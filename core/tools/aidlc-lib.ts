@@ -9,7 +9,6 @@ import { TextDecoder } from "node:util";
 import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
-  aidlcDispatcherInvocation,
   aidlcInvocation,
   aidlcToolInvocation,
   entrySkillInvocation,
@@ -20,6 +19,7 @@ import {
   type KiroLayout,
   knownActiveSpace,
   kiroTreeLayout,
+  quoteCommandArgument,
   resolveHarnessPath,
   runtimeHarnessDir,
   runtimeHarnessName,
@@ -45,6 +45,7 @@ import {
   type GuardFence,
   type SwitchableGuardFence,
   isSwitchableGuardFence,
+  guardFenceFromConfigKey,
 } from "./aidlc-guard-fences.ts";
 export {
   GUARD_FENCES,
@@ -1167,12 +1168,6 @@ export const SPACE_VERBS: ReadonlySet<string> = new Set([
   "create",
 ]);
 
-export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
-  "rename",
-  "show",
-  "birth",
-]);
-
 // The two intent lifecycle verbs that retire and revive a record without
 // touching its files: `archive` moves an in-flight or completed intent to the
 // `archived` status, `unarchive` brings it back to the status it had.
@@ -1186,7 +1181,10 @@ export type WorkspaceCommand =
   // `all` is only ever set (true) for `intent list --all`; a plain list omits
   // it so existing shape consumers keep matching the two-field object.
   | { kind: "list"; noun: WorkspaceNoun; json: boolean; all?: true }
-  | { kind: "switch"; noun: WorkspaceNoun; name: string; explicit: boolean }
+  // `words`: every token the person typed after the name, kept whole for the
+  // agent to read (a request, or a setting for the work selected); never for
+  // the utility. Present only when there are any.
+  | { kind: "switch"; noun: WorkspaceNoun; name: string; explicit: boolean; words?: string[] }
   | { kind: "create"; noun: "space"; name: string }
   | { kind: "create-intent"; noun: "intent"; rest: string[] }
   // `rest` carries the verb's trailing flags (`--reason <text>`) through to the
@@ -1199,13 +1197,6 @@ export type WorkspaceCommand =
       noun: WorkspaceNoun;
       code: "missing-name" | "unexpected-arguments";
       verb: "switch" | "create" | "space-create" | IntentLifecycleVerb | IntentRepoVerb;
-      message: string;
-    }
-  | {
-      kind: "error";
-      noun: WorkspaceNoun;
-      code: "reserved-future-verb";
-      verb: string;
       message: string;
     }
   | { kind: "not-workspace" };
@@ -1242,29 +1233,8 @@ function unexpectedWorkspaceArguments(
   };
 }
 
-function reservedFutureWorkspaceVerb(
-  noun: WorkspaceNoun,
-  verb: string,
-): WorkspaceCommand {
-  return {
-    kind: "error",
-    noun,
-    code: "reserved-future-verb",
-    verb,
-    message:
-      `${noun} ${verb} is reserved for a future workspace verb and is not implemented yet. ` +
-      `Use ${noun} switch ${verb} to select an existing record with that name.`,
-  };
-}
-
 export function isWorkspaceNoun(token: string | undefined): token is WorkspaceNoun {
   return (WORKSPACE_NOUNS as readonly (string | undefined)[]).includes(token);
-}
-
-function isReservedFutureWorkspaceVerb(
-  token: string | undefined,
-): token is string {
-  return token !== undefined && RESERVED_FUTURE.has(token);
 }
 
 function isIntentLifecycleVerb(token: string | undefined): token is IntentLifecycleVerb {
@@ -1316,17 +1286,13 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
   if (verbOrName === "help" || verbOrName === "-h") {
     return { kind: "help", noun };
   }
-  if (isReservedFutureWorkspaceVerb(verbOrName)) {
-    return reservedFutureWorkspaceVerb(noun, verbOrName);
-  }
 
   if (noun === "intent") {
     if (verbOrName === "list") return explicitWorkspaceList(noun, tokens);
     if (verbOrName === "switch") {
       const name = tokens[2];
       if (name === undefined) return missingWorkspaceName(noun, "switch");
-      if (tokens.length > 3) return unexpectedWorkspaceArguments(noun, "switch");
-      return { kind: "switch", noun, name, explicit: true };
+      return switchWithWords(noun, name, true, tokens.slice(3));
     }
     if (verbOrName === "create") {
       return { kind: "create-intent", noun, rest: tokens.slice(2) };
@@ -1345,8 +1311,7 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     if (verbOrName === "switch") {
       const name = tokens[2];
       if (name === undefined) return missingWorkspaceName(noun, "switch");
-      if (tokens.length > 3) return unexpectedWorkspaceArguments(noun, "switch");
-      return { kind: "switch", noun, name, explicit: true };
+      return switchWithWords(noun, name, true, tokens.slice(3));
     }
     if (verbOrName === "create") {
       const name = tokens[2];
@@ -1356,10 +1321,20 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     }
   }
 
-  if (tokens.slice(2).some((token) => token.startsWith("--"))) {
-    return unexpectedWorkspaceArguments(noun, "switch");
-  }
-  return { kind: "switch", noun, name: verbOrName, explicit: false };
+  return switchWithWords(noun, verbOrName, false, tokens.slice(2));
+}
+
+// A switch keeps whatever the person typed after the name, flags included: the
+// engine hands those words to the agent whole with the switch (Branch 1b), so
+// "intent auth --guard-policy relaxed" selects auth and the agent sets the
+// policy for it. Nothing here reads them.
+function switchWithWords(
+  noun: WorkspaceNoun,
+  name: string,
+  explicit: boolean,
+  rest: readonly string[],
+): WorkspaceCommand {
+  return { kind: "switch", noun, name, explicit, ...(rest.length > 0 ? { words: [...rest] } : {}) };
 }
 
 export function workspaceCommandUtilityArgv(
@@ -1539,15 +1514,15 @@ export function splitKiroCommandArgs(raw: string): string[] {
 }
 
 export const RESERVED_RECORD_NAME_LIST = Object.freeze(
-  [...new Set(["help", ...INTENT_VERBS, ...SPACE_VERBS, ...RESERVED_FUTURE])],
+  [...new Set(["help", ...INTENT_VERBS, ...SPACE_VERBS])],
 );
 
 // Slugs a record (intent or space) may never take. These names are grammar:
-// help, current workspace verbs, and reserved future verbs all change how the
-// router reads `intent <token>` / `space <token>`. Refusing them at the
-// creation chokepoints keeps new records reachable. Pre-existing records with
-// these names remain reachable via explicit `switch`; doctor flags them as an
-// advisory so humans can rename them deliberately.
+// help and the workspace verbs change how the router reads `intent <token>` /
+// `space <token>`. Refusing them at the creation chokepoints keeps new records
+// reachable. Pre-existing records with these names remain reachable via
+// explicit `switch`; doctor flags them as an advisory so humans can rename
+// them deliberately.
 export const RESERVED_RECORD_NAMES: ReadonlySet<string> = new Set(
   RESERVED_RECORD_NAME_LIST,
 );
@@ -1774,7 +1749,10 @@ function terminalCommandFromWorkspaceCommand(
 // matching rules are byte-for-byte the engine's parseNextFlags terminal branches
 // (read-only flag anywhere; workspace verb only at index 0) so the seam and the
 // engine can never disagree about what is terminal.
-export function classifyTerminalCommand(argv: string[]): TerminalCommand | null {
+// `projectDir` lets a switch be judged against the records there, and
+// `sessionId` names the chat whose selection decides the space (a hook knows
+// its payload's chat; the invoking session is used otherwise).
+export function classifyTerminalCommand(argv: string[], projectDir?: string, sessionId?: string): TerminalCommand | null {
   const args = withoutEntryWord(argv);
   // A SOLE bare `help` / `-h` token is a help REQUEST (terminal, read-only);
   // mirrors parseNextFlags in the engine. Without this the token reads as
@@ -1804,6 +1782,24 @@ export function classifyTerminalCommand(argv: string[]): TerminalCommand | null 
     // no session_id, while the shell PostToolUse event does; executing creation
     // off-band would make exact session ownership impossible.
     if (workspaceCommand.kind === "create-intent") return null;
+    // A switch is terminal only when it is exactly a record's name: words after
+    // the name are the agent's to read (the engine hands them over with the
+    // switch), and a name that is no record goes to the agent with the noun's
+    // verbs and records (Branch 1b). The seam knows the project; without one
+    // the shape alone is classified, as the engine's parser does.
+    if (workspaceCommand.kind === "switch") {
+      if (workspaceCommand.words !== undefined) return null;
+      if (
+        projectDir !== undefined &&
+        !workspaceRecordExists(projectDir, workspaceCommand.noun, workspaceCommand.name, sessionId) &&
+        // A slug several records share stays with the seam: the utility
+        // answers in the chat's own space, naming the record dirs, as it did
+        // before the record check existed.
+        ambiguousWorkspaceRecordDirs(projectDir, workspaceCommand.noun, workspaceCommand.name, sessionId).length < 2
+      ) {
+        return null;
+      }
+    }
     return terminalCommandFromWorkspaceCommand(workspaceCommand, args);
   }
   // Among the person's own words a utility flag is part of their request.
@@ -4297,6 +4293,77 @@ export function listIntents(
   return infos;
 }
 
+// The records a bare name after `intent` or `space` can select, newest last:
+// the selected space's intents by slug (the record dir counts as the same
+// name, as `intent <name>` resolves it), or the spaces by name. Structure
+// only, read from the registry and the spaces dir; anything unreadable is an
+// empty list.
+function workspaceRecordList(
+  projectDir: string,
+  noun: WorkspaceNoun,
+  sessionId?: string,
+): Array<{ name: string; dirName: string | null }> {
+  try {
+    if (noun === "space") return listSpaces(projectDir).map((space) => ({ name: space.name, dirName: null }));
+    // The chat's own selection when the caller knows the chat (a hook with the
+    // payload's session); otherwise the invoking session, as the utility
+    // resolves it when the agent runs the switch.
+    const space = resolveWorkflowSelection(projectDir, sessionId ? { sessionId } : {}).space;
+    return listIntents(projectDir, space).map((intent) => ({ name: intent.slug, dirName: intent.dirName }));
+  } catch {
+    return [];
+  }
+}
+
+// Whether a name after `intent` or `space` is exactly the record the switch
+// would select, as the utility selects it: an intent by its record dir, or by
+// a slug exactly one record on disk carries (two records with one slug are
+// ambiguous there, so neither is "the" record); a space by name, or by the
+// slug the utility stores it under (`space "My Space"` selects my-space). Any
+// other word is the agent's to read (Branch 1b).
+export function workspaceRecordExists(
+  projectDir: string,
+  noun: WorkspaceNoun,
+  name: string,
+  sessionId?: string,
+): boolean {
+  const records = workspaceRecordList(projectDir, noun, sessionId);
+  if (noun === "space") {
+    const slug = slugify(name);
+    return records.some((record) => record.name === name || record.name === slug);
+  }
+  if (records.some((record) => record.dirName === name)) return true;
+  return records.filter((record) => record.name === name && record.dirName !== null).length === 1;
+}
+
+// The record dirs that share one slug in the selected space, when more than
+// one does: the utility refuses that slug as ambiguous, so the agent is handed
+// the dirs to pick from, or to ask with. Spaces have no such case.
+export function ambiguousWorkspaceRecordDirs(
+  projectDir: string,
+  noun: WorkspaceNoun,
+  name: string,
+  sessionId?: string,
+): string[] {
+  if (noun !== "intent") return [];
+  const dirs = workspaceRecordList(projectDir, noun, sessionId)
+    .filter((record) => record.name === name && record.dirName !== null)
+    .map((record) => record.dirName as string);
+  return dirs.length > 1 ? dirs : [];
+}
+
+// The most recent record names for the noun, newest first, capped, with how
+// many more there are: what the agent is shown beside an unknown word so a
+// typo of a name is read as that name.
+export function recentWorkspaceRecordNames(
+  projectDir: string,
+  noun: WorkspaceNoun,
+  limit = 20,
+): { names: string[]; more: number } {
+  const names = [...new Set(workspaceRecordList(projectDir, noun).map((record) => record.name))].reverse();
+  return { names: names.slice(0, limit), more: Math.max(0, names.length - limit) };
+}
+
 // The workflows still running in a project: every space's intents that neither
 // the registry nor the state file marks completed or archived. config names
 // them when it changes something while work is open, doctor names the same
@@ -5046,9 +5113,10 @@ export function requireProtectedResponse(
 ): void {
   const question = readProtectedQuestion(projectDir, session);
   const response = readProtectedResponse(projectDir, session);
-  const recovery = expected.kind === "verification-command" ? VERIFICATION_COMMAND_RECOVERY
+  const recovery = expected.kind === "verification-command" ? verificationCommandRecovery()
     : expected.kind === "construction-policy" ? CONSTRUCTION_POLICY_RECOVERY
-    : 'Re-ask with aidlc bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> or aidlc bolt swarm-checkpoint --action ask --batch <number> --units "<units>", then wait for Approve or Request Changes.';
+    : `Re-ask with ${aidlcToolInvocation("bolt")} checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> or ` +
+      `${aidlcToolInvocation("bolt")} swarm-checkpoint --action ask --batch <number> --units "<units>", then wait for Approve or Request Changes.`;
   // The person replied to this exact question (the hook's record); the choice
   // is the one the conductor read from their words. That reply is the
   // person's presence: with it on record, a misrecord is corrected by
@@ -6043,6 +6111,42 @@ export function writeSessionBinding(
   }
 }
 
+// A Codex helper agent's thread, mapped to the chat that spawned it. Codex gives
+// a spawned agent's shell its own CODEX_THREAD_ID and marks that agent's hook
+// payloads with agent_id = that thread id under the root session_id, so the
+// adapter notes the pair the first time it sees it and the resolver reads the
+// root session for the helper's commands. Machine-local runtime state beside the
+// session bindings; a write failure leaves the helper resolving as before.
+function helperSessionPath(projectDir: string, threadId: string): string {
+  const recordPath = sessionRecordPath(projectDir, threadId);
+  return recordPath ? `${recordPath}.helper-of` : "";
+}
+
+export function noteHelperSession(projectDir: string, rootSessionId: string, agentId: string): void {
+  const root = validSessionId(rootSessionId);
+  const agent = validSessionId(agentId);
+  if (!root || !agent || root === agent) return;
+  const path = helperSessionPath(projectDir, agent);
+  if (!path) return;
+  try {
+    if (existsSync(path) && readFileSync(path, "utf-8").trim() === root) return;
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileSync(path, `${root}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+export function helperSessionRoot(projectDir: string, threadId: string): string | null {
+  const path = helperSessionPath(projectDir, threadId);
+  if (!path) return null;
+  try {
+    return validSessionId(readFileSync(path, "utf-8").trim());
+  } catch {
+    return null;
+  }
+}
+
 function sessionRebindOfferPath(projectDir: string, sessionId: string): string {
   const recordPath = sessionRecordPath(projectDir, sessionId);
   return recordPath ? `${recordPath}.rebind-offer` : "";
@@ -6774,25 +6878,139 @@ export interface WorkflowSelectionOptions {
   sessionId?: string;
 }
 
+// THE ONE DOOR. Every id a host hands the engine (a hook payload's session_id,
+// the shell's own chat variable, a helper's thread id) passes here before any
+// chat or work record is read: the raw id maps to its root chat through the
+// helper-of fact the adapter wrote (the one fact the engine cannot know), that
+// chat's binding is read, and a chat with no binding is bound at first contact
+// by the rule a new chat follows at SessionStart: silently, to the work the
+// shared cursor names if this machine has joined it, else to no record. From
+// then on the chat stays on that work; the cursor moving later (another window
+// switched) does not move it. A process with no id at all (the person's own
+// terminal) never comes here and keeps following the cursor.
+export interface ResolvedChat {
+  chatId: string;
+  binding: SessionBinding | null;
+}
+
+// First contact settles a chat's work only when this process IS that chat: its
+// identity came from its own environment or process ancestry. A caller that
+// NAMES a session is asking about a chat, not acting as one: a hook reading its
+// payload, a command carrying --session, an engine child a hook handed its
+// identity to. Those resolve read-only, so a host-injected prompt (a Kiro IDE
+// workflow step's brief, a background notification) never gets work of its own
+// and never leaves a non-person actor sitting on the person's record.
+export function resolveChat(
+  projectDir: string,
+  rawId: string | null | undefined,
+  options: { bind?: boolean } = {},
+): ResolvedChat | null {
+  const id = validSessionId(rawId ?? undefined);
+  if (!id) return null;
+  const chatId = helperSessionRoot(projectDir, id) ?? id;
+  const existing = readSessionBinding(projectDir, chatId);
+  if (existing) return { chatId, binding: existing };
+  const bind = options.bind ?? false;
+  // Read-only: the chat keeps whatever the shared selection names, as before.
+  if (!bind) return { chatId, binding: null };
+  // A worker's own worktree already names the work it was prepared for, and
+  // that record governs every resolution there, so first contact binds nothing:
+  // the worktree is the identity, not this chat.
+  let delegated: ReturnType<typeof delegatedWorktreeIntent> = null;
+  try {
+    delegated = delegatedWorktreeIntent(projectDir);
+  } catch {
+    delegated = null;
+  }
+  if (delegated) {
+    return {
+      chatId,
+      binding: { space: delegated.space, intent: delegated.intent, boundAt: isoTimestamp(), source: "worktree" },
+    };
+  }
+  const space = activeSpace(projectDir);
+  const resolved: WorkflowSelection = { space, intent: activeIntent(projectDir, space), sessionId: chatId, binding: null };
+  const contact = classifyFirstContact(projectDir, resolved);
+  writeSessionBinding(projectDir, chatId, contact.selection.space, contact.selection.intent, contact.source);
+  // A record the binding cannot carry, or a write that failed, still answers
+  // what the chat is on for this process.
+  const binding = readSessionBinding(projectDir, chatId) ??
+    { space: contact.selection.space, intent: contact.selection.intent, boundAt: isoTimestamp(), source: contact.source };
+  return { chatId, binding };
+}
+
+// The rule a new chat follows when it first meets a workflow: resolving a record
+// is not joining it. Joined (participation by the cursor, this checkout's
+// worktree record or a Unit claim) keeps the record and names the evidence as
+// the binding's source; not joined binds to no record ("unjoined" when a record
+// was found, "none" when there was nothing). SessionStart adds its own stamp and
+// pre-existing-binding branches on top; resolveChat uses the rule as it is.
+export function classifyFirstContact(
+  projectDir: string,
+  resolved: WorkflowSelection,
+): { joined: boolean; selection: WorkflowSelection; source: SessionBindingSource } {
+  const joined = workflowParticipation(projectDir, resolved) === "participant";
+  const selection = joined ? resolved : { ...resolved, intent: null, binding: null };
+  if (!joined) return { joined, selection, source: resolved.intent === null ? "none" : "unjoined" };
+  if (readActiveIntentCursor(projectDir, selection.space) === selection.intent) return { joined, selection, source: "cursor" };
+  const unitScope = readUnitScopeStamp(projectDir);
+  const source: SessionBindingSource =
+    unitScope?.space === selection.space && unitScope.intent_uuid === intentUuidForSelection(projectDir, selection)
+      ? "unit-claim"
+      : "worktree";
+  return { joined, selection, source };
+}
+
 // The session of the conversation that invoked this process, when the caller
 // named none: the hook-injected override first, then the process ancestry.
 // Throws SessionResolutionConflictError when the two disagree and the override
 // did not come from a validated hook payload.
+// The chat the host names in the agent's own shell. Each host that names one
+// does it its own way, and the engine needs no override written into the
+// command: Codex gives every command CODEX_THREAD_ID, Claude Code gives
+// CLAUDE_CODE_SESSION_ID beside the pid of the process running that chat, and
+// Kiro CLI gives KIRO_SESSION_ID (measured: its shell carries no pid).
+//
+// A variable is only as good as the chat it names. A shell the person started
+// from inside a chat keeps the variable after that chat is gone, so Claude
+// Code's id counts only while the process it names is alive; a dead or absent
+// pid leaves the id unread and the process ancestry decides, as before. Kiro
+// CLI has no pid in the shell to check, so its id stands on its own, as Codex's
+// does. Every other harness names no chat in the shell.
+function hostNamedChat(projectDir: string): string | null {
+  switch (runtimeHarnessDir(projectDir)) {
+    case ".codex":
+      return validSessionId(process.env.CODEX_THREAD_ID);
+    case ".claude": {
+      const pid = Number.parseInt(process.env.CLAUDE_PID ?? "", 10);
+      return Number.isSafeInteger(pid) && processIsAlive(pid)
+        ? validSessionId(process.env.CLAUDE_CODE_SESSION_ID)
+        : null;
+    }
+    case ".kiro":
+      return validSessionId(process.env.KIRO_SESSION_ID);
+    default:
+      return null;
+  }
+}
+
 export function resolveInvokingSessionId(projectDir: string): string | null {
   const overrideSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
-  // Codex gives every command it runs CODEX_THREAD_ID, the session id its
-  // hooks carry, so a Codex tool needs no override written into the command.
-  const codexSession = overrideSession === null && runtimeHarnessDir(projectDir) === ".codex"
-    ? validSessionId(process.env.CODEX_THREAD_ID)
-    : null;
-  const envSession = overrideSession ?? codexSession;
+  // A spawned helper agent's shell carries the helper's own thread id; that
+  // thread resolves to the chat that spawned it (noteHelperSession).
+  const hostThread = overrideSession === null ? hostNamedChat(projectDir) : null;
+  const hostSession = hostThread === null ? null : helperSessionRoot(projectDir, hostThread) ?? hostThread;
+  const envSession = overrideSession ?? hostSession;
   // This refusal is a footgun guard against stale exported overrides, not a
   // security boundary. The SOURCE marker is an internal hookChildEnv contract.
   // Deliberately setting both variables is an intentional same-user act
   // equivalent to a sanctioned session switch; no privilege boundary exists
   // between callers that could authenticate it.
+  // The host's own word for the chat this shell runs in is not a stale export:
+  // process ancestry is the engine's reconstruction of the same fact, and a
+  // second chat starting is enough to make the two differ.
   const payloadOverride =
-    codexSession !== null ||
+    hostSession !== null ||
     (overrideSession !== null && process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload");
   const ancestrySession = resolveSessionIdFromAncestry(projectDir);
   if (
@@ -6834,9 +7052,17 @@ export function resolveWorkflowSelection(
     }
     return { space: delegated.space, intent: delegated.intent, sessionId: null, binding: null };
   }
-  const sessionId =
-    validSessionId(options.sessionId) ?? resolveInvokingSessionId(projectDir);
-  const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
+  const named = validSessionId(options.sessionId);
+  const rawSession = named ?? resolveInvokingSessionId(projectDir);
+  // Only this process's own identity settles a chat at first contact; a named
+  // session, or identity a hook handed us, is read-only.
+  const chat = rawSession
+    ? resolveChat(projectDir, rawSession, {
+        bind: named === null && process.env.AIDLC_SESSION_OVERRIDE_SOURCE !== "payload",
+      })
+    : null;
+  const sessionId = chat?.chatId ?? null;
+  const binding = chat?.binding ?? null;
   const space = options.space ?? binding?.space ?? activeSpace(projectDir);
   let intent: string | null;
   if (options.intent !== undefined) {
@@ -6921,23 +7147,30 @@ export function workflowParticipation(
   return "outsider";
 }
 
-// The workflow a hook acts on. A payload session that has a binding is pinned as
-// the session override while the hook runs, so the default path helpers resolve
-// the same record the hook classified (process ancestry or the shared cursor can
-// name another conversation). An id without a binding — a worker-scoped id — is
-// not pinned. Callers run `restore()` when the hook returns or throws.
+// The workflow a hook acts on. The payload id passes through resolveChat, so a
+// helper's own id names the chat that spawned it; that chat is pinned as the
+// session override while the hook runs, so the default path helpers resolve the
+// same record the hook classified (process ancestry or the shared cursor can
+// name another conversation). An id the engine cannot place, with no binding and
+// no chat an adapter named for it, is not pinned: a per-call or worker-scoped id
+// must not take the shared cursor's work while the caller's own ancestry names a
+// chat. A hook never settles a chat's work either: the event is the host's, not
+// the chat's own command. Callers run `restore()` when the hook returns or throws.
 export function enterHookWorkflow(
   projectDir: string,
   payloadSessionId: unknown,
 ): { selection: WorkflowSelection | null; participation: WorkflowParticipation; restore: () => void } {
-  const sessionId = typeof payloadSessionId === "string" ? validSessionId(payloadSessionId) : null;
+  const raw = typeof payloadSessionId === "string" ? validSessionId(payloadSessionId) : null;
+  const chat = raw === null ? null : resolveChat(projectDir, raw, { bind: false });
+  // Placed: this chat has a binding, or the id belongs to a chat an adapter named.
+  const placed = chat !== null && (chat.binding !== null || chat.chatId !== raw);
   let restore = () => {};
-  if (sessionId && readSessionBinding(projectDir, sessionId) !== null) {
+  if (chat && placed) {
     const previous = {
       AIDLC_SESSION_OVERRIDE: process.env.AIDLC_SESSION_OVERRIDE,
       AIDLC_SESSION_OVERRIDE_SOURCE: process.env.AIDLC_SESSION_OVERRIDE_SOURCE,
     };
-    process.env.AIDLC_SESSION_OVERRIDE = sessionId;
+    process.env.AIDLC_SESSION_OVERRIDE = chat.chatId;
     process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
     restore = () => {
       for (const [key, value] of Object.entries(previous)) {
@@ -11776,25 +12009,6 @@ export function personCheckSwitchAllowed(projectDir: string, key: string, value:
   return values.on.includes(value) || (values.off.includes(value) && personAskedSinceGate(projectDir));
 }
 
-// The gate's "Request Changes" choice, matched the way a person types it: any
-// case, an optional option prefix ("B." or "2)"), surrounding quotes, and
-// trailing punctuation are all the same choice, as is the "(Recommended)" label
-// decorator the question-rendering guide asks the conductor to add. The words
-// themselves must be present; a paraphrase ("please change it") is not this
-// label. A paraphrase is the conductor's to read; the shared reply reader
-// (aidlc-reply-reader.ts) matches only exact picks and judges no meaning.
-// Shape of an accepted reply: optional option prefix, then the words
-// "request changes", then wrapper noise (whitespace, quotes, . or !), then at
-// most ONE "(recommended)" decorator, then wrapper noise again. Because the
-// noise is allowed on both sides of the decorator, the decorator composes with
-// quotes and punctuation whether it sits inside or outside them, and there is
-// no pass ordering that can silently drop one direction (PR #1133 review).
-const REQUEST_CHANGES_CHOICE_RE =
-  /^(?:(?:[A-Za-z]|\d+)[.)])?[\s"'`]*request\s+changes[\s"'`.!]*(?:\(recommended\)[\s"'`.!]*)?$/i;
-export function isRequestChangesChoice(text: string | undefined | null): boolean {
-  return REQUEST_CHANGES_CHOICE_RE.test((text ?? "").trim());
-}
-
 // The approval the conductor reports at a held stage gate. The conductor reads
 // the person's reply in context and reports the choice they made; the engine
 // never second-guesses the words. "Accept as-is" is that offered label, when it
@@ -12345,13 +12559,24 @@ export function authorizedVerificationCommand(
     ? command : null;
 }
 
-export const VERIFICATION_COMMAND_RECOVERY =
-  'Write the proposed command to <record>/verification-command.txt with the harness file-write tool (never shell echo or a heredoc); never interpolate repo-derived command text into a shell line. ' +
-  'Record the human choice with aidlc-log.ts decision --stage "<stage>" --checkpoint verification-command ' +
-  '--command-file verification-command.txt --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes", ' +
-  'then wait for the human\'s offered choice in that session and run aidlc-log.ts answer --stage "<stage>" --checkpoint verification-command --command-file verification-command.txt --details "Approve". ' +
-  'Both commands find the session they run in. ' +
-  'Apply the receipt with aidlc-state.ts set-construction-verification-command --command-file verification-command.txt.';
+// The same sequence rides with an unauthorized checkpoint and its refusals.
+// Registering the question after showing it loses the reply to that question.
+export function verificationCommandRecovery(
+  stage = "<stage>",
+  logInvocation = aidlcToolInvocation("log"),
+  stateInvocation = aidlcToolInvocation("state"),
+): string {
+  const identity = `--stage ${quoteCommandArgument(stage)} --checkpoint verification-command --command-file verification-command.txt`;
+  return "If this command already has a current approval receipt, apply it without asking again. Otherwise, " +
+    "write the proposed command to <record>/verification-command.txt with the harness file-write tool (never shell echo or a heredoc); never interpolate repo-derived command text into a shell line. " +
+    `Before showing the question, register it with \`${logInvocation} decision ${identity} ` +
+    '--decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"`. ' +
+    "Show the returned canonical command and the question with its choices, then end the turn and wait for the person's reply. " +
+    "If that question is already pending, keep it: do not register it again after the reply. " +
+    `Record the choice they made with \`${logInvocation} answer ${identity} --details '<their choice>'\`. ` +
+    "Both commands find the session they run in. Only an Approve receipt authorizes " +
+    `\`${stateInvocation} set-construction-verification-command --command-file verification-command.txt\`.`;
+}
 
 export const CONSTRUCTION_POLICY_CHECKPOINT = "Construction Policy";
 
@@ -15244,6 +15469,10 @@ export interface FreshReviewReceipts {
    *  records an edited review (reviewCompletionEdited). Read only beside
    *  stageVerdict / unitVerdicts, for the one line the gate says. */
   editedVerdicts?: Set<string>;
+  /** Scopes ("" for the stage, else the Unit) whose fresh terminal verdict
+   *  records the verdict its dispatch dictated (reviewCompletionDictated).
+   *  Read only beside stageVerdict / unitVerdicts, for the one line the gate says. */
+  dictatedVerdicts?: Set<string>;
   /**
    * Units with a merge-confirmed Bolt attempt. A name-only attempt is
    * confirmed by its BOLT_COMPLETED row; a slug-backed (worktree) attempt is
@@ -17343,24 +17572,56 @@ export function openReviewRequests(events: ReadonlyArray<AuditShardEvent>): Open
 }
 
 /**
- * The latest SUBAGENT_COMPLETED of `reviewer` that definitely follows `after`
- * (same shard: a later position; another shard: a later timestamp), or null
- * when the reviewer has not finished since. A cross-shard tie reads as not
- * after, so the callers fail open on it.
+ * The latest row of `event` whose `Agent Type` is `reviewer` that definitely
+ * follows `after` (same shard: a later position; another shard: a later
+ * timestamp) and that `accept` admits, or null when there is none. A
+ * cross-shard tie reads as not after, so the callers fail open on it.
  */
+export function latestReviewerRowAfter(
+  events: ReadonlyArray<AuditShardEvent>,
+  event: string,
+  reviewer: string,
+  after: AuditShardEvent,
+  accept: (row: AuditShardEvent) => boolean = () => true,
+): AuditShardEvent | null {
+  let latest: AuditShardEvent | null = null;
+  for (const row of sortAttemptEvents(events)) {
+    if (row.event !== event) continue;
+    if (auditBlockField(row.block, "Agent Type") !== reviewer) continue;
+    if (!attemptEventDefinitelyBefore(after, row)) continue;
+    if (!accept(row)) continue;
+    latest = row;
+  }
+  return latest;
+}
+
+/** The latest SUBAGENT_COMPLETED of `reviewer` definitely after `after`, or null when it has not finished since. */
 export function reviewerCompletionAfter(
   events: ReadonlyArray<AuditShardEvent>,
   reviewer: string,
   after: AuditShardEvent,
 ): AuditShardEvent | null {
-  let latest: AuditShardEvent | null = null;
-  for (const row of sortAttemptEvents(events)) {
-    if (row.event !== "SUBAGENT_COMPLETED") continue;
-    if (auditBlockField(row.block, "Agent Type") !== reviewer) continue;
-    if (!attemptEventDefinitelyBefore(after, row)) continue;
-    latest = row;
-  }
-  return latest;
+  return latestReviewerRowAfter(events, "SUBAGENT_COMPLETED", reviewer, after);
+}
+
+/** The row the plan-approval guard writes when a reviewer dispatch's brief already carries a rendered verdict line. */
+export const REVIEW_VERDICT_DICTATED_EVENT = "REVIEW_VERDICT_DICTATED";
+
+/**
+ * Whether a REVIEW_VERDICT_DICTATED row of `reviewer`, written after this
+ * request's row and naming its id, carried `verdict`: the verdict being recorded
+ * is the one the dispatch dictated. A row naming another request, an earlier
+ * row, or the other verdict is not.
+ */
+export function dispatchDictatedVerdict(
+  events: ReadonlyArray<AuditShardEvent>,
+  reviewer: string,
+  request: OpenReviewRequest,
+  verdict: ReviewVerdict,
+): boolean {
+  const row = latestReviewerRowAfter(events, REVIEW_VERDICT_DICTATED_EVENT, reviewer, request.row, (candidate) =>
+    (auditBlockField(candidate.block, "Request Id") ?? "").split(",").map((id) => id.trim()).includes(request.requestId));
+  return row !== null && auditBlockField(row.block, "Verdict") === verdict;
 }
 
 /** The SUBAGENT_COMPLETED field carrying `<review file>=<sha256 | absent>` per open request. */
@@ -17715,6 +17976,27 @@ export function reviewCompletionEdited(completionBlock: string): boolean {
  *  reviewer finished. */
 export function editedReviewNotice(stageName: string, unit?: string | null): string {
   return `The review file for ${stageName}${unit ? ` (${unit})` : ""} was edited after the reviewer finished.`;
+}
+
+/** The REVIEW_COMPLETED field the logger writes, as `yes`, when the verdict it
+ *  records is the one the reviewer's dispatch already carried (a
+ *  REVIEW_VERDICT_DICTATED row for this request with that verdict): the verdict
+ *  is on record as the dispatch's, not as the reviewer's own judgement. */
+export const REVIEW_DICTATED_FIELD = "Review Verdict Dictated";
+
+/** Whether a REVIEW_COMPLETED row records a verdict its dispatch dictated. Read
+ *  for what the person is told at the gate; it changes no readiness. */
+export function reviewCompletionDictated(completionBlock: string): boolean {
+  return auditBlockField(completionBlock, REVIEW_DICTATED_FIELD) === "yes";
+}
+
+/** The one line the person hears at the gate (strict) or with the verdict
+ *  (relaxed, off) when the review they are deciding on was dispatched with its
+ *  verdict already in the brief, in the person's words: no engine vocabulary. A
+ *  fact, not a judgement: a conductor quoting an earlier review's verdict on a
+ *  re-review carries it too. */
+export function dictatedReviewNotice(stageName: string, unit?: string | null): string {
+  return `The reviewer for ${stageName}${unit ? ` (${unit})` : ""} was told what to conclude before it looked.`;
 }
 
 /**
@@ -19628,6 +19910,7 @@ export function freshReviewReceipts(
     awaitingVerdict: new Set(),
     unfinishedVerdicts: new Set(),
     editedVerdicts: new Set(),
+    dictatedVerdicts: new Set(),
     mergedBoltUnits: new Set(),
     openBoltUnits: new Set(),
     acceptedChanges: [],
@@ -19731,10 +20014,12 @@ export function freshReviewReceipts(
   // an ambiguous matching path fails closed by clearing every unit receipt.
   const recordedRepos = new Set(intentRepos(projectDir));
   const unitVerdicts = new Map<string, ReviewVerdict>();
-  // Read beside the verdicts above: which of them no reviewer gave, and which
-  // record a review edited after the reviewer finished.
+  // Read beside the verdicts above: which of them no reviewer gave, which
+  // record a review edited after the reviewer finished, and which record the
+  // verdict the reviewer's dispatch dictated.
   const unfinishedVerdicts = new Set<string>();
   const editedVerdicts = new Set<string>();
+  const dictatedVerdicts = new Set<string>();
   const unitStale = new Set<string>();
   const unitStaleProgress = new Map<string, StaleReviewProgress>();
   const unitIterations = new Map<string, number>();
@@ -20164,6 +20449,8 @@ export function freshReviewReceipts(
     else unfinishedVerdicts.delete(unit ?? "");
     if (reviewCompletionEdited(e.block)) editedVerdicts.add(unit ?? "");
     else editedVerdicts.delete(unit ?? "");
+    if (reviewCompletionDictated(e.block)) dictatedVerdicts.add(unit ?? "");
+    else dictatedVerdicts.delete(unit ?? "");
     if (unit) {
       unitVerdicts.set(unit, terminalVerdict);
       unitStale.delete(unit);
@@ -20630,6 +20917,7 @@ export function freshReviewReceipts(
     awaitingVerdict,
     unfinishedVerdicts,
     editedVerdicts,
+    dictatedVerdicts,
     mergedBoltUnits,
     openBoltUnits,
     acceptedChanges: [
@@ -39024,6 +39312,121 @@ export function formatGuardPolicy(value: GuardPolicy, source: string): string {
 /** Retired alias of formatGuardPolicy. */
 export const formatChangeControl = formatGuardPolicy;
 
+/**
+ * What `next` does with the token after each flag it takes: `none` takes no
+ * value, `free` takes any word, `words` only the words listed. `needsFollowing`
+ * marks the four whose branch reads `a === "--x" && i + 1 < args.length`, so
+ * with nothing after them this engine does not take them at all.
+ */
+export interface NextFlagShape {
+  value: "none" | "free" | "words";
+  words?: readonly string[];
+  needsFollowing?: true;
+}
+
+// Written out rather than imported from aidlc-guard-switch.ts, which imports
+// this module: t-next-flag-table pins them equal to VALID_DEPTHS and
+// VALID_TEST_STRATEGIES there.
+const DEPTH_VALUES = ["minimal", "standard", "comprehensive"] as const;
+
+/**
+ * Every flag `next`'s flag loop takes, in one table.
+ *
+ * The loop in parseNextFlags reads it (nextTokenKind below) to decide whether a
+ * flag-shaped token is one this engine takes, so a flag missing from the table
+ * can never be taken and the two cannot drift. A harness seam that has to read
+ * a line before any agent sees it reads the same table, instead of mirroring
+ * the loop's branches by hand.
+ *
+ * Absent on purpose, because they are not the flag loop's: the read-only flags
+ * (READ_ONLY_FLAGS, taken earlier and only when the line carries no words of
+ * the person's own), `--doctor`'s own `--export`/`--output`/`--verbose`,
+ * `--config` and `--project-dir` (read before the loop), and `--pick` (a
+ * leading command). The ceremony flags and the per-check `--guard.<fence>`
+ * family come from their own tables, in nextFlagShape.
+ */
+export const NEXT_FLAGS: ReadonlyMap<string, NextFlagShape> = new Map<string, NextFlagShape>([
+  ["--resume", { value: "none" }],
+  ["--single", { value: "none" }],
+  ["--new-intent", { value: "none" }],
+  ["--new-scope", { value: "none" }],
+  ["--continue", { value: "none" }],
+  ["--change", { value: "none" }],
+  ["--every-unit", { value: "none" }],
+  // Retired, still taken so the token never becomes task text.
+  ["--init", { value: "none" }],
+  ["--force", { value: "none" }],
+  ["--scope", { value: "free", needsFollowing: true }],
+  ["--stage", { value: "free", needsFollowing: true }],
+  ["--phase", { value: "free", needsFollowing: true }],
+  ["--report", { value: "free", needsFollowing: true }],
+  // Valued: a missing or `--`-prefixed value is this engine's own refusal, with
+  // the flag named, not a token it does not take.
+  ["--request", { value: "free" }],
+  ["--record", { value: "free" }],
+  ["--unit", { value: "free" }],
+  ["--plan-name", { value: "free" }],
+  ["--skip", { value: "free" }],
+  ["--add", { value: "free" }],
+  ["--claim", { value: "free" }],
+  ["--release", { value: "free" }],
+  ["--team", { value: "free" }],
+  ["--rhythm", { value: "free" }],
+  ["--depth", { value: "words", words: DEPTH_VALUES }],
+  ["--test-strategy", { value: "words", words: DEPTH_VALUES }],
+  ["--review", { value: "words", words: ["adversarial", "advisory", "none"] }],
+  ["--guard-policy", { value: "words", words: GUARD_POLICY_VALUES }],
+  ["--change-control", { value: "words", words: GUARD_POLICY_VALUES }],
+  ["--project-type", { value: "words", words: ["greenfield", "brownfield"] }],
+]);
+
+/** The shape of a flag `next` takes, or null when it takes no such flag. */
+export function nextFlagShape(token: string): NextFlagShape | null {
+  const listed = NEXT_FLAGS.get(token);
+  if (listed !== undefined) return listed;
+  if (CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === token)) {
+    return { value: "words", words: CEREMONY_SETTINGS };
+  }
+  if (token.startsWith("--") && guardFenceFromConfigKey(token.slice(2)) !== null) {
+    return { value: "words", words: CEREMONY_SETTINGS };
+  }
+  return null;
+}
+
+/**
+ * Whether one argument is flags and their values and nothing else. One quoted
+ * argument can hold the whole request, as Kiro IDE's PowerShell hands it over,
+ * so a bare word inside it that is not a flag's value makes it the person's
+ * sentence: "--help flag for the reverser" is what they asked for, while
+ * "--choice=Approve Plan" is one flag and its value. Only the second kind is a
+ * token `next` can refuse to take without dropping a word of a request.
+ */
+export function argumentIsFlagShaped(arg: string): boolean {
+  const tokens = arg.split(/\s+/).filter((token) => token.length > 0);
+  if (tokens.length === 0) return false;
+  for (let index = 0; index < tokens.length; index++) {
+    if (!tokens[index].startsWith("--")) return false;
+    const next = tokens[index + 1];
+    if (next !== undefined && !next.startsWith("-")) index++;
+  }
+  return true;
+}
+
+/**
+ * Which of the three kinds one token on a `next` line is: a flag this engine
+ * takes, a flag-shaped token it does not take (the agent's own argument, a name
+ * the person misspelt, or a flag they are asking to have built), or a word of
+ * the person's own.
+ *
+ * `following` is the token after it, which is what settles the four flags this
+ * engine takes only when something follows them.
+ */
+export function nextTokenKind(token: string, following: string | undefined): "flag" | "untaken" | "words" {
+  const shape = nextFlagShape(token);
+  if (shape !== null && (shape.needsFollowing !== true || following !== undefined)) return "flag";
+  return argumentIsFlagShaped(token) ? "untaken" : "words";
+}
+
 // Scope-owned ceremonies: env kill switch, then intent, then scope, then on.
 export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation", "plan_approval", "collaborators"] as const;
 export type CeremonyKey = (typeof CEREMONY_KEYS)[number];
@@ -39051,6 +39454,7 @@ export const CEREMONY_FLAGS: Record<CeremonyKey, string> = {
   plan_approval: "--plan-approval",
   collaborators: "--collaborators",
 };
+
 export type CeremonyPolicy = Record<CeremonyKey, CeremonySetting>;
 export interface CeremonyResolution {
   key: CeremonyKey;
@@ -39920,7 +40324,6 @@ export function parseTypedGuardSwitches(prompt: string): GuardSwitch[] {
 
 export function guardSwitchRefusal(
   wanted: GuardSwitch,
-  context: "config" | "intent-create",
   // The person only asked about the switch since the last decision.
   asked = false,
   projectDir?: string,
@@ -39943,22 +40346,6 @@ export function guardSwitchRefusal(
   // works there is named in place of the chat's.
   const ownTerminal = humanTurnMintAllowed() && personAtOwnTerminal(projectDir);
   const hint = humanTurnMintAllowed() && !ownTerminal ? "" : unattendedHumanPresenceHint(projectDir);
-  // Before the work exists, the person's own words at the compose gate or
-  // scope confirmation are what turn a check off for it. Otherwise the agent
-  // creates the work and then runs the setter itself for what they asked.
-  if (context === "intent-create") {
-    if (wanted.key === "plan-approval") {
-      const setter = renderGuardOperation({ kind: "lower-fence", fence: "plan-approval" }, { harnessDir: harnessDir() });
-      return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call. Create the piece of work without it; when they ask for it in their own words, run \`${setter}\` yourself and say in one line that it is off for this piece of work.${hint}`;
-    }
-    if (wanted.key === "guard-policy") {
-      // The source install runs the utility directly, as the lower-fence setter does.
-      const setter = aidlcInvocation().startsWith("bun ")
-        ? `${aidlcToolInvocation("utility")} config-change --guard-policy ${wanted.value}`
-        : aidlcDispatcherInvocation(`config set guard-policy ${wanted.value}`);
-      return `Creating this intent with Guard Policy ${wanted.value} would lower fences, which is the person's call. Create it, then, when they ask for it in their own words, run \`${setter}\` yourself and say in one line what changed. A scope default applies without asking.${hint}`;
-    }
-  }
   // Lowering a check is the person's call: the setter carries it out when a
   // person has spoken since the last decision, so this refusal means no reply
   // from them has arrived (or an unattended driver is running).

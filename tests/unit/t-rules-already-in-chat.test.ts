@@ -553,6 +553,48 @@ describe("Kiro IDE: the chat holds the steering file it captured when it started
     expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
   });
 
+  // A second run reported on #2167 piped most steps through a filter that
+  // dropped rules_content; the engine records a delivery as it prints the step,
+  // so the pipe outside it left every later step a pointer. The guard card
+  // notes the shell call it lets through, and the next card forgets what this
+  // chat's last step named when that call piped or captured a step away.
+  test("a step the agent piped or captured away does not count: the next step carries the text again", async () => {
+    const proj = await kiroIdeProject();
+    const sid = kiroChat();
+    await kiroIdePrompt(proj, sid);
+    expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
+    expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
+    const record = join(proj, "aidlc", ".aidlc-sessions", `${sid}.rules-delivered.json`);
+    const card = (tool: string, command: string) =>
+      kiroIdeHook(proj, "guard-tool-call", {
+        hook_event_name: "PreToolUse",
+        session_id: sid,
+        tool_name: tool,
+        tool_input: { command, cwd: proj },
+      });
+    const piped = [
+      ["execute_bash", "aidlc engine orchestrate next 2>&1 | python3 -c \"import sys,json; d=json.load(sys.stdin); " +
+        "print(json.dumps({k:v for k,v in d.items() if k not in ('steering','rules_in_context','rules_content')}))\""],
+      ["execute_bash", "out=$(aidlc engine orchestrate next 2>&1); echo \"$out\" | head -50"],
+      ["execute_pwsh", "$x = aidlc engine orchestrate next | ConvertFrom-Json"],
+    ];
+    for (const [tool, command] of piped) {
+      // The card lets the call through; the engine runs the step with the pipe outside it.
+      await card(tool, command);
+      expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(sid))), command).toBe(true);
+      // The agent's next call is the next card: the piped step is forgotten.
+      await card(tool, "aidlc engine orchestrate next");
+      expect((JSON.parse(readFileSync(record, "utf-8")) as { last: string }).last, command).toBe("");
+      expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(sid))), command).toBe(true);
+      expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(sid))), command).toBe(true);
+    }
+    // A bare step noted and caught up leaves the record alone.
+    await card("execute_bash", "aidlc engine orchestrate next");
+    await card("execute_bash", "aidlc engine orchestrate next 2>&1");
+    expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
+    await kiroIdeStop(proj, sid);
+  });
+
   test("two chats at once: the text unless every chat with an open turn holds the same file", async () => {
     const proj = await kiroIdeProject();
     const a = kiroChat();

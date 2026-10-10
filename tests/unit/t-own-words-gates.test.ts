@@ -56,6 +56,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { exactOptionPick } from "../../dist/claude/.claude/tools/aidlc-reply-reader.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { aidlcToolInvocation } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 import { recordProtectedHumanResponse } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -588,6 +589,24 @@ describe("a protected checkpoint question keeps the person's reply", () => {
   test("nothing is recorded without a reply", () => {
     expect(() => require("Approve")).toThrow(/requires the person's reply/);
     expect(recordProtectedHumanResponse(proj, session, "Cancelled", null).recorded).toBe(false);
+  });
+
+  // The way back it names runs on the install: the bolt route as this tree
+  // invokes it, never a bare `aidlc bolt`, which no dispatcher has.
+  test("a checkpoint answer with no question open names the install's bolt command", () => {
+    let message = "";
+    try {
+      requireProtectedResponse(proj, "no-such-session", {
+        kind: "checkpoint-approval", targetDigest: protectedTargetDigest({ units: ["alpha"] }), choice: "Approve",
+      });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    const bolt = aidlcToolInvocation("bolt");
+    expect(message).toContain("no such question is open for this session");
+    expect(message).toContain(`${bolt} checkpoint --action ask`);
+    expect(message).toContain(`${bolt} swarm-checkpoint --action ask`);
+    expect(message).not.toContain("aidlc bolt ");
   });
 
   test("a long run of replies keeps the latest words, bounded", () => {

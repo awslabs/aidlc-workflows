@@ -644,13 +644,23 @@ describe("t114 help-request routing", () => {
 
   // Live (Claude Code, poc and express): the request printed AI-DLC's version
   // and started nothing, so the person had to say it again.
-  test("a utility flag inside a description stays part of the request", () => {
+  // A flag-shaped word inside a description is never AI-DLC's own utility, and
+  // it is never read as one. What it IS depends on what the person meant, which
+  // only the agent can tell, so `next` takes nothing from the line and names
+  // what it could not take; one re-run with the delimiter keeps their words
+  // whole, flag-shaped word and all.
+  test("a utility flag inside a description is not run, and survives the delimiter", () => {
     for (const flag of ["--version", "--status", "--help", "--doctor"]) {
       proj = createOrchestrationTestProject();
       const said = `add a ${flag} flag that prints the version from package.json`;
-      const out = runNext(proj, said.split(" ")).out;
-      expect(out, flag).toContain('"kind":"ask"');
-      expect(out, flag).not.toContain(" version`, print its output verbatim");
+      const first = runNext(proj, said.split(" "));
+      expect(first.out, flag).toContain('"kind":"print"');
+      expect(first.out, flag).toContain(flag);
+      expect(first.out, flag).not.toContain(" version`, print its output verbatim");
+      expect(first.out, flag).not.toContain('"narration"');
+      const again = runNext(proj, ["--", said]).out;
+      expect(again, flag).toContain('"kind":"ask"');
+      expect(again, flag).toContain(said);
       cleanupTestProject(proj);
       proj = "";
     }
@@ -868,13 +878,36 @@ describe("t114 cutover: no --args swallow", () => {
 // <name> arg, so the engine just passes args[1] through when present.
 // ===========================================================================
 describe("t114 workspace verbs -> terminal print naming the handler", () => {
+  // A name is the switch only for a record that exists; these seed one. A name
+  // that is no record is still a print (the agent reads it), never freeform.
+  function seedSpace(dir: string, name: string): void {
+    mkdirSync(join(dir, "aidlc", "spaces", name, "intents"), { recursive: true });
+  }
+  function seedIntentRow(dir: string, slug: string): void {
+    const intents = join(dir, "aidlc", "spaces", "default", "intents");
+    mkdirSync(intents, { recursive: true });
+    const registry = join(intents, "intents.json");
+    const rows = existsSync(registry) ? JSON.parse(readFileSync(registry, "utf-8")) as unknown[] : [];
+    rows.push({ uuid: `00000000-0000-7000-8000-${slug.padEnd(12, "0").slice(0, 12)}`, slug, dirName: `260711-${slug}`, status: "in-flight" });
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`, "utf-8");
+    // A record on disk, as the utility requires before it selects by slug.
+    mkdirSync(join(intents, `260711-${slug}`), { recursive: true });
+    writeFileSync(join(intents, `260711-${slug}`, "aidlc-state.md"), "# AI-DLC State Tracking\n", "utf-8");
+  }
+
   test("20: `space teamB` -> print naming aidlc.ts engine space teamB (switch, not freeform)", () => {
     proj = createOrchestrationTestProject();
+    seedSpace(proj, "teamb");
     const out = runNext(proj, ["space", "teamB"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("aidlc.ts engine space teamB");
     // It must NOT be misread as a new-work freeform intent that advances state.
     expect(out).not.toContain('"kind":"run-stage"');
+    // Nor is a name that is no space: the agent is handed it to read.
+    const unknown = runNext(proj, ["space", "teamc"]).out;
+    expect(unknown).toContain('"kind":"print"');
+    expect(unknown).toContain("The person typed: \\\"space teamc\\\"");
+    expect(unknown).not.toContain('"kind":"run-stage"');
   });
 
   test("21: bare `space` (no arg) -> print naming aidlc.ts engine space (read-only listing)", () => {
@@ -888,6 +921,7 @@ describe("t114 workspace verbs -> terminal print naming the handler", () => {
 
   test("22: `intent some-slug` -> print naming aidlc.ts engine intent some-slug", () => {
     proj = createOrchestrationTestProject();
+    seedIntentRow(proj, "some-slug");
     const out = runNext(proj, ["intent", "some-slug"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("aidlc.ts engine intent some-slug");
@@ -914,6 +948,8 @@ describe("t114 workspace verbs -> terminal print naming the handler", () => {
     // says outright that no workflow step follows, with a workflow mid-stage.
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
+    seedSpace(proj, "teamb");
+    seedIntentRow(proj, "some-slug");
     const boundary =
       "Do not call `next` or `report`, run a stage, or offer to resume a workflow after this command";
     for (const args of [["space", "teamB"], ["space"], ["intent", "some-slug"], ["space-create", "teamB"]]) {
@@ -1722,15 +1758,22 @@ describe("t114 retired flags are consumed, not description text", () => {
     expect(pendingDescription(proj, out)).toBe("build auth across both repos");
   });
 
-  test("genuinely unknown flag-looking tokens remain lossless task text (#847)", () => {
+  test("genuinely unknown flag-looking tokens stay lossless, through the delimiter (#847)", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
+    // The engine takes no `--dark-mode`, so it starts no work named after it
+    // and tells the agent what it could not take.
+    const first = runNext(proj, ["--new-intent", "--scope", "poc", "a dashboard with", "--dark-mode"]).out;
+    expect(first).toContain('"kind":"print"');
+    expect(first).toContain("--dark-mode");
+    expect(first).not.toContain("intent create");
+    // Marked as the person's words, every token of theirs reaches creation.
     const out = runNext(proj, [
       "--new-intent",
       "--scope",
       "poc",
-      "a dashboard with",
-      "--dark-mode",
+      "--",
+      "a dashboard with --dark-mode",
     ]).out;
     expect(out).toContain("intent create");
     expect(pendingDescription(proj, out)).toBe("a dashboard with --dark-mode");
@@ -1749,6 +1792,18 @@ describe("t114 retired flags are consumed, not description text", () => {
     ]).out;
     expect(out).toContain("intent create");
     expect(pendingDescription(proj, out)).toBe("document the retired --init");
+  });
+
+  test.each([
+    [["--", "document", "--choice", "in the CLI"], "document --choice in the CLI"],
+    [["--", "--choice", "Approve Plan"], "--choice Approve Plan"],
+    [["--", "--choice=Approve Plan"], "--choice=Approve Plan"],
+  ])("a literal --choice remains work the person requested: %j", (words, description) => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["--new-intent", "--scope", "poc", ...words]).out;
+    expect(out).toContain("intent create");
+    expect(pendingDescription(proj, out)).toBe(description);
   });
 
   test("retired flags alone do not advance an active workflow", () => {

@@ -807,8 +807,16 @@ aidlc/                                    # neutral, harness-independent, commit
 ```
 
 **Resolution.** Workflow identity is resolved at one library chokepoint with
-precedence `in-process sessionId > AIDLC_SESSION_OVERRIDE > CODEX_THREAD_ID
-(Codex tools only) > PID ancestry > none`. Hook payload identity uses the in-process option and is authoritative.
+precedence `in-process sessionId > AIDLC_SESSION_OVERRIDE > the chat the host
+names in the agent's shell (CODEX_THREAD_ID; CLAUDE_CODE_SESSION_ID while its
+CLAUDE_PID process is alive; KIRO_SESSION_ID) > PID ancestry > none`. Hook payload identity uses the in-process option and is authoritative.
+Whatever id that yields passes through `resolveChat` before a binding is read: a
+helper's id maps to its root chat through the `<id>.helper-of` record the adapter
+wrote (Codex agents and review threads, Kiro CLI delegations, Copilot subagents),
+and a chat with no binding is bound at first contact by the rule SessionStart
+applies to a new chat (`classifyFirstContact`), so a chat the engine first meets
+in a command stays on the work it selected then. Only a process with no session
+identity at all reads the shared cursors directly.
 An invalid environment value is ignored. A valid environment override that
 differs from ancestry throws a typed refusal before a binding or workflow record
 path is derived. Explicit selectors and the resulting machine-local session
@@ -946,7 +954,7 @@ readers read the rows they share once (`copiedAuditBlocks` in
 
 11. **Phase boundary verification** -- Traceability checks run automatically at phase transitions (Initialization->Ideation auto-proceed, Ideation->Inception, Inception->Construction, Construction->Operation). This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 117-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 118-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 

@@ -221,9 +221,28 @@ Session identity follows one order:
 
 1. The host session id delivered to a hook.
 2. A valid `AIDLC_SESSION_OVERRIDE` inherited from the harness process.
-3. On Codex, the `CODEX_THREAD_ID` Codex gives every command it runs.
+3. The chat the host names in the agent's own shell: Codex's `CODEX_THREAD_ID`,
+   Claude Code's `CLAUDE_CODE_SESSION_ID` while the process its `CLAUDE_PID`
+   names is alive, or Kiro CLI's `KIRO_SESSION_ID`. A shell kept open after its
+   chat ended still carries the variable, which is why Claude Code's id is read
+   only while that chat's process is alive; a dead or absent pid leaves it
+   unread. Kiro CLI puts no pid in the shell, so its id stands on its own, as
+   Codex's does. Other harnesses name no chat there.
 4. The nearest live PID ancestry entry.
 5. No session identity.
+
+Every id found this way, and every hook payload's session id, passes through one
+door before any chat or work record is read. A helper's own id (a spawned Codex
+agent's or review thread's, a Kiro CLI delegation's, a Copilot subagent's) maps
+to the chat it belongs to: the adapter notes the pair from the first hook payload
+that shows both, the one fact the engine cannot learn by itself. That chat's
+binding is then read, and a chat with no binding yet (a host that never ran
+SessionStart for it, or hooks installed after the chat opened) is bound at first
+contact by the same rule SessionStart applies to a new chat: to the work the
+shared cursor names when this machine has joined it, else to no record, silently.
+From then on the chat stays on that work; a switch typed in another window moves
+the cursor, not the chat. A command with no session identity at all (your own
+terminal) keeps following the cursor.
 
 Once identity is known, an explicit space or intent selector wins, followed by
 that session's binding, then the shared `active-space` and `active-intent`

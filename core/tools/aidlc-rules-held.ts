@@ -422,6 +422,22 @@ export function noteRulesDelivered(
 }
 
 /**
+ * A step reply this chat's shell piped or captured away from the tool result
+ * (the Kiro IDE adapter reads the command's shape, #2167) did not put its rules
+ * in front of the agent: what the chat's last step named is forgotten (an empty
+ * name matches no bundle), so its next step carries the text again, once. The
+ * conductor persona the chat was handed is kept. A chat with no record has
+ * nothing to forget.
+ */
+export function forgetRulesDelivered(projectDir: string, sessionId: string | undefined): void {
+  const sid = validSessionId(sessionId);
+  if (sid === null) return;
+  const previous = readDelivery(projectDir, sid);
+  if (previous === null || previous.last === "") return;
+  writeDelivery(projectDir, sid, { v: 2, last: "", ...(previous.persona ? { persona: previous.persona } : {}) });
+}
+
+/**
  * True when this chat should be handed the conductor persona whose text hashes
  * to `personaSha256`: the host's command names its chat, and that chat has not
  * been handed this persona (a new chat on work under way, or one that

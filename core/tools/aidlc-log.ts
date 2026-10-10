@@ -40,7 +40,7 @@ import {
   unknownRuntimeSessionWarning,
   validSessionId,
   VERIFICATION_COMMAND_CHECKPOINT,
-  VERIFICATION_COMMAND_RECOVERY,
+  verificationCommandRecovery,
   validConstructionPolicyChange,
   CONSTRUCTION_POLICY_CHECKPOINT,
   CONSTRUCTION_POLICY_RECOVERY,
@@ -124,6 +124,9 @@ import {
   recordedReviewFileDigest,
   editedReviewNotice,
   REVIEW_EDITED_FIELD,
+  dictatedReviewNotice,
+  dispatchDictatedVerdict,
+  REVIEW_DICTATED_FIELD,
   recordFileTargetOrThrow,
   relativeRecordDir,
   recoveryGuidance,
@@ -485,7 +488,7 @@ function personSpokeInThisWork(pd: string): boolean {
 
 function verificationCommandFromFlags(pd: string, flags: Record<string, string>) {
   if ((flags.command !== undefined) === (flags["command-file"] !== undefined)) {
-    error("Verification command requires exactly one of --command or --command-file. " + VERIFICATION_COMMAND_RECOVERY);
+    error("Verification command requires exactly one of --command or --command-file. " + verificationCommandRecovery(flags.stage));
   }
   return flags["command-file"] !== undefined
     ? readVerificationCommandFile(pd, flags["command-file"])
@@ -1191,7 +1194,7 @@ function handleDecision(args: string[]): void {
     fields.Session = verificationCommandSession(pd, flags);
     const options = (flags.options ?? "").split(",").map((option) => option.trim().toLowerCase());
     if (options.length !== 2 || options[0] !== "approve" || options[1] !== "request changes") {
-      error('Verification command decision requires --options "Approve,Request Changes". ' + VERIFICATION_COMMAND_RECOVERY);
+      error('Verification command decision requires --options "Approve,Request Changes". ' + verificationCommandRecovery(flags.stage));
     }
   }
   const policyFields = flags.checkpoint === "construction-policy" ? constructionPolicyFields(pd, flags) : null;
@@ -2146,7 +2149,7 @@ function handleAnswer(args: string[]): void {
 
     if (verificationCommand) {
       if (!pendingVerificationDecision(pd, flags.stage, verificationCommand.sha256, fields.Session)) {
-        error("No matching pending DECISION_RECORDED with the same Command SHA-256 and Session exists in the current workflow. " + VERIFICATION_COMMAND_RECOVERY);
+        error("No matching pending DECISION_RECORDED with the same Command SHA-256 and Session exists in the current workflow. " + verificationCommandRecovery(flags.stage));
       }
       // Neither presence bypass nor autonomy supplies the person's recorded reply.
       requireProtectedResponse(pd, fields.Session, {
@@ -4142,6 +4145,19 @@ function handleReview(args: string[]): void {
           } else {
             verdictChangeNotices.push(notice);
           }
+        }
+        // The verdict the reviewer's dispatch already carried (a rendered
+        // verdict line in its brief, recorded by the plan-approval guard as
+        // REVIEW_VERDICT_DICTATED) is not the reviewer's own judgement when the
+        // reviewer wrote that same verdict: the row says so, and the person
+        // hears it once (with the verdict here; at the gate under strict). A
+        // reviewer that wrote the other verdict judged for itself: nothing.
+        if (
+          request !== undefined &&
+          dispatchDictatedVerdict(events, flags.reviewer, request, verdict as ReviewVerdict)
+        ) {
+          fields[REVIEW_DICTATED_FIELD] = "yes";
+          verdictChangeNotices.push(dictatedReviewNotice(node.name, flags.unit));
         }
       }
       let reviewBytes = body ?? snapshot.appendix;

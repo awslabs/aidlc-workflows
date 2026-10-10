@@ -2324,7 +2324,7 @@ describe("what the engine names while a plan waits", () => {
     return proj;
   }
   function resumeReport(proj: string, choice: string): unknown {
-    const result = spawnSync(BUN, [ORCHESTRATE, "report", "--result", "resumed", "--user-input", choice, "--project-dir", proj], {
+    const result = spawnSync(BUN, [ORCHESTRATE, "report", "--result", "resumed", "--choice", choice, "--project-dir", proj], {
       cwd: proj,
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
       encoding: "utf-8",
@@ -2347,11 +2347,11 @@ describe("what the engine names while a plan waits", () => {
     ["a scope change", "/aidlc --scope feature", ["--scope", "feature"]],
     ["a setting change", "/aidlc --depth minimal --review advisory", ["--depth", "minimal", "--review", "advisory"]],
     ["new work beside it", "/aidlc --new-intent add a csv export", ["--new-intent", "--scope", "poc", "add a csv export"]],
-    ["the resume menu's redo", "redo this stage from the start", null],
+    ["a redo asked for on re-entry", "redo this stage from the start", null],
   ] as const)("%s: every command the engine names gets through", (_label, typed, args) => {
     const proj = waitingPlan();
     reply(proj, typed);
-    const directive = args === null ? resumeReport(proj, "2") : next(proj, [...args]);
+    const directive = args === null ? resumeReport(proj, "redo") : next(proj, [...args]);
     const commands = namedCommands(directive).map(filled);
     expect(commands.length, `no command named: ${JSON.stringify(directive)}`).toBeGreaterThan(0);
     for (const command of commands) {

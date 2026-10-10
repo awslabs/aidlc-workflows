@@ -2048,8 +2048,6 @@ export function settleBuiltPlanReviews(projectDir: string, directive: Directive)
 // --details "Review the plan"`). The engine keeps the request and honors it:
 // the next `next` asks for approval before that plan is built.
 
-  /\b(?:review|re-?review|re-?approve|look (?:at|over)|see|show me|check|reopen)\b[^.?!]{0,40}\b(?:the |my |this |that )?(?:code )?plan\b/i;
-
 /**
  * A rules part's route, read only when it is the payload its receipt was
  * minted for: the marker is a file in the workspace. `unit` is the signed Unit

@@ -558,15 +558,16 @@ describe("a switch typed while the engine's question is open, before any work ex
 });
 
 // A setting the person typed that no parser can read, and nothing else with it:
-// the hook reads no switch at all, so it says nothing, and before this the
-// routing question at least echoed their words back. The turn now ends with what
-// could not be read, rather than running the stage on top of it while they
-// believe a check is off.
+// the hook reads no switch at all, so it says nothing. `next` cannot take the
+// token either, and says so to the agent alone: the person is never asked about
+// a name they misspelt, and no stage runs on top of it while they believe a
+// check went off. The agent has their line in the chat and reads what they
+// meant (t-flags-next-does-not-take holds the rule).
 describe("a setting the engine cannot read, typed on its own", () => {
   test.each([
     { typed: "--review-freeze", reason: "the guard. prefix is missing" },
     { typed: "--plan-aprroval", reason: "the name is misspelt" },
-  ])("with work open, the turn ends naming it ($reason)", ({ typed }) => {
+  ])("with work open, the agent is told and nothing of theirs changes ($reason)", ({ typed }) => {
     const proj = openWork();
     // The hook reads no switch here, so nothing of theirs is applied or said.
     expect(reply(proj, `/aidlc ${typed} off`)).not.toContain("could not read");
@@ -574,27 +575,30 @@ describe("a setting the engine cannot read, typed on its own", () => {
 
     const step = next(proj, [typed, "off"]);
     expect(step.directive?.kind, step.out).toBe("print");
-    expect(String(step.directive?.narration ?? ""), step.out)
-      .toContain(`I could not read "${typed}". Was that a setting you wanted?`);
+    // Nothing for the person, and nothing that re-asks them.
+    expect(step.directive?.narration, step.out).toBeUndefined();
+    expect(step.out).not.toContain("could not read");
+    expect(String(step.directive?.message ?? ""), step.out).toContain(`${typed} off`);
     // Nothing ran on top of the question, and nothing changed.
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 
-  test("before any work exists, the same line ends the turn", () => {
+  test("before any work exists, the same print and nothing said to them", () => {
     const proj = emptyProject();
     const step = next(proj, ["--plan-aprroval", "off"]);
     expect(step.directive?.kind, step.out).toBe("print");
-    expect(String(step.directive?.narration ?? ""), step.out)
-      .toContain('I could not read "--plan-aprroval". Was that a setting you wanted?');
+    expect(step.directive?.narration, step.out).toBeUndefined();
+    expect(String(step.directive?.message ?? ""), step.out).toContain("--plan-aprroval off");
+    expect(step.out).not.toContain("could not read");
   });
 
-  test("said once: a readable switch beside it already told them", () => {
+  test("the hook says it once for a readable switch beside it, and the step adds nothing", () => {
     const proj = emptyProject();
     const note = reply(proj, "/aidlc --guard.review-freeze off --nonsense 1");
     expect(note).toContain('I could not read "--nonsense". Was that a setting you wanted?');
     const step = next(proj, ["--nonsense", "1"]);
-    const said = String(step.directive?.narration ?? "");
-    expect(said.split("I could not read").length - 1, said).toBe(1);
+    expect(step.directive?.narration, step.out).toBeUndefined();
+    expect(step.out).not.toContain("could not read");
   });
 });
 
@@ -609,7 +613,10 @@ describe("a request made only of a flag-shaped token the engine could not read",
     // The agent passes on the words it has left, as it does for any request.
     const step = next(proj, ["--nonsense", "1"]);
     expect(step.directive?.kind, step.out).not.toBe("ask");
-    expect(String(step.directive?.narration ?? ""), step.out).toContain("Tell me what to build");
+    // The token is not work, so no plan is offered for it and nothing is said
+    // to the person; the agent reads their line and comes back with their words.
+    expect(step.directive?.narration, step.out).toBeUndefined();
+    expect(String(step.directive?.message ?? ""), step.out).toContain("--nonsense 1");
     // So their switch is still waiting for the work they describe next.
     const printed = next(proj, ["--scope", scope, "--", "build the export"]);
     const made = createFromPrint(proj, printed);

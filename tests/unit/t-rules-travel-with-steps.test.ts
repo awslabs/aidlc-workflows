@@ -1,4 +1,4 @@
-// covers: function:withAgentNotes, function:validateDirective, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report
+// covers: function:withAgentNotes, function:verificationCommandRecovery, function:validateDirective, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report
 //
 // A live Kiro IDE journey ran from start to Construction with the agent never
 // loading the aidlc skill or a stage protocol, so every rule that lives only
@@ -291,6 +291,29 @@ describe("t-rules-travel-with-steps: the notes and their checks", () => {
     expect(validateDirective({ kind: "print", message: "x", question_note: QUESTION_NOTE }).valid).toBe(false);
     expect(validateDirective({ kind: "print", message: "x", change_notices: ["A line."], change_notices_note: CHANGE_NOTICES_NOTE }).valid).toBe(true);
   });
+
+  for (const invocation of ["aidlc engine orchestrate", "bun .codex/tools/aidlc-orchestrate.ts"]) {
+    test(`an unauthorized verification command carries the registration order: ${invocation}`, () => {
+      const step = {
+        kind: "run-stage", stage: "code-generation", gate: true,
+        construction_checkpoint: { command_authorized: false },
+      };
+      const note = String(withAgentNotes!(step, invocation).gate_note);
+      const log = invocation.replace(/aidlc-orchestrate\.ts$/, "aidlc-log.ts").replace(/ orchestrate$/, " log");
+      const state = invocation.replace(/aidlc-orchestrate\.ts$/, "aidlc-state.ts").replace(/ orchestrate$/, " state");
+      expect(note).toContain(`Before showing the question, register it with \`${log} decision --stage code-generation`);
+      expect(note).toContain("then end the turn and wait for the person's reply");
+      expect(note).toContain("do not register it again after the reply");
+      expect(note).toContain(`${log} answer --stage code-generation --checkpoint verification-command`);
+      expect(note).toContain(`${state} set-construction-verification-command --command-file verification-command.txt`);
+      expect(note.indexOf(`${log} decision`)).toBeLessThan(note.indexOf("Show the returned canonical command"));
+      expect(note.indexOf("wait for the person's reply")).toBeLessThan(note.indexOf(`${log} answer`));
+      expect(note).not.toContain("--session");
+      expect(withAgentNotes!({
+        ...step, construction_checkpoint: { command_authorized: true },
+      }, invocation).gate_note).toBeUndefined();
+    });
+  }
 });
 
 describe("t-rules-travel-with-steps: the Kiro agent prompts", () => {

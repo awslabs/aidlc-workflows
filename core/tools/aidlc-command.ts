@@ -199,11 +199,6 @@ const DISPATCHER_INTENT_VERBS = new Set([
   "remove-repo",
 ]);
 const DISPATCHER_SPACE_VERBS = new Set(["list", "switch", "create"]);
-const DISPATCHER_RESERVED_FUTURE = new Set([
-  "rename",
-  "show",
-  "birth",
-]);
 
 type DispatcherIntentLifecycleVerb = "archive" | "unarchive";
 type DispatcherIntentRepoVerb = "add-repo" | "remove-repo";
@@ -301,20 +296,13 @@ export function parseDispatcherWorkspaceCommand(
   if (verbOrName === "help" || verbOrName === "-h") {
     return { kind: "help", noun };
   }
-  if (DISPATCHER_RESERVED_FUTURE.has(verbOrName)) {
-    return {
-      kind: "error",
-      noun,
-      message:
-        `${noun} ${verbOrName} is reserved for a future workspace verb and is not implemented yet. ` +
-        `Use ${noun} switch ${verbOrName} to select an existing record with that name.`,
-    };
-  }
   if (noun === "intent") {
     if (verbOrName === "list") return dispatcherWorkspaceList(noun, tokens);
     if (verbOrName === "switch") {
       const name = tokens[2];
-      return name === undefined
+      // At a shell there is no agent to hand extra words to, so they are a
+      // usage error here, never dropped in silence.
+      return name === undefined || tokens.length > 3
         ? missingDispatcherWorkspaceName(noun, "switch")
         : { kind: "switch", noun, name, explicit: true };
     }
@@ -332,7 +320,9 @@ export function parseDispatcherWorkspaceCommand(
     if (verbOrName === "list") return dispatcherWorkspaceList(noun, tokens);
     if (verbOrName === "switch") {
       const name = tokens[2];
-      return name === undefined
+      // At a shell there is no agent to hand extra words to, so they are a
+      // usage error here, never dropped in silence.
+      return name === undefined || tokens.length > 3
         ? missingDispatcherWorkspaceName(noun, "switch")
         : { kind: "switch", noun, name, explicit: true };
     }
@@ -349,6 +339,7 @@ export function parseDispatcherWorkspaceCommand(
   ) {
     return { kind: "error", noun, message: `invalid ${noun} command` };
   }
+  if (tokens.length > 2) return missingDispatcherWorkspaceName(noun, "switch");
   return { kind: "switch", noun, name: verbOrName, explicit: false };
 }
 

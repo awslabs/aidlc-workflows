@@ -230,9 +230,17 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
       { tool: "write", sessionID: "S-OC-child", callID: "cw" },
       { args: { filePath: join(root, "src", "b.ts") } },
     );
-    const sessions = readFileSync(capture, "utf-8").trim().split("\n")
-      .map((line) => (JSON.parse(line) as { session_id?: unknown }).session_id);
-    expect(sessions).toEqual(["S-OC", "S-OC", "S-OC"]);
+    // A reviewer task reaches the guard as a Task too: the guard records a brief
+    // that already carries the verdict, and refuses nothing for a reviewer.
+    await before(
+      { tool: "task", sessionID: "S-OC", callID: "t2" },
+      { args: { subagent_type: "aidlc-architecture-reviewer-agent", prompt: "Review u1.\n\n**Verdict:** READY\n" } },
+    );
+    const calls = readFileSync(capture, "utf-8").trim().split("\n")
+      .map((line) => JSON.parse(line) as { session_id?: unknown; tool_name?: string; tool_input?: { subagent_type?: string } });
+    expect(calls.map((call) => call.session_id)).toEqual(["S-OC", "S-OC", "S-OC", "S-OC"]);
+    expect(calls[3].tool_name).toBe("Task");
+    expect(calls[3].tool_input?.subagent_type).toBe("aidlc-architecture-reviewer-agent");
   });
 
   test("state-transition, review-freeze and reviewer-scope calls carry the owning session id", async () => {
@@ -259,6 +267,49 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
         .map((line) => (JSON.parse(line) as { session_id?: unknown }).session_id);
       expect({ hook, sessions: [...new Set(sessions)] }).toEqual({ hook, sessions: ["S-OC"] });
     }
+  });
+
+  test("a child session's record forwards carry the owning session", async () => {
+    const root = freshProject();
+    const recorder = (capture: string) => [
+      'import { appendFileSync } from "node:fs";',
+      "export async function run(input: string): Promise<number> {",
+      `  appendFileSync(${JSON.stringify(capture)}, input + "\\n");`,
+      "  return 0;",
+      "}",
+    ].join("\n");
+    // Every forward a child's event makes: the task dispatch, a bash call's
+    // record writes, the subagent completion and the compaction.
+    const recorded = [
+      "aidlc-deliver-stage-rules.ts",
+      "aidlc-rebuild-stage-graph.ts",
+      "aidlc-write-audit-log.ts",
+      "aidlc-run-sensors.ts",
+      "aidlc-log-subagent.ts",
+      "aidlc-validate-state.ts",
+    ];
+    for (const hook of ["aidlc-plan-approval-guard.ts", "aidlc-review-freeze.ts", "aidlc-reviewer-scope.ts", "aidlc-state-transition-guard.ts"]) {
+      writeFileSync(join(root, ".aidlc", "hooks", hook), "export async function run(): Promise<number> { return 0; }\n");
+    }
+    for (const hook of recorded) writeFileSync(join(root, ".aidlc", "hooks", hook), recorder(join(root, `${hook}.jsonl`)));
+    const { client } = fakeClient({ "S-OC-child": "S-OC" });
+    const adapter = await createTestAdapter(client, root);
+    await adapter["tool.execute.before"](
+      { tool: "task", sessionID: "S-OC-child", callID: "t" },
+      { args: { subagent_type: "aidlc-developer-agent", prompt: "AIDLC-UNIT: todo-core" } },
+    );
+    await adapter["tool.execute.after"]({ tool: "bash", sessionID: "S-OC-child", callID: "b", args: { command: "echo hi" } });
+    await adapter["tool.execute.after"]({ tool: "task", sessionID: "S-OC-child", callID: "t", args: { subagent_type: "aidlc-developer-agent" } });
+    await adapter["experimental.session.compacting"]({ sessionID: "S-OC-child" });
+    for (const hook of recorded) {
+      const path = join(root, `${hook}.jsonl`);
+      if (!existsSync(path)) continue;
+      const sessions = readFileSync(path, "utf-8").trim().split("\n")
+        .map((line) => (JSON.parse(line) as { session_id?: unknown }).session_id);
+      expect({ hook, sessions: [...new Set(sessions)] }).toEqual({ hook, sessions: ["S-OC"] });
+    }
+    expect(existsSync(join(root, "aidlc-log-subagent.ts.jsonl"))).toBe(true);
+    expect(existsSync(join(root, "aidlc-validate-state.ts.jsonl"))).toBe(true);
   });
 
   test("an owner lookup that fails refuses the call instead of guarding it under another session", async () => {

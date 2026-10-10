@@ -36,6 +36,7 @@ import {
   seededAuditDir,
   seededRecordDir,
   seededStateFile,
+  WORKER_BRIEF_SECTIONS_FIXTURE,
 } from "../harness/fixtures.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -176,7 +177,7 @@ function dispatch(proj: string, session: string, contract: string) {
     hook_event_name: "PreToolUse", session_id: session, tool_name: "runSubagent",
     tool_input: {
       agentName: "aidlc-developer-agent", description: "Build the approved plan",
-      prompt: `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${contract}\nBuild the approved plan.`,
+      prompt: `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${contract}${WORKER_BRIEF_SECTIONS_FIXTURE}Build the approved plan.`,
     },
   });
 }
