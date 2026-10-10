@@ -146,6 +146,7 @@ import {
   clearSessionIntentSwitch,
   type UnitCheckpoint,
   unitOpenCheckpoints,
+  ambiguousWorkspaceRecordDirs,
   approvedConstructionUnits,
   approvedTogetherFollowers,
   approvesTogetherStages,
@@ -14119,6 +14120,19 @@ function unknownWorkspaceWordStep(
         ? ` (and ${recent.more} more; \`${aidlcDispatcherInvocation(noun)} list${noun === "intent" ? " --all" : ""}\` shows them all).`
         : ".");
   const typed = [noun, ...(command.explicit ? ["switch"] : []), name, ...(command.words ?? [])].join(" ");
+  // One slug on several records: the utility would refuse it as ambiguous, so
+  // the agent gets the record dirs to switch by, or to ask with.
+  const same = ambiguousWorkspaceRecordDirs(pd, noun, name);
+  if (same.length > 1) {
+    // Words after the name are still the person's request: they are acted on
+    // for the record picked, as after any switch.
+    const rest = command.words?.length
+      ? " After the switch, act on the rest of what they typed for the record they picked, or ask them once in plain words if you cannot tell what they meant."
+      : "";
+    return `\`${noun} ${name}\` names ${same.length} ${noun}s: ${same.join(", ")}, so nothing ran and nothing changed. ` +
+      `Run \`${aidlcDispatcherInvocation(noun)} switch <record dir>\` for the one the person meant; if you cannot tell, ` +
+      `ask them once in plain words. The person typed: "${typed}".${rest}`;
+  }
   const names = command.explicit
     ? `\`${noun} switch ${name}\` names no ${noun}: none is named "${name}"`
     : `\`${noun} ${name}\` names no ${noun} verb, and no ${noun} is named "${name}"`;

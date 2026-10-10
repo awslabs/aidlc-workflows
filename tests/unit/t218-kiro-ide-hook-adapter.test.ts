@@ -1142,6 +1142,68 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
+  // The chat's own selection decides which space a bare name is looked up in:
+  // a chat bound to another space switches to that space's intent off-band,
+  // while a chat bound to the default space is handed the word.
+  test("8c3: the prompt seam judges a bare name against the chat's own space", () => {
+    const dir = scratchProject(true);
+    try {
+      const teamb = join(dir, "aidlc", "spaces", "teamb", "intents");
+      mkdirSync(join(teamb, "260711-auth"), { recursive: true });
+      writeFileSync(join(teamb, "260711-auth", "aidlc-state.md"), "# AI-DLC State Tracking\n", "utf-8");
+      writeFileSync(join(teamb, "intents.json"), `${JSON.stringify([
+        { uuid: "00000000-0000-7000-8000-000000000021", slug: "auth", dirName: "260711-auth", status: "in-flight" },
+      ], null, 2)}\n`, "utf-8");
+      writeSessionBinding(dir, "sess_teamb_chat", "teamb", "260711-auth", "switch");
+      writeSessionBinding(dir, "sess_default_chat", DEFAULT_SPACE, DEFAULT_RECORD_DIR, "switch");
+      const prompt = (session: string) => runIdeStdin(dir, "verb-intercept", JSON.stringify({
+        session_id: session, hook_event_name: "UserPromptSubmit", cwd: dir, prompt: "/aidlc intent auth",
+      }));
+      const bound = prompt("sess_teamb_chat");
+      expect(bound.code, bound.stderr).toBe(0);
+      expect(bound.stdout).toContain("Relay the output below");
+      expect(bound.stdout).toContain("Now working on `auth` in space `teamb`.");
+      const elsewhere = prompt("sess_default_chat");
+      expect(elsewhere.code, elsewhere.stderr).toBe(0);
+      expect(elsewhere.stdout).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A slug two records in the chat's space share stays with the seam: the
+  // utility answers in that space, naming both record dirs, instead of the
+  // conductor resolving the name against another chat's selection.
+  test("8c4: a shared slug is answered off-band in the chat's own space", () => {
+    const dir = scratchProject(true);
+    try {
+      const teamb = join(dir, "aidlc", "spaces", "teamb", "intents");
+      for (const record of ["260711-auth", "260712-auth"]) {
+        mkdirSync(join(teamb, record), { recursive: true });
+        writeFileSync(join(teamb, record, "aidlc-state.md"), "# AI-DLC State Tracking\n", "utf-8");
+      }
+      writeFileSync(join(teamb, "intents.json"), `${JSON.stringify([
+        { uuid: "00000000-0000-7000-8000-000000000041", slug: "auth", dirName: "260711-auth", status: "in-flight" },
+        { uuid: "00000000-0000-7000-8000-000000000042", slug: "auth", dirName: "260712-auth", status: "in-flight" },
+      ], null, 2)}\n`, "utf-8");
+      writeSessionBinding(dir, "sess_shared_slug", "teamb", "260711-auth", "switch");
+      const r = runIdeStdin(dir, "verb-intercept", JSON.stringify({
+        session_id: "sess_shared_slug", hook_event_name: "UserPromptSubmit", cwd: dir, prompt: "/aidlc intent auth",
+      }));
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toContain("Relay the output below");
+      // The utility's own line, read from the JSON it printed between the markers.
+      const relayed = /--- OUTPUT [0-9A-F]{16} \(exit (\d+)\) ---\n([\s\S]*?)\n--- END OUTPUT/.exec(r.stdout);
+      expect(relayed, r.stdout).not.toBeNull();
+      expect(relayed?.[1]).toBe("1");
+      expect((JSON.parse(relayed?.[2] ?? "{}") as { error?: string }).error).toBe(
+        'Ambiguous intent "auth" in space "teamb" (2 match). Use the full record-dir name: 260711-auth, 260712-auth.',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("8d: empty-prompt IDEs intercept execute_pwsh once and preserve exit-2 refusal semantics", () => {
     const dir = scratchProject(true);
     try {

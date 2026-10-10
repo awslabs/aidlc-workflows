@@ -1748,7 +1748,10 @@ function terminalCommandFromWorkspaceCommand(
 // matching rules are byte-for-byte the engine's parseNextFlags terminal branches
 // (read-only flag anywhere; workspace verb only at index 0) so the seam and the
 // engine can never disagree about what is terminal.
-export function classifyTerminalCommand(argv: string[], projectDir?: string): TerminalCommand | null {
+// `projectDir` lets a switch be judged against the records there, and
+// `sessionId` names the chat whose selection decides the space (a hook knows
+// its payload's chat; the invoking session is used otherwise).
+export function classifyTerminalCommand(argv: string[], projectDir?: string, sessionId?: string): TerminalCommand | null {
   const args = withoutEntryWord(argv);
   // A SOLE bare `help` / `-h` token is a help REQUEST (terminal, read-only);
   // mirrors parseNextFlags in the engine. Without this the token reads as
@@ -1785,7 +1788,14 @@ export function classifyTerminalCommand(argv: string[], projectDir?: string): Te
     // the shape alone is classified, as the engine's parser does.
     if (workspaceCommand.kind === "switch") {
       if (workspaceCommand.words !== undefined) return null;
-      if (projectDir !== undefined && !workspaceRecordExists(projectDir, workspaceCommand.noun, workspaceCommand.name)) {
+      if (
+        projectDir !== undefined &&
+        !workspaceRecordExists(projectDir, workspaceCommand.noun, workspaceCommand.name, sessionId) &&
+        // A slug several records share stays with the seam: the utility
+        // answers in the chat's own space, naming the record dirs, as it did
+        // before the record check existed.
+        ambiguousWorkspaceRecordDirs(projectDir, workspaceCommand.noun, workspaceCommand.name, sessionId).length < 2
+      ) {
         return null;
       }
     }
@@ -4290,24 +4300,55 @@ export function listIntents(
 function workspaceRecordList(
   projectDir: string,
   noun: WorkspaceNoun,
+  sessionId?: string,
 ): Array<{ name: string; dirName: string | null }> {
   try {
     if (noun === "space") return listSpaces(projectDir).map((space) => ({ name: space.name, dirName: null }));
-    const space = resolveWorkflowSelection(projectDir).space;
+    // The chat's own selection when the caller knows the chat (a hook with the
+    // payload's session); otherwise the invoking session, as the utility
+    // resolves it when the agent runs the switch.
+    const space = resolveWorkflowSelection(projectDir, sessionId ? { sessionId } : {}).space;
     return listIntents(projectDir, space).map((intent) => ({ name: intent.slug, dirName: intent.dirName }));
   } catch {
     return [];
   }
 }
 
-// Whether a name after `intent` or `space` is exactly a record the switch
-// would select: an intent by slug or record dir; a space by name, or by the
+// Whether a name after `intent` or `space` is exactly the record the switch
+// would select, as the utility selects it: an intent by its record dir, or by
+// a slug exactly one record on disk carries (two records with one slug are
+// ambiguous there, so neither is "the" record); a space by name, or by the
 // slug the utility stores it under (`space "My Space"` selects my-space). Any
 // other word is the agent's to read (Branch 1b).
-export function workspaceRecordExists(projectDir: string, noun: WorkspaceNoun, name: string): boolean {
-  const slug = noun === "space" ? slugify(name) : name;
-  return workspaceRecordList(projectDir, noun).some((record) =>
-    record.name === name || record.name === slug || record.dirName === name);
+export function workspaceRecordExists(
+  projectDir: string,
+  noun: WorkspaceNoun,
+  name: string,
+  sessionId?: string,
+): boolean {
+  const records = workspaceRecordList(projectDir, noun, sessionId);
+  if (noun === "space") {
+    const slug = slugify(name);
+    return records.some((record) => record.name === name || record.name === slug);
+  }
+  if (records.some((record) => record.dirName === name)) return true;
+  return records.filter((record) => record.name === name && record.dirName !== null).length === 1;
+}
+
+// The record dirs that share one slug in the selected space, when more than
+// one does: the utility refuses that slug as ambiguous, so the agent is handed
+// the dirs to pick from, or to ask with. Spaces have no such case.
+export function ambiguousWorkspaceRecordDirs(
+  projectDir: string,
+  noun: WorkspaceNoun,
+  name: string,
+  sessionId?: string,
+): string[] {
+  if (noun !== "intent") return [];
+  const dirs = workspaceRecordList(projectDir, noun, sessionId)
+    .filter((record) => record.name === name && record.dirName !== null)
+    .map((record) => record.dirName as string);
+  return dirs.length > 1 ? dirs : [];
 }
 
 // The most recent record names for the noun, newest first, capped, with how
