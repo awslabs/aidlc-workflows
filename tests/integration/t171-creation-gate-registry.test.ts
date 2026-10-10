@@ -318,6 +318,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(routing.ask_type, JSON.stringify(routing).slice(0, 300)).toBe("new-work-routing");
       for (const text of [routing.question, routing.numbered_prose_question]) {
         expect(text).toContain("This project already has 1 piece of work in progress, and none is currently selected:");
+        expect(text).not.toContain("New work routing");
         expect(text).toContain(here);
         expect(text).not.toContain(elsewhere);
       }

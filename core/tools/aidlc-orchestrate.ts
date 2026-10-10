@@ -5067,7 +5067,7 @@ function intentPickPromptIfRecordsExist(
         `(2) a separate new piece of work - Yes, set it up alongside the existing work as ` +
         `"${pendingWork.proposedScope}" work without changing it; or (3) a change to an ` +
         "existing remaining plan - select its record, then reshape it?",
-      `**New work routing** \u2014 This project already has ${inProgress}, ` +
+      `This project already has ${inProgress}, ` +
         `and none is currently selected: ${list}${unlisted}. You said: "${requestPreview(pendingWork.description)}".${documentSplitSentence(pendingWork.description)} What should I do?\n\n` +
         `${newWorkRoutingOptionLine(0, pendingWork.proposedScope, EXISTING_WORK_ROUTING_OPTIONS)}\n` +
         `${newWorkRoutingOptionLine(1, pendingWork.proposedScope, EXISTING_WORK_ROUTING_OPTIONS)}\n` +
@@ -8944,7 +8944,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
           : "Is this (1) part of that work - continue it; (2) a separate new piece of work - " +
             `Yes, set it up alongside the current one as "${inferred.scope}" work without changing it; `) +
         "or (3) a change to how the remaining plan is shaped?",
-      `**New work routing** — Work is already in progress on: "${activeLabel}". You said: "${requestPreview(flags.intent)}".${documentSplitSentence(flags.intent)} What should I do?\n\n` +
+      `Work is already in progress on: "${activeLabel}". You said: "${requestPreview(flags.intent)}".${documentSplitSentence(flags.intent)} What should I do?\n\n` +
         `${newWorkRoutingOptionLine(0, inferred.scope, options)}\n` +
         `${newWorkRoutingOptionLine(1, inferred.scope, options)}\n` +
         `${newWorkRoutingOptionLine(2, inferred.scope, options)}\n` +

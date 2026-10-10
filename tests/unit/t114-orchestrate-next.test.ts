@@ -1215,6 +1215,10 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
       "1. **Part of the active work**",
     );
     expect(directive.numbered_prose_question).toContain("4. **Other**");
+    // The question the person reads opens with the work in progress, not with a heading in the engine's words
+    // ("routing" is a reserved word in the voice contract; live on Kiro CLI and Codex the heading was what they saw).
+    expect(directive.numbered_prose_question).not.toContain("New work routing");
+    expect(directive.numbered_prose_question).toMatch(/^Work is already in progress on: /);
     expect(directive.question).toContain(
       `as "${directive.proposed_scope}" work`,
     );
