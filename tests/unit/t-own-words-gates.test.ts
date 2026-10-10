@@ -146,14 +146,23 @@ function picks(proj: string, label: string, options = ["Approve", "Request Chang
 describe("an exact pick is syntax, and only syntax", () => {
   const PLAN = ["Approve Plan", "Request Changes", "I'll edit the files"];
   test.each([
-    ["1", 0], ["2", 1], ["3", 2], ["(2)", 1], ["option 2", 1], ["b", 1], ["B.", 1],
+    ["1", 0], ["2", 1], ["3", 2], ["(2)", 1], ["option 2", 1],
     ["approve plan", 0], ["Approve Plan (Recommended)", 0], ["**Request Changes**", 1],
     ["\"I'll edit the files\"", 2], ["1. Approve Plan", 0], ["Approve Plan.", 0],
-    // A lettered pick, where the question offers lettered options.
-    ["A", 0], ["A)", 0], ["a)", 0], ["(b)", 1], ["A) Approve Plan", 0], ["b) Request Changes", 1],
-    ["C. I'll edit the files", 2],
+    // A letter before the label is a prefix: the label is the pick.
+    ["A) Approve Plan", 0], ["b) Request Changes", 1], ["C. I'll edit the files", 2],
   ] as const)("%s picks option %i", (reply, index) => {
     expect(exactOptionPick(reply, PLAN)).toBe(index);
+  });
+
+  // A lone letter is a pick only where the question showed letters: the
+  // questions file's own answer line. Chat shows a picker or numbers, so there
+  // it is the person's words, and the agent reads them.
+  test.each([
+    ["b", 1], ["B.", 1], ["A", 0], ["A)", 0], ["a)", 0], ["(b)", 1], ["option c", 2],
+  ] as const)("%s picks option %i on the lettered file line, and nothing in chat", (reply, index) => {
+    expect(exactOptionPick(reply, PLAN, true)).toBe(index);
+    expect(exactOptionPick(reply, PLAN)).toBeNull();
   });
 
   test.each([
@@ -161,6 +170,7 @@ describe("an exact pick is syntax, and only syntax", () => {
     "approve plan, but rename the handler", "", "   ",
   ])("%s is not an exact pick: the agent reads it", (reply) => {
     expect(exactOptionPick(reply, PLAN)).toBeNull();
+    expect(exactOptionPick(reply, PLAN, true)).toBeNull();
   });
 
   test("the primitives it owns keep their contracts", () => {
@@ -367,11 +377,33 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(events(proj, "WORKFLOW_PARKED")).toHaveLength(1);
   });
 
-  test.each(["2", "B", "b) Request Changes"])("an exact Request Changes (%s) is the person's pick: an approval is refused", (pick) => {
+  test.each(["2", "b) Request Changes"])("an exact Request Changes (%s) is the person's pick: an approval is refused", (pick) => {
     says(proj, pick);
     const refused = theirChoice(() => report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]));
     expect(refused.message).toContain("picked Request Changes");
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+  });
+
+  // The gate is shown as a picker or as numbered options, never with letters:
+  // a lone letter typed there is the person's words. The agent reads them (it
+  // may well read "B" as the second option); no tool takes the letter as a
+  // pick by position and holds it against the agent's reading.
+  test("a lone letter at the gate is their words, not a pick: the approval the agent read stands", () => {
+    says(proj, "B");
+    const done = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    expect(JSON.stringify(done)).not.toContain("picked Request Changes");
+    const approved = events(proj, "GATE_APPROVED");
+    expect(approved).toHaveLength(1);
+    expect(auditBlockField(approved[0].block, "Person Reply")).toBe("B");
+  });
+
+  test("a lone letter at the gate is their words, not a pick: the rejection the agent read stands", () => {
+    says(proj, "a");
+    const revised = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "x"]);
+    expect(revised.kind, JSON.stringify(revised)).toBe("print");
+    expect(JSON.stringify(revised)).not.toContain("picked Approve");
+    expect(events(proj, "GATE_REJECTED")).toHaveLength(1);
   });
 
   test("a Request Changes picked in the picker is the person's pick: an approval is refused", () => {
@@ -662,9 +694,7 @@ describe("a recovery question: exact picks are recorded, everything else is the 
 
   test.each([
     ["1", "reconfirm-summary"],
-    ["a", "reconfirm-summary"],
     ["Present the current summary again", "reconfirm-summary"],
-    ["b.", "request-changes"],
     ["2", "request-changes"],
   ])("%s is the person's exact pick of %s", (reply, op) => {
     ask();
@@ -672,7 +702,9 @@ describe("a recovery question: exact picks are recorded, everything else is the 
     expect(response()).toMatchObject({ selected_op: op, picked_by: "person" });
   });
 
-  test.each(["the first one", "Presnt the current summary again", "go with 2", "split the flow into two steps"])(
+  // The remedies are shown by number and name, never with letters: a lone
+  // letter is the person's words, read by the agent.
+  test.each(["the first one", "Presnt the current summary again", "go with 2", "split the flow into two steps", "a", "b."])(
     "%s waits for the agent's reading",
     (reply) => {
       ask();
