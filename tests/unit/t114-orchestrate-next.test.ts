@@ -890,6 +890,9 @@ describe("t114 workspace verbs -> terminal print naming the handler", () => {
     const rows = existsSync(registry) ? JSON.parse(readFileSync(registry, "utf-8")) as unknown[] : [];
     rows.push({ uuid: `00000000-0000-7000-8000-${slug.padEnd(12, "0").slice(0, 12)}`, slug, dirName: `260711-${slug}`, status: "in-flight" });
     writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`, "utf-8");
+    // A record on disk, as the utility requires before it selects by slug.
+    mkdirSync(join(intents, `260711-${slug}`), { recursive: true });
+    writeFileSync(join(intents, `260711-${slug}`, "aidlc-state.md"), "# AI-DLC State Tracking\n", "utf-8");
   }
 
   test("20: `space teamB` -> print naming aidlc.ts engine space teamB (switch, not freeform)", () => {

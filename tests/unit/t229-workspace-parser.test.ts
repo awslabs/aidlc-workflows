@@ -671,6 +671,60 @@ describe("utility handlers and reservation chokepoints", () => {
     }
   });
 
+  // "Exists" means the record the utility would select: two records with one
+  // slug are ambiguous there, and a registry row with no record dir selects
+  // nothing, so neither is a switch; the agent is handed the word instead.
+  test("a slug two records carry, or a row with no record dir, is no switch", () => {
+    const projectDir = scratchProject();
+    try {
+      const intentsRoot = join(projectDir, "aidlc", "spaces", "default", "intents");
+      // Two records on disk (a record dir holds aidlc-state.md) with one slug;
+      // the third row has no record dir.
+      for (const record of ["260711-auth", "260712-auth"]) {
+        mkdirSync(join(intentsRoot, record), { recursive: true });
+        writeFileSync(join(intentsRoot, record, "aidlc-state.md"), "# AI-DLC State Tracking\n", "utf-8");
+      }
+      writeFileSync(join(projectDir, "aidlc", "active-space"), "default\n", "utf-8");
+      writeFileSync(join(intentsRoot, "intents.json"), `${JSON.stringify([
+        { uuid: "00000000-0000-7000-8000-000000000011", slug: "auth", dirName: "260711-auth", status: "in-flight" },
+        { uuid: "00000000-0000-7000-8000-000000000012", slug: "auth", dirName: "260712-auth", status: "in-flight" },
+        { uuid: "00000000-0000-7000-8000-000000000013", slug: "ghost", dirName: "260713-ghost", status: "in-flight" },
+      ], null, 2)}\n`, "utf-8");
+      for (const args of [["intent", "auth"], ["intent", "auth", "fix", "it"], ["intent", "ghost"]]) {
+        const d = directive(projectDir, [...args]);
+        expect(d.kind, args.join(" ")).toBe("print");
+        expect(d.message, args.join(" ")).toContain(`The person typed: "${args.join(" ")}"`);
+        expect(d.message, args.join(" ")).not.toContain("The person also asked:");
+        expect(d.message, args.join(" ")).not.toContain("aidlc.ts engine intent auth`");
+      }
+      // The seam keeps a bare shared slug: the utility's own line answers in the
+      // chat's space, naming the record dirs. Words, and a row with no record
+      // dir, still go to the conductor.
+      expect(classifyTerminalCommand(["intent", "auth"], projectDir)).toEqual({ subcommand: "intent", arg: "auth", source: "workspace-verb" });
+      expect(classifyTerminalCommand(["intent", "auth", "fix", "it"], projectDir)).toBeNull();
+      expect(classifyTerminalCommand(["intent", "ghost"], projectDir)).toBeNull();
+      // A shared slug is named as such, with the record dirs to switch by.
+      const shared = directive(projectDir, ["intent", "auth"]).message;
+      expect(shared).toContain("`intent auth` names 2 intents: 260711-auth, 260712-auth, so nothing ran and nothing changed.");
+      expect(shared).toContain("engine intent switch <record dir>` for the one the person meant");
+      expect(shared).not.toContain("no intent is named");
+      expect(shared).not.toContain("After the switch, act on the rest");
+      // With words after the shared name, the words are still acted on, for the record picked.
+      const sharedWithWords = directive(projectDir, ["intent", "auth", "fix", "it"]).message;
+      expect(sharedWithWords).toContain("names 2 intents: 260711-auth, 260712-auth");
+      expect(sharedWithWords).toContain('The person typed: "intent auth fix it". After the switch, act on the rest of what they typed for the record they picked, or ask them once in plain words if you cannot tell what they meant.');
+      // A row with no record dir is no record: the ordinary unknown-word step.
+      expect(directive(projectDir, ["intent", "ghost"]).message).toContain('no intent is named "ghost"');
+      // The names list says each slug once; the full record dir still selects.
+      expect(directive(projectDir, ["intent", "auht"]).message).toContain("The intents here are: ghost, auth.");
+      const byDir = directive(projectDir, ["intent", "260712-auth"]);
+      expect(byDir.message).toContain("aidlc.ts engine intent 260712-auth`");
+      expect(classifyTerminalCommand(["intent", "260712-auth"], projectDir)).toEqual({ subcommand: "intent", arg: "260712-auth", source: "workspace-verb" });
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
   test("words after a name switch and reach the agent whole, flags included", () => {
     const projectDir = scratchProject();
     try {
