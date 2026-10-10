@@ -87,6 +87,11 @@ function recordedNow(item: AnswersItem, proj: string, start: Start): string {
     if (since("REQUEST_ROUTED")) return "Reshape the active work";
     return readAuditShardEvents(proj).slice(start.events).some((e) => e.event !== "HUMAN_TURN") ? "Part of the active work" : "none";
   }
+  // The project-type answer reclassifies the workspace: the row names the new type, with the person as its source.
+  if (item.question === "project-type") {
+    const row = readAuditShardEvents(proj).slice(start.events).findLast((e) => e.event === "WORKSPACE_RECLASSIFIED");
+    if (row) return /New Project Type\*\*: Brownfield/.test(row.block) ? "Yes, it is existing code" : "No, it stays a new project";
+  }
   if (since("PLAN_APPROVAL_RECORDED")) return "approved plan";
   if (since("GATE_APPROVED")) return "Approve";
   if (since("GATE_REJECTED")) return "Request Changes";
