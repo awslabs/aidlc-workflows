@@ -557,7 +557,7 @@ if (target === "verb-intercept") {
   const humanPrompt = hostEnvelopeTurnText(kiro.prompt ?? "");
   const invocation = extractNextInvocation(humanPrompt);
   const args = invocation.args;
-  const cmd = classifyTerminalCommand(args, projectDir);
+  const cmd = classifyTerminalCommand(args, projectDir, kiro.session_id?.trim() || undefined);
   // Turn-clock: bump a per-turn counter EVERY time this seam fires (it fires
   // once per turn, BEFORE the cmd===null exit so a bare-next turn still advances
   // the clock and a prior turn's latch goes stale). The read-only/nav latch
@@ -819,7 +819,7 @@ if (target === "guard-tool-call") {
     nextArgs[0] !== "compose" &&
     leadingOrchestratorVerb(nextArgs) === null &&
     !nextArgs.some((a) => ADVANCING_FLAGS.has(a)) &&
-    classifyTerminalCommand(nextArgs, cwd) === null;
+    classifyTerminalCommand(nextArgs, cwd, kiro.session_id?.trim() || undefined) === null;
 
   let counter = -1;
   let latchTurn = -2;

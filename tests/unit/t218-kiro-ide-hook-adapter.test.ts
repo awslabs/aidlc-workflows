@@ -1142,6 +1142,35 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
+  // The chat's own selection decides which space a bare name is looked up in:
+  // a chat bound to another space switches to that space's intent off-band,
+  // while a chat bound to the default space is handed the word.
+  test("8c3: the prompt seam judges a bare name against the chat's own space", () => {
+    const dir = scratchProject(true);
+    try {
+      const teamb = join(dir, "aidlc", "spaces", "teamb", "intents");
+      mkdirSync(join(teamb, "260711-auth"), { recursive: true });
+      writeFileSync(join(teamb, "260711-auth", "aidlc-state.md"), "# AI-DLC State Tracking\n", "utf-8");
+      writeFileSync(join(teamb, "intents.json"), `${JSON.stringify([
+        { uuid: "00000000-0000-7000-8000-000000000021", slug: "auth", dirName: "260711-auth", status: "in-flight" },
+      ], null, 2)}\n`, "utf-8");
+      writeSessionBinding(dir, "sess_teamb_chat", "teamb", "260711-auth", "switch");
+      writeSessionBinding(dir, "sess_default_chat", DEFAULT_SPACE, DEFAULT_RECORD_DIR, "switch");
+      const prompt = (session: string) => runIdeStdin(dir, "verb-intercept", JSON.stringify({
+        session_id: session, hook_event_name: "UserPromptSubmit", cwd: dir, prompt: "/aidlc intent auth",
+      }));
+      const bound = prompt("sess_teamb_chat");
+      expect(bound.code, bound.stderr).toBe(0);
+      expect(bound.stdout).toContain("Relay the output below");
+      expect(bound.stdout).toContain("Now working on `auth` in space `teamb`.");
+      const elsewhere = prompt("sess_default_chat");
+      expect(elsewhere.code, elsewhere.stderr).toBe(0);
+      expect(elsewhere.stdout).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("8d: empty-prompt IDEs intercept execute_pwsh once and preserve exit-2 refusal semantics", () => {
     const dir = scratchProject(true);
     try {
