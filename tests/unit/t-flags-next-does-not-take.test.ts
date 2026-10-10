@@ -223,6 +223,26 @@ function createdField(proj: string, field: string): string | null {
   return getField(readFileSync(join(intents(proj), record, "aidlc-state.md"), "utf-8"), field);
 }
 
+/**
+ * What a refused engine command said, as text. It arrives as JSON (`error: {"error":
+ * "..."}`), so on Windows the backslashes of a path inside it are escaped and the
+ * raw path never matches the raw output. Parse it, and fall back to the output as
+ * printed when it is not JSON.
+ */
+function errorText(out: string): string {
+  const start = out.indexOf("{");
+  const end = out.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    try {
+      const parsed = JSON.parse(out.slice(start, end + 1)) as { error?: unknown };
+      if (typeof parsed.error === "string") return parsed.error;
+    } catch {
+      // Not JSON: what was printed is what was said.
+    }
+  }
+  return out;
+}
+
 function lockMemory(proj: string): string {
   const dir = join(proj, "aidlc", "spaces", "default", "memory");
   mkdirSync(dir, { recursive: true });
@@ -235,6 +255,23 @@ function lockMemory(proj: string): string {
 // ---------------------------------------------------------------------------
 // The parser: one rule, no per-flag branch
 // ---------------------------------------------------------------------------
+
+// The refusal checks below compare a path against the parsed error, because the
+// command prints JSON: on Windows a path's backslashes are escaped inside it, so
+// the raw output never contains the raw path. This pins the reading itself.
+describe("a refused command's text is read from the JSON it prints", () => {
+  test("a Windows path inside the error survives the escaping", () => {
+    const windowsPath = "C:\\Users\\dev\\aidlc\\spaces\\default\\memory\\project.md";
+    const printed = `error: ${JSON.stringify({ error: `Your team set Guard Policy to strict in ${windowsPath}.` })}\n`;
+    // The raw output cannot be matched against the raw path, which is the Windows red.
+    expect(printed).not.toContain(windowsPath);
+    expect(errorText(printed)).toContain(windowsPath);
+  });
+
+  test("output that is not JSON is returned as printed", () => {
+    expect(errorText("plain words, no JSON here")).toBe("plain words, no JSON here");
+  });
+});
 
 describe("the parser reads a flag it does not take, before the person's words, as untaken", () => {
   test.each(ANSWER_FLAGS)("%s is untaken and is never the work's description", (flag, args) => {
@@ -450,8 +487,8 @@ describe("creation takes a lowering flag the command passes when the person aske
     const proj = emptyProject();
     const made = utility(proj, [...CREATE, "--plan-approval", "off"]);
     expect(made.status).toBe(1);
-    expect(made.out).toContain("No reply from the person has arrived since the last decision");
-    expect(made.out).not.toContain("Create the piece of work without it");
+    expect(errorText(made.out)).toContain("No reply from the person has arrived since the last decision");
+    expect(errorText(made.out)).not.toContain("Create the piece of work without it");
   });
 
   test("a message from another chat is not this chat's proof", () => {
@@ -481,7 +518,9 @@ describe("creation takes a lowering flag the command passes when the person aske
     say(proj, "I trust these plans, let it build them without me");
     const made = utility(proj, [...CREATE, "--plan-approval", "off"]);
     expect(made.status).toBe(1);
-    expect(made.out).toContain(path);
+    // The path is compared against the parsed error: a Windows path's backslashes
+    // are escaped inside the JSON the command prints.
+    expect(errorText(made.out)).toContain(path);
   });
 
   test("with work open, a Guard Policy the command lowers is theirs once they have spoken", () => {
