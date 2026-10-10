@@ -728,8 +728,9 @@ the two paths that actually exist for it:
 
 Kiro CLI and Kiro IDE provide their own model access, so AI-DLC configures no
 model provider for them. `aidlc config providers` states that model access
-comes with Kiro and asks nothing; so does the first-run wizard on Kiro IDE, while
-on Kiro CLI its step 2 chooses the session model instead. Provider flags are
+comes with Kiro and asks nothing; so does the first-run wizard on Kiro IDE when
+`kiro-cli` cannot be read, while on Kiro CLI, and on Kiro IDE with a readable
+`kiro-cli`, its step 2 chooses Kiro CLI's session model instead. Provider flags are
 refused, and the Providers row reads `[ok]` regardless of a legacy record.
 `aidlc config providers --reset --yes` clears a record left by an earlier build.
 `builtin` records from the previous build still load and read as harness-managed,
