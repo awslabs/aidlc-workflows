@@ -2101,15 +2101,76 @@ function canonicalizeLegacyCopilotHookArgv(argv: string[]): string[] {
     : argv;
 }
 
+/**
+ * Where the person's own words begin on this line, as an index into `argv`: the
+ * first word after the route the resolver named and the subcommand's own verb.
+ * Everything from there on is the subcommand's argv, which is where a request of
+ * theirs lives, so a token that looks like one of this launcher's flags among
+ * those words is one of their words and stays exactly where they typed it.
+ *
+ * `route` is how many leading tokens the resolver read as the route (the
+ * delegate's own argv is what is left), so the grammar decides the boundary and
+ * nothing here mirrors it. A token after one of our flags is that flag's value,
+ * never a word of theirs.
+ */
+function theirWordsBegin(argv: readonly string[], route: number): number | undefined {
+  let named = 0;
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (token === "--") return i;
+    // A token after any flag is that flag's value, never a word of theirs: the
+    // same rule nextArgsCarryRequestWords reads in aidlc-lib.ts, so a line like
+    // `config --harness kiro --project-dir <dir>` still names this launcher's
+    // own directory.
+    if (token.startsWith("-")) {
+      if (argv[i + 1] !== undefined && !argv[i + 1].startsWith("-")) i++;
+      continue;
+    }
+    named++;
+    if (named > route + 1) return i;
+  }
+  return undefined;
+}
+
 export function resolveAction(
   rawArgv: string[],
   compiled = isCompiledExecutable(),
 ): Action {
+  const first = resolveActionFrom(rawArgv, compiled, Number.POSITIVE_INFINITY);
+  // A delegate's argv is the only place a request of the person's rides, and
+  // their words begin after the route and the verb. When one of our own flags
+  // sat among them, read the line again and leave that one alone.
+  if (first.action.type !== "delegate" || first.route === undefined) return first.action;
+  const words = theirWordsBegin(rawArgv, first.route);
+  if (words === undefined || first.ourFlagsFrom === undefined || first.ourFlagsFrom < words) {
+    return first.action;
+  }
+  return resolveActionFrom(rawArgv, compiled, words).action;
+}
+
+interface ResolvedWithRoute {
+  action: Action;
+  /** Leading tokens the resolver read as the route, for a delegate. */
+  route?: number;
+  /** The lowest index in `argv` where one of our own flags was taken. */
+  ourFlagsFrom?: number;
+}
+
+/**
+ * `limit`: our own flags are this launcher's only before this index in `argv`.
+ * At or after it the tokens are the subcommand's, so they pass through whole.
+ */
+function resolveActionFrom(
+  rawArgv: string[],
+  compiled: boolean,
+  limit: number,
+): ResolvedWithRoute {
   const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
   const clean: string[] = [];
   const globalFlags: string[] = [];
   let projectDir: string | undefined;
   let literalArgs = false;
+  let ourFlagsFrom = Number.POSITIVE_INFINITY;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--") {
       literalArgs = true;
@@ -2118,41 +2179,54 @@ export function resolveAction(
     }
     if (
       !literalArgs &&
+      i < limit &&
       LAUNCHER_GLOBAL_FLAGS.has(argv[i])
     ) {
       globalFlags.push(argv[i]);
+      ourFlagsFrom = Math.min(ourFlagsFrom, i);
       continue;
     }
-    if (!literalArgs && argv[i].startsWith("--project-dir=")) {
+    if (!literalArgs && i < limit && argv[i].startsWith("--project-dir=")) {
       return {
-        type: "error",
-        code: 2,
-        message: "aidlc: --project-dir takes a separate path value; use --project-dir <path>\n",
+        action: {
+          type: "error",
+          code: 2,
+          message: "aidlc: --project-dir takes a separate path value; use --project-dir <path>\n",
+        },
       };
     }
-    if (literalArgs || argv[i] !== "--project-dir") {
+    if (literalArgs || i >= limit || argv[i] !== "--project-dir") {
       clean.push(argv[i]);
       continue;
     }
+    ourFlagsFrom = Math.min(ourFlagsFrom, i);
     const value = argv[++i];
     if (!value || value.startsWith("--")) {
       return {
-        type: "error",
-        code: 2,
-        message: "aidlc: --project-dir requires a path value\n",
+        action: {
+          type: "error",
+          code: 2,
+          message: "aidlc: --project-dir requires a path value\n",
+        },
       };
     }
     if (projectDir !== undefined) {
       return {
-        type: "error",
-        code: 2,
-        message: "aidlc: --project-dir may be specified only once\n",
+        action: {
+          type: "error",
+          code: 2,
+          message: "aidlc: --project-dir may be specified only once\n",
+        },
       };
     }
     projectDir = value;
   }
 
   const action = resolveActionWithoutGlobalFlags(clean);
+  // What the resolver read as the route: the clean tokens it did not hand to the
+  // delegate. The boundary for our own flags comes from this, never from a list
+  // of words kept here.
+  const route = action.type === "delegate" ? clean.length - action.args.length : undefined;
   if (action.type === "version" && globalFlags.includes("--json")) {
     action.json = true;
   }
@@ -2197,7 +2271,11 @@ export function resolveAction(
     if (delimiter >= 0) action.args.splice(action.args.indexOf("--"), 0, ...globalFlags);
     else action.args.push(...globalFlags);
   }
-  return action;
+  return {
+    action,
+    ...(route === undefined ? {} : { route }),
+    ...(Number.isFinite(ourFlagsFrom) ? { ourFlagsFrom } : {}),
+  };
 }
 // TRANSLATION_LOGIC_END
 

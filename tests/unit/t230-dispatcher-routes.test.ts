@@ -1455,6 +1455,66 @@ describe("t230 version-aware startup", () => {
 });
 
 describe("t230 dispatcher global flag translation", () => {
+  // The dispatcher's own flags are its own only while it is still reading the
+  // route and the subcommand's verb. Once a word of the person's has appeared,
+  // every token is the subcommand's argv, so a flag that looks like one of ours
+  // among their words stays exactly where they typed it: nothing of theirs is
+  // taken, resolved into a path, or moved to the end of their sentence.
+  test("a flag of ours among the person's own words stays where they typed it", () => {
+    const words = ["next", "add", "a", "--project-dir", "flag", "to", "the", "CLI"];
+    expect(resolveAction(["engine", "orchestrate", ...words])).toEqual({
+      type: "delegate",
+      tool: "aidlc-orchestrate.ts",
+      args: words,
+    });
+    const global = ["next", "add", "a", "--json", "flag", "to", "the", "CLI"];
+    expect(resolveAction(["engine", "orchestrate", ...global])).toEqual({
+      type: "delegate",
+      tool: "aidlc-orchestrate.ts",
+      args: global,
+    });
+  });
+
+  /** The delegate's own argv, or a loud failure when the route resolved elsewhere. */
+  const delegateArgs = (argv: string[]): string[] => {
+    const action = resolveAction(argv);
+    if (action.type !== "delegate") throw new Error(`${argv.join(" ")} resolved as ${action.type}`);
+    return action.args;
+  };
+  const projectDirOf = (argv: string[]): string | undefined => {
+    const action = resolveAction(argv);
+    return "projectDir" in action ? action.projectDir : undefined;
+  };
+
+  test("the orderings every caller uses keep working", () => {
+    // Ours before the route.
+    expect(delegateArgs(["--project-dir", "/tmp/example", "engine", "orchestrate", "next"]))
+      .toEqual(["next", "--project-dir", "/tmp/example"]);
+    // Ours inside the route, before the verb.
+    expect(delegateArgs(["engine", "config", "--project-dir", "/tmp/example", "set", "depth", "minimal"]))
+      .toEqual(["config-change", "--depth", "minimal", "--project-dir", "/tmp/example"]);
+    // Ours straight after the subcommand's verb.
+    expect(delegateArgs(["engine", "bolt", "start", "--project-dir", "relative/project"]))
+      .toEqual(["start", "--project-dir", resolve(process.cwd(), "relative/project")]);
+    // A top-level command's own flag, which follows a route word, not a word of theirs.
+    expect(delegateArgs(["doctor", "--json"])).toEqual(["doctor", "--json"]);
+    // A name the person gave, with our flag after it: the delegated tool reads
+    // the flag itself, so the path reaches it whole either way.
+    expect(delegateArgs(["engine", "intent", "add-repo", "app-b", "--project-dir", "/elsewhere"]))
+      .toEqual(["intent", "add-repo", "app-b", "--project-dir", "/elsewhere"]);
+    expect(delegateArgs(["config", "models", "--agent", "developer", "--effort", "high", "--project", "--yes"]))
+      .toEqual(["config", "models", "--agent", "developer", "--effort", "high", "--project", "--yes"]);
+    // The hooks, adapters and the statusline: their argv is this engine's own.
+    expect(projectDirOf(["engine", "hook", "record-human-turn", "--project-dir", "/tmp/example"]))
+      .toBe("/tmp/example");
+    expect(projectDirOf(["engine", "adapter", "kiro-ide", "record-human-turn", "--project-dir", "/tmp/example"]))
+      .toBe("/tmp/example");
+    // `--json` on a read-only command of ours still reaches the dispatcher.
+    const version = resolveAction(["version", "--json"]) as { type: string; json?: boolean };
+    expect(version.type).toBe("version");
+    expect(version.json).toBe(true);
+  });
+
   test("extracts --project-dir before noun/verb parsing and restores it for delegation", () => {
     expect(resolveAction(["engine", "space", "--project-dir", "/tmp/example", "create", "teamB"])).toEqual({
       type: "delegate",

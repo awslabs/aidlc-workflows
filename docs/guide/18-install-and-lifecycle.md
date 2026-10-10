@@ -433,6 +433,14 @@ interactive wizard.
 | `--quiet` | Emit one summary or remediation line |
 | `--no-color` | Disable color output |
 
+`--project-dir`, `--json`, `--quiet`, `--no-color`, `--yes`, `--offline` and
+`--verbose` are the launcher's own while it is still reading the command: before
+it, inside it, and straight after it. Once a word of your own request has
+followed the command (`/aidlc add a --project-dir flag to the CLI`), every token
+from there on is part of the request, so a word of yours that happens to look
+like one of these stays exactly where you typed it and reaches the workflow
+whole.
+
 ### Model Policy
 
 `aidlc config models` records model policy in the selected settings layer
