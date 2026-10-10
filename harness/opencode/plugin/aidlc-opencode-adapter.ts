@@ -630,6 +630,17 @@ export default async ({
     return current;
   }
 
+  // The owning session for a record forward: a child whose owner cannot be
+  // looked up is forwarded with no session rather than its own unbound id, so
+  // nothing of a child's is bound as a chat of its own.
+  async function owningSessionOrNone(sessionID: string): Promise<string | undefined> {
+    try {
+      return await owningSession(sessionID);
+    } catch {
+      return undefined;
+    }
+  }
+
   async function isMainSession(sessionID: string): Promise<boolean> {
     const cached = mainSession.get(sessionID);
     if (cached !== undefined) return cached;
@@ -708,7 +719,7 @@ export default async ({
           "aidlc-deliver-stage-rules.ts",
           {
             hook_event_name: "PreToolUse",
-            session_id: input.sessionID,
+            session_id: await owningSessionOrNone(input.sessionID),
             tool_name: "task",
             tool_input: args,
             cwd: directory,
@@ -951,7 +962,7 @@ export default async ({
           hook_event_name: "PostToolUse",
           tool_name: "Bash",
           tool_input: { command: (args.command as string) ?? "" },
-          session_id: input.sessionID,
+          session_id: await owningSessionOrNone(input.sessionID),
           tool_response: output?.output ?? "",
         };
         const result = await runCore("aidlc-rebuild-stage-graph.ts", payload, directory);
@@ -980,7 +991,7 @@ export default async ({
           "aidlc-log-subagent.ts",
           {
             hook_event_name: "SubagentStop",
-            session_id: input.sessionID,
+            session_id: await owningSessionOrNone(input.sessionID),
             agent_type:
               (args.subagent_type as string) ?? (args.agent as string) ?? "unknown",
             agent_id: input.callID,
@@ -991,10 +1002,11 @@ export default async ({
     },
 
     "experimental.session.compacting": async (input: { sessionID: string }) => {
-      // The compacting session's own id: a child's compaction concerns the child.
+      // A child's compaction is recorded for the chat that owns it: a child's own
+      // id is no chat of its own.
       await runCore(
         "aidlc-validate-state.ts",
-        { hook_event_name: "PreCompact", session_id: input.sessionID },
+        { hook_event_name: "PreCompact", session_id: await owningSessionOrNone(input.sessionID) },
         directory,
       );
     },
