@@ -53,6 +53,7 @@ import {
   seededAuditDir,
   seededRecordDir,
   seededStateFile,
+  WORKER_BRIEF_SECTIONS_FIXTURE,
 } from "../harness/fixtures.ts";
 import {
   hooksHealthDir,
@@ -834,6 +835,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
   function runLog(
     dir: string,
     args: string[],
+    env: Record<string, string> = {},
   ): { stdout: string; stderr: string; code: number } {
     const r = spawnSync(
       process.execPath,
@@ -845,6 +847,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
           ...process.env,
           DEVIN_PROJECT_DIR: dir,
           CLAUDE_PROJECT_DIR: dir,
+          ...env,
         },
         timeout: 30_000,
       },
@@ -1806,7 +1809,8 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       approveStageLevelPlan(dir, session);
       const task =
         "AIDLC-STAGE: code-generation\n" +
-        `AIDLC-TESTING-CONTRACT: ${resolveTestingPosture(dir).contract_sha256}\n` +
+        `AIDLC-TESTING-CONTRACT: ${resolveTestingPosture(dir).contract_sha256}` +
+        WORKER_BRIEF_SECTIONS_FIXTURE +
         "Implement the approved stage-level plan";
       const r = runAdapter(
         dir,
@@ -1903,6 +1907,47 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("Item 2 case 5a: plan-approval-guard hands a reviewer dispatch to the core guard, which records its dictated verdict", () => {
+    const dir = scratchProject(true);
+    try {
+      // Every named dispatch reaches the core guard as a Task (upstream
+      // 32e0c57f, the codex/opencode/kiro change): a reviewer brief that
+      // already carries a rendered verdict line is recorded
+      // (REVIEW_VERDICT_DICTATED) for its open review request, never refused.
+      const reviewer = "aidlc-product-lead-agent";
+      const stageDir = join(seededRecordDir(dir), "inception", "requirements-analysis");
+      mkdirSync(stageDir, { recursive: true });
+      for (const name of ["requirements.md", "requirements-analysis-questions.md"]) {
+        writeFileSync(join(stageDir, name), `# ${name}\n`);
+      }
+      const request = runLog(
+        dir,
+        [
+          "review",
+          "--stage",
+          "requirements-analysis",
+          "--reviewer",
+          reviewer,
+          "--iteration",
+          "1",
+        ],
+        { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+      );
+      expect(request.code, `${request.stdout}\n${request.stderr}`).toBe(0);
+      const r = runAdapter(
+        dir,
+        "plan-approval-guard",
+        devinRunSubagent(reviewer, "Review the requirements.\n\n**Verdict:** READY\n"),
+      );
+      expect(r.code, r.stderr).toBe(0);
+      const audit = readAudit(dir);
+      expect(audit).toContain("REVIEW_VERDICT_DICTATED");
+      expect(audit).toContain("**Verdict**: READY");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
 
   test("Item 2 case 6: deliver-stage-rules returns the active-stage bundle inside a Devin-native updatedInput.task", () => {
     const dir = scratchProject(true);

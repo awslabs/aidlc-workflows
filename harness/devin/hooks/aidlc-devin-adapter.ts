@@ -1615,8 +1615,9 @@ export async function run(
       //   conductor actually ran the command from), not the project root.
       // edit/write/apply_patch→ fan out one Write per touched path.
       // run_subagent→ normalize to the core Task shape
-      //   {PreToolUse, Task, {subagent_type, prompt}}. Only block for the
-      //   developer agent target (mirror codex's early-allow for non-developer).
+      //   {PreToolUse, Task, {subagent_type, prompt}}. Every named dispatch
+      //   goes to the core guard, which judges only the developer's and
+      //   records a reviewer brief that already carries its verdict.
       // Block contract: exit 2 + stderr.
       if (tool === "exec") {
         const rewritten = rewriteStdinCwd(rewriteStdinToolName(rawInput, devin), devin);
@@ -1672,10 +1673,11 @@ export async function run(
         return 0;
       }
       // Normalize the native dispatch input and forward the core Task shape
-      // {PreToolUse, Task, {subagent_type, prompt}}; only block for the
-      // developer agent target (mirror codex's early-allow for non-developer).
+      // {PreToolUse, Task, {subagent_type, prompt}}; every named dispatch goes
+      // to the core guard, which judges only the developer's and records a
+      // reviewer brief that already carries its verdict.
       const normalized = normalizeRunSubagentInput(devin.tool_input ?? {});
-      if (normalized.profile !== "aidlc-developer-agent") {
+      if (normalized.profile === "") {
         return 0;
       }
       const fwd = JSON.stringify({
