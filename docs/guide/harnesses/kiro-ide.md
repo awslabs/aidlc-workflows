@@ -174,8 +174,10 @@ workflow.
 
 The install ships:
 
-- `.kiro/skills/aidlc/SKILL.md` — the conductor loaded when you invoke
-  `/aidlc`.
+- `.kiro/skills/aidlc/SKILL.md`: AI-DLC's instructions to the aidlc agent. The
+  agent has them, with `question-rendering.md` and `composer.md` beside them,
+  from the first line of every chat, so it reads no file before acting on your
+  request.
 - `.kiro/agents/aidlc.md` — the same conductor exposed in the workspace agent
   selector. It delegates through `invoke_sub_agent` (Kiro IDE) or
   `orchestrate_subagent` (Kiro CLI), the dispatch tools that run each persona
@@ -271,10 +273,8 @@ and Kiro IDE does not read that file. So in each new Kiro IDE chat:
 1. Open the agent picker in the chat panel and choose **aidlc** (its
    description starts "AI-DLC. Choose this agent in the agent picker"). This
    agent lets AI-DLC's commands run without asking you, and lets AI-DLC bring
-   in its specialist agents. When AI-DLC
-   starts, Kiro asks you to allow **Load skill: aidlc**. Choose **Always
-   allow** and keep **Apply to: This workspace**, and Kiro stops asking in
-   new chats for this project. **Allow** covers only the current chat.
+   in its specialist agents, and it already holds AI-DLC's instructions when
+   a chat starts, so it reads no file before acting on your first line.
 2. Type the whole request, then press Enter: for example `/aidlc --doctor` or
    `/aidlc build a to-do app`. A bare `/aidlc` works too. While the `/` menu
    is open, Enter puts its first entry in the chat, a specialist such as
