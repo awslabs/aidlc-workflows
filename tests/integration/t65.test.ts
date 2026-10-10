@@ -77,6 +77,11 @@ type StageObj = Record<string, unknown>;
 type Parsed = { slug: string; phase: string; obj: StageObj };
 type GraphNode = { slug: string; number: string; phase: string };
 
+// Conditional outputs also satisfy consumers and cross-phase dependency checks.
+function outputArtifacts(obj: StageObj): unknown[] {
+  return [obj.produces, obj.optional_produces].flatMap((value) => Array.isArray(value) ? value : []);
+}
+
 // --- Aggregate computed once in beforeAll (transcribed verbatim from the .sh's
 //     single `bun -e` block). Each field maps 1:1 to a `j <field>` query. ---
 interface Aggregate {
@@ -189,12 +194,10 @@ beforeAll(() => {
   const produces = new Set<string>();
   const badSlugs: Aggregate["badSlugs"] = [];
   for (const p of parsed) {
-    if (Array.isArray(p.obj.produces)) {
-      for (const name of p.obj.produces as unknown[]) {
-        produces.add(name as string);
-        if (typeof name !== "string" || !ARTIFACT_RE.test(name)) {
-          badSlugs.push({ slug: p.slug, artifact: name });
-        }
+    for (const name of outputArtifacts(p.obj)) {
+      produces.add(name as string);
+      if (typeof name !== "string" || !ARTIFACT_RE.test(name)) {
+        badSlugs.push({ slug: p.slug, artifact: name });
       }
     }
   }
@@ -226,10 +229,8 @@ beforeAll(() => {
   // phase must have its producer reachable via the requires_stage BFS.
   const artifactToProducer = new Map<string, { slug: string; phase: string }>();
   for (const p of parsed) {
-    if (Array.isArray(p.obj.produces)) {
-      for (const a of p.obj.produces as string[]) {
-        artifactToProducer.set(a, { slug: p.slug, phase: p.phase });
-      }
+    for (const a of outputArtifacts(p.obj) as string[]) {
+      artifactToProducer.set(a, { slug: p.slug, phase: p.phase });
     }
   }
   const crossPhaseGaps: Aggregate["crossPhaseGaps"] = [];

@@ -200,12 +200,12 @@ describe("t205 optional_produces frontmatter", () => {
       expect(infra?.optional_produces).toBeUndefined();
     });
 
-    test("functional-design is the only stage carrying optional_produces", () => {
+    test("functional-design and units-generation carry conditional artifacts", () => {
       const carriers = loadGraph()
         .filter((s) => s.optional_produces !== undefined)
         .map((s) => s.slug)
         .sort();
-      expect(carriers).toEqual(["functional-design"]);
+      expect(carriers).toEqual(["functional-design", "units-generation"]);
     });
   });
 

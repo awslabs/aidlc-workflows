@@ -165,8 +165,9 @@ wire identifier, not the filename.
 
 Artifacts live on disk at paths that are derivable from `(canonical
 name) + (producing stage) + (per-unit flag)`. Markdown is the default extension;
-the canonical `traceability` artifact is the structured-data exception and
-resolves to `traceability.json`. Two placement shapes apply:
+the canonical `traceability` and `unit-requirement-assignments` artifacts are
+structured-data exceptions, resolving to `traceability.json` and
+`unit-requirement-assignments.json`. Two placement shapes apply:
 
 - **Non-per-unit stages (25 of 30):**
   `<record>/<phase>/<stage>/<artifact-filename>`
@@ -190,8 +191,8 @@ stage graph + canonical name.
 
 `artifactFilename()` in `aidlc-lib.ts` is the shared extension resolver used by
 directives, per-Unit coverage, completion guards, and review fingerprints.
-Every artifact except `traceability` resolves to `<canonical-name>.md`;
-`traceability` resolves to `traceability.json`.
+Every artifact except `traceability` and `unit-requirement-assignments` resolves
+to `<canonical-name>.md`; these two resolve to their matching `.json` files.
 
 **Review records are not artifacts.** A reviewer-bearing stage's review result
 (verdict, findings, reviewer, request id, the fingerprints it binds, and the
