@@ -254,6 +254,37 @@ describe("a misplaced --choice returns the agent to the pending answer command",
   }
 });
 
+// The agent reports the approval with the verb it knows for a stage gate while
+// the open question is the engine's plan question. The step it reads back is
+// that question's answer command; nothing is recorded, nothing is re-asked.
+describe("a stage report of the approval while the plan question is open names the plan answer command", () => {
+  for (const replied of [true, false]) {
+    test(replied ? "with the person's reply on record" : "with no reply yet", () => {
+      const proj = project("strict");
+      expect(next(proj).ask_type).toBe("plan-approval");
+      if (replied) say(proj, "Approve Plan");
+      const before = planAnswers(proj);
+      const result = spawnSync(BUN, [
+        ORCHESTRATE, "report", "--stage", "code-generation", "--result", "approved", "--project-dir", proj,
+      ], { cwd: proj, env: env(proj), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      const line = (result.stdout ?? "").split("\n").filter((entry) => entry.startsWith("{")).pop();
+      expect(line, `${result.stdout}${result.stderr}`).toBeDefined();
+      const step = JSON.parse(line as string) as Emitted;
+      expect(step.kind, JSON.stringify(step)).toBe("print");
+      expect(step.message).toContain("answer --stage code-generation --checkpoint plan-approval");
+      expect(step.message).not.toContain("show the gate");
+      expect(step.message).not.toContain("No reply from the person is on record");
+      expect(planAnswers(proj)).toEqual(before);
+      expect(readAuditShardEvents(proj).some((row) => row.event === "GATE_APPROVED")).toBe(false);
+      // The report added nothing: with no reply the plan question is asked
+      // again; with their exact pick on record, the engine carries the work on.
+      const after = next(proj);
+      if (replied) expect(after.plan_approval?.status, JSON.stringify(after)).toBe("approved");
+      else expect(after.ask_type, JSON.stringify(after)).toBe("plan-approval");
+    });
+  }
+});
+
 describe("a number for the routing question answers it alone while the code plan question is open", () => {
   for (const policy of ["off", "strict"] as const) {
     test(`${policy}: "1" records nothing for the plan; the plan question comes back with the person's words as their reply`, () => {
