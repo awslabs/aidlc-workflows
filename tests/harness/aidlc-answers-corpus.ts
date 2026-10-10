@@ -5,7 +5,7 @@
 // command that puts the person's words on the record beside the choice it read. The unit check
 // (tests/unit/t-aidlc-answers-corpus.test.ts) runs every item; the live check drives a sample through real agents.
 // Shared mechanics (exec, env, next, say, the message record, six of the states) come from aidlc-input-corpus.ts.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import corpus from "../fixtures/aidlc-answers/corpus.json";
@@ -534,18 +534,39 @@ export function argvVariants(item: AnswersItem): Array<[string, string[]]> {
 }
 export const PICKER_HARNESSES: Harness[] = ["claude", "codex"];
 
+const CORE_HOOK = join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts");
+const DISPATCHER_TOOL = join(AIDLC_SRC, "tools", "aidlc.ts");
+/** The core human-turn hook with the host's payload (a typed prompt, or the question box's envelope), started the one
+ * way that carries human authority: the dispatcher's internal entry with a process token, as every host adapter
+ * starts it (one process, where `engine hook record-human-turn` spawns two). The bulk path of the unit check; the
+ * hosts' own shapes run on a sample. */
+export async function reply(proj: string, item: AnswersItem): Promise<Exec> {
+  const payload = item.via === "picker"
+    ? pickerPayload(item)
+    : { hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: typedPrompt(item) };
+  return exec([process.execPath, DISPATCHER_TOOL, "--internal-aidlc-record-human-turn", CORE_HOOK], {
+    cwd: proj,
+    env: { ...env(proj), AIDLC_INTERNAL_HUMAN_TURN_TOKEN: randomUUID() },
+    input: JSON.stringify({ ...payload, cwd: proj }),
+  });
+}
+function pickerPayload(item: AnswersItem): Record<string, unknown> {
+  const picker = item.picker!;
+  const answered = picker.answer !== null && picker.answer !== "";
+  return {
+    hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: SESSION,
+    tool_input: { questions: [{ question: picker.question, header: "Question", multiSelect: false, options: picker.options.map((label) => ({ label, description: "" })) }] },
+    tool_response: { answers: answered ? { [picker.question]: picker.answer } : {} },
+  };
+}
+
 /** The person picks in the question box: the host's tool envelope reaches the hook (Claude AskUserQuestion PostToolUse,
  * Codex request_user_input through its adapter). */
 export async function pick(proj: string, item: AnswersItem, harness: Harness): Promise<Exec> {
   const picker = item.picker!;
   const answered = picker.answer !== null && picker.answer !== "";
   if (harness === "claude") {
-    const input = {
-      hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: SESSION, cwd: proj,
-      tool_input: { questions: [{ question: picker.question, header: "Question", multiSelect: false, options: picker.options.map((label) => ({ label, description: "" })) }] },
-      tool_response: { answers: answered ? { [picker.question]: picker.answer } : {} },
-    };
-    return exec([process.execPath, join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], { cwd: proj, env: env(proj), input: JSON.stringify(input) });
+    return exec([process.execPath, join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], { cwd: proj, env: env(proj), input: JSON.stringify({ ...pickerPayload(item), cwd: proj }) });
   }
   const codexTree = join(proj, ".codex");
   if (!existsSync(codexTree)) cpSync(join(REPO_ROOT, "dist", "codex", ".codex"), codexTree, { recursive: true });

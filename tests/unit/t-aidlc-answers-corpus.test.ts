@@ -5,8 +5,10 @@
 //
 // Every question AI-DLC asks the person, and the replies people give, as a checked-in corpus:
 // tests/fixtures/aidlc-answers/corpus.json. Each item is one reply at the state where that question is open, with
-// MEANING (what the person means) and EXPECTED. The reply goes through each host's own human-turn hook (typed in chat,
-// typed after /aidlc, or picked in the question box), then the engine's step where there is one. Pass, for every item:
+// MEANING (what the person means) and EXPECTED. Every reply goes through the core human-turn hook (the one every host
+// adapter forwards to: typed in chat, typed after /aidlc, or picked in the question box), then the engine's step where
+// there is one; a fixed sample per question also goes through each host's own hook shape (Claude Code's dispatcher,
+// the Codex, Kiro CLI and Kiro IDE adapters) and through the agent's answer command. Pass, for every item:
 //  1. the record keeps what they typed, verbatim;
 //  2. a tool records a choice only from an exact pick as the options were shown (a number where numbers were shown,
 //     the label, "(Recommended)" stripped); anything else is left for the agent, with nothing recorded and no question
@@ -21,13 +23,16 @@ import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { cleanupTestProject } from "../harness/fixtures.ts";
 import {
   ANSWERS, NO_FIXTURE, PICKER_HARNESSES, argvVariants, choiceRowCount, messageRecord, next, pick, projectAt,
-  recordByAgent, recorded, rows, say, templateProjects, typedPrompt, waitsFor,
+  recordByAgent, recorded, reply, rows, say, templateProjects, typedPrompt, waitsFor,
   type AnswersItem, type Directive, type Exec, type Harness, type Question, type Recorded, type StoredRecord,
 } from "../harness/aidlc-answers-corpus.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const HARNESSES: Harness[] = ["claude", "codex", "kiro", "kiro-ide"];
+/** The hook every item goes through (the core hook, directly), named beside the host shapes in the results. */
+const CORE = "core" as const;
+type HookShape = typeof CORE | Harness;
 const PARALLEL = Math.max(1, Number.parseInt(process.env.AIDLC_ANSWERS_PARALLEL ?? "6", 10) || 6);
 const ONLY = process.env.AIDLC_ANSWERS_ONLY?.split(",").map((s) => s.trim()).filter(Boolean);
 
@@ -48,7 +53,7 @@ const ENGINE_READS = new Set<Question>(["routing"]);
 
 interface HookSeen { exit: Exec; record: StoredRecord | null; recorded: Recorded; delta: number }
 interface Observed {
-  hooks: Partial<Record<Harness, HookSeen>>;
+  hooks: Partial<Record<HookShape, HookSeen>>;
   steps: Array<{ variant: string; argv: string[]; status: number; directive: Directive | null; out: string }>;
   agent?: { event: string; exec: Exec; row: Record<string, string | null> | undefined };
   error?: string;
@@ -58,6 +63,31 @@ const projects: string[] = [];
 
 const recordsByAgent = (item: AnswersItem): boolean =>
   AGENT_RECORDS.has(item.question) && item.expected.end.recorded !== "none" && item.expected.end.asks === 0 && !item.ambiguous;
+
+// The fixed samples (by position in the corpus, so they never drift): per question, the host shapes run for the first
+// exact pick typed in chat, the first plain-words reply, the first /aidlc line and every picker reply; the agent's
+// answer command runs for the first approving reply with words and the first change request with words.
+function samples(): { hosts: Set<string>; agent: Set<string> } {
+  const hosts = new Set<string>();
+  const agent = new Set<string>();
+  for (const question of new Set(ANSWERS.map((item) => item.question))) {
+    const of = ANSWERS.filter((item) => item.question === question);
+    const first = (where: (item: AnswersItem) => boolean): AnswersItem | undefined => of.find(where);
+    for (const item of [
+      first((i) => i.via === "chat" && i.reader === "tool"),
+      first((i) => i.via === "chat" && i.reader === "agent" && i.input !== "" && !i.ambiguous),
+      first((i) => i.via === "aidlc"),
+      ...of.filter((i) => i.via === "picker"),
+    ]) if (item) hosts.add(item.id);
+    for (const item of [
+      first((i) => recordsByAgent(i) && i.via === "chat" && i.reader === "agent" && i.expected.end.change === undefined),
+      first((i) => recordsByAgent(i) && i.via === "chat" && i.expected.end.change !== undefined),
+      first((i) => recordsByAgent(i) && i.via === "chat" && i.reader === "tool"),
+    ]) if (item) agent.add(item.id);
+  }
+  return { hosts, agent };
+}
+const SAMPLE = samples();
 const runsEngine = (item: AnswersItem): boolean =>
   (item.via === "aidlc" || item.via === "codex" || ENGINE_READS.has(item.question)) && item.input.trim() !== "";
 const typedText = (item: AnswersItem): string => (item.via === "picker" ? item.picker?.answer ?? "" : typedPrompt(item));
@@ -65,21 +95,23 @@ const typedText = (item: AnswersItem): string => (item.via === "picker" ? item.p
 async function observe(item: AnswersItem): Promise<Observed> {
   const result: Observed = { hooks: {}, steps: [] };
   try {
-    for (const harness of HARNESSES) {
-      if (item.via === "picker" && !PICKER_HARNESSES.includes(harness)) continue;
+    const shapes: HookShape[] = [CORE, ...(SAMPLE.hosts.has(item.id) ? HARNESSES : [])];
+    for (const shape of shapes) {
+      if (item.via === "picker" && shape !== CORE && !PICKER_HARNESSES.includes(shape)) continue;
       const proj = await projectAt(item.question);
       projects.push(proj);
       const before = choiceRowCount(proj);
-      const exit = item.via === "picker" ? await pick(proj, item, harness) : await say(proj, typedPrompt(item), harness);
-      result.hooks[harness] = { exit, record: messageRecord(proj, typedText(item)), recorded: recorded(proj, item), delta: choiceRowCount(proj) - before };
-      if (harness !== "claude") continue;
+      const exit = shape === CORE ? await reply(proj, item)
+        : item.via === "picker" ? await pick(proj, item, shape) : await say(proj, typedPrompt(item), shape);
+      result.hooks[shape] = { exit, record: messageRecord(proj, typedText(item)), recorded: recorded(proj, item), delta: choiceRowCount(proj) - before };
+      if (shape !== CORE) continue;
       if (runsEngine(item)) {
         for (const [variant, argv] of argvVariants(item)) {
           const step = await next(proj, argv);
           result.steps.push({ variant, argv, ...step });
         }
       }
-      if (recordsByAgent(item)) {
+      if (SAMPLE.agent.has(item.id)) {
         const recordedBy = await recordByAgent(proj, item, item.expected.end.recorded);
         if (recordedBy !== null) result.agent = { ...recordedBy, row: recordedBy.event === "" ? undefined : rows(proj, recordedBy.event).at(-1) };
       }
@@ -117,7 +149,7 @@ describe("the answers corpus: a tool records only an exact pick as shown, keeps 
       const engine = item.expected.engine;
       const text = typedText(item);
       const hookChoice = item.reader === "tool" && HOOK_RECORDS.has(item.question) ? engine.recorded : "none";
-      for (const [harness, hook] of Object.entries(seen!.hooks) as Array<[Harness, HookSeen]>) {
+      for (const [harness, hook] of Object.entries(seen!.hooks) as Array<[HookShape, HookSeen]>) {
         const where = `${harness}: ${hook.exit.stdout}${hook.exit.stderr}`;
         // 1. The host's hook took the turn and the record keeps what they typed, verbatim.
         expect(hook.exit.status, where).toBe(0);
