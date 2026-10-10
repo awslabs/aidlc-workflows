@@ -64,11 +64,13 @@ const outcomes: LiveOutcome<AnswersItem>[] = [];
 // What the project held before the person replied: the records, how long the audit was, and how many rows of each
 // event the fixture itself carries (a gate fixture holds its own summary confirmation, say): only rows after that are
 // the reply's.
-interface Start { records: number; events: number; rowsBefore: Record<string, number> }
+interface Start { records: number; active: string | null; stage: string | null; events: number; rowsBefore: Record<string, number> }
 const RECORD_EVENTS = ["PLAN_APPROVAL_RECORDED", "GATE_APPROVED", "GATE_REJECTED", "REQUEST_ROUTED", "ARTIFACT_REUSED", "QUESTION_ANSWERED", "SUMMARY_CONFIRMATION_RECORDED", "VERIFICATION_COMMAND_RECORDED", "CONSTRUCTION_POLICY_RECORDED"];
 const ANSWER_EVENTS = ["QUESTION_ANSWERED", "SUMMARY_CONFIRMATION_RECORDED", "VERIFICATION_COMMAND_RECORDED", "CONSTRUCTION_POLICY_RECORDED"];
 const startOf = (proj: string): Start => ({
   records: listIntents(proj).length,
+  active: listIntents(proj).find((i) => i.active)?.slug ?? null,
+  stage: existsSync(stateFilePath(proj)) ? getField(readFileSync(stateFilePath(proj), "utf-8"), "Current Stage") : null,
   events: readAuditShardEvents(proj).length,
   rowsBefore: Object.fromEntries(RECORD_EVENTS.map((event) => [event, rows(proj, event).length])),
 });
@@ -82,10 +84,35 @@ function recordedNow(item: AnswersItem, proj: string, start: Start): string {
   // "unknown" is the plan question no longer open: the agent answered it, and the record is the audit row.
   if (choice !== "none" && choice !== "unknown") return choice;
   const since = (event: string) => rowsAfter(proj, start, event).length > 0;
-  if (item.question === "routing") {
-    if (listIntents(proj).length > start.records) return "Separate new piece of work";
-    if (since("REQUEST_ROUTED")) return "Reshape the active work";
-    return readAuditShardEvents(proj).slice(start.events).some((e) => e.event !== "HUMAN_TURN") ? "Part of the active work" : "none";
+  const intents = listIntents(proj);
+  const fresh = intents.length > start.records ? intents.at(-1) : undefined;
+  switch (item.question) {
+    case "routing":
+      // Folding the words into the open work leaves no row of its own (see workCarriedOn); dropping them leaves none either.
+      if (fresh) return "Separate new piece of work";
+      if (since("REQUEST_ROUTED")) return "Reshape the active work";
+      return "none";
+    case "plan-offer":
+    case "scope-confirm":
+      // Going ahead creates the work on the offered plan; a different plan creates it on another.
+      if (fresh) return fresh.scope === "bugfix" ? 'Go ahead with the "bugfix" plan' : `A different plan (${fresh.scope ?? "?"})`;
+      return "none";
+    case "intent-pick": {
+      const active = intents.find((i) => i.active)?.slug ?? null;
+      return active !== null && active !== start.active ? active : "none";
+    }
+    case "unit-paused":
+      if (readAuditShardEvents(proj).slice(start.events).some((e) => e.event === "UNIT_RESUMED")) return "Resume";
+      break;
+    case "resume-reentry":
+    case "jump-target": {
+      if (fresh) return "fresh";
+      const stage = existsSync(stateFilePath(proj)) ? getField(readFileSync(stateFilePath(proj), "utf-8"), "Current Stage") : null;
+      if (stage !== null && stage !== start.stage) return `jump ${stage}`;
+      break;
+    }
+    default:
+      break;
   }
   // The project-type answer reclassifies the workspace: the row names the new type, with the person as its source.
   if (item.question === "project-type") {
@@ -104,11 +131,17 @@ function recordedNow(item: AnswersItem, proj: string, start: Start): string {
   return "none";
 }
 // True once the choice the item expects is on record: the drive stops at that point.
+// The open work carried on after the reply: rows the stage wrote, no record created. A routing reply folded into the
+// work ends there; so does a non-answer the agent read past, which the judge of the words catches.
+const workCarriedOn = (proj: string, start: Start): boolean =>
+  listIntents(proj).length === start.records && readAuditShardEvents(proj).slice(start.events).some((e) => e.event !== "HUMAN_TURN");
 function endReached(item: AnswersItem, proj: string, start: Start): boolean {
   const end = item.expected.end;
   if (end.recorded === "none") return false;
+  if (item.question === "routing" && end.recorded === "Part of the active work") return workCarriedOn(proj, start);
   const now = recordedNow(item, proj, start);
   if (now === "none") return false;
+  if (end.recorded === "first stage" || end.recorded === "jump") return now.startsWith("jump");
   return now.toLowerCase().includes(end.recorded.toLowerCase().split(" ")[0]) || end.recorded.toLowerCase().includes(now.toLowerCase());
 }
 // How many questions the item allows after the reply. A non-answer (the host's cancellation text, an empty line: the
@@ -130,8 +163,7 @@ function judge(item: AnswersItem, proj: string, typed: string, transcript: Trans
   if (end.recorded === "none") {
     if (now !== "none") failures.push(`a choice was recorded (${now}) where the item records none`);
   } else if (!paused) {
-    if (now === "none") failures.push(`nothing recorded; expected ${end.recorded}`);
-    else if (!endReached(item, proj, start)) failures.push(`recorded ${JSON.stringify(now)}, expected ${JSON.stringify(end.recorded)}`);
+    if (!endReached(item, proj, start)) failures.push(now === "none" ? `nothing recorded; expected ${end.recorded}` : `recorded ${JSON.stringify(now)}, expected ${JSON.stringify(end.recorded)}`);
     if (end.words && item.via !== "picker") {
       const words = typed.replace(/^[/$]aidlc\s*/, "");
       const row = RECORD_EVENTS.map((e) => rowsAfter(proj, start, e).at(-1)).find((r) => r !== undefined);
@@ -163,13 +195,23 @@ function pickerSpec(item: AnswersItem): { spec: AnswerSpec; label: string | null
 
 // The agent's first turn must show the item's question: when what it showed offers no such choice (re-entry showed another
 // question, or none), the reply answers nothing this item judges, and the line says what was shown instead.
+// The choice the corpus names most often for a question: its first option, the most stable wording the agent shows.
+const USUAL_CHOICE = new Map<string, string>();
+for (const question of [...new Set(ANSWERS.map((i) => i.question))]) {
+  const counts = new Map<string, number>();
+  for (const item of ANSWERS) if (item.question === question && item.expected.end.recorded !== "none") counts.set(item.expected.end.recorded, (counts.get(item.expected.end.recorded) ?? 0) + 1);
+  const usual = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  if (usual !== undefined) USUAL_CHOICE.set(question, usual);
+}
 function showsQuestion(item: AnswersItem, firstText: string): string | null {
   const want = item.expected.end.recorded;
   if (want === "none") return null;
-  const words = want.replace(DECORATED, "").toLowerCase().split(/[^a-z0-9'-]+/).filter(Boolean);
   const shown = firstText.toLowerCase();
-  const found = words.filter((w) => shown.includes(w)).length;
-  if (words.length === 0 || found >= Math.ceil(words.length * 2 / 3)) return null;
+  const offered = (label: string): boolean => {
+    const words = label.replace(DECORATED, "").toLowerCase().split(/[^a-z0-9'-]+/).filter(Boolean);
+    return words.length === 0 || words.filter((w) => shown.includes(w)).length >= Math.ceil(words.length * 2 / 3);
+  };
+  if (offered(want) || offered(USUAL_CHOICE.get(item.question) ?? want)) return null;
   return `setup: the agent did not show the ${item.question} question (no choice ${JSON.stringify(want)} offered); it said: ${JSON.stringify(firstText.trim().slice(-300))}`;
 }
 
