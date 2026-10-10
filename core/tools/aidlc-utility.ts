@@ -297,6 +297,7 @@ import {
   recordHookDrop,
   readCurrentSessionId,
   resolveChat,
+  SELECTION_NOTICE_FOLLOW,
   writeSessionSelectionNotice,
   relativeRecordDir,
   resolveAuditWorktreePath,
@@ -9028,16 +9029,25 @@ function askTheOpenChatToFollow(
         )}\``;
     // The command the AGENT runs, in this install's own spelling, so a yes is
     // one step on every harness: a slash form is the person's, and no agent can
-    // run one everywhere.
-    const follow = destinationRecord === null
-      ? `${aidlcToolInvocation("utility")} space ${destinationSpace}`
-      : `${aidlcToolInvocation("utility")} intent ${destinationRecord}`;
+    // run one everywhere. A record name selects itself only inside the space
+    // the chat is in, so from any other space the step is the space switch,
+    // which lands on that space's own selection: this record, in one step. A
+    // record name that is not safe for a model to read stays out of the
+    // command for the same reason the rejoin offer leaves it out; the space
+    // switch carries it.
+    if (!SPACE_NAME_REGEX.test(destinationSpace)) return;
+    const follow =
+      binding.space === destinationSpace && destinationRecord !== null &&
+        isSafeIntentRecordName(destinationRecord)
+        ? `${aidlcToolInvocation("utility")} intent ${destinationRecord}`
+        : `${aidlcToolInvocation("utility")} space ${destinationSpace}`;
     writeSessionSelectionNotice(
       projectDir,
       chat.chatId,
       `Another window switched to ${destination}. This chat is still on ${here}. ` +
         `Do you want this chat on ${destination} too? Ask them exactly that and act on their answer: ` +
         `on yes run \`${follow}\` in this chat, on no carry on with the work this chat is on. Ask once.`,
+      SELECTION_NOTICE_FOLLOW,
     );
   } catch {
     /* per-user runtime state; the chat keeps the work it is on either way */
@@ -9385,7 +9395,10 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   if (!sessionId) {
     const found = activeIntent(projectDir, target);
     const record = found !== null && isBindableIntentRecordName(found) ? found : null;
-    askTheOpenChatToFollow(projectDir, target, record, record === null ? `space \`${target}\`` : `\`${record}\``);
+    const label = record === null
+      ? `space \`${target}\``
+      : `\`${intentDisplayLabel(listIntents(projectDir, target).find((entry) => entry.dirName === record) ?? { dirName: record })}\``;
+    askTheOpenChatToFollow(projectDir, target, record, label);
   }
   const priorUuid = sessionId ? readSessionIntentUuid(projectDir, sessionId) : null;
   let spaceHasNoIntent = false;

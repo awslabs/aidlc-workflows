@@ -77,6 +77,33 @@ function run(dir: string, tool: string, args: readonly string[], env: NodeJS.Pro
 const selection = (dir: string): string => readFileSync(join(intentsDirOf(dir, DEFAULT_SPACE), "active-intent"), "utf-8").trim();
 const chatIsOn = (dir: string): string | null => lib.readSessionBinding(dir, CHAT)?.intent ?? null;
 
+// A second space with its own record and its own selection, as a person who
+// keeps two spaces has.
+const ELSEWHERE = "elsewhere";
+const OVER_THERE = "over-there-00000003";
+function secondSpace(dir: string, record = OVER_THERE, slug = "over-there"): void {
+  const intents = intentsDirOf(dir, ELSEWHERE);
+  mkdirSync(join(dir, "aidlc", "spaces", ELSEWHERE, "memory"), { recursive: true });
+  mkdirSync(join(intents, record), { recursive: true });
+  writeFileSync(join(intents, record, "aidlc-state.md"), STATE);
+  writeFileSync(join(intents, "intents.json"), `${JSON.stringify([
+    { uuid: "00000000-0000-7000-8000-000000000003", slug, dirName: record, status: "in-flight" },
+  ], null, 2)}\n`);
+  lib.setActiveIntentCursor(dir, record, ELSEWHERE);
+}
+
+// The chat comes back: the host fires its session start with the resume source.
+function resumes(dir: string, session = CHAT): { rc: number; out: string } {
+  const r = spawnSync(process.execPath, [join(dir, ".claude", "hooks", "aidlc-session-start.ts")], {
+    cwd: dir,
+    encoding: "utf-8",
+    env: { ...process.env, ...CLEAN, AIDLC_PROJECT_DIR: dir, CLAUDE_PROJECT_DIR: dir } as NodeJS.ProcessEnv,
+    input: JSON.stringify({ hook_event_name: "SessionStart", source: "resume", session_id: session }),
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
 describe("a switch typed in another window moves the selection, not this chat", () => {
   test("the terminal switch leaves the open chat where it is, and still moves the selection", () => {
     const dir = project();
@@ -108,6 +135,65 @@ describe("a switch typed in another window moves the selection, not this chat", 
     const second = run(dir, "aidlc-orchestrate.ts", ["next"], asChat);
     expect(second.rc, second.out).toBe(0);
     expect(second.out).not.toContain("Another window switched");
+  });
+
+  // The chat is in its own space, where that record name selects nothing. The
+  // step it is handed has to work from where the chat is, in one move.
+  test("a switch to another space names the space switch, which lands on that space's own record", () => {
+    const dir = project();
+    secondSpace(dir);
+    const switched = run(dir, "aidlc-utility.ts", ["space", ELSEWHERE]);
+    expect(switched.rc, switched.out).toBe(0);
+    expect(chatIsOn(dir)).toBe(HERE);
+    const first = run(dir, "aidlc-orchestrate.ts", ["next"], { AIDLC_SESSION_OVERRIDE: CHAT });
+    expect(first.rc, first.out).toBe(0);
+    expect(first.out).toContain("Another window switched to `over-there`.");
+    expect(first.out).toContain(`aidlc-utility.ts space ${ELSEWHERE}`);
+    // `intent <record>` would be read in THIS chat's space, where that record
+    // does not exist (or a same-named one is the wrong work).
+    expect(first.out).not.toContain(`intent ${OVER_THERE}`);
+  });
+
+  // A record directory a person migrated or renamed by hand can carry shell
+  // syntax. It is never put in a command the agent runs; the space switch
+  // selects the same work without naming it.
+  test("a record name with shell syntax in it never reaches the command", () => {
+    const dir = project();
+    const dodgy = "foo;touch pwned";
+    const intents = intentsDirOf(dir, DEFAULT_SPACE);
+    mkdirSync(join(intents, dodgy), { recursive: true });
+    writeFileSync(join(intents, dodgy, "aidlc-state.md"), STATE);
+    writeFileSync(join(intents, "intents.json"), `${JSON.stringify([
+      { uuid: "00000000-0000-7000-8000-000000000001", slug: "fixture", dirName: HERE, status: "in-flight" },
+      { uuid: "00000000-0000-7000-8000-000000000004", slug: "handmade", dirName: dodgy, status: "in-flight" },
+    ], null, 2)}\n`);
+    const switched = run(dir, "aidlc-utility.ts", ["intent", dodgy]);
+    expect(switched.rc, switched.out).toBe(0);
+    expect(selection(dir)).toBe(dodgy);
+    const first = run(dir, "aidlc-orchestrate.ts", ["next"], { AIDLC_SESSION_OVERRIDE: CHAT });
+    expect(first.rc, first.out).toBe(0);
+    expect(first.out).toContain("Another window switched to");
+    expect(first.out).toContain(`aidlc-utility.ts space ${DEFAULT_SPACE}`);
+    expect(first.out).not.toContain("touch pwned");
+    expect(existsSync(join(dir, "pwned"))).toBe(false);
+  });
+
+  // The chat was closed when the other window switched. On the way back the
+  // engine already asks about that divergence from the other end ("move the
+  // shared cursor back?"), so the person is asked once, not twice in one turn.
+  test("a resume the engine already asks about is not asked a second time", () => {
+    const dir = project();
+    lib.writeSessionIntentUuid(dir, CHAT, "00000000-0000-7000-8000-000000000001");
+    expect(run(dir, "aidlc-utility.ts", ["intent", THERE]).rc).toBe(0);
+    const resumed = resumes(dir);
+    expect(resumed.rc, resumed.out).toBe(0);
+    expect(resumed.out).toContain("INTENT REBIND OFFER");
+    const step = run(dir, "aidlc-orchestrate.ts", ["next"], { AIDLC_SESSION_OVERRIDE: CHAT });
+    expect(step.rc, step.out).toBe(0);
+    expect(step.out).not.toContain("Another window switched");
+    // The chat still has its own work, and the selection still moved.
+    expect(chatIsOn(dir)).toBe(HERE);
+    expect(selection(dir)).toBe(THERE);
   });
 
   test("a switch typed in the chat itself still moves that chat", () => {
