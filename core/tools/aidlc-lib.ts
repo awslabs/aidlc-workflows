@@ -15296,6 +15296,10 @@ export interface FreshReviewReceipts {
    *  records an edited review (reviewCompletionEdited). Read only beside
    *  stageVerdict / unitVerdicts, for the one line the gate says. */
   editedVerdicts?: Set<string>;
+  /** Scopes ("" for the stage, else the Unit) whose fresh terminal verdict
+   *  records the verdict its dispatch dictated (reviewCompletionDictated).
+   *  Read only beside stageVerdict / unitVerdicts, for the one line the gate says. */
+  dictatedVerdicts?: Set<string>;
   /**
    * Units with a merge-confirmed Bolt attempt. A name-only attempt is
    * confirmed by its BOLT_COMPLETED row; a slug-backed (worktree) attempt is
@@ -17395,24 +17399,56 @@ export function openReviewRequests(events: ReadonlyArray<AuditShardEvent>): Open
 }
 
 /**
- * The latest SUBAGENT_COMPLETED of `reviewer` that definitely follows `after`
- * (same shard: a later position; another shard: a later timestamp), or null
- * when the reviewer has not finished since. A cross-shard tie reads as not
- * after, so the callers fail open on it.
+ * The latest row of `event` whose `Agent Type` is `reviewer` that definitely
+ * follows `after` (same shard: a later position; another shard: a later
+ * timestamp) and that `accept` admits, or null when there is none. A
+ * cross-shard tie reads as not after, so the callers fail open on it.
  */
+export function latestReviewerRowAfter(
+  events: ReadonlyArray<AuditShardEvent>,
+  event: string,
+  reviewer: string,
+  after: AuditShardEvent,
+  accept: (row: AuditShardEvent) => boolean = () => true,
+): AuditShardEvent | null {
+  let latest: AuditShardEvent | null = null;
+  for (const row of sortAttemptEvents(events)) {
+    if (row.event !== event) continue;
+    if (auditBlockField(row.block, "Agent Type") !== reviewer) continue;
+    if (!attemptEventDefinitelyBefore(after, row)) continue;
+    if (!accept(row)) continue;
+    latest = row;
+  }
+  return latest;
+}
+
+/** The latest SUBAGENT_COMPLETED of `reviewer` definitely after `after`, or null when it has not finished since. */
 export function reviewerCompletionAfter(
   events: ReadonlyArray<AuditShardEvent>,
   reviewer: string,
   after: AuditShardEvent,
 ): AuditShardEvent | null {
-  let latest: AuditShardEvent | null = null;
-  for (const row of sortAttemptEvents(events)) {
-    if (row.event !== "SUBAGENT_COMPLETED") continue;
-    if (auditBlockField(row.block, "Agent Type") !== reviewer) continue;
-    if (!attemptEventDefinitelyBefore(after, row)) continue;
-    latest = row;
-  }
-  return latest;
+  return latestReviewerRowAfter(events, "SUBAGENT_COMPLETED", reviewer, after);
+}
+
+/** The row the plan-approval guard writes when a reviewer dispatch's brief already carries a rendered verdict line. */
+export const REVIEW_VERDICT_DICTATED_EVENT = "REVIEW_VERDICT_DICTATED";
+
+/**
+ * Whether a REVIEW_VERDICT_DICTATED row of `reviewer`, written after this
+ * request's row and naming its id, carried `verdict`: the verdict being recorded
+ * is the one the dispatch dictated. A row naming another request, an earlier
+ * row, or the other verdict is not.
+ */
+export function dispatchDictatedVerdict(
+  events: ReadonlyArray<AuditShardEvent>,
+  reviewer: string,
+  request: OpenReviewRequest,
+  verdict: ReviewVerdict,
+): boolean {
+  const row = latestReviewerRowAfter(events, REVIEW_VERDICT_DICTATED_EVENT, reviewer, request.row, (candidate) =>
+    (auditBlockField(candidate.block, "Request Id") ?? "").split(",").map((id) => id.trim()).includes(request.requestId));
+  return row !== null && auditBlockField(row.block, "Verdict") === verdict;
 }
 
 /** The SUBAGENT_COMPLETED field carrying `<review file>=<sha256 | absent>` per open request. */
@@ -17767,6 +17803,27 @@ export function reviewCompletionEdited(completionBlock: string): boolean {
  *  reviewer finished. */
 export function editedReviewNotice(stageName: string, unit?: string | null): string {
   return `The review file for ${stageName}${unit ? ` (${unit})` : ""} was edited after the reviewer finished.`;
+}
+
+/** The REVIEW_COMPLETED field the logger writes, as `yes`, when the verdict it
+ *  records is the one the reviewer's dispatch already carried (a
+ *  REVIEW_VERDICT_DICTATED row for this request with that verdict): the verdict
+ *  is on record as the dispatch's, not as the reviewer's own judgement. */
+export const REVIEW_DICTATED_FIELD = "Review Verdict Dictated";
+
+/** Whether a REVIEW_COMPLETED row records a verdict its dispatch dictated. Read
+ *  for what the person is told at the gate; it changes no readiness. */
+export function reviewCompletionDictated(completionBlock: string): boolean {
+  return auditBlockField(completionBlock, REVIEW_DICTATED_FIELD) === "yes";
+}
+
+/** The one line the person hears at the gate (strict) or with the verdict
+ *  (relaxed, off) when the review they are deciding on was dispatched with its
+ *  verdict already in the brief, in the person's words: no engine vocabulary. A
+ *  fact, not a judgement: a conductor quoting an earlier review's verdict on a
+ *  re-review carries it too. */
+export function dictatedReviewNotice(stageName: string, unit?: string | null): string {
+  return `The reviewer for ${stageName}${unit ? ` (${unit})` : ""} was told what to conclude before it looked.`;
 }
 
 /**
@@ -19680,6 +19737,7 @@ export function freshReviewReceipts(
     awaitingVerdict: new Set(),
     unfinishedVerdicts: new Set(),
     editedVerdicts: new Set(),
+    dictatedVerdicts: new Set(),
     mergedBoltUnits: new Set(),
     openBoltUnits: new Set(),
     acceptedChanges: [],
@@ -19783,10 +19841,12 @@ export function freshReviewReceipts(
   // an ambiguous matching path fails closed by clearing every unit receipt.
   const recordedRepos = new Set(intentRepos(projectDir));
   const unitVerdicts = new Map<string, ReviewVerdict>();
-  // Read beside the verdicts above: which of them no reviewer gave, and which
-  // record a review edited after the reviewer finished.
+  // Read beside the verdicts above: which of them no reviewer gave, which
+  // record a review edited after the reviewer finished, and which record the
+  // verdict the reviewer's dispatch dictated.
   const unfinishedVerdicts = new Set<string>();
   const editedVerdicts = new Set<string>();
+  const dictatedVerdicts = new Set<string>();
   const unitStale = new Set<string>();
   const unitStaleProgress = new Map<string, StaleReviewProgress>();
   const unitIterations = new Map<string, number>();
@@ -20216,6 +20276,8 @@ export function freshReviewReceipts(
     else unfinishedVerdicts.delete(unit ?? "");
     if (reviewCompletionEdited(e.block)) editedVerdicts.add(unit ?? "");
     else editedVerdicts.delete(unit ?? "");
+    if (reviewCompletionDictated(e.block)) dictatedVerdicts.add(unit ?? "");
+    else dictatedVerdicts.delete(unit ?? "");
     if (unit) {
       unitVerdicts.set(unit, terminalVerdict);
       unitStale.delete(unit);
@@ -20682,6 +20744,7 @@ export function freshReviewReceipts(
     awaitingVerdict,
     unfinishedVerdicts,
     editedVerdicts,
+    dictatedVerdicts,
     mergedBoltUnits,
     openBoltUnits,
     acceptedChanges: [

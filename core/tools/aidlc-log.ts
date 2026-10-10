@@ -124,6 +124,9 @@ import {
   recordedReviewFileDigest,
   editedReviewNotice,
   REVIEW_EDITED_FIELD,
+  dictatedReviewNotice,
+  dispatchDictatedVerdict,
+  REVIEW_DICTATED_FIELD,
   recordFileTargetOrThrow,
   relativeRecordDir,
   recoveryGuidance,
@@ -4142,6 +4145,19 @@ function handleReview(args: string[]): void {
           } else {
             verdictChangeNotices.push(notice);
           }
+        }
+        // The verdict the reviewer's dispatch already carried (a rendered
+        // verdict line in its brief, recorded by the plan-approval guard as
+        // REVIEW_VERDICT_DICTATED) is not the reviewer's own judgement when the
+        // reviewer wrote that same verdict: the row says so, and the person
+        // hears it once (with the verdict here; at the gate under strict). A
+        // reviewer that wrote the other verdict judged for itself: nothing.
+        if (
+          request !== undefined &&
+          dispatchDictatedVerdict(events, flags.reviewer, request, verdict as ReviewVerdict)
+        ) {
+          fields[REVIEW_DICTATED_FIELD] = "yes";
+          verdictChangeNotices.push(dictatedReviewNotice(node.name, flags.unit));
         }
       }
       let reviewBytes = body ?? snapshot.appendix;

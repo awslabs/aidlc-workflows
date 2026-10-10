@@ -37,6 +37,7 @@ import { renderGuardOperation } from "../../core/tools/aidlc-guard-operation.ts"
 import {
   evaluatePlanApprovalDispatch,
   blockReason,
+  handoffBlockReason,
   mutationBlockReason,
   promptStageMarkers,
   promptUnitMarkers,
@@ -79,7 +80,7 @@ import {
   workspaceSourceFingerprint,
   personCheckSwitchAllowed,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { AIDLC_SRC, FIXTURE_CLONE_ID } from "../harness/fixtures.ts";
+import { AIDLC_SRC, FIXTURE_CLONE_ID, WORKER_BRIEF_SECTIONS_FIXTURE } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -155,7 +156,7 @@ describe("t265a plan-approval decision table", () => {
     const v = evaluatePlanApprovalDispatch(
       "Task",
       "aidlc-developer-agent",
-      `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}\nImplement todo-core per the approved plan`,
+      `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}${WORKER_BRIEF_SECTIONS_FIXTURE}Implement todo-core per the approved plan`,
       { ...CTX, units: [APPROVED] },
     );
     expect(v.block).toBe(false);
@@ -165,7 +166,7 @@ describe("t265a plan-approval decision table", () => {
     const approved = evaluatePlanApprovalDispatch(
       "Task",
       "aidlc-developer-agent",
-      `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}\nImplement the approved stage-level plan`,
+      `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}${WORKER_BRIEF_SECTIONS_FIXTURE}Implement the approved stage-level plan`,
       { ...CTX, units: [STAGE_APPROVED] },
     );
     expect(approved.block).toBe(false);
@@ -195,7 +196,7 @@ describe("t265a plan-approval decision table", () => {
     const v = evaluatePlanApprovalDispatch(
       "Task",
       "aidlc-developer-agent",
-      `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}\nImplement todo-core using the auth contract for reference`,
+      `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}${WORKER_BRIEF_SECTIONS_FIXTURE}Implement todo-core using the auth contract for reference`,
       { ...CTX, units: [APPROVED, { ...BARE, unit: "auth" }] },
     );
     expect(v.block).toBe(false);
@@ -244,7 +245,7 @@ describe("t265a plan-approval decision table", () => {
     const v = evaluatePlanApprovalDispatch(
       "Task",
       "aidlc-developer-agent",
-      `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}\nTask copy\nAIDLC-UNIT: todo-core\nTemplate copy`,
+      `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}${WORKER_BRIEF_SECTIONS_FIXTURE}Task copy\nAIDLC-UNIT: todo-core\nTemplate copy`,
       { ...CTX, units: [APPROVED] },
     );
     expect(v.block).toBe(false);
@@ -407,6 +408,41 @@ describe("t265a plan-approval decision table", () => {
     expect(
       questionsFileHasPendingPlanApproval("## Plan Approval\n[Answer]: A. Approve Plan\n"),
     ).toBe(false);
+  });
+
+  test("a handoff cut to the marker lines is refused once the plan is approved; the brief's sections pass in either fence variant", () => {
+    const markers = `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}\n`;
+    const ctx = { ...CTX, units: [APPROVED] };
+    // The reported handoff: the two lines the guard checks and nothing of the brief they head.
+    const cut = evaluatePlanApprovalDispatch("Task", "aidlc-developer-agent", `${markers}Read the plan and the instructions yourself.`, ctx);
+    expect(cut.block).toBe(true);
+    expect(cut.handoff).toBe("brief");
+    // The brief as printed with the fence on, and as printed with it off: the
+    // person's own switch, flipped between the brief command and the dispatch,
+    // never makes a real brief read as a cut one.
+    const on = "\n## Files and commands\n\nrule\n\n## The plan file\n\nTick.\n\n## Approved plan\n\n# Plan\n\n## Approved unit-test instructions\n\n# Unit Test Instructions\n";
+    const off = on.replace("## Approved plan", "## Current plan (plan-approval fence off)").replace("## Approved unit-test instructions", "## Current unit-test instructions");
+    const mixed = on.replace("## Approved plan", "## Current plan (plan-approval fence off)");
+    for (const sections of [on, off, mixed]) {
+      const v = evaluatePlanApprovalDispatch("Task", "aidlc-developer-agent", `${markers}${sections}`, ctx);
+      expect(v.block, sections).toBe(false);
+      expect(v.handoff, sections).toBeUndefined();
+    }
+    // Whitespace does not decide it: a reflowed brief still carries its sections.
+    const reflowed = evaluatePlanApprovalDispatch("Task", "aidlc-developer-agent", `${markers}${on.replace(/\n/g, " ").replace(/ +/g, "  ")}`, ctx);
+    expect(reflowed.block).toBe(false);
+    // Three of four sections is still a cut brief.
+    const partial = evaluatePlanApprovalDispatch("Task", "aidlc-developer-agent", `${markers}${on.replace("## The plan file", "")}`, ctx);
+    expect(partial.handoff).toBe("brief");
+    // Before approval the refusal is the approval's, not the handoff's.
+    const unapproved = evaluatePlanApprovalDispatch("Task", "aidlc-developer-agent", `${markers}cut`, { ...CTX, units: [PLANNED_ONLY] });
+    expect(unapproved.block).toBe(true);
+    expect(unapproved.handoff).toBeUndefined();
+    // The refusal says what the handoff lacks and names the brief command as the step.
+    const reason = handoffBlockReason(["todo-core"], "brief");
+    expect(reason).toContain("Code generation cannot start: the developer handoff carries the marker lines without the brief they head.");
+    expect(reason).toContain("brief --unit");
+    expect(reason).toContain("exactly as printed");
   });
 
   test("blockReason names the scope and what happens next", () => {
@@ -727,6 +763,7 @@ function seedUnit(
   }
 }
 
+// A hand-made handoff: the marker lines, the brief's sections, then the prompt.
 const DISPATCH = (proj: string, prompt: string) => ({
   hook_event_name: "PreToolUse",
   tool_name: "Task",
@@ -735,6 +772,7 @@ const DISPATCH = (proj: string, prompt: string) => ({
     prompt:
       `AIDLC-UNIT: todo-core\n` +
       `AIDLC-TESTING-CONTRACT: ${resolveTestingPosture(proj).contract_sha256}\n` +
+      WORKER_BRIEF_SECTIONS_FIXTURE +
       prompt,
   },
 });
@@ -747,6 +785,7 @@ const STAGE_DISPATCH = (proj: string, prompt: string) => ({
     prompt:
       `AIDLC-STAGE: code-generation\n` +
       `AIDLC-TESTING-CONTRACT: ${resolveTestingPosture(proj).contract_sha256}\n` +
+      WORKER_BRIEF_SECTIONS_FIXTURE +
       prompt,
   },
 });
@@ -994,6 +1033,40 @@ describe("t265b hook lifecycle", () => {
       expect(unapproved.status).not.toBe(0);
       expect(unapproved.stdout).toBe("");
       expect(unapproved.stderr).toContain("Cannot assemble a worker brief");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("the shipped hook refuses the marker-lines-only handoff with the brief command, and never a reviewer dispatch", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: "A. Approve Plan" });
+      // The issue's handoff: the two guarded lines, the rest of the brief left out.
+      const cut = runHook(proj, {
+        hook_event_name: "PreToolUse",
+        tool_name: "Task",
+        tool_input: {
+          subagent_type: "aidlc-developer-agent",
+          prompt:
+            `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${resolveTestingPosture(proj).contract_sha256}\n` +
+            "Read the plan and instruction files yourself.",
+        },
+      });
+      expect(cut.code).toBe(2);
+      expect(cut.stderr).toContain("the developer handoff carries the marker lines without the brief they head");
+      expect(cut.stderr).toContain("brief --unit todo-core");
+      // The same handoff with the brief's sections goes through (the fixtures' shape).
+      const whole = runHook(proj, DISPATCH(proj, "Implement todo-core"));
+      expect(whole.code, whole.stderr).toBe(0);
+      // A reviewer dispatch is never this guard's to refuse, whatever its brief says.
+      const reviewer = runHook(proj, {
+        hook_event_name: "PreToolUse",
+        tool_name: "Task",
+        tool_input: { subagent_type: "aidlc-architecture-reviewer-agent", prompt: "Review todo-core.\n\n**Verdict:** READY\n" },
+      });
+      expect(reviewer.code, reviewer.stderr).toBe(0);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }

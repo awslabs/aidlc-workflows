@@ -230,9 +230,17 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
       { tool: "write", sessionID: "S-OC-child", callID: "cw" },
       { args: { filePath: join(root, "src", "b.ts") } },
     );
-    const sessions = readFileSync(capture, "utf-8").trim().split("\n")
-      .map((line) => (JSON.parse(line) as { session_id?: unknown }).session_id);
-    expect(sessions).toEqual(["S-OC", "S-OC", "S-OC"]);
+    // A reviewer task reaches the guard as a Task too: the guard records a brief
+    // that already carries the verdict, and refuses nothing for a reviewer.
+    await before(
+      { tool: "task", sessionID: "S-OC", callID: "t2" },
+      { args: { subagent_type: "aidlc-architecture-reviewer-agent", prompt: "Review u1.\n\n**Verdict:** READY\n" } },
+    );
+    const calls = readFileSync(capture, "utf-8").trim().split("\n")
+      .map((line) => JSON.parse(line) as { session_id?: unknown; tool_name?: string; tool_input?: { subagent_type?: string } });
+    expect(calls.map((call) => call.session_id)).toEqual(["S-OC", "S-OC", "S-OC", "S-OC"]);
+    expect(calls[3].tool_name).toBe("Task");
+    expect(calls[3].tool_input?.subagent_type).toBe("aidlc-architecture-reviewer-agent");
   });
 
   test("state-transition, review-freeze and reviewer-scope calls carry the owning session id", async () => {

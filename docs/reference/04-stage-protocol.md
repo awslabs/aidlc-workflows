@@ -1160,7 +1160,8 @@ change. See
    completion remain blocked while the request is unmatched. The reviewer
    receives the stage definition path, Q&A file, produced artifact paths, and
    validation tools from frontmatter - never the builder's `memory.md` or
-   plan, so it forms independent judgment. A retry reuses the original
+   plan, and never a verdict to write or to prefer, so it forms independent
+   judgment. A retry reuses the original
    artifact/source binding and request id and never rebaselines current bytes.
    The reviewed-output freeze stays on throughout a stale-receipt recovery:
    the reviewer writes beside the artifact, never inside it, so no write

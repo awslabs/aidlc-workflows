@@ -1178,6 +1178,33 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("2c2: a reviewer spawn reaches the plan-approval guard as a Task with its brief", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "guard-input.jsonl");
+      writeFileSync(join(dir, ".codex", "hooks", "aidlc-plan-approval-guard.ts"), recordingGuard(capture), "utf-8");
+      const r = runAdapter(
+        dir,
+        "plan-approval-guard",
+        {
+          hook_event_name: "PreToolUse", cwd: dir, session_id: "S-CODEX",
+          tool_name: "spawn_agent",
+          tool_input: { agent_type: "aidlc-architecture-reviewer-agent", message: "Review u1.\n\n**Verdict:** READY\n" },
+        },
+        { AIDLC_COMPILED_EXECUTABLE: "" },
+      );
+      expect(r.code, r.stderr).toBe(0);
+      const forwarded = readFileSync(capture, "utf-8").trim().split("\n")
+        .map((line) => JSON.parse(line) as { tool_name?: string; tool_input?: { subagent_type?: string; prompt?: string } });
+      expect(forwarded).toHaveLength(1);
+      expect(forwarded[0].tool_name).toBe("Task");
+      expect(forwarded[0].tool_input?.subagent_type).toBe("aidlc-architecture-reviewer-agent");
+      expect(forwarded[0].tool_input?.prompt).toContain("**Verdict:** READY");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("2cc: native Codex apply_patch and Bash mutation payloads reach plan approval", () => {
     const dir = scratchProject(true);
     try {
