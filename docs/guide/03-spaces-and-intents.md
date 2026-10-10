@@ -222,9 +222,9 @@ Session identity follows one order:
 1. The host session id delivered to a hook.
 2. A valid `AIDLC_SESSION_OVERRIDE` inherited from the harness process.
 3. On Codex, the `CODEX_THREAD_ID` Codex gives every command it runs. A spawned
-   helper agent's shell carries the helper's own thread id; the adapter notes which
-   chat spawned it from the helper's first hook payload, and that thread resolves
-   to the spawning chat's session.
+   helper agent's shell, and a Codex review thread's, carries that thread's own
+   id; the adapter notes which chat it belongs to from the thread's first hook
+   payload, and that thread resolves to the chat's session.
 4. The nearest live PID ancestry entry.
 5. No session identity.
 

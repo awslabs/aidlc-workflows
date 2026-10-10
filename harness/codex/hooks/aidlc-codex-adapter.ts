@@ -31,7 +31,8 @@
 //      brief as `prompt` under the root session id. Spawned subagents carry
 //      agent_id; internal reviewers carry a transcript_path naming their own
 //      thread. record-human-turn never counts either as the person's turn
-//      (#1411).
+//      (#1411), and the preamble maps either thread to this chat so an engine
+//      command run in it acts on this chat's work.
 //
 // Output contracts:
 //   - session-start: the core hook prints
@@ -170,15 +171,22 @@ export function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unk
   });
 }
 
+// The thread a Codex rollout file is for (rollout-<timestamp>-<thread id>[_<rollout
+// id>].jsonl), or null for a path in any other form.
+function rolloutThread(transcriptPath: unknown): string | null {
+  if (typeof transcriptPath !== "string") return null;
+  const name = transcriptPath.split(/[\\/]/).pop() ?? "";
+  return name.match(
+    /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:_[0-9a-f-]+)?\.jsonl(?:\.[a-z0-9]+)?$/i,
+  )?.[1]?.toLowerCase() ?? null;
+}
+
 // True when transcript_path is a Codex rollout file for a thread other than
 // the session's root thread (whose id is the session id).
 function otherThreadInput(transcriptPath: unknown, sessionId: unknown): boolean {
-  if (typeof transcriptPath !== "string" || typeof sessionId !== "string" || !sessionId) return false;
-  const name = transcriptPath.split(/[\\/]/).pop() ?? "";
-  const thread = name.match(
-    /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:_[0-9a-f-]+)?\.jsonl(?:\.[a-z0-9]+)?$/i,
-  )?.[1];
-  return thread !== undefined && thread.toLowerCase() !== sessionId.trim().toLowerCase();
+  if (typeof sessionId !== "string" || !sessionId) return false;
+  const thread = rolloutThread(transcriptPath);
+  return thread !== null && thread.toLowerCase() !== sessionId.trim().toLowerCase();
 }
 
 function explicitHumanSelectionText(toolResponse: unknown): string {
@@ -224,11 +232,14 @@ if (payloadSessionId) {
   process.env.AIDLC_SESSION_OVERRIDE = payloadSessionId;
   process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
   // A spawned agent's payloads carry agent_id = its own thread id, the one its
-  // shell gets as CODEX_THREAD_ID. Note the pair once, from the helper's first
-  // event (its brief), so an engine command the helper runs resolves to this
-  // chat and not to whatever the shared cursor names (aidlc-lib
-  // resolveInvokingSessionId reads it).
-  if (typeof codex.agent_id === "string") noteHelperSession(projectDir, payloadSessionId, codex.agent_id);
+  // shell gets as CODEX_THREAD_ID; Codex's own review thread carries no
+  // agent_id, and only its transcript_path names its thread (the root chat's
+  // rollout names the root itself, which noteHelperSession ignores). Note the
+  // pair once, from the thread's first event, so an engine command run in that
+  // thread resolves to this chat and not to whatever the shared cursor names
+  // (aidlc-lib resolveInvokingSessionId reads it).
+  const ownThread = typeof codex.agent_id === "string" ? codex.agent_id : rolloutThread(codex.transcript_path);
+  if (ownThread !== null) noteHelperSession(projectDir, payloadSessionId, ownThread);
 }
 const projectEnv = {
   ...process.env,

@@ -8,6 +8,11 @@
 // the session bindings) and the resolver maps the helper's thread id to the root
 // session, so an engine command the helper runs acts on the chat that spawned
 // it, not on whatever the shared cursor names when a second chat is open.
+//
+// Codex's own review thread (/review) is the same shape with one difference: its
+// payloads carry no agent_id, and only transcript_path (rollout-<timestamp>-<thread
+// id>.jsonl) names the thread whose input it is. Its shell carries its own
+// CODEX_THREAD_ID too, so the adapter records it from that name.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -24,6 +29,7 @@ const CODEX_TREE = join(REPO_ROOT, "dist", "codex", ".codex");
 const STATE = readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8");
 const ROOT = "01a12051-e539-79b1-b035-e277202dc7e9";
 const HELPER = "01a12051-f83f-7e91-8a6c-9025a2eb68e2";
+const REVIEW = "01a123c1-215f-7753-a117-531435ce9adb";
 const CURSOR_RECORD = DEFAULT_RECORD_DIR;
 const BOUND_RECORD = "second-chat-00000002";
 const projects: string[] = [];
@@ -151,5 +157,45 @@ describe("a Codex helper's engine command stays on the chat that spawned it", ()
     expect(call.code, call.err).toBe(0);
     expect(helperRecords(dir)).toEqual([`${HELPER}.helper-of`]);
     expect(activeIntentSeenBy(dir, HELPER)).toBe(BOUND_RECORD);
+  });
+
+  // Live on Codex 0.160: a /review in chat 1 runs as a subagent thread (source
+  // "review", parent = chat 1) whose shell gets its own CODEX_THREAD_ID; its hook
+  // payloads arrive under chat 1's session_id with no agent_id and a
+  // transcript_path naming its own rollout.
+  test("a Codex review thread is recorded from the rollout transcript_path names, and a tool it runs sees the root chat's work", () => {
+    const dir = project();
+    const sessions = "/home/person/.codex/sessions/2026/10/10";
+    expect(activeIntentSeenBy(dir, REVIEW)).toBe(CURSOR_RECORD);
+    const review = adapter(dir, "record-human-turn", {
+      hook_event_name: "UserPromptSubmit", session_id: ROOT, turn_id: "01a12051-0000-7000-8000-000000000020",
+      transcript_path: `${sessions}/rollout-2026-10-10T14-00-21-${REVIEW}.jsonl`,
+      prompt: "Review the current code changes and report prioritized findings.",
+    });
+    expect(review.code, review.err).toBe(0);
+    expect(helperRecords(dir)).toEqual([`${REVIEW}.helper-of`]);
+    expect(readFileSync(join(dir, "aidlc", ".aidlc-sessions", `${REVIEW}.helper-of`), "utf-8").trim()).toBe(ROOT);
+    expect(activeIntentSeenBy(dir, REVIEW)).toBe(BOUND_RECORD);
+    // The root chat's own rollout, plain or with a rollout-id suffix, is the main chat: nothing is recorded for it.
+    for (const name of [`rollout-2026-10-10T13-58-13-${ROOT}.jsonl`, `rollout-2026-10-10T13-58-13-${ROOT}_019f0000-0000-7000-8000-0000000000aa.jsonl`]) {
+      const own = adapter(dir, "record-human-turn", {
+        hook_event_name: "UserPromptSubmit", session_id: ROOT, turn_id: "01a12051-0000-7000-8000-000000000021",
+        transcript_path: `${sessions}/${name}`, prompt: "Carry on.",
+      });
+      expect(own.code, own.err).toBe(0);
+    }
+    expect(helperRecords(dir)).toEqual([`${REVIEW}.helper-of`]);
+  });
+
+  test("a review thread's tool call records it too, from a Windows rollout path", () => {
+    const dir = project();
+    const call = adapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse", session_id: ROOT, tool_name: "Bash", tool_input: { command: "ls" },
+      transcript_path: `C:\\Users\\person\\.codex\\sessions\\2026\\10\\10\\rollout-2026-10-10T14-00-21-${REVIEW}.jsonl`,
+      turn_id: "01a12051-0000-7000-8000-000000000022", tool_use_id: "call_review",
+    });
+    expect(call.code, call.err).toBe(0);
+    expect(helperRecords(dir)).toEqual([`${REVIEW}.helper-of`]);
+    expect(activeIntentSeenBy(dir, REVIEW)).toBe(BOUND_RECORD);
   });
 });
