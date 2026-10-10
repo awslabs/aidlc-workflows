@@ -98,6 +98,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   deleteQuestion,
+  firstFrontQuestionSince,
   latestFrontQuestionId,
   latestQuestion,
   pruneExpiredQuestions,
@@ -280,8 +281,11 @@ import {
   PHASES,
   parseTeamBoardArgs,
   parseWorkspaceCommand,
+  isWorkspaceNoun,
   nextArgsCarryRequestWords,
+  type NextLineReading,
   nextTokenKind,
+  readNextLine,
   READ_ONLY_FLAGS,
   readKiroIdeLegacyPlanApprovalHost,
   readAllAuditShards,
@@ -455,6 +459,7 @@ import {
   type DirectiveLimit,
   entrySkillInvocation,
   isCompiledExecutable,
+  quoteCommandArgument,
   resolveHarnessPath,
   resolveHarnessRoot,
   runtimeHarnessName,
@@ -827,6 +832,10 @@ const KEPT_REQUEST_LINE = "Carrying on with your earlier request.";
 const KEPT_REQUEST_FLAGS = new Set([
   "intent", "scope", "positionalScope", "depth", "testStrategy", "projectType", "review",
   "changeControl", "ceremony", "planChanges", "newIntent", "compose", "newScope",
+  // How the line reads is still a request: words the delimiter marked as
+  // theirs, and a line only the agent can read whole. Both keep their words,
+  // so the restart carries on with what they asked for rather than losing it.
+  "markedWords", "readingStep",
 ]);
 // Said first on the step the kept request leads to.
 let activeKeptRequestLine: string | null = null;
@@ -2411,6 +2420,27 @@ function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boole
   return true;
 }
 
+/**
+ * The plan question the person was asked and has not answered: the latest copy
+ * this engine kept, when it is one of its own front questions and nothing was
+ * started from it. A question whose answer created work is answered, and a
+ * routing question is read back by its own options.
+ */
+function openFrontQuestion(
+  projectDir: string,
+): { question: StoredQuestion; sole: boolean } | null {
+  const latest = latestQuestion(projectDir);
+  if (latest === null || latest.origin !== "front") return null;
+  if (intentStartedByQuestion(projectDir, latest.id) !== null) return null;
+  // A question copy does not say which chat it was shown in, and a reply
+  // answers a question of this work from any chat, so with more than one still
+  // open this engine cannot tell WHICH question the person is answering. It
+  // says so instead of naming one: the agent has the question it asked in its
+  // own chat, with that question's own commands.
+  const earliest = firstFrontQuestionSince(projectDir, new Date(0).toISOString(), Number.POSITIVE_INFINITY);
+  return { question: latest, sole: earliest === null || earliest === latest.id };
+}
+
 function carriedFromQuestion(question: StoredQuestion, flags: ParsedFlags): RoutingCarried | null {
   if (!question.settings) return carriedRoutingFlags(flags);
   const kept = parseNextFlags(question.settings.newWork);
@@ -3844,6 +3874,20 @@ export interface ParsedFlags {
   /** The value that token took, when a word followed it, so the print names both. */
   untakenFlagValue?: string;
   /**
+   * The line has two readings and only the agent can tell which the person
+   * meant, so `next` took nothing from it: a flag it takes with a value its
+   * table does not hold, a plan word at the start of their own sentence, or one
+   * of this engine's nouns with their sentence after it. `intent` holds the
+   * line whole. routeNext returns the one reading step and nothing else runs.
+   */
+  readingStep?: Exclude<NextLineReading, { kind: "exact" } | { kind: "words" } | { kind: "untaken-flag" }>;
+  /**
+   * The `--` delimiter supplied the words: they are the person's, marked as
+   * theirs by whoever typed them, so nothing reads them for a meaning of its
+   * own. It is how an agent says "these words are a request, not a reply".
+   */
+  markedWords?: true;
+  /**
    * The person's words as they typed them, when `intent` cannot hold them whole:
    * a flag-shaped token this engine does not take is folded out of `intent`,
    * because `next` acts on none of the line, but it is still one of their words
@@ -3879,6 +3923,25 @@ const ENTRY_WORD_PREFIX = /^[/$]aidlc\s+/i;
 
 export function parseNextFlags(argv: string[]): ParsedFlags {
   const args = withoutEntryWord(argv);
+  // Which of the three ways this line reads, decided once by readNextLine in
+  // aidlc-lib.ts, which the prompt-time seams read too, so nothing can act on a
+  // line the engine would hand to the agent. On a reading step nothing of the
+  // line is taken here at all: no plan peeled off their sentence, no noun run
+  // as a command, no value refused. `intent` keeps the line whole, for the
+  // record and for the print, and routeNext returns the one reading step.
+  // An untaken flag keeps its own fields, set by the loop below.
+  const reading = readNextLine(args);
+  // A workspace noun with a word that names no record of theirs already has its
+  // own step, which names that noun's verbs and the records there
+  // (unknownWorkspaceWordStep), so the command stays parsed and that step runs.
+  // The seams read the same reading and stand back from the line either way.
+  if (
+    reading.kind === "value" || reading.kind === "plan-word" ||
+    (reading.kind === "noun" && !isWorkspaceNoun(reading.noun))
+  ) {
+    const said = args.join(" ").replace(ENTRY_WORD_PREFIX, "").trim();
+    return { readingStep: reading, ...(said.length > 0 ? { intent: said } : {}) };
+  }
   // A SOLE bare `help` / `-h` token is a help REQUEST, not intent text. Without
   // this, the token falls into intentWords and the freeform funnel offers to
   // create an intent literally named "help" (fresh workspace) or silently
@@ -3919,7 +3982,10 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       ? { configCommand: args, parseError: usage }
       : { configCommand: args };
   }
-  const configIndex = args.indexOf("--config");
+  // Behind the delimiter `--config` is one of their words, like every other
+  // token there, so the scan for this engine's own flag stops at the mark.
+  const beforeMark = args.indexOf("--");
+  const configIndex = (beforeMark < 0 ? args : args.slice(0, beforeMark)).indexOf("--config");
   if (configIndex >= 0) {
     const trailing = args.slice(configIndex + 1);
     if (
@@ -4296,6 +4362,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   }
   if (intentWords.length > 0) {
     flags.intent = intentWords.join(" ").replace(ENTRY_WORD_PREFIX, "");
+    if (literalIntent) flags.markedWords = true;
   }
   // Only when the two readings differ: a line whose words `intent` already holds
   // needs no second copy, and every reader of the parse keeps one meaning.
@@ -4328,7 +4395,8 @@ export function nextArgsAreOnlyWords(args: string[]): boolean {
   // for the question they answered. Only what `next` does take makes it a
   // command. The agent still gets the print naming the token it could not take.
   const read = Object.keys(parsed).filter((key) =>
-    key !== "untakenFlag" && key !== "untakenFlagValue" && key !== "personWords");
+    key !== "untakenFlag" && key !== "untakenFlagValue" && key !== "personWords" &&
+    key !== "readingStep" && key !== "markedWords");
   return typeof parsed.intent === "string" && read.length === 1;
 }
 
@@ -7230,6 +7298,55 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // and not a question put to the person about words they may never have typed.
   // No narration, so nothing here reaches them; the agent has their own line in
   // the chat and reads what they meant, then runs `next` again.
+  // The other two readings of a line this engine could not read whole: a value
+  // its own table does not hold, a plan word at the start of their sentence, or
+  // one of its nouns with their sentence after it. Same shape as the untaken
+  // token below, for the same reason: the line has two readings, only the agent
+  // has their chat, and nothing of the line is acted on until it has read it.
+  const step = flags.readingStep;
+  if (step !== undefined) {
+    const next = `${aidlcToolInvocation("orchestrate")} next`;
+    const said = flags.intent ?? "";
+    // Their own text goes into a command someone runs, so it is one quoted
+    // argument (quoteCommandArgument, platform-aware): a line of theirs that
+    // mentions shell syntax says what they said and runs nothing of its own.
+    // After the delimiter one quoted argument is read as the request whole, so
+    // the command means exactly what it did unquoted.
+    const theirs = `run \`${next} -- ${quoteCommandArgument(said)}\`, which keeps every word of theirs`;
+    const ask = "If you cannot tell, ask them once in plain words.";
+    if (step.kind === "value") {
+      // Their value is shown as a quoted string, never inside backticks: in
+      // every directive of this engine a backticked span is a command to run,
+      // and a value of theirs is not one. The only command here that carries
+      // their text is the delimiter one above, where it is one quoted argument.
+      emit(printDirective(
+        `\`next\` takes \`${step.flag}\` with ${step.valid.join("|")}, and does not take ` +
+        `${JSON.stringify(step.value)}. If the person meant one of those, run \`${next}\` again with ` +
+        `\`${step.flag}\` and that word, and their own words after it. ` +
+        `If that value is part of what they asked for, ${theirs}. ${ask}`,
+      ));
+      return;
+    }
+    if (step.kind === "plan-word") {
+      emit(printDirective(
+        `\`${step.scope}\` is the name of a plan and also the first word of what the person typed, ` +
+        `and \`next\` cannot tell which they meant, so it took nothing from the line. ` +
+        `If they named the plan, run \`${next} --scope ${step.scope} -- ` +
+        `${quoteCommandArgument(said.slice(step.scope.length).trim())}\`. ` +
+        `If \`${step.scope}\` is their own word, ${theirs}. ${ask}`,
+      ));
+      return;
+    }
+    emit(printDirective(
+      `\`${step.noun}\` is one of this engine's own nouns and also the first word of what the person ` +
+      `typed, and \`next\` cannot tell which they meant, so it took nothing from the line. ` +
+      `If they meant the \`${step.noun}\` command, run \`${next} ${step.noun} <its verb>\` ` +
+      `(\`${next} ${step.noun} help\` lists them). ` +
+      `If \`${step.noun}\` is their own word, ${theirs}. ${ask}`,
+    ));
+    return;
+  }
+
   if (flags.untakenFlag !== undefined) {
     const open = openPlanApprovalQuestion(resolveProjectDir(projectDir), "");
     const next = `${aidlcToolInvocation("orchestrate")} next`;
@@ -7282,8 +7399,44 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // repeat the question. Its continue and reshape still act only on the work
   // the question named, and ask again otherwise.
   const onlyProse = flags.intent !== undefined &&
-    Object.entries(flags).every(([key, value]) => key === "intent" || value === undefined || value === false);
+    Object.entries(flags).every(([key, value]) =>
+      key === "intent" || key === "markedWords" || value === undefined || value === false);
   const routingAnswer = onlyProse ? routingQuestionAnswer(questionDir, flags.intent!) : null;
+  // A reply typed while one of this engine's own questions is still open is
+  // that question's reply, never a new request: before this, "yes" after the
+  // plan offer became work named "yes" and the same offer came back, a loop the
+  // person could sit in, and their word was spent as a name. Only the agent has
+  // their chat and can tell a reply from a new request, so both readings go to
+  // it and nothing is created first. A question whose answer already started
+  // work is not open, and a routing question answers itself above.
+  // Words behind the delimiter are already marked as the person's own request,
+  // which is the agent's answer to this very print: it must not come back.
+  const openFront = routingAnswer === null && onlyProse && flags.markedWords !== true
+    ? openFrontQuestion(questionDir)
+    : null;
+  if (openFront !== null) {
+    const tool = `${aidlcToolInvocation("orchestrate")} next`;
+    const open = openFront.question;
+    const answer = !openFront.sole
+      // More than one plan question is open on this work, so which one they are
+      // answering is the agent's to know: it ran the one it showed them, and
+      // that question's own commands carry its own `--request` id.
+      ? "the command that question gave for their choice, as that question still stands in your own chat, " +
+        "with the `--request` id it came with"
+      : open.proposedScope.length > 0
+        ? `\`${tool} --scope ${scopeArg(open.proposedScope)} --request ${open.id}\`, ` +
+          `or \`${tool} compose --request ${open.id}\` for a plan tailored to it`
+        : `\`${tool} compose --request ${open.id}\`, or one of the plan commands that question listed, ` +
+          `each with \`--request ${open.id}\``;
+    emit(printDirective(
+      "The person has not answered the plan question they were asked, so `next` cannot tell their reply from a " +
+      `new request and took nothing from the line. If their words answer that question, run the command it gave ` +
+      `for their choice: ${answer}. If they are asking for something else, run ` +
+      `\`${tool} -- ${quoteCommandArgument(flags.intent ?? "")}\`, which keeps every word of theirs. ` +
+      "If you cannot tell, ask them once in plain words.",
+    ));
+    return;
+  }
   // Asked while no work was selected, continue and reshape act on a record the
   // person picks from the ones the question listed that are still there: with
   // one listed, that is the one; with more, only which one is left to ask.
@@ -14122,9 +14275,17 @@ function unknownWorkspaceWordStep(
   const names = command.explicit
     ? `\`${noun} switch ${name}\` names no ${noun}: none is named "${name}"`
     : `\`${noun} ${name}\` names no ${noun} verb, and no ${noun} is named "${name}"`;
+  // With a sentence of theirs after the name, the noun may be their own first
+  // word ("intent is to build a notes app"), so the way to keep every word of
+  // it is named too; a mistyped verb or name alone has no such reading.
+  const theirs = (command.words?.length ?? 0) > 0
+    ? ` If \`${noun}\` is their own first word and the line is a request, run ` +
+      `\`${aidlcToolInvocation("orchestrate")} next -- ${quoteCommandArgument(typed)}\` instead, ` +
+      "which keeps every word of theirs."
+    : "";
   return `${names}, so nothing ran and nothing changed. The ${noun} verbs are: ${verbs}; run one as ` +
     `\`${aidlcDispatcherInvocation(noun)} <verb> ...\`. ${records} The person typed: "${typed}". Read what they meant ` +
-    "and run that command; if you cannot tell, ask them once in plain words.";
+    `and run that command; if you cannot tell, ask them once in plain words.${theirs}`;
 }
 
 // Complete the non-stage resume-choice round-trip by ROUTING the choice, not

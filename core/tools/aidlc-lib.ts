@@ -1093,9 +1093,17 @@ export function isBareContinuationPhrase(text: string): boolean {
 // One rule for the Copilot adapter claim gate and isTerminalUtilityNext, mirroring
 // parseNextFlags/routeNext's terminal early returns and engine-marker exclusion.
 export function isReadOnlyNextArgv(argv: readonly string[]): boolean {
-  const args = withoutEntryWord(argv);
+  const args = splitFlagShapedArguments(withoutEntryWord(argv));
+  // A line the engine would hand to the agent is never acted on here: a seam
+  // that runs before any agent reads the line must stand back from it, which is
+  // what readNextLine answers for both of us. Only an exact line is this
+  // engine's own command.
   if (isRetiredOnlyNextArgv(args)) return true;
+  // A modifier whose value this engine refuses is its own terminal refusal, and
+  // stays one when the refusal becomes a reading step: either way the turn
+  // carries no workflow work (Full Suite 36549553601).
   if (isRefusedModifierNextArgv(args)) return true;
+  if (readNextLine(args).kind !== "exact") return false;
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) return true;
   const verb = leadingOrchestratorVerb(args);
   if (verb === "team-board") return true;
@@ -1753,7 +1761,12 @@ function terminalCommandFromWorkspaceCommand(
 // `sessionId` names the chat whose selection decides the space (a hook knows
 // its payload's chat; the invoking session is used otherwise).
 export function classifyTerminalCommand(argv: string[], projectDir?: string, sessionId?: string): TerminalCommand | null {
-  const args = withoutEntryWord(argv);
+  const args = splitFlagShapedArguments(withoutEntryWord(argv));
+  // A line the engine would hand to the agent is never acted on here: a seam
+  // that runs before any agent reads the line must stand back from it, which is
+  // what readNextLine answers for both of us. Only an exact line is this
+  // engine's own command.
+  if (readNextLine(args).kind !== "exact") return null;
   // A SOLE bare `help` / `-h` token is a help REQUEST (terminal, read-only);
   // mirrors parseNextFlags in the engine. Without this the token reads as
   // freeform intent text and the funnel offers to create an intent named
@@ -39235,6 +39248,166 @@ export function nextTokenKind(token: string, following: string | undefined): "fl
   const shape = nextFlagShape(token);
   if (shape !== null && (shape.needsFollowing !== true || following !== undefined)) return "flag";
   return argumentIsFlagShaped(token) ? "untaken" : "words";
+}
+
+/**
+ * Which of the three ways the engine reads what the person typed after
+ * `/aidlc`.
+ *
+ * `exact`: every token was read under the grammar, and any free words are
+ * marked as theirs (the `--` delimiter, or a plan named with a colon). It acts.
+ * `words`: nothing on the line was read, so it is a request. Anything else is a
+ * reading step: the line has two readings and only the agent, which has their
+ * chat, can tell which they meant, so the engine takes nothing from it and says
+ * what it could not read. Nothing is created, switched, jumped, dropped or
+ * refused first.
+ *
+ * One function, so the parser and the prompt-time seams that read a line before
+ * any agent sees it cannot disagree about it. The seams split each argument on
+ * whitespace before calling this, because a harness can hand the whole line
+ * over as one quoted argument.
+ */
+export type NextLineReading =
+  | { kind: "exact" }
+  | { kind: "words" }
+  | { kind: "untaken-flag"; token: string; value?: string }
+  | { kind: "value"; flag: string; value: string; valid: readonly string[] }
+  | { kind: "plan-word"; scope: string }
+  | { kind: "noun"; noun: string };
+
+/**
+ * One argument that is nothing but flags and their values is that command,
+ * however the harness quoted it (`"--doctor --export"` from Kiro IDE's
+ * PowerShell), so it reads as the tokens it holds. One that holds a bare word
+ * is the person's sentence and stays whole, which is what keeps every word of
+ * "--help flag for the reverser" theirs.
+ */
+export function splitFlagShapedArguments(argv: readonly string[]): string[] {
+  return argv.flatMap((arg) =>
+    /\s/.test(arg) && argumentIsFlagShaped(arg) ? arg.split(/\s+/).filter((token) => token.length > 0) : [arg]
+  ).filter((token) => token.length > 0);
+}
+
+export function readNextLine(argv: readonly string[]): NextLineReading {
+  const args = splitFlagShapedArguments(argv);
+  if (args.length === 0) return { kind: "exact" };
+  // Words behind the delimiter are theirs and marked, so what is in front of it
+  // decides and their words never make a reading step.
+  const mark = args.indexOf("--");
+  const head = mark >= 0 ? args.slice(0, mark) : args;
+  if (head.length === 0) return mark + 1 < args.length ? { kind: "words" } : { kind: "exact" };
+
+  // A leading noun owns its argv, and that noun's own parser says whether it can
+  // read the rest as its command. One word after the noun is a verb or a name,
+  // however it is spelt, so the engine's own refusal naming its verbs is the
+  // answer. Two or more words of theirs cannot be either, so the noun may be
+  // their own first word (`intent is to build a notes app`) and only the agent
+  // can tell; this engine must not run that as a command first.
+  const theirSentenceAfter = head.length > 2 && !head[1].startsWith("-");
+  const plugin = parsePluginCommand(head);
+  if (plugin.kind !== "not-plugin") {
+    return plugin.kind === "error" && theirSentenceAfter ? { kind: "noun", noun: head[0] } : { kind: "exact" };
+  }
+  const knowledge = parseKnowledgeCommand(head);
+  if (knowledge.kind !== "not-knowledge") {
+    return knowledge.kind === "error" && theirSentenceAfter ? { kind: "noun", noun: head[0] } : { kind: "exact" };
+  }
+  const workspace = parseWorkspaceCommand(head);
+  if (workspace.kind !== "not-workspace") {
+    const theirs = workspace.kind === "switch" && !workspace.explicit && workspace.words !== undefined;
+    return theirs ? { kind: "noun", noun: workspace.noun } : { kind: "exact" };
+  }
+  // The rest of the engine's own leading forms own their argv as they are.
+  if (leadingOrchestratorVerb(head) !== null) return { kind: "exact" };
+  if (head[0] === "config" || head[0] === "compose" || head[0] === "--pick") return { kind: "exact" };
+  if (head.includes("--config")) return { kind: "exact" };
+  if (head.length === 1 && (head[0] === "help" || head[0] === "-h")) return { kind: "exact" };
+
+  const requestWords = nextArgsCarryRequestWords(args);
+  const words: string[] = [];
+  let took = false;
+  let readOnly: string | undefined;
+  for (let i = 0; i < head.length; i++) {
+    const token = head[i];
+    const following = head[i + 1];
+    // A utility flag among their own words is one of their words; alone, or
+    // among other flags, it is the utility.
+    if (READ_ONLY_FLAGS.has(token) && !requestWords) {
+      readOnly = token;
+      took = true;
+      continue;
+    }
+    if (readOnly === "--doctor" && (token === "--export" || token === "--verbose")) {
+      took = true;
+      continue;
+    }
+    if (readOnly === "--doctor" && token === "--output") {
+      took = true;
+      if (following !== undefined && !following.startsWith("--")) i++;
+      continue;
+    }
+    const kind = nextTokenKind(token, following);
+    if (kind === "words") {
+      words.push(token);
+      continue;
+    }
+    if (kind === "untaken") {
+      return { kind: "untaken-flag", token, ...(following !== undefined && !following.startsWith("--") ? { value: following } : {}) };
+    }
+    took = true;
+    const shape = nextFlagShape(token);
+    if (shape === null || shape.value === "none") continue;
+    if (following === undefined || following.startsWith("--")) continue; // the engine's own refusal, by name
+    i++;
+    // A flag this engine takes, with a value its own table does not hold: the
+    // person meant one of the words it does hold, and the agent re-runs it.
+    if (shape.value === "words" && shape.words !== undefined &&
+      !shape.words.includes(following.toLowerCase())) {
+      return { kind: "value", flag: token, value: following, valid: shape.words };
+    }
+  }
+  if (!took && words.length === 0) return { kind: "exact" };
+  if (!took) {
+    // Nothing on the line was read: a request, unless it opens with the name of
+    // a plan, which is ambiguous with their own first word.
+    const plan = words[0];
+    const colon = plan.match(/^([A-Za-z][\w-]*):(?:\s+([\s\S]*))?$/);
+    // The plan names come from the stage graph. A tree without it (a seam
+    // reading a line before the engine is installed, a bare checkout) reads
+    // their words as words, which is the reading that acts on nothing.
+    let plans: ReadonlySet<string>;
+    try {
+      plans = validScopes();
+    } catch {
+      return { kind: "words" };
+    }
+    if (colon && plans.has(colon[1].toLowerCase())) return { kind: "exact" };
+    // Three shapes a plan's name can lead in, and only one of them is a reading
+    // already made: the name in its OWN argument with the rest of the request
+    // in one more, or in none, which is what the orchestrator skill asks the
+    // agent for (`next classic 'Build a notes app'`), and what the mark says
+    // too (`bugfix -- --enable`). The engine acts on that one.
+    // The other two are the person's own sentence as a harness hands it over,
+    // opening with a word that is also a plan's name: loose words after it
+    // (`bugfix Fix duplicate todos`), or the whole line in one argument, as
+    // Kiro IDE's PowerShell hands it over (`classic car rental website`).
+    // Both read the same way, because they are the same line, and only the
+    // agent can tell whether that first word is their plan or their own word.
+    const opening = plan.split(/\s+/)[0];
+    if (plans.has(opening)) {
+      // The plan named in its own argument with the rest of the request in one
+      // more: the agent packaged it that way, which is the reading made.
+      const namedByArgument = words.length === 2 && !/\s/.test(words[0]);
+      // And a line of two words is the plan and a one-word description however
+      // it arrives, so the two forms of one line never disagree.
+      const tokens = words.flatMap((word) => word.split(/\s+/)).filter((token) => token.length > 0);
+      return namedByArgument || tokens.length <= 2
+        ? { kind: "exact" }
+        : { kind: "plan-word", scope: opening };
+    }
+    return { kind: "words" };
+  }
+  return { kind: "exact" };
 }
 
 // Scope-owned ceremonies: env kill switch, then intent, then scope, then on.

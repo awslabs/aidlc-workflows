@@ -3272,9 +3272,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         expect(pre.stdout, spec.text).toBe("");
         const executed = runShell(dir, spec.text);
         expect(executed.status, executed.stderr).toBe(0);
+        // A value this engine's own table does not hold is a reading step, which
+        // is a print the agent acts on; it carries no workflow work either way,
+        // which is what this case guards (t-three-ways-to-read-a-line).
         expect(JSON.parse(executed.stdout.trim()), spec.text).toMatchObject({
-          kind: (args[1] === "team-board" && args.length > 2) || (args[1] === "--config" && (args.includes("bogus") || args.includes("extra"))) ||
-            args.includes("extreme") || args.includes("loud") ? "error" : "print",
+          kind: (args[1] === "team-board" && args.length > 2) ||
+            (args[1] === "--config" && (args.includes("bogus") || args.includes("extra"))) ? "error" : "print",
         });
         const post = runAdapter(dir, "post-tool", commandPayload(dir, session, spec.text, attempt, true, executed.stdout));
         expect(post.code, spec.text).toBe(0);

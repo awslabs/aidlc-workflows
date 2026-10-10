@@ -517,7 +517,13 @@ describe("t338 atomic per-intent settings", () => {
     expect(creation.kind).toBe("print");
     expect(creation.message).toContain("--sensors off");
     expect(directive(run(ORCHESTRATE, ["next", "compose", "--sensors", "off"], proj).stdout).kind).toBe("error");
-    expect(directive(run(ORCHESTRATE, ["next", "--sensors", "invalid"], proj).stdout).kind).toBe("error");
+    // A ceremony value this engine's table does not hold goes to the agent as a
+    // reading step naming the words it does hold (t-three-ways-to-read-a-line);
+    // nothing is applied either way.
+    const unheld = directive(run(ORCHESTRATE, ["next", "--sensors", "invalid"], proj).stdout);
+    expect(unheld.kind).toBe("print");
+    expect(unheld.message).toContain("on|off");
+    expect(unheld.message).toContain('"invalid"');
   });
 
 

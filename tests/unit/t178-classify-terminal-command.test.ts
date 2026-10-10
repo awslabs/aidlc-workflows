@@ -115,13 +115,10 @@ describe("classifyTerminalCommand() — read-only flags (match anywhere)", () =>
       subcommand: "doctor",
       source: "read-only-flag",
     });
-    // Only the allowlist rides through: an arbitrary trailing token is ignored,
-    // never captured into args.
-    expect(classifyTerminalCommand(["--doctor", "--export", "--evil"])).toEqual({
-      subcommand: "doctor",
-      source: "read-only-flag",
-      args: ["--export"],
-    });
+    // A token this engine does not take makes the line one the agent must read
+    // (the engine's own parse returns its reading step for it), so the seam
+    // runs nothing at all rather than dropping the token and running the rest.
+    expect(classifyTerminalCommand(["--doctor", "--export", "--evil"])).toBeNull();
   });
 
   test("the exported READ_ONLY_FLAGS set is exactly the four utility flags", () => {
@@ -267,7 +264,6 @@ test("isReadOnlyNextArgv mirrors the engine's terminal early returns", () => {
     ["--config", "bogus"],
     ["--config", "models", "extra"],
     ["--scope", "poc", "--config"],
-    ["--", "--config"],
     ["intent"],
     ["intent", "list"],
     ["space", "teamb"],
@@ -296,6 +292,9 @@ test("isReadOnlyNextArgv mirrors the engine's terminal early returns", () => {
     ["--claim", "--doctor"],
     ["intent", "create", "--scope", "poc"],
     ["--", "--status"],
+    // Behind the delimiter this engine's own flags are words of theirs, in the
+    // engine's parse and here: `-- --config` is a request, not a config route.
+    ["--", "--config"],
     ["plugin", "list"],
     ["plugin", "sync", "--status"],
     ["plugin", "help"],

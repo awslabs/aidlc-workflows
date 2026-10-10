@@ -28,8 +28,14 @@ import {
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 import {
+  argumentIsFlagShaped,
+  classifyTerminalCommand,
   hooksHealthDir,
+  isReadOnlyNextArgv,
+  isRefusedModifierNextArgv,
+  isRetiredOnlyNextArgv,
   readAuditShardEvents,
+  readNextLine,
   splitKiroCommandArgs,
   validScopes,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -129,6 +135,9 @@ type Shape =
   | "untaken-equals"
   | "flag-after-words"
   | "after-delimiter"
+  | "plan-word-split"
+  | "plan-word-quoted"
+  | "plan-word-named"
   | "blank";
 
 interface Case {
@@ -162,6 +171,7 @@ function buildCase(next: () => number): Case {
     "words-only", "valued-flag", "ceremony-flag", "fence-flag", "boolean-flag", "bad-value",
     "missing-value", "valueless-positional", "untaken-answer", "untaken-misspelt", "untaken-unknown",
     "untaken-equals", "flag-after-words", "after-delimiter", "blank",
+    "plan-word-split", "plan-word-quoted", "plan-word-named",
   ];
   const shape = shapes[Math.floor(next() * shapes.length)];
   const tailLength = 1 + Math.floor(next() * 3);
@@ -170,6 +180,27 @@ function buildCase(next: () => number): Case {
   switch (shape) {
     case "words-only":
       return { shape, argv: [...tail], tail };
+    // The same line, as the three harnesses hand it over: the person's own
+    // sentence opening with a word that is also a plan's name, split into
+    // tokens or quoted whole (both ambiguous), and the plan named in its own
+    // argument, which is the reading the orchestrator skill asks the agent for.
+    case "plan-word-split": {
+      // Nothing of theirs is spent on a reading step, so the whole line is
+      // their words; with one word after the plan name it is the plan and that
+      // description, as it is in every form of the line.
+      const plan = pick([...SCOPES]);
+      const words = tail.length > 1 ? [plan, ...tail] : tail;
+      return { shape, argv: [plan, ...tail], tail: words };
+    }
+    case "plan-word-quoted": {
+      // One argument holding the whole line: the engine never splits their
+      // sentence for them, so every word of it is the request.
+      const plan = pick([...SCOPES]);
+      const line = [plan, ...tail].join(" ");
+      return { shape, argv: [line], tail: [line] };
+    }
+    case "plan-word-named":
+      return { shape, argv: [pick([...SCOPES]), tail.join(" ")], tail: [tail.join(" ")] };
     case "valued-flag": {
       const entry = pick(VALUED_FLAGS);
       const withTail = next() < 0.6;
@@ -278,11 +309,21 @@ describe("the flag parser over a seeded sweep of lines", () => {
         expect(parsed.parseError, note).toBeUndefined();
       }
 
-      // A value the flag does not accept, or none at all, is a parse error that
-      // names what is valid. Never a throw, and never work named after it.
+      // A value the flag does not accept is a reading step naming the words it
+      // does: the person meant one of them, and the agent re-runs it. With no
+      // value at all it is still this engine's own refusal, by name. Never a
+      // throw, and never work named after it.
       if (testCase.shape === "bad-value" || testCase.shape === "missing-value") {
-        expect(typeof parsed.parseError, note).toBe("string");
-        expect(String(parsed.parseError), note).toContain(testCase.argv[0].split("=")[0]);
+        const flag = testCase.argv[0].split("=")[0];
+        const step = parsed.readingStep;
+        if (step !== undefined) {
+          expect(step.kind, note).toBe("value");
+          expect(step.kind === "value" ? step.flag : "", note).toBe(flag);
+          expect(parsed.untakenFlag, note).toBeUndefined();
+        } else {
+          expect(typeof parsed.parseError, note).toBe("string");
+          expect(String(parsed.parseError), note).toContain(flag);
+        }
       }
 
       // A flag that reads its value only when one follows: a line ending on it
@@ -392,6 +433,59 @@ describe("the flag parser over a seeded sweep of lines", () => {
       checked++;
     }
     expect(checked).toBeGreaterThan(50);
+  });
+
+  // One reading per line, and the seams that run before any agent reads take
+  // the same one: a line the engine would hand to the agent is never run from a
+  // seam, and one quoted argument that holds only flags reads as the tokens in
+  // it. This is the invariant row 3 broke, where the two readings of one line
+  // disagreed.
+  test(`reads each of the ${CASES} lines exactly one way, and both seams take that reading`, () => {
+    const kinds = new Set(["exact", "words", "untaken-flag", "value", "plan-word", "noun"]);
+    let exact = 0;
+    let handed = 0;
+    for (const testCase of cases) {
+      const note = where(testCase);
+      const reading = readNextLine(testCase.argv);
+      expect(kinds.has(reading.kind), `${note} kind=${reading.kind}`).toBe(true);
+      if (reading.kind === "exact") exact++;
+      else handed++;
+      // A line the engine hands to the agent is not a terminal command and not
+      // a read-only mode at either seam, save this engine's own refusals, which
+      // carry no workflow work either way.
+      if (reading.kind !== "exact" && !isRefusedModifierNextArgv(testCase.argv)) {
+        expect(classifyTerminalCommand([...testCase.argv]), note).toBeNull();
+        expect(isReadOnlyNextArgv(testCase.argv), note).toBe(isRetiredOnlyNextArgv(testCase.argv));
+      }
+      // The same line as one quoted argument, as a harness that quotes the
+      // whole turn hands it over. Nothing but flags and their values reads as
+      // those tokens; a sentence opening with a plan's name is the same reading
+      // step either way, because it is the same line; any other sentence is
+      // theirs whole.
+      if (testCase.argv.length > 1 && !testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token))) {
+        const line = testCase.argv.join(" ");
+        const quoted = readNextLine([line]);
+        if (argumentIsFlagShaped(line) || reading.kind === "plan-word") {
+          // A sentence opening with a plan's name is the same reading step
+          // either way, because it is the same line.
+          expect(quoted, `quoted ${note}`).toEqual(reading);
+        } else {
+          // Otherwise the engine cannot see a flag or a noun inside one
+          // argument of theirs, so the line is their words whole, and never a
+          // reading it would act on differently.
+          expect([reading.kind, "words"], `quoted ${note} -> ${quoted.kind}`).toContain(quoted.kind);
+        }
+        // And the seams stand back from the quoted form exactly as from the
+        // split one: one line, one reading, wherever it is read.
+        // One line, so this engine's own refusal is read off the same tokens.
+        if (quoted.kind !== "exact" && !isRefusedModifierNextArgv(testCase.argv)) {
+          expect(classifyTerminalCommand([line]), `quoted ${note}`).toBeNull();
+          expect(isReadOnlyNextArgv([line]), `quoted ${note}`).toBe(isRetiredOnlyNextArgv([line]));
+        }
+      }
+    }
+    expect(exact, "some of the generated lines act").toBeGreaterThan(50);
+    expect(handed, "some of them go to the agent").toBeGreaterThan(50);
   });
 });
 

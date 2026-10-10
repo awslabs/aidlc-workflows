@@ -958,7 +958,9 @@ function terminalModifierDispatch(proj: string, flags: string[], command: string
   return result.stdout;
 }
 
-// next refuses a level word outside the allowed ones before naming a command.
+// next takes no level word outside the allowed ones, and names them instead of
+// a command: a reading step for the agent (t-three-ways-to-read-a-line), which
+// carries no workflow work either way, so the stop is still allowed below.
 function refusedModifierDispatch(proj: string, flags: string[]): string {
   const statePath = seededStateFile(proj);
   writeFileSync(statePath, `- **State Version**: 8\n${readFileSync(statePath, "utf-8")}`);
@@ -967,8 +969,9 @@ function refusedModifierDispatch(proj: string, flags: string[]): string {
     "next", ...flags, "--project-dir", proj,
   ], { encoding: "utf-8", env: process.env });
   const directive = JSON.parse(result.stdout);
-  expect(directive.kind, result.stdout).toBe("error");
-  expect(directive.message).toContain(`${flags[0]} requires <`);
+  expect(directive.kind, result.stdout).toBe("print");
+  expect(directive.message).toContain(`takes \`${flags[0]}\` with`);
+  expect(directive.message).toContain(JSON.stringify(flags[1]));
   return result.stdout;
 }
 

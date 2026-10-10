@@ -353,17 +353,24 @@ describe("t114 scope precedence + validation", () => {
       d.kind === "ask"
         ? `ask ${d.ask_type}`
         : `${d.kind} ${String(d.message ?? d.reason ?? "").match(
-          /intent create --scope \w+|Dispatch the composer agent|Workflow complete/,
+          /intent create --scope \w+|Dispatch the composer agent|Workflow complete|cannot tell which they meant/,
         )?.[0] ?? ""}`;
     const newWork = (scope: string) => {
-      proj = createOrchestrationTestProject();
-      seedStateFile(proj, "state-completed.md");
-      const statePath = seededStateFile(proj);
-      writeFileSync(
-        statePath,
-        readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*$/m, `- **Scope**: ${scope}`),
-        "utf-8",
-      );
+      // Each of the two entry forms gets its own project: an offer one form
+      // leaves open is a question of ours that the next form's words would be
+      // read as a reply to, which is the point of the three ways to read a line.
+      const seeded = (): string => {
+        const dir = createOrchestrationTestProject();
+        seedStateFile(dir, "state-completed.md");
+        const statePath = seededStateFile(dir);
+        writeFileSync(
+          statePath,
+          readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*$/m, `- **Scope**: ${scope}`),
+          "utf-8",
+        );
+        return dir;
+      };
+      proj = seeded();
       const run = (args: string[]) =>
         JSON.parse(runNext(proj, args).out.trim().split("\n").at(-1) ?? "{}") as Record<string, unknown>;
       const answer = (command: unknown) => {
@@ -372,11 +379,14 @@ describe("t114 scope precedence + validation", () => {
       };
       const initOffer = run(["--new-intent", "fix the login redirect"]);
       const initComposed = answer(initOffer.compose_command);
+      const initConfirmed = answer(initOffer.confirm_command);
+      cleanupTestProject(proj);
+      proj = seeded();
       const freeTextOffer = run(["fix the login redirect"]);
       const freeTextComposed = answer(freeTextOffer.compose_command);
       const seen = {
         initOffer: shape(initOffer),
-        initConfirmed: shape(answer(initOffer.confirm_command)),
+        initConfirmed: shape(initConfirmed),
         initComposed: shape(initComposed),
         initComposedInFlight: String(initComposed.message).includes("mode in-flight"),
         freeTextOffer: shape(freeTextOffer),
@@ -402,6 +412,10 @@ describe("t114 scope precedence + validation", () => {
       freeTextComposed: "print Dispatch the composer agent",
       freeTextComposedInFlight: false,
       typedScope: "print intent create --scope bugfix",
+      // A plan's name in its own argument with the request in one more is the
+      // naming the orchestrator skill asks the agent for, so it still acts; a
+      // raw line of loose words after a plan word is the ambiguous form
+      // (t-three-ways-to-read-a-line).
       positionalScope: "print intent create --scope bugfix",
     });
     expect(newWork("retired-lane")).toEqual(known);
@@ -497,14 +511,17 @@ describe("t114 in-session config alias", () => {
 
   test("a modifier next refuses stays terminal over an active workflow", () => {
     // Full Suite 36549553601: `/aidlc --depth extreme` must not count as
-    // engagement on the marker path (Kiro CLI, opencode) either.
+    // engagement on the marker path (Kiro CLI, opencode) either. The value its
+    // table does not hold goes to the agent as a reading step naming the words
+    // it does hold, which is still no workflow work.
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     const before = readFileSync(seededStateFile(proj), "utf-8");
     for (const args of [["--depth", "extreme"], ["--review", "loud"], ["--guard-policy", "loose"]]) {
       const out = runNext(proj, args).out;
-      expect(out, args.join(" ")).toContain('"kind":"error"');
-      expect(out, args.join(" ")).toContain(`${args[0]} requires <`);
+      expect(out, args.join(" ")).toContain('"kind":"print"');
+      expect(out, args.join(" ")).toContain(`takes \`${args[0]}\` with`);
+      expect(out, args.join(" ")).toContain(`does not take ${JSON.stringify(JSON.stringify(args[1])).slice(1, -1)}`);
       expect(existsSync(engineTouchMarkerPath(proj)), args.join(" ")).toBe(false);
     }
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);

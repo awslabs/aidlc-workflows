@@ -327,11 +327,15 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     expect(JSON.stringify(d)).toContain("--project-type brownfield");
   });
 
-  test("a value other than greenfield or brownfield is an error", () => {
+  test("a value other than greenfield or brownfield goes to the agent, naming the two words", () => {
+    // A value this engine's table does not hold is a reading step now
+    // (t-three-ways-to-read-a-line): it names the words it holds, shows theirs
+    // as a quoted string, and applies nothing.
     const proj = project();
     const d = next(proj, ["--project-type", "maybe"]);
-    expect(d.kind).toBe("error");
-    expect(String(d.message)).toContain("--project-type requires <greenfield|brownfield>");
+    expect(d.kind).toBe("print");
+    expect(String(d.message)).toContain("greenfield|brownfield");
+    expect(String(d.message)).toContain('"maybe"');
   });
 
   test("mid-workflow the flag is recorded first, then the rest of the request runs", () => {
