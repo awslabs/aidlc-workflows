@@ -188,7 +188,10 @@ function firstPrompt(item: AnswersItem, harness: LiveHarness): string | null {
   return line === null ? null : harness === "codex" ? line.replace(/^\/aidlc/, "$aidlc") : line;
 }
 
-class DriveLedgerRefusal extends Error {}
+// Each driver's person-turn ledger refuses a drive whose decisions no turn of the person backs (a reply or a box
+// submission backs one decision per question it answered: one reply that approves every plan of a group writes one row
+// per plan). That is the drive's accounting, reported as such; the item is not judged.
+const ledgerRefusal = (e: unknown): e is Error => e instanceof Error && /recorded \d+ decision\(s\) as the person's/.test(e.message);
 
 const REAL_CODEX_HOME = join(homedir(), ".codex");
 // Answering one question takes the agent a handful of tool calls; a drive still running past this many after the reply
@@ -240,12 +243,6 @@ async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutco
           return (reachedAt !== null && results.length > reachedAt + 1) || (replied && since > REPLY_TOOL_BUDGET);
         },
         timeoutMs: remainingOperationTimeoutMs(CASE_TIMEOUT_MS),
-      }).catch((e: unknown) => {
-        // The driver's own ledger refuses a drive whose decisions no turn of the person backs (a box submission backs
-        // as many decisions as it carried picks: one pick that approves every plan of a group writes one row per plan).
-        // That is the drive's accounting, reported as such; the item is not judged.
-        if (e instanceof Error && /recorded \d+ decision\(s\) as the person's/.test(e.message)) throw new DriveLedgerRefusal(e.message);
-        throw e;
       });
       // What the person read after their reply: the prose after turn 1 (chat), or after the box they answered (picker);
       // every box after the question itself is a question put to the person after their reply.
@@ -291,7 +288,7 @@ async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutco
     // A reply to a question the agent never showed judges nothing about the reply: the setup line stands alone.
     return { item, harness, prompt: said, failures: setup !== null ? [setup, ...driveFailures] : [...driveFailures, ...failures], endSummary, transcript: { ...transcript, text: `[shown first]\n${firstText}\n[after the reply]\n${transcript.text}` } };
   } catch (e) {
-    if (e instanceof DriveLedgerRefusal) {
+    if (ledgerRefusal(e)) {
       return { item, harness, prompt: said, failures: [`drive: ${e.message.replace(/\s+/g, " ").trim()}`], endSummary: "drive aborted by its ledger", transcript: { tools: [], text: firstText, asks: null } };
     }
     throw e;
