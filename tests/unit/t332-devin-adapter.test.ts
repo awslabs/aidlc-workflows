@@ -769,6 +769,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
         session,
         challengeId: "test-challenge-1",
         choice: "Approve Plan",
+        words: "yes",
         responseSha256: createHash("sha256")
           .update("yes", "utf-8")
           .digest("hex"),
@@ -959,15 +960,18 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     test(`13j: a session-tagged ${kind} answer certifies only its own session through the real decision and answer commands`, () => {
       const dir = scratchProject(true);
       try {
-        const questionsPath = seedStageLevelPlanApproval(dir);
         const sessionA = "devin-session-a";
         const sessionB = "devin-session-b";
+        // Session-start bootstraps root AGENTS.md/.gitignore, which the
+        // [Planned Source] fingerprint covers: run it before seeding so the
+        // seeded fingerprint matches the workspace at decision time.
         expect(
           runAdapter(dir, "session-start", devinSessionStart(sessionA)).code,
         ).toBe(0);
         expect(
           runAdapter(dir, "session-start", devinSessionStart(sessionB)).code,
         ).toBe(0);
+        const questionsPath = seedStageLevelPlanApproval(dir);
         const identityFor = (session: string) => [
           "--stage",
           "code-generation",
@@ -1036,7 +1040,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
         ]);
         expect(crossSession.code).not.toBe(0);
         expect(crossSession.stderr).toContain(
-          "actual offered choice from this prompt and session",
+          "the person's reply to this prompt, in this session",
         );
         expect(approvalRuntimeFiles(dir, "receipt-")).toEqual([]);
         expect(readPlanApprovalResponse(dir, sessionA)).toEqual(responseA);
@@ -1086,12 +1090,14 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
   test("13k: an answer event for an unknown session or an intent UUID never redirects to the pending challenge", () => {
     const dir = scratchProject(true);
     try {
-      const questionsPath = seedStageLevelPlanApproval(dir);
       const sessionB = "devin-session-b";
       const intentUuid = "00000000-0000-7000-8000-000000000001";
+      // Session-start writes root AGENTS.md/.gitignore; seed the fingerprint
+      // after it so the workspace matches at decision time.
       expect(
         runAdapter(dir, "session-start", devinSessionStart(sessionB)).code,
       ).toBe(0);
+      const questionsPath = seedStageLevelPlanApproval(dir);
       const decision = runLog(dir, [
         "decision",
         "--stage",
@@ -1151,7 +1157,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
         ]);
         expect(refused.code).not.toBe(0);
         expect(refused.stderr).toContain(
-          "actual offered choice from this prompt and session",
+          "the person's reply to this prompt, in this session",
         );
       }
       expect(approvalRuntimeFiles(dir, "response-")).toEqual([]);
@@ -1165,11 +1171,11 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
   test("13l: an answer event with no session writes no protected approval records", () => {
     const dir = scratchProject(true);
     try {
-      const questionsPath = seedStageLevelPlanApproval(dir);
       const sessionB = "devin-session-b";
       expect(
         runAdapter(dir, "session-start", devinSessionStart(sessionB)).code,
       ).toBe(0);
+      const questionsPath = seedStageLevelPlanApproval(dir);
       const decision = runLog(dir, [
         "decision",
         "--stage",
@@ -1750,8 +1756,10 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
    *  session-start → log decision (challenge) → record-human-turn (response) →
    *  questions-file [Answer] → log answer (receipt). Mirrors the 13j flow. */
   function approveStageLevelPlan(dir: string, session: string): void {
-    const questionsPath = seedStageLevelPlanApproval(dir);
+    // Session-start writes root AGENTS.md/.gitignore; seed the fingerprint
+    // after it so the workspace matches at decision time.
     expect(runAdapter(dir, "session-start", devinSessionStart(session)).code).toBe(0);
+    const questionsPath = seedStageLevelPlanApproval(dir);
     const identity = [
       "--stage",
       "code-generation",
@@ -1850,7 +1858,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       expect(r.code).toBe(2);
       // The zero-marker wording names the actual defect (no target marker in
       // the brief) instead of claiming the plan is unapproved.
-      expect(r.stderr).toContain("carries no target marker");
+      expect(r.stderr).toContain("the brief does not name it");
       expect(r.stderr).not.toContain("not currently approved");
       expect(readAudit(dir)).toContain("**Unit**: (missing marker)");
     } finally {
@@ -2140,6 +2148,13 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     return existsSync(path) ? readFileSync(path, "utf-8") : "";
   }
 
+  /** Contents of a per-hook trace file ("" when absent): the Stop hook's
+   *  normal allow decisions are trace, not drops. */
+  function hookTraces(dir: string, hook: string): string {
+    const path = join(hooksHealthDir(dir), `${hook}.trace`);
+    return existsSync(path) ? readFileSync(path, "utf-8") : "";
+  }
+
   /** Drive a background dispatch through both real hook arms: the
    *  deliver-stage-rules PreToolUse (creates the in-flight entry) then the
    *  log-subagent PostToolUse launch ack (annotates it). */
@@ -2409,6 +2424,9 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     const dir = scratchProject(true);
     try {
       const session = "item3-case9";
+      // continue-workflow drives `next`, which resolves the active stage's
+      // rule bundle — seed the method memory it reads.
+      seedMemorySeed(dir);
       launchBackground(dir, session, "aa37dc28");
       const stopPayload = () => ({
         ...(FIXTURES.stop as Record<string, unknown>),
@@ -2420,14 +2438,14 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       expect(whilePending.stdout).not.toContain('"decision":"block"');
       const carveOutCount = (text: string) =>
         text.split("pending-subagent carve-out").length - 1;
-      expect(carveOutCount(hookDrops(dir, "continue-workflow"))).toBe(1);
+      expect(carveOutCount(hookTraces(dir, "continue-workflow"))).toBe(1);
       readTerminal(dir, session, "aa37dc28");
       const afterTerminal = runAdapter(dir, "continue-workflow", stopPayload());
       expect(afterTerminal.code).toBe(0);
       // The ledger is drained, so the same Stop must not cite the
       // pending-subagent carve-out again (it may block or allow for another
       // reason — the carve-out line is the assertion).
-      expect(carveOutCount(hookDrops(dir, "continue-workflow"))).toBe(1);
+      expect(carveOutCount(hookTraces(dir, "continue-workflow"))).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

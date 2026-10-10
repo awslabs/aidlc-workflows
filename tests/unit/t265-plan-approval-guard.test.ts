@@ -3324,7 +3324,7 @@ describe("t265b hook lifecycle", () => {
       ]);
       expect(crossSession.status).not.toBe(0);
       expect(crossSession.stderr).toContain(
-        "actual offered choice from this prompt and session",
+        "no prompt was recorded for session",
       );
       const runtimeDir = join(proj, "aidlc", ".aidlc-sessions", "plan-approval");
       expect(
@@ -3892,13 +3892,13 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
-  test("Facet C — git push remains blocked at the code-generation boundary", () => {
+  test("Facet C — git push runs at the code-generation boundary: it names no file it writes, and only the build waits", () => {
     const proj = scratchProject();
     try {
       seedState(proj);
       seedActiveDirectiveLoadSteering(proj);
       const r = runHook(proj, BASH("git push"));
-      expect(r.code).toBe(2);
+      expect(r.code).toBe(0);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
@@ -3911,7 +3911,6 @@ describe("t265 compound Git checkpoint exemption", () => {
       "echo x > src/app.ts",
       "git add -A && echo x > src/app.ts",
       "git add -A ; echo x > src/app.ts",
-      "git add -A && git push",
     ]) {
       test(`blocks ${command} with ${directive} before approval`, () => {
         const proj = scratchProject();
@@ -3932,6 +3931,9 @@ describe("t265 compound Git checkpoint exemption", () => {
   for (const command of [
     'git commit -m "checkpoint"',
     'git add -A && git commit -m "checkpoint"',
+    // `git push` names no file it writes, so under "only the build waits"
+    // a checkpoint stage followed by a push runs while the plan waits.
+    "git add -A && git push",
   ]) {
     test(`allows checkpoint-only Bash payload: ${command}`, () => {
       const proj = scratchProject();

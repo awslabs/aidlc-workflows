@@ -497,7 +497,9 @@ export function blockReason(
       ? mentioned[0] === `stage:${GUARDED_STAGE}`
         ? "the zero-Unit stage-level implementation"
         : `unit ${mentioned[0]}`
-      : `one target, but the brief names several (${mentioned.join(", ")})`;
+      : mentioned.length > 1
+        ? `one target, but the brief names several (${mentioned.join(", ")})`
+        : "one target, but the brief does not name it";
   return (
     `Code generation cannot start for ${scope} because its plan and test instructions are ` +
     `not approved yet.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""} Finish code-generation-plan.md and ` +

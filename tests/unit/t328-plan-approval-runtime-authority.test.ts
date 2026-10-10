@@ -2016,7 +2016,7 @@ describe("t328 plan-approval session resolution", () => {
 
 describe("Item 1 session isolation", () => {
   const PAIRING_REFUSAL =
-    "Plan Approval requires the actual offered choice from this prompt and session";
+    "Plan Approval requires the person's reply to this prompt, in this session";
 
   function sessionFixture() {
     const project = createProject();
