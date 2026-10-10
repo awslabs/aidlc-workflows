@@ -8,7 +8,7 @@ GitHub verdict. For each candidate use:
 
 Evidence: `path/to/file:line-range` and any related locations.
 Problem: concrete condition -> execution or workflow path -> observable failure.
-Impact: who meets it on which normal-run path, and why this priority fits.
+Impact: for a P0 or P1 the REPRO, LOSS and BLAME lines (shared contract); for a P2 or P3, who meets it and why this priority fits.
 Suggested fix: the smallest change that keeps the person in charge (judge rules).
 ```
 
