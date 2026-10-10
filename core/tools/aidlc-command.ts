@@ -199,11 +199,6 @@ const DISPATCHER_INTENT_VERBS = new Set([
   "remove-repo",
 ]);
 const DISPATCHER_SPACE_VERBS = new Set(["list", "switch", "create"]);
-const DISPATCHER_RESERVED_FUTURE = new Set([
-  "rename",
-  "show",
-  "birth",
-]);
 
 type DispatcherIntentLifecycleVerb = "archive" | "unarchive";
 type DispatcherIntentRepoVerb = "add-repo" | "remove-repo";
@@ -300,15 +295,6 @@ export function parseDispatcherWorkspaceCommand(
   }
   if (verbOrName === "help" || verbOrName === "-h") {
     return { kind: "help", noun };
-  }
-  if (DISPATCHER_RESERVED_FUTURE.has(verbOrName)) {
-    return {
-      kind: "error",
-      noun,
-      message:
-        `${noun} ${verbOrName} is reserved for a future workspace verb and is not implemented yet. ` +
-        `Use ${noun} switch ${verbOrName} to select an existing record with that name.`,
-    };
   }
   if (noun === "intent") {
     if (verbOrName === "list") return dispatcherWorkspaceList(noun, tokens);

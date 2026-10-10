@@ -14070,14 +14070,14 @@ function planApprovalAnswerStep(): string {
 }
 
 // Complete the non-stage resume-choice round-trip by ROUTING the choice, not
-// just accepting it. Resuming from the current checkpoint is read-only; the
-// other three choices are mutations, so the directive NAMES the move (the
-// existing verbs: jump execute --direction redo, next --stage, next
-// --new-intent) and the conductor runs it — report itself never mutates. The
-// keywords are matched against the engine's own Branch-6 question wording, so
-// they are stable even though the rendered option labels are LLM-authored.
-// In a solo unit-major walk with finished Unit work, Redo names no jump: it
-// stays with the Unit's own step (unitMajorRedo).
+// just accepting it. The conductor reads the person's words and reports the
+// choice they made as --choice; this report reads none of their words.
+// Resuming from the current checkpoint is read-only; the other three choices
+// are mutations, so the directive NAMES the move (the existing verbs: jump
+// execute --direction redo, next --stage, next --new-intent) and the conductor
+// runs it; report itself never mutates. In a solo unit-major walk with
+// finished Unit work, Redo names no jump: it stays with the Unit's own step
+// (unitMajorRedo).
 function handleResumeReport(
   flags: ReportFlags,
   projectDir: string | undefined,
@@ -14088,9 +14088,12 @@ function handleResumeReport(
     ));
     return;
   }
-  if (flags.choice === undefined && !flags.userInput?.trim()) {
-    emit(errorDirective(
-      "report --result resumed requires --choice <resume|redo|jump|fresh>, the choice you read from the person's words.",
+  // A correction to the agent's command is its next action, never an error
+  // that ends the turn.
+  if (flags.choice === undefined) {
+    emit(printDirective(
+      "`report --result resumed` names the choice with `--choice <resume|redo|jump|fresh>`: the one you read from " +
+        "the person's words. Run it again with `--choice` (add `--target <stage>` for a stage they named).",
     ));
     return;
   }
@@ -14109,50 +14112,7 @@ function handleResumeReport(
     ));
     return;
   }
-  if (flags.choice !== undefined) {
-    emitTypedResumeChoice(flags, pd, stateContent, slug);
-    return;
-  }
-  // Numbered-prose harnesses show this fixed menu as 1-4. Normalize an exact
-  // visible response key before semantic matching so the engine, not the
-  // conductor, owns that stable mapping.
-  const numericChoices: Readonly<Record<string, string>> = {
-    "1": "resume from last checkpoint",
-    "2": "redo the current stage",
-    "3": "jump to a stage",
-    "4": "start fresh",
-  };
-  const rawChoice = (flags.userInput ?? "").trim().toLowerCase();
-  const choice = numericChoices[rawChoice] ?? rawChoice;
-  if (choice.includes("redo")) {
-    emit(redoCurrentStage(pd, getField(stateContent, "Scope")?.trim() ?? "", stateContent, slug));
-    return;
-  }
-  if (choice.includes("jump")) {
-    emit(printDirective(
-      `Jump accepted. Run \`next --stage <slug>\` for the stage the person named; ask which stage only when they named none. The direction and the target are worked out and checked for you.`,
-    ));
-    return;
-  }
-  if (choice.includes("fresh") || choice.includes("start over")) {
-    emit(printDirective(
-      "Start-fresh accepted. Confirm the new work's scope and description with the human, then run `next --new-intent --scope <scope> \"<description>\"` — the existing workflow stays in place and the new intent starts alongside it.",
-    ));
-    return;
-  }
-  if (
-    choice.includes("resume") ||
-    choice.includes("checkpoint") ||
-    choice.includes("continue")
-  ) {
-    emit(printDirective(
-      `Resume choice accepted at "${slug}". Re-run \`next\` to continue from the last checkpoint.`,
-    ));
-    return;
-  }
-  emit(errorDirective(
-    `Unrecognized resume choice "${flags.userInput}". Accepted choices: 1/resume from last checkpoint, 2/redo the current stage, 3/jump to a stage, or 4/start fresh.`,
-  ));
+  emitTypedResumeChoice(flags, pd, stateContent, slug);
 }
 
 // The redo of the current stage, run only for a stage and a scope AI-DLC knows,

@@ -1168,12 +1168,6 @@ export const SPACE_VERBS: ReadonlySet<string> = new Set([
   "create",
 ]);
 
-export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
-  "rename",
-  "show",
-  "birth",
-]);
-
 // The two intent lifecycle verbs that retire and revive a record without
 // touching its files: `archive` moves an in-flight or completed intent to the
 // `archived` status, `unarchive` brings it back to the status it had.
@@ -1200,13 +1194,6 @@ export type WorkspaceCommand =
       noun: WorkspaceNoun;
       code: "missing-name" | "unexpected-arguments";
       verb: "switch" | "create" | "space-create" | IntentLifecycleVerb | IntentRepoVerb;
-      message: string;
-    }
-  | {
-      kind: "error";
-      noun: WorkspaceNoun;
-      code: "reserved-future-verb";
-      verb: string;
       message: string;
     }
   | { kind: "not-workspace" };
@@ -1243,29 +1230,8 @@ function unexpectedWorkspaceArguments(
   };
 }
 
-function reservedFutureWorkspaceVerb(
-  noun: WorkspaceNoun,
-  verb: string,
-): WorkspaceCommand {
-  return {
-    kind: "error",
-    noun,
-    code: "reserved-future-verb",
-    verb,
-    message:
-      `${noun} ${verb} is reserved for a future workspace verb and is not implemented yet. ` +
-      `Use ${noun} switch ${verb} to select an existing record with that name.`,
-  };
-}
-
 export function isWorkspaceNoun(token: string | undefined): token is WorkspaceNoun {
   return (WORKSPACE_NOUNS as readonly (string | undefined)[]).includes(token);
-}
-
-function isReservedFutureWorkspaceVerb(
-  token: string | undefined,
-): token is string {
-  return token !== undefined && RESERVED_FUTURE.has(token);
 }
 
 function isIntentLifecycleVerb(token: string | undefined): token is IntentLifecycleVerb {
@@ -1316,9 +1282,6 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
   }
   if (verbOrName === "help" || verbOrName === "-h") {
     return { kind: "help", noun };
-  }
-  if (isReservedFutureWorkspaceVerb(verbOrName)) {
-    return reservedFutureWorkspaceVerb(noun, verbOrName);
   }
 
   if (noun === "intent") {
@@ -1540,15 +1503,15 @@ export function splitKiroCommandArgs(raw: string): string[] {
 }
 
 export const RESERVED_RECORD_NAME_LIST = Object.freeze(
-  [...new Set(["help", ...INTENT_VERBS, ...SPACE_VERBS, ...RESERVED_FUTURE])],
+  [...new Set(["help", ...INTENT_VERBS, ...SPACE_VERBS])],
 );
 
 // Slugs a record (intent or space) may never take. These names are grammar:
-// help, current workspace verbs, and reserved future verbs all change how the
-// router reads `intent <token>` / `space <token>`. Refusing them at the
-// creation chokepoints keeps new records reachable. Pre-existing records with
-// these names remain reachable via explicit `switch`; doctor flags them as an
-// advisory so humans can rename them deliberately.
+// help and the workspace verbs change how the router reads `intent <token>` /
+// `space <token>`. Refusing them at the creation chokepoints keeps new records
+// reachable. Pre-existing records with these names remain reachable via
+// explicit `switch`; doctor flags them as an advisory so humans can rename
+// them deliberately.
 export const RESERVED_RECORD_NAMES: ReadonlySet<string> = new Set(
   RESERVED_RECORD_NAME_LIST,
 );
@@ -11815,25 +11778,6 @@ export function personCheckSwitchAllowed(projectDir: string, key: string, value:
   const values = Object.hasOwn(PERSON_CHECK_SWITCH_VALUES, key) ? PERSON_CHECK_SWITCH_VALUES[key] : undefined;
   if (values === undefined) return false;
   return values.on.includes(value) || (values.off.includes(value) && personAskedSinceGate(projectDir));
-}
-
-// The gate's "Request Changes" choice, matched the way a person types it: any
-// case, an optional option prefix ("B." or "2)"), surrounding quotes, and
-// trailing punctuation are all the same choice, as is the "(Recommended)" label
-// decorator the question-rendering guide asks the conductor to add. The words
-// themselves must be present; a paraphrase ("please change it") is not this
-// label. A paraphrase is the conductor's to read; the shared reply reader
-// (aidlc-reply-reader.ts) matches only exact picks and judges no meaning.
-// Shape of an accepted reply: optional option prefix, then the words
-// "request changes", then wrapper noise (whitespace, quotes, . or !), then at
-// most ONE "(recommended)" decorator, then wrapper noise again. Because the
-// noise is allowed on both sides of the decorator, the decorator composes with
-// quotes and punctuation whether it sits inside or outside them, and there is
-// no pass ordering that can silently drop one direction (PR #1133 review).
-const REQUEST_CHANGES_CHOICE_RE =
-  /^(?:(?:[A-Za-z]|\d+)[.)])?[\s"'`]*request\s+changes[\s"'`.!]*(?:\(recommended\)[\s"'`.!]*)?$/i;
-export function isRequestChangesChoice(text: string | undefined | null): boolean {
-  return REQUEST_CHANGES_CHOICE_RE.test((text ?? "").trim());
 }
 
 // The approval the conductor reports at a held stage gate. The conductor reads

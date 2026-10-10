@@ -3053,12 +3053,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(marker(dir).resume).toBeUndefined();
   });
 
-  test("23b: session-menu Resume reports are plain reports and return per-choice prints", () => {
+  test("23b: typed re-entry reports are plain reports and return per-choice prints", () => {
     const cases = [
-      ["1", "Re-run `next`"],
-      ["2", "--direction redo"],
-      ["3", "next --stage"],
-      ["4", "--new-intent"],
+      ["resume", "Re-run `next`"],
+      ["redo", "--direction redo"],
+      ["jump", "--choice jump --target <stage>"],
+      ["fresh", "--new-intent"],
     ] as const;
     for (const [choice, expected] of cases) {
       const dir = orchestrationProject();
@@ -3068,7 +3068,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         dir,
         session,
         "source",
-        ["report", "--result", "resumed", "--user-input", choice],
+        ["report", "--result", "resumed", "--choice", choice],
         `resume-report-choice-${choice}`,
       );
       expect(reported.directive.kind).toBe("print");

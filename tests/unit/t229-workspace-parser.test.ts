@@ -177,14 +177,14 @@ describe("parseWorkspaceCommand", () => {
   });
 
   test("utility argv keeps the explicit switch token for verb-shaped names", () => {
-    const command = parseWorkspaceCommand(["intent", "switch", "birth"]);
+    const command = parseWorkspaceCommand(["intent", "switch", "archive"]);
     expect(command).toEqual({
       kind: "switch",
       noun: "intent",
-      name: "birth",
+      name: "archive",
       explicit: true,
     });
-    expect(workspaceCommandUtilityArgv(command)).toEqual(["intent", "switch", "birth"]);
+    expect(workspaceCommandUtilityArgv(command)).toEqual(["intent", "switch", "archive"]);
   });
 
   test("switch and space creation reject trailing flags instead of routing them to another command", () => {
@@ -203,7 +203,7 @@ describe("parseWorkspaceCommand", () => {
     }
   });
 
-  test("migration delta missing-name and reserved-future verbs are errors, not sugar switches", () => {
+  test("migration delta missing-name cases are errors, not sugar switches", () => {
     expect(parseWorkspaceCommand(["space", "create"])).toMatchObject({
       kind: "error",
       noun: "space",
@@ -216,16 +216,13 @@ describe("parseWorkspaceCommand", () => {
       code: "missing-name",
       message: "Usage: aidlc space switch <name>",
     });
+  });
+
+  test("a word that is no verb is the switch sugar at both sites, rename, show and birth included", () => {
     for (const noun of ["intent", "space"] as const) {
-      for (const verb of ["rename", "show"]) {
-        const parsed = parseWorkspaceCommand([noun, verb, "foo"]);
-        expect(parsed).toMatchObject({
-          kind: "error",
-          noun,
-          code: "reserved-future-verb",
-          verb,
-        });
-        expect(parsed.kind === "error" ? parsed.message : "").toContain(`${noun} switch ${verb}`);
+      for (const name of ["rename", "show", "birth"]) {
+        expect(parseWorkspaceCommand([noun, name])).toEqual({ kind: "switch", noun, name, explicit: false });
+        expect(classifyTerminalCommand([noun, name])).toEqual({ subcommand: noun, arg: name, source: "workspace-verb" });
       }
     }
   });
@@ -347,7 +344,7 @@ describe("parseWorkspaceCommand", () => {
     expect(parseWorkspaceCommand(["build", "a", "space", "station"])).toEqual({ kind: "not-workspace" });
   });
 
-  test("reserved record names include help, current verbs, and future verbs", () => {
+  test("reserved record names are help and the current verbs", () => {
     expect(RESERVED_RECORD_NAME_LIST).toEqual([
       "help",
       "list",
@@ -357,9 +354,6 @@ describe("parseWorkspaceCommand", () => {
       "unarchive",
       "add-repo",
       "remove-repo",
-      "rename",
-      "show",
-      "birth",
     ]);
     for (const name of RESERVED_RECORD_NAME_LIST) {
       expect(RESERVED_RECORD_NAMES.has(name)).toBe(true);
@@ -420,7 +414,6 @@ describe("classifier and next parser parity", () => {
       { args: ["intent", "switch"], message: "Usage: aidlc intent switch <name>" },
       { args: ["intent", "archive"], message: "Usage: aidlc intent archive <name>" },
       { args: ["intent", "unarchive"], message: "Usage: aidlc intent unarchive <name>" },
-      { args: ["intent", "rename", "foo"], message: "intent rename is reserved for a future workspace verb" },
     ];
     for (const row of rows) {
       const cmd = classifyTerminalCommand(row.args);
@@ -503,28 +496,53 @@ describe("utility handlers and reservation chokepoints", () => {
   test("engine and dispatcher switch to a verb-named intent without creating", () => {
     const projectDir = scratchProject();
     try {
-      seedIntent(projectDir, "birth", "260711-birth");
+      seedIntent(projectDir, "archive", "260711-archive");
       const registry = join(projectDir, "aidlc", "spaces", "default", "intents", "intents.json");
       const before = readFileSync(registry, "utf-8");
 
-      const d = directive(projectDir, ["intent", "switch", "birth"]);
+      const d = directive(projectDir, ["intent", "switch", "archive"]);
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("aidlc.ts engine intent switch birth");
+      expect(d.message).toContain("aidlc.ts engine intent switch archive");
 
       const r = runDispatcher(REPO_ROOT, [
         "engine",
         "intent",
         "switch",
-        "birth",
+        "archive",
         "--project-dir",
         projectDir,
       ]);
       expect(r.status).toBe(0);
-      expect(r.stdout).toContain("Now working on `birth`.");
+      expect(r.stdout).toContain("Now working on `archive`.");
       expect(r.stdout).not.toContain("Active intent");
       expect(r.stderr).toBe("");
       expect(readFileSync(registry, "utf-8")).toBe(before);
-      expect(readFileSync(join(projectDir, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim()).toBe("260711-birth");
+      expect(readFileSync(join(projectDir, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim()).toBe("260711-archive");
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
+  // `/aidlc intent show` selects the record named show, as any other name does;
+  // the words rename, show and birth are no longer held back for verbs to come.
+  test("engine and dispatcher switch to a record named show without the switch verb", () => {
+    const projectDir = scratchProject();
+    try {
+      seedIntent(projectDir, "show", "260711-show");
+      const registry = join(projectDir, "aidlc", "spaces", "default", "intents", "intents.json");
+      const before = readFileSync(registry, "utf-8");
+
+      const d = directive(projectDir, ["intent", "show"]);
+      expect(d.kind, JSON.stringify(d)).toBe("print");
+      expect(d.message).toContain("aidlc.ts engine intent show");
+      expect(d.message).not.toContain("reserved");
+
+      const r = runDispatcher(REPO_ROOT, ["engine", "intent", "show", "--project-dir", projectDir]);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toContain("Now working on `show`.");
+      expect(r.stderr).toBe("");
+      expect(readFileSync(registry, "utf-8")).toBe(before);
+      expect(readFileSync(join(projectDir, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim()).toBe("260711-show");
     } finally {
       cleanup(projectDir);
     }
@@ -552,10 +570,10 @@ describe("utility handlers and reservation chokepoints", () => {
     const projectDir = scratchProject();
     try {
       mkdirSync(join(projectDir, "aidlc", "spaces", "list", "intents"), { recursive: true });
-      seedIntent(projectDir, "birth", "260711-birth");
+      seedIntent(projectDir, "archive", "260711-archive");
       const r = runUtility(projectDir, ["doctor", "--verbose"]);
       expect(r.out).toContain(
-        "Workspace names shadowing grammar verbs (advisory): space 'list', intent 'birth' - reachable via explicit switch; consider renaming.",
+        "Workspace names shadowing grammar verbs (advisory): space 'list', intent 'archive' - reachable via explicit switch; consider renaming.",
       );
     } finally {
       cleanup(projectDir);
