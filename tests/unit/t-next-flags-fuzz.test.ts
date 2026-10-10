@@ -278,11 +278,21 @@ describe("the flag parser over a seeded sweep of lines", () => {
         expect(parsed.parseError, note).toBeUndefined();
       }
 
-      // A value the flag does not accept, or none at all, is a parse error that
-      // names what is valid. Never a throw, and never work named after it.
+      // A value the flag does not accept is a reading step naming the words it
+      // does: the person meant one of them, and the agent re-runs it. With no
+      // value at all it is still this engine's own refusal, by name. Never a
+      // throw, and never work named after it.
       if (testCase.shape === "bad-value" || testCase.shape === "missing-value") {
-        expect(typeof parsed.parseError, note).toBe("string");
-        expect(String(parsed.parseError), note).toContain(testCase.argv[0].split("=")[0]);
+        const flag = testCase.argv[0].split("=")[0];
+        const step = parsed.readingStep;
+        if (step !== undefined) {
+          expect(step.kind, note).toBe("value");
+          expect(step.kind === "value" ? step.flag : "", note).toBe(flag);
+          expect(parsed.untakenFlag, note).toBeUndefined();
+        } else {
+          expect(typeof parsed.parseError, note).toBe("string");
+          expect(String(parsed.parseError), note).toContain(flag);
+        }
       }
 
       // A flag that reads its value only when one follows: a line ending on it
