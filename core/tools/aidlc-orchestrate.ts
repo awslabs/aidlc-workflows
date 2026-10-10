@@ -2413,6 +2413,18 @@ function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boole
   return true;
 }
 
+/**
+ * The plan question the person was asked and has not answered: the latest copy
+ * this engine kept, when it is one of its own front questions and nothing was
+ * started from it. A question whose answer created work is answered, and a
+ * routing question is read back by its own options.
+ */
+function openFrontQuestion(projectDir: string): StoredQuestion | null {
+  const latest = latestQuestion(projectDir);
+  if (latest === null || latest.origin !== "front") return null;
+  return intentStartedByQuestion(projectDir, latest.id) === null ? latest : null;
+}
+
 function carriedFromQuestion(question: StoredQuestion, flags: ParsedFlags): RoutingCarried | null {
   if (!question.settings) return carriedRoutingFlags(flags);
   const kept = parseNextFlags(question.settings.newWork);
@@ -3854,6 +3866,12 @@ export interface ParsedFlags {
    */
   readingStep?: Exclude<NextLineReading, { kind: "exact" } | { kind: "words" } | { kind: "untaken-flag" }>;
   /**
+   * The `--` delimiter supplied the words: they are the person's, marked as
+   * theirs by whoever typed them, so nothing reads them for a meaning of its
+   * own. It is how an agent says "these words are a request, not a reply".
+   */
+  markedWords?: true;
+  /**
    * The person's words as they typed them, when `intent` cannot hold them whole:
    * a flag-shaped token this engine does not take is folded out of `intent`,
    * because `next` acts on none of the line, but it is still one of their words
@@ -4318,6 +4336,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   }
   if (intentWords.length > 0) {
     flags.intent = intentWords.join(" ").replace(ENTRY_WORD_PREFIX, "");
+    if (literalIntent) flags.markedWords = true;
   }
   // Only when the two readings differ: a line whose words `intent` already holds
   // needs no second copy, and every reader of the parse keeps one meaning.
@@ -4351,7 +4370,7 @@ export function nextArgsAreOnlyWords(args: string[]): boolean {
   // command. The agent still gets the print naming the token it could not take.
   const read = Object.keys(parsed).filter((key) =>
     key !== "untakenFlag" && key !== "untakenFlagValue" && key !== "personWords" &&
-    key !== "readingStep");
+    key !== "readingStep" && key !== "markedWords");
   return typeof parsed.intent === "string" && read.length === 1;
 }
 
@@ -7345,8 +7364,37 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // repeat the question. Its continue and reshape still act only on the work
   // the question named, and ask again otherwise.
   const onlyProse = flags.intent !== undefined &&
-    Object.entries(flags).every(([key, value]) => key === "intent" || value === undefined || value === false);
+    Object.entries(flags).every(([key, value]) =>
+      key === "intent" || key === "markedWords" || value === undefined || value === false);
   const routingAnswer = onlyProse ? routingQuestionAnswer(questionDir, flags.intent!) : null;
+  // A reply typed while one of this engine's own questions is still open is
+  // that question's reply, never a new request: before this, "yes" after the
+  // plan offer became work named "yes" and the same offer came back, a loop the
+  // person could sit in, and their word was spent as a name. Only the agent has
+  // their chat and can tell a reply from a new request, so both readings go to
+  // it and nothing is created first. A question whose answer already started
+  // work is not open, and a routing question answers itself above.
+  // Words behind the delimiter are already marked as the person's own request,
+  // which is the agent's answer to this very print: it must not come back.
+  const openFront = routingAnswer === null && onlyProse && flags.markedWords !== true
+    ? openFrontQuestion(questionDir)
+    : null;
+  if (openFront !== null) {
+    const tool = `${aidlcToolInvocation("orchestrate")} next`;
+    const answer = openFront.proposedScope.length > 0
+      ? `\`${tool} --scope ${scopeArg(openFront.proposedScope)} --request ${openFront.id}\`, ` +
+        `or \`${tool} compose --request ${openFront.id}\` for a plan tailored to it`
+      : `\`${tool} compose --request ${openFront.id}\`, or one of the plan commands that question listed, ` +
+        `each with \`--request ${openFront.id}\``;
+    emit(printDirective(
+      "The person has not answered the plan question they were asked, so `next` cannot tell their reply from a " +
+      `new request and took nothing from the line. If their words answer that question, run the command it gave ` +
+      `for their choice: ${answer}. If they are asking for something else, run ` +
+      `\`${tool} -- ${flags.intent ?? ""}\`, which keeps every word of theirs. ` +
+      "If you cannot tell, ask them once in plain words.",
+    ));
+    return;
+  }
   // Asked while no work was selected, continue and reshape act on a record the
   // person picks from the ones the question listed that are still there: with
   // one listed, that is the one; with more, only which one is left to ask.
