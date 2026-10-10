@@ -525,6 +525,48 @@ describe("t238 build-binaries release builder", () => {
     expect(pluginDoctorOutput).toContain("ok    Plugin check (doctor-probe): native plugin check ran");
     expect(pluginDoctorOutput).not.toContain("returned exit code 2");
 
+    const projectHookProject = createTestProject();
+    tempDirs.push(projectHookProject);
+    cpSync(
+      join(dirname(native.artifact), "runtime", "claude", ".claude"),
+      join(projectHookProject, ".claude"),
+      { recursive: true },
+    );
+    writeFileSync(
+      join(projectHookProject, ".claude", "hooks", "aidlc-team-guard.ts"),
+      "export async function run(): Promise<number> {\n  return 2;\n}\n",
+    );
+    const projectHookSettings = join(projectHookProject, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(projectHookSettings, "utf-8")) as {
+      hooks: Record<string, unknown[]>;
+    };
+    settings.hooks.PreToolUse.push({
+      matcher: "mcp__github__projects_write",
+      hooks: [{ type: "command", command: "aidlc engine hook team-guard" }],
+    });
+    writeFileSync(projectHookSettings, `${JSON.stringify(settings, null, 2)}\n`);
+    const projectHookEnv = { ...process.env, PATH: "", AIDLC_INSTALL_ROOT: join(root, "project-hook-install") };
+    const projectHookRun = spawnSync(native.artifact, ["engine", "hook", "team-guard"], {
+      cwd: projectHookProject,
+      encoding: "utf-8",
+      input: "{}",
+      env: { ...projectHookEnv, CLAUDE_PROJECT_DIR: projectHookProject },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(projectHookRun.status, `${projectHookRun.stdout ?? ""}${projectHookRun.stderr ?? ""}`).toBe(1);
+    const projectHookDoctor = spawnSync(native.artifact, ["doctor", "--verbose", "--project-dir", projectHookProject], {
+      cwd: projectHookProject,
+      encoding: "utf-8",
+      env: projectHookEnv,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const projectHookOutput = `${projectHookDoctor.stdout ?? ""}${projectHookDoctor.stderr ?? ""}`;
+    expect(projectHookOutput).toContain(
+      "fail  aidlc-team-guard.ts is not in this install's runtime: `aidlc engine hook team-guard` exits 1 without running it",
+    );
+    expect(projectHookOutput).not.toContain("aidlc-team-guard.ts present");
+    expect(projectHookOutput).toContain("ok    aidlc-write-audit-log.ts present");
+
     const utility = spawnSync(BUN, [UTILITY_TS, "version"], {
       cwd: tempDirectory("rerun"),
       encoding: "utf-8",

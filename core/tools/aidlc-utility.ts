@@ -415,6 +415,7 @@ import {
   tomlFragmentText,
   withFileLineEndings,
 } from "./aidlc-plugin.ts";
+import { resolveHookPath } from "./aidlc.ts";
 import { executePlan } from "./aidlc-transaction.ts";
 import {
   aidlcDispatcherInvocation,
@@ -4281,6 +4282,19 @@ export async function collectDoctorReport(
       });
     } else {
       for (const h of expectedHooks) {
+        if (compiled) {
+          const packaged = resolveHookPath(h, undefined, projectDir);
+          const runs = packaged !== "" && existsSync(packaged);
+          const name = h.replace(/^aidlc-/, "").replace(/\.ts$/, "");
+          results.push({
+            pass: runs,
+            label: runs
+              ? `${h} present`
+              : `${h} is not in this install's runtime: \`${aidlcInvocation()} engine hook ${name}\` exits 1 without running it`,
+            fix: `\`${aidlcInvocation()} engine hook\` runs only the hooks the installed runtime ships; register a project hook in .claude/settings.json with a command that runs its own file`,
+          });
+          continue;
+        }
         const hookPath = join(projectDir, harness, "hooks", h);
         results.push({
           pass: existsSync(hookPath),
