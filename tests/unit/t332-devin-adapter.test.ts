@@ -3331,77 +3331,620 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
 
 describe("t332 devin-hook-payloads fixture hygiene", () => {
   const FIXTURE_DIR = join(REPO_ROOT, "tests", "fixtures", "devin-hook-payloads");
-  const CONTRACT_FILE = "native-contracts-3000.10.31.json";
-  const PROVENANCE_FILE = "native-contracts-3000.10.31.provenance.json";
-  const NATIVE_EVENT_KEYS = [
-    "backgroundLaunchPost",
-    "backgroundTerminalReadPost",
-    "repeatedTerminalReadPost",
-    "foregroundCompletionPost",
-    "resumedCompletionPost",
-    "reviewerForegroundCompletionPost",
+  const CONTRACT_PAIRS = [
+    {
+      contract: "native-contracts-3000.10.31.json",
+      provenance: "native-contracts-3000.10.31.provenance.json",
+      eventKeys: [
+        "backgroundLaunchPost",
+        "backgroundTerminalReadPost",
+        "repeatedTerminalReadPost",
+        "foregroundCompletionPost",
+        "resumedCompletionPost",
+        "reviewerForegroundCompletionPost",
+      ],
+    },
+    {
+      contract: "native-contracts-3000.11.3.json",
+      provenance: "native-contracts-3000.11.3.provenance.json",
+      eventKeys: [
+        "foregroundDispatchPre",
+        "foregroundChildStop",
+        "foregroundCompletionPost",
+        "parentStop",
+        "foregroundStartFailurePost",
+        "backgroundStartFailurePost",
+        "hookDeniedDispatchPre",
+      ],
+    },
   ];
 
   test("the fixture directory holds exactly the retained allowlist", () => {
     expect(readdirSync(FIXTURE_DIR).sort()).toEqual(
       [
-        CONTRACT_FILE,
-        PROVENANCE_FILE,
+        ...CONTRACT_PAIRS.flatMap((p) => [p.contract, p.provenance]),
         "payloads.json",
         "s02-stop-gate-contract.md",
       ].sort(),
     );
   });
 
-  test("the native-contract fixture and provenance each stay below 32 KiB", () => {
-    for (const file of [CONTRACT_FILE, PROVENANCE_FILE]) {
-      expect(statSync(join(FIXTURE_DIR, file)).size).toBeLessThan(32 * 1024);
+  test("the native-contract fixtures and provenances each stay below 32 KiB", () => {
+    for (const pair of CONTRACT_PAIRS) {
+      for (const file of [pair.contract, pair.provenance]) {
+        expect(statSync(join(FIXTURE_DIR, file)).size).toBeLessThan(32 * 1024);
+      }
     }
   });
 
-  test("the contract fixture exposes exactly the six retained event shapes", () => {
-    const parsed = JSON.parse(
-      readFileSync(join(FIXTURE_DIR, CONTRACT_FILE), "utf-8"),
-    ) as { events?: Record<string, unknown> };
-    expect(Object.keys(parsed.events ?? {}).sort()).toEqual(
-      [...NATIVE_EVENT_KEYS].sort(),
-    );
+  test("each contract fixture exposes exactly its retained event shapes", () => {
+    for (const pair of CONTRACT_PAIRS) {
+      const parsed = JSON.parse(
+        readFileSync(join(FIXTURE_DIR, pair.contract), "utf-8"),
+      ) as { events?: Record<string, unknown> };
+      expect(Object.keys(parsed.events ?? {}).sort(), pair.contract).toEqual(
+        [...pair.eventKeys].sort(),
+      );
+    }
   });
 
   test("the native files carry no machine identity, capture paths, or ATIF export body", () => {
-    for (const file of [CONTRACT_FILE, PROVENANCE_FILE]) {
-      const raw = readFileSync(join(FIXTURE_DIR, file), "utf-8");
-      expect(raw).not.toMatch(/\/home\/[^/\s"]+/);
-      expect(raw).not.toMatch(/\/Users\/[^/\s"]+/);
-      expect(raw).not.toMatch(/[A-Za-z]:[\\/]Users[\\/]/);
-      expect(raw).not.toContain("/tmp/");
-      expect(raw).not.toContain("galaxybook");
-      expect(raw).not.toContain("reasoning_content");
-      expect(raw).not.toContain("final_metrics");
+    for (const pair of CONTRACT_PAIRS) {
+      for (const file of [pair.contract, pair.provenance]) {
+        const raw = readFileSync(join(FIXTURE_DIR, file), "utf-8");
+        expect(raw).not.toMatch(/\/home\/[^/\s"]+/);
+        expect(raw).not.toMatch(/\/Users\/[^/\s"]+/);
+        expect(raw).not.toMatch(/[A-Za-z]:[\\/]Users[\\/]/);
+        expect(raw).not.toContain("/tmp/");
+        expect(raw).not.toContain("galaxybook");
+        expect(raw).not.toContain("reasoning_content");
+        expect(raw).not.toContain("final_metrics");
+      }
+      const contract = JSON.parse(
+        readFileSync(join(FIXTURE_DIR, pair.contract), "utf-8"),
+      ) as Record<string, unknown>;
+      expect("steps" in contract).toBe(false);
     }
-    const contract = JSON.parse(
-      readFileSync(join(FIXTURE_DIR, CONTRACT_FILE), "utf-8"),
-    ) as Record<string, unknown>;
-    expect("steps" in contract).toBe(false);
   });
 
-  test("the contract fixture keeps semantic placeholders, not raw identifiers", () => {
-    const raw = readFileSync(join(FIXTURE_DIR, CONTRACT_FILE), "utf-8");
-    for (const token of [
-      "<session>",
-      "<prompt-id>",
-      "<tool-use-id-parent>",
-      "<agent-id>",
-    ]) {
-      expect(raw).toContain(token);
+  test("the contract fixtures keep semantic placeholders, not raw identifiers", () => {
+    for (const pair of CONTRACT_PAIRS) {
+      const raw = readFileSync(join(FIXTURE_DIR, pair.contract), "utf-8");
+      for (const token of [
+        "<session>",
+        "<prompt-id>",
+        "<tool-use-id-parent>",
+        "<agent-id>",
+      ]) {
+        expect(raw, `${pair.contract} ${token}`).toContain(token);
+      }
+      // No concrete UUIDs or raw tool-use id formats; every identity field is
+      // a <placeholder> the tests substitute.
+      expect(raw).not.toMatch(
+        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+      );
+      expect(raw).not.toMatch(
+        /"(?:session_id|prompt_id|tool_use_id|agent_id)":\s*"(?!<)[^"<]+"/,
+      );
     }
-    // No concrete UUIDs or raw tool-use id formats; every identity field is
-    // a <placeholder> the tests substitute.
-    expect(raw).not.toMatch(
-      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+  });
+});
+
+// --- 3000.11.3 contract: failed starts and the foreground child Stop --------
+//
+// The 2026-10-10 hook-capture probe on Devin CLI 3000.11.3 (the
+// native-contracts-3000.11.3.json pair) proved two adapter bugs this
+// describe pins closed:
+//   - a host-refused run_subagent fires PostToolUse with
+//     {success:false, output:null, error:"Subagent failed to start."} —
+//     foreground (R1) AND background (R1b). It must mint no
+//     SUBAGENT_COMPLETED, and the un-annotated in-flight entry a background
+//     dispatch's PreToolUse created must be discarded (it would otherwise
+//     keep the pending-subagent Stop carve-out alive until TTL);
+//   - a FOREGROUND child's own Stop enters the parent's hook stream between
+//     the run_subagent Pre and Post with the same session_id/prompt_id and
+//     nothing to tell it from the parent's (C0); the adapter's dispatch
+//     window lets it through without consulting the core, whose
+//     decision:block would steer the CHILD (S3's block turned the child's
+//     report into the injected text). Every AIDLC denial of the dispatch
+//     writes a matching denied file so hook order cannot strand the parent
+//     (R3b: later PreToolUse entries still run after an earlier denial).
+
+describe("t332 devin adapter — 3000.11.3 failed starts and foreground child Stop", () => {
+  const NATIVE_11_3 = JSON.parse(
+    readFileSync(
+      join(
+        REPO_ROOT,
+        "tests",
+        "fixtures",
+        "devin-hook-payloads",
+        "native-contracts-3000.11.3.json",
+      ),
+      "utf-8",
+    ),
+  ) as { events: Record<string, Record<string, unknown>> };
+
+  /** Clone one captured 3000.11.3 native event by its semantic name,
+   *  substituting the fixture's <placeholder> tokens. */
+  function nativeEvent(
+    name: string,
+    subs: Record<string, string> = {},
+  ): Record<string, unknown> {
+    const event = NATIVE_11_3.events[name];
+    if (!event) {
+      throw new Error(`native-contracts-3000.11.3 fixture has no event "${name}"`);
+    }
+    let json = JSON.stringify(event);
+    for (const [token, value] of Object.entries(subs)) {
+      json = json.replaceAll(token, value);
+    }
+    return JSON.parse(json) as Record<string, unknown>;
+  }
+
+  function inflightEntries(dir: string): Array<Record<string, unknown>> {
+    const path = subagentInflightMarkerPath(dir);
+    if (!existsSync(path)) return [];
+    const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
+      entries?: Array<Record<string, unknown>>;
+    };
+    return parsed.entries ?? [];
+  }
+
+  function subagentCompletedRows(dir: string): number {
+    return (readAudit(dir).match(/\*\*Event\*\*: SUBAGENT_COMPLETED/g) ?? [])
+      .length;
+  }
+
+  function hookTraces(dir: string, hook: string): string {
+    const path = join(hooksHealthDir(dir), `${hook}.trace`);
+    return existsSync(path) ? readFileSync(path, "utf-8") : "";
+  }
+
+  function dispatchWindowFile(dir: string, session: string): string {
+    return join(
+      dirname(reviewerDispatchPath(dir)),
+      "dispatch-window",
+      `${session}.json`,
     );
-    expect(raw).not.toMatch(
-      /"(?:session_id|prompt_id|tool_use_id|agent_id)":\s*"(?!<)[^"<]+"/,
+  }
+
+  function dispatchDeniedFile(dir: string, session: string): string {
+    return join(
+      dirname(reviewerDispatchPath(dir)),
+      "dispatch-window",
+      `${session}.denied.json`,
     );
+  }
+
+  /** A run_subagent PreToolUse through the reviewer-scope arm. Foreground
+   *  dispatches of ANY profile open the dispatch window; background opens
+   *  nothing. */
+  function dispatchPre(
+    dir: string,
+    opts: {
+      session: string;
+      profile?: string;
+      toolUseId?: string;
+      background?: boolean;
+    },
+  ): { stdout: string; stderr: string; code: number } {
+    return runAdapter(dir, "reviewer-scope", {
+      hook_event_name: "PreToolUse",
+      tool_name: "run_subagent",
+      tool_input: {
+        profile: opts.profile ?? "subagent_explore",
+        title: "t332 dispatch",
+        task: "Do the child work and report.",
+        ...(opts.background ? { is_background: true } : {}),
+      },
+      tool_use_id: opts.toolUseId ?? "toolu_dispatch",
+      session_id: opts.session,
+    });
+  }
+
+  /** A run_subagent PreToolUse shaped for the plan-approval-guard /
+   *  deliver-stage-rules arms (mirrors the Item 2 helper). */
+  function devinRunSubagent(
+    profile: string,
+    task: string,
+    extraInput: Record<string, unknown> = {},
+    session?: string,
+    toolUseId?: string,
+  ): Record<string, unknown> {
+    return {
+      ...(session ? { session_id: session } : {}),
+      ...(toolUseId ? { tool_use_id: toolUseId } : {}),
+      hook_event_name: "PreToolUse",
+      tool_name: "run_subagent",
+      tool_input: { profile, task, title: "t332 dispatch", ...extraInput },
+    };
+  }
+
+  /** A background dispatch through the real deliver-stage-rules arm plus a
+   *  launch-ack PostToolUse — produces one ANNOTATED in-flight entry. */
+  function launchBackground(dir: string, session: string, agentId: string): void {
+    expect(
+      runAdapter(
+        dir,
+        "deliver-stage-rules",
+        devinRunSubagent(
+          "subagent_explore",
+          "Read sentinel.txt in the project root and report its first line verbatim",
+          { is_background: true },
+          session,
+        ),
+      ).code,
+    ).toBe(0);
+    expect(
+      runAdapter(dir, "log-subagent", {
+        hook_event_name: "PostToolUse",
+        tool_name: "run_subagent",
+        tool_input: {
+          profile: "subagent_explore",
+          title: "t332 dispatch",
+          task: "Read sentinel.txt in the project root and report its first line verbatim",
+          is_background: true,
+        },
+        tool_use_id: "toolu_launch",
+        tool_response: {
+          success: true,
+          output: `Background subagent started with agent_id=${agentId}. You can wait for this agent to finish using the read_subagent tool, otherwise you will automatically be notified with a <subagent_completion_notification> when it completes.`,
+          error: null,
+        },
+        session_id: session,
+        cwd: dir,
+      }).code,
+    ).toBe(0);
+  }
+
+  /** A Stop payload on this session through the continue-workflow arm. */
+  function stopNow(
+    dir: string,
+    session: string,
+  ): { stdout: string; stderr: string; code: number } {
+    return runAdapter(dir, "continue-workflow", {
+      ...(FIXTURES.stop as Record<string, unknown>),
+      session_id: session,
+      cwd: dir,
+    });
+  }
+
+  test("1: a foreground failed start mints no completion and leaves a trace line", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "v113-fgfail";
+      const r = runAdapter(
+        dir,
+        "log-subagent",
+        withCwd(nativeEvent("foregroundStartFailurePost", { "<session>": session }), dir),
+      );
+      expect(r.code).toBe(0);
+      expect(subagentCompletedRows(dir)).toBe(0);
+      expect(hookTraces(dir, "log-subagent")).toContain(
+        "run_subagent failed to start; no completion recorded",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2: a background failed start discards the un-annotated entry and preserves an annotated one", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "v113-bgfail";
+      // An earlier accepted background launch: annotated entry for aa37dc28.
+      launchBackground(dir, session, "aa37dc28");
+      // A second background dispatch whose entry is still un-annotated.
+      expect(
+        runAdapter(
+          dir,
+          "deliver-stage-rules",
+          devinRunSubagent(
+            "subagent_explore",
+            "Read sentinel.txt in the project root and report its first line verbatim",
+            { is_background: true },
+            session,
+          ),
+        ).code,
+      ).toBe(0);
+      expect(inflightEntries(dir).length).toBe(2);
+      const r = runAdapter(
+        dir,
+        "log-subagent",
+        withCwd(nativeEvent("backgroundStartFailurePost", { "<session>": session }), dir),
+      );
+      expect(r.code).toBe(0);
+      // Only the newest un-annotated entry was discarded; the launch-ack'd
+      // entry survives.
+      expect(inflightEntries(dir)).toEqual([
+        {
+          sessionId: session,
+          agentId: "aa37dc28",
+          agentType: "subagent_explore",
+          authority: "none",
+          startedAtMs: expect.any(Number),
+        },
+      ]);
+      expect(subagentCompletedRows(dir)).toBe(0);
+      expect(hookTraces(dir, "log-subagent")).toContain(
+        "run_subagent failed to start; no completion recorded",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("3: regression — a foreground completion still lands exactly one SUBAGENT_COMPLETED", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "v113-fgdone";
+      const r = runAdapter(
+        dir,
+        "log-subagent",
+        withCwd(
+          nativeEvent("foregroundCompletionPost", {
+            "<session>": session,
+            "<agent-id>": "cc11dd22",
+            "<child-report>": "done",
+          }),
+          dir,
+        ),
+      );
+      expect(r.code).toBe(0);
+      expect(subagentCompletedRows(dir)).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("4: a foreground child's own Stop is allowed inside the dispatch; the parent's Stop after PostToolUse still blocks", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "v113-fgchild";
+      // The dispatch PreToolUse opens the window (C0's real event shape).
+      expect(
+        runAdapter(
+          dir,
+          "reviewer-scope",
+          withCwd(
+            nativeEvent("foregroundDispatchPre", {
+              "<session>": session,
+              "<tool-use-id-parent>": "toolu_fg",
+              "<task>": "Do the child work and report.",
+            }),
+            dir,
+          ),
+        ).code,
+      ).toBe(0);
+      expect(existsSync(dispatchWindowFile(dir, session))).toBe(true);
+      // The child's own Stop — payload-identical to a parent Stop (C0) — is
+      // allowed without consulting the core.
+      const childStop = runAdapter(
+        dir,
+        "continue-workflow",
+        withCwd(
+          nativeEvent("foregroundChildStop", {
+            "<session>": session,
+            "<child-report>": "CHILD-DONE",
+          }),
+          dir,
+        ),
+      );
+      expect(childStop.code).toBe(0);
+      expect(childStop.stdout.trim()).toBe("");
+      expect(hookTraces(dir, "continue-workflow")).toContain(
+        "a foreground subagent's own Stop inside run_subagent toolu_fg (subagent_explore); allowing it without consulting the workflow",
+      );
+      // The dispatch's PostToolUse closes the window (matched by tool_use_id).
+      expect(
+        runAdapter(
+          dir,
+          "log-subagent",
+          withCwd(
+            nativeEvent("foregroundCompletionPost", {
+              "<session>": session,
+              "<tool-use-id-parent>": "toolu_fg",
+              "<agent-id>": "ffe1e33c",
+              "<child-report>": "CHILD-DONE",
+            }),
+            dir,
+          ),
+        ).code,
+      ).toBe(0);
+      expect(existsSync(dispatchWindowFile(dir, session))).toBe(false);
+      // The parent's own Stop takes the normal core path and blocks on the
+      // pending work, exactly as test 3.
+      const parent = runAdapter(
+        dir,
+        "continue-workflow",
+        withCwd(
+          nativeEvent("parentStop", {
+            "<session>": session,
+            "<parent-report>": "PARENT-DONE",
+          }),
+          dir,
+        ),
+      );
+      expect(parent.code).toBe(0);
+      const out = JSON.parse(parent.stdout) as { decision?: string };
+      expect(out.decision).toBe("block");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5a: an AIDLC-denied dispatch suppresses the window — the Stop after the denial blocks (window opened first)", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const session = "v113-denied-a";
+      // reviewer-scope runs first and opens the window for the same call.
+      expect(
+        dispatchPre(dir, {
+          session,
+          profile: "aidlc-developer-agent",
+          toolUseId: "toolu_denied",
+        }).code,
+      ).toBe(0);
+      // plan-approval-guard then refuses the dispatch and marks it denied.
+      const task =
+        "AIDLC-STAGE: code-generation\n" +
+        `AIDLC-TESTING-CONTRACT: sha256:${"a".repeat(64)}\n` +
+        "Implement the stage-level plan";
+      const denied = runAdapter(
+        dir,
+        "plan-approval-guard",
+        devinRunSubagent("aidlc-developer-agent", task, {}, session, "toolu_denied"),
+      );
+      expect(denied.code).toBe(2);
+      expect(existsSync(dispatchDeniedFile(dir, session))).toBe(true);
+      // The denied dispatch produced no child — the parent's Stop must NOT
+      // be treated as a child's and takes the normal (blocking) path.
+      const r = stopNow(dir, session);
+      expect(r.stdout).toContain('"decision":"block"');
+      expect(hookTraces(dir, "continue-workflow")).not.toContain(
+        "foreground subagent's own Stop",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5b: the denial file written before the window opens still suppresses it (R3b ordering)", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const session = "v113-denied-b";
+      const task =
+        "AIDLC-STAGE: code-generation\n" +
+        `AIDLC-TESTING-CONTRACT: sha256:${"a".repeat(64)}\n` +
+        "Implement the stage-level plan";
+      // The denial lands first (hook order cannot be relied on).
+      const denied = runAdapter(
+        dir,
+        "plan-approval-guard",
+        devinRunSubagent("aidlc-developer-agent", task, {}, session, "toolu_denied"),
+      );
+      expect(denied.code).toBe(2);
+      expect(existsSync(dispatchDeniedFile(dir, session))).toBe(true);
+      // reviewer-scope runs after and opens the window anyway.
+      expect(
+        dispatchPre(dir, {
+          session,
+          profile: "aidlc-developer-agent",
+          toolUseId: "toolu_denied",
+        }).code,
+      ).toBe(0);
+      const r = stopNow(dir, session);
+      expect(r.stdout).toContain('"decision":"block"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("6a: UserPromptSubmit closes the window and clears the denial", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "v113-boundary";
+      expect(dispatchPre(dir, { session, toolUseId: "toolu_a" }).code).toBe(0);
+      expect(existsSync(dispatchWindowFile(dir, session))).toBe(true);
+      expect(
+        runAdapter(dir, "record-human-turn", {
+          ...(FIXTURES.userPromptSubmit as Record<string, unknown>),
+          session_id: session,
+          cwd: dir,
+        }).code,
+      ).toBe(0);
+      expect(existsSync(dispatchWindowFile(dir, session))).toBe(false);
+      expect(stopNow(dir, session).stdout).toContain('"decision":"block"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("6b: a PostToolUse with a different tool_use_id does not close the window", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "v113-tuid-mismatch";
+      expect(dispatchPre(dir, { session, toolUseId: "toolu_a" }).code).toBe(0);
+      // Another dispatch's PostToolUse (different tool_use_id) must not
+      // close toolu_a's window.
+      expect(
+        runAdapter(
+          dir,
+          "log-subagent",
+          withCwd(
+            nativeEvent("foregroundCompletionPost", {
+              "<session>": session,
+              "<tool-use-id-parent>": "toolu_b",
+              "<agent-id>": "bb48ef31",
+              "<child-report>": "done",
+            }),
+            dir,
+          ),
+        ).code,
+      ).toBe(0);
+      expect(existsSync(dispatchWindowFile(dir, session))).toBe(true);
+      const r = stopNow(dir, session);
+      expect(r.stdout.trim()).toBe("");
+      expect(hookTraces(dir, "continue-workflow")).toContain(
+        "foreground subagent's own Stop inside run_subagent toolu_a",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("6c: a new foreground Pre replaces the window", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "v113-replace";
+      expect(dispatchPre(dir, { session, toolUseId: "toolu_a" }).code).toBe(0);
+      expect(dispatchPre(dir, { session, toolUseId: "toolu_b" }).code).toBe(0);
+      const w = JSON.parse(
+        readFileSync(dispatchWindowFile(dir, session), "utf-8"),
+      ) as { toolUseId?: string };
+      expect(w.toolUseId).toBe("toolu_b");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("6d: a window older than the dispatch TTL is ignored and janitored", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "v113-stale";
+      mkdirSync(dirname(dispatchWindowFile(dir, session)), { recursive: true });
+      writeFileSync(
+        dispatchWindowFile(dir, session),
+        `${JSON.stringify({
+          version: 1,
+          sessionId: session,
+          toolUseId: "toolu_stale",
+          profile: "subagent_explore",
+          openedAtMs: Date.now() - REVIEWER_DISPATCH_TTL_MS - 60_000,
+        })}\n`,
+        "utf-8",
+      );
+      expect(stopNow(dir, session).stdout).toContain('"decision":"block"');
+      expect(existsSync(dispatchWindowFile(dir, session))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("6e: a background dispatch Pre opens no window", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "v113-bgdispatch";
+      expect(
+        dispatchPre(dir, { session, toolUseId: "toolu_bg", background: true })
+          .code,
+      ).toBe(0);
+      expect(existsSync(dispatchWindowFile(dir, session))).toBe(false);
+      expect(stopNow(dir, session).stdout).toContain('"decision":"block"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

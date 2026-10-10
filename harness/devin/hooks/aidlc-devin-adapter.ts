@@ -84,11 +84,13 @@ import {
 } from "./aidlc-reviewer-scope.ts";
 import {
   annotateSubagentInflight,
+  discardSubagentInflight,
   errorMessage,
   findSubagentInflight,
   isNonAnswer,
   matchSubagentInflight,
   recordHookDrop,
+  recordHookTrace,
   resolveProjectFlag,
   REVIEWER_DISPATCH_TTL_MS,
   reviewerDispatchPath,
@@ -743,10 +745,13 @@ function forwardSubagentStop(
 // foreground child cannot hold). A hook-denied dispatch emits no PostToolUse
 // (C21), so denial paths close the window adapter-side. Stop is NOT a close
 // point: a foreground child's own Stop enters the shared stream before the
-// parent's PostToolUse (C14/C17) and continue-workflow may answer it with
+// parent's PostToolUse (C14/C17) and another hook may still answer it with
 // decision:block, after which the child resumes its review — closing there
-// would strip attribution mid-review. Ctrl+B and cancel both return the
-// parent's run_subagent call, so the PostToolUse close already covers them.
+// would strip attribution mid-review. The core continue-workflow no longer
+// does this itself: the dispatch window below lets the child Stop through
+// without consulting the workflow (3000.11.3 C0/S3). Ctrl+B and cancel both
+// return the parent's run_subagent call, so the PostToolUse close already
+// covers them.
 //
 // While a window is open, every path/search/shell PreToolUse on that session
 // is forwarded to the core reviewer-scope hook with agent_type set to the
@@ -889,6 +894,236 @@ function namesReviewerWindow(toolInput: Record<string, unknown>): boolean {
   return scan(toolInput);
 }
 
+// --- Foreground dispatch window (continue-workflow child-Stop carve-out) ------
+//
+// The 3000.11.3 hook-capture probe showed a FOREGROUND child's own Stop
+// enters the parent's hook stream between the run_subagent PreToolUse and
+// its PostToolUse — same session_id, same prompt_id, stop_hook_active=false,
+// identical env (C0, S3): nothing on the payload distinguishes it from the
+// parent's Stop. Piping it to the core continue-workflow is harmful: with a
+// pending dispatch-subagent directive the core answers decision:block and
+// the host feeds the reason to the CHILD, steering it mid-dispatch (S3's
+// block turned the child's report into the injected text) and spending the
+// parent's block budget. The adapter therefore keeps a second per-session
+// file beside the reviewer window —
+//
+//   <record>/.aidlc-engine/dispatch-window/<session_id>.json
+//
+// — opened by EVERY foreground run_subagent PreToolUse in the reviewer-scope
+// arm (any profile; the mechanism is about the host's foreground-child
+// semantics, not reviewer attribution) and closed at the dispatch's own
+// PostToolUse in log-subagent (matched by tool_use_id) plus the same
+// boundaries the reviewer window honours. While it is open, the
+// continue-workflow arm allows the session's Stop without consulting the
+// core — a Stop inside a live foreground dispatch can only be the child's.
+//
+// Denials: R3b proved every PreToolUse hook entry still runs after an
+// earlier entry denies (no ordering, no short-circuit), so a denied dispatch
+// cannot rely on which arm ran first. Every AIDLC arm that refuses a
+// run_subagent (reviewer-scope's own two, plan-approval-guard,
+// deliver-stage-rules) also writes <session>.denied.json {version,
+// toolUseId}; the Stop check honours a window only when no denial names its
+// toolUseId, so either arm order is safe. A run_subagent denied by a
+// NON-AIDLC hook is the known residual: it leaves the window open until the
+// next boundary, so that one parent Stop is allowed instead of nudged (the
+// design fails toward letting the stop through).
+
+interface DispatchWindow {
+  version: 1;
+  sessionId: string;
+  toolUseId: string;
+  profile: string;
+  openedAtMs: number;
+}
+
+function dispatchWindowDir(): string {
+  return join(dirname(reviewerDispatchPath(projectDir)), "dispatch-window");
+}
+
+function dispatchWindowPath(sessionId: string): string {
+  return join(dispatchWindowDir(), `${sessionId}.json`);
+}
+
+function dispatchDeniedPath(sessionId: string): string {
+  return join(dispatchWindowDir(), `${sessionId}.denied.json`);
+}
+
+// Open (or replace — a new dispatch is a boundary) the session's foreground
+// dispatch window. Atomic temp + rename, best-effort like the reviewer
+// window: a write failure drops a line and the next child Stop takes the
+// normal core path. No-op without a valid session id.
+function openDispatchWindow(
+  w: Omit<DispatchWindow, "version" | "openedAtMs">,
+): void {
+  const session = validSessionId(w.sessionId);
+  if (!session) return;
+  try {
+    const path = dispatchWindowPath(session);
+    mkdirSync(dirname(path), { recursive: true });
+    const tmp = `${path}.tmp-${process.pid}`;
+    writeFileSync(
+      tmp,
+      `${JSON.stringify({ ...w, sessionId: session, version: 1, openedAtMs: Date.now() })}\n`,
+      "utf-8",
+    );
+    renameSync(tmp, path);
+  } catch (error) {
+    recordHookDrop(
+      projectDir,
+      "reviewer-scope",
+      `could not open the Devin foreground dispatch window: ${errorMessage(error)}`,
+    );
+  }
+}
+
+// Load the session's window with the reviewer window's staleness discipline:
+// absent → null; older than the freshness window → janitor + drop line;
+// malformed JSON/shape → drop line. Never throws. `hook` names the arm the
+// drop lines attribute to.
+function readDispatchWindow(
+  sessionId: string | undefined,
+  hook: string,
+): DispatchWindow | null {
+  const session = validSessionId(sessionId);
+  if (!session) return null;
+  const path = dispatchWindowPath(session);
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8");
+  } catch {
+    return null; // ENOENT is the common case — no window open.
+  }
+  let w: DispatchWindow;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const o = parsed as Partial<DispatchWindow> | null;
+    if (
+      o === null ||
+      typeof o !== "object" ||
+      o.version !== 1 ||
+      o.sessionId !== session ||
+      typeof o.toolUseId !== "string" ||
+      o.toolUseId.length === 0 ||
+      typeof o.profile !== "string" ||
+      o.profile.length === 0 ||
+      typeof o.openedAtMs !== "number"
+    ) {
+      throw new Error("shape");
+    }
+    w = o as DispatchWindow;
+  } catch {
+    recordHookDrop(
+      projectDir,
+      hook,
+      "Devin foreground dispatch window is malformed; child-Stop carve-out skipped",
+    );
+    return null;
+  }
+  if (Date.now() - w.openedAtMs > REVIEWER_DISPATCH_TTL_MS) {
+    try {
+      unlinkSync(path);
+    } catch {
+      // Janitor failure is non-fatal — the staleness check already refused it.
+    }
+    recordHookDrop(
+      projectDir,
+      hook,
+      "ignoring an orphaned Devin foreground dispatch window (older than the freshness window); cleaned it up",
+    );
+    return null;
+  }
+  return w;
+}
+
+// Drop the session's window. Idempotent (ENOENT ignored); a no-op for an
+// invalid session id. When onlyToolUseId is given (the dispatch's own
+// PostToolUse) only the window that dispatch opened is closed — a newer
+// dispatch's window, or a leftover file the read cannot identify, survives.
+function closeDispatchWindow(
+  sessionId: string | undefined,
+  onlyToolUseId?: string,
+): void {
+  const session = validSessionId(sessionId);
+  if (!session) return;
+  const path = dispatchWindowPath(session);
+  if (onlyToolUseId !== undefined) {
+    let toolUseId: unknown;
+    try {
+      toolUseId = (
+        JSON.parse(readFileSync(path, "utf-8")) as Partial<DispatchWindow>
+      ).toolUseId;
+    } catch {
+      return; // Nothing readable to match — leave it for the janitor.
+    }
+    if (toolUseId !== onlyToolUseId) return;
+  }
+  try {
+    unlinkSync(path);
+  } catch {
+    // ENOENT — no window was open.
+  }
+}
+
+// Record that a run_subagent with this tool_use_id was refused by an AIDLC
+// arm. The Stop check consults the file instead of relying on PreToolUse
+// hook ordering (R3b). No-op without a valid session or tool_use_id — a
+// window could not have opened without one either.
+function markDispatchDenied(
+  sessionId: string | undefined,
+  toolUseId: string | undefined,
+  hook: string,
+): void {
+  const session = validSessionId(sessionId);
+  if (!session || typeof toolUseId !== "string" || toolUseId === "") return;
+  try {
+    const path = dispatchDeniedPath(session);
+    mkdirSync(dirname(path), { recursive: true });
+    const tmp = `${path}.tmp-${process.pid}`;
+    writeFileSync(tmp, `${JSON.stringify({ version: 1, toolUseId })}\n`, "utf-8");
+    renameSync(tmp, path);
+  } catch (error) {
+    recordHookDrop(
+      projectDir,
+      hook,
+      `could not record the Devin run_subagent denial: ${errorMessage(error)}`,
+    );
+  }
+}
+
+// Drop the session's denial record at human/session boundaries (the window's
+// own close points clear both). Idempotent; a stale file is harmless anyway
+// — it can only ever suppress a window naming its own tool_use_id.
+function clearDispatchDenied(sessionId: string | undefined): void {
+  const session = validSessionId(sessionId);
+  if (!session) return;
+  try {
+    unlinkSync(dispatchDeniedPath(session));
+  } catch {
+    // ENOENT — nothing was denied.
+  }
+}
+
+// The continue-workflow consult: a live foreground dispatch whose own Stop
+// is the only Stop that can arrive. Returns the window when one is present,
+// fresh, and not denied for its own tool_use_id.
+function foregroundDispatchActive(
+  sessionId: string | undefined,
+): DispatchWindow | null {
+  const w = readDispatchWindow(sessionId, "continue-workflow");
+  if (!w) return null;
+  let deniedToolUseId: unknown;
+  try {
+    deniedToolUseId = (
+      JSON.parse(readFileSync(dispatchDeniedPath(w.sessionId), "utf-8")) as {
+        toolUseId?: unknown;
+      }
+    ).toolUseId;
+  } catch {
+    return w; // No readable denial — the window stands.
+  }
+  return deniedToolUseId === w.toolUseId ? null : w;
+}
+
 // --- Targets ------------------------------------------------------------------
 
 let projectDir = "";
@@ -939,8 +1174,10 @@ export async function run(
     case "session-start": {
       // A session boundary ends any reviewer attribution the previous
       // incarnation left behind (a resumed session keeps its session_id but
-      // its foreground children are gone).
+      // its foreground children are gone) — and any dispatch-window state.
       closeReviewerWindow(devin.session_id);
+      closeDispatchWindow(devin.session_id);
+      clearDispatchDenied(devin.session_id);
       // Forward {hook_event_name:"SessionStart", source, session_id?} to the
       // core session-start hook; re-wrap the core's {"additionalContext":...}
       // stdout into hookSpecificOutput.{hookEventName:"SessionStart",
@@ -978,8 +1215,10 @@ export async function run(
     }
 
     case "session-end": {
-      // Session teardown is a reviewer-window boundary.
+      // Session teardown is a reviewer-window and dispatch-window boundary.
       closeReviewerWindow(devin.session_id);
+      closeDispatchWindow(devin.session_id);
+      clearDispatchDenied(devin.session_id);
       // Devin HAS a SessionEnd event (unlike codex). Pipe stdin verbatim to
       // the core session-end hook. Advisory.
       runCore("aidlc-session-end.ts", rawInput);
@@ -988,8 +1227,10 @@ export async function run(
 
     case "record-human-turn": {
       // UserPromptSubmit (and an ask_user_question PostToolUse) are human
-      // boundaries — a foreground reviewer cannot span one.
+      // boundaries — a foreground reviewer or child cannot span one.
       closeReviewerWindow(devin.session_id);
+      closeDispatchWindow(devin.session_id);
+      clearDispatchDenied(devin.session_id);
       // For ask_user_question PostToolUse, skip ONLY for genuine cancellations
       // (success:false or cancellation text). An unrecognized answer shape
       // still means the user interacted — the PostToolUse firing is evidence
@@ -1061,6 +1302,23 @@ export async function run(
         // attribution.
         closeReviewerWindow(devin.session_id);
         const { profile } = normalizeRunSubagentInput(devin.tool_input ?? {});
+        // Open the foreground dispatch window for EVERY run_subagent — any
+        // profile. A foreground child's own Stop is indistinguishable from
+        // the parent's on the payload (3000.11.3 C0), so continue-workflow
+        // consults this file to let the child Stop through. A background
+        // dispatch opens nothing: its child Stop arrives after the launch
+        // ack, already covered by the core pending-background carve-out.
+        if (
+          devin.tool_input?.is_background !== true &&
+          typeof devin.tool_use_id === "string" &&
+          devin.tool_use_id !== ""
+        ) {
+          openDispatchWindow({
+            sessionId: devin.session_id ?? "",
+            toolUseId: devin.tool_use_id,
+            profile,
+          });
+        }
         if (!REVIEW_AGENT_RE.test(profile)) return 0;
         if (!scopeDisabled) {
           // A background reviewer is unenforceable: its child events
@@ -1076,6 +1334,13 @@ export async function run(
               "reviewer-scope",
               "refused a background reviewer dispatch (unattributable)",
             );
+            // No dispatch window was opened for a background dispatch; the
+            // mark is harmless and keeps the denial contract uniform.
+            markDispatchDenied(
+              devin.session_id,
+              devin.tool_use_id,
+              "reviewer-scope",
+            );
             return 2;
           }
           try {
@@ -1087,6 +1352,11 @@ export async function run(
                 projectDir,
                 "reviewer-scope",
                 "refused a reviewer dispatch while background subagents are pending",
+              );
+              markDispatchDenied(
+                devin.session_id,
+                devin.tool_use_id,
+                "reviewer-scope",
               );
               return 2;
             }
@@ -1123,6 +1393,7 @@ export async function run(
       // parent is reading results or asking the human.
       if (tool === "read_subagent" || tool === "ask_user_question") {
         closeReviewerWindow(devin.session_id);
+        closeDispatchWindow(devin.session_id);
         return 0;
       }
 
@@ -1422,8 +1693,14 @@ export async function run(
       const r = runCoreWithStderr("aidlc-plan-approval-guard.ts", fwd);
       if (r.code === 2) {
         // A denied dispatch emits no PostToolUse (C21) — the window the
-        // reviewer-scope arm opened for it must not outlive the refusal.
+        // reviewer-scope arm opened for it must not outlive the refusal,
+        // and the denial must be on record whichever arm ran first (R3b).
         closeReviewerWindow(devin.session_id);
+        markDispatchDenied(
+          devin.session_id,
+          devin.tool_use_id,
+          "plan-approval-guard",
+        );
         process.stderr.write(r.stderr);
         return 2;
       }
@@ -1458,8 +1735,14 @@ export async function run(
       const r = runCoreWithStderr("aidlc-deliver-stage-rules.ts", rewritten);
       if (r.code === 2) {
         // A denied dispatch emits no PostToolUse (C21) — the window the
-        // reviewer-scope arm opened for it must not outlive the refusal.
+        // reviewer-scope arm opened for it must not outlive the refusal,
+        // and the denial must be on record whichever arm ran first (R3b).
         closeReviewerWindow(devin.session_id);
+        markDispatchDenied(
+          devin.session_id,
+          devin.tool_use_id,
+          "deliver-stage-rules",
+        );
         process.stderr.write(r.stderr);
         return 2;
       }
@@ -1574,6 +1857,12 @@ export async function run(
       // PostToolUse for run_subagent / read_subagent (the matcher is
       // ^(run_subagent|read_subagent)$). The synthesized SubagentStart/
       // SubagentStop pair, per the classifier helpers above:
+      //   run_subagent + success:false     → failed start (the host refused
+      //     (host refused the launch)        the launch — 3000.11.3 R1/R1b):
+      //                                      no SubagentStop; a background
+      //                                      dispatch's un-annotated in-flight
+      //                                      entry is discarded + a
+      //                                      log-subagent trace line
       //   run_subagent + resume:<id>      → terminal under that agent id
       //   run_subagent + launch ack        → annotate the in-flight entry the
       //                                      deliver-stage-rules PreToolUse
@@ -1602,7 +1891,34 @@ export async function run(
         // The dispatch's PostToolUse is the reviewer window's primary close
         // point — a foreground child's events sit strictly between the
         // parent's Pre and Post (C17), so Post means the reviewer returned.
+        // The dispatch window closes here too, matched by tool_use_id.
         closeReviewerWindow(devin.session_id);
+        closeDispatchWindow(devin.session_id, devin.tool_use_id);
+        // A host-refused start (unknown profile, spawn failure) arrives as
+        // success:false with no child and no completion (3000.11.3 R1/R1b) —
+        // no SubagentStop is synthesized. A background dispatch's
+        // un-annotated in-flight entry is discarded so it cannot keep
+        // relaxing Stop enforcement until TTL; a foreground dispatch marked
+        // no ledger entry, so there is nothing to discard.
+        if (toolResponseFailed(devin.tool_response)) {
+          if (input.is_background === true) {
+            try {
+              discardSubagentInflight(projectDir, devin.session_id);
+            } catch (error) {
+              recordHookDrop(
+                projectDir,
+                "log-subagent",
+                `could not discard the background-subagent in-flight entry: ${errorMessage(error)}`,
+              );
+            }
+          }
+          recordHookTrace(
+            projectDir,
+            "log-subagent",
+            "run_subagent failed to start; no completion recorded",
+          );
+          return 0;
+        }
         // A resume always runs foreground under the resumed agent id; an
         // annotated entry for that id (an unread earlier background run) is
         // completed by the core's exact-id path.
@@ -1710,6 +2026,21 @@ export async function run(
     }
 
     case "continue-workflow": {
+      // A foreground child's own Stop rides the parent's session inside the
+      // dispatch (see the dispatch-window section): allow it without
+      // consulting the workflow — a core decision:block would steer the
+      // CHILD and spend the parent's block budget (S3 on 3000.11.3). The
+      // window is deliberately not closed here; the dispatch's PostToolUse
+      // closes it.
+      const w = foregroundDispatchActive(devin.session_id);
+      if (w) {
+        recordHookTrace(
+          projectDir,
+          "continue-workflow",
+          `a foreground subagent's own Stop inside run_subagent ${w.toolUseId} (${w.profile}); allowing it without consulting the workflow`,
+        );
+        return 0;
+      }
       // Stop → pipe stdin verbatim to aidlc-continue-workflow.ts; forward
       // {"decision":"block","reason"} stdout + exit code verbatim (contract
       // identical on Devin; stop_hook_active is in stdin).

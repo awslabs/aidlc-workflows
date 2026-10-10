@@ -1,4 +1,4 @@
-// covers: hook:aidlc-continue-workflow, hook:aidlc-log-subagent, hook:aidlc-deliver-stage-rules, function:markSubagentInflight, function:completeSubagentInflight, function:matchSubagentInflight, function:inspectSubagentInflight, function:subagentInflightMarkerPath, function:SUBAGENT_INFLIGHT_TTL_MS, function:annotateSubagentInflight, function:findSubagentInflight, function:hasSubagentInflight
+// covers: hook:aidlc-continue-workflow, hook:aidlc-log-subagent, hook:aidlc-deliver-stage-rules, function:markSubagentInflight, function:completeSubagentInflight, function:matchSubagentInflight, function:inspectSubagentInflight, function:subagentInflightMarkerPath, function:SUBAGENT_INFLIGHT_TTL_MS, function:annotateSubagentInflight, function:findSubagentInflight, function:hasSubagentInflight, function:discardSubagentInflight
 //
 // t327 - session-scoped background-subagent Stop-hook carve-out.
 //
@@ -33,6 +33,7 @@ import {
   activeIntent,
   annotateSubagentInflight,
   completeSubagentInflight,
+  discardSubagentInflight,
   findSubagentInflight,
   hasSubagentInflight,
   inspectSubagentInflight,
@@ -526,5 +527,69 @@ describe("t327 agent-id correlation on the in-flight ledger", () => {
     expect(() =>
       completeSubagentInflight(proj, "session-a", "worker-a"),
     ).toThrow("malformed");
+    expect(() => discardSubagentInflight(proj, "session-a")).toThrow(
+      "malformed",
+    );
+  });
+
+  test("discard removes only the newest un-annotated entry of its own session", () => {
+    const proj = makeProject();
+    expect(markSubagentInflight(proj, "session-a")).toBe(true);
+    expect(markSubagentInflight(proj, "session-a")).toBe(true);
+    annotateSubagentInflight(proj, "session-a", {
+      agentId: "worker-a",
+      agentType: "general-purpose",
+    });
+    expect(markSubagentInflight(proj, "session-a")).toBe(true);
+    expect(markSubagentInflight(proj, "session-b")).toBe(true);
+    // session-a: [{u},{worker-a},{u-newest}]; session-b: [{u}]. A Devin
+    // failed-to-start discard must take only the newest un-annotated entry
+    // of its own session — the launch-ack'd and foreign entries stay.
+    expect(discardSubagentInflight(proj, "session-a")).toBe(true);
+    expect(rawEntries(proj)).toEqual([
+      { sessionId: "session-a", startedAtMs: expect.any(Number) },
+      {
+        sessionId: "session-a",
+        startedAtMs: expect.any(Number),
+        agentId: "worker-a",
+        agentType: "general-purpose",
+      },
+      { sessionId: "session-b", startedAtMs: expect.any(Number) },
+    ]);
+    // The second discard takes the older un-annotated entry; the annotated
+    // entry is never touched.
+    expect(discardSubagentInflight(proj, "session-a")).toBe(true);
+    expect(rawEntries(proj)).toEqual([
+      {
+        sessionId: "session-a",
+        startedAtMs: expect.any(Number),
+        agentId: "worker-a",
+        agentType: "general-purpose",
+      },
+      { sessionId: "session-b", startedAtMs: expect.any(Number) },
+    ]);
+    // Nothing left for session-a to discard — annotated entries are not
+    // eligible — and session-b is untouched.
+    expect(discardSubagentInflight(proj, "session-a")).toBe(false);
+    expect(discardSubagentInflight(proj, "session-b")).toBe(true);
+    expect(discardSubagentInflight(proj, "session-a")).toBe(false);
+    expect(rawEntries(proj)).toEqual([
+      {
+        sessionId: "session-a",
+        startedAtMs: expect.any(Number),
+        agentId: "worker-a",
+        agentType: "general-purpose",
+      },
+    ]);
+  });
+
+  test("discard returns false on an absent ledger and for an invalid session", () => {
+    const proj = makeProject();
+    expect(discardSubagentInflight(proj, "session-a")).toBe(false);
+    expect(markSubagentInflight(proj, "session-a")).toBe(true);
+    for (const bad of [123, "", {}, ["session-a"]]) {
+      expect(discardSubagentInflight(proj, bad)).toBe(false);
+    }
+    expect(rawEntries(proj).length).toBe(1);
   });
 });

@@ -28922,6 +28922,41 @@ export function annotateSubagentInflight(
   });
 }
 
+// Remove the newest un-annotated fresh entry of this session — the same
+// selection rule as annotateSubagentInflight. Devin's run_subagent
+// failed-to-start PostToolUse uses it: the host refused the launch, so the
+// dispatch-created entry must not keep relaxing Stop enforcement until TTL.
+// Annotated entries are never touched. Returns whether an entry was removed.
+export function discardSubagentInflight(
+  projectDir: string,
+  sessionId: unknown,
+): boolean {
+  const identity = subagentSessionIdentity(sessionId);
+  if (!identity.valid) return false;
+  return withAuditLock(projectDir, () => {
+    const current = readSubagentInflightLedger(projectDir);
+    if (!current.exists) return false;
+    if (current.malformed) {
+      throw new Error(
+        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
+      );
+    }
+    const entries = freshSubagentEntries(current.entries, Date.now());
+    for (let i = entries.length - 1; i >= 0; i--) {
+      if (
+        entries[i].sessionId === identity.sessionId &&
+        entries[i].agentId === undefined
+      ) {
+        entries.splice(i, 1);
+        writeSubagentInflightLedger(projectDir, entries);
+        return true;
+      }
+    }
+    writeSubagentInflightLedger(projectDir, entries);
+    return false;
+  });
+}
+
 // Exact-id lookup over the session's fresh entries (the Devin adapter's
 // read_subagent correlation). Returns the matching annotated entry — its
 // agentType is what the synthesized SubagentStop reports — or null. Stale
