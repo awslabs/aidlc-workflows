@@ -11,6 +11,7 @@ import {
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -23,9 +24,11 @@ import { fileURLToPath } from "node:url";
 import {
   createIntent,
   classifyTerminalCommand,
+  INTENT_VERBS,
   parseWorkspaceCommand,
   RESERVED_RECORD_NAME_LIST,
   RESERVED_RECORD_NAMES,
+  SPACE_VERBS,
   splitDoubleQuotedArgs,
   workspaceCommandUtilityArgv,
 } from "../../core/tools/aidlc-lib.ts";
@@ -177,22 +180,18 @@ describe("parseWorkspaceCommand", () => {
   });
 
   test("utility argv keeps the explicit switch token for verb-shaped names", () => {
-    const command = parseWorkspaceCommand(["intent", "switch", "birth"]);
+    const command = parseWorkspaceCommand(["intent", "switch", "archive"]);
     expect(command).toEqual({
       kind: "switch",
       noun: "intent",
-      name: "birth",
+      name: "archive",
       explicit: true,
     });
-    expect(workspaceCommandUtilityArgv(command)).toEqual(["intent", "switch", "birth"]);
+    expect(workspaceCommandUtilityArgv(command)).toEqual(["intent", "switch", "archive"]);
   });
 
-  test("switch and space creation reject trailing flags instead of routing them to another command", () => {
+  test("space creation rejects trailing flags instead of routing them to another command", () => {
     for (const tokens of [
-      ["intent", "switch", "target", "--guard-policy", "relaxed"],
-      ["intent", "target", "--guard-policy", "relaxed"],
-      ["space", "switch", "target", "--guard-policy", "relaxed"],
-      ["space", "target", "--guard-policy", "relaxed"],
       ["space", "create", "target", "--guard-policy", "relaxed"],
       ["space-create", "target", "--guard-policy", "relaxed"],
     ]) {
@@ -203,7 +202,28 @@ describe("parseWorkspaceCommand", () => {
     }
   });
 
-  test("migration delta missing-name and reserved-future verbs are errors, not sugar switches", () => {
+  // What the person types after a name rides with the switch, whole, flags
+  // included: the agent acts on it for the work just selected. The utility
+  // argv never carries it.
+  test("a switch keeps every word after the name for the agent, never for the utility", () => {
+    for (const [tokens, explicit, words] of [
+      [["intent", "auth", "fix", "the", "login", "bug", "today"], false, ["fix", "the", "login", "bug", "today"]],
+      [["intent", "switch", "auth", "fix", "the", "login", "bug", "today"], true, ["fix", "the", "login", "bug", "today"]],
+      [["intent", "auth", "--guard-policy", "relaxed"], false, ["--guard-policy", "relaxed"]],
+      [["intent", "switch", "auth", "--guard-policy", "relaxed"], true, ["--guard-policy", "relaxed"]],
+      [["space", "teamb", "--guard-policy", "relaxed"], false, ["--guard-policy", "relaxed"]],
+      [["space", "switch", "teamb", "--guard-policy", "relaxed"], true, ["--guard-policy", "relaxed"]],
+    ] as const) {
+      const command = parseWorkspaceCommand([...tokens]);
+      expect(command, tokens.join(" ")).toEqual({ kind: "switch", noun: tokens[0], name: explicit ? tokens[2] : tokens[1], explicit, words: [...words] });
+      expect(workspaceCommandUtilityArgv(command), tokens.join(" ")).toEqual(
+        explicit ? [tokens[0], "switch", tokens[2]] : [tokens[0], tokens[1]],
+      );
+    }
+    expect(parseWorkspaceCommand(["intent", "auth"])).toEqual({ kind: "switch", noun: "intent", name: "auth", explicit: false });
+  });
+
+  test("migration delta missing-name cases are errors, not sugar switches", () => {
     expect(parseWorkspaceCommand(["space", "create"])).toMatchObject({
       kind: "error",
       noun: "space",
@@ -216,16 +236,13 @@ describe("parseWorkspaceCommand", () => {
       code: "missing-name",
       message: "Usage: aidlc space switch <name>",
     });
+  });
+
+  test("a word that is no verb is the switch sugar at both sites, rename, show and birth included", () => {
     for (const noun of ["intent", "space"] as const) {
-      for (const verb of ["rename", "show"]) {
-        const parsed = parseWorkspaceCommand([noun, verb, "foo"]);
-        expect(parsed).toMatchObject({
-          kind: "error",
-          noun,
-          code: "reserved-future-verb",
-          verb,
-        });
-        expect(parsed.kind === "error" ? parsed.message : "").toContain(`${noun} switch ${verb}`);
+      for (const name of ["rename", "show", "birth"]) {
+        expect(parseWorkspaceCommand([noun, name])).toEqual({ kind: "switch", noun, name, explicit: false });
+        expect(classifyTerminalCommand([noun, name])).toEqual({ subcommand: noun, arg: name, source: "workspace-verb" });
       }
     }
   });
@@ -302,6 +319,7 @@ describe("parseWorkspaceCommand", () => {
       noun: "space",
       name: "archive",
       explicit: false,
+      words: ["x"],
     });
   });
 
@@ -347,7 +365,7 @@ describe("parseWorkspaceCommand", () => {
     expect(parseWorkspaceCommand(["build", "a", "space", "station"])).toEqual({ kind: "not-workspace" });
   });
 
-  test("reserved record names include help, current verbs, and future verbs", () => {
+  test("reserved record names are help and the current verbs", () => {
     expect(RESERVED_RECORD_NAME_LIST).toEqual([
       "help",
       "list",
@@ -357,9 +375,6 @@ describe("parseWorkspaceCommand", () => {
       "unarchive",
       "add-repo",
       "remove-repo",
-      "rename",
-      "show",
-      "birth",
     ]);
     for (const name of RESERVED_RECORD_NAME_LIST) {
       expect(RESERVED_RECORD_NAMES.has(name)).toBe(true);
@@ -390,6 +405,14 @@ describe("classifier and next parser parity", () => {
 
       const projectDir = scratchProject();
       try {
+        // A name is the switch only for a record that exists (the classifier,
+        // asked without a project, classifies the shape alone).
+        if (row.args[0] === "intent" && row.args[1] === "some-slug") seedIntent(projectDir, "some-slug", "260711-some-slug");
+        if (row.args[0] === "intent" && row.args[1] === "switch") seedIntent(projectDir, row.args[2], `260711-${row.args[2]}`);
+        if (row.args[0] === "space" && row.args.includes("teamB")) {
+          // Stored under its slug, as the utility stores a space.
+          mkdirSync(join(projectDir, "aidlc", "spaces", "teamb", "intents"), { recursive: true });
+        }
         const d = directive(projectDir, row.args);
         expect(d.kind, row.args.join(" ")).toBe("print");
         expect(d.message, row.args.join(" ")).toContain(`aidlc.ts engine ${row.route}`);
@@ -420,7 +443,6 @@ describe("classifier and next parser parity", () => {
       { args: ["intent", "switch"], message: "Usage: aidlc intent switch <name>" },
       { args: ["intent", "archive"], message: "Usage: aidlc intent archive <name>" },
       { args: ["intent", "unarchive"], message: "Usage: aidlc intent unarchive <name>" },
-      { args: ["intent", "rename", "foo"], message: "intent rename is reserved for a future workspace verb" },
     ];
     for (const row of rows) {
       const cmd = classifyTerminalCommand(row.args);
@@ -449,19 +471,23 @@ describe("classifier and next parser parity", () => {
     }
   });
 
-  test("a workspace switch rejects a later flag at both sites", () => {
-    const cmd = classifyTerminalCommand(["space", "foo", "--status"]);
-    expect(cmd).toEqual({
-      subcommand: "error",
-      display: "space foo --status",
-      error: "Usage: aidlc space switch <name>",
-      source: "workspace-verb",
-    });
+  test("a flag after a workspace name is the person's word for the agent at both sites, never a mode switch", () => {
+    // The seam never runs it off-band: the conductor gets it through `next`.
+    expect(classifyTerminalCommand(["space", "foo", "--status"])).toBeNull();
     const projectDir = scratchProject();
     try {
+      // No space is named foo: the agent reads the whole line.
+      const unknown = directive(projectDir, ["space", "foo", "--status"]);
+      expect(unknown.kind, JSON.stringify(unknown)).toBe("print");
+      expect(unknown.message).toContain('The person typed: "space foo --status"');
+      expect(unknown.message).not.toContain("aidlc.ts engine status");
+      expect(unknown.message).not.toContain("Usage:");
+      // With the space there, it switches and the flag rides along for the agent.
+      mkdirSync(join(projectDir, "aidlc", "spaces", "foo", "intents"), { recursive: true });
       const d = directive(projectDir, ["space", "foo", "--status"]);
-      expect(d.kind).toBe("error");
-      expect(d.message).toContain("Usage: aidlc space switch <name>");
+      expect(d.kind, JSON.stringify(d)).toBe("print");
+      expect(d.message).toContain("aidlc.ts engine space foo`");
+      expect(d.message).toContain('The person also asked: "--status"');
       expect(d.message).not.toContain("aidlc.ts engine status");
     } finally {
       cleanup(projectDir);
@@ -503,28 +529,204 @@ describe("utility handlers and reservation chokepoints", () => {
   test("engine and dispatcher switch to a verb-named intent without creating", () => {
     const projectDir = scratchProject();
     try {
-      seedIntent(projectDir, "birth", "260711-birth");
+      seedIntent(projectDir, "archive", "260711-archive");
       const registry = join(projectDir, "aidlc", "spaces", "default", "intents", "intents.json");
       const before = readFileSync(registry, "utf-8");
 
-      const d = directive(projectDir, ["intent", "switch", "birth"]);
+      const d = directive(projectDir, ["intent", "switch", "archive"]);
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("aidlc.ts engine intent switch birth");
+      expect(d.message).toContain("aidlc.ts engine intent switch archive");
 
       const r = runDispatcher(REPO_ROOT, [
         "engine",
         "intent",
         "switch",
-        "birth",
+        "archive",
         "--project-dir",
         projectDir,
       ]);
       expect(r.status).toBe(0);
-      expect(r.stdout).toContain("Now working on `birth`.");
+      expect(r.stdout).toContain("Now working on `archive`.");
       expect(r.stdout).not.toContain("Active intent");
       expect(r.stderr).toBe("");
       expect(readFileSync(registry, "utf-8")).toBe(before);
-      expect(readFileSync(join(projectDir, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim()).toBe("260711-birth");
+      expect(readFileSync(join(projectDir, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim()).toBe("260711-archive");
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
+  // A word after `intent` or `space` that is neither a verb nor a record's exact
+  // name never becomes a name and never reaches the person as "Unknown intent":
+  // the engine hands the agent the noun's verbs, the records there and the words
+  // whole, to read what the person meant (a mistyped verb or name, or something
+  // the noun cannot do) and run that command, or ask them once.
+  const INTENT_VERB_LIST = "list, switch <name>, create, archive <name>, unarchive <name>, add-repo <name>, remove-repo <name>";
+  const SPACE_VERB_LIST = "list, switch <name>, create <name>";
+  function activeIntentCursor(projectDir: string): string {
+    const path = join(projectDir, "aidlc", "spaces", "default", "intents", "active-intent");
+    return existsSync(path) ? readFileSync(path, "utf-8") : "";
+  }
+  function expectUnknownWordStep(d: Record<string, string>, noun: "intent" | "space", typed: string): void {
+    expect(d.kind, JSON.stringify(d)).toBe("print");
+    expect(d.narration, JSON.stringify(d)).toBeUndefined();
+    expect(d.message).toContain(`The ${noun} verbs are: ${noun === "intent" ? INTENT_VERB_LIST : SPACE_VERB_LIST}`);
+    for (const verb of noun === "intent" ? INTENT_VERBS : SPACE_VERBS) expect(d.message).toContain(verb);
+    expect(d.message).toContain(`The person typed: "${typed}"`);
+    expect(d.message).toContain("Read what they meant and run that command; if you cannot tell, ask them once in plain words.");
+    expect(d.message).toContain("nothing ran and nothing changed");
+    expect(d.message).not.toContain("Unknown");
+    expect(d.message).not.toContain("reserved");
+  }
+
+  test("a word that is neither a verb nor an intent goes to the agent with the verbs and the intents, whole", () => {
+    const projectDir = scratchProject();
+    try {
+      seedIntent(projectDir, "auth", "260711-auth");
+      const cursor = activeIntentCursor(projectDir);
+      // A verb that does not exist; a verb mistyped; a name mistyped; a verb
+      // typed by its name.
+      for (const [typed, args] of [
+        ["intent show", ["intent", "show"]],
+        ["intent rename foo", ["intent", "rename", "foo"]],
+        ["intent swtich auth", ["intent", "swtich", "auth"]],
+        ["intent auht", ["intent", "auht"]],
+        ["intent switch auht", ["intent", "switch", "auht"]],
+      ] as const) {
+        const d = directive(projectDir, [...args]);
+        expectUnknownWordStep(d, "intent", typed);
+        expect(d.message, typed).toContain("The intents here are: auth.");
+        expect(d.message, typed).not.toContain("engine intent show");
+        expect(d.message, typed).not.toContain("engine intent switch auht");
+      }
+      // Rename is no intent verb: the agent reads that from the list it is given.
+      expect(INTENT_VERB_LIST).not.toContain("rename");
+      // The classifier agrees when it knows the project: none of these is run off-band.
+      for (const args of [["intent", "show"], ["intent", "auht"], ["intent", "switch", "auht"], ["intent", "auth", "fix", "it"], ["intent", "switch", "auth", "fix", "it"]]) {
+        expect(classifyTerminalCommand(args, projectDir), args.join(" ")).toBeNull();
+      }
+      expect(classifyTerminalCommand(["intent", "auth"], projectDir)).toEqual({ subcommand: "intent", arg: "auth", source: "workspace-verb" });
+      expect(classifyTerminalCommand(["intent", "switch", "auth"], projectDir)).toEqual({ subcommand: "intent", args: ["switch", "auth"], source: "workspace-verb" });
+      // Nothing was selected by any of it.
+      expect(activeIntentCursor(projectDir)).toBe(cursor);
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
+  test("the unknown-word step lists the recent intents, capped, and says how many more", () => {
+    const projectDir = scratchProject();
+    try {
+      const intentsRoot = join(projectDir, "aidlc", "spaces", "default", "intents");
+      mkdirSync(intentsRoot, { recursive: true });
+      writeFileSync(join(projectDir, "aidlc", "active-space"), "default\n", "utf-8");
+      const slugs = Array.from({ length: 23 }, (_, i) => `work-${String(i + 1).padStart(2, "0")}`);
+      writeFileSync(join(intentsRoot, "intents.json"), `${JSON.stringify(slugs.map((slug, i) =>
+        ({ uuid: `00000000-0000-7000-8000-${String(i + 1).padStart(12, "0")}`, slug, dirName: `2607${String(i + 1).padStart(2, "0")}-${slug}`, status: "in-flight" })), null, 2)}\n`, "utf-8");
+      const d = directive(projectDir, ["intent", "wrok-23"]);
+      expectUnknownWordStep(d, "intent", "intent wrok-23");
+      // Newest first, twenty of them, the rest counted.
+      expect(d.message).toContain(`The intents here are: ${[...slugs].reverse().slice(0, 20).join(", ")} (and 3 more; `);
+      expect(d.message).toContain("intent list --all` shows them all).");
+      expect(d.message).not.toContain("work-01,");
+      expect(d.message).not.toContain("work-03,");
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
+  test("a word that is neither a verb nor a space goes to the agent with the verbs and the spaces", () => {
+    const projectDir = scratchProject();
+    try {
+      mkdirSync(join(projectDir, "aidlc", "spaces", "teamb", "intents"), { recursive: true });
+      writeFileSync(join(projectDir, "aidlc", "active-space"), "default\n", "utf-8");
+      for (const [typed, args] of [
+        ["space show", ["space", "show"]],
+        ["space rename foo", ["space", "rename", "foo"]],
+        ["space swtich teamb", ["space", "swtich", "teamb"]],
+        ["space teanb", ["space", "teanb"]],
+        ["space switch teanb", ["space", "switch", "teanb"]],
+      ] as const) {
+        const d = directive(projectDir, [...args]);
+        expectUnknownWordStep(d, "space", typed);
+        expect(d.message, typed).toContain("The spaces here are: teamb, default.");
+      }
+      expect(classifyTerminalCommand(["space", "show"], projectDir)).toBeNull();
+      expect(classifyTerminalCommand(["space", "teamb"], projectDir)).toEqual({ subcommand: "space", arg: "teamb", source: "workspace-verb" });
+      expect(readFileSync(join(projectDir, "aidlc", "active-space"), "utf-8")).toBe("default\n");
+      // A space really named show switches by its exact name, like any other.
+      mkdirSync(join(projectDir, "aidlc", "spaces", "show", "intents"), { recursive: true });
+      const d = directive(projectDir, ["space", "show"]);
+      expect(d.kind, JSON.stringify(d)).toBe("print");
+      expect(d.message).toContain("aidlc.ts engine space show");
+      // With no records at all, the step says so instead of listing.
+      const empty = scratchProject();
+      try {
+        expect(directive(empty, ["intent", "show"]).message).toContain("No intent exists here yet.");
+      } finally {
+        cleanup(empty);
+      }
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
+  test("words after a name switch and reach the agent whole, flags included", () => {
+    const projectDir = scratchProject();
+    try {
+      seedIntent(projectDir, "auth", "260711-auth");
+      for (const [args, words] of [
+        [["intent", "auth", "fix", "the", "login", "bug", "today"], "fix the login bug today"],
+        [["intent", "switch", "auth", "fix", "the", "login", "bug", "today"], "fix the login bug today"],
+        [["intent", "auth", "--guard-policy", "relaxed"], "--guard-policy relaxed"],
+        [["intent", "switch", "auth", "--guard-policy", "relaxed"], "--guard-policy relaxed"],
+      ] as const) {
+        const d = directive(projectDir, [...args]);
+        expect(d.kind, args.join(" ")).toBe("print");
+        expect(d.message, args.join(" ")).toContain(args[1] === "switch" ? "aidlc.ts engine intent switch auth`" : "aidlc.ts engine intent auth`");
+        expect(d.message, args.join(" ")).toContain(`The person also asked: "${words}". Act on that for the work just selected`);
+        expect(d.message, args.join(" ")).toContain("ask them once in plain words if you cannot tell what they meant");
+        expect(d.message, args.join(" ")).not.toContain("then stop");
+        expect(d.message, args.join(" ")).not.toContain("Usage:");
+      }
+      // Nothing is read into the words by the tool: the switch command carries none of them.
+      expect(directive(projectDir, ["intent", "auth", "--guard-policy", "relaxed"]).message).not.toContain("engine intent auth --guard-policy");
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
+  // `/aidlc intent show` selects the record named show, as any other name does;
+  // the words rename, show and birth are no longer held back for verbs to come.
+  test("engine and dispatcher switch to a record named show without the switch verb", () => {
+    const projectDir = scratchProject();
+    try {
+      seedIntent(projectDir, "show", "260711-show");
+      const registry = join(projectDir, "aidlc", "spaces", "default", "intents", "intents.json");
+      const before = readFileSync(registry, "utf-8");
+
+      const d = directive(projectDir, ["intent", "show"]);
+      expect(d.kind, JSON.stringify(d)).toBe("print");
+      expect(d.message).toContain("aidlc.ts engine intent show");
+      expect(d.message).not.toContain("reserved");
+
+      const r = runDispatcher(REPO_ROOT, ["engine", "intent", "show", "--project-dir", projectDir]);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toContain("Now working on `show`.");
+      expect(r.stderr).toBe("");
+      expect(readFileSync(registry, "utf-8")).toBe(before);
+      expect(readFileSync(join(projectDir, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim()).toBe("260711-show");
+      // A shell has no agent to hand extra words to: the dispatcher says the usage line.
+      const extra = runDispatcher(REPO_ROOT, ["engine", "intent", "show", "extra", "--project-dir", projectDir]);
+      expect(extra.status).not.toBe(0);
+      expect(`${extra.stdout}${extra.stderr}`).toContain("Usage: aidlc intent switch <name>");
+      // Creation is unchanged: a record may be named show.
+      const made = scratchProject();
+      try {
+        expect(() => createIntent(made, "show", "default", "feature")).not.toThrow();
+      } finally {
+        cleanup(made);
+      }
     } finally {
       cleanup(projectDir);
     }
@@ -552,10 +754,10 @@ describe("utility handlers and reservation chokepoints", () => {
     const projectDir = scratchProject();
     try {
       mkdirSync(join(projectDir, "aidlc", "spaces", "list", "intents"), { recursive: true });
-      seedIntent(projectDir, "birth", "260711-birth");
+      seedIntent(projectDir, "archive", "260711-archive");
       const r = runUtility(projectDir, ["doctor", "--verbose"]);
       expect(r.out).toContain(
-        "Workspace names shadowing grammar verbs (advisory): space 'list', intent 'birth' - reachable via explicit switch; consider renaming.",
+        "Workspace names shadowing grammar verbs (advisory): space 'list', intent 'archive' - reachable via explicit switch; consider renaming.",
       );
     } finally {
       cleanup(projectDir);
@@ -595,6 +797,8 @@ describe("Kiro quoted argv tokenizer", () => {
   test("engine directives preserve multi-word workspace arguments", () => {
     const projectDir = scratchProject();
     try {
+      // The space the switch selects is stored under its slug.
+      mkdirSync(join(projectDir, "aidlc", "spaces", "my-space", "intents"), { recursive: true });
       const cases = [
         {
           args: ["space", "create", "My Space"],

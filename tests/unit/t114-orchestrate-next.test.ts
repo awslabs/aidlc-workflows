@@ -868,13 +868,33 @@ describe("t114 cutover: no --args swallow", () => {
 // <name> arg, so the engine just passes args[1] through when present.
 // ===========================================================================
 describe("t114 workspace verbs -> terminal print naming the handler", () => {
+  // A name is the switch only for a record that exists; these seed one. A name
+  // that is no record is still a print (the agent reads it), never freeform.
+  function seedSpace(dir: string, name: string): void {
+    mkdirSync(join(dir, "aidlc", "spaces", name, "intents"), { recursive: true });
+  }
+  function seedIntentRow(dir: string, slug: string): void {
+    const intents = join(dir, "aidlc", "spaces", "default", "intents");
+    mkdirSync(intents, { recursive: true });
+    const registry = join(intents, "intents.json");
+    const rows = existsSync(registry) ? JSON.parse(readFileSync(registry, "utf-8")) as unknown[] : [];
+    rows.push({ uuid: `00000000-0000-7000-8000-${slug.padEnd(12, "0").slice(0, 12)}`, slug, dirName: `260711-${slug}`, status: "in-flight" });
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`, "utf-8");
+  }
+
   test("20: `space teamB` -> print naming aidlc.ts engine space teamB (switch, not freeform)", () => {
     proj = createOrchestrationTestProject();
+    seedSpace(proj, "teamb");
     const out = runNext(proj, ["space", "teamB"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("aidlc.ts engine space teamB");
     // It must NOT be misread as a new-work freeform intent that advances state.
     expect(out).not.toContain('"kind":"run-stage"');
+    // Nor is a name that is no space: the agent is handed it to read.
+    const unknown = runNext(proj, ["space", "teamc"]).out;
+    expect(unknown).toContain('"kind":"print"');
+    expect(unknown).toContain("The person typed: \\\"space teamc\\\"");
+    expect(unknown).not.toContain('"kind":"run-stage"');
   });
 
   test("21: bare `space` (no arg) -> print naming aidlc.ts engine space (read-only listing)", () => {
@@ -888,6 +908,7 @@ describe("t114 workspace verbs -> terminal print naming the handler", () => {
 
   test("22: `intent some-slug` -> print naming aidlc.ts engine intent some-slug", () => {
     proj = createOrchestrationTestProject();
+    seedIntentRow(proj, "some-slug");
     const out = runNext(proj, ["intent", "some-slug"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("aidlc.ts engine intent some-slug");
@@ -914,6 +935,8 @@ describe("t114 workspace verbs -> terminal print naming the handler", () => {
     // says outright that no workflow step follows, with a workflow mid-stage.
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
+    seedSpace(proj, "teamb");
+    seedIntentRow(proj, "some-slug");
     const boundary =
       "Do not call `next` or `report`, run a stage, or offer to resume a workflow after this command";
     for (const args of [["space", "teamB"], ["space"], ["intent", "some-slug"], ["space-create", "teamB"]]) {
