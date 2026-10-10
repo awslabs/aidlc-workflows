@@ -163,12 +163,18 @@ export function codexHeadlessArgs(...args: string[]): string[] {
   return ["-c", "features.default_mode_request_user_input=false", ...args];
 }
 
+/** The argv of one headless `codex exec` turn for `prompt`. The "--" ends codex exec's own options, so a line that
+ * is one of its subcommand words (`help`, `resume`) or starts with a dash is still the prompt, never an argument. */
+export function codexExecArgs(prompt: string): string[] {
+  return codexHeadlessArgs("exec", "--", prompt);
+}
+
 export function execCodex(
   proj: string,
   home: string,
   prompt: string,
 ): ExecResult {
-  const argv = codexHeadlessArgs("exec", prompt);
+  const argv = codexExecArgs(prompt);
   const turn = codexPersonTurn(proj, prompt);
   const result = spawnSync(CODEX_BIN, argv, {
     cwd: proj,

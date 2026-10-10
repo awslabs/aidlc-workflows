@@ -399,3 +399,19 @@ export function messageRecord(proj: string, prompt: string): StoredRecord | null
     .map((f) => JSON.parse(readFileSync(join(dir, f), "utf-8")) as StoredRecord & { at: string });
   return records.find((r) => r.text === prompt) ?? records.sort((a, b) => a.at.localeCompare(b.at)).at(-1) ?? null;
 }
+
+// What Codex said to the person: `codex exec` logs every event to stderr; the agent's messages follow a line that is
+// exactly "codex" and run until the next event marker (a hook, an exec, a user turn, the token count, the workspace diff
+// codex exec prints after the last message). The tool log, the engine's JSON and the diff are not words to the person.
+// Without any marker the agent never spoke (codex exec stopped at its own usage text or error): nothing is its words.
+export function codexWords(out: string): string {
+  const blocks: string[] = [];
+  let current: string[] | null = null;
+  for (const line of out.split("\n")) {
+    if (line === "codex") { current = []; blocks.push(""); continue; }
+    if (current && /^(hook: |exec$|user$|thinking$|tokens used$|diff --git |\d{4}-\d{2}-\d{2}T\S+ (ERROR|WARN))/.test(line)) { blocks[blocks.length - 1] = current.join("\n").trim(); current = null; continue; }
+    if (current) current.push(line);
+  }
+  if (current) blocks[blocks.length - 1] = current.join("\n").trim();
+  return blocks.filter((b) => b.length > 0).join("\n\n");
+}
