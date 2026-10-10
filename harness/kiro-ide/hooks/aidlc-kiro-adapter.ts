@@ -3839,10 +3839,12 @@ if (result.code === 2 && result.stderr) process.stderr.write(result.stderr);
 return result.code;
 }
 
-// What the agent hears when the person's message never reached the hook. It
-// names no engine part: the agent repeats these words to the person.
+// What the agent hears when the chat's last message never reached the hook. It
+// names no engine part (the agent repeats these words to the person), and it is
+// true whoever sent that message: with no payload, nobody knows whether it was
+// the person's or one Kiro made.
 const NO_MESSAGE_AGENT_LINE =
-  "Tell the person in one line: AI-DLC did not receive their last message, so if it answered an AI-DLC question they will be asked it again.";
+  "Tell the person in one line: AI-DLC did not receive the last message in this chat, so if that message answered an AI-DLC question, the question will be asked again.";
 
 // The safety limit on the 1.x stdin read. Kiro writes the payload and closes
 // stdin, so the read ends when Kiro has finished sending, however late (a

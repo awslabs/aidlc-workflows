@@ -5541,7 +5541,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
       expect(r.stdinProbed).toBe(true);
       expect(readAudit(dir)).not.toContain("HUMAN_TURN");
       expect(messageTexts(dir)).toEqual([]);
-      expect(r.stdout).toContain("AI-DLC did not receive their last message");
+      expect(r.stdout).toContain("AI-DLC did not receive the last message in this chat");
       const dropFile = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "kiro-adapter.drops");
       expect(existsSync(dropFile)).toBe(true);
       expect(readFileSync(dropFile, "utf-8")).toContain("record-human-turn: no payload");
