@@ -151,8 +151,9 @@ list without prompts. A saved model your account no longer offers fails every
 prompt, so setup asks for another instead of keeping it. `--dry-run` shows the
 personal Kiro settings change too and writes nothing. When Kiro refuses a write,
 AI-DLC says exactly what was saved and `config models` exits 5 (action needed).
-`aidlc doctor` checks the live setting: the model is still offered, it has an
-effort the model offers, and no project file overrides it. An effort you saved
+`aidlc doctor` checks the live setting: the model is still offered, its saved
+effort is one the model offers (when a preset is recorded and Kiro lists the
+model's effort levels), and no project file overrides it. An effort you saved
 that differs from the preset is yours: doctor names the preset's level and the
 command that applies it, without a warning. Refreshing a project set
 up by an earlier release removes AI-DLC's old effort map (`claude-opus-4.8` at

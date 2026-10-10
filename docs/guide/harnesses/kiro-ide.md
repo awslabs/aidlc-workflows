@@ -253,7 +253,8 @@ saved in your personal Kiro settings (`~/.kiro/settings/cli.json`). It is a
 Kiro CLI setting: Kiro IDE uses the model you choose in its own model picker.
 On this row setup saves the model only, never an effort, and recommends no
 model over Kiro auto: Enter keeps Kiro auto, and in Kiro IDE's own terminal
-setup does not ask and says where each host chooses its model.
+the recommended setup does not ask and says where each host chooses its model
+(Customize still asks in its step 2).
 `aidlc config models --session-model <id>` saves one later.
 
 If doctor reports "AIDLC hooks have not run in this project yet" after you have

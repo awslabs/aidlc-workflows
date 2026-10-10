@@ -705,7 +705,10 @@ describe("t299 first-run setup wizard", () => {
     "claude-opus-5": ["low", "medium", "high", "xhigh", "max"],
     "claude-sonnet-4.6": ["low", "medium", "high", "max"],
   };
-  function kiroSeam(current: Record<string, unknown>): { env: NodeJS.ProcessEnv; writes: string } {
+  function kiroSeam(
+    current: Record<string, unknown>,
+    extra: Record<string, unknown> = {},
+  ): { env: NodeJS.ProcessEnv; writes: string } {
     const writes = join(temp("aidlc-t299-kiro-"), "writes.jsonl");
     return {
       writes,
@@ -715,6 +718,7 @@ describe("t299 first-run setup wizard", () => {
           current,
           levels: KIRO_LEVELS,
           writes,
+          ...extra,
         }),
       },
     };
@@ -871,6 +875,19 @@ describe("t299 first-run setup wizard", () => {
     });
     expect(choose.status, choose.stdout + choose.stderr).toBe(0);
     expect(kiroWrites(chosen.writes)).toEqual([["settings", "chat.defaultModel", "claude-opus-5"]]);
+    expect(choose.stdout).toContain("Kiro CLI uses it in every project; Kiro IDE uses its own model picker:");
+    expect(choose.stdout).not.toContain("They apply to every Kiro project you open");
+
+    // A write Kiro refuses names the command that saves the chosen model again.
+    const refused = kiroSeam({}, { failWrite: "chat.defaultModel" });
+    const failed = runWizard("6\n\n2\n", {
+      harnesses: { claude: { found: false } },
+      env: refused.env,
+      probed: ["kiro", "kiro-ide"],
+    });
+    expect(failed.status, failed.stdout + failed.stderr).toBe(0);
+    expect(failed.stdout).toMatch(/fix: \S.* config models --session-model claude-opus-5\n/);
+    expect(failed.stdout).not.toContain("--session-model <id>`");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a write Kiro refuses is listed with what needs the person, not printed as saved", () => {

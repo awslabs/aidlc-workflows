@@ -8066,7 +8066,9 @@ async function applyFirstRunKiroSession(choices: FirstRunChoices): Promise<KiroS
     preset: distribution !== "kiro" || choices.preset === "unchanged" ? null : choices.preset,
     fetchLevels: true,
     ...(kiro.fillEffortOnly ? { fillEffortOnly: true } : {}),
+    ...(distribution === "kiro-ide" ? { kiroCliOnly: true } : {}),
     modelsCommand: kiroSessionModelsCommand(distribution),
+    retryCommand: kiroSessionRetryCommand(distribution, kiro.setModel?.id),
     doctorCommand: `${aidlcInvocation()} doctor`,
   });
   if (kiro.unasked && result.model === null) {
@@ -8141,7 +8143,7 @@ function renderFirstRunEnding(
           section: "models" as const,
           id: "kiro-session-unsaved",
           message: (kiro.lines.at(-1) ?? "Kiro did not save your session model.").replace(/ Run `[^`]+` to try again\.$/, ""),
-          command: kiroSessionModelsCommand(choices.candidate.stamp.distribution),
+          command: kiroSessionRetryCommand(choices.candidate.stamp.distribution, choices.kiro?.setModel?.id),
         }]
       : []),
   ];
@@ -8215,6 +8217,14 @@ function kiroSessionRow(distribution: string): boolean {
 // session model is named with --session-model.
 function kiroSessionModelsCommand(distribution: string): string {
   return configCommand(distribution === "kiro-ide" ? "models --session-model <id>" : "models");
+}
+
+// What repeats a session request Kiro refused: on Kiro IDE's row, where
+// `config models` offers no session model, the model the person chose.
+function kiroSessionRetryCommand(distribution: string, model: string | undefined): string {
+  return distribution === "kiro-ide" && model
+    ? configCommand(`models --session-model ${model}`)
+    : kiroSessionModelsCommand(distribution);
 }
 
 function kiroSessionFor(distribution: string): FirstRunKiroSession | null {
@@ -10114,7 +10124,9 @@ function kiroModelsPlan(input: {
       preset: input.distribution === "kiro" ? input.preset : null,
       fetchLevels: input.fetchLevels,
       keepExistingEffort: input.keepExistingEffort,
+      ...(input.distribution === "kiro-ide" ? { kiroCliOnly: true } : {}),
       modelsCommand: kiroSessionModelsCommand(input.distribution),
+      retryCommand: kiroSessionRetryCommand(input.distribution, input.setModel),
       doctorCommand: `${aidlcInvocation()} doctor`,
     },
   };
@@ -10172,6 +10184,7 @@ function kiroSessionData(result: KiroSessionResult): Record<string, unknown> {
       model: result.model,
       effort: result.effort,
       saved: result.saved,
+      ...(result.wouldSave ? { wouldSave: result.wouldSave } : {}),
       lines: result.lines,
     },
   };
@@ -10180,22 +10193,27 @@ function kiroSessionData(result: KiroSessionResult): Record<string, unknown> {
 async function emitKiroSessionResult(
   result: KiroSessionResult,
   options: ReturnType<typeof globalOptions>,
-  modelsCommand = configCommand("models"),
+  plan: KiroSessionPlan,
 ): Promise<void> {
   if (options.mode === "human") writeKiroSessionLines(result.lines);
+  const sessionModel = plan.kiroCliOnly ? "Kiro CLI session model" : "Kiro session model";
   emitResult(
     result.ok
       ? success(
-        result.saved.model || result.saved.effort ? "saved the Kiro session model" : "session model unchanged",
+        result.wouldSave?.model || result.wouldSave?.effort
+          ? `would save the ${sessionModel}`
+          : result.saved.model || result.saved.effort
+          ? `saved the ${sessionModel}`
+          : "session model unchanged",
         kiroSessionData(result),
       )
       : {
         ...failure(
           result.saved.model
             ? `Kiro saved the session model ${result.saved.model} but not its effort`
-            : "the Kiro session model was not saved",
+            : `the ${sessionModel} was not saved`,
           EXIT.actionNeeded,
-          modelsCommand,
+          plan.retryCommand ?? plan.modelsCommand,
         ),
         status: "action-needed",
         data: kiroSessionData(result),
@@ -11662,7 +11680,7 @@ export async function main(
             dryRun: argv.includes("--dry-run"),
           }),
           options,
-          preparedModels.kiroOnly.modelsCommand,
+          preparedModels.kiroOnly,
         );
         return;
       }
@@ -13037,7 +13055,13 @@ export async function main(
     );
     emitResult(
       kiroUnsaved
-        ? { ...configured, ok: false, code: EXIT.actionNeeded, status: "action-needed", remediation: configCommand("models") }
+        ? {
+          ...configured,
+          ok: false,
+          code: EXIT.actionNeeded,
+          status: "action-needed",
+          remediation: pendingKiroSession?.retryCommand ?? configCommand("models"),
+        }
         : configured,
       options,
     );

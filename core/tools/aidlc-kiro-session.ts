@@ -501,7 +501,13 @@ export type KiroSessionPlan = {
   fillEffortOnly?: boolean;
   // Report what would be saved and write nothing.
   dryRun?: boolean;
+  // Kiro IDE's row: the session model is Kiro CLI's alone (Kiro IDE does not
+  // read it), so the lines say where it applies.
+  kiroCliOnly?: boolean;
   modelsCommand: string;
+  // The command that repeats this request after a write Kiro refused, when
+  // modelsCommand alone does not (Kiro IDE's row names the model).
+  retryCommand?: string;
   doctorCommand: string;
 };
 
@@ -511,6 +517,8 @@ export type KiroSessionResult = {
   model: string | null;
   effort: KiroEffort | null;
   saved: KiroSessionWrite;
+  // A dry run's write, listed and not made.
+  wouldSave?: KiroSessionWrite;
 };
 
 // Apply a session plan: save the model when one was chosen, then the preset's
@@ -530,7 +538,7 @@ export async function applyKiroSessionPlan(
       lines: [
         `Saving your personal Kiro settings stopped (${
           error instanceof Error ? error.message : String(error)
-        }). Run \`${plan.modelsCommand}\` to finish.`,
+        }). Run \`${plan.retryCommand ?? plan.modelsCommand}\` to finish.`,
       ],
       model: plan.setModel ?? plan.session.model,
       effort: null,
@@ -594,25 +602,30 @@ async function applyPlan(
     lines.push(`Would save in your personal Kiro settings (${kiroPersonalSettingsPath(env)}):`);
     if (write.model) lines.push(`  model    ${write.model}`);
     if (write.effort) lines.push(`  effort   ${write.effort.effort}, for ${write.effort.model}`);
-    return { ok: true, lines, model, effort, saved: {} };
+    return { ok: true, lines, model, effort, saved: {}, wouldSave: write };
   }
   const saved = writeKiroPersonalSession(plan.cli, write, env);
   if (!saved.ok) {
+    const retry = plan.retryCommand ?? plan.modelsCommand;
     const modelSaved = saved.savedModel && write.model !== undefined;
     lines.push(
       modelSaved
-        ? `Kiro saved the model ${write.model} in your personal Kiro settings but not its effort, so ${write.model} keeps Kiro's own effort. Run \`${plan.modelsCommand}\` to try again.`
-        : `${saved.reason}, so your personal Kiro settings are unchanged. Run \`${plan.modelsCommand}\` to try again.`,
+        ? `Kiro saved the model ${write.model} in your personal Kiro settings but not its effort, so ${write.model} keeps Kiro's own effort. Run \`${retry}\` to try again.`
+        : `${saved.reason}, so your personal Kiro settings are unchanged. Run \`${retry}\` to try again.`,
     );
     return { ok: false, lines, model, effort, saved: modelSaved ? { model: write.model } : {} };
   }
   lines.push(
-    `Saved in your personal Kiro settings (${kiroPersonalSettingsPath(env)}). They apply to every Kiro project you open:`,
+    plan.kiroCliOnly
+      ? `Saved in your personal Kiro settings (${kiroPersonalSettingsPath(env)}). Kiro CLI uses it in every project; Kiro IDE uses its own model picker:`
+      : `Saved in your personal Kiro settings (${kiroPersonalSettingsPath(env)}). They apply to every Kiro project you open:`,
   );
   if (write.model) lines.push(`  model    ${write.model}`);
   if (write.effort) lines.push(`  effort   ${write.effort.effort}, for ${write.effort.model}`);
   lines.push(
-    `Your other models' settings were not changed. Change this any time with \`${plan.modelsCommand}\`, or inside Kiro with /model.`,
+    plan.kiroCliOnly
+      ? `Change it any time with \`${plan.modelsCommand}\`, or inside Kiro CLI with /model.`
+      : `Your other models' settings were not changed. Change this any time with \`${plan.modelsCommand}\`, or inside Kiro with /model.`,
   );
   return { ok: true, lines, model, effort, saved: write };
 }

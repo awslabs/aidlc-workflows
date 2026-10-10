@@ -1312,6 +1312,50 @@ describe("t293 config models CLI", () => {
     expect(unknown.stdout + unknown.stderr).toContain("config models --session-model <id>");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("Kiro IDE's row says the session model is Kiro CLI's, in a preview, a save, and a retry", () => {
+    const project = install("kiro-ide");
+    const seam = kiroSeam({});
+    const args = ["config", "models", "--project-dir", project, "--session-model", "claude-sonnet-4.6"];
+    const preview = run([...args, "--dry-run"], project, { ...runtimeEnv(), ...seam.env });
+    expect(preview.status, preview.stdout + preview.stderr).toBe(0);
+    expect(preview.stdout).toContain("Would save in your personal Kiro settings");
+    expect(preview.stdout).toContain("would save the Kiro CLI session model");
+    expect(preview.stdout).not.toContain("session model unchanged");
+    const quiet = run([...args, "--dry-run", "--quiet"], project, { ...runtimeEnv(), ...seam.env });
+    expect(quiet.stdout.trim()).toBe("would save the Kiro CLI session model");
+    const json = run([...args, "--dry-run", "--json"], project, { ...runtimeEnv(), ...seam.env });
+    const payload = JSON.parse(json.stdout) as { message: string; data: { kiroSession: { saved: object; wouldSave: object } } };
+    expect(payload.message).toBe("would save the Kiro CLI session model");
+    expect(payload.data.kiroSession).toEqual(expect.objectContaining({ saved: {}, wouldSave: { model: "claude-sonnet-4.6" } }));
+    expect(kiroWrites(seam.writes)).toEqual([]);
+
+    const saved = run(args, project, { ...runtimeEnv(), ...seam.env });
+    expect(saved.status, saved.stdout + saved.stderr).toBe(0);
+    expect(saved.stdout).toContain("Kiro CLI uses it in every project; Kiro IDE uses its own model picker:");
+    expect(saved.stdout).toContain("inside Kiro CLI with /model");
+    expect(saved.stdout).not.toContain("They apply to every Kiro project you open");
+    expect(saved.stdout).toContain("saved the Kiro CLI session model");
+
+    // A write Kiro refuses names the command that repeats this exact request.
+    const refused = kiroSeam({}, { failWrite: "chat.defaultModel" });
+    const failed = run([...args, "--json"], project, { ...runtimeEnv(), ...refused.env });
+    expect(failed.status, failed.stdout + failed.stderr).toBe(5);
+    const failure = JSON.parse(failed.stdout) as {
+      message: string;
+      remediation: string;
+      data: { kiroSession: { lines: string[] } };
+    };
+    expect(failure.message).toBe("the Kiro CLI session model was not saved");
+    expect(failure.remediation).toEndWith(" config models --session-model claude-sonnet-4.6");
+    expect(failure.data.kiroSession.lines.at(-1)).toEndWith(" config models --session-model claude-sonnet-4.6` to try again.");
+    const combined = run([
+      ...args, "--project", "--preset", "thorough", "--yes", "--json",
+    ], project, { ...runtimeEnv(), ...refused.env });
+    expect(combined.status, combined.stdout + combined.stderr).toBe(5);
+    expect((JSON.parse(combined.stdout) as { remediation: string }).remediation)
+      .toEndWith(" config models --session-model claude-sonnet-4.6");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("a Kiro CLI agent setting leaves the person's session effort alone", () => {
     const project = install("kiro");
     writeFileSync(projectSettingsPath(project), `${JSON.stringify({ schemaVersion: 1, models: { schemaVersion: 1, preset: "balanced" } })}\n`);
