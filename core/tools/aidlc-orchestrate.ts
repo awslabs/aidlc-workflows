@@ -281,7 +281,9 @@ import {
   parseTeamBoardArgs,
   parseWorkspaceCommand,
   nextArgsCarryRequestWords,
+  type NextLineReading,
   nextTokenKind,
+  readNextLine,
   READ_ONLY_FLAGS,
   readKiroIdeLegacyPlanApprovalHost,
   readAllAuditShards,
@@ -3844,6 +3846,14 @@ export interface ParsedFlags {
   /** The value that token took, when a word followed it, so the print names both. */
   untakenFlagValue?: string;
   /**
+   * The line has two readings and only the agent can tell which the person
+   * meant, so `next` took nothing from it: a flag it takes with a value its
+   * table does not hold, a plan word at the start of their own sentence, or one
+   * of this engine's nouns with their sentence after it. `intent` holds the
+   * line whole. routeNext returns the one reading step and nothing else runs.
+   */
+  readingStep?: Exclude<NextLineReading, { kind: "exact" } | { kind: "words" } | { kind: "untaken-flag" }>;
+  /**
    * The person's words as they typed them, when `intent` cannot hold them whole:
    * a flag-shaped token this engine does not take is folded out of `intent`,
    * because `next` acts on none of the line, but it is still one of their words
@@ -3879,6 +3889,18 @@ const ENTRY_WORD_PREFIX = /^[/$]aidlc\s+/i;
 
 export function parseNextFlags(argv: string[]): ParsedFlags {
   const args = withoutEntryWord(argv);
+  // Which of the three ways this line reads, decided once by readNextLine in
+  // aidlc-lib.ts, which the prompt-time seams read too, so nothing can act on a
+  // line the engine would hand to the agent. On a reading step nothing of the
+  // line is taken here at all: no plan peeled off their sentence, no noun run
+  // as a command, no value refused. `intent` keeps the line whole, for the
+  // record and for the print, and routeNext returns the one reading step.
+  // An untaken flag keeps its own fields, set by the loop below.
+  const reading = readNextLine(args);
+  if (reading.kind !== "exact" && reading.kind !== "words" && reading.kind !== "untaken-flag") {
+    const said = args.join(" ").replace(ENTRY_WORD_PREFIX, "").trim();
+    return { readingStep: reading, ...(said.length > 0 ? { intent: said } : {}) };
+  }
   // A SOLE bare `help` / `-h` token is a help REQUEST, not intent text. Without
   // this, the token falls into intentWords and the freeform funnel offers to
   // create an intent literally named "help" (fresh workspace) or silently
@@ -4328,7 +4350,8 @@ export function nextArgsAreOnlyWords(args: string[]): boolean {
   // for the question they answered. Only what `next` does take makes it a
   // command. The agent still gets the print naming the token it could not take.
   const read = Object.keys(parsed).filter((key) =>
-    key !== "untakenFlag" && key !== "untakenFlagValue" && key !== "personWords");
+    key !== "untakenFlag" && key !== "untakenFlagValue" && key !== "personWords" &&
+    key !== "readingStep");
   return typeof parsed.intent === "string" && read.length === 1;
 }
 
@@ -7230,6 +7253,46 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // and not a question put to the person about words they may never have typed.
   // No narration, so nothing here reaches them; the agent has their own line in
   // the chat and reads what they meant, then runs `next` again.
+  // The other two readings of a line this engine could not read whole: a value
+  // its own table does not hold, a plan word at the start of their sentence, or
+  // one of its nouns with their sentence after it. Same shape as the untaken
+  // token below, for the same reason: the line has two readings, only the agent
+  // has their chat, and nothing of the line is acted on until it has read it.
+  const step = flags.readingStep;
+  if (step !== undefined) {
+    const next = `${aidlcToolInvocation("orchestrate")} next`;
+    const said = flags.intent ?? "";
+    const theirs = `run \`${next} -- ${said}\`, which keeps every word of theirs`;
+    const ask = "If you cannot tell, ask them once in plain words.";
+    if (step.kind === "value") {
+      emit(printDirective(
+        `\`next\` takes \`${step.flag}\` with ${step.valid.join("|")}, and does not take ` +
+        `\`${step.value}\`. If the person meant one of those, run \`${next}\` again with ` +
+        `\`${step.flag}\` and that word, and their own words after it. ` +
+        `If \`${step.value}\` is part of what they asked for, ${theirs}. ${ask}`,
+      ));
+      return;
+    }
+    if (step.kind === "plan-word") {
+      emit(printDirective(
+        `\`${step.scope}\` is the name of a plan and also the first word of what the person typed, ` +
+        `and \`next\` cannot tell which they meant, so it took nothing from the line. ` +
+        `If they named the plan, run \`${next} --scope ${step.scope} -- ` +
+        `${said.slice(step.scope.length).trim()}\`. ` +
+        `If \`${step.scope}\` is their own word, ${theirs}. ${ask}`,
+      ));
+      return;
+    }
+    emit(printDirective(
+      `\`${step.noun}\` is one of this engine's own nouns and also the first word of what the person ` +
+      `typed, and \`next\` cannot tell which they meant, so it took nothing from the line. ` +
+      `If they meant the \`${step.noun}\` command, run \`${next} ${step.noun} <its verb>\` ` +
+      `(\`${next} ${step.noun} help\` lists them). ` +
+      `If \`${step.noun}\` is their own word, ${theirs}. ${ask}`,
+    ));
+    return;
+  }
+
   if (flags.untakenFlag !== undefined) {
     const open = openPlanApprovalQuestion(resolveProjectDir(projectDir), "");
     const next = `${aidlcToolInvocation("orchestrate")} next`;

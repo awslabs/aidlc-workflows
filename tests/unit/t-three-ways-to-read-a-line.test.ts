@@ -194,8 +194,11 @@ describe("a plan word at the start of their sentence", () => {
   });
 
   test("a plan word alone still acts, and so does the colon form", () => {
+    // A plan word alone acts: the engine's own way of acting on it is the print
+    // that names the creation command for that plan, never a reading step.
     const alone = next(emptyProject(), ["bugfix"]);
-    expect(alone.d.kind, alone.out).not.toBe("print");
+    expect(String(alone.d.message), alone.out).toContain("--scope bugfix");
+    expect(parseNextFlags(["bugfix"]).readingStep, alone.out).toBeUndefined();
     expect(parseNextFlags(["bugfix"]).positionalScope).toBe("bugfix");
     const colon = parseNextFlags(["bugfix:", "Fix duplicate todos"]);
     expect(colon.positionalScope).toBe("bugfix");
