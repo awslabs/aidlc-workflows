@@ -74,7 +74,6 @@
 // per the tool/agent/human split (routing string-building to an LLM would
 // invert the whole thesis).
 
-import { noteSlowReplyAtExit } from "./aidlc-kiro-ide-terminal.ts";
 import {
   createHash,
   randomBytes,
@@ -16229,7 +16228,12 @@ export function main(argv: string[]): void {
 }
 
 if (import.meta.main) {
-  noteSlowReplyAtExit();
+  // Kiro IDE's Command Prompt terminal, Windows only: note at exit a reply Kiro
+  // dropped. Loaded only there, so the dispatcher's front gate and the lean
+  // projections keep their import graph.
+  if (process.env.TERM_PROGRAM === "kiro" && process.platform === "win32") {
+    void import("./aidlc-kiro-ide-terminal.ts").then((m) => m.noteSlowReplyAtExit()).catch(() => {});
+  }
   try {
     main(process.argv.slice(2));
   } catch (e) {

@@ -6,7 +6,6 @@
 // (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
 // because they fire per-question / per-review, not per state transition.
 
-import { noteSlowReplyAtExit } from "./aidlc-kiro-ide-terminal.ts";
 import { reviewRequestNote } from "./aidlc-directive.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
@@ -4560,6 +4559,11 @@ function error(msg: string, changeNotices: readonly string[] = []): never {
 }
 
 if (import.meta.main) {
-  noteSlowReplyAtExit();
+  // Kiro IDE's Command Prompt terminal, Windows only: note at exit a reply Kiro
+  // dropped. Loaded only there, so the dispatcher's front gate and the lean
+  // projections keep their import graph.
+  if (process.env.TERM_PROGRAM === "kiro" && process.platform === "win32") {
+    void import("./aidlc-kiro-ide-terminal.ts").then((m) => m.noteSlowReplyAtExit()).catch(() => {});
+  }
   main(process.argv.slice(2));
 }

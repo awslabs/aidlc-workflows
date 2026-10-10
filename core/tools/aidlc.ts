@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { noteSlowReplyAtExit } from "./aidlc-kiro-ide-terminal.ts";
 import { existsSync, readFileSync, realpathSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -3718,7 +3717,12 @@ export async function main(rawArgv: string[]): Promise<void> {
 }
 
 if (import.meta.main) {
-  noteSlowReplyAtExit();
+  // Kiro IDE's Command Prompt terminal, Windows only: note at exit a reply Kiro
+  // dropped. Loaded only there, so the dispatcher's front gate and the lean
+  // projections keep their import graph.
+  if (process.env.TERM_PROGRAM === "kiro" && process.platform === "win32") {
+    void import("./aidlc-kiro-ide-terminal.ts").then((m) => m.noteSlowReplyAtExit()).catch(() => {});
+  }
   // Keep pending stdin and async dispatch alive, while leaving this module
   // synchronous to import (completions imports its route table during dispatch).
   const keepAlive = setInterval(() => {}, 1_000);

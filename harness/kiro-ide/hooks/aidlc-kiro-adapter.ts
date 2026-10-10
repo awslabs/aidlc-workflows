@@ -176,7 +176,6 @@ import {
 } from "../tools/aidlc-testing-posture.ts";
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import { kiroTerminalBreakWarning } from "../tools/aidlc-kiro-ide-terminal.ts";
 import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 import { forgetRulesDelivered, kiroIdeTurnOpen, noteKiroIdeTurn } from "../tools/aidlc-rules-held.ts";
@@ -2303,8 +2302,13 @@ if (target === "verb-intercept") {
   // this message of theirs, and never again on this machine. A line handed
   // over before a tool call was swallowed live; one that comes with the
   // person's message is answered.
-  const breakLine = kiroTerminalBreakWarning();
-  if (breakLine !== "") process.stdout.write(`${breakLine}\n`);
+  // Windows only (Kiro reads the terminal setting there); a test that points
+  // AI-DLC at a settings file of its own names the platform in the same seam.
+  if (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS) {
+    const { kiroTerminalBreakWarning } = await import("../tools/aidlc-kiro-ide-terminal.ts");
+    const breakLine = kiroTerminalBreakWarning();
+    if (breakLine !== "") process.stdout.write(`${breakLine}\n`);
+  }
   const sessionId = terminalSessionId();
   const turn = bumpTurn(sessionId);
   recordPromptEmpty(sessionId, turn);
