@@ -469,6 +469,18 @@ if (args.verbose) {
 const resultsDir = join(logDir, "_results");
 mkdirSync(resultsDir, { recursive: true });
 
+// A test must not inherit the chat of whoever is running it. The engine reads
+// the chat its host names in the agent's own shell (CLAUDE_CODE_SESSION_ID with
+// CLAUDE_PID, KIRO_SESSION_ID, CODEX_THREAD_ID), so a suite started from inside
+// one of those chats would hand every fixture project that live chat's identity
+// and the cases that mean "no chat the engine can name" would stop meaning it.
+// Production keeps reading them; every test that needs one sets it on its own
+// spawn. CLAUDECODE and the rest of the host's variables are left alone: they
+// say which host is running, not which chat.
+for (const hostChat of ["CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "KIRO_SESSION_ID", "CODEX_THREAD_ID"]) {
+  delete process.env[hostChat];
+}
+
 if (args.noLlm) {
   for (const gate of LIVE_MODEL_GATES) process.env[gate] = "0";
 }

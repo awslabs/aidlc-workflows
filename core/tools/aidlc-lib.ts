@@ -6965,24 +6965,52 @@ export function classifyFirstContact(
 // named none: the hook-injected override first, then the process ancestry.
 // Throws SessionResolutionConflictError when the two disagree and the override
 // did not come from a validated hook payload.
+// The chat the host names in the agent's own shell. Each host that names one
+// does it its own way, and the engine needs no override written into the
+// command: Codex gives every command CODEX_THREAD_ID, Claude Code gives
+// CLAUDE_CODE_SESSION_ID beside the pid of the process running that chat, and
+// Kiro CLI gives KIRO_SESSION_ID (measured: its shell carries no pid).
+//
+// A variable is only as good as the chat it names. A shell the person started
+// from inside a chat keeps the variable after that chat is gone, so Claude
+// Code's id counts only while the process it names is alive; a dead or absent
+// pid leaves the id unread and the process ancestry decides, as before. Kiro
+// CLI has no pid in the shell to check, so its id stands on its own, as Codex's
+// does. Every other harness names no chat in the shell.
+function hostNamedChat(projectDir: string): string | null {
+  switch (runtimeHarnessDir(projectDir)) {
+    case ".codex":
+      return validSessionId(process.env.CODEX_THREAD_ID);
+    case ".claude": {
+      const pid = Number.parseInt(process.env.CLAUDE_PID ?? "", 10);
+      return Number.isSafeInteger(pid) && processIsAlive(pid)
+        ? validSessionId(process.env.CLAUDE_CODE_SESSION_ID)
+        : null;
+    }
+    case ".kiro":
+      return validSessionId(process.env.KIRO_SESSION_ID);
+    default:
+      return null;
+  }
+}
+
 export function resolveInvokingSessionId(projectDir: string): string | null {
   const overrideSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
-  // Codex gives every command it runs CODEX_THREAD_ID, the session id its
-  // hooks carry, so a Codex tool needs no override written into the command.
   // A spawned helper agent's shell carries the helper's own thread id; that
   // thread resolves to the chat that spawned it (noteHelperSession).
-  const codexThread = overrideSession === null && runtimeHarnessDir(projectDir) === ".codex"
-    ? validSessionId(process.env.CODEX_THREAD_ID)
-    : null;
-  const codexSession = codexThread === null ? null : helperSessionRoot(projectDir, codexThread) ?? codexThread;
-  const envSession = overrideSession ?? codexSession;
+  const hostThread = overrideSession === null ? hostNamedChat(projectDir) : null;
+  const hostSession = hostThread === null ? null : helperSessionRoot(projectDir, hostThread) ?? hostThread;
+  const envSession = overrideSession ?? hostSession;
   // This refusal is a footgun guard against stale exported overrides, not a
   // security boundary. The SOURCE marker is an internal hookChildEnv contract.
   // Deliberately setting both variables is an intentional same-user act
   // equivalent to a sanctioned session switch; no privilege boundary exists
   // between callers that could authenticate it.
+  // The host's own word for the chat this shell runs in is not a stale export:
+  // process ancestry is the engine's reconstruction of the same fact, and a
+  // second chat starting is enough to make the two differ.
   const payloadOverride =
-    codexSession !== null ||
+    hostSession !== null ||
     (overrideSession !== null && process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload");
   const ancestrySession = resolveSessionIdFromAncestry(projectDir);
   if (
