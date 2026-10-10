@@ -50,6 +50,8 @@ const AGENT_RECORDS = new Set<Question>([
 ]);
 /** The engine reads the typed reply itself when the agent forwards it to `next`. */
 const ENGINE_READS = new Set<Question>(["routing"]);
+/** Questions whose reply a tool keeps word for word before any agent runs (gate words, protected responses). */
+const KEEPERS: Question[] = ["stage-gate", "stage-gate-accept-as-is", "unit-checkpoint", "batch-checkpoint", "verification-command", "construction-policy"];
 
 interface HookSeen { exit: Exec; record: StoredRecord | null; recorded: Recorded; delta: number }
 interface Observed {
@@ -166,14 +168,15 @@ describe("the answers corpus: a tool records only an exact pick as shown, keeps 
         const rowsAllowed = item.question === "code-plan" && hookChoice !== "none" ? [0, 1]
           : item.question === "code-plan-grouped" && hookChoice !== "none" ? [0, 2] : [0];
         expect(rowsAllowed, `${harness}: choice rows the hook alone added (${hook.delta})`).toContain(hook.delta);
-        // The words: kept whole where the question keeps them; nothing kept for a non-answer.
-        if (hook.recorded.words !== null && !item.question.startsWith("code-plan")) {
+        // The words, where the question keeps them (the gate's kept words, a checkpoint's protected response): kept whole
+        // for a reply, nothing kept for a non-answer. The plan question's record is not read here; its text is proven by
+        // the message record above.
+        if (KEEPERS.includes(item.question)) {
           if (engine.words === null) {
-            if (["stage-gate", "stage-gate-accept-as-is", "unit-checkpoint", "batch-checkpoint", "verification-command", "construction-policy"].includes(item.question)) {
-              expect(hook.recorded.words, `${harness}: a non-answer kept as a reply`).toBeNull();
-            }
+            expect(hook.recorded.words, `${harness}: a non-answer kept as a reply`).toBeNull();
           } else if (text !== "") {
             // A picked gate label is kept without its "(Recommended)" tag, as the picker returned it.
+            expect(hook.recorded.words, `${harness}: the reply was not kept`).not.toBeNull();
             expect(hook.recorded.words, `${harness}: the kept words`).toContain(text.replace(/^[/$]aidlc\s*/, "").replace(/\s*\(recommended\)\s*$/i, ""));
           }
         }
@@ -200,7 +203,10 @@ describe("the answers corpus: a tool records only an exact pick as shown, keeps 
         expect(exec.status, where).toBe(0);
         if (event !== "") {
           expect(row, `${event}: no row: ${exec.stdout}`).toBeDefined();
-          if (text !== "" && item.via !== "picker" && row!["Person Reply"] !== null && row!["Person Reply"] !== undefined) {
+          // The rows that carry the person's words beside the choice must carry them whenever words were typed.
+          const carriesWords = ["GATE_APPROVED", "GATE_REJECTED", "QUESTION_ANSWERED"].includes(event);
+          if (text !== "" && item.via !== "picker" && (carriesWords || (row!["Person Reply"] !== null && row!["Person Reply"] !== undefined))) {
+            expect(row!["Person Reply"], `${event}: Person Reply missing: ${JSON.stringify(row)}`).not.toBeNull();
             expect(row!["Person Reply"], `${event}: Person Reply`).toContain(text.replace(/^[/$]aidlc\s*/, ""));
           }
         }
