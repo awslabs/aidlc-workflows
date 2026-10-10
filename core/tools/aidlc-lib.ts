@@ -20,6 +20,7 @@ import {
   type KiroLayout,
   knownActiveSpace,
   kiroTreeLayout,
+  quoteCommandArgument,
   resolveHarnessPath,
   runtimeHarnessDir,
   runtimeHarnessName,
@@ -1167,12 +1168,6 @@ export const SPACE_VERBS: ReadonlySet<string> = new Set([
   "create",
 ]);
 
-export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
-  "rename",
-  "show",
-  "birth",
-]);
-
 // The two intent lifecycle verbs that retire and revive a record without
 // touching its files: `archive` moves an in-flight or completed intent to the
 // `archived` status, `unarchive` brings it back to the status it had.
@@ -1186,7 +1181,10 @@ export type WorkspaceCommand =
   // `all` is only ever set (true) for `intent list --all`; a plain list omits
   // it so existing shape consumers keep matching the two-field object.
   | { kind: "list"; noun: WorkspaceNoun; json: boolean; all?: true }
-  | { kind: "switch"; noun: WorkspaceNoun; name: string; explicit: boolean }
+  // `words`: every token the person typed after the name, kept whole for the
+  // agent to read (a request, or a setting for the work selected); never for
+  // the utility. Present only when there are any.
+  | { kind: "switch"; noun: WorkspaceNoun; name: string; explicit: boolean; words?: string[] }
   | { kind: "create"; noun: "space"; name: string }
   | { kind: "create-intent"; noun: "intent"; rest: string[] }
   // `rest` carries the verb's trailing flags (`--reason <text>`) through to the
@@ -1199,13 +1197,6 @@ export type WorkspaceCommand =
       noun: WorkspaceNoun;
       code: "missing-name" | "unexpected-arguments";
       verb: "switch" | "create" | "space-create" | IntentLifecycleVerb | IntentRepoVerb;
-      message: string;
-    }
-  | {
-      kind: "error";
-      noun: WorkspaceNoun;
-      code: "reserved-future-verb";
-      verb: string;
       message: string;
     }
   | { kind: "not-workspace" };
@@ -1242,29 +1233,8 @@ function unexpectedWorkspaceArguments(
   };
 }
 
-function reservedFutureWorkspaceVerb(
-  noun: WorkspaceNoun,
-  verb: string,
-): WorkspaceCommand {
-  return {
-    kind: "error",
-    noun,
-    code: "reserved-future-verb",
-    verb,
-    message:
-      `${noun} ${verb} is reserved for a future workspace verb and is not implemented yet. ` +
-      `Use ${noun} switch ${verb} to select an existing record with that name.`,
-  };
-}
-
 export function isWorkspaceNoun(token: string | undefined): token is WorkspaceNoun {
   return (WORKSPACE_NOUNS as readonly (string | undefined)[]).includes(token);
-}
-
-function isReservedFutureWorkspaceVerb(
-  token: string | undefined,
-): token is string {
-  return token !== undefined && RESERVED_FUTURE.has(token);
 }
 
 function isIntentLifecycleVerb(token: string | undefined): token is IntentLifecycleVerb {
@@ -1316,17 +1286,13 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
   if (verbOrName === "help" || verbOrName === "-h") {
     return { kind: "help", noun };
   }
-  if (isReservedFutureWorkspaceVerb(verbOrName)) {
-    return reservedFutureWorkspaceVerb(noun, verbOrName);
-  }
 
   if (noun === "intent") {
     if (verbOrName === "list") return explicitWorkspaceList(noun, tokens);
     if (verbOrName === "switch") {
       const name = tokens[2];
       if (name === undefined) return missingWorkspaceName(noun, "switch");
-      if (tokens.length > 3) return unexpectedWorkspaceArguments(noun, "switch");
-      return { kind: "switch", noun, name, explicit: true };
+      return switchWithWords(noun, name, true, tokens.slice(3));
     }
     if (verbOrName === "create") {
       return { kind: "create-intent", noun, rest: tokens.slice(2) };
@@ -1345,8 +1311,7 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     if (verbOrName === "switch") {
       const name = tokens[2];
       if (name === undefined) return missingWorkspaceName(noun, "switch");
-      if (tokens.length > 3) return unexpectedWorkspaceArguments(noun, "switch");
-      return { kind: "switch", noun, name, explicit: true };
+      return switchWithWords(noun, name, true, tokens.slice(3));
     }
     if (verbOrName === "create") {
       const name = tokens[2];
@@ -1356,10 +1321,20 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     }
   }
 
-  if (tokens.slice(2).some((token) => token.startsWith("--"))) {
-    return unexpectedWorkspaceArguments(noun, "switch");
-  }
-  return { kind: "switch", noun, name: verbOrName, explicit: false };
+  return switchWithWords(noun, verbOrName, false, tokens.slice(2));
+}
+
+// A switch keeps whatever the person typed after the name, flags included: the
+// engine hands those words to the agent whole with the switch (Branch 1b), so
+// "intent auth --guard-policy relaxed" selects auth and the agent sets the
+// policy for it. Nothing here reads them.
+function switchWithWords(
+  noun: WorkspaceNoun,
+  name: string,
+  explicit: boolean,
+  rest: readonly string[],
+): WorkspaceCommand {
+  return { kind: "switch", noun, name, explicit, ...(rest.length > 0 ? { words: [...rest] } : {}) };
 }
 
 export function workspaceCommandUtilityArgv(
@@ -1539,15 +1514,15 @@ export function splitKiroCommandArgs(raw: string): string[] {
 }
 
 export const RESERVED_RECORD_NAME_LIST = Object.freeze(
-  [...new Set(["help", ...INTENT_VERBS, ...SPACE_VERBS, ...RESERVED_FUTURE])],
+  [...new Set(["help", ...INTENT_VERBS, ...SPACE_VERBS])],
 );
 
 // Slugs a record (intent or space) may never take. These names are grammar:
-// help, current workspace verbs, and reserved future verbs all change how the
-// router reads `intent <token>` / `space <token>`. Refusing them at the
-// creation chokepoints keeps new records reachable. Pre-existing records with
-// these names remain reachable via explicit `switch`; doctor flags them as an
-// advisory so humans can rename them deliberately.
+// help and the workspace verbs change how the router reads `intent <token>` /
+// `space <token>`. Refusing them at the creation chokepoints keeps new records
+// reachable. Pre-existing records with these names remain reachable via
+// explicit `switch`; doctor flags them as an advisory so humans can rename
+// them deliberately.
 export const RESERVED_RECORD_NAMES: ReadonlySet<string> = new Set(
   RESERVED_RECORD_NAME_LIST,
 );
@@ -1774,7 +1749,7 @@ function terminalCommandFromWorkspaceCommand(
 // matching rules are byte-for-byte the engine's parseNextFlags terminal branches
 // (read-only flag anywhere; workspace verb only at index 0) so the seam and the
 // engine can never disagree about what is terminal.
-export function classifyTerminalCommand(argv: string[]): TerminalCommand | null {
+export function classifyTerminalCommand(argv: string[], projectDir?: string): TerminalCommand | null {
   const args = withoutEntryWord(argv);
   // A SOLE bare `help` / `-h` token is a help REQUEST (terminal, read-only);
   // mirrors parseNextFlags in the engine. Without this the token reads as
@@ -1804,6 +1779,17 @@ export function classifyTerminalCommand(argv: string[]): TerminalCommand | null 
     // no session_id, while the shell PostToolUse event does; executing creation
     // off-band would make exact session ownership impossible.
     if (workspaceCommand.kind === "create-intent") return null;
+    // A switch is terminal only when it is exactly a record's name: words after
+    // the name are the agent's to read (the engine hands them over with the
+    // switch), and a name that is no record goes to the agent with the noun's
+    // verbs and records (Branch 1b). The seam knows the project; without one
+    // the shape alone is classified, as the engine's parser does.
+    if (workspaceCommand.kind === "switch") {
+      if (workspaceCommand.words !== undefined) return null;
+      if (projectDir !== undefined && !workspaceRecordExists(projectDir, workspaceCommand.noun, workspaceCommand.name)) {
+        return null;
+      }
+    }
     return terminalCommandFromWorkspaceCommand(workspaceCommand, args);
   }
   // Among the person's own words a utility flag is part of their request.
@@ -4297,6 +4283,46 @@ export function listIntents(
   return infos;
 }
 
+// The records a bare name after `intent` or `space` can select, newest last:
+// the selected space's intents by slug (the record dir counts as the same
+// name, as `intent <name>` resolves it), or the spaces by name. Structure
+// only, read from the registry and the spaces dir; anything unreadable is an
+// empty list.
+function workspaceRecordList(
+  projectDir: string,
+  noun: WorkspaceNoun,
+): Array<{ name: string; dirName: string | null }> {
+  try {
+    if (noun === "space") return listSpaces(projectDir).map((space) => ({ name: space.name, dirName: null }));
+    const space = resolveWorkflowSelection(projectDir).space;
+    return listIntents(projectDir, space).map((intent) => ({ name: intent.slug, dirName: intent.dirName }));
+  } catch {
+    return [];
+  }
+}
+
+// Whether a name after `intent` or `space` is exactly a record the switch
+// would select: an intent by slug or record dir; a space by name, or by the
+// slug the utility stores it under (`space "My Space"` selects my-space). Any
+// other word is the agent's to read (Branch 1b).
+export function workspaceRecordExists(projectDir: string, noun: WorkspaceNoun, name: string): boolean {
+  const slug = noun === "space" ? slugify(name) : name;
+  return workspaceRecordList(projectDir, noun).some((record) =>
+    record.name === name || record.name === slug || record.dirName === name);
+}
+
+// The most recent record names for the noun, newest first, capped, with how
+// many more there are: what the agent is shown beside an unknown word so a
+// typo of a name is read as that name.
+export function recentWorkspaceRecordNames(
+  projectDir: string,
+  noun: WorkspaceNoun,
+  limit = 20,
+): { names: string[]; more: number } {
+  const names = [...new Set(workspaceRecordList(projectDir, noun).map((record) => record.name))].reverse();
+  return { names: names.slice(0, limit), more: Math.max(0, names.length - limit) };
+}
+
 // The workflows still running in a project: every space's intents that neither
 // the registry nor the state file marks completed or archived. config names
 // them when it changes something while work is open, doctor names the same
@@ -5046,9 +5072,10 @@ export function requireProtectedResponse(
 ): void {
   const question = readProtectedQuestion(projectDir, session);
   const response = readProtectedResponse(projectDir, session);
-  const recovery = expected.kind === "verification-command" ? VERIFICATION_COMMAND_RECOVERY
+  const recovery = expected.kind === "verification-command" ? verificationCommandRecovery()
     : expected.kind === "construction-policy" ? CONSTRUCTION_POLICY_RECOVERY
-    : 'Re-ask with aidlc bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> or aidlc bolt swarm-checkpoint --action ask --batch <number> --units "<units>", then wait for Approve or Request Changes.';
+    : `Re-ask with ${aidlcToolInvocation("bolt")} checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> or ` +
+      `${aidlcToolInvocation("bolt")} swarm-checkpoint --action ask --batch <number> --units "<units>", then wait for Approve or Request Changes.`;
   // The person replied to this exact question (the hook's record); the choice
   // is the one the conductor read from their words. That reply is the
   // person's presence: with it on record, a misrecord is corrected by
@@ -6043,6 +6070,42 @@ export function writeSessionBinding(
   }
 }
 
+// A Codex helper agent's thread, mapped to the chat that spawned it. Codex gives
+// a spawned agent's shell its own CODEX_THREAD_ID and marks that agent's hook
+// payloads with agent_id = that thread id under the root session_id, so the
+// adapter notes the pair the first time it sees it and the resolver reads the
+// root session for the helper's commands. Machine-local runtime state beside the
+// session bindings; a write failure leaves the helper resolving as before.
+function helperSessionPath(projectDir: string, threadId: string): string {
+  const recordPath = sessionRecordPath(projectDir, threadId);
+  return recordPath ? `${recordPath}.helper-of` : "";
+}
+
+export function noteHelperSession(projectDir: string, rootSessionId: string, agentId: string): void {
+  const root = validSessionId(rootSessionId);
+  const agent = validSessionId(agentId);
+  if (!root || !agent || root === agent) return;
+  const path = helperSessionPath(projectDir, agent);
+  if (!path) return;
+  try {
+    if (existsSync(path) && readFileSync(path, "utf-8").trim() === root) return;
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileSync(path, `${root}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+export function helperSessionRoot(projectDir: string, threadId: string): string | null {
+  const path = helperSessionPath(projectDir, threadId);
+  if (!path) return null;
+  try {
+    return validSessionId(readFileSync(path, "utf-8").trim());
+  } catch {
+    return null;
+  }
+}
+
 function sessionRebindOfferPath(projectDir: string, sessionId: string): string {
   const recordPath = sessionRecordPath(projectDir, sessionId);
   return recordPath ? `${recordPath}.rebind-offer` : "";
@@ -6782,9 +6845,12 @@ export function resolveInvokingSessionId(projectDir: string): string | null {
   const overrideSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
   // Codex gives every command it runs CODEX_THREAD_ID, the session id its
   // hooks carry, so a Codex tool needs no override written into the command.
-  const codexSession = overrideSession === null && runtimeHarnessDir(projectDir) === ".codex"
+  // A spawned helper agent's shell carries the helper's own thread id; that
+  // thread resolves to the chat that spawned it (noteHelperSession).
+  const codexThread = overrideSession === null && runtimeHarnessDir(projectDir) === ".codex"
     ? validSessionId(process.env.CODEX_THREAD_ID)
     : null;
+  const codexSession = codexThread === null ? null : helperSessionRoot(projectDir, codexThread) ?? codexThread;
   const envSession = overrideSession ?? codexSession;
   // This refusal is a footgun guard against stale exported overrides, not a
   // security boundary. The SOURCE marker is an internal hookChildEnv contract.
@@ -11776,25 +11842,6 @@ export function personCheckSwitchAllowed(projectDir: string, key: string, value:
   return values.on.includes(value) || (values.off.includes(value) && personAskedSinceGate(projectDir));
 }
 
-// The gate's "Request Changes" choice, matched the way a person types it: any
-// case, an optional option prefix ("B." or "2)"), surrounding quotes, and
-// trailing punctuation are all the same choice, as is the "(Recommended)" label
-// decorator the question-rendering guide asks the conductor to add. The words
-// themselves must be present; a paraphrase ("please change it") is not this
-// label. A paraphrase is the conductor's to read; the shared reply reader
-// (aidlc-reply-reader.ts) matches only exact picks and judges no meaning.
-// Shape of an accepted reply: optional option prefix, then the words
-// "request changes", then wrapper noise (whitespace, quotes, . or !), then at
-// most ONE "(recommended)" decorator, then wrapper noise again. Because the
-// noise is allowed on both sides of the decorator, the decorator composes with
-// quotes and punctuation whether it sits inside or outside them, and there is
-// no pass ordering that can silently drop one direction (PR #1133 review).
-const REQUEST_CHANGES_CHOICE_RE =
-  /^(?:(?:[A-Za-z]|\d+)[.)])?[\s"'`]*request\s+changes[\s"'`.!]*(?:\(recommended\)[\s"'`.!]*)?$/i;
-export function isRequestChangesChoice(text: string | undefined | null): boolean {
-  return REQUEST_CHANGES_CHOICE_RE.test((text ?? "").trim());
-}
-
 // The approval the conductor reports at a held stage gate. The conductor reads
 // the person's reply in context and reports the choice they made; the engine
 // never second-guesses the words. "Accept as-is" is that offered label, when it
@@ -12357,13 +12404,24 @@ export function authorizedVerificationCommand(
     ? command : null;
 }
 
-export const VERIFICATION_COMMAND_RECOVERY =
-  'Write the proposed command to <record>/verification-command.txt with the harness file-write tool (never shell echo or a heredoc); never interpolate repo-derived command text into a shell line. ' +
-  'Record the human choice with aidlc-log.ts decision --stage "<stage>" --checkpoint verification-command ' +
-  '--command-file verification-command.txt --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes", ' +
-  'then wait for the human\'s offered choice in that session and run aidlc-log.ts answer --stage "<stage>" --checkpoint verification-command --command-file verification-command.txt --details "Approve". ' +
-  'Both commands find the session they run in. ' +
-  'Apply the receipt with aidlc-state.ts set-construction-verification-command --command-file verification-command.txt.';
+// The same sequence rides with an unauthorized checkpoint and its refusals.
+// Registering the question after showing it loses the reply to that question.
+export function verificationCommandRecovery(
+  stage = "<stage>",
+  logInvocation = aidlcToolInvocation("log"),
+  stateInvocation = aidlcToolInvocation("state"),
+): string {
+  const identity = `--stage ${quoteCommandArgument(stage)} --checkpoint verification-command --command-file verification-command.txt`;
+  return "If this command already has a current approval receipt, apply it without asking again. Otherwise, " +
+    "write the proposed command to <record>/verification-command.txt with the harness file-write tool (never shell echo or a heredoc); never interpolate repo-derived command text into a shell line. " +
+    `Before showing the question, register it with \`${logInvocation} decision ${identity} ` +
+    '--decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"`. ' +
+    "Show the returned canonical command and the question with its choices, then end the turn and wait for the person's reply. " +
+    "If that question is already pending, keep it: do not register it again after the reply. " +
+    `Record the choice they made with \`${logInvocation} answer ${identity} --details '<their choice>'\`. ` +
+    "Both commands find the session they run in. Only an Approve receipt authorizes " +
+    `\`${stateInvocation} set-construction-verification-command --command-file verification-command.txt\`.`;
+}
 
 export const CONSTRUCTION_POLICY_CHECKPOINT = "Construction Policy";
 
@@ -15256,6 +15314,10 @@ export interface FreshReviewReceipts {
    *  records an edited review (reviewCompletionEdited). Read only beside
    *  stageVerdict / unitVerdicts, for the one line the gate says. */
   editedVerdicts?: Set<string>;
+  /** Scopes ("" for the stage, else the Unit) whose fresh terminal verdict
+   *  records the verdict its dispatch dictated (reviewCompletionDictated).
+   *  Read only beside stageVerdict / unitVerdicts, for the one line the gate says. */
+  dictatedVerdicts?: Set<string>;
   /**
    * Units with a merge-confirmed Bolt attempt. A name-only attempt is
    * confirmed by its BOLT_COMPLETED row; a slug-backed (worktree) attempt is
@@ -17355,24 +17417,56 @@ export function openReviewRequests(events: ReadonlyArray<AuditShardEvent>): Open
 }
 
 /**
- * The latest SUBAGENT_COMPLETED of `reviewer` that definitely follows `after`
- * (same shard: a later position; another shard: a later timestamp), or null
- * when the reviewer has not finished since. A cross-shard tie reads as not
- * after, so the callers fail open on it.
+ * The latest row of `event` whose `Agent Type` is `reviewer` that definitely
+ * follows `after` (same shard: a later position; another shard: a later
+ * timestamp) and that `accept` admits, or null when there is none. A
+ * cross-shard tie reads as not after, so the callers fail open on it.
  */
+export function latestReviewerRowAfter(
+  events: ReadonlyArray<AuditShardEvent>,
+  event: string,
+  reviewer: string,
+  after: AuditShardEvent,
+  accept: (row: AuditShardEvent) => boolean = () => true,
+): AuditShardEvent | null {
+  let latest: AuditShardEvent | null = null;
+  for (const row of sortAttemptEvents(events)) {
+    if (row.event !== event) continue;
+    if (auditBlockField(row.block, "Agent Type") !== reviewer) continue;
+    if (!attemptEventDefinitelyBefore(after, row)) continue;
+    if (!accept(row)) continue;
+    latest = row;
+  }
+  return latest;
+}
+
+/** The latest SUBAGENT_COMPLETED of `reviewer` definitely after `after`, or null when it has not finished since. */
 export function reviewerCompletionAfter(
   events: ReadonlyArray<AuditShardEvent>,
   reviewer: string,
   after: AuditShardEvent,
 ): AuditShardEvent | null {
-  let latest: AuditShardEvent | null = null;
-  for (const row of sortAttemptEvents(events)) {
-    if (row.event !== "SUBAGENT_COMPLETED") continue;
-    if (auditBlockField(row.block, "Agent Type") !== reviewer) continue;
-    if (!attemptEventDefinitelyBefore(after, row)) continue;
-    latest = row;
-  }
-  return latest;
+  return latestReviewerRowAfter(events, "SUBAGENT_COMPLETED", reviewer, after);
+}
+
+/** The row the plan-approval guard writes when a reviewer dispatch's brief already carries a rendered verdict line. */
+export const REVIEW_VERDICT_DICTATED_EVENT = "REVIEW_VERDICT_DICTATED";
+
+/**
+ * Whether a REVIEW_VERDICT_DICTATED row of `reviewer`, written after this
+ * request's row and naming its id, carried `verdict`: the verdict being recorded
+ * is the one the dispatch dictated. A row naming another request, an earlier
+ * row, or the other verdict is not.
+ */
+export function dispatchDictatedVerdict(
+  events: ReadonlyArray<AuditShardEvent>,
+  reviewer: string,
+  request: OpenReviewRequest,
+  verdict: ReviewVerdict,
+): boolean {
+  const row = latestReviewerRowAfter(events, REVIEW_VERDICT_DICTATED_EVENT, reviewer, request.row, (candidate) =>
+    (auditBlockField(candidate.block, "Request Id") ?? "").split(",").map((id) => id.trim()).includes(request.requestId));
+  return row !== null && auditBlockField(row.block, "Verdict") === verdict;
 }
 
 /** The SUBAGENT_COMPLETED field carrying `<review file>=<sha256 | absent>` per open request. */
@@ -17727,6 +17821,27 @@ export function reviewCompletionEdited(completionBlock: string): boolean {
  *  reviewer finished. */
 export function editedReviewNotice(stageName: string, unit?: string | null): string {
   return `The review file for ${stageName}${unit ? ` (${unit})` : ""} was edited after the reviewer finished.`;
+}
+
+/** The REVIEW_COMPLETED field the logger writes, as `yes`, when the verdict it
+ *  records is the one the reviewer's dispatch already carried (a
+ *  REVIEW_VERDICT_DICTATED row for this request with that verdict): the verdict
+ *  is on record as the dispatch's, not as the reviewer's own judgement. */
+export const REVIEW_DICTATED_FIELD = "Review Verdict Dictated";
+
+/** Whether a REVIEW_COMPLETED row records a verdict its dispatch dictated. Read
+ *  for what the person is told at the gate; it changes no readiness. */
+export function reviewCompletionDictated(completionBlock: string): boolean {
+  return auditBlockField(completionBlock, REVIEW_DICTATED_FIELD) === "yes";
+}
+
+/** The one line the person hears at the gate (strict) or with the verdict
+ *  (relaxed, off) when the review they are deciding on was dispatched with its
+ *  verdict already in the brief, in the person's words: no engine vocabulary. A
+ *  fact, not a judgement: a conductor quoting an earlier review's verdict on a
+ *  re-review carries it too. */
+export function dictatedReviewNotice(stageName: string, unit?: string | null): string {
+  return `The reviewer for ${stageName}${unit ? ` (${unit})` : ""} was told what to conclude before it looked.`;
 }
 
 /**
@@ -19640,6 +19755,7 @@ export function freshReviewReceipts(
     awaitingVerdict: new Set(),
     unfinishedVerdicts: new Set(),
     editedVerdicts: new Set(),
+    dictatedVerdicts: new Set(),
     mergedBoltUnits: new Set(),
     openBoltUnits: new Set(),
     acceptedChanges: [],
@@ -19743,10 +19859,12 @@ export function freshReviewReceipts(
   // an ambiguous matching path fails closed by clearing every unit receipt.
   const recordedRepos = new Set(intentRepos(projectDir));
   const unitVerdicts = new Map<string, ReviewVerdict>();
-  // Read beside the verdicts above: which of them no reviewer gave, and which
-  // record a review edited after the reviewer finished.
+  // Read beside the verdicts above: which of them no reviewer gave, which
+  // record a review edited after the reviewer finished, and which record the
+  // verdict the reviewer's dispatch dictated.
   const unfinishedVerdicts = new Set<string>();
   const editedVerdicts = new Set<string>();
+  const dictatedVerdicts = new Set<string>();
   const unitStale = new Set<string>();
   const unitStaleProgress = new Map<string, StaleReviewProgress>();
   const unitIterations = new Map<string, number>();
@@ -20176,6 +20294,8 @@ export function freshReviewReceipts(
     else unfinishedVerdicts.delete(unit ?? "");
     if (reviewCompletionEdited(e.block)) editedVerdicts.add(unit ?? "");
     else editedVerdicts.delete(unit ?? "");
+    if (reviewCompletionDictated(e.block)) dictatedVerdicts.add(unit ?? "");
+    else dictatedVerdicts.delete(unit ?? "");
     if (unit) {
       unitVerdicts.set(unit, terminalVerdict);
       unitStale.delete(unit);
@@ -20642,6 +20762,7 @@ export function freshReviewReceipts(
     awaitingVerdict,
     unfinishedVerdicts,
     editedVerdicts,
+    dictatedVerdicts,
     mergedBoltUnits,
     openBoltUnits,
     acceptedChanges: [

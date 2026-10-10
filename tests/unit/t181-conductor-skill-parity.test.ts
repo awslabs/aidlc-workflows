@@ -1128,8 +1128,6 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       for (const anchor of ["| `run-stage` |", "**Per-unit batch waves (optional).**"]) {
         const instruction = skill.split("\n").find((line) => line.startsWith(anchor));
         expect(instruction, `${skillRoot}: ${anchor}`).toContain(citation);
-        expect(instruction, `${skillRoot}: ${anchor}`).toContain("native preload");
-        expect(instruction, `${skillRoot}: ${anchor}`).toContain("verbatim paste otherwise");
       }
 
       const ensemble = read(`${protocolRoot}/stage-protocol-ensemble.md`);
@@ -1140,11 +1138,86 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       const next = ensemble.slice(cliStart + 1).search(/\n#{2,3} /);
       const binding = ensemble.slice(cliStart, next === -1 ? undefined : cliStart + 1 + next);
       expect(binding, protocolRoot).toContain(citation);
-      expect(binding, protocolRoot).toContain("native preload");
       expect(binding, protocolRoot).not.toMatch(residualPaste);
 
       const construction = read(`${protocolRoot}/stage-protocol-construction.md`);
       expect(construction, protocolRoot).not.toMatch(residualPaste);
+    }
+  });
+
+  // Step 2 is the one owner of how a brief gets the stage's rules, the
+  // `rules_held` case included: there the directive carries only the bundle's
+  // digest, so a paste order cannot be met. Every recipe that dispatches
+  // defers to step 2 instead of restating a paste order.
+  test("step 2 owns brief rule delivery, rules_held included, and every dispatch recipe defers to it", () => {
+    const citation = '`stage-protocol.md` § "For subagent stages" step 2';
+    const stalePaste =
+      /\bpastes? the (?:accumulated|complete) (?:rule|steering) bundle\b|\b(?:complete|accumulated) (?:rule|steering) bundle verbatim\b|rules as the accumulated `?(?:load-)?steering`? bundle|verbatim paste otherwise|and the accumulated steering bundle\)|paths-only briefs/i;
+    const read = (path: string) => readFileSync(path, "utf-8");
+    const section = (path: string, start: string, end: string) => {
+      const body = read(path);
+      const from = body.indexOf(start);
+      expect(from, `${path}: ${start}`).toBeGreaterThan(-1);
+      const to = body.indexOf(end, from + start.length);
+      return body.slice(from, to === -1 ? undefined : to).replace(/\s+/g, " ");
+    };
+    const expectStepTwo = (path: string, heading: string) => {
+      const step = section(path, heading, "\n3. ");
+      expect(step, path).toContain("`run-stage.rules_content`, or the accumulated `load-steering` parts");
+      expect(step, path).toContain("Kiro CLI `resources`");
+      expect(step, path).toContain(
+        "When `run-stage` carries `rules_held` instead of `rules_content`, the chat already holds the bundle and the directive does not repeat it: paste nothing for the rules and name `directive.stage_file` in the brief",
+      );
+      expect(step, path).not.toMatch(/Paste the accumulated/);
+    };
+    const expectDefers = (path: string, recipe: string) => {
+      expect(recipe, path).toContain(citation);
+      expect(recipe, path).not.toMatch(stalePaste);
+    };
+
+    expectStepTwo(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"), "### For subagent stages:");
+    expectStepTwo(join(REPO_ROOT, "docs/reference/04-stage-protocol.md"), "### Subagent Stages");
+    const docs = (rel: string) => join(REPO_ROOT, rel);
+    expectDefers(docs("docs/reference/03-orchestrator.md"), section(docs("docs/reference/03-orchestrator.md"), "3. **Prepare briefs:", "\n4. "));
+    expectDefers(docs("docs/reference/15-stage-definition.md"), section(docs("docs/reference/15-stage-definition.md"), "- `subagent` — hub-and-spoke.", "\n- `pipeline`"));
+    expectDefers(docs("docs/reference/17-skill-system.md"), section(docs("docs/reference/17-skill-system.md"), "| `run-stage` |", "\n"));
+
+    const ensembleBindings = ["Claude Code", "Kiro CLI", "Kiro IDE", "Codex CLI", "Cursor", "opencode", "GitHub Copilot"];
+    const trees = [
+      { label: "core", protocols: docs("core/aidlc-common/protocols"), stages: docs("core/aidlc-common/stages"), skills: [] as string[] },
+      ...HARNESS_MATRIX.map((harness) => ({
+        label: harness.name,
+        protocols: join(harness.engineRoot, "aidlc-common", "protocols"),
+        stages: join(harness.engineRoot, "aidlc-common", "stages"),
+        skills: [
+          join(REPO_ROOT, "harness", harness.name, "skills", "aidlc", "SKILL.md"),
+          join(harness.skillsRoot, "aidlc", "SKILL.md"),
+        ],
+      })),
+    ];
+    for (const tree of trees) {
+      if (tree.label !== "core") expectStepTwo(join(tree.protocols, "stage-protocol.md"), "### For subagent stages:");
+      const stories = join(tree.stages, "inception", "user-stories.md");
+      expectDefers(stories, section(stories, "**Round 1 — dispatch the mob.**", "\n\n"));
+
+      // The authored module carries every binding; a shipped tree only its own.
+      const ensemble = join(tree.protocols, "stage-protocol-ensemble.md");
+      expectDefers(ensemble, section(ensemble, "- **`mode: subagent`**", "\n- **`mode: "));
+      const present = ensembleBindings.filter((name) => read(ensemble).includes(`\n### ${name}\n`));
+      expect(present.length, ensemble).toBe(tree.label === "core" ? ensembleBindings.length : 1);
+      for (const name of present) {
+        expectDefers(ensemble, section(ensemble, `\n### ${name}\n`, "\n---"));
+      }
+      expect(read(join(tree.protocols, "stage-protocol-construction.md")), tree.label).not.toMatch(stalePaste);
+
+      for (const skill of tree.skills) {
+        expect(read(skill), skill).not.toMatch(stalePaste);
+        for (const anchor of ["| `run-stage` |", "**Per-unit batch waves (optional).**"]) {
+          const line = read(skill).split("\n").find((entry) => entry.startsWith(anchor));
+          expect(line, `${skill}: ${anchor}`).toBeDefined();
+          expect(line, `${skill}: ${anchor}`).toContain(citation);
+        }
+      }
     }
   });
 

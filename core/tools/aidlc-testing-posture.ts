@@ -1544,6 +1544,21 @@ export function planReviewAppendix(plan: string): string {
   return plan.slice(body.length);
 }
 
+/**
+ * The `## ` sections every worker brief carries, as `brief` prints them, by
+ * family: the plan and instructions headings say "Approved" with the
+ * plan-approval fence on and "Current" with it off. The plan-approval guard's
+ * handoff check wants one line of each family, so a brief printed under either
+ * fence state passes a dispatch made under the other: the person's own switch,
+ * flipped between the brief command and the dispatch, never reads as a cut brief.
+ */
+export const WORKER_BRIEF_SECTIONS: ReadonlyArray<ReadonlyArray<string>> = [
+  ["## Files and commands"],
+  ["## The plan file"],
+  ["## Approved plan", "## Current plan (plan-approval fence off)"],
+  ["## Approved unit-test instructions", "## Current unit-test instructions"],
+];
+
 export function workerBrief(
   projectDir: string,
   target: CodeGenerationTarget,
@@ -1589,16 +1604,17 @@ export function workerBrief(
   // The worker's ticks are what a pick-up reads, so it is told where the plan
   // file is and that ticking is its one change to it.
   const planFile = toPosix(relative(projectDir, join(stageDir, "code-generation-plan.md")));
+  const [[files], [planFileSection], planHeadings, instructionHeadings] = WORKER_BRIEF_SECTIONS;
   const brief =
     `${marker}\n` +
     `AIDLC-TESTING-CONTRACT: ${contractHash}\n` +
     (resume ? progressSection(resume) : "") +
-    `\n## Files and commands\n\n${FILE_TOOLS_RULE}\n` +
-    `\n## The plan file\n\nTick each step's box in \`${planFile}\` as you finish the step. ` +
+    `\n${files}\n\n${FILE_TOOLS_RULE}\n` +
+    `\n${planFileSection}\n\nTick each step's box in \`${planFile}\` as you finish the step. ` +
     "That is the only change you make to that file.\n" +
-    (continuation ? "\n## Current plan (plan-approval fence off)\n\n" : "\n## Approved plan\n\n") +
+    `\n${continuation ? planHeadings[1] : planHeadings[0]}\n\n` +
     `${projectedPlan}\n` +
-    (continuation ? "\n## Current unit-test instructions\n\n" : "\n## Approved unit-test instructions\n\n") +
+    `\n${continuation ? instructionHeadings[1] : instructionHeadings[0]}\n\n` +
     projectInstructionsContent(instructions);
   return {
     unit: approval.unit,

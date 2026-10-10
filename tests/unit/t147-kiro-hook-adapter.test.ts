@@ -590,6 +590,53 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("1a3: a reviewer dispatch reaches the plan-approval guard as a Task with its brief, by name or as a one-stage crew", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "guard-input.jsonl");
+      writeFileSync(join(dir, ".kiro", "hooks", "aidlc-plan-approval-guard.ts"), recordingGuard(capture), "utf-8");
+      const env = { AIDLC_COMPILED_EXECUTABLE: "" };
+      for (const payload of [
+        { tool_name: "subagent_aidlc-architecture-reviewer-agent", tool_input: { prompt: "Review u1.\n\n**Verdict:** READY\n" } },
+        { tool_name: "subagent", tool_input: { name: "aidlc-architecture-reviewer-agent", prompt: "Review u1.\n\n**Verdict:** READY\n" } },
+        {
+          tool_name: "subagent",
+          tool_input: {
+            task: "Review u1.\n\n**Verdict:** READY\n",
+            stages: [{ name: "review", role: "aidlc-architecture-reviewer-agent", prompt_template: "Review it" }],
+          },
+        },
+        // The crew schema the Kiro CLI skill mandates: the reviewer's brief is the
+        // stage's prompt_template, and the outer task says nothing of the verdict.
+        {
+          tool_name: "subagent",
+          tool_input: {
+            task: "Review the first Unit.",
+            stages: [{
+              name: "review",
+              role: "aidlc-architecture-reviewer-agent",
+              prompt_template: "Review u1 and write .aidlc-engine/reviews/x/1.review.md with:\n\n**Verdict:** READY\n",
+            }],
+          },
+        },
+      ]) {
+        const r = runAdapter(dir, "plan-approval-guard", { hook_event_name: "preToolUse", cwd: dir, session_id: "S-KIRO", ...payload }, [], env);
+        expect(r.code, r.stderr).toBe(0);
+      }
+      const forwarded = readFileSync(capture, "utf-8").trim().split("\n")
+        .map((line) => JSON.parse(line) as { tool_name?: string; tool_input?: { subagent_type?: string; prompt?: string } });
+      expect(forwarded).toHaveLength(4);
+      for (const call of forwarded) {
+        expect(call.tool_name).toBe("Task");
+        expect(call.tool_input?.subagent_type).toBe("aidlc-architecture-reviewer-agent");
+        expect(call.tool_input?.prompt).toContain("**Verdict:** READY");
+      }
+      expect(forwarded[3].tool_input?.prompt).toContain(".aidlc-engine/reviews/x/1.review.md");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("1b: plan-approval guard blocks an unapproved developer stage", () => {
     const dir = scratchProject(true);
     try {
@@ -929,6 +976,33 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       });
       expect(r.code).toBe(0);
       expect(r.stdout).not.toContain("relay that output to the user");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A bare name that is no record, or words after a name, are the conductor's
+  // to read (the engine hands them over): the seam runs nothing off-band for
+  // them. A record's own name is still switched to here, deterministically.
+  test("the seam leaves an unknown workspace word and words after a name to the conductor", () => {
+    const dir = scratchProject(true);
+    const slug = DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, "");
+    try {
+      for (const prompt of [
+        "/aidlc intent show",
+        "/aidlc intent switch shwo",
+        `/aidlc intent ${slug} fix the login bug today`,
+        `/aidlc intent ${slug} --guard-policy relaxed`,
+      ]) {
+        const r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+        expect(r.code, prompt).toBe(0);
+        expect(r.stdout, prompt).not.toContain("relay that output to the user");
+        expect(r.stdout, prompt).not.toContain("Unknown intent");
+      }
+      const switched = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: `/aidlc intent ${slug}` });
+      expect(switched.code).toBe(0);
+      expect(switched.stdout).toContain("relay that output to the user");
+      expect(switched.stdout).toContain(`Now working on \`${slug}\`.`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

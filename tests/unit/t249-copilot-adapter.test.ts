@@ -94,6 +94,7 @@ import {
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
+  WORKER_BRIEF_SECTIONS_FIXTURE,
 } from "../harness/fixtures.ts";
 import { writeActiveDirectiveMarker } from "../../core/tools/aidlc-lib.ts";
 import {
@@ -3052,12 +3053,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(marker(dir).resume).toBeUndefined();
   });
 
-  test("23b: session-menu Resume reports are plain reports and return per-choice prints", () => {
+  test("23b: typed re-entry reports are plain reports and return per-choice prints", () => {
     const cases = [
-      ["1", "Re-run `next`"],
-      ["2", "--direction redo"],
-      ["3", "next --stage"],
-      ["4", "--new-intent"],
+      ["resume", "Re-run `next`"],
+      ["redo", "--direction redo"],
+      ["jump", "--choice jump --target <stage>"],
+      ["fresh", "--new-intent"],
     ] as const;
     for (const [choice, expected] of cases) {
       const dir = orchestrationProject();
@@ -3067,7 +3068,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         dir,
         session,
         "source",
-        ["report", "--result", "resumed", "--user-input", choice],
+        ["report", "--result", "resumed", "--choice", choice],
         `resume-report-choice-${choice}`,
       );
       expect(reported.directive.kind).toBe("print");
@@ -3957,7 +3958,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const dir = rulesProject();
     seedUnapprovedCodeGeneration(dir);
     const brief = (contract: string) =>
-      `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${contract}\nBuild the approved plan.`;
+      `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${contract}${WORKER_BRIEF_SECTIONS_FIXTURE}Build the approved plan.`;
     for (const launcher of LAUNCHERS) {
       const refused = launch(dir, launcher, "aidlc-developer-agent", brief(`sha256:${"a".repeat(64)}`));
       expect(refused.code, refused.stderr).toBe(0);

@@ -42,7 +42,7 @@ shorter than what was said:
 - A picked option in a picker is kept only when it is one of a stage gate's own
   choices; other picked labels are the conductor's text, not the person's words.
 
-## Event Registry (117 events, 25 categories)
+## Event Registry (118 events, 25 categories)
 
 ### Workflow Lifecycle (7 events)
 
@@ -265,12 +265,13 @@ the active space's shared `codekb/<repo>/` tree.
 | `ARTIFACT_UPDATED` | Existing artifact modified in either tree | Timestamp, Tool, File, Context, optional Summary Authorization Id (as for `ARTIFACT_CREATED`) | `hooks/aidlc-write-audit-log.ts` (PostToolUse; Edit, or Write overwriting existing) |
 | `ARTIFACT_REUSED` | Re-use decision on backward jump or per-repo pipeline reuse evidence; only `Decision=keep` grants the pipeline exemption; reserved from the public audit CLI | Timestamp, Stage, Decision, Artifacts, optional Repo, optional Workflow (`single-stage:<slug>` for isolated freshness-bound reuse), optional Unit and Source (`Redo on re-entry`: the person's Redo answered the question for that Unit's step) | `tools/aidlc-state.ts reuse-artifact`, `tools/aidlc-jump.ts reopen --via redo` |
 
-### Subagent Events (2 events - hook-emitted)
+### Subagent Events (3 events - hook-emitted)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `SUBAGENT_COMPLETED` | Subagent task finishes | Timestamp, Agent Type, optional Agent ID, optional Message | `hooks/aidlc-log-subagent.ts` (SubagentStop) |
 | `SUBAGENT_PROMPT_UNMATCHED` | Advisory, never a human turn: a Copilot prompt arrived within seconds of a subagent start in the same chat and matched no recorded subagent brief, so it was not counted | Timestamp, optional Session, Agent, Counted (always `no`), Reason (no brief matched, or the brief record could not be read) | `tools/aidlc-audit.ts appendSubagentPromptUnmatched` (Copilot adapter `record-human-turn`) |
+| `REVIEW_VERDICT_DICTATED` | Advisory, never a refusal: a reviewer dispatch's brief already carried a rendered `**Verdict:** READY` or `**Verdict:** NOT-READY` line (the engine's own verdict reader finds one; the review template's `READY \| NOT-READY` line is not one) for the reviewer of an open review request. `log review --verdict` reads it: a verdict the reviewer then wrote as told records `Review Verdict Dictated: yes`, said once with the verdict and at the approval gate under strict | Timestamp, Agent Type (the reviewer), Verdict, Tool, Request Id (the open requests whose review file the brief names, else every open request of that reviewer) | `hooks/aidlc-plan-approval-guard.ts` (PreToolUse, before its off-switch, on every harness that hands it the dispatch) |
 
 ### Reviewer Enforcement Events (2 events - hook-emitted)
 

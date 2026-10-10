@@ -162,9 +162,14 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
       const prompt = [
         firstNonBlank([toolInput.task]),
         firstNonBlank([toolInput.prompt]),
+        // Each stage's brief is its prompt_template (the crew schema the skill
+        // mandates). The developer's is always forwarded; a one-stage crew
+        // forwards its one brief whatever the role, so a reviewer's verdict
+        // written there reaches the plan-approval guard's record.
         ...stages
           .filter((stage) =>
-            typeof stage.role === "string" && stage.role.trim() === "aidlc-developer-agent"
+            stages.length === 1 ||
+            (typeof stage.role === "string" && stage.role.trim() === "aidlc-developer-agent")
           )
           .map((stage) => firstNonBlank([stage.prompt_template])),
       ].filter((part) => part.length > 0).join("\n");
@@ -552,7 +557,7 @@ if (target === "verb-intercept") {
   const humanPrompt = hostEnvelopeTurnText(kiro.prompt ?? "");
   const invocation = extractNextInvocation(humanPrompt);
   const args = invocation.args;
-  const cmd = classifyTerminalCommand(args);
+  const cmd = classifyTerminalCommand(args, projectDir);
   // Turn-clock: bump a per-turn counter EVERY time this seam fires (it fires
   // once per turn, BEFORE the cmd===null exit so a bare-next turn still advances
   // the clock and a prior turn's latch goes stale). The read-only/nav latch
@@ -814,7 +819,7 @@ if (target === "guard-tool-call") {
     nextArgs[0] !== "compose" &&
     leadingOrchestratorVerb(nextArgs) === null &&
     !nextArgs.some((a) => ADVANCING_FLAGS.has(a)) &&
-    classifyTerminalCommand(nextArgs) === null;
+    classifyTerminalCommand(nextArgs, cwd) === null;
 
   let counter = -1;
   let latchTurn = -2;
@@ -973,12 +978,19 @@ if (target === "plan-approval-guard") {
   const ti = kiro.tool_input ?? {};
   const canonical = canonicalTool(tool, ti);
   let payload: Record<string, unknown>;
-  if (dispatch?.agents.includes("aidlc-developer-agent")) {
+  if (dispatch !== null && dispatch.agents.length > 0) {
+    // Every named dispatch goes to the core guard, which judges only the
+    // developer's and records a reviewer brief that already carries its
+    // verdict. A crew with the developer is the developer's dispatch; a crew of
+    // several others names no one agent.
+    const agent = dispatch.agents.includes("aidlc-developer-agent")
+      ? "aidlc-developer-agent"
+      : dispatch.agents.length === 1 ? dispatch.agents[0] : "";
     payload = {
       hook_event_name: "PreToolUse",
       tool_name: "Task",
       tool_input: {
-        subagent_type: "aidlc-developer-agent",
+        subagent_type: agent,
         prompt: dispatch.prompt,
       },
     };
