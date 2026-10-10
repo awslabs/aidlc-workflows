@@ -100,18 +100,18 @@ function report(proj: string, args: string[]): { kind: string; message?: string 
 }
 
 // What the person types, through the real UserPromptSubmit route every harness uses.
-function says(proj: string, prompt: string): void {
+function says(proj: string, prompt: string, session = SESSION): void {
   const env: Record<string, string | undefined> = {
     ...process.env,
     CLAUDE_PROJECT_DIR: proj,
     AIDLC_PROJECT_DIR: proj,
     AIDLC_UNATTENDED: "0",
-    AIDLC_SESSION_OVERRIDE: SESSION,
+    AIDLC_SESSION_OVERRIDE: session,
   };
   delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
   const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj,
-    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
     env,
     encoding: "utf-8",
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -905,5 +905,63 @@ describe("an ordinary question keeps the person's own words", () => {
     expect(codex(JSON.stringify({ answers: {} })).status).toBe(0);
     expect(events(proj, "QUESTION_REPLIED")).toHaveLength(2);
     expect(events(proj, "QUESTION_UNANSWERED")).toHaveLength(1);
+  });
+});
+
+// A gate row carries the person's words only when the engine can tell which
+// chat ran the agent's command: the words are kept per chat. When it cannot
+// (an opencode or Copilot agent shell, or an ancestry walk that runs out of its
+// 50 ms on a loaded machine), the row says nothing at all about the person,
+// which reads as though they never answered. These cases measure what happens
+// on that path today.
+describe("when the engine cannot tell which chat answered", () => {
+  let proj: string;
+  let slug: string;
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedStateFile(proj, "state-mid-ideation.md");
+    slug = state(proj, ["get", "Current Stage"]).out.trim();
+    state(proj, ["checkbox", `${slug}=in-progress`]);
+    state(proj, ["gate-start", slug]);
+    says(proj, "looks good");
+  });
+  afterEach(() => cleanupTestProject(proj));
+
+  const keptMessageId = (): string | null =>
+    auditBlockField(events(proj, "HUMAN_TURN").at(-1)?.block ?? "", "Message Id");
+
+  const approves = (extra: Record<string, string> = {}) => run(
+    ORCHESTRATE,
+    ["report", "--stage", slug, "--result", "approved", "--user-input", "Approve", "--project-dir", proj],
+    extra,
+  );
+
+  test("the row names the kept message instead of saying nothing", () => {
+    const approved = approves({ AIDLC_SESSION_OVERRIDE: "" });
+    expect(approved.rc, approved.out).toBe(0);
+    const block = events(proj, "GATE_APPROVED").at(-1)?.block ?? "";
+    expect(block, approved.out).not.toBe("");
+    // Never a copy of their words on a row the engine cannot tie to them.
+    expect(auditBlockField(block, "Person Reply")).toBeNull();
+    expect(keptMessageId()).not.toBeNull();
+    expect(auditBlockField(block, "Message Id")).toBe(keptMessageId());
+  });
+
+  test("with the chat known, their own words still land on the row", () => {
+    const approved = approves();
+    expect(approved.rc, approved.out).toBe(0);
+    const block = events(proj, "GATE_APPROVED").at(-1)?.block ?? "";
+    expect(auditBlockField(block, "Person Reply")).toBe("looks good");
+  });
+  // Two chats have replied since the gate was shown, so which of them answered
+  // is not the engine's to guess: it points at neither, as before.
+  test("with two chats replying since the gate, the row points at neither", () => {
+    says(proj, "yes do that", "01995000-7a11-7000-8000-00000000beef");
+    const approved = approves({ AIDLC_SESSION_OVERRIDE: "" });
+    expect(approved.rc, approved.out).toBe(0);
+    const block = events(proj, "GATE_APPROVED").at(-1)?.block ?? "";
+    expect(auditBlockField(block, "Person Reply")).toBeNull();
+    expect(auditBlockField(block, "Message Id")).toBeNull();
   });
 });
