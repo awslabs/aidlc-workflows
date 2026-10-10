@@ -157,7 +157,7 @@ describe("the answers corpus: a tool records only an exact pick as shown, keeps 
           expect(kind, where).toBe("print");
           expect(String(step.directive!.message ?? ""), where).toMatch(/--request [0-9a-f]{8}|--details|--action|--choice/);
         } else if (engine.step === "recorded") {
-          expect(["print", "run-stage"], where).toContain(kind);
+          expect(["print", "run-stage"].includes(kind ?? ""), where).toBe(true);
         }
         for (const never of engine.never ?? []) expect(JSON.stringify(step.directive), where).not.toContain(never);
       }
