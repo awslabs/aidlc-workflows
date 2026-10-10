@@ -1,6 +1,6 @@
 # Skills, ambient rules, and onboarding
 
-**Finding:** DEVIN-02. **Status:** Implemented; context-injection limits require host verification. **Source baseline:** `6e208f7b`. **Fact-checked:** 2026-09-12.
+**Finding:** DEVIN-02. **Status:** Implemented; host injection limits documented in the 3000.11.3 bundle, effective threshold unmeasured. **Source baseline:** `6e208f7b`. **Fact-checked:** 2026-09-12; injection limits 2026-10-10.
 
 ## Why this was needed
 
@@ -22,7 +22,7 @@ No custom statusline is wired for Devin. `/aidlc --status` is the on-demand alte
 
 ## Evidence and limits
 
-The project-owned byte limit does not prove complete host injection under every configuration. Historical notes reported a 16,384-byte truncation marker, but the proposed shared-budget explanation was not established. Rule listing and source-file size alone do not prove what reached the model.
+The project-owned byte limit does not prove complete host injection under every configuration. The 3000.11.3 documentation bundle now documents the host mechanism: always-on rule files are capped at 32 KiB each, with oversized ones truncated alongside a source-path hint (`changelog/stable.mdx:743`, v2026.4.17-0), and triggered rules that exceed the available context budget switch to path-only guidance (`stable.mdx:655`, v2026.4.24-1). The current always-on set at `4ed211f6` totals 25,666 bytes before user rules — root `AGENTS.md` 7,866, `.devin/rules/aidlc-onboarding.md` 15,229, `.devin/rules/aidlc.md` 2,571 — every file under the per-file cap. The PR #996 reviewer measured an `AGENTS.md` truncated at 15,309 of 19,908 bytes on 3000.6.7; that figure is external and unverified here, and the documented limits are 3000.11.3's, not that build's. Rule listing and source-file size alone do not prove what reached the model.
 
 The authored orchestrator still contains statements such as ordinary `next` mutating nothing; current engine publication can update runtime metadata. Only explicit observer modes have the narrower write-free consultation contract described in DEVIN-11. Research must not copy the orchestrator sentence as an implementation fact.
 
@@ -33,7 +33,7 @@ The authored orchestrator still contains statements such as ordinary `next` muta
 | Runner regeneration | Mutating runners stay user-only after packaging and regeneration | t331 pins packaged metadata; aidlc-runner-gen consumes it; exercise installed regeneration separately |
 | Rule activation | Pointer is always-on, contains navigation, and does not inline memory | t331 rules and pointer tests; live injection NOT RUN |
 | Onboarding growth | Rendered UTF-8 byte size stays within the current project limit and key guidance remains | t331 tests 7b–7d; not proof of host truncation behavior |
-| Actual context delivery after a host update | In a disposable installation, beginning/end sentinels and required rules are visible in injected context | Manual verification gap; test with and without substantial global rules |
+| Actual context delivery after a host update | In a disposable installation, beginning/end sentinels and required rules are visible in injected context; each always-on file stays under the documented 32 KiB cap and triggered rules inject rather than degrading to path-only guidance | Manual verification gap; test with and without substantial global rules |
 | Status behavior | Status is available on demand; no claim of a Devin custom statusline or complete Claude usage ledger | DEVIN-06 and DEVIN-14 |
 
 ## Superseded approaches and history

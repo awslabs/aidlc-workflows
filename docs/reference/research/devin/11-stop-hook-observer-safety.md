@@ -1,6 +1,6 @@
 # Stop-hook consultation must preserve live approval state
 
-**Finding:** DEVIN-11. **Status:** Shared observer mechanism implemented and regression-covered. **Source baseline:** `6e208f7b`. **Fact-checked:** 2026-09-12.
+**Finding:** DEVIN-11. **Status:** Shared observer mechanism implemented and regression-covered; the Devin adapter adds a foreground child-Stop dispatch-window carve-out upstream of the core hook (`4ed211f6`). **Source baseline:** `6e208f7b`; the dispatch-window carve-out at `4ed211f6`. **Fact-checked:** 2026-09-12; adapter carve-out 2026-10-10.
 
 ## Why this was needed
 
