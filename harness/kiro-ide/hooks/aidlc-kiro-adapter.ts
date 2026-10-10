@@ -176,6 +176,7 @@ import {
 } from "../tools/aidlc-testing-posture.ts";
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { kiroTerminalBreakWarning } from "../tools/aidlc-kiro-ide-terminal.ts";
 import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 import { forgetRulesDelivered, kiroIdeTurnOpen, noteKiroIdeTurn } from "../tools/aidlc-rules-held.ts";
@@ -2297,6 +2298,13 @@ if (target === "verb-intercept") {
     if (chat !== "" && !kiroIdeTurnOpen(projectDir, chat)) endTerminalHold(terminalSessionId());
     return 0;
   }
+  // Kiro's Command Prompt terminal dropped a reply over a second long (the
+  // engine noted it at exit): the person hears why once, with the answer to
+  // this message of theirs, and never again on this machine. A line handed
+  // over before a tool call was swallowed live; one that comes with the
+  // person's message is answered.
+  const breakLine = kiroTerminalBreakWarning();
+  if (breakLine !== "") process.stdout.write(`${breakLine}\n`);
   const sessionId = terminalSessionId();
   const turn = bumpTurn(sessionId);
   recordPromptEmpty(sessionId, turn);

@@ -1,3 +1,4 @@
+import { noteSlowReplyAtExit } from "./aidlc-kiro-ide-terminal.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { hasStoredMessages, latestMessage } from "./aidlc-message-store.ts";
 import { createHash, randomUUID } from "node:crypto";
@@ -13126,6 +13127,7 @@ export async function main(argv: string[]): Promise<void> {
 }
 
 if (import.meta.main) {
+  noteSlowReplyAtExit();
   void main(process.argv.slice(2)).catch((error) => {
     die(errorMessage(error));
   });

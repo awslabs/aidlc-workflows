@@ -199,6 +199,7 @@ import {
 } from "./aidlc-kiro-ide-workflows.ts";
 import {
   KIRO_TERMINAL_ISSUE_ID,
+  KIRO_TERMINAL_POWERSHELL,
   KIRO_TERMINAL_QUESTION,
   kiroTerminalKeptLine,
   kiroTerminalQuestionDue,
@@ -2324,6 +2325,12 @@ function kiroTerminalSwitch(
   const data = (answer: KiroTerminalAnswer | null) => ({
     kiroTerminal: { commandPrompt: false, profile: "PowerShell", settingsPath: state.settingsPath, answer },
   });
+  // Nothing to set: the profile is PowerShell by name, or Kiro's default (no key).
+  // No question, no write; the answer is kept so no chat asks about it.
+  if (state.readable && !state.commandPrompt && (state.profile === null || state.profile === KIRO_TERMINAL_POWERSHELL)) {
+    if (!argv.includes("--dry-run")) recordKiroTerminalAnswer("powershell");
+    return success("Kiro's terminal is already PowerShell.", data(argv.includes("--dry-run") ? readKiroTerminalAnswer() : "powershell"));
+  }
   if (argv.includes("--dry-run")) {
     return success(`would set Kiro's terminal to PowerShell in ${state.settingsPath}`, data(readKiroTerminalAnswer()));
   }

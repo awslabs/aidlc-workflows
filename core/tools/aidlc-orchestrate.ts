@@ -74,6 +74,7 @@
 // per the tool/agent/human split (routing string-building to an LLM would
 // invert the whole thesis).
 
+import { noteSlowReplyAtExit } from "./aidlc-kiro-ide-terminal.ts";
 import {
   createHash,
   randomBytes,
@@ -16228,6 +16229,7 @@ export function main(argv: string[]): void {
 }
 
 if (import.meta.main) {
+  noteSlowReplyAtExit();
   try {
     main(process.argv.slice(2));
   } catch (e) {

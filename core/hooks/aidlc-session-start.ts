@@ -43,7 +43,7 @@ import {
   trackedKiroIdeSteeringAsk,
 } from "../tools/aidlc-includes.ts";
 import { kiroIdeWorkflowsAsk } from "../tools/aidlc-kiro-ide-workflows.ts";
-import { kiroIdeTerminalAsk } from "../tools/aidlc-kiro-ide-terminal.ts";
+import { kiroIdeTerminalAsk, kiroIdeTerminalStandingLine, recordKiroTerminalShell } from "../tools/aidlc-kiro-ide-terminal.ts";
 import {
   isBindableIntentRecordName,
   isSafeIntentRecordName,
@@ -329,8 +329,15 @@ if (sessionId && !rebindCheckOnly) {
   } catch {
     // Asked at a later start.
   }
+  // Kiro's terminal is Command Prompt: the question once per machine, and in
+  // every chat the mechanics and the one setter (a chat that was never asked
+  // otherwise knows nothing of it and tells the person it switched when it did not).
   try {
-    if (runtimeHarnessName(projectDir) === "kiro-ide") asks.push(kiroIdeTerminalAsk(aidlcInvocation()));
+    if (runtimeHarnessName(projectDir) === "kiro-ide") {
+      recordKiroTerminalShell();
+      asks.push(kiroIdeTerminalAsk(aidlcInvocation()));
+      asks.push(kiroIdeTerminalStandingLine(aidlcInvocation()));
+    }
   } catch {
     // Asked at a later start.
   }

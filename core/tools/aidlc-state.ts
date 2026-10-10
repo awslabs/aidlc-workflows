@@ -1,3 +1,4 @@
+import { noteSlowReplyAtExit } from "./aidlc-kiro-ide-terminal.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
 import { spawnSync } from "node:child_process";
@@ -1051,6 +1052,7 @@ export function main(argv: string[]): void {
 }
 
 if (import.meta.main) {
+  noteSlowReplyAtExit();
   main(process.argv.slice(2));
 }
 

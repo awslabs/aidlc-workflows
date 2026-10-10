@@ -494,10 +494,13 @@ tool" setting off), so it needs nothing.
 ### Command Prompt as Kiro's terminal on Windows
 
 Kiro IDE runs its agent's commands in your default terminal profile. When that
-is **Command Prompt**, AI-DLC's commands, written for PowerShell, can split
-your words at their quotes (a value reaches AI-DLC as several pieces, or your
-request is recorded with its quotes), and every command looks like it failed:
-Kiro shows exit code -1 for each one. Kiro itself recommends PowerShell.
+is **Command Prompt**, Kiro hands AI-DLC a command's reply only when the
+command finishes within a second (Command Prompt has no shell integration, so
+Kiro reads the result one second after sending the command and shows exit code
+-1 for every run). Most AI-DLC steps take longer, so their replies come back
+empty while the step itself has run, and the agent needs extra turns to catch
+up; AI-DLC's commands, written for PowerShell, can also split your words at
+their quotes. Kiro itself recommends PowerShell.
 
 When Kiro's terminal is Command Prompt and you have not answered before on this
 computer, AI-DLC asks you once whether to set it to PowerShell: during
@@ -515,6 +518,12 @@ aidlc config trust --kiro-terminal powershell --yes
 
 Kiro's own **Terminal: Select Default Profile** command does the same.
 `/aidlc --doctor` shows a warning while Kiro's terminal is Command Prompt.
+
+While your terminal is Command Prompt, every Kiro IDE chat is told how that
+terminal behaves and how to set PowerShell when you ask for it, so any chat can
+carry out "set Kiro's terminal to PowerShell". If you kept Command Prompt, the
+first time a step's reply is lost the agent tells you once what happened and
+that PowerShell avoids it; it does not ask again.
 
 ### Command cards end with "dministrator: ...powershell.exe" on Windows
 
