@@ -27862,6 +27862,44 @@ export function personsGateWords(
   return words.length > 0 ? words.join("\n") : null;
 }
 
+// Where the person's words are, when the engine cannot tell which chat said
+// them. Their words are kept per chat (personsGateWords above), so a command
+// the engine cannot tie to a chat records a gate with nothing of theirs on it,
+// which reads as though they never answered. This is the pointer that row
+// carries instead: the message the human-turn hook kept for their latest reply
+// after this gate was shown, never a copy of the words themselves. Null when
+// more than one chat has replied since, because which of them answered is not
+// the engine's to guess, and null when no reply was kept.
+export function personsGateMessagePointer(
+  projectDir: string,
+  gate: { stage: string; unit?: string },
+): string | null {
+  try {
+    const rows = readAuditShardEvents(projectDir);
+    let shown = -1;
+    rows.forEach((row, at) => {
+      if (
+        row.event === "STAGE_AWAITING_APPROVAL" &&
+        auditBlockField(row.block, "Stage") === gate.stage &&
+        (gate.unit === undefined || auditBlockField(row.block, "Unit") === gate.unit) &&
+        auditBlockField(row.block, "Recovered") !== "true"
+      ) {
+        shown = at;
+      }
+    });
+    if (shown < 0) return null;
+    const replies = rows.slice(shown + 1).filter((row) => isReplyTurn(row));
+    if (new Set(replies.map((row) => auditBlockField(row.block, "Session") ?? "")).size > 1) return null;
+    for (let at = replies.length - 1; at >= 0; at -= 1) {
+      const id = auditBlockField(replies[at].block, "Message Id");
+      if (id) return id;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // What the person asked to change at a stage gate, in their own words: every
 // message they typed since the gate was presented, in order and verbatim,
 // leaving out a message that is only an option pick ("2", "Request Changes"),
