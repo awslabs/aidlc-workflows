@@ -5,7 +5,8 @@
 //     tool_response } — no success flag; USER_PROMPT arrives empty. PostToolUse
 //     write/shell captures have empty tool_input, while later builds populate
 //     some PreToolUse/delegation inputs. Read only for the three payload targets
-//     plus SessionStart/Stop identity, raced against a 2s ceiling.
+//     plus SessionStart/Stop identity, read until Kiro closes stdin (a 60 s safety limit
+//     ends a channel that never closes).
 //   - IDE 0.12: JSON in the USER_PROMPT env var, camelCase { toolName,
 //     toolArgs, toolResult, toolSuccess }; stdin was opened but never
 //     written/closed. A non-empty USER_PROMPT is consumed immediately, without
@@ -2355,7 +2356,8 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
 
 // ============================================================
 // The IDE 1.x stdin channel (upstream #543/#555): snake_case JSON on stdin,
-// USER_PROMPT empty. Payload acquisition is raced against a 2s timeout and
+// USER_PROMPT empty. Payload acquisition waits for Kiro to close stdin (a 60 s safety
+// limit ends a channel that never closes) and is
 // GATED to the two payload-dependent targets — every other target must never
 // touch stdin (block fires on EVERY PreToolUse).
 // ============================================================

@@ -390,7 +390,7 @@ its zero-latency path. The approval floor (`enforce-approval-gate`) runs on ever
 On 1.x it reads the invoking chat's `session_id`, so concurrent chats are held
 by their own gates; the payload arrives and the channel closes with the call,
 so it does not wait on the normal path, and only a channel that never closes
-holds it until the 2s ceiling. A 0.12 payload carries no `session_id`, so the
+holds it until the 60 s safety limit. A 0.12 payload carries no `session_id`, so the
 floor uses the identity derived from the IDE host instance: every chat in that
 host shares it and is judged by the gates of the workflow it is bound to.
 
