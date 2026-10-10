@@ -1,24 +1,25 @@
 // Kiro's agent cuts any tool result over 30,000 characters (CHAR_THRESHOLD in
-// the kiro-agent bundle): a skill load shows only the first and last 500
-// characters, and a file read the first 30,000. Both Kiro skills are about
-// three times that, so the part Kiro always shows tells the agent to read the
-// whole file in parts that each fit, and the agent prompts say the same (#2167).
+// the kiro-agent bundle): a file read shows the first 30,000. Both Kiro skills
+// are about three times that, and when the conductor had to read its own skill
+// with its file tool in parts, Kiro IDE 1.2.37 stopped after four of ten parts
+// in five of six measured chats, so 230 of 390 lines never reached it. The
+// conductor now carries the skill and its two annexes as the agent's own
+// `file://` resources, which Kiro puts whole into that agent's context at chat
+// start (measured on Kiro IDE 1.2.37: all 102 KB, no read), and the prompt says
+// so; nothing in the skill asks to be read any more.
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const REPO = join(import.meta.dir, "..", "..");
-const KIRO_RESULT_CUT = 30_000;
-const PREVIEW = 500;
 // Each part a read returns, with room for the read tool's own wrapper.
-const PART_LINES = 40;
 const PART_MAX_CHARS = 28_000;
-const READ_STEP = "read `.kiro/skills/aidlc/SKILL.md` with your file tool in parts of at most 40 lines (offset and limit), from the first line to the last";
-// Live on Kiro IDE 1.2.37 the Default agent read the file once, got its first
-// 121 lines with Kiro's note to go on from line 122, and never did: the step
-// spoke only of loading the skill and let one cut read count as all of it.
-const CUT_SHORT = "a read that comes back cut short is not all of it";
-const PROMPT_STEP = "read all of .kiro/skills/aidlc/SKILL.md with your file tool in parts of at most 40 lines, from the first line to the last (Kiro shows a long skill or file only in part), unless all of it is already in this chat";
+const SKILL_FILES = ["SKILL.md", "question-rendering.md", "composer.md"] as const;
+const RESOURCES = SKILL_FILES.map((file) => `file://.kiro/skills/aidlc/${file}`);
+const PROMPT_ITEM =
+  "the aidlc skill (.kiro/skills/aidlc/SKILL.md) and the two files beside it (question-rendering.md and composer.md) are in your context from the start of this chat: follow them, and never read them with your file tool; read every other AI-DLC file they send you to (a protocol module, a stage file) with your file tool in parts of at most 200 lines, to its last line;";
+// The read step the skill and the prompts carried while the agent read the skill itself.
+const OLD_READ_STEP = "with your file tool in parts of at most 40 lines";
 
 // What Kiro loads as the skill: the text after the front matter.
 function skillBody(text: string): string {
@@ -26,60 +27,57 @@ function skillBody(text: string): string {
   return match ? text.slice(match[0].length) : text;
 }
 
-const SKILLS = [
-  ["Kiro IDE", "dist/kiro-ide/.kiro/skills/aidlc/SKILL.md"],
-  ["Kiro IDE release", "dist-release/kiro-ide/.kiro/skills/aidlc/SKILL.md"],
-  ["Kiro CLI", "dist/kiro/.kiro/skills/aidlc/SKILL.md"],
-  ["Kiro CLI release", "dist-release/kiro/.kiro/skills/aidlc/SKILL.md"],
+function frontmatter(text: string): string {
+  const match = text.match(/^---\n([\s\S]*?)\n---\n/);
+  return match ? match[1] : "";
+}
+
+const TREES = [
+  ["Kiro IDE", "dist/kiro-ide"],
+  ["Kiro IDE release", "dist-release/kiro-ide"],
+  ["Kiro CLI", "dist/kiro"],
+  ["Kiro CLI release", "dist-release/kiro"],
 ] as const;
 
-describe("t-kiro-skill-read-in-parts: the skill reaches the agent past Kiro's cut", () => {
-  for (const [tool, rel] of SKILLS) {
-    const text = readFileSync(join(REPO, rel), "utf-8");
-    const body = skillBody(text);
+function conductorPrompt(treeRoot: string): string {
+  const ide = join(REPO, treeRoot, ".kiro", "agents", "aidlc.md");
+  if (existsSync(ide)) return skillBody(readFileSync(ide, "utf-8"));
+  return (JSON.parse(readFileSync(join(REPO, treeRoot, ".kiro", "agents", "aidlc.json"), "utf-8")) as { prompt: string }).prompt;
+}
 
-    test(`${tool}: the skill is longer than Kiro shows, so the step is needed`, () => {
-      expect(body.length).toBeGreaterThan(KIRO_RESULT_CUT);
+function conductorResources(treeRoot: string): string[] {
+  const ide = join(REPO, treeRoot, ".kiro", "agents", "aidlc.md");
+  if (existsSync(ide)) {
+    return [...frontmatter(readFileSync(ide, "utf-8")).matchAll(/^\s+- "(file:\/\/[^"]+)"$/gm)].map((m) => m[1]);
+  }
+  return (JSON.parse(readFileSync(join(REPO, treeRoot, ".kiro", "agents", "aidlc.json"), "utf-8")) as { resources: string[] }).resources;
+}
+
+describe("t-kiro-skill-read-in-parts: the conductor carries the skill as its own resources", () => {
+  for (const [tool, root] of TREES) {
+    test(`${tool}: the conductor lists the skill and its two annexes as file resources, and each one is shipped`, () => {
+      const resources = conductorResources(root);
+      for (const resource of RESOURCES) {
+        expect(resources, `${tool} resources`).toContain(resource);
+        expect(existsSync(join(REPO, root, resource.slice("file://".length))), resource).toBe(true);
+      }
     });
 
-    test(`${tool}: the first and the last ${PREVIEW} characters Kiro shows carry the step`, () => {
-      expect(body.slice(0, PREVIEW)).toContain(READ_STEP);
-      expect(body.slice(-PREVIEW)).toContain(READ_STEP);
-      expect(body.slice(0, PREVIEW)).toContain(CUT_SHORT);
-      expect(body.slice(-PREVIEW)).toContain(CUT_SHORT);
+    test(`${tool}: the skill asks nothing about reading itself`, () => {
+      const body = skillBody(readFileSync(join(REPO, root, ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8"));
+      expect(body).not.toContain(OLD_READ_STEP);
+      expect(body).not.toContain("Read all of this file before any AI-DLC command");
+      expect(body).not.toContain("## Read all of this skill");
       expect(body).not.toContain("loading this skill shows only its start and its end");
     });
 
-    test(`${tool}: the exception counts a skill that is already in the chat, however it got there`, () => {
-      // kiro-cli's v2 engine expands /aidlc into the whole skill body as the user message, and the
-      // agent then re-read a file it already held, 4 to 10 reads a turn, telling the person so
-      // (53 of 73 live turns, 2026-10-10). The exception reads "already in this chat", which a
-      // message that carried the whole skill satisfies; where Kiro cuts the skill load, the read stays.
-      expect(body).toContain("unless every line of it is already in this chat");
-      expect(body).toContain("If every line of this file is not already in this chat, do it now");
-      expect(body).not.toContain("unless you already read");
-      expect(body).not.toContain("If you have not read every line");
-    });
-
-    test(`${tool}: every ${PART_LINES}-line part fits in one Kiro result`, () => {
-      const lines = text.split("\n");
-      let largest = 0;
-      for (let start = 0; start < lines.length; start++) {
-        largest = Math.max(largest, lines.slice(start, start + PART_LINES).join("\n").length + 1);
-      }
-      expect(largest).toBeLessThan(PART_MAX_CHARS);
+    test(`${tool}: the conductor prompt says the skill is in its context from the start, never read`, () => {
+      const prompt = conductorPrompt(root);
+      expect(prompt).toContain(PROMPT_ITEM);
+      expect(prompt).not.toContain(OLD_READ_STEP);
+      expect(prompt).not.toContain("unless the aidlc skill is already in this chat");
     });
   }
-
-  test("both Kiro agent prompts say to read all of it, in parts", () => {
-    const ide = readFileSync(join(REPO, "dist", "kiro-ide", ".kiro", "agents", "aidlc.md"), "utf-8");
-    const cli = (JSON.parse(readFileSync(join(REPO, "dist", "kiro", ".kiro", "agents", "aidlc.json"), "utf-8")) as { prompt: string }).prompt;
-    for (const prompt of [ide, cli]) {
-      expect(prompt).toContain(PROMPT_STEP);
-      // A skill load's preview is not the skill: the old wording let it count as read.
-      expect(prompt).not.toContain("unless the aidlc skill is already in this chat");
-    }
-  });
 });
 
 // The protocol modules, stage files and agent files the skill sends the agent
@@ -92,7 +90,7 @@ describe("t-kiro-skill-read-in-parts: the skill reaches the agent past Kiro's cu
 const MODULE_PART_LINES = 200;
 const MODULE_READ_STEP = "read every module named in `directive.protocol_modules`, and the stage file, with your file tool in parts of at most 200 lines (offset and limit), from the first line to the last";
 const MODULE_CUT_SHORT = "never act on a module or stage file until its last part has come back";
-const PROMPT_MODULE_STEP = "read every other AI-DLC file it sends you to (a protocol module, a stage file) the same way, in parts of at most 200 lines, to its last line";
+const PROMPT_MODULE_STEP = "read every other AI-DLC file they send you to (a protocol module, a stage file) with your file tool in parts of at most 200 lines, to its last line";
 
 function markdownFiles(dir: string): string[] {
   return readdirSync(dir, { recursive: true, withFileTypes: true })
@@ -102,20 +100,20 @@ function markdownFiles(dir: string): string[] {
 }
 
 describe("t-kiro-skill-read-in-parts: every file the skill sends the agent to fits its parts", () => {
-  for (const [tool, rel] of SKILLS) {
-    const root = join(REPO, rel.split("/.kiro/")[0], ".kiro");
+  for (const [tool, root] of TREES) {
+    const kiroDir = join(REPO, root, ".kiro");
 
     test(`${tool}: the skill says to read modules and stage files in ${MODULE_PART_LINES}-line parts, to the last line`, () => {
-      const body = skillBody(readFileSync(join(REPO, rel), "utf-8"));
+      const body = skillBody(readFileSync(join(kiroDir, "skills", "aidlc", "SKILL.md"), "utf-8"));
       expect(body).toContain(MODULE_READ_STEP);
       expect(body).toContain(MODULE_CUT_SHORT);
     });
 
     test(`${tool}: every ${MODULE_PART_LINES}-line part of every protocol module, stage file and agent file fits in one Kiro result`, () => {
       const files = [
-        ...markdownFiles(join(root, "aidlc-common", "protocols")),
-        ...markdownFiles(join(root, "aidlc-common", "stages")),
-        ...markdownFiles(join(root, "agents")),
+        ...markdownFiles(join(kiroDir, "aidlc-common", "protocols")),
+        ...markdownFiles(join(kiroDir, "aidlc-common", "stages")),
+        ...markdownFiles(join(kiroDir, "agents")),
       ];
       expect(files.length).toBeGreaterThan(40);
       for (const file of files) {
@@ -127,13 +125,11 @@ describe("t-kiro-skill-read-in-parts: every file the skill sends the agent to fi
         expect(largest, relative(REPO, file)).toBeLessThan(PART_MAX_CHARS);
       }
     });
-  }
 
-  test("both Kiro agent prompts say to read every other AI-DLC file in parts too", () => {
-    const ide = readFileSync(join(REPO, "dist", "kiro-ide", ".kiro", "agents", "aidlc.md"), "utf-8");
-    const cli = (JSON.parse(readFileSync(join(REPO, "dist", "kiro", ".kiro", "agents", "aidlc.json"), "utf-8")) as { prompt: string }).prompt;
-    for (const prompt of [ide, cli]) expect(prompt).toContain(PROMPT_MODULE_STEP);
-  });
+    test(`${tool}: the conductor prompt says to read every other AI-DLC file in parts`, () => {
+      expect(conductorPrompt(root)).toContain(PROMPT_MODULE_STEP);
+    });
+  }
 });
 
 // The generated knowledge preflight in every delegated agent file tells a
@@ -144,8 +140,8 @@ const PREFLIGHT_MARKER = "<!-- aidlc-delegated-knowledge-preflight -->";
 const PREFLIGHT_KIRO_CLAUSE = "Kiro shows only part of a long file: read each one with your file tool in parts of at most 200 lines (offset and limit), from the first line to the last; a read that comes back cut short is not all of it.";
 
 describe("t-kiro-skill-read-in-parts: the generated preflight tells a Kiro helper to read its knowledge in parts", () => {
-  for (const [tool, rel] of SKILLS) {
-    const agents = join(REPO, rel.split("/.kiro/")[0], ".kiro", "agents");
+  for (const [tool, root] of TREES) {
+    const agents = join(REPO, root, ".kiro", "agents");
     test(`${tool}: every delegated agent file carries the clause after the preflight marker`, () => {
       const files = readdirSync(agents).filter((name) => /^aidlc-.*-agent\.md$/.test(name));
       expect(files.length).toBe(14);
