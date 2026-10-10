@@ -55,6 +55,8 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 | `session-end.ts` | SessionEnd | Project-wide (settings.json) | (empty) | Emit `SESSION_ENDED` on graceful exit to the intent recorded for that exact session; fail closed instead of using the shared active cursor when a UUID-backed workflow has no session binding |
 | `aidlc-statusline.ts` | statusLine | Project-wide (settings.json) | -- | Show real-time progress in terminal |
 
+Before a Code Generation plan exists, `engine log decision` and `engine log answer` for `--stage code-generation --checkpoint summary-confirmation` are admitted as planning prerequisites, like the Plan Approval checkpoint. The log owner still validates the questions file, Unit and human reply. Summary confirmation grants no Plan Approval; source changes and developer dispatch remain subject to the plan guard.
+
 **One process for the checks before a tool call.** A host starts every hook it
 has registered for an event at once, each as its own process loading the whole
 engine before its own filter decides there is nothing to do. Claude Code ran
