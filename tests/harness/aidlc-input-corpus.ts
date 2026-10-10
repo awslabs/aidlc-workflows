@@ -137,17 +137,15 @@ export function argvVariants(item: CorpusItem): Array<[ArgvVariant, string[]]> {
 
 export interface Exec { status: number; stdout: string; stderr: string }
 export async function exec(cmd: string[], opts: { cwd: string; env: NodeJS.ProcessEnv; input?: string }): Promise<Exec> {
+  // The input goes in as one buffer the runtime writes and closes itself: a hook that starts slowly under load still
+  // reads the whole line, where a pipe written and ended by hand once reached a Kiro IDE hook empty on Windows.
   const proc = Bun.spawn(cmd, {
     cwd: opts.cwd,
     env: opts.env as Record<string, string>,
-    stdin: opts.input === undefined ? "ignore" : "pipe",
+    stdin: opts.input === undefined ? "ignore" : new TextEncoder().encode(opts.input),
     stdout: "pipe",
     stderr: "pipe",
   });
-  if (opts.input !== undefined && proc.stdin) {
-    proc.stdin.write(opts.input);
-    proc.stdin.end();
-  }
   const timer = setTimeout(() => proc.kill(), remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS));
   try {
     const [stdout, stderr, status] = await Promise.all([

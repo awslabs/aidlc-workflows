@@ -4,13 +4,16 @@
 // What people type after /aidlc (and in plain chat once work is under way), as a checked-in corpus:
 // tests/fixtures/aidlc-input/corpus.json. Each item is one typed line at one workspace state, with
 // MEANING (what the person means, in plain words) and EXPECTED (what the engine's first step must
-// do about it). The person's turn goes through each host's own human-turn hook (Claude Code, Codex,
-// Kiro CLI, Kiro IDE), then `next` runs with the line exactly as that host hands it over (bare, for a
-// plain-chat line). Pass, for every item: the message record keeps the typed text verbatim, the
-// person's words whole and in order, and the settings they typed; and `next` either acts exactly as
-// EXPECTED names (a known flag, verb, record name or pick) or returns the one agent-facing note,
-// never a wrong name, a dropped word, a setting silently lost, or a question to the person when
-// the item is not `ambiguous`.
+// do about it). For every item the person's turn goes through the Claude Code human-turn hook, then
+// `next` runs with the line exactly as the host hands it over (bare, for a plain-chat line). Pass: the
+// message record keeps the typed text verbatim, the person's words whole and in order, and the
+// settings they typed; and `next` either acts exactly as EXPECTED names (a known flag, verb, record
+// name or pick) or returns the one agent-facing note, never a wrong name, a dropped word, a setting
+// silently lost, or a question to the person when the item is not `ambiguous`. The other hosts' hooks
+// (Codex, Kiro CLI, Kiro IDE) take the same turn for a fixed sample of items per category (the first
+// HOST_HOOK_SAMPLE in corpus order), each in a fresh project at the item's state: the record contract
+// is the same hook under every host, so a sample holds the plumbing while the file stays fast enough
+// for every PR (one project and about two processes per item).
 //
 // An item whose EXPECTED needs a change not merged yet carries `after`: it is skipped, with the
 // reason, until that change is in the source (LANDED in the harness reads for it), so the file is
@@ -45,6 +48,10 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const PARALLEL = Math.max(1, Number.parseInt(process.env.AIDLC_INPUT_PARALLEL ?? "6", 10) || 6);
 const ONLY = process.env.AIDLC_INPUT_ONLY?.split(",").map((s) => s.trim()).filter(Boolean);
+// How many items per category also take their turn through the Codex, Kiro CLI and Kiro IDE hooks. Fixed, not seeded:
+// the same items every run, on every platform.
+const HOST_HOOK_SAMPLE = 2;
+const HOST_HOOKS = HARNESSES.filter((h) => h !== "claude");
 
 interface Observed {
   hooks: Partial<Record<Harness, { exit: Exec; record: StoredRecord | null }>>;
@@ -54,24 +61,30 @@ interface Observed {
 const observed = new Map<string, Observed>();
 const projects: string[] = [];
 
-async function observe(item: CorpusItem): Promise<Observed> {
+async function observe(item: CorpusItem, hostHooks: boolean): Promise<Observed> {
   const result: Observed = { hooks: {}, steps: {} };
   const prompt = typedPrompt(item);
   const opts = { session: sessionOf(item), env: itemEnv(item) };
   try {
-    for (const harness of HARNESSES) {
-      // Hooks off: the host never ran its hook, so the engine meets the line with no turn of the person's on record.
-      if (!hookRuns(item) && harness !== "claude") continue;
-      const proj = await projectAt(item.state);
-      projects.push(proj);
-      if (hookRuns(item)) {
-        const exit = await say(proj, prompt, harness, opts);
-        result.hooks[harness] = { exit, record: messageRecord(proj, prompt) };
-      }
-      if (harness !== "claude") continue;
-      for (const [variant, argv] of argvVariants(item)) {
-        const step = await next(proj, argv, opts);
-        result.steps[variant] = { argv, ...step };
+    // The Claude Code path, in one project: the person's turn through the hook (unless hooks are off, when the engine
+    // meets the line with no turn on record), then the engine's first step per way the host hands the line over.
+    const proj = await projectAt(item.state);
+    projects.push(proj);
+    if (hookRuns(item)) {
+      const exit = await say(proj, prompt, "claude", opts);
+      result.hooks.claude = { exit, record: messageRecord(proj, prompt) };
+    }
+    for (const [variant, argv] of argvVariants(item)) {
+      const step = await next(proj, argv, opts);
+      result.steps[variant] = { argv, ...step };
+    }
+    // The other hosts' hooks, each on a fresh project at the same state, for the sampled items.
+    if (hostHooks && hookRuns(item)) {
+      for (const harness of HOST_HOOKS) {
+        const own = await projectAt(item.state);
+        projects.push(own);
+        const exit = await say(own, prompt, harness, opts);
+        result.hooks[harness] = { exit, record: messageRecord(own, prompt) };
       }
     }
   } catch (error) {
@@ -81,11 +94,15 @@ async function observe(item: CorpusItem): Promise<Observed> {
 }
 
 const live = CORPUS.filter((item) => waitsFor(item) === null && (!ONLY || ONLY.includes(item.id)));
+const hostHookSample = new Set<string>();
+for (const category of new Set(live.map((item) => item.category))) {
+  for (const item of live.filter((i) => i.category === category && hookRuns(i)).slice(0, HOST_HOOK_SAMPLE)) hostHookSample.add(item.id);
+}
 
 beforeAll(async () => {
   const queue = [...live];
   await Promise.all(Array.from({ length: PARALLEL }, async () => {
-    for (let item = queue.shift(); item !== undefined; item = queue.shift()) observed.set(item.id, await observe(item));
+    for (let item = queue.shift(); item !== undefined; item = queue.shift()) observed.set(item.id, await observe(item, hostHookSample.has(item.id)));
   }));
 }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 4);
 
@@ -123,11 +140,13 @@ for (const category of categories) {
         const engine = item.expected.engine;
         const prompt = typedPrompt(item);
 
-        // The record: every host's hook keeps the typed text, the words and the settings. No record is owed when the
-        // hook never ran (hooks off), and none is written today for a chat that has not joined or an unattended run
-        // (those items wait on their own changes; their record check is the words expectation, when set).
+        // The record: the hook keeps the typed text, the words and the settings, under every host that took the turn
+        // (Claude Code for every item, the others for the sampled ones). No record is owed when the hook never ran
+        // (hooks off), and none is written today for a chat that has not joined or an unattended run (those items
+        // wait on their own changes; their record check is the words expectation, when set).
         const recordOwed = hookRuns(item) && !["second-chat", "unattended"].includes(item.state);
-        for (const harness of hookRuns(item) ? HARNESSES : []) {
+        const hosts = hookRuns(item) ? ["claude", ...(hostHookSample.has(item.id) ? HOST_HOOKS : [])] : [];
+        for (const harness of hosts as Harness[]) {
           const hook = seen!.hooks[harness];
           expect(hook, `${harness}: no hook result`).toBeDefined();
           expect(hook!.exit.status, `${harness} hook: ${hook!.exit.stderr}`).toBe(0);
