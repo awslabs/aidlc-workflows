@@ -1735,18 +1735,22 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     try {
       const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
       writeFileSync(workerFile, JSON.stringify({ resources: [] }));
-      const payload = {
+      const dispatch = (session: string) => ({
         cwd: dir,
-        session_id: "11111111-2222-4333-8444-555555555555",
+        session_id: session,
         tool_name: "invoke_sub_agent",
         tool_input: { name: "aidlc-product-agent", prompt: "Inspect the project." },
-      };
-      expect(runAdapter(dir, "deliver-stage-rules", payload).code).toBe(2);
-      // No cursor names the record, so this chat stands outside it.
+      });
+      // A chat that reaches the hook while the cursor names the record joins it,
+      // so its dispatch is held until the worker file is repaired.
+      expect(runAdapter(dir, "deliver-stage-rules", dispatch("11111111-2222-4333-8444-555555555555")).code).toBe(2);
+      // A chat whose first contact finds no cursor naming the record never
+      // joined it, and its dispatch is not held. (A chat that already joined
+      // stays joined when the cursor moves later: that is its own work.)
       const cursor = join(dirname(dirname(seededStateFile(dir))), "active-intent");
       expect(existsSync(cursor)).toBe(true);
       writeFileSync(cursor, "");
-      const outside = runAdapter(dir, "deliver-stage-rules", payload);
+      const outside = runAdapter(dir, "deliver-stage-rules", dispatch("66666666-7777-4888-8999-aaaaaaaaaaaa"));
       expect(outside.code, outside.stderr).toBe(0);
       expect(outside.stderr).toBe("");
     } finally {
@@ -3067,5 +3071,60 @@ describe("the forwarded call is accepted as written", () => {
       const exact = guard(`bun .kiro/tools/aidlc.ts engine orchestrate next ${raw}`);
       expect(exact.code, exact.stderr).toBe(0);
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+// Kiro names the chat in the hook's environment (KIRO_SESSION_ID) and the
+// payload names the session the event belongs to. A delegation (subagent) has
+// its own session, so that pair is the one fact the engine cannot learn by
+// itself: noted once, every record the delegate's hooks write lands on the chat
+// that delegated instead of on whatever the shared cursor names. A helper picked
+// in /agent holds the chat's own id, so nothing is noted for it.
+describe("5e3: a delegation's own session is noted as the chat's", () => {
+  const CHAT = "369a3cd4-55a1-4d61-a812-d6b8fe4fba99";
+  const DELEGATION = "81a63708-483d-44a7-8b78-1766b546d0e9";
+  function helperOf(dir: string, id: string): string | null {
+    try {
+      return readFileSync(join(dir, "aidlc", ".aidlc-sessions", `${id}.helper-of`), "utf-8").trim();
+    } catch {
+      return null;
+    }
+  }
+  function passingCall(dir: string, session: string | undefined, chat: string | undefined) {
+    return runAdapter(
+      dir,
+      "state-transition-guard",
+      {
+        cwd: dir,
+        ...(session ? { session_id: session } : {}),
+        tool_name: "execute_bash",
+        tool_input: { command: "echo hi" },
+      },
+      [],
+      { KIRO_SESSION_ID: chat },
+    );
+  }
+
+  test("a delegation maps to the chat that delegated", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = passingCall(dir, DELEGATION, CHAT);
+      expect(r.code, r.stderr).toBe(0);
+      expect(helperOf(dir, DELEGATION)).toBe(CHAT);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the chat's own id, and a payload with no session, note nothing", () => {
+    const dir = scratchProject(true);
+    try {
+      expect(passingCall(dir, CHAT, CHAT).code).toBe(0);
+      expect(passingCall(dir, undefined, CHAT).code).toBe(0);
+      expect(helperOf(dir, CHAT)).toBeNull();
+      expect(helperOf(dir, DELEGATION)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

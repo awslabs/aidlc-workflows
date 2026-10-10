@@ -6877,6 +6877,89 @@ export interface WorkflowSelectionOptions {
   sessionId?: string;
 }
 
+// THE ONE DOOR. Every id a host hands the engine (a hook payload's session_id,
+// the shell's own chat variable, a helper's thread id) passes here before any
+// chat or work record is read: the raw id maps to its root chat through the
+// helper-of fact the adapter wrote (the one fact the engine cannot know), that
+// chat's binding is read, and a chat with no binding is bound at first contact
+// by the rule a new chat follows at SessionStart: silently, to the work the
+// shared cursor names if this machine has joined it, else to no record. From
+// then on the chat stays on that work; the cursor moving later (another window
+// switched) does not move it. A process with no id at all (the person's own
+// terminal) never comes here and keeps following the cursor.
+export interface ResolvedChat {
+  chatId: string;
+  binding: SessionBinding | null;
+}
+
+// First contact settles a chat's work only when this process IS that chat: its
+// identity came from its own environment or process ancestry. A caller that
+// NAMES a session is asking about a chat, not acting as one: a hook reading its
+// payload, a command carrying --session, an engine child a hook handed its
+// identity to. Those resolve read-only, so a host-injected prompt (a Kiro IDE
+// workflow step's brief, a background notification) never gets work of its own
+// and never leaves a non-person actor sitting on the person's record.
+export function resolveChat(
+  projectDir: string,
+  rawId: string | null | undefined,
+  options: { bind?: boolean } = {},
+): ResolvedChat | null {
+  const id = validSessionId(rawId ?? undefined);
+  if (!id) return null;
+  const chatId = helperSessionRoot(projectDir, id) ?? id;
+  const existing = readSessionBinding(projectDir, chatId);
+  if (existing) return { chatId, binding: existing };
+  const bind = options.bind ?? false;
+  // Read-only: the chat keeps whatever the shared selection names, as before.
+  if (!bind) return { chatId, binding: null };
+  // A worker's own worktree already names the work it was prepared for, and
+  // that record governs every resolution there, so first contact binds nothing:
+  // the worktree is the identity, not this chat.
+  let delegated: ReturnType<typeof delegatedWorktreeIntent> = null;
+  try {
+    delegated = delegatedWorktreeIntent(projectDir);
+  } catch {
+    delegated = null;
+  }
+  if (delegated) {
+    return {
+      chatId,
+      binding: { space: delegated.space, intent: delegated.intent, boundAt: isoTimestamp(), source: "worktree" },
+    };
+  }
+  const space = activeSpace(projectDir);
+  const resolved: WorkflowSelection = { space, intent: activeIntent(projectDir, space), sessionId: chatId, binding: null };
+  const contact = classifyFirstContact(projectDir, resolved);
+  writeSessionBinding(projectDir, chatId, contact.selection.space, contact.selection.intent, contact.source);
+  // A record the binding cannot carry, or a write that failed, still answers
+  // what the chat is on for this process.
+  const binding = readSessionBinding(projectDir, chatId) ??
+    { space: contact.selection.space, intent: contact.selection.intent, boundAt: isoTimestamp(), source: contact.source };
+  return { chatId, binding };
+}
+
+// The rule a new chat follows when it first meets a workflow: resolving a record
+// is not joining it. Joined (participation by the cursor, this checkout's
+// worktree record or a Unit claim) keeps the record and names the evidence as
+// the binding's source; not joined binds to no record ("unjoined" when a record
+// was found, "none" when there was nothing). SessionStart adds its own stamp and
+// pre-existing-binding branches on top; resolveChat uses the rule as it is.
+export function classifyFirstContact(
+  projectDir: string,
+  resolved: WorkflowSelection,
+): { joined: boolean; selection: WorkflowSelection; source: SessionBindingSource } {
+  const joined = workflowParticipation(projectDir, resolved) === "participant";
+  const selection = joined ? resolved : { ...resolved, intent: null, binding: null };
+  if (!joined) return { joined, selection, source: resolved.intent === null ? "none" : "unjoined" };
+  if (readActiveIntentCursor(projectDir, selection.space) === selection.intent) return { joined, selection, source: "cursor" };
+  const unitScope = readUnitScopeStamp(projectDir);
+  const source: SessionBindingSource =
+    unitScope?.space === selection.space && unitScope.intent_uuid === intentUuidForSelection(projectDir, selection)
+      ? "unit-claim"
+      : "worktree";
+  return { joined, selection, source };
+}
+
 // The session of the conversation that invoked this process, when the caller
 // named none: the hook-injected override first, then the process ancestry.
 // Throws SessionResolutionConflictError when the two disagree and the override
@@ -6940,9 +7023,17 @@ export function resolveWorkflowSelection(
     }
     return { space: delegated.space, intent: delegated.intent, sessionId: null, binding: null };
   }
-  const sessionId =
-    validSessionId(options.sessionId) ?? resolveInvokingSessionId(projectDir);
-  const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
+  const named = validSessionId(options.sessionId);
+  const rawSession = named ?? resolveInvokingSessionId(projectDir);
+  // Only this process's own identity settles a chat at first contact; a named
+  // session, or identity a hook handed us, is read-only.
+  const chat = rawSession
+    ? resolveChat(projectDir, rawSession, {
+        bind: named === null && process.env.AIDLC_SESSION_OVERRIDE_SOURCE !== "payload",
+      })
+    : null;
+  const sessionId = chat?.chatId ?? null;
+  const binding = chat?.binding ?? null;
   const space = options.space ?? binding?.space ?? activeSpace(projectDir);
   let intent: string | null;
   if (options.intent !== undefined) {
@@ -7027,23 +7118,30 @@ export function workflowParticipation(
   return "outsider";
 }
 
-// The workflow a hook acts on. A payload session that has a binding is pinned as
-// the session override while the hook runs, so the default path helpers resolve
-// the same record the hook classified (process ancestry or the shared cursor can
-// name another conversation). An id without a binding — a worker-scoped id — is
-// not pinned. Callers run `restore()` when the hook returns or throws.
+// The workflow a hook acts on. The payload id passes through resolveChat, so a
+// helper's own id names the chat that spawned it; that chat is pinned as the
+// session override while the hook runs, so the default path helpers resolve the
+// same record the hook classified (process ancestry or the shared cursor can
+// name another conversation). An id the engine cannot place, with no binding and
+// no chat an adapter named for it, is not pinned: a per-call or worker-scoped id
+// must not take the shared cursor's work while the caller's own ancestry names a
+// chat. A hook never settles a chat's work either: the event is the host's, not
+// the chat's own command. Callers run `restore()` when the hook returns or throws.
 export function enterHookWorkflow(
   projectDir: string,
   payloadSessionId: unknown,
 ): { selection: WorkflowSelection | null; participation: WorkflowParticipation; restore: () => void } {
-  const sessionId = typeof payloadSessionId === "string" ? validSessionId(payloadSessionId) : null;
+  const raw = typeof payloadSessionId === "string" ? validSessionId(payloadSessionId) : null;
+  const chat = raw === null ? null : resolveChat(projectDir, raw, { bind: false });
+  // Placed: this chat has a binding, or the id belongs to a chat an adapter named.
+  const placed = chat !== null && (chat.binding !== null || chat.chatId !== raw);
   let restore = () => {};
-  if (sessionId && readSessionBinding(projectDir, sessionId) !== null) {
+  if (chat && placed) {
     const previous = {
       AIDLC_SESSION_OVERRIDE: process.env.AIDLC_SESSION_OVERRIDE,
       AIDLC_SESSION_OVERRIDE_SOURCE: process.env.AIDLC_SESSION_OVERRIDE_SOURCE,
     };
-    process.env.AIDLC_SESSION_OVERRIDE = sessionId;
+    process.env.AIDLC_SESSION_OVERRIDE = chat.chatId;
     process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
     restore = () => {
       for (const [key, value] of Object.entries(previous)) {
