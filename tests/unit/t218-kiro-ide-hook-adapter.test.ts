@@ -1171,6 +1171,39 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
+  // A slug two records in the chat's space share stays with the seam: the
+  // utility answers in that space, naming both record dirs, instead of the
+  // conductor resolving the name against another chat's selection.
+  test("8c4: a shared slug is answered off-band in the chat's own space", () => {
+    const dir = scratchProject(true);
+    try {
+      const teamb = join(dir, "aidlc", "spaces", "teamb", "intents");
+      for (const record of ["260711-auth", "260712-auth"]) {
+        mkdirSync(join(teamb, record), { recursive: true });
+        writeFileSync(join(teamb, record, "aidlc-state.md"), "# AI-DLC State Tracking\n", "utf-8");
+      }
+      writeFileSync(join(teamb, "intents.json"), `${JSON.stringify([
+        { uuid: "00000000-0000-7000-8000-000000000041", slug: "auth", dirName: "260711-auth", status: "in-flight" },
+        { uuid: "00000000-0000-7000-8000-000000000042", slug: "auth", dirName: "260712-auth", status: "in-flight" },
+      ], null, 2)}\n`, "utf-8");
+      writeSessionBinding(dir, "sess_shared_slug", "teamb", "260711-auth", "switch");
+      const r = runIdeStdin(dir, "verb-intercept", JSON.stringify({
+        session_id: "sess_shared_slug", hook_event_name: "UserPromptSubmit", cwd: dir, prompt: "/aidlc intent auth",
+      }));
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toContain("Relay the output below");
+      // The utility's own line, read from the JSON it printed between the markers.
+      const relayed = /--- OUTPUT [0-9A-F]{16} \(exit (\d+)\) ---\n([\s\S]*?)\n--- END OUTPUT/.exec(r.stdout);
+      expect(relayed, r.stdout).not.toBeNull();
+      expect(relayed?.[1]).toBe("1");
+      expect((JSON.parse(relayed?.[2] ?? "{}") as { error?: string }).error).toBe(
+        'Ambiguous intent "auth" in space "teamb" (2 match). Use the full record-dir name: 260711-auth, 260712-auth.',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("8d: empty-prompt IDEs intercept execute_pwsh once and preserve exit-2 refusal semantics", () => {
     const dir = scratchProject(true);
     try {

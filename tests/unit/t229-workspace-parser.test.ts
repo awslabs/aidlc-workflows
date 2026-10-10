@@ -696,13 +696,23 @@ describe("utility handlers and reservation chokepoints", () => {
         expect(d.message, args.join(" ")).toContain(`The person typed: "${args.join(" ")}"`);
         expect(d.message, args.join(" ")).not.toContain("The person also asked:");
         expect(d.message, args.join(" ")).not.toContain("aidlc.ts engine intent auth`");
-        expect(classifyTerminalCommand(args, projectDir), args.join(" ")).toBeNull();
       }
+      // The seam keeps a bare shared slug: the utility's own line answers in the
+      // chat's space, naming the record dirs. Words, and a row with no record
+      // dir, still go to the conductor.
+      expect(classifyTerminalCommand(["intent", "auth"], projectDir)).toEqual({ subcommand: "intent", arg: "auth", source: "workspace-verb" });
+      expect(classifyTerminalCommand(["intent", "auth", "fix", "it"], projectDir)).toBeNull();
+      expect(classifyTerminalCommand(["intent", "ghost"], projectDir)).toBeNull();
       // A shared slug is named as such, with the record dirs to switch by.
       const shared = directive(projectDir, ["intent", "auth"]).message;
       expect(shared).toContain("`intent auth` names 2 intents: 260711-auth, 260712-auth, so nothing ran and nothing changed.");
       expect(shared).toContain("engine intent switch <record dir>` for the one the person meant");
       expect(shared).not.toContain("no intent is named");
+      expect(shared).not.toContain("After the switch, act on the rest");
+      // With words after the shared name, the words are still acted on, for the record picked.
+      const sharedWithWords = directive(projectDir, ["intent", "auth", "fix", "it"]).message;
+      expect(sharedWithWords).toContain("names 2 intents: 260711-auth, 260712-auth");
+      expect(sharedWithWords).toContain('The person typed: "intent auth fix it". After the switch, act on the rest of what they typed for the record they picked, or ask them once in plain words if you cannot tell what they meant.');
       // A row with no record dir is no record: the ordinary unknown-word step.
       expect(directive(projectDir, ["intent", "ghost"]).message).toContain('no intent is named "ghost"');
       // The names list says each slug once; the full record dir still selects.

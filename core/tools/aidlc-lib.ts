@@ -1791,7 +1791,11 @@ export function classifyTerminalCommand(argv: string[], projectDir?: string, ses
       if (workspaceCommand.words !== undefined) return null;
       if (
         projectDir !== undefined &&
-        !workspaceRecordExists(projectDir, workspaceCommand.noun, workspaceCommand.name, sessionId)
+        !workspaceRecordExists(projectDir, workspaceCommand.noun, workspaceCommand.name, sessionId) &&
+        // A slug several records share stays with the seam: the utility
+        // answers in the chat's own space, naming the record dirs, as it did
+        // before the record check existed.
+        ambiguousWorkspaceRecordDirs(projectDir, workspaceCommand.noun, workspaceCommand.name, sessionId).length < 2
       ) {
         return null;
       }
