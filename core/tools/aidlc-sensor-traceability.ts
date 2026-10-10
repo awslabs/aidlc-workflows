@@ -12,6 +12,8 @@ import {
   usesStageLevelPerUnitArtifacts,
 } from "./aidlc-lib.ts";
 
+import { loadRequirementAssignments } from "./aidlc-unit-requirements.ts";
+
 const VALID_STATUSES = new Set(["OK", "GAP", "ORPHAN", "Deferred", "N/A"]);
 
 interface CoverageEntry {
@@ -456,6 +458,14 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
       unitIds: unitIdMap(join(docsDir, "inception", "units-generation", "unit-of-work.md"), dag.units),
     };
     result.unitContext = context;
+    if (!hasStories) {
+      const read = readText(requirements);
+      if (read.content === null) result.reasons.push(read.reason ?? "requirements.md missing");
+      else {
+        const assigned = loadRequirementAssignments(join(docsDir, "inception", "units-generation"), read.content, dag.units);
+        result.reasons.push(...assigned.reasons);
+      }
+    }
     // Without stories the required set is FR-only ("otherwise enumerate every
     // FR"), but a scope that also traces NFRs must not have its correctly
     // mapped NFR rows reported as unmapped targets, so the join accepts both.
@@ -535,6 +545,14 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
         }
       } else {
         addSource(result, idsFromFile(stories, [ID_PATTERNS.AC], "stories.md"));
+      }
+    } else if (unit) {
+      const read = readText(requirements);
+      if (read.content === null) result.reasons.push(read.reason ?? "requirements.md missing");
+      else {
+        const assigned = loadRequirementAssignments(join(docsDir, "inception", "units-generation"), read.content, resolvedUnit.context.units, unit);
+        result.reasons.push(...assigned.reasons);
+        for (const id of assigned.ids) result.ids.add(id);
       }
     } else {
       addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR, ID_PATTERNS.NFR], "requirements.md"));

@@ -495,3 +495,77 @@ is an author error that the parser rejects.
 
 The schema above plus the five shipped manifests in
 `dist/claude/.claude/sensors/` are the working examples.
+
+### Unit requirement assignments without stories
+
+When User Stories is skipped and Units exist, Units Generation authors
+`inception/units-generation/unit-requirement-assignments.json`. It is a declared
+optional output because the stories route does not need it; the traceability
+sensor requires a complete assignment on the no-stories route. Schema version 1
+has an `assignments` array with exactly one row for each FR and intent-level NFR
+ID in `requirements.md` (including FR group IDs):
+
+```json
+{
+  "version": 1,
+  "assignments": [
+    { "id": "FR1", "owner": "u1-api", "related": [], "required_for": "owner" },
+    { "id": "NFR1", "owner": "u1-api", "related": ["u2-ui"], "required_for": "all" }
+  ]
+}
+```
+
+`owner` is one exact DAG directory name. `related` lists other declared Units,
+without duplicates or the owner. `required_for` is `owner` (owner only),
+`participants` (owner and related), or `all` (every Unit, including Units omitted
+from related). This separates accountability from applicability. A Unit without any applicable
+upstream IDs retains the sensor's existing empty-scope failure. Shared requirements remain
+required in every applicable Unit. Unknown IDs/Units, duplicates, incomplete
+assignments, malformed JSON, and `draft: true` / `not_for_active_use: true` fail
+with reasons; a present invalid file never falls back to legacy input.
+
+The Unit Code Generation sensor uses this independently determined set. It
+still adds Unit-local detailed NFR and BR IDs and validates coverage, statuses,
+and workspace-relative targets. The US-to-AC path and no-Unit global FR/NFR
+path remain as before. Downstream `upstream_ids` and coverage never define the
+expected set.
+
+#### Existing projects and refresh
+
+After a successful `aidlc config --harness <harness>` refresh, a dedicated
+migration examines each existing space/intent under its own audit lock. The
+config projection transaction is not a generic artifact migration hook. The
+migration uses the existing filesystem transaction's absent-only write,
+atomic candidate publication and rollback; it never overwrites an existing
+assignment, even an invalid one. Each record retries independently; a migration
+failure leaves the successful runtime refresh in place and names the remedy.
+Rerunning the refresh preserves already migrated records.
+
+Recovery reads only requirements, Unit definitions, the Unit DAG, and the
+upstream story map. Exact `U{n}`/directory table joins are accepted. An old
+single-implementing-Unit FR row is recoverable when it names no other related
+Unit. NFR applicability and shared FR applicability are never guessed. Explicit
+rows may use this table (all requirement IDs must be present):
+
+```markdown
+| Requirement | Owner | Related | Required For |
+|---|---|---|---|
+| FR1 | U1 | U2 | participants |
+| NFR1 | U1 | U2 | all |
+```
+
+For ambiguous/missing rows, the refresh leaves the new file absent and names
+the missing IDs and exact path. Author the JSON from independent upstream
+requirements and agreed Unit responsibilities, resolve applicability with the
+human, and use normal Units Generation review/gate for changed decisions.
+Do not copy the set from Code Generation coverage. Normal sensor runs are
+read-only; if the JSON is absent, they use the same complete explicit recovery
+in memory, allowing recoverable old projects to work before a refresh.
+
+No approval, state, or audit receipt is synthesized or rewritten by migration.
+Adding/changing this declared artifact changes Units Generation's review and
+validation fingerprint, so old receipts are not relabeled as reviews of the
+new artifact. It does not directly change Code Generation's plan/instructions/
+Testing Contract approval fingerprint. Changed applicability needs the normal
+review and a corresponding plan revision when implementation changes; migration
+is not a new human decision.

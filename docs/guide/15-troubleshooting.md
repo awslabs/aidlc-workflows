@@ -945,3 +945,15 @@ for the full report contents and safety model.
 - [Session Management](11-session-management.md): carrying on after compaction
 - [CLI Commands](12-cli-commands.md) — `--doctor`, `--status`, `--stage` usage
 - [Glossary](glossary.md) — Definitions for compaction, recovery breadcrumb, hook
+
+### Unit Code Generation reports other Units' requirements without User Stories
+
+Refresh the project's harness with `aidlc config --harness <harness>`. Existing
+complete, explicit upstream requirement assignments are recovered into
+`<record>/inception/units-generation/unit-requirement-assignments.json` without
+overwriting an existing file. The refresh names incomplete or ambiguous rows,
+including NFRs whose common applicability was never recorded. Author those
+assignments from the requirements and Unit responsibilities, with an owner and
+`required_for` (`owner`, `participants`, or `all`) for every FR/NFR, and follow
+normal Units Generation review for changed applicability. Do not fill them from
+the downstream coverage table. See [Unit requirement assignments](../reference/07-sensor-system.md#unit-requirement-assignments-without-stories).
