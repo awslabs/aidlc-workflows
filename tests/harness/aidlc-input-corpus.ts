@@ -4,6 +4,8 @@
 // engine's first step for every item; the live check (tests/e2e/t-live-aidlc-input-corpus.serial.test.ts) drives a
 // sample through real agents.
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import corpus from "../fixtures/aidlc-input/corpus.json";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
@@ -137,12 +139,16 @@ export function argvVariants(item: CorpusItem): Array<[ArgvVariant, string[]]> {
 
 export interface Exec { status: number; stdout: string; stderr: string }
 export async function exec(cmd: string[], opts: { cwd: string; env: NodeJS.ProcessEnv; input?: string }): Promise<Exec> {
-  // The input goes in as one buffer the runtime writes and closes itself: a hook that starts slowly under load still
-  // reads the whole line, where a pipe written and ended by hand once reached a Kiro IDE hook empty on Windows.
+  // The input is a file the child reads as its stdin, not a pipe this process has to write: the Kiro IDE hook gives a
+  // pipe two seconds before it settles for an empty payload, and on a loaded Windows runner this single-threaded parent
+  // (copying fixtures for other items) has written the pipe later than that, recording an empty turn. A file is complete
+  // before the child starts, whatever the parent is doing.
+  const payload = opts.input === undefined ? null : join(tmpdir(), `aidlc-input-stdin-${process.pid}-${randomUUID()}.json`);
+  if (payload !== null) writeFileSync(payload, opts.input as string, "utf-8");
   const proc = Bun.spawn(cmd, {
     cwd: opts.cwd,
     env: opts.env as Record<string, string>,
-    stdin: opts.input === undefined ? "ignore" : new TextEncoder().encode(opts.input),
+    stdin: payload === null ? "ignore" : Bun.file(payload),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -156,6 +162,7 @@ export async function exec(cmd: string[], opts: { cwd: string; env: NodeJS.Proce
     return { status, stdout, stderr };
   } finally {
     clearTimeout(timer);
+    if (payload !== null) rmSync(payload, { force: true });
   }
 }
 
