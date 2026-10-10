@@ -24,10 +24,13 @@ import {
   HARNESSES,
   LANDED,
   argvVariants,
+  hookRuns,
+  itemEnv,
   messageRecord,
   next,
   projectAt,
   say,
+  sessionOf,
   typedPrompt,
   waitsFor,
   type ArgvVariant,
@@ -54,15 +57,20 @@ const projects: string[] = [];
 async function observe(item: CorpusItem): Promise<Observed> {
   const result: Observed = { hooks: {}, steps: {} };
   const prompt = typedPrompt(item);
+  const opts = { session: sessionOf(item), env: itemEnv(item) };
   try {
     for (const harness of HARNESSES) {
+      // Hooks off: the host never ran its hook, so the engine meets the line with no turn of the person's on record.
+      if (!hookRuns(item) && harness !== "claude") continue;
       const proj = await projectAt(item.state);
       projects.push(proj);
-      const exit = await say(proj, prompt, harness);
-      result.hooks[harness] = { exit, record: messageRecord(proj, prompt) };
+      if (hookRuns(item)) {
+        const exit = await say(proj, prompt, harness, opts);
+        result.hooks[harness] = { exit, record: messageRecord(proj, prompt) };
+      }
       if (harness !== "claude") continue;
       for (const [variant, argv] of argvVariants(item)) {
-        const step = await next(proj, argv);
+        const step = await next(proj, argv, opts);
         result.steps[variant] = { argv, ...step };
       }
     }
@@ -115,12 +123,16 @@ for (const category of categories) {
         const engine = item.expected.engine;
         const prompt = typedPrompt(item);
 
-        // The record: every host's hook keeps the typed text, the words and the settings.
-        for (const harness of HARNESSES) {
+        // The record: every host's hook keeps the typed text, the words and the settings. No record is owed when the
+        // hook never ran (hooks off), and none is written today for a chat that has not joined or an unattended run
+        // (those items wait on their own changes; their record check is the words expectation, when set).
+        const recordOwed = hookRuns(item) && !["second-chat", "unattended"].includes(item.state);
+        for (const harness of hookRuns(item) ? HARNESSES : []) {
           const hook = seen!.hooks[harness];
           expect(hook, `${harness}: no hook result`).toBeDefined();
           expect(hook!.exit.status, `${harness} hook: ${hook!.exit.stderr}`).toBe(0);
           const record = hook!.record;
+          if (!recordOwed && record === null && engine.words === undefined) continue;
           expect(record, `${harness}: no message record for ${JSON.stringify(prompt)}`).not.toBeNull();
           expect(record!.text.trim(), `${harness}: the typed text`).toBe(prompt.trim());
           if (engine.words !== undefined) expect(record!.words, `${harness}: the person's words`).toBe(engine.words);

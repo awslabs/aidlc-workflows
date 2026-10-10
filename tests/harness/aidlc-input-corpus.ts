@@ -1,19 +1,34 @@
 // The /aidlc input corpus (tests/fixtures/aidlc-input/corpus.json) and the fixture mechanics its two checks share:
-// the five workspace states, the person's turn through each host's own human-turn hook, `next` as the agent runs
-// it, and the message record the hook writes. The unit check (tests/unit/t-aidlc-input-corpus.test.ts) runs the
+// the workspace states, the person's turn through each host's own human-turn hook, `next` as the agent runs it,
+// and the message record the hook writes. The unit check (tests/unit/t-aidlc-input-corpus.test.ts) runs the
 // engine's first step for every item; the live check (tests/e2e/t-live-aidlc-input-corpus.serial.test.ts) drives a
 // sample through real agents.
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import corpus from "../fixtures/aidlc-input/corpus.json";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
-import { AIDLC_SRC, FIXTURES_DIR, REPO_ROOT, createOrchestrationTestProject, seededRecordDir, seededStateFile } from "./fixtures.ts";
+import { AIDLC_SRC, FIXTURES_DIR, REPO_ROOT, createOrchestrationTestProject, intentsDirOf, recordArtifactWriteViaHook, seededRecordDir, seededStateFile } from "./fixtures.ts";
 import { testGuardEnvironment } from "./runner-profile.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { splitKiroCommandArgs, writeSessionPidEntry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { splitKiroCommandArgs, writeSessionBinding, writeSessionPidEntry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
-export type State = "fresh" | "work-open" | "plan-question-open" | "gate-open" | "two-similar-records";
+/**
+ * Where the person is when they type the line:
+ * fresh: no workflow yet. work-open: a bugfix mid-Inception. plan-question-open: a code plan awaiting approval.
+ * gate-open: a stage gate awaiting approval (review READY, summary confirmed, so an approval goes through).
+ * two-similar-records: auth and auth-fix, the second active. plan-offer-open: a fresh workspace where they typed
+ * "build a notes app" and the plan offer is on screen. routing-question-open: open work where they typed "fix the
+ * login" and the routing question is on screen. stage-question-asked: the agent asked a stage question in chat.
+ * parked: the open work parked. finished: all stages done. archived: the selected record archived.
+ * second-chat: open work, typed from a chat that has not joined it. kiro-pick: two records, none selected in this
+ * chat, the pick question on screen. hooks-off: the host's hooks never ran (the hook is not driven).
+ * unattended: AIDLC_UNATTENDED=1 on the hook and the engine.
+ */
+export type State =
+  | "fresh" | "work-open" | "plan-question-open" | "gate-open" | "two-similar-records"
+  | "plan-offer-open" | "routing-question-open" | "stage-question-asked" | "parked" | "finished" | "archived"
+  | "second-chat" | "kiro-pick" | "hooks-off" | "unattended";
 export type Harness = "claude" | "codex" | "kiro" | "kiro-ide";
 export type ArgvVariant = "posix" | "kiro-cli" | "kiro-ide-pwsh";
 
@@ -44,8 +59,6 @@ export interface EndExpectation {
   plan?: "approved" | "changes" | "open";
   /** Questions to the person allowed (Claude Code only); defaults to 1 when `ambiguous`, else 0 when `no_ask`. */
   asks?: number;
-  /** One of these phrasings appears in the agent's final text (case-insensitive). */
-  says?: string[];
 }
 
 export interface CorpusItem {
@@ -73,9 +86,14 @@ export const HARNESSES: Harness[] = ["claude", "codex", "kiro", "kiro-ide"];
 export const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 export const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
 export const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
+export const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 export const SESSION = "01995000-7a11-7000-8000-00000000d001";
+/** A second chat in the same project that never joined the open work. */
+export const SECOND_SESSION = "01995000-7a11-7000-8000-00000000d002";
+const REVIEWER = "aidlc-product-lead-agent";
 
-// The source each `after` waits for, read where the change lands.
+// The source each `after` waits for, read where the change lands. `pending` and `chat-identity` wait for a work order
+// nobody has yet (an owner to be named; the chat-identity tab's plan).
 const coreTool = (name: string) => readFileSync(join(REPO_ROOT, "core", "tools", name), "utf-8");
 export const LANDED: Record<string, () => boolean> = {
   "#2276": () => !coreTool("aidlc-command.ts").includes("DISPATCHER_RESERVED_FUTURE"),
@@ -84,6 +102,7 @@ export const LANDED: Record<string, () => boolean> = {
   WO5: () => !coreTool("aidlc-lib.ts").includes("CONTINUATION_PHRASES"),
   WO6: () => !coreTool("aidlc-orchestrate.ts").includes("This looks like"),
   pending: () => false,
+  "chat-identity": () => false,
 };
 const landed = new Map<string, boolean>();
 /** The change an item still waits for, or null when its EXPECTED holds on this source. */
@@ -94,6 +113,11 @@ export function waitsFor(item: CorpusItem): string | null {
   if (!landed.has(item.after)) landed.set(item.after, check());
   return landed.get(item.after) ? null : item.after;
 }
+
+/** The chat the item is typed from, and whether the host's hook runs before the engine. */
+export const sessionOf = (item: CorpusItem): string => (item.state === "second-chat" ? SECOND_SESSION : SESSION);
+export const hookRuns = (item: CorpusItem): boolean => item.state !== "hooks-off";
+export const itemEnv = (item: CorpusItem): Record<string, string> => (item.state === "unattended" ? { AIDLC_UNATTENDED: "1" } : {});
 
 // The person's line as the host delivers it: `/aidlc <typed>`, `$aidlc <typed>` on Codex, or the bare words in
 // plain chat (`entry: ""`), where nothing of the line reaches `next` and the agent runs it bare.
@@ -137,22 +161,26 @@ export async function exec(cmd: string[], opts: { cwd: string; env: NodeJS.Proce
   }
 }
 
-// Production guards, as a person's run has them.
-export function env(proj: string): NodeJS.ProcessEnv {
+export interface RunOptions { session?: string; env?: Record<string, string> }
+// Production guards, as a person's run has them; the chat the engine acts for is pinned the way a hook pins it.
+export function env(proj: string, opts: RunOptions = {}): NodeJS.ProcessEnv {
   return {
     ...testGuardEnvironment(process.env, "production"),
     CLAUDE_PROJECT_DIR: proj,
     AIDLC_PROJECT_DIR: proj,
     AIDLC_UNATTENDED: "0",
+    AIDLC_SESSION_OVERRIDE: opts.session ?? SESSION,
+    AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
+    ...(opts.env ?? {}),
   };
 }
 
 export interface Directive { kind?: string; ask_type?: string; message?: string; question?: string; narration?: string; [k: string]: unknown }
 /** `next` as the agent runs it, with the load-steering continuations consumed. */
-export async function next(proj: string, args: string[]): Promise<{ status: number; directive: Directive | null; out: string }> {
+export async function next(proj: string, args: string[], opts: RunOptions = {}): Promise<{ status: number; directive: Directive | null; out: string }> {
   let command = ["next", "--project-dir", proj, ...args];
   for (let attempts = 0; attempts < 100; attempts++) {
-    const res = await exec([process.execPath, ORCHESTRATE, ...command], { cwd: proj, env: env(proj) });
+    const res = await exec([process.execPath, ORCHESTRATE, ...command], { cwd: proj, env: env(proj, opts) });
     let directive: Directive | null = null;
     try {
       directive = JSON.parse(res.stdout.trim()) as Directive;
@@ -168,14 +196,39 @@ export async function next(proj: string, args: string[]): Promise<{ status: numb
 }
 
 const midInception = () => readFileSync(join(FIXTURES_DIR, "state-mid-inception.md"), "utf-8");
+const STAGE = "requirements-analysis";
+const stageDir = (proj: string) => join(seededRecordDir(proj), "inception", STAGE);
+
+function writeStageFiles(proj: string, summaryConfirmed: boolean): void {
+  const dir = stageDir(proj);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "requirements.md"), "# Requirements\n\n## Overview\n\nA to-do app whose titles are never blank.\n\n## Functional Requirements\n\n- FR-1: a blank title is refused.\n", "utf-8");
+  writeFileSync(join(dir, `${STAGE}-questions.md`),
+    "# Questions\n\n## Q1\n\nShould a blank title be refused?\n\n[Answer]: Yes\n" +
+      // The section waits blank; the `log decision` and `log answer` pair below records the person's confirmation.
+      (summaryConfirmed ? "\n## Consolidated Summary Confirmation\n\nDoes this all look correct before I generate the artifact?\n\n- Looks correct\n- Request changes\n\n[Answer]: \n" : ""),
+    "utf-8");
+}
+
+async function createIntent(proj: string, label: string, words: string): Promise<void> {
+  const created = await exec(
+    [process.execPath, UTILITY, "intent-create", "--scope", "bugfix", "--arguments", words, "--label", label, "--project-dir", proj],
+    { cwd: proj, env: { ...process.env } },
+  );
+  if (created.status !== 0) throw new Error(`intent-create failed: ${created.stdout}${created.stderr}`);
+}
 
 /** A project at one of the corpus states. `proj` already holds the shipped engine and the method tree. */
 export async function buildState(proj: string, state: State): Promise<void> {
   switch (state) {
     case "fresh":
+    case "hooks-off":
       return;
     case "work-open":
+    case "second-chat":
+    case "unattended":
       writeFileSync(seededStateFile(proj), midInception(), "utf-8");
+      if (state === "second-chat") writeSessionBinding(proj, SECOND_SESSION, "default", null, "unjoined");
       return;
     case "plan-question-open": {
       // A one-step bug fix at Code Generation, its plan written and not yet approved.
@@ -205,28 +258,96 @@ export async function buildState(proj: string, state: State): Promise<void> {
       return;
     }
     case "gate-open": {
-      // A bugfix at Requirements Analysis whose stage files are written and whose gate waits for the person.
+      // A bugfix at Requirements Analysis: files written, summary confirmed, the reviewer's READY review on record,
+      // the gate waiting for the person, so an approval goes through under production guards.
       writeFileSync(seededStateFile(proj), midInception(), "utf-8");
-      const dir = join(seededRecordDir(proj), "inception", "requirements-analysis");
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, "requirements.md"), "# Requirements\n\n- FR-1: a blank title is refused.\n", "utf-8");
-      writeFileSync(join(dir, "requirements-analysis-questions.md"), "# Questions\n\n## Q1\n\nShould a blank title be refused?\n\n[Answer]: \n", "utf-8");
-      appendAuditEntry("STAGE_STARTED", { Stage: "requirements-analysis" }, proj);
-      const gate = await exec(
-        [process.execPath, ORCHESTRATE, "report", "--stage", "requirements-analysis", "--result", "awaiting-approval", "--project-dir", proj],
-        { cwd: proj, env: { ...process.env, AIDLC_SKIP_REVIEWER_GATE_GUARD: "1", AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" } },
-      );
+      appendAuditEntry("STAGE_STARTED", { Stage: STAGE }, proj);
+      writeStageFiles(proj, true);
+      // The stage's documents, written through the host's write hook so the record knows them.
+      const questions = join(stageDir(proj), `${STAGE}-questions.md`);
+      recordArtifactWriteViaHook(proj, questions);
+      // The consolidated summary, shown and confirmed by the person (a human turn backs the answer).
+      const summaryArgs = ["--checkpoint", "summary-confirmation", "--stage", STAGE, "--questions-file", questions, "--project-dir", proj];
+      const shown = await exec([process.execPath, LOG, "decision", ...summaryArgs, "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes"], { cwd: proj, env: env(proj) });
+      if (shown.status !== 0) throw new Error(`summary confirmation ask failed: ${shown.stdout}${shown.stderr}`);
+      await say(proj, "Looks correct", "claude");
+      // The agent writes the person's answer into the questions file, then records it.
+      writeFileSync(questions, readFileSync(questions, "utf-8").replace(/\[Answer\]: \n$/, "[Answer]: Looks correct\n"), "utf-8");
+      recordArtifactWriteViaHook(proj, questions, "Edit");
+      const confirmed = await exec([process.execPath, LOG, "answer", ...summaryArgs, "--details", "Looks correct"], { cwd: proj, env: env(proj) });
+      if (confirmed.status !== 0) throw new Error(`summary confirmation answer failed: ${confirmed.stdout}${confirmed.stderr}`);
+      // The stage's document is saved from the confirmed answers, then reviewed.
+      const requirements = join(stageDir(proj), "requirements.md");
+      writeFileSync(requirements, readFileSync(requirements, "utf-8"), "utf-8");
+      recordArtifactWriteViaHook(proj, requirements);
+      const asked = await exec([process.execPath, LOG, "review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "1", "--project-dir", proj], { cwd: proj, env: env(proj) });
+      if (asked.status !== 0) throw new Error(`review request failed: ${asked.stdout}${asked.stderr}`);
+      const reviewFile = (JSON.parse(asked.stdout.split("\n").find((l) => l.startsWith("{")) ?? "{}") as { reviewFile?: string }).reviewFile;
+      if (!reviewFile) throw new Error(`no review file named: ${asked.stdout}`);
+      writeFileSync(join(proj, reviewFile),
+        `## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Date:** 2026-01-01T00:00:00Z\n**Iteration:** 1\n\n` +
+          "### Findings\n\n**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n\n### Summary\n\nReady.\n", "utf-8");
+      const ready = await exec([process.execPath, LOG, "review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { cwd: proj, env: env(proj) });
+      if (ready.status !== 0) throw new Error(`review verdict failed: ${ready.stdout}${ready.stderr}`);
+      const gate = await exec([process.execPath, ORCHESTRATE, "report", "--stage", STAGE, "--result", "awaiting-approval", "--project-dir", proj], { cwd: proj, env: env(proj) });
       if (gate.status !== 0) throw new Error(`gate did not open: ${gate.stdout}${gate.stderr}`);
       return;
     }
-    case "two-similar-records": {
-      for (const [label, words] of [["auth", "fix the login session timeout"], ["auth-fix", "fix the password reset link"]]) {
-        const created = await exec(
-          [process.execPath, UTILITY, "intent-create", "--scope", "bugfix", "--arguments", words, "--label", label, "--project-dir", proj],
-          { cwd: proj, env: { ...process.env } },
-        );
-        if (created.status !== 0) throw new Error(`intent-create failed: ${created.stdout}${created.stderr}`);
-      }
+    case "two-similar-records":
+      await createIntent(proj, "auth", "fix the login session timeout");
+      await createIntent(proj, "auth-fix", "fix the password reset link");
+      return;
+    case "kiro-pick": {
+      // Two records and no selection in this chat: the engine's pick question is what the person last saw.
+      await createIntent(proj, "auth", "fix the login session timeout");
+      await createIntent(proj, "auth-fix", "fix the password reset link");
+      rmSync(join(intentsDirOf(proj, "default"), "active-intent"), { force: true });
+      await say(proj, "/aidlc", "claude");
+      const pick = await next(proj, []);
+      if (pick.directive?.ask_type !== "intent-pick") throw new Error(`pick question did not open: ${pick.out}`);
+      return;
+    }
+    case "plan-offer-open": {
+      // The person typed "build a notes app" on a fresh workspace and the plan offer is on screen.
+      await say(proj, "/aidlc build a notes app", "claude");
+      const offer = await next(proj, ["build", "a", "notes", "app"]);
+      if (offer.directive?.kind !== "ask") throw new Error(`plan offer did not open: ${offer.out}`);
+      return;
+    }
+    case "routing-question-open": {
+      // Open work; the person typed "fix the login" and the routing question is on screen.
+      writeFileSync(seededStateFile(proj), midInception(), "utf-8");
+      await say(proj, "/aidlc fix the login", "claude");
+      const reading = await next(proj, ["fix", "the", "login"]);
+      const request = /`[^`]* next (--request [0-9a-f]{8})`/.exec(reading.directive?.message ?? "")?.[1];
+      if (!request) throw new Error(`no request id in the reading note: ${reading.out}`);
+      const routing = await next(proj, request.split(" "));
+      if (routing.directive?.ask_type !== "new-work-routing") throw new Error(`routing question did not open: ${routing.out}`);
+      return;
+    }
+    case "stage-question-asked": {
+      // Open work at Requirements Analysis; the agent asked the person a stage question in chat.
+      writeFileSync(seededStateFile(proj), midInception(), "utf-8");
+      writeStageFiles(proj, false);
+      appendAuditEntry("STAGE_STARTED", { Stage: STAGE }, proj);
+      const asked = await exec([process.execPath, LOG, "decision", "--stage", STAGE, "--decision", "Should a blank title be refused, or saved as Untitled?", "--options", "Refuse it,Save it as Untitled", "--project-dir", proj], { cwd: proj, env: env(proj) });
+      if (asked.status !== 0) throw new Error(`stage question failed: ${asked.stdout}${asked.stderr}`);
+      return;
+    }
+    case "parked": {
+      writeFileSync(seededStateFile(proj), midInception(), "utf-8");
+      await say(proj, "/aidlc park", "claude");
+      const parked = await exec([process.execPath, ORCHESTRATE, "park", "--project-dir", proj], { cwd: proj, env: env(proj) });
+      if (parked.status !== 0) throw new Error(`park failed: ${parked.stdout}${parked.stderr}`);
+      return;
+    }
+    case "finished":
+      writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-completed.md"), "utf-8"), "utf-8");
+      return;
+    case "archived": {
+      await createIntent(proj, "auth", "fix the login session timeout");
+      const archived = await exec([process.execPath, UTILITY, "intent", "archive", "auth", "--project-dir", proj], { cwd: proj, env: env(proj) });
+      if (archived.status !== 0) throw new Error(`archive failed: ${archived.stdout}${archived.stderr}`);
       return;
     }
   }
@@ -240,26 +361,27 @@ export async function projectAt(state: State): Promise<string> {
 }
 
 // The person types `prompt`, through the host's own human-turn hook.
-export async function say(proj: string, prompt: string, harness: Harness): Promise<Exec> {
+export async function say(proj: string, prompt: string, harness: Harness, opts: RunOptions = {}): Promise<Exec> {
+  const session = opts.session ?? SESSION;
   if (harness === "claude") {
     return exec([process.execPath, DISPATCHER, "engine", "hook", "record-human-turn"],
-      { cwd: proj, env: env(proj), input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, cwd: proj, prompt }) });
+      { cwd: proj, env: env(proj, opts), input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, cwd: proj, prompt }) });
   }
   const tree = harness === "codex" ? ".codex" : ".kiro";
   if (!existsSync(join(proj, tree))) cpSync(join(REPO_ROOT, "dist", harness, tree), join(proj, tree), { recursive: true });
-  const unset = { ...env(proj), CLAUDE_PROJECT_DIR: undefined, AIDLC_UNATTENDED: undefined, USER_PROMPT: undefined };
+  const unset = { ...env(proj, opts), CLAUDE_PROJECT_DIR: undefined, AIDLC_UNATTENDED: opts.env?.AIDLC_UNATTENDED, USER_PROMPT: undefined };
   if (harness === "codex") {
-    writeSessionPidEntry(proj, process.pid, SESSION);
+    writeSessionPidEntry(proj, process.pid, session);
     return exec([process.execPath, join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "record-human-turn"], {
       cwd: proj,
       env: { ...unset, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined },
-      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, turn_id: "t1", cwd: proj, prompt }),
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, turn_id: "t1", cwd: proj, prompt }),
     });
   }
   return exec([process.execPath, join(proj, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), harness === "kiro" ? "verb-intercept" : "record-human-turn"], {
     cwd: proj,
     env: unset,
-    input: JSON.stringify({ hook_event_name: harness === "kiro" ? "userPromptSubmit" : "UserPromptSubmit", session_id: SESSION, cwd: proj, prompt }),
+    input: JSON.stringify({ hook_event_name: harness === "kiro" ? "userPromptSubmit" : "UserPromptSubmit", session_id: session, cwd: proj, prompt }),
   });
 }
 

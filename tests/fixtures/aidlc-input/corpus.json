@@ -38,6 +38,10 @@
         ],
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -57,6 +61,10 @@
         ],
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "WO2"
@@ -74,6 +82,10 @@
         ],
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -94,6 +106,12 @@
         "never": [
           "No workflow state found"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "-plan-approval off"
+        }
       }
     },
     "after": "WO3"
@@ -112,6 +130,10 @@
         "words": "-plan-approval off",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -128,6 +150,10 @@
         ],
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -136,7 +162,7 @@
     "category": "typo-flag",
     "input": "--plan-approval of",
     "state": "work-open",
-    "meaning": "the person means: turn plan approval off (a typo in the value); nothing should re-ask them",
+    "meaning": "the person means: turn plan approval off (a typo in the value); nothing should re-ask them, and the one line says what was set, so a wrong read is undone in a word",
     "expected": {
       "engine": {
         "kinds": [
@@ -146,6 +172,10 @@
           "requires <on|off>"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "unsure": true,
@@ -173,6 +203,10 @@
         "names": [
           "fix the login"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "unsure": true,
@@ -195,6 +229,10 @@
         "never": [
           "Unknown scope"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "unsure": true,
@@ -214,6 +252,10 @@
         "words": "\u2014plan-approval off",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -233,6 +275,10 @@
         ],
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "WO2"
@@ -253,6 +299,10 @@
         ],
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "WO2"
@@ -271,6 +321,12 @@
         "words": "inetnt list",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "inetnt list"
+        }
       }
     },
     "after": "WO6"
@@ -289,6 +345,10 @@
         "words": "inetnt list",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -309,6 +369,10 @@
         "never": [
           "auth-fix"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -326,6 +390,12 @@
         "words": "spcae teamb",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "spcae teamb"
+        }
       }
     },
     "after": "WO6"
@@ -344,6 +414,10 @@
         "never": [
           "engine intent lsit"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "unsure": true,
@@ -363,6 +437,10 @@
         "never": [
           "engine intent archvie"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "unsure": true,
@@ -444,6 +522,10 @@
         "never": [
           "auth-fix"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "unsure": true
@@ -468,6 +550,11 @@
         "never": [
           "auth-fix"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "active": "auht"
       }
     }
   },
@@ -490,6 +577,12 @@
           ]
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "fix the login"
+        }
       }
     },
     "after": "WO6"
@@ -545,6 +638,10 @@
         "names": [
           "fix the login"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -567,6 +664,12 @@
           ]
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "fix the login"
+        }
       }
     },
     "after": "WO6"
@@ -626,6 +729,10 @@
         "names": [
           "fix the export timeout"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -655,6 +762,10 @@
         "names": [
           "fix the export timeout"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -680,6 +791,10 @@
         "names": [
           "answer --stage code-generation --checkpoint plan-approval"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -697,6 +812,12 @@
         "words": "turn plan approval off for this work",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "turn plan approval off for this work"
+        }
       }
     },
     "after": "WO6"
@@ -769,6 +890,10 @@
         "words": "skip the reviews for this one",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -867,6 +992,10 @@
         "words": "turn the review freeze check off",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -938,6 +1067,10 @@
         "words": "this is brownfield",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -955,6 +1088,10 @@
         "words": "treat it as a new project",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -972,6 +1109,10 @@
         "words": "skip plan approval?",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -1016,6 +1157,10 @@
         "words": "please stop asking me to approve plans",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -1087,6 +1232,12 @@
         "words": "fix the login",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "fix the login"
+        }
       }
     },
     "after": "WO6"
@@ -1105,6 +1256,10 @@
         ],
         "words": "fix the login",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -1122,6 +1277,10 @@
         ],
         "words": "fix the login",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -1139,6 +1298,10 @@
         ],
         "words": "fix the login page",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "unsure": true
@@ -1156,6 +1319,10 @@
         ],
         "words": "it's broken",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "ambiguous": true,
@@ -1196,6 +1363,10 @@
         ],
         "words": "users' files are lost after logout",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -1218,6 +1389,10 @@
         ],
         "words": "can't login",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -1235,6 +1410,10 @@
         ],
         "words": "add a beta badge",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "unsure": true
@@ -1253,6 +1432,10 @@
         ],
         "words": "log the %PATH% value",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -1270,6 +1453,10 @@
         ],
         "words": "fix the ^ caret parsing",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -1287,6 +1474,10 @@
         ],
         "words": "fix the `config` loader",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -1304,6 +1495,10 @@
         ],
         "words": "fix the $HOME path lookup",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -1321,6 +1516,10 @@
         ],
         "words": "fix the login; then the logout",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -1338,6 +1537,10 @@
         ],
         "words": "fix the login | logout flow",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -1355,6 +1558,10 @@
         ],
         "words": "fix the C:\\Users path handling",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "unsure": true
@@ -1371,6 +1578,10 @@
           "ask",
           "print"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "unsure": true
@@ -1396,6 +1607,10 @@
           "feature"
         ],
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "unsure": true
@@ -1414,6 +1629,12 @@
         "words": "fix the login",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "fix the login"
+        }
       }
     },
     "after": "WO6"
@@ -1444,15 +1665,20 @@
     "category": "crlf-unicode",
     "input": "fix the login\r\n",
     "state": "plan-question-open",
-    "meaning": "the person means: new work to fix the login (Windows line ending at the end)",
+    "meaning": "the person means: a request (fix the login) while the code plan question is open; whether it changes the plan, is part of this work or is new work is theirs to say, asked once",
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "print",
+          "ask"
         ],
         "words": "fix the login",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -1470,6 +1696,10 @@
         ],
         "words": "fix the login",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -1487,6 +1717,10 @@
         ],
         "words": "fix the login",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "unsure": true
@@ -1505,6 +1739,12 @@
         "words": "\u201cfix the login\u201d",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "\u201cfix the login\u201d"
+        }
       }
     },
     "after": "WO6"
@@ -1544,6 +1784,10 @@
         ],
         "words": "fix the login \ud83d\udc1b",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -1567,6 +1811,10 @@
         "never": [
           "auth"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -1584,6 +1832,12 @@
         "words": "r\u00e9parer la connexion",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "r\u00e9parer la connexion"
+        }
       }
     },
     "after": "WO6"
@@ -1602,6 +1856,10 @@
         ],
         "words": "r\u00e9parer la connexion",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -1619,6 +1877,10 @@
         ],
         "words": "\u30ed\u30b0\u30a4\u30f3\u3092\u4fee\u6b63",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -1696,6 +1958,10 @@
         "names": [
           "recorded"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -1952,7 +2218,7 @@
     "category": "reply",
     "input": "a",
     "state": "plan-question-open",
-    "meaning": "the person means: pick the first option of the open code plan question by letter",
+    "meaning": "the person means: ambiguous: a is not an offered label (the plan question shows numbered options), so the agent asks once which option they meant",
     "expected": {
       "engine": {
         "kinds": [
@@ -1960,10 +2226,18 @@
         ],
         "words": "a",
         "settings": [],
-        "no_ask": true
+        "never": [
+          "recorded"
+        ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
-    "unsure": true
+    "unsure": true,
+    "ambiguous": true,
+    "after": "pending"
   },
   {
     "id": "rp12-p",
@@ -1982,6 +2256,10 @@
         "names": [
           "answer --stage code-generation --checkpoint plan-approval"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -2124,6 +2402,10 @@
         "words": "2 please",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "unsure": true
@@ -2148,6 +2430,11 @@
         "never": [
           "reserved"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "active": "show"
       }
     },
     "after": "#2276"
@@ -2193,6 +2480,10 @@
         "names": [
           "intent list"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -2310,6 +2601,10 @@
           "fix the login bug"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "pending"
@@ -2332,6 +2627,10 @@
           "engine intent is"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "pending"
@@ -2354,6 +2653,10 @@
           "engine intent is"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "pending"
@@ -2375,6 +2678,10 @@
         "names": [
           "space teamb"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO6"
@@ -2396,6 +2703,10 @@
         "names": [
           "teamb"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO6"
@@ -2417,6 +2728,10 @@
         "names": [
           "teamb"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO6"
@@ -2441,6 +2756,10 @@
         "never": [
           "auth-fix"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -2462,6 +2781,10 @@
           "auth-fix"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "unsure": true
@@ -2483,6 +2806,10 @@
         "names": [
           "intent unarchive auth"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -2501,6 +2828,10 @@
           "a todo app"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "unsure": true,
@@ -2549,6 +2880,10 @@
           "Usage:"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "unsure": true,
@@ -2568,6 +2903,10 @@
         "words": "list intents",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -2588,6 +2927,10 @@
         "names": [
           "intent list --json"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -2608,6 +2951,10 @@
         "names": [
           "space list"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO6"
@@ -2626,6 +2973,12 @@
         "words": "status",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "status"
+        }
       }
     },
     "after": "pending"
@@ -2644,6 +2997,10 @@
         "words": "status",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -2731,6 +3088,10 @@
         "words": "what's the status?",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -2748,6 +3109,10 @@
         "words": "show me the help",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -2756,7 +3121,7 @@
     "category": "help-status-in-sentence",
     "input": "--status please",
     "state": "fresh",
-    "meaning": "the person means: show me where the work stands (said politely)",
+    "meaning": "the person means: show where the work stands; with nothing started they hear that, never a plan offer",
     "expected": {
       "engine": {
         "kinds": [
@@ -2766,9 +3131,12 @@
           "status"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
-    },
-    "unsure": true
+    }
   },
   {
     "id": "hs06-w",
@@ -2785,6 +3153,10 @@
           "status"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "unsure": true
@@ -2806,6 +3178,12 @@
         "never": [
           "orchestrate help"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "help me plan a migration"
+        }
       }
     },
     "after": "WO6"
@@ -2827,6 +3205,10 @@
         "never": [
           "orchestrate help"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -2844,6 +3226,12 @@
         "words": "--help me",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "--help me"
+        }
       }
     },
     "unsure": true,
@@ -2863,6 +3251,10 @@
         "words": "run the doctor",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -2880,6 +3272,12 @@
         "words": "doctor",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "doctor"
+        }
       }
     },
     "after": "pending"
@@ -2898,6 +3296,10 @@
         "words": "doctor",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -2918,6 +3320,10 @@
         "never": [
           "engine status"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -2938,6 +3344,10 @@
         "never": [
           "engine status"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -2955,6 +3365,10 @@
         "words": "version",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -2975,6 +3389,12 @@
         "never": [
           "--scope classic"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "classic car rental site"
+        }
       }
     },
     "after": "pending"
@@ -3000,6 +3420,10 @@
         "never": [
           "--scope classic"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "after": "pending"
@@ -3009,7 +3433,7 @@
     "category": "scope-led-sentence",
     "input": "bugfix the login",
     "state": "fresh",
-    "meaning": "the person means: fix the login (bugfix used as a verb); the words must stay whole even if the bugfix plan is the right one",
+    "meaning": "the person means: start bugfix work to fix the login (bugfix is both the verb and the right plan); the description keeps their words",
     "expected": {
       "engine": {
         "kinds": [
@@ -3017,7 +3441,17 @@
         ],
         "words": "bugfix the login",
         "settings": [],
-        "no_ask": true
+        "no_ask": true,
+        "names": [
+          "--scope bugfix"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "scope": "bugfix",
+          "words": "bugfix the login"
+        }
       }
     },
     "unsure": true,
@@ -3041,6 +3475,10 @@
         "names": [
           "bugfix the login"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "unsure": true,
@@ -3063,6 +3501,12 @@
         "never": [
           "--scope feature"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "feature flags for the admin page"
+        }
       }
     },
     "after": "pending"
@@ -3088,6 +3532,10 @@
         "never": [
           "--scope feature"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "after": "pending"
@@ -3109,6 +3557,12 @@
         "never": [
           "--scope express"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "express checkout for guests"
+        }
       }
     },
     "after": "pending"
@@ -3127,6 +3581,12 @@
         "words": "refactor the payment module",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "refactor the payment module"
+        }
       }
     },
     "unsure": true,
@@ -3146,6 +3606,12 @@
         "words": "poc for a chat widget",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "poc for a chat widget"
+        }
       }
     },
     "unsure": true,
@@ -3255,6 +3721,12 @@
         "never": [
           "--scope feature"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "feature flags for the admin page"
+        }
       }
     },
     "after": "pending"
@@ -3271,6 +3743,10 @@
           "print",
           "ask"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "unsure": true,
@@ -3298,6 +3774,10 @@
         "never": [
           "retired"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "pending"
@@ -3307,25 +3787,30 @@
     "category": "retired",
     "input": "--init",
     "state": "work-open",
-    "meaning": "the person means: carry on with the open work (an older habit); no lesson about the old flag",
+    "meaning": "the person means: start something, or thinks nothing is open (an older habit); the agent says what is open and asks once what they want, with no lesson about the old flag",
     "expected": {
       "engine": {
         "kinds": [
           "run-stage",
-          "print"
+          "print",
+          "ask"
         ],
         "words": null,
         "settings": [],
-        "no_ask": true,
         "names": [
           "retired"
         ],
         "never": [
           "retired"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
-    "after": "pending"
+    "after": "pending",
+    "ambiguous": true
   },
   {
     "id": "rt02-f",
@@ -3348,6 +3833,10 @@
         "never": [
           "retired"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "pending"
@@ -3366,6 +3855,12 @@
         "words": "build a todo app",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "build a todo app"
+        }
       }
     },
     "after": "WO6"
@@ -3451,6 +3946,10 @@
         "names": [
           "fix the login"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -3471,6 +3970,10 @@
         "names": [
           "add a --force option to the deploy script"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "after": "pending"
@@ -3493,6 +3996,10 @@
         "names": [
           "describing what to build"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "unsure": true,
@@ -3537,6 +4044,10 @@
         "names": [
           "plan"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -3550,11 +4061,16 @@
       "engine": {
         "kinds": [
           "ask",
-          "print"
+          "print",
+          "run-stage"
         ],
         "words": null,
         "settings": [],
         "no_ask": false
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -3573,6 +4089,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "unsure": true,
@@ -3593,6 +4113,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "unsure": true
@@ -3612,6 +4136,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -3630,6 +4158,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -3638,7 +4170,7 @@
     "category": "ambiguous",
     "input": "fix it",
     "state": "work-open",
-    "meaning": "the person means: fix something; which thing is unclear, the agent asks once",
+    "meaning": "the person means: ambiguous: fix the thing just discussed in this chat; the agent asks only when nothing was discussed",
     "expected": {
       "engine": {
         "kinds": [
@@ -3689,6 +4221,10 @@
         "words": "go",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -3697,7 +4233,7 @@
     "category": "ambiguous",
     "input": "1",
     "state": "work-open",
-    "meaning": "the person means: pick option 1 of a question; no question is open, the agent asks once",
+    "meaning": "the person means: ambiguous: pick option 1 of the question they were last asked, by the agent in chat or by the engine; the agent knows which and asks only when none was asked",
     "expected": {
       "engine": {
         "kinds": [
@@ -3705,6 +4241,10 @@
         ],
         "words": "1",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "ambiguous": true
@@ -3735,7 +4275,7 @@
     "category": "ambiguous",
     "input": "yes",
     "state": "work-open",
-    "meaning": "the person means: agree to something; nothing is open to agree to, the agent asks once",
+    "meaning": "the person means: ambiguous: yes to what the agent last asked or proposed in chat; the agent asks only when nothing was asked",
     "expected": {
       "engine": {
         "kinds": [
@@ -3743,6 +4283,10 @@
         ],
         "words": "yes",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "ambiguous": true
@@ -3752,7 +4296,7 @@
     "category": "ambiguous",
     "input": "2",
     "state": "fresh",
-    "meaning": "the person means: pick option 2 of the plan offer they were just shown; the engine must not start a plan offer for the word 2",
+    "meaning": "the person means: ambiguous: pick option 2 of the plan offer they were just shown; the agent asks only when nothing was offered",
     "expected": {
       "engine": {
         "kinds": [
@@ -3763,6 +4307,10 @@
         "never": [
           "obvious fit for: \"2\""
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "ambiguous": true,
@@ -3773,7 +4321,7 @@
     "category": "ambiguous",
     "input": "approve",
     "state": "work-open",
-    "meaning": "the person means: approve something; nothing is open to approve, the agent asks once",
+    "meaning": "the person means: ambiguous: approve what the agent last proposed in chat; the agent asks only when nothing was proposed",
     "expected": {
       "engine": {
         "kinds": [
@@ -3781,6 +4329,10 @@
         ],
         "words": "approve",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "ambiguous": true
@@ -3798,6 +4350,10 @@
         ],
         "words": "start over",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "ambiguous": true
@@ -3815,6 +4371,10 @@
         ],
         "words": "the auth one please",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "ambiguous": true
@@ -3835,6 +4395,10 @@
           "You said"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "WO2"
@@ -3855,6 +4419,10 @@
           "You said"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -3874,6 +4442,10 @@
           "You said"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -3896,6 +4468,10 @@
           "You said"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -3916,6 +4492,10 @@
           "You said"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -3935,6 +4515,10 @@
           "You said"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "WO2"
@@ -3955,6 +4539,10 @@
           "You said"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "WO2"
@@ -3975,6 +4563,10 @@
           "You said"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "WO2"
@@ -3995,6 +4587,10 @@
           "You said"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "WO2"
@@ -4015,6 +4611,10 @@
           "You said"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "WO2"
@@ -4035,6 +4635,10 @@
           "You said"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "WO2"
@@ -4055,6 +4659,10 @@
           "You said"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "WO2"
@@ -4075,6 +4683,10 @@
           "You said"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "WO2"
@@ -4095,6 +4707,10 @@
           "You said"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "WO2"
@@ -4115,6 +4731,10 @@
           "You said"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "WO2"
@@ -4142,6 +4762,12 @@
         "words": "build a notes app",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "build a notes app"
+        }
       }
     },
     "source": "FORMS.md A1",
@@ -4170,6 +4796,10 @@
         ],
         "words": "build a notes app",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md A1"
@@ -4193,6 +4823,10 @@
         ],
         "words": "build a notes app",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md A1"
@@ -4211,6 +4845,10 @@
         ],
         "words": "add a --verbose flag to the CLI",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md A2",
@@ -4234,6 +4872,10 @@
         "never": [
           "hook scripts"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md A3",
@@ -4257,6 +4899,10 @@
         "never": [
           "hook scripts"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md A3",
@@ -4288,6 +4934,10 @@
         "never": [
           "could not read"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "source": "FORMS.md A5",
@@ -4318,6 +4968,10 @@
         "never": [
           "could not read"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md A5",
@@ -4340,6 +4994,10 @@
         "names": [
           "orchestrate help"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "source": "FORMS.md B1",
@@ -4387,6 +5045,10 @@
         "names": [
           "park"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md B2"
@@ -4405,6 +5067,10 @@
         "words": "park this for now",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md B2"
@@ -4425,6 +5091,10 @@
           "not a command"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md B3",
@@ -4444,6 +5114,10 @@
         "words": "unpark it",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md B3"
@@ -4465,6 +5139,10 @@
         "names": [
           "team-board --snapshot"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md B4"
@@ -4474,11 +5152,12 @@
     "category": "audit-form",
     "input": "team-board for billing",
     "state": "work-open",
-    "meaning": "the person means: something about a team board for billing; the words must reach the agent, not a refusal of the word for",
+    "meaning": "the person means: show the team board for the billing work or team; the agent runs it with the matching filter or asks once which",
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "print",
+          "ask"
         ],
         "names": [
           "team-board for billing"
@@ -4486,10 +5165,15 @@
         "never": [
           "does not accept"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md B4",
-    "after": "pending"
+    "after": "pending",
+    "ambiguous": true
   },
   {
     "id": "B5a-w",
@@ -4508,6 +5192,10 @@
         "names": [
           "config set guard.review-freeze off"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md B5"
@@ -4530,6 +5218,10 @@
         "never": [
           "unknown verb"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md B5",
@@ -4552,6 +5244,10 @@
         "names": [
           "config get plan-approval"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md B5"
@@ -4573,6 +5269,10 @@
         "names": [
           "config list"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md B5"
@@ -4594,6 +5294,10 @@
         "names": [
           "config"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "source": "FORMS.md B6",
@@ -4616,6 +5320,10 @@
         "names": [
           "config"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md B6"
@@ -4638,6 +5346,10 @@
         "never": [
           "Usage"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md B6",
@@ -4660,6 +5372,10 @@
         "names": [
           "plugin list"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "source": "FORMS.md B7",
@@ -4682,6 +5398,10 @@
         "names": [
           "plugin list"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md B7"
@@ -4704,6 +5424,10 @@
         "never": [
           "unknown verb"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md B7",
@@ -4726,6 +5450,10 @@
         "names": [
           "knowledge"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md B8"
@@ -4735,7 +5463,7 @@
     "category": "audit-form",
     "input": "knowledge of the domain is in docs",
     "state": "work-open",
-    "meaning": "the person means: tell the agent where the domain knowledge is (knowledge is part of the sentence)",
+    "meaning": "the person means: tell the agent the domain knowledge is in docs; the agent offers to bring it into the knowledge base",
     "expected": {
       "engine": {
         "kinds": [
@@ -4748,6 +5476,10 @@
         "never": [
           "unknown verb"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md B8",
@@ -4769,6 +5501,10 @@
         "never": [
           "auth-fix"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md B9",
@@ -4788,6 +5524,10 @@
         "never": [
           "takes one record name"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md B9",
@@ -4809,6 +5549,10 @@
           "intent list"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md B10",
@@ -4831,6 +5575,10 @@
         "names": [
           "intent list --all"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md B10"
@@ -4852,6 +5600,10 @@
         "never": [
           "engine intent billing`"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md B12",
@@ -4862,19 +5614,25 @@
     "category": "audit-form",
     "input": "space for the billing team",
     "state": "fresh",
-    "meaning": "the person means: something about a space for the billing team (space is part of the sentence); not a switch to a space called for",
+    "meaning": "the person means: create a space for the billing team; the name is theirs, so the agent proposes one and asks once",
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "print",
+          "ask"
         ],
         "never": [
           "engine space for"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "source": "FORMS.md B12",
-    "after": "pending"
+    "after": "pending",
+    "ambiguous": true
   },
   {
     "id": "B13a-f",
@@ -4893,6 +5651,10 @@
         "names": [
           "intent create"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "source": "FORMS.md B13",
@@ -4918,6 +5680,10 @@
         "never": [
           "auth"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md B14"
@@ -4937,6 +5703,10 @@
           "reserved",
           "engine intent show`"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md B15",
@@ -4957,6 +5727,10 @@
           "reserved",
           "engine space rename`"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "source": "FORMS.md B15",
@@ -4979,6 +5753,10 @@
         "names": [
           "help"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md B16",
@@ -4998,6 +5776,10 @@
         "never": [
           "Usage"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "source": "FORMS.md B17",
@@ -5021,6 +5803,10 @@
         "names": [
           "doctor"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "source": "FORMS.md C2",
@@ -5043,6 +5829,10 @@
         "names": [
           "version"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "source": "FORMS.md C2",
@@ -5090,6 +5880,12 @@
         "names": [
           "harden the deployment pipeline"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "harden the deployment pipeline"
+        }
       }
     },
     "source": "FORMS.md C3",
@@ -5100,21 +5896,26 @@
     "category": "audit-form",
     "input": "compose harden the deployment pipeline",
     "state": "work-open",
-    "meaning": "the person means: work out a tailored plan to harden the deployment pipeline",
+    "meaning": "the person means: work out a tailored plan to harden the deployment pipeline; whether that reshapes the open work or starts new work is theirs to say, asked once",
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "print",
+          "ask"
         ],
         "words": "harden the deployment pipeline",
         "settings": [],
-        "no_ask": true,
         "names": [
           "harden the deployment pipeline"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
-    "source": "FORMS.md C3"
+    "source": "FORMS.md C3",
+    "ambiguous": true
   },
   {
     "id": "C3b-f",
@@ -5131,6 +5932,10 @@
           "an email digest feature"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "source": "FORMS.md C3",
@@ -5153,6 +5958,12 @@
         "names": [
           "harden the pipeline"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "harden the pipeline"
+        }
       }
     },
     "source": "FORMS.md C4",
@@ -5163,21 +5974,26 @@
     "category": "audit-form",
     "input": "--new-scope harden the pipeline",
     "state": "work-open",
-    "meaning": "the person means: work out a custom plan to harden the pipeline",
+    "meaning": "the person means: work out a custom plan to harden the pipeline; whether that reshapes the open work or starts new work is theirs to say, asked once",
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "print",
+          "ask"
         ],
         "words": "harden the pipeline",
         "settings": [],
-        "no_ask": true,
         "names": [
           "harden the pipeline"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
-    "source": "FORMS.md C4"
+    "source": "FORMS.md C4",
+    "ambiguous": true
   },
   {
     "id": "C4b-w",
@@ -5197,6 +6013,10 @@
         "never": [
           "composer"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md C4",
@@ -5217,6 +6037,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md C5"
@@ -5236,6 +6060,10 @@
         "names": [
           "add rate limiting"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md C5",
@@ -5258,6 +6086,10 @@
         "names": [
           "jump"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md C6"
@@ -5280,6 +6112,10 @@
         "never": [
           "Unknown stage"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md C6",
@@ -5303,6 +6139,10 @@
         "never": [
           "--change needs"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md C7",
@@ -5322,6 +6162,10 @@
         ],
         "words": null,
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md C8",
@@ -5362,21 +6206,32 @@
     "category": "audit-form",
     "input": "--scope feature build the auth service",
     "state": "work-open",
-    "meaning": "the person means: start feature work to build the auth service",
+    "meaning": "the person means: start feature work to build the auth service alongside the open work, no question: an explicit plan different from the open work's plus a new description is new work; the one line says what started, that the open work is kept as it was, and how to go back to it",
     "expected": {
       "engine": {
         "kinds": [
-          "ask"
+          "print"
         ],
         "words": "build the auth service",
         "settings": [],
-        "no_ask": false,
+        "no_ask": true,
         "names": [
-          "build the auth service"
+          "--scope feature"
+        ],
+        "never": [
+          "Is this (1)"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "scope": "feature",
+          "words": "build the auth service"
+        }
       }
     },
-    "source": "FORMS.md C9"
+    "source": "FORMS.md C9",
+    "after": "pending"
   },
   {
     "id": "C9b-f",
@@ -5398,6 +6253,12 @@
         "never": [
           "Unknown scope"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "build a notes app"
+        }
       }
     },
     "source": "FORMS.md C9",
@@ -5445,6 +6306,10 @@
         "words": "build it",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md C10",
@@ -5468,6 +6333,10 @@
         "never": [
           "--review requires"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md C11",
@@ -5492,6 +6361,12 @@
           ]
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "build a notes app"
+        }
       }
     },
     "source": "FORMS.md C11",
@@ -5502,7 +6377,7 @@
     "category": "audit-form",
     "input": "--skip reverse-engineering fix the login",
     "state": "work-open",
-    "meaning": "the person means: new work to fix the login without the reverse-engineering stage",
+    "meaning": "the person means: a request (fix the login) without the reverse-engineering stage; whether it is part of the open work or a new piece of work is theirs to say, asked once, and the skip rides their answer",
     "expected": {
       "engine": {
         "kinds": [
@@ -5510,12 +6385,17 @@
           "ask"
         ],
         "names": [
-          "reverse-engineering"
+          "fix the login"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md C12",
-    "unsure": true
+    "unsure": true,
+    "after": "pending"
   },
   {
     "id": "C12b-w",
@@ -5535,6 +6415,10 @@
         "never": [
           "is not a stage"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md C12",
@@ -5557,6 +6441,10 @@
         "names": [
           "--claim user-api"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md C13"
@@ -5579,6 +6467,10 @@
         "never": [
           "require --claim"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md C13",
@@ -5599,6 +6491,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md C14"
@@ -5623,6 +6519,10 @@
         "never": [
           "no longer available"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md C14",
@@ -5643,6 +6543,10 @@
         ],
         "words": "build x",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md C16"
@@ -5661,6 +6565,10 @@
         ],
         "words": "add a --dry-run flag",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md C18"
@@ -5678,6 +6586,10 @@
         ],
         "words": "build it --fast",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md C18",
@@ -5698,6 +6610,10 @@
           "could not read"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md C19",
@@ -5721,6 +6637,10 @@
           "could not read"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "source": "FORMS.md C20, docs/guide/12-cli-commands.md:55",
@@ -5741,6 +6661,12 @@
         "words": "Build a REST API for inventory",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "Build a REST API for inventory"
+        }
       }
     },
     "source": "FORMS.md D3",
@@ -5760,6 +6686,10 @@
         "words": "take me back to requirements analysis",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md D4"
@@ -5769,7 +6699,7 @@
     "category": "audit-form",
     "input": "Separate new piece of work",
     "state": "fresh",
-    "meaning": "the person means: pick the separate new piece of work option of the question they were asked; with no question open the agent asks once",
+    "meaning": "the person means: ambiguous: pick the separate-new-work option of the routing question they were shown; the agent knows which question and asks only when none was",
     "expected": {
       "engine": {
         "kinds": [
@@ -5780,6 +6710,10 @@
         "never": [
           "obvious fit for: \"Separate"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "ambiguous": true,
@@ -5791,7 +6725,7 @@
     "category": "audit-form",
     "input": "Separate new piece of work",
     "state": "work-open",
-    "meaning": "the person means: pick the separate new piece of work option of the question they were asked; with no question open the agent asks once",
+    "meaning": "the person means: ambiguous: pick the separate-new-work option of the routing question they were shown; the agent knows which question and asks only when none was",
     "expected": {
       "engine": {
         "kinds": [
@@ -5799,6 +6733,10 @@
         ],
         "words": "Separate new piece of work",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "ambiguous": true,
@@ -5809,7 +6747,7 @@
     "category": "audit-form",
     "input": "yes",
     "state": "fresh",
-    "meaning": "the person means: agree to the plan offer they were just shown; the engine must not start a plan offer for the word yes",
+    "meaning": "the person means: ambiguous: agree to the plan offer they were just shown; the agent asks only when nothing was offered (the plan-offer-open items hold the offer)",
     "expected": {
       "engine": {
         "kinds": [
@@ -5820,6 +6758,10 @@
         "never": [
           "obvious fit for: \"yes\""
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "ambiguous": true,
@@ -5831,7 +6773,7 @@
     "category": "audit-form",
     "input": "1",
     "state": "fresh",
-    "meaning": "the person means: pick option 1 of the plan offer they were just shown",
+    "meaning": "the person means: ambiguous: pick option 1 of the plan offer they were just shown; the agent asks only when nothing was offered",
     "expected": {
       "engine": {
         "kinds": [
@@ -5842,6 +6784,10 @@
         "never": [
           "obvious fit for: \"1\""
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "ambiguous": true,
@@ -5908,6 +6854,10 @@
         "words": "proceed",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md D7"
@@ -5964,6 +6914,12 @@
           ]
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "build a notes app"
+        }
       }
     },
     "source": "FORMS.md H1",
@@ -6016,6 +6972,10 @@
         "names": [
           "answer --stage code-generation --checkpoint plan-approval"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md H3"
@@ -6042,6 +7002,10 @@
         "names": [
           "recorded"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "FORMS.md H4"
@@ -6063,6 +7027,12 @@
         "names": [
           "a dashboard"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "a dashboard"
+        }
       }
     },
     "source": "FORMS.md H5",
@@ -6088,6 +7058,10 @@
             "minimal"
           ]
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "source": "FORMS.md H5",
@@ -6112,6 +7086,11 @@
           "auth-fix"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "active": "auth"
       }
     },
     "source": "FORMS.md K5",
@@ -6131,6 +7110,10 @@
         "words": "unit status",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "docs/guide/12-cli-commands.md:54",
@@ -6150,6 +7133,10 @@
         "words": "unit adopt user-profile-api",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "source": "docs/guide/12-cli-commands.md:557",
@@ -6172,6 +7159,10 @@
         "never": [
           "require --claim"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "docs/guide/12-cli-commands.md:527",
@@ -6195,10 +7186,1179 @@
         "never": [
           "engine status"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "docs/guide/12-cli-commands.md:86",
     "documented": "Inside a description they are part of what you asked for"
+  },
+  {
+    "id": "po01-o",
+    "category": "plan-offer-open",
+    "input": "yes",
+    "state": "plan-offer-open",
+    "meaning": "the person means: yes to the plan offer just shown (build a notes app), so confirm it; no question",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "yes",
+        "settings": [],
+        "no_ask": true,
+        "never": [
+          "obvious fit for: \"yes\""
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "yes"
+        }
+      }
+    },
+    "after": "pending"
+  },
+  {
+    "id": "po02-o",
+    "category": "plan-offer-open",
+    "input": "1",
+    "state": "plan-offer-open",
+    "meaning": "the person means: pick option 1 of the plan offer just shown; no question",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "1",
+        "settings": [],
+        "no_ask": true,
+        "never": [
+          "obvious fit for: \"1\""
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "1"
+        }
+      }
+    },
+    "after": "pending"
+  },
+  {
+    "id": "po03-o",
+    "category": "plan-offer-open",
+    "input": "2",
+    "state": "plan-offer-open",
+    "meaning": "the person means: pick option 2 of the plan offer just shown; no question",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "2",
+        "settings": [],
+        "no_ask": true,
+        "never": [
+          "obvious fit for: \"2\""
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "2"
+        }
+      }
+    },
+    "after": "pending"
+  },
+  {
+    "id": "po04-o",
+    "category": "plan-offer-open",
+    "input": "compose",
+    "state": "plan-offer-open",
+    "meaning": "the person means: take the offer's recommendation: work out a tailored plan for the notes app they described; their words go with it",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": null,
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "build a notes app"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
+      }
+    },
+    "after": "pending"
+  },
+  {
+    "id": "po05-o",
+    "category": "plan-offer-open",
+    "input": "bugfix",
+    "state": "plan-offer-open",
+    "meaning": "the person means: pick the bugfix plan for the notes app they described; their words go with it",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": null,
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "--scope bugfix",
+          "--request"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
+      }
+    },
+    "after": "pending"
+  },
+  {
+    "id": "po06-o",
+    "category": "plan-offer-open",
+    "input": "no, make it a feature",
+    "state": "plan-offer-open",
+    "meaning": "the person means: decline the offer's recommendation and start feature work for the notes app they described",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "no, make it a feature",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "--scope feature"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "scope": "feature",
+          "words": "no, make it a feature"
+        }
+      }
+    },
+    "after": "pending"
+  },
+  {
+    "id": "po07-o",
+    "category": "plan-offer-open",
+    "input": "the second one",
+    "state": "plan-offer-open",
+    "meaning": "the person means: ambiguous: pick the second thing the offer listed; which one that is depends on how the offer was shown, the agent asks once",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "the second one",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
+      }
+    },
+    "ambiguous": true,
+    "after": "WO6"
+  },
+  {
+    "id": "rq01-q",
+    "category": "routing-question-open",
+    "input": "1",
+    "state": "routing-question-open",
+    "meaning": "the person means: option 1 of the routing question: fixing the login is part of the open work, carry on",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "run-stage",
+          "print"
+        ],
+        "words": "1",
+        "settings": [],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "rq02-q",
+    "category": "routing-question-open",
+    "input": "2",
+    "state": "routing-question-open",
+    "meaning": "the person means: option 2 of the routing question: fixing the login is a separate new piece of work alongside",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "2",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "intent create",
+          "--scope bugfix"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "scope": "bugfix",
+          "words": "2"
+        }
+      }
+    }
+  },
+  {
+    "id": "rq03-q",
+    "category": "routing-question-open",
+    "input": "3",
+    "state": "routing-question-open",
+    "meaning": "the person means: option 3 of the routing question: a change to how the remaining plan is shaped",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print",
+          "ask"
+        ],
+        "words": "3",
+        "settings": [],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    },
+    "unsure": true
+  },
+  {
+    "id": "rq04-q",
+    "category": "routing-question-open",
+    "input": "Separate new piece of work",
+    "state": "routing-question-open",
+    "meaning": "the person means: the separate-new-work option of the routing question they were shown; the agent knows which question",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "Separate new piece of work",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "intent create"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "Separate new piece of work"
+        }
+      }
+    }
+  },
+  {
+    "id": "rq05-q",
+    "category": "routing-question-open",
+    "input": "part of that work",
+    "state": "routing-question-open",
+    "meaning": "the person means: the part-of-that-work option of the routing question they were shown",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "run-stage",
+          "print",
+          "ask"
+        ],
+        "words": "part of that work",
+        "settings": [],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    },
+    "unsure": true
+  },
+  {
+    "id": "rq06-q",
+    "category": "routing-question-open",
+    "input": "yes",
+    "state": "routing-question-open",
+    "meaning": "the person means: the yes-led option of the routing question (a separate new piece of work alongside); the agent knows which question",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "yes",
+        "settings": [],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "rq07-q",
+    "category": "routing-question-open",
+    "input": "neither, forget it",
+    "state": "routing-question-open",
+    "meaning": "the person means: withdraw the request; nothing starts and the open work carries on as it was",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "neither, forget it",
+        "settings": [],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "sq01s-s",
+    "category": "stage-question-asked",
+    "input": "Refuse it",
+    "state": "stage-question-asked",
+    "meaning": "the person means: answer the stage question the agent asked: refuse a blank title",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "Refuse it",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "answer --stage requirements-analysis"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "sq02s-s",
+    "category": "stage-question-asked",
+    "input": "1",
+    "state": "stage-question-asked",
+    "meaning": "the person means: option 1 of the stage question the agent asked (refuse it); the agent knows which question",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "1",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "answer --stage requirements-analysis"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "sq03s-s",
+    "category": "stage-question-asked",
+    "input": "save it as untitled please",
+    "state": "stage-question-asked",
+    "meaning": "the person means: answer the stage question the agent asked, in their words: save it as Untitled",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "save it as untitled please",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "answer --stage requirements-analysis"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "sq04s-s",
+    "category": "stage-question-asked",
+    "input": "what does untitled mean here?",
+    "state": "stage-question-asked",
+    "meaning": "the person means: ask the agent a question back before answering; the agent explains and asks the stage question again, nothing is recorded",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "what does untitled mean here?",
+        "settings": [],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "pk01-k",
+    "category": "parked",
+    "input": "",
+    "state": "parked",
+    "meaning": "the person means: pick the parked work back up",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": null,
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "unpark"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "pk02-k",
+    "category": "parked",
+    "input": "--resume",
+    "state": "parked",
+    "meaning": "the person means: pick the parked work back up",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": null,
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "unpark"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "pk03-k",
+    "category": "parked",
+    "input": "continue",
+    "state": "parked",
+    "meaning": "the person means: pick the parked work back up",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "continue",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "unpark"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "pk04-k",
+    "category": "parked",
+    "input": "unpark",
+    "state": "parked",
+    "meaning": "the person means: pick the parked work back up (the natural word); not a refusal that it is not a command",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print",
+          "run-stage"
+        ],
+        "never": [
+          "not a command"
+        ],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    },
+    "after": "pending"
+  },
+  {
+    "id": "pk05-k",
+    "category": "parked",
+    "input": "add a logout button",
+    "state": "parked",
+    "meaning": "the person means: a request (add a logout button) while the work is parked; whether it is part of the parked work or a new piece of work is theirs to say, asked once",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print",
+          "ask"
+        ],
+        "words": "add a logout button",
+        "settings": [],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "pk06-k",
+    "category": "parked",
+    "input": "--status",
+    "state": "parked",
+    "meaning": "the person means: show me where the parked work stands",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": null,
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "status"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "fn01-d",
+    "category": "finished",
+    "input": "",
+    "state": "finished",
+    "meaning": "the person means: carry on; the work is finished, so they hear that it is done and written up",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "done"
+        ],
+        "words": null,
+        "settings": [],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "fn02-d",
+    "category": "finished",
+    "input": "add CSV export",
+    "state": "finished",
+    "meaning": "the person means: new work to add CSV export (the finished work is done)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "add CSV export",
+        "settings": [],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    },
+    "after": "WO6"
+  },
+  {
+    "id": "fn03-d",
+    "category": "finished",
+    "input": "feature add CSV export",
+    "state": "finished",
+    "meaning": "the person means: start feature work to add CSV export beside the finished work (the documented plan word first)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "add CSV export",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "--scope feature"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "scope": "feature",
+          "words": "add CSV export"
+        }
+      }
+    }
+  },
+  {
+    "id": "fn04-d",
+    "category": "finished",
+    "input": "--status",
+    "state": "finished",
+    "meaning": "the person means: show me where the finished work stands",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": null,
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "status"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "fn05-d",
+    "category": "finished",
+    "input": "what did we build?",
+    "state": "finished",
+    "meaning": "the person means: ask what the finished work built; the agent answers from the record, nothing starts",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "what did we build?",
+        "settings": [],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    },
+    "after": "WO6"
+  },
+  {
+    "id": "ar01-a",
+    "category": "archived",
+    "input": "",
+    "state": "archived",
+    "meaning": "the person means: carry on; the only work here is archived, so they hear that and how to bring it back or start new work",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "error",
+          "print"
+        ],
+        "words": null,
+        "settings": [],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
+      }
+    },
+    "unsure": true
+  },
+  {
+    "id": "ar02-a",
+    "category": "archived",
+    "input": "build a CSV export",
+    "state": "archived",
+    "meaning": "the person means: new work to build a CSV export (the archived work stays archived)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "build a CSV export",
+        "settings": [],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "build a CSV export"
+        }
+      }
+    },
+    "after": "WO6"
+  },
+  {
+    "id": "ar03-a",
+    "category": "archived",
+    "input": "intent unarchive auth",
+    "state": "archived",
+    "meaning": "the person means: bring the archived piece of work named auth back",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": null,
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "intent unarchive auth"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
+      }
+    }
+  },
+  {
+    "id": "ar04-a",
+    "category": "archived",
+    "input": "intent list",
+    "state": "archived",
+    "meaning": "the person means: list my pieces of work (the archived one is hidden unless they ask for all)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": null,
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "intent list"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
+      }
+    }
+  },
+  {
+    "id": "sc01-c",
+    "category": "second-chat",
+    "input": "approve",
+    "state": "second-chat",
+    "meaning": "the person means: approve what the open work is waiting on, from a second chat that has not joined it; their words must reach that work",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "never": [
+          "obvious fit"
+        ],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    },
+    "after": "chat-identity"
+  },
+  {
+    "id": "sc02-c",
+    "category": "second-chat",
+    "input": "fix the login",
+    "state": "second-chat",
+    "meaning": "the person means: a request (fix the login) from a second chat; whether it is part of the open work or new is theirs to say, asked once; the words must not become a plan offer",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print",
+          "ask"
+        ],
+        "never": [
+          "This looks like"
+        ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "after": "chat-identity"
+  },
+  {
+    "id": "sc03-c",
+    "category": "second-chat",
+    "input": "--plan-approval off",
+    "state": "second-chat",
+    "meaning": "the person means: turn plan approval off for the open work, from a second chat; not a pick question",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "never": [
+          "intent-pick",
+          "Carry on with"
+        ],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    },
+    "after": "chat-identity"
+  },
+  {
+    "id": "sc04-c",
+    "category": "second-chat",
+    "input": "intent list",
+    "state": "second-chat",
+    "meaning": "the person means: list my pieces of work (works from any chat)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "names": [
+          "intent list"
+        ],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "sc05-c",
+    "category": "second-chat",
+    "input": "--status",
+    "state": "second-chat",
+    "meaning": "the person means: show me where the work stands (works from any chat)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "names": [
+          "status"
+        ],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "kp01-i",
+    "category": "kiro-pick",
+    "input": "--pick auth",
+    "state": "kiro-pick",
+    "meaning": "the person means: pick the record named auth and carry on with it",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "run-stage",
+          "print",
+          "ask"
+        ],
+        "words": null,
+        "settings": [],
+        "no_ask": true,
+        "never": [
+          "auth-fix"
+        ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "kp02-i",
+    "category": "kiro-pick",
+    "input": "auth",
+    "state": "kiro-pick",
+    "meaning": "the person means: pick the record named auth from the pick question just shown",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "run-stage",
+          "print",
+          "ask"
+        ],
+        "never": [
+          "engine intent auth-fix"
+        ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "unsure": true
+  },
+  {
+    "id": "kp03-i",
+    "category": "kiro-pick",
+    "input": "1",
+    "state": "kiro-pick",
+    "meaning": "the person means: pick the first record listed in the pick question just shown",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "run-stage",
+          "print",
+          "ask"
+        ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "unsure": true
+  },
+  {
+    "id": "kp04-i",
+    "category": "kiro-pick",
+    "input": "the auth one",
+    "state": "kiro-pick",
+    "meaning": "the person means: ambiguous: pick auth or auth-fix; both carry the word, the agent asks once",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print",
+          "ask"
+        ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "ambiguous": true
+  },
+  {
+    "id": "kp05-i",
+    "category": "kiro-pick",
+    "input": "none of those, start new work on billing",
+    "state": "kiro-pick",
+    "meaning": "the person means: decline the pick and start new work on billing",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    },
+    "after": "WO6"
+  },
+  {
+    "id": "ho01-h",
+    "category": "hooks-off",
+    "input": "build a notes app",
+    "state": "hooks-off",
+    "meaning": "the person means: new work to build a notes app; the host's hooks are off, so they hear once how to turn them on and the request is kept for after",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "names": [
+          "hook"
+        ],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
+      }
+    }
+  },
+  {
+    "id": "ho02-h",
+    "category": "hooks-off",
+    "input": "--status",
+    "state": "hooks-off",
+    "meaning": "the person means: show me where the work stands (a read-only utility runs with the hooks off)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "names": [
+          "status"
+        ],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
+      }
+    }
+  },
+  {
+    "id": "ho03-h",
+    "category": "hooks-off",
+    "input": "",
+    "state": "hooks-off",
+    "meaning": "the person means: start, or show me what to do next; the host's hooks are off, so they hear once how to turn them on",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "names": [
+          "hook"
+        ],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
+      }
+    }
+  },
+  {
+    "id": "un01-u",
+    "category": "unattended",
+    "input": "--plan-approval off",
+    "state": "unattended",
+    "meaning": "the person means: turn plan approval off for the open work; the run is unattended, so no human authority exists for a lowering and they hear that once",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print",
+          "error"
+        ],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "un02-u",
+    "category": "unattended",
+    "input": "skip plan approval for this work",
+    "state": "unattended",
+    "meaning": "the person means: turn plan approval off for the open work in plain words; the run is unattended, so the lowering is refused once in plain words",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print",
+          "run-stage"
+        ],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "un03-u",
+    "category": "unattended",
+    "input": "--status",
+    "state": "unattended",
+    "meaning": "the person means: show me where the work stands",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "names": [
+          "status"
+        ],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
+  },
+  {
+    "id": "un04-u",
+    "category": "unattended",
+    "input": "--guard-policy strict",
+    "state": "unattended",
+    "meaning": "the person means: set the Guard Policy to strict for the open work (a raise needs no human authority)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
+      }
+    }
   },
   {
     "id": "ws21-w",
@@ -6217,6 +8377,10 @@
         "names": [
           "intent add-repo api"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -6237,6 +8401,10 @@
         "names": [
           "intent remove-repo api"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -6259,6 +8427,10 @@
         "names": [
           "describing what to build"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "unsure": true,
@@ -6305,6 +8477,10 @@
         "names": [
           "plan"
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -6319,11 +8495,16 @@
       "engine": {
         "kinds": [
           "ask",
-          "print"
+          "print",
+          "run-stage"
         ],
         "words": null,
         "settings": [],
         "no_ask": false
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -6374,6 +8555,10 @@
         ],
         "words": "--plan-aprroval off",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -6396,6 +8581,10 @@
         ],
         "words": "--guard-polciy relaxed",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -6418,6 +8607,10 @@
         ],
         "words": "--plan_approval off",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -6440,6 +8633,10 @@
         ],
         "words": "\u2014plan-approval off",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -6462,6 +8659,10 @@
         ],
         "words": "--review-freeze off",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -6484,6 +8685,10 @@
         ],
         "words": "turn plan approval off for this work",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "entry": "",
@@ -6570,6 +8775,10 @@
         ],
         "words": "skip the reviews for this one",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -6656,6 +8865,10 @@
         ],
         "words": "stop asking me to confirm summaries",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -6678,6 +8891,10 @@
         ],
         "words": "turn the review freeze check off",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -6700,6 +8917,10 @@
         ],
         "words": "bring the specialists in",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -6722,6 +8943,10 @@
         ],
         "words": "lead agent only from here",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -6744,6 +8969,10 @@
         ],
         "words": "this is brownfield",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -6766,6 +8995,10 @@
         ],
         "words": "treat it as a new project",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -6788,6 +9021,10 @@
         ],
         "words": "skip plan approval?",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -6842,6 +9079,10 @@
         ],
         "words": "please stop asking me to approve plans",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -6896,6 +9137,10 @@
         ],
         "words": "turn plan approval back on",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -6918,6 +9163,10 @@
         ],
         "words": "--plan-approval off",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -6967,6 +9216,10 @@
         ],
         "words": "2",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -7070,6 +9323,10 @@
         ],
         "words": "approved",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -7092,6 +9349,10 @@
         ],
         "words": "yes",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -7195,6 +9456,10 @@
         ],
         "words": "request changes: use bcrypt for the hashes",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -7233,7 +9498,7 @@
     "category": "reply",
     "input": "a",
     "state": "plan-question-open",
-    "meaning": "the person means: pick the first option of the open code plan question by letter (said in plain chat, no /aidlc)",
+    "meaning": "the person means: ambiguous: a is not an offered label (the plan question shows numbered options), so the agent asks once which option they meant (said in plain chat, no /aidlc)",
     "expected": {
       "engine": {
         "kinds": [
@@ -7243,6 +9508,10 @@
         ],
         "words": "a",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "unsure": true,
@@ -7266,6 +9535,10 @@
         ],
         "words": "other: let me think about it",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -7423,6 +9696,10 @@
         ],
         "words": "2 please",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "unsure": true,
@@ -7446,6 +9723,10 @@
         ],
         "words": "intent show",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "entry": "",
@@ -7494,6 +9775,10 @@
         ],
         "words": "intent list",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -7516,6 +9801,10 @@
         ],
         "words": "intent",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -7565,6 +9854,10 @@
         ],
         "words": "intent auth-fix",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -7614,6 +9907,10 @@
         ],
         "words": "intent auth fix the login bug",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -7636,6 +9933,10 @@
         ],
         "words": "intent is to build a notes app",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "entry": "",
@@ -7658,6 +9959,10 @@
         ],
         "words": "intent is to build a notes app",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -7680,6 +9985,10 @@
         ],
         "words": "space teamb",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "entry": "",
@@ -7702,6 +10011,10 @@
         ],
         "words": "space create teamb",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "entry": "",
@@ -7724,6 +10037,10 @@
         ],
         "words": "space-create teamb",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "entry": "",
@@ -7746,6 +10063,10 @@
         ],
         "words": "intent archive auth",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -7768,6 +10089,10 @@
         ],
         "words": "intent archive auth because it shipped",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "unsure": true,
@@ -7791,6 +10116,10 @@
         ],
         "words": "intent unarchive auth",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -7813,6 +10142,10 @@
         ],
         "words": "intent create a todo app",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "unsure": true,
@@ -7836,6 +10169,10 @@
         ],
         "words": "intent switch auth",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -7858,6 +10195,10 @@
         ],
         "words": "intent switch notes app",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "unsure": true,
@@ -7881,6 +10222,10 @@
         ],
         "words": "list intents",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -7903,6 +10248,10 @@
         ],
         "words": "intent --json",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -7925,6 +10274,10 @@
         ],
         "words": "space",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "entry": "",
@@ -7947,6 +10300,10 @@
         ],
         "words": "help",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "entry": "",
@@ -8021,6 +10378,10 @@
         ],
         "words": "what's the status?",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -8033,7 +10394,7 @@
     "category": "help-status-in-sentence",
     "input": "--status please",
     "state": "fresh",
-    "meaning": "the person means: show me where the work stands (said politely) (said in plain chat, no /aidlc)",
+    "meaning": "the person means: show where the work stands; with nothing started they hear that, never a plan offer (said in plain chat, no /aidlc)",
     "expected": {
       "engine": {
         "kinds": [
@@ -8043,9 +10404,12 @@
         ],
         "words": "--status please",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
-    "unsure": true,
     "entry": "",
     "argv": {
       "posix": []
@@ -8066,6 +10430,10 @@
         ],
         "words": "--status please",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "unsure": true,
@@ -8089,6 +10457,10 @@
         ],
         "words": "--change-control strict",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -8101,7 +10473,7 @@
     "category": "ambiguous",
     "input": "fix it",
     "state": "work-open",
-    "meaning": "the person means: fix something; which thing is unclear, the agent asks once (said in plain chat, no /aidlc)",
+    "meaning": "the person means: ambiguous: fix the thing just discussed in this chat; the agent asks only when nothing was discussed (said in plain chat, no /aidlc)",
     "expected": {
       "engine": {
         "kinds": [
@@ -8111,6 +10483,10 @@
         ],
         "words": "fix it",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -8133,6 +10509,10 @@
         ],
         "words": "the other one",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -8155,6 +10535,10 @@
         ],
         "words": "go",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -8206,6 +10590,10 @@
         ],
         "words": "--doctor --export",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "source": "FORMS.md A5",
@@ -8253,6 +10641,10 @@
         ],
         "words": "park",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md B2",
@@ -8276,6 +10668,10 @@
         ],
         "words": "park this for now",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md B2",
@@ -8299,6 +10695,10 @@
         ],
         "words": "unpark",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md B3",
@@ -8322,6 +10722,10 @@
         ],
         "words": "unpark it",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md B3",
@@ -8345,6 +10749,10 @@
         ],
         "words": "config set guard.review-freeze off",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md B5",
@@ -8368,6 +10776,10 @@
         ],
         "words": "config get plan-approval",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md B5",
@@ -8391,6 +10803,10 @@
         ],
         "words": "config list",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md B5",
@@ -8414,6 +10830,10 @@
         ],
         "words": "--doctor --export --output ./diag",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "source": "FORMS.md C2",
@@ -8437,6 +10857,10 @@
         ],
         "words": "--version",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "source": "FORMS.md C2",
@@ -8487,6 +10911,10 @@
         ],
         "words": "--resume",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md C5",
@@ -8564,6 +10992,10 @@
         ],
         "words": "proceed",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "source": "FORMS.md D7",
@@ -8606,6 +11038,615 @@
     }
   },
   {
+    "id": "po01-o-chat",
+    "category": "plan-offer-open",
+    "input": "yes",
+    "state": "plan-offer-open",
+    "meaning": "the person means: yes to the plan offer just shown (build a notes app), so confirm it; no question (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage",
+          "error"
+        ],
+        "words": "yes",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "po02-o-chat",
+    "category": "plan-offer-open",
+    "input": "1",
+    "state": "plan-offer-open",
+    "meaning": "the person means: pick option 1 of the plan offer just shown; no question (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage",
+          "error"
+        ],
+        "words": "1",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "po03-o-chat",
+    "category": "plan-offer-open",
+    "input": "2",
+    "state": "plan-offer-open",
+    "meaning": "the person means: pick option 2 of the plan offer just shown; no question (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage",
+          "error"
+        ],
+        "words": "2",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "po04-o-chat",
+    "category": "plan-offer-open",
+    "input": "compose",
+    "state": "plan-offer-open",
+    "meaning": "the person means: take the offer's recommendation: work out a tailored plan for the notes app they described; their words go with it (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage",
+          "error"
+        ],
+        "words": "compose",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "po05-o-chat",
+    "category": "plan-offer-open",
+    "input": "bugfix",
+    "state": "plan-offer-open",
+    "meaning": "the person means: pick the bugfix plan for the notes app they described; their words go with it (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage",
+          "error"
+        ],
+        "words": "bugfix",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "po06-o-chat",
+    "category": "plan-offer-open",
+    "input": "no, make it a feature",
+    "state": "plan-offer-open",
+    "meaning": "the person means: decline the offer's recommendation and start feature work for the notes app they described (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage",
+          "error"
+        ],
+        "words": "no, make it a feature",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "po07-o-chat",
+    "category": "plan-offer-open",
+    "input": "the second one",
+    "state": "plan-offer-open",
+    "meaning": "the person means: ambiguous: pick the second thing the offer listed; which one that is depends on how the offer was shown, the agent asks once (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage",
+          "error"
+        ],
+        "words": "the second one",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "rq01-q-chat",
+    "category": "routing-question-open",
+    "input": "1",
+    "state": "routing-question-open",
+    "meaning": "the person means: option 1 of the routing question: fixing the login is part of the open work, carry on (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage"
+        ],
+        "words": "1",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "rq02-q-chat",
+    "category": "routing-question-open",
+    "input": "2",
+    "state": "routing-question-open",
+    "meaning": "the person means: option 2 of the routing question: fixing the login is a separate new piece of work alongside (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage"
+        ],
+        "words": "2",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "rq03-q-chat",
+    "category": "routing-question-open",
+    "input": "3",
+    "state": "routing-question-open",
+    "meaning": "the person means: option 3 of the routing question: a change to how the remaining plan is shaped (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage"
+        ],
+        "words": "3",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "unsure": true,
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "rq04-q-chat",
+    "category": "routing-question-open",
+    "input": "Separate new piece of work",
+    "state": "routing-question-open",
+    "meaning": "the person means: the separate-new-work option of the routing question they were shown; the agent knows which question (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage"
+        ],
+        "words": "Separate new piece of work",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "rq05-q-chat",
+    "category": "routing-question-open",
+    "input": "part of that work",
+    "state": "routing-question-open",
+    "meaning": "the person means: the part-of-that-work option of the routing question they were shown (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage"
+        ],
+        "words": "part of that work",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "unsure": true,
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "rq06-q-chat",
+    "category": "routing-question-open",
+    "input": "yes",
+    "state": "routing-question-open",
+    "meaning": "the person means: the yes-led option of the routing question (a separate new piece of work alongside); the agent knows which question (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage"
+        ],
+        "words": "yes",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "rq07-q-chat",
+    "category": "routing-question-open",
+    "input": "neither, forget it",
+    "state": "routing-question-open",
+    "meaning": "the person means: withdraw the request; nothing starts and the open work carries on as it was (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage"
+        ],
+        "words": "neither, forget it",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "sq01s-s-chat",
+    "category": "stage-question-asked",
+    "input": "Refuse it",
+    "state": "stage-question-asked",
+    "meaning": "the person means: answer the stage question the agent asked: refuse a blank title (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print",
+          "run-stage",
+          "ask"
+        ],
+        "words": "Refuse it",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "sq02s-s-chat",
+    "category": "stage-question-asked",
+    "input": "1",
+    "state": "stage-question-asked",
+    "meaning": "the person means: option 1 of the stage question the agent asked (refuse it); the agent knows which question (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print",
+          "run-stage",
+          "ask"
+        ],
+        "words": "1",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "sq03s-s-chat",
+    "category": "stage-question-asked",
+    "input": "save it as untitled please",
+    "state": "stage-question-asked",
+    "meaning": "the person means: answer the stage question the agent asked, in their words: save it as Untitled (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print",
+          "run-stage",
+          "ask"
+        ],
+        "words": "save it as untitled please",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "sq04s-s-chat",
+    "category": "stage-question-asked",
+    "input": "what does untitled mean here?",
+    "state": "stage-question-asked",
+    "meaning": "the person means: ask the agent a question back before answering; the agent explains and asks the stage question again, nothing is recorded (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print",
+          "run-stage",
+          "ask"
+        ],
+        "words": "what does untitled mean here?",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "kp01-i-chat",
+    "category": "kiro-pick",
+    "input": "--pick auth",
+    "state": "kiro-pick",
+    "meaning": "the person means: pick the record named auth and carry on with it (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage"
+        ],
+        "words": "--pick auth",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "kp02-i-chat",
+    "category": "kiro-pick",
+    "input": "auth",
+    "state": "kiro-pick",
+    "meaning": "the person means: pick the record named auth from the pick question just shown (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage"
+        ],
+        "words": "auth",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "unsure": true,
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "kp03-i-chat",
+    "category": "kiro-pick",
+    "input": "1",
+    "state": "kiro-pick",
+    "meaning": "the person means: pick the first record listed in the pick question just shown (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage"
+        ],
+        "words": "1",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "unsure": true,
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "kp04-i-chat",
+    "category": "kiro-pick",
+    "input": "the auth one",
+    "state": "kiro-pick",
+    "meaning": "the person means: ambiguous: pick auth or auth-fix; both carry the word, the agent asks once (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage"
+        ],
+        "words": "the auth one",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
+    "id": "kp05-i-chat",
+    "category": "kiro-pick",
+    "input": "none of those, start new work on billing",
+    "state": "kiro-pick",
+    "meaning": "the person means: decline the pick and start new work on billing (said in plain chat, no /aidlc)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print",
+          "run-stage"
+        ],
+        "words": "none of those, start new work on billing",
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    },
+    "entry": "",
+    "argv": {
+      "posix": []
+    }
+  },
+  {
     "id": "ws21-w-chat",
     "category": "workspace",
     "input": "intent add-repo api",
@@ -8620,6 +11661,10 @@
         ],
         "words": "intent add-repo api",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -8642,6 +11687,10 @@
         ],
         "words": "intent remove-repo api",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "entry": "",
@@ -8668,6 +11717,10 @@
           "engine intent list --json"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -8695,6 +11748,10 @@
           "engine intent create --scope bugfix --depth comprehensive"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -8722,6 +11779,16 @@
           "engine config set depth comprehensive"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Depth",
+            "comprehensive (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -8741,6 +11808,10 @@
         "words": "1",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -8760,6 +11831,10 @@
         "words": "use postgres",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -8782,6 +11857,10 @@
           "Unknown phase"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "pending",
@@ -8808,6 +11887,10 @@
           ]
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -8830,6 +11913,10 @@
           "engine scope change --scope mvp"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -8838,7 +11925,7 @@
     "category": "doc-example",
     "input": "intent login",
     "state": "fresh",
-    "meaning": "the person means: switch to the piece of work named login; no record has that name here, so they hear which ones exist",
+    "meaning": "the person means: ambiguous: with no records at all, likelier the start of work about login than a switch; the agent asks once",
     "source": "core/tools/aidlc-lib.ts:6151 (comment)",
     "documented": "\"A typed workspace switch or create (\"/aidlc intent login\") moves this conversation's selection itself, so no rebind line is kept for it.\"",
     "expected": {
@@ -8850,10 +11937,15 @@
         "settings": [],
         "names": [
           "engine intent login"
-        ],
-        "no_ask": true
+        ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same",
+        "active": "login"
       }
-    }
+    },
+    "ambiguous": true
   },
   {
     "id": "doc-009-w",
@@ -8874,6 +11966,11 @@
           "engine intent login"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "active": "login"
       }
     }
   },
@@ -8893,6 +11990,12 @@
         "words": "Build what docs/brief.pdf describes",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "Build what docs/brief.pdf describes"
+        }
       }
     },
     "after": "WO6",
@@ -8914,6 +12017,10 @@
         "words": "take me back to requirements analysis",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -8936,6 +12043,13 @@
           "engine intent create --scope bugfix"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "scope": "bugfix",
+          "words": "Fix the crash"
+        }
       }
     }
   },
@@ -8956,6 +12070,10 @@
         "words": "Fix the crash",
         "settings": [],
         "no_ask": false
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "after": "pending",
@@ -8980,6 +12098,13 @@
           "engine intent create --scope classic"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "scope": "classic",
+          "words": "Build a notes app"
+        }
       }
     }
   },
@@ -8999,6 +12124,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -9022,6 +12151,10 @@
           "No state file found"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -9046,6 +12179,13 @@
           "engine intent create --scope feature"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "scope": "feature",
+          "words": "build the auth service"
+        }
       }
     }
   },
@@ -9068,6 +12208,10 @@
           "engine space 'My Space'"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -9090,6 +12234,10 @@
           "engine space 'My Space'"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -9108,6 +12256,10 @@
         ],
         "words": "build a to-do app",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     }
   },
@@ -9135,6 +12287,16 @@
           "engine config set collaborators on"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Collaborators",
+            "on (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -9154,6 +12316,12 @@
         "words": "Read ./vision.md and build what it describes",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "Read ./vision.md and build what it describes"
+        }
       }
     },
     "after": "WO6",
@@ -9178,6 +12346,10 @@
           "aidlc-knowledge.ts onboard docs"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -9200,6 +12372,10 @@
           "aidlc-knowledge.ts onboard docs"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -9219,6 +12395,12 @@
         "words": "Build what ./brief.pdf describes",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "Build what ./brief.pdf describes"
+        }
       }
     },
     "after": "WO6",
@@ -9247,6 +12429,10 @@
           "No workflow state found",
           "No state file found"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -9271,6 +12457,10 @@
           "engine status"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -9293,6 +12483,10 @@
           "engine status"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -9315,6 +12509,10 @@
           "engine intent list --all"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -9337,6 +12535,10 @@
           "engine intent list --all"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -9359,6 +12561,10 @@
           "engine intent unarchive auth"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -9381,6 +12587,10 @@
           "engine intent unarchive auth"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -9399,6 +12609,10 @@
         ],
         "words": "carry on",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -9428,6 +12642,10 @@
           ]
         ],
         "no_ask": false
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -9448,6 +12666,10 @@
         "words": "Fix the timeout",
         "settings": [],
         "no_ask": false
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "after": "pending",
@@ -9458,20 +12680,29 @@
     "category": "doc-example",
     "input": "--scope express \"add a health endpoint\"",
     "state": "work-open",
-    "meaning": "the person means: a request to add a health endpoint with the express plan; whether it is new work or a change to the open work is theirs to say, asked once",
+    "meaning": "the person means: start express work to add a health endpoint alongside the open work, no question: an explicit plan different from the open work's plus a new description is new work; the one line says what started, that the open work is kept as it was, and how to go back to it",
     "source": "docs/guide/03-spaces-and-intents.md:169",
     "documented": "A scope differing from the active intent's, typed with a description, asks \"with new work first: choose **1** and the description starts new express work, the active intent kept as it is, or **2** and the active intent changes to express\"; \"A scope with no description changes the active intent's scope without asking.\"",
     "expected": {
       "engine": {
         "kinds": [
-          "ask",
-          "print"
+          "print",
+          "run-stage"
         ],
         "words": "add a health endpoint",
         "settings": [],
-        "no_ask": false
+        "never": [
+          "Is this (1)"
+        ],
+        "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
-    }
+    },
+    "after": "pending",
+    "documented_differs": "ask/new-work-routing: Work is already in progress on: \"Todo app bug fix\". You said: \"add a health endpoint\". Is this (1) a separate new piece of work - start new \"express\" work for i"
   },
   {
     "id": "doc-034-f",
@@ -9492,6 +12723,10 @@
           "engine intent list"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -9514,6 +12749,10 @@
           "engine intent list"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -9522,7 +12761,7 @@
     "category": "doc-example",
     "input": "intent auth",
     "state": "fresh",
-    "meaning": "the person means: switch to the piece of work named auth; no record has that name here, so they hear which ones exist",
+    "meaning": "the person means: ambiguous: with no records at all, likelier the start of work about auth than a switch; the agent asks once",
     "source": "docs/guide/03-spaces-and-intents.md:209 (+1 more) (+7 more sources)",
     "documented": "In a fresh clone \"AI-DLC's hooks leave that record alone until the session runs `/aidlc intent <slug>` (or creates its own intent)\"; a plain git worktree \"also selects its intent with `/aidlc intent <slug>`\".",
     "expected": {
@@ -9534,10 +12773,15 @@
         "settings": [],
         "names": [
           "engine intent auth"
-        ],
-        "no_ask": true
+        ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same",
+        "active": "auth"
       }
-    }
+    },
+    "ambiguous": true
   },
   {
     "id": "doc-035-w",
@@ -9558,6 +12802,11 @@
           "engine intent auth"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "active": "auth"
       }
     }
   },
@@ -9580,6 +12829,11 @@
           "engine intent switch auth"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "active": "auth"
       }
     }
   },
@@ -9602,6 +12856,11 @@
           "engine intent switch auth"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "active": "auth"
       }
     }
   },
@@ -9624,6 +12883,10 @@
           "engine space teamb"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -9646,6 +12909,10 @@
           "engine space teamb"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -9668,6 +12935,10 @@
           "engine space create teamb"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -9690,6 +12961,10 @@
           "engine space create teamb"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -9712,6 +12987,10 @@
           "aidlc-knowledge.ts sync"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -9734,6 +13013,10 @@
           "aidlc-knowledge.ts sync"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -9753,6 +13036,10 @@
         ],
         "words": null,
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "ambiguous": true,
@@ -9778,6 +13065,10 @@
           "aidlc-jump.ts execute --target reverse-engineering --direction backward --scope bugfix"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -9797,6 +13088,10 @@
         ],
         "words": null,
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "ambiguous": true,
@@ -9822,6 +13117,10 @@
           "aidlc-jump.ts execute --target requirements-analysis --direction redo --scope bugfix"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -9844,6 +13143,10 @@
           "aidlc-jump.ts execute --target requirements-analysis --direction redo --scope bugfix"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -9863,6 +13166,10 @@
         ],
         "words": null,
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "unsure": true,
@@ -9885,6 +13192,10 @@
         ],
         "words": null,
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -9904,6 +13215,10 @@
         "words": "status",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -9927,6 +13242,10 @@
           "No state file found"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -9948,6 +13267,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -9967,6 +13290,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -9986,6 +13313,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -10005,6 +13336,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -10024,6 +13359,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -10043,6 +13382,12 @@
         "words": "build a to-do app",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "build a to-do app"
+        }
       }
     }
   },
@@ -10051,19 +13396,24 @@
     "category": "doc-example",
     "input": "compose \"build a to-do app\"",
     "state": "work-open",
-    "meaning": "the person means: reshape the open work's remaining stages around: build a to-do app",
+    "meaning": "the person means: work out a tailored plan to build a to-do app; whether that reshapes the open work or starts new work is theirs to say, asked once",
     "source": "docs/guide/05-scopes-and-depth.md:283 (+3 more sources)",
     "documented": "Plain chat is recognised as a reshape request mid-workflow, but \"On the non-Claude harnesses the literal `/aidlc compose \"<request>\"` verb remains the documented reliable path.\"",
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "print",
+          "ask"
         ],
         "words": "build a to-do app",
-        "settings": [],
-        "no_ask": true
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
-    }
+    },
+    "ambiguous": true
   },
   {
     "id": "doc-048-f",
@@ -10085,6 +13435,10 @@
           "No workflow state found",
           "No state file found"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -10106,6 +13460,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -10133,6 +13491,16 @@
           "engine config set learnings on"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Learnings",
+            "on (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -10160,6 +13528,16 @@
           "engine config set summary-confirmation on"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Summary Confirmation",
+            "on (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -10187,6 +13565,16 @@
           "engine config set collaborators off"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Collaborators",
+            "off (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -10214,6 +13602,16 @@
           "engine config set learnings off"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Learnings",
+            "off (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -10242,6 +13640,10 @@
           "No state file found"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -10271,6 +13673,16 @@
           "engine config set plan-approval off"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Plan Approval",
+            "off (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -10298,6 +13710,16 @@
           "engine config set plan-approval off"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Plan Approval",
+            "off (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -10325,6 +13747,16 @@
           "engine config set sensors off"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Sensors",
+            "off (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -10352,6 +13784,16 @@
           "engine config set summary-confirmation off"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Summary Confirmation",
+            "off (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -10380,6 +13822,10 @@
           "No state file found"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -10409,6 +13855,16 @@
           "engine config set review none"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Review",
+            "none (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -10427,6 +13883,10 @@
         ],
         "words": null,
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -10449,6 +13909,10 @@
           "aidlc-knowledge.ts onboard"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -10471,6 +13935,10 @@
           "aidlc-knowledge.ts onboard"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -10493,6 +13961,10 @@
           "engine intent create --scope feature"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -10515,6 +13987,10 @@
           "engine intent create --scope bugfix"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -10534,6 +14010,10 @@
         ],
         "words": null,
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "ambiguous": true,
@@ -10559,6 +14039,10 @@
           "aidlc-jump.ts execute --target deployment-pipeline --direction forward --scope bugfix"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -10578,6 +14062,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -10600,6 +14088,10 @@
           "aidlc-jump.ts execute --target code-generation --direction forward --scope bugfix"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -10619,6 +14111,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -10641,6 +14137,10 @@
           "aidlc-orchestrate.ts park"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -10663,6 +14163,10 @@
           "aidlc-jump.ts execute --target requirements-analysis --direction redo --scope bugfix"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -10681,6 +14185,10 @@
         ],
         "words": null,
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "after": "pending",
@@ -10707,6 +14215,10 @@
           ]
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -10730,6 +14242,10 @@
           "No state file found"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -10751,6 +14267,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -10770,6 +14290,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -10798,6 +14322,10 @@
           "No state file found"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -10827,6 +14355,11 @@
           "engine config set guard.review-freeze off"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": []
       }
     }
   },
@@ -10850,6 +14383,10 @@
             "off"
           ]
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     }
   },
@@ -10875,6 +14412,10 @@
           ]
         ],
         "no_ask": false
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -10898,6 +14439,10 @@
             "off"
           ]
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     }
   },
@@ -10917,6 +14462,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -10936,6 +14485,12 @@
         "words": "codekb-snapshot",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "codekb-snapshot"
+        }
       }
     },
     "after": "WO6",
@@ -10957,6 +14512,10 @@
         "words": "codekb-snapshot",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -10976,6 +14535,12 @@
         "words": "codekb-publish",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "codekb-publish"
+        }
       }
     },
     "after": "WO6",
@@ -10997,6 +14562,10 @@
         "words": "codekb-publish",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11016,6 +14585,12 @@
         "words": "codekb-scope-diff",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "codekb-scope-diff"
+        }
       }
     },
     "after": "WO6",
@@ -11037,6 +14612,10 @@
         "words": "codekb-scope-diff",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11056,6 +14635,10 @@
         "words": "workspace-sync",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11075,6 +14658,10 @@
         "words": "select-plugins",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11094,6 +14681,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11116,6 +14707,10 @@
           "engine recompose --skip requirements-analysis"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11138,6 +14733,10 @@
           "engine intent create --scope feature"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -11157,6 +14756,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -11176,6 +14779,12 @@
         "words": "build a to-do app",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "build a to-do app"
+        }
       }
     }
   },
@@ -11198,6 +14807,10 @@
           "engine intent archive auth --reason done"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -11220,6 +14833,10 @@
           "engine intent archive auth --reason done"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11239,6 +14856,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11261,6 +14882,10 @@
           "engine intent remove-repo auth"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11283,6 +14908,10 @@
           "engine intent archive auth"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -11305,6 +14934,10 @@
           "engine intent archive auth"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11327,6 +14960,10 @@
           "engine intent add-repo auth"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11349,6 +14986,10 @@
           "engine space list"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -11371,6 +15012,10 @@
           "engine space list"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11393,6 +15038,10 @@
           "aidlc-knowledge.ts list"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -11415,6 +15064,10 @@
           "aidlc-knowledge.ts list"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11437,6 +15090,10 @@
           "aidlc-knowledge.ts show docs"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -11459,6 +15116,10 @@
           "aidlc-knowledge.ts show docs"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11481,6 +15142,10 @@
           "aidlc-knowledge.ts associate docs --intent"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -11503,6 +15168,10 @@
           "aidlc-knowledge.ts associate docs --intent"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11525,6 +15194,10 @@
           "aidlc-knowledge.ts dissociate docs --intent"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -11547,6 +15220,10 @@
           "aidlc-knowledge.ts dissociate docs --intent"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11569,6 +15246,10 @@
           "aidlc-knowledge.ts rebind docs --to docs"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -11591,6 +15272,10 @@
           "aidlc-knowledge.ts rebind docs --to docs"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11613,6 +15298,10 @@
           "aidlc-knowledge.ts summarize docs --text-file docs --source-revision auth"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -11635,6 +15324,10 @@
           "aidlc-knowledge.ts summarize docs --text-file docs --source-revision auth"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11658,6 +15351,10 @@
           "No workflow state found",
           "No state file found"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -11679,6 +15376,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11698,6 +15399,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11717,6 +15422,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11736,6 +15445,10 @@
         "words": "unit adopt u1-login",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11755,6 +15468,10 @@
         "words": "unit participate",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11774,6 +15491,10 @@
         "words": "unit publish u1-login",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11793,6 +15514,10 @@
         "words": "unit pin u1-login",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11812,6 +15537,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11831,6 +15560,10 @@
         "words": "unit claim u1-login",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11850,6 +15583,10 @@
         "words": "unit merge-status u1-login",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11869,6 +15606,10 @@
         "words": "unit status",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11892,6 +15633,10 @@
           "No workflow state found",
           "No state file found"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -11913,6 +15658,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11932,6 +15681,10 @@
         "words": "unit release u1-login",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -11954,6 +15707,10 @@
           "engine intent create --scope bugfix"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -11974,6 +15731,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -12002,6 +15763,10 @@
           "No state file found"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -12031,6 +15796,16 @@
           "engine config set depth minimal"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Depth",
+            "minimal (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -12059,6 +15834,10 @@
           "No state file found"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -12088,6 +15867,16 @@
           "engine config set test-strategy minimal"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Test Strategy",
+            "minimal (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -12107,6 +15896,10 @@
         "words": "unit gate u1-login",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -12130,6 +15923,10 @@
           "No state file found"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -12154,6 +15951,10 @@
           "engine workspace reclassify --project-type brownfield --intent fixture-8000000000000001 --space default"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -12173,6 +15974,10 @@
         "words": "unit land u1-login",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -12201,6 +16006,10 @@
           "No state file found"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -12227,6 +16036,16 @@
           ]
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Guard Policy",
+            "relaxed (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -12246,6 +16065,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -12269,6 +16092,10 @@
           "No state file found"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -12290,6 +16117,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -12309,6 +16140,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -12331,6 +16166,10 @@
           "engine plugin select"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -12353,6 +16192,10 @@
           "engine plugin select"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -12375,6 +16218,10 @@
           "engine plugin list"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -12397,6 +16244,10 @@
           "engine plugin list"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -12419,6 +16270,10 @@
           "engine plugin validate"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -12441,6 +16296,10 @@
           "engine plugin validate"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -12463,6 +16322,10 @@
           "engine plugin build auth"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -12485,6 +16348,10 @@
           "engine plugin build auth"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -12508,6 +16375,10 @@
           "No workflow state found",
           "No state file found"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -12529,6 +16400,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -12555,6 +16430,10 @@
           "No workflow state found",
           "No state file found"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -12579,6 +16458,10 @@
           "engine orchestrate help"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -12597,6 +16480,10 @@
         ],
         "words": "add a --version flag that prints the version from package.json",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     }
   },
@@ -12615,6 +16502,10 @@
         ],
         "words": "auth",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "ambiguous": true,
@@ -12636,6 +16527,10 @@
         ],
         "words": "auth",
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "ambiguous": true
@@ -12659,6 +16554,10 @@
           "engine intent create --scope enterprise"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -12682,6 +16581,10 @@
           "engine scope change --scope enterprise"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "pending",
@@ -12707,6 +16610,10 @@
             "on"
           ]
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     }
   },
@@ -12735,6 +16642,10 @@
           "No state file found"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -12764,6 +16675,16 @@
           "engine config set plan-approval on"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Plan Approval",
+            "on (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -12783,6 +16704,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -12806,6 +16731,10 @@
             "off"
           ]
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     }
   },
@@ -12831,6 +16760,10 @@
           ]
         ],
         "no_ask": false
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -12863,6 +16796,10 @@
           "No state file found"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -12896,6 +16833,16 @@
           "engine config set guard.state-transition off"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Guard Policy",
+            "off (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -12919,6 +16866,10 @@
             "relaxed"
           ]
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     }
   },
@@ -12944,6 +16895,10 @@
           ]
         ],
         "no_ask": false
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -12963,6 +16918,12 @@
         "words": "why was config set guard.plan-approval off suggested?",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "why was config set guard.plan-approval off suggested?"
+        }
       }
     },
     "after": "WO6",
@@ -12984,6 +16945,10 @@
         "words": "why was config set guard.plan-approval off suggested?",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -13003,6 +16968,12 @@
         "words": "fix the login bug",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "fix the login bug"
+        }
       }
     },
     "after": "WO6",
@@ -13024,6 +16995,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -13051,6 +17026,16 @@
           "engine config set sensors on"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Sensors",
+            "on (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -13070,6 +17055,12 @@
         "words": "build a to-do app",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "build a to-do app"
+        }
       }
     },
     "after": "WO6",
@@ -13094,6 +17085,13 @@
           "engine intent create --scope workshop"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "scope": "workshop",
+          "words": "Read ./vision.md and build what it describes"
+        }
       }
     }
   },
@@ -13116,6 +17114,13 @@
           "engine intent create --scope bugfix"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "scope": "bugfix",
+          "words": "auth"
+        }
       }
     }
   },
@@ -13138,6 +17143,13 @@
           "engine intent create --scope express"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "scope": "express",
+          "words": "auth"
+        }
       }
     }
   },
@@ -13165,6 +17177,13 @@
           "engine intent create --scope classic"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "scope": "classic",
+          "words": "auth"
+        }
       }
     }
   },
@@ -13187,6 +17206,10 @@
           "engine intent create --scope workshop"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -13206,6 +17229,12 @@
         "words": "build a to-do app",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "build a to-do app"
+        }
       }
     },
     "after": "WO6",
@@ -13230,6 +17259,10 @@
           "engine intent create --scope classic"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -13252,6 +17285,10 @@
           "engine intent create --scope express"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -13274,6 +17311,10 @@
           "engine intent create --scope enterprise"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -13296,6 +17337,10 @@
           "engine intent create --scope mvp"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -13318,6 +17363,10 @@
           "engine intent create --scope poc"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -13340,6 +17389,10 @@
           "engine intent create --scope refactor"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -13362,6 +17415,10 @@
           "engine intent create --scope infra"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -13384,6 +17441,10 @@
           "engine intent create --scope security-patch"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -13411,6 +17472,16 @@
           "engine config set guard-policy strict"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Guard Policy",
+            "strict (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -13433,6 +17504,10 @@
           "engine intent list"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -13455,6 +17530,10 @@
           "engine intent list"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -13474,6 +17553,12 @@
         "words": "fix the login",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "fix the login"
+        }
       }
     },
     "after": "WO6",
@@ -13498,6 +17583,10 @@
           "engine space create teamb"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -13520,6 +17609,10 @@
           "engine space create teamb"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -13539,6 +17632,10 @@
         "words": null,
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -13558,6 +17655,12 @@
         "words": "build the auth service",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "build the auth service"
+        }
       }
     },
     "after": "WO6",
@@ -13582,6 +17685,13 @@
           "engine intent create --scope bugfix"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "scope": "bugfix",
+          "words": "Fix duplicate todos"
+        }
       }
     }
   },
@@ -13602,6 +17712,10 @@
         "words": "Fix login",
         "settings": [],
         "no_ask": false
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     },
     "after": "pending",
@@ -13627,6 +17741,10 @@
             "relaxed"
           ]
         ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     }
   },
@@ -13652,6 +17770,10 @@
           ]
         ],
         "no_ask": false
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -13671,6 +17793,10 @@
         "words": "approve the code plan",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -13693,6 +17819,10 @@
           "engine space default"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -13715,6 +17845,10 @@
           "engine space default"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -13737,6 +17871,10 @@
         "names": [
           "plugin list"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "pending",
@@ -13761,6 +17899,10 @@
         "names": [
           "plugin list"
         ]
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     },
     "after": "pending",
@@ -13785,6 +17927,13 @@
           "engine intent create --scope classic"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "scope": "classic",
+          "words": "Build a notes app"
+        }
       }
     }
   },
@@ -13807,6 +17956,13 @@
           "engine intent create --scope express"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "scope": "express",
+          "words": "add a version flag"
+        }
       }
     }
   },
@@ -13829,6 +17985,13 @@
           "engine intent create --scope classic"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "scope": "classic",
+          "words": "car rental website"
+        }
       }
     },
     "after": "pending",
@@ -13855,6 +18018,16 @@
           ]
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Guard Policy",
+            "off (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -13874,6 +18047,12 @@
         "words": "Fix the login timeout bug",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "Fix the login timeout bug"
+        }
       }
     },
     "after": "WO6",
@@ -13895,6 +18074,12 @@
         "words": "harden the deploy pipeline",
         "settings": [],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": {
+          "words": "harden the deploy pipeline"
+        }
       }
     }
   },
@@ -13903,19 +18088,24 @@
     "category": "doc-example",
     "input": "compose \"harden the deploy pipeline\"",
     "state": "work-open",
-    "meaning": "the person means: reshape the open work's remaining stages around hardening the deploy pipeline",
+    "meaning": "the person means: work out a tailored plan to harden the deploy pipeline; whether that reshapes the open work or starts new work is theirs to say, asked once",
     "source": "help output:83",
     "documented": "\"Composer proposes a tailored plan\".",
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "print",
+          "ask"
         ],
         "words": "harden the deploy pipeline",
-        "settings": [],
-        "no_ask": true
+        "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
-    }
+    },
+    "ambiguous": true
   },
   {
     "id": "doc-172-f",
@@ -13936,6 +18126,10 @@
           "engine plugin build claude"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -13958,6 +18152,10 @@
           "engine plugin build claude"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -13977,6 +18175,10 @@
         ],
         "words": null,
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "ambiguous": true,
@@ -14002,6 +18204,10 @@
           "aidlc-jump.ts execute --target code-generation --direction forward --scope bugfix"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -14034,6 +18240,10 @@
           "No state file found"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -14067,6 +18277,20 @@
           "engine config set depth standard --test-strategy minimal"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Depth",
+            "standard (set by you)"
+          ],
+          [
+            "Test Strategy",
+            "minimal (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -14095,6 +18319,10 @@
           "No state file found"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     },
     "after": "WO3",
@@ -14124,6 +18352,16 @@
           "engine config set review advisory"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same",
+        "set": [
+          [
+            "Review",
+            "advisory (set by you)"
+          ]
+        ]
       }
     }
   },
@@ -14146,6 +18384,10 @@
           "engine plugin sync"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "none"
       }
     }
   },
@@ -14168,6 +18410,10 @@
           "engine plugin sync"
         ],
         "no_ask": true
+      },
+      "end": {
+        "asks": 0,
+        "work": "same"
       }
     }
   },
@@ -14186,6 +18432,10 @@
         ],
         "words": null,
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "none"
       }
     },
     "after": "pending",
@@ -14202,10 +18452,17 @@
     "expected": {
       "engine": {
         "kinds": [
-          "ask"
+          "ask",
+          "print",
+          "run-stage"
         ],
         "words": null,
-        "settings": []
+        "settings": [],
+        "no_ask": false
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -14224,6 +18481,10 @@
         ],
         "words": null,
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   },
@@ -14242,6 +18503,10 @@
         ],
         "words": null,
         "settings": []
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
       }
     }
   }
