@@ -17818,10 +17818,11 @@ export function reviewCompletionDictated(completionBlock: string): boolean {
 
 /** The one line the person hears at the gate (strict) or with the verdict
  *  (relaxed, off) when the review they are deciding on was dispatched with its
- *  verdict already in the brief. A fact, not a judgement: a conductor quoting an
- *  earlier review's verdict on a re-review carries it too. */
+ *  verdict already in the brief, in the person's words: no engine vocabulary. A
+ *  fact, not a judgement: a conductor quoting an earlier review's verdict on a
+ *  re-review carries it too. */
 export function dictatedReviewNotice(stageName: string, unit?: string | null): string {
-  return `The dispatch to the reviewer for ${stageName}${unit ? ` (${unit})` : ""} carried this verdict.`;
+  return `The reviewer for ${stageName}${unit ? ` (${unit})` : ""} was told what to conclude before it looked.`;
 }
 
 /**

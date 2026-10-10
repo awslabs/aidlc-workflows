@@ -65,7 +65,7 @@ const SUBAGENT_HOOK = join(DIST_CLAUDE, "hooks", "aidlc-log-subagent.ts");
 const DISPATCH_HOOK = join(DIST_CLAUDE, "hooks", "aidlc-plan-approval-guard.ts");
 const STAGE = "requirements-analysis";
 const REVIEWER = "aidlc-product-lead-agent";
-const DICTATED_LINE = "The dispatch to the reviewer for Requirements Analysis carried this verdict.";
+const DICTATED_LINE = "The reviewer for Requirements Analysis was told what to conclude before it looked.";
 
 const tempDirs: string[] = [];
 afterAll(() => {
@@ -286,7 +286,7 @@ describe("a verdict the reviewer wrote as told records marked, never as the revi
     const recorded = logReview(p, ["--verdict", "READY"]);
     expect(recorded.status, recorded.out).toBe(0);
     expect(blocks(p, "REVIEW_COMPLETED")[0]).not.toContain(REVIEW_DICTATED_FIELD);
-    expect(gateStart(p)).not.toContain("carried this verdict");
+    expect(gateStart(p)).not.toContain("was told what to conclude");
   });
 });
 
@@ -343,6 +343,6 @@ describe("the pure helpers", () => {
     expect(reviewCompletionDictated("**Event**: REVIEW_COMPLETED\n**Verdict**: READY")).toBe(false);
     expect(dictatedReviewNotice("Requirements Analysis")).toBe(DICTATED_LINE);
     expect(dictatedReviewNotice("Functional Design", "u2-note-tags"))
-      .toBe("The dispatch to the reviewer for Functional Design (u2-note-tags) carried this verdict.");
+      .toBe("The reviewer for Functional Design (u2-note-tags) was told what to conclude before it looked.");
   });
 });

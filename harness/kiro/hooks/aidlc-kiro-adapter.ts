@@ -162,9 +162,14 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
       const prompt = [
         firstNonBlank([toolInput.task]),
         firstNonBlank([toolInput.prompt]),
+        // Each stage's brief is its prompt_template (the crew schema the skill
+        // mandates). The developer's is always forwarded; a one-stage crew
+        // forwards its one brief whatever the role, so a reviewer's verdict
+        // written there reaches the plan-approval guard's record.
         ...stages
           .filter((stage) =>
-            typeof stage.role === "string" && stage.role.trim() === "aidlc-developer-agent"
+            stages.length === 1 ||
+            (typeof stage.role === "string" && stage.role.trim() === "aidlc-developer-agent")
           )
           .map((stage) => firstNonBlank([stage.prompt_template])),
       ].filter((part) => part.length > 0).join("\n");
