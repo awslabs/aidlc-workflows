@@ -159,6 +159,7 @@ export interface StageEntry {
   consumes?: Array<{ artifact: string; required: boolean; conditional_on?: string }>;
   requires_stage?: string[];
   scopes?: string[];
+  when?: { "producer-in-plan"?: string };
   // Composer screening prior authored on the stage (the frontmatter twin of one
   // tools/data/ars-priors.json entry, for stages that file does not name -
   // plugin stages). Compiled verbatim; `aidlc-graph ars` reads it when the
@@ -36466,6 +36467,42 @@ let _scopeMetadataAll: Record<string, ScopeMetadata> | null = null;
 
 type ScopeGridForMapping = Record<string, { stages: Record<string, "EXECUTE" | "SKIP"> }>;
 
+export function scopeGridStages(
+  stages: readonly StageEntry[],
+  scope: string,
+): Record<string, "EXECUTE" | "SKIP"> {
+  const stagesMap: Record<string, "EXECUTE" | "SKIP"> = {};
+  for (const stage of stages) {
+    stagesMap[stage.slug] =
+      stage.phase === "initialization" || (stage.scopes ?? []).includes(scope)
+        ? "EXECUTE"
+        : "SKIP";
+  }
+  return stagesMap;
+}
+
+export interface UnmetPlanInput {
+  stage: string;
+  artifact: string;
+}
+
+export function unmetProducerInPlan(
+  stages: readonly StageEntry[],
+  plan: Readonly<Record<string, "EXECUTE" | "SKIP">>,
+): UnmetPlanInput[] {
+  const unmet: UnmetPlanInput[] = [];
+  for (const stage of stages) {
+    const artifact = stage.when?.["producer-in-plan"];
+    if (artifact === undefined || plan[stage.slug] !== "EXECUTE") continue;
+    const produced = stages.some((producer) =>
+      plan[producer.slug] === "EXECUTE" &&
+      [...(producer.produces ?? []), ...(producer.optional_produces ?? [])].includes(artifact)
+    );
+    if (!produced) unmet.push({ stage: stage.slug, artifact });
+  }
+  return unmet;
+}
+
 function transposeScopeGridForMapping(stages: StageEntry[]): ScopeGridForMapping {
   const scopeNames = new Set<string>();
   for (const stage of stages) {
@@ -36473,11 +36510,7 @@ function transposeScopeGridForMapping(stages: StageEntry[]): ScopeGridForMapping
   }
   const grid: ScopeGridForMapping = {};
   for (const scope of [...scopeNames].sort()) {
-    const stagesMap: Record<string, "EXECUTE" | "SKIP"> = {};
-    for (const stage of stages) {
-      stagesMap[stage.slug] = (stage.scopes ?? []).includes(scope) ? "EXECUTE" : "SKIP";
-    }
-    grid[scope] = { stages: stagesMap };
+    grid[scope] = { stages: scopeGridStages(stages, scope) };
   }
   return grid;
 }
