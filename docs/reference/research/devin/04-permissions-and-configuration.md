@@ -10,7 +10,7 @@ The port needed enough scoped permission for routine framework work without gran
 
 The shipped project config has permissions.allow and an explicit read_config_from decision for all seven documented compatibility-import sources: `agents_standard: true`, and `cursor`, `windsurf`, `claude`, `copilot`, `opencode`, `zed` all `false` (read-config-from.mdx:138-146; key order follows the options table). `agents_standard` stays `true` because it is the only channel by which Devin reads the rendered AGENTS.md onboarding file; it also admits `AGENTS.local.md`, `AGENT.md`, and `.windsurfrules` — an accepted side effect. Every key is spelled out so a future Devin default change cannot alter the installed behavior, and every value is a boolean because `null` is treated as `true` (config-file.mdx:365, verified live: `{ "copilot": null }` imports Copilot skills). Devin documentation limits project config to permissions, compatibility-import controls, and hooks; model and other user-only settings do not belong there. MCP uses dedicated files.
 
-Copy permissions allow file/search/delegation/question/web operations and, for each of the `bun` and `bun run` spellings, the `bun .devin/tools/aidlc.ts engine` prefix, the dispatcher's listed read-only commands, and each approved `.devin/tools/` script (the packager expands the authored `bun .devin/tools/*` globs; `Exec(...)` is a whole-word prefix match, so a script entry also covers trailing arguments). The native projection drops every `Exec(bun …)` entry for the installed trusted aidlc engine prefix plus the exact read-only commands. General Bun, Git, Node, package-manager, and MCP tool execution is not blanket-pre-approved.
+Copy permissions allow file/search/delegation/question/web operations and, for each of the `bun` and `bun run` spellings, the `bun .devin/tools/aidlc.ts engine` prefix, one entry per `copyChannelDispatcherCommands()` command, and one entry per `copyChannelToolScripts()` script — the packager's `expandDevinToolAllows` expands the authored `bun .devin/tools/*` globs in both trees and never grants `machineReachingTools()` (`d7c9b67f`, 2026-10-09). `Exec(...)` is a whole-word prefix match, so a script entry also covers trailing arguments — and so does a dispatcher-command entry: e.g. `doctor --export` (writes a redacted report) rides on the `doctor` grant. Config refuses `--show`/`--check` combined with a mutation, and the expansion is still far narrower than the retired glob, but it is not per-argument exact. The native projection drops every `Exec(bun …)`/`Exec(aidlc …)` entry, then appends the exact `Exec(aidlc engine)` entry plus `Exec(aidlc <cmd>)` for each dispatcher command. The `Exec(date -u)` grant was retired (`a008cf08`): upstream replaced agent-taken timestamps with `aidlc engine now`. General Bun, Git, Node, package-manager, and MCP tool execution is not blanket-pre-approved.
 
 The native projection's grant is the exact entry `Exec(aidlc engine)`, with no `*`, because Devin's `Exec(...)` is a prefix match. Doctor's shared `Native command trust` row only gained a Devin branch on 2026-10-09. Before that, it read `settings.json`, `hooks.json`, and JSON under `agents/` and `hooks/`, none of which holds Devin's grants or hook commands. On a correctly configured native `.devin/` it reported `native hooks missing, native permission/trust missing` (observed in all three doctor captures in `evidence/devin-e2e-run/compiled-hook-dispatch-run/`). It now also reads `.devin/config.json` (the `permissions.allow` grants) and `.devin/hooks.v1.json` (the `aidlc engine adapter devin <target>` commands). It passes only when the exact `Exec(aidlc engine)` entry is present and no Bun-shaped framework entry remains; an `Exec(aidlc engine *)` spelling does not count. The row runs only in native execution mode and checks the project files, not effective host policy. `trustFilesForHarness` (the `config` trust listing) was deliberately left without Devin entries in this change.
 
@@ -40,13 +40,13 @@ Personal settings use gitignored .devin/config.local.json and .devin/mcp_config.
 
 ## Evidence and limits
 
-t331 asserts copy/native allow-only configuration and the absence of blanket MCP permission claims. Those assertions do not evaluate every host policy combination. Workflow guards are conditional and some adapter inputs fail open; see DEVIN-06 and DEVIN-07.
+t331 asserts copy/native allow-only configuration and the absence of blanket MCP permission claims. The recorded limit of the new grants is prefix matching: every dispatcher-command `Exec` entry also covers trailing arguments (config refuses `--show`/`--check` combined with a mutation, but `doctor --export`'s redacted-report write is covered). Those assertions do not evaluate every host policy combination. Workflow guards are conditional and some adapter inputs fail open; see DEVIN-06 and DEVIN-07.
 
 ## Regression and upgrade checks
 
 | Case | Expected contract | Evidence or gap |
 | --- | --- | --- |
-| Copy versus native permissions | Only runtime-appropriate framework shell prefixes are pre-approved | t331 config and onboarding tests; package.ts native rewrite |
+| Copy versus native permissions | Only runtime-appropriate framework shell prefixes are pre-approved: no `/tools/*` glob survives in either tree, no `Exec(bun …)` survives in native, native carries `Exec(aidlc engine)`/`Exec(aidlc doctor)`, and machine-reaching tools are never granted | t331 tests 4/4b; package.ts native rewrite |
 | Native-trust doctor row on Devin | Shipped native tree passes; removing the `Exec(aidlc engine)` grant or replacing it with `Exec(aidlc engine *)` reports `native permission/trust missing` while hooks stay `present` | t294 "Devin native trust reads Exec(aidlc engine) from config.json and hook commands from hooks.v1.json" |
 | Coexisting harnesses | Compatibility imports are isolated (skills/MCP): no sibling harness's skills or MCP servers load under the shipped config | Verified live by `t-exec-devin-config-imports` (gated); hook-source/audit duplication surface remains NOT RUN |
 | Existing local policy | Updates preserve deliberate user/team overrides and secrets remain uncommitted | Shared installation policy plus manual effective-config review |
@@ -54,7 +54,7 @@ t331 asserts copy/native allow-only configuration and the absence of blanket MCP
 
 ## Superseded approaches and history
 
-`47630bee` aligned permission defaults with framework-scoped trust. Older broad executable/MCP grants and explicit deny-list descriptions are not current guidance.
+`47630bee` aligned permission defaults with framework-scoped trust. `d7c9b67f` (2026-10-09) expanded the copy-channel `Exec(bun …/tools/*)` globs into per-command grants and tightened the native rewrite to drop every `Exec(bun …)`/`Exec(aidlc …)`; `a008cf08` retired the `Exec(date -u)` grant in favor of `aidlc engine now`. Older broad executable/MCP grants and explicit deny-list descriptions are not current guidance.
 
 Retired claim: absent from allow means unconditionally blocked. Neither an allowlist nor a successfully registered AI-DLC guard establishes a general destructive-command sandbox. `79cf8498` landed the PR #996 Item 6 seven-key `read_config_from` contract, the packager drift check, and the two doctor rows; the standalone plan was folded into this finding and DEVIN-14 and removed.
 
@@ -62,7 +62,7 @@ Retired claim: absent from allow means unconditionally blocked. Neither an allow
 
 - `harness/devin/config.json`
 - `harness/devin/dot-gitignore`
-- `scripts/package.ts` — rewriteDevinNativePermissions
+- `scripts/package.ts` — expandDevinToolAllows, rewriteDevinNativePermissions
 - `core/tools/aidlc-utility.ts` — `Native command trust` row (Devin branch)
 - `tests/unit/t294-config-diagnostics.test.ts` — Devin native-trust case
 - `tests/unit/t331-devin-packaging.test.ts` — config and permission tests

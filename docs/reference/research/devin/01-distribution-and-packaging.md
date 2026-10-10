@@ -10,7 +10,7 @@ The port needed to become a supported projection of the existing engine, not a f
 
 `harness/devin/manifest.ts` declares `name: devin`, `harnessDir: .devin`, `tierFlavor: devin`, and the authored file mappings. It uses the shared declarative packager with `emit: null`. Core tools, hooks, agents, protocols, knowledge, sensors, scopes, and standalone skills are projected alongside the adapter, native configuration, rules pointer, and orchestrator.
 
-The mutable workspace is `aidlc/`, a sibling of `.devin/`. Root `AGENTS.md` and `.gitignore` have managed-block integration policies. Method seeds live under `aidlc/spaces/default/memory/`; active-space memory is not an additional private copy inside `.devin/`.
+The mutable workspace is `aidlc/`, a sibling of `.devin/`. Root `AGENTS.md` and `.gitignore` have managed-block integration policies. Method seeds live under `aidlc/spaces/default/memory/`; active-space memory is not an additional private copy inside `.devin/`. Since the `b8d9bdc3` merge the personas and the rules pointer read `aidlc/active-memory/` — the engine's git-ignored copy of the active space's memory, beside `aidlc/` (not inside `.devin/`), refreshed at session start, on a space switch, and with each step whose rules it sends; only `aidlc/spaces/<active-space>/memory/` is edited. Upstream replaced rewriting tracked includes on a space switch with this copy. The `.gitignore` managed block was reduced to upstream's minimal `# AI-DLC: local working files` block — adding `aidlc.settings.local.json` and `aidlc/active-memory/` — while keeping the Devin-local ignores (`.devin/config.local.json`, `.devin/mcp_config.local.json`, `.devin/.aidlc-session-start.local.json`); the previous shipped variant's hash stays in the manifest so existing installs remain recognized (2026-10-09).
 
 `bun scripts/package.ts` materializes local copy and native release projections. `dist/` and `dist-release/` are generated, ignored outputs; they are not hand-authored or committed. Native projections rewrite commands and permissions to the installed `aidlc` runtime; the adapter uses `AIDLC_COMPILED_EXECUTABLE` when supplied and otherwise respawns with `process.execPath`. Source-copy tools/hooks need Bun; a native installation does not require a separate Bun executable.
 
@@ -59,7 +59,8 @@ Retired guidance: checking out `v2`, assuming dist exists in a fresh clone, comm
 
 - `harness/devin/manifest.ts`
 - `scripts/manifest-types.ts`
-- `scripts/package.ts` — rewriteDevinNativePermissions, native projection
+- `scripts/package.ts` — expandDevinToolAllows, rewriteDevinNativePermissions, native projection
+- `scripts/harness-bindings.ts` — BINDING_HEADINGS own-subsection projection
 - `scripts/build-binaries.ts` — harnessRuntimeGate, harnessProbeGate
 - `core/tools/aidlc-runtime-paths.ts` — HARNESS_PRECEDENCE, runtimeHarnessName
 - `harness/devin/hooks/aidlc-devin-adapter.ts` — runCore, runCoreWithStderr

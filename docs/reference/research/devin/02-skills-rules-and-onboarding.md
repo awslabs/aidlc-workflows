@@ -12,9 +12,11 @@ The root orchestrator is `.devin/skills/aidlc/SKILL.md`, explicitly user-trigger
 
 This is invocation policy, not a requirement to make a skill discoverable. Devin's creating-skills documentation gives the default triggers as `[user, model]`. The manifest comment claiming a missing triggers line makes slash invocation impossible is not supported by that documented default; this rewrite does not edit runtime-source comments.
 
-`rules-aidlc.md` emits `.devin/rules/aidlc.md` with `trigger: always_on`. The loaded rule names the active-space memory directory; it does not import those files. Actual method delivery belongs to the engine's resolver and load-steering protocol. Skill `triggers` and rule `trigger` are different fields.
+`rules-aidlc.md` emits `.devin/rules/aidlc.md` with `trigger: always_on`. The loaded rule names the active-space memory directory; it does not import those files. Since the `b8d9bdc3` merge it also names `aidlc/active-memory/` — the engine's git-ignored copy of the active space's memory — as readable, while edits go only to `aidlc/spaces/<active-space>/memory/`. Actual method delivery belongs to the engine's resolver and load-steering protocol. Skill `triggers` and rule `trigger` are different fields.
 
-Onboarding renders from `core/templates/onboarding.md` plus Devin fills. t331 currently enforces at most 16,384 UTF-8 bytes, no duplicated DocumentKB section, and no blanket claim of identical behavior across harnesses. The old 12 KiB proposal is not the current test limit.
+Upstream's harness-neutral skill changes were ported to Devin's `SKILL.md` and `question-rendering.md` (`ea936ecb`, 2026-10-09): for example the engine now emits nine directive kinds including `notice`. `composer.md` now ships as `.devin/skills/aidlc/composer.md`. Upstream also retired the per-harness "fresh session" hand-off text (`aidlc-runner-gen.ts` `freshSessionFlow` removed); "exit or restart Devin CLI and start a new session" survives only in t123's `RETIRED_FRESH_SESSION_TEXT` as retired wording.
+
+Onboarding is split: root `AGENTS.md` renders from `core/templates/onboarding.md` and is byte-identical across the harnesses that share it, while the Devin onboarding rule `.devin/rules/aidlc-onboarding.md` renders from `core/templates/onboarding-harness.md` with `harness/devin/onboarding.fills.ts` — the fills gained upstream's "Show AI-DLC's questions and choices…" paragraph in the same pass. t331 currently enforces at most 16,384 UTF-8 bytes on that Devin onboarding rule, no duplicated DocumentKB section, and no blanket claim of identical behavior across harnesses. The old 12 KiB proposal is not the current test limit.
 
 No custom statusline is wired for Devin. `/aidlc --status` is the on-demand alternative; injecting display text into model context is not an equivalent persistent user-visible status strip.
 
@@ -46,7 +48,9 @@ Retired explanations: all rule files automatically activate regardless of trigge
 - `harness/devin/rules-aidlc.md`
 - `harness/devin/onboarding.fills.ts`
 - `harness/devin/skills/aidlc/SKILL.md`
+- `harness/devin/skills/aidlc/composer.md`
 - `core/templates/onboarding.md`
+- `core/templates/onboarding-harness.md`
 - `core/tools/aidlc-runner-gen.ts`
 - `tests/unit/t331-devin-packaging.test.ts` — tests 6, 7b–7d, 14–18
 - https://docs.devin.ai/cli/extensibility/skills/creating-skills

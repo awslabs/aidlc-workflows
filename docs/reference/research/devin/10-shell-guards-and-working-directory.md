@@ -14,7 +14,7 @@ The core distinguishes concrete write targets, dynamic evaluation, and mutation-
 
 Pseudo-device output handling and valid file-descriptor redirection must not trap legitimate planning. Real source-file redirects remain mutations. The detailed parser's real numeric executable is not treated like a legacy synthetic descriptor artifact.
 
-Git checkpoints have a narrow exemption: a nonempty invocation list entirely of add/commit, with no concrete write targets or dynamic evaluation. A companion source write or git push must not inherit the exemption. Review-freeze and host permission policies remain independent.
+Git checkpoints have a narrow exemption: a nonempty invocation list entirely of add/commit, with no concrete write targets or dynamic evaluation. A companion source write must not inherit the exemption. `git push` needs none since the `b8d9bdc3` merge: it names no file it writes, so upstream's guard runs it before Plan Approval — "only the build waits for the plan" (t265 Facet C was flipped to expect exit 0 and `git add -A && git push` moved to the allowed checkpoint list). Review-freeze and host permission policies remain independent.
 
 At baseline 6e208f7b the former framework-tool any-match bypass was tightened: reclassification checks every invocation with full executable/wrapper metadata and rejects dynamic evaluation or executable-resolution changes. Possible cd/pushd/popd changes also prevent trusting the unified entry point as a direct invocation. This was necessary when combining the branch with upstream's stricter planning checks.
 
@@ -22,7 +22,7 @@ At baseline 6e208f7b the former framework-tool any-match bypass was tightened: r
 
 The old live notes explicitly corrected the claim that 2>&1 was a concrete file write: their parser returned a numeric invocation artifact instead. The subsequent bare-command rejection lacked complete exec arguments, so workdir was a hypothesis for that incident, not a proven universal cause.
 
-The guard is a workflow-specific parser and policy, not a general shell sandbox. Existing sed/mkdir classifications and checkpoint exceptions must not be represented as a proof that all shell syntax, hooks, aliases, or indirect writes are harmless.
+The guard is a workflow-specific parser and policy, not a general shell sandbox. Since the merge, `sed` is classified by upstream: it sits in `TRACKED_SHELL_MUTATORS` and its `-i` write targets come from `review-freeze-command.ts` (the branch's own "sed without `-i` is read-only" rule was not re-added — the branch's sed tests pass on upstream's code). `cd`/`mkdir` remain branch additions to `READ_ONLY_SHELL_COMMANDS`, as do the retained `2>&1` numeric-artifact rule and the git add/commit carve-out; the Devin adapter's `rewriteStdinCwd` is unchanged. These classifications and the checkpoint exceptions must not be represented as a proof that all shell syntax, hooks, aliases, or indirect writes are harmless.
 
 ## Regression and upgrade checks
 
@@ -30,13 +30,13 @@ The guard is a workflow-specific parser and policy, not a general shell sandbox.
 | --- | --- | --- |
 | Planning with descriptor redirects | Supported planning commands can run before approval without permitting source redirection | t265 planning and Facet A cases |
 | Native executable/wrapper spoofing | ./aidlc, PATH changes, data-driven wrappers, and uncertain unified-entry cwd do not inherit planning trust | t265 native/Bun prerequisite negative cases |
-| Compound checkpoint | Standalone/checkpoint-only compounds pass; checkpoint plus source write, push, redirection, or substitution is refused | t265 compound Git checkpoint block |
+| Compound checkpoint | Standalone/checkpoint-only compounds pass — including `git add -A && git push` (push is allowed before Plan Approval); checkpoint plus source write, redirection, or substitution is refused | t265 compound Git checkpoint block and Facet C |
 | workdir/cwd precedence | Relative paths are evaluated under the supplied working directory; explicit top-level cwd is preserved | t332 tests 17b–17c; additional cross-guard normalization is not claimed |
 | Upstream parser or route update | Run both legitimate-planning positives and mutation negatives through core and the Devin adapter | t265 plus t332; passing one side alone is insufficient |
 
 ## Superseded approaches and history
 
-`bbc8f348` and later small follow-ups addressed false positives and working-directory handling. `f3b3810c` fixed the any-Git compound exemption. `6e208f7b` reconciled framework exemptions with upstream detailed parsing and fixed the unrelated diagnostics-test literal typing error.
+`bbc8f348` and later small follow-ups addressed false positives and working-directory handling. `f3b3810c` fixed the any-Git compound exemption. `6e208f7b` reconciled framework exemptions with upstream detailed parsing and fixed the unrelated diagnostics-test literal typing error. The `a6f8597a` merge of upstream `b8d9bdc3` (2026-10-09) adopted upstream's classifications: `git push` runs before Plan Approval, `sed` moved to `TRACKED_SHELL_MUTATORS` with `review-freeze-command.ts` owning `-i` targets, and the branch's separate sed read-only rule was not re-added.
 
 Superseded recipes: exempt an entire command if any invocation is Git add/commit; ignore opaque shell whenever any framework tool occurs; reject every redirect during planning; treat workdir as the confirmed cause of an incident without its full payload. Keep valid BASH/exec JSON in tests—one old raw-string commit test exercised malformed-input fail-open, not checkpoint approval.
 

@@ -16,7 +16,7 @@ A probe may prepare fresh load-steering rather than reuse a retained directive. 
 
 The historical resetPlanApprovalRuntime function is absent from executable core code at this baseline. Do not add a new public next --probe flag or resurrect reset-suppression recipes to fix a path already replaced upstream.
 
-The Stop hook as a whole is not read-only: health, usage, drop, and no-progress bookkeeping remain intentional. The protected contract concerns its engine consultation and authority state.
+The Stop hook as a whole is not read-only: health, usage, drop, and no-progress bookkeeping remain intentional. Since the `b8d9bdc3` merge its normal decisions — waits, the pending-subagent carve-out allow, the interactive recursion-guard release — are recorded in `continue-workflow.trace`, while `.drops` is reserved for genuine failures; doctor skips legacy such lines in old `.drops` files (2026-10-09). The protected contract concerns its engine consultation and authority state.
 
 ## Evidence and limits
 

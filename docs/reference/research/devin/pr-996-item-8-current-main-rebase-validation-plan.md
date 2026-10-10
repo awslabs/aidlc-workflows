@@ -1,6 +1,6 @@
 # PR #996 Item 8 — Current-main integration and exact-SHA validation plan
 
-**Status:** in execution in the isolated worktree `/tmp/aidlc-item8-squash` (branch `item8-squash-integration`, base `3c54ec1a`); squash transplant staged, conflicts resolved, release metadata applied, deterministic gate in progress. No commit, branch rewrite, or push yet.
+**Status:** executed 2026-09-22 and then superseded by the post-review addendum below (release metadata reverted to main values). Since then the branch has been kept current with upstream by merge commits — the latest is `a6f8597a` merging upstream/main `b8d9bdc3` (592 commits) plus parity commits `32f2a6f4`–`402f5754` (2026-10-09). This plan is retained as history; it is not an instruction to execute.
 
 **Prepared:** 2026-09-22
 
@@ -553,3 +553,7 @@ three release surfaces were restored to main's values —
 removed with all 279 prior headings preserved — so this PR ships the
 Devin harness with no version bump; the coordinated bump belongs to a
 release-preparation PR. All other validation results above stand.
+
+2026-10-09: the branch's release metadata now tracks main's values —
+`AIDLC_VERSION = "2.11.0"` at upstream merge `b8d9bdc3` — with no
+Devin-specific bump, consistent with the reverted decision above.
