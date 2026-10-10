@@ -2142,9 +2142,8 @@ function writeTerminalLatch(
 
 function terminalContext(result: TerminalResult): string {
   return (
-    "SYSTEM (deterministic harness dispatch): The command " +
-    `\`/aidlc ${result.typed}\` has ALREADY been run by the harness. ` +
-    `It carries no workflow work. Relay the output below ${relayAsTextBlock(result.output)}, then STOP. ` +
+    `The command \`/aidlc ${result.typed}\` has already run. ` +
+    `It carries no workflow work. Relay the output below ${relayAsTextBlock(result.output)}, then stop. ` +
     "Do not run any shell command or call any AIDLC tool this turn.\n\n" +
     fenceCommandOutput(result.output, result.exitCode)
   );
@@ -2152,8 +2151,7 @@ function terminalContext(result: TerminalResult): string {
 
 function terminalRefusal(result: TerminalResult): string {
   return (
-    "AIDLC deterministic terminal command complete. The requested command has " +
-    "already run inside the hook, and this shell call is intentionally refused " +
+    "The requested command has already run inside the hook, and this shell call is refused " +
     "to keep Kiro's Windows shell transport from changing its UTF-8 output. " +
     "Do not retry or run another shell command this turn. Relay the output below " +
     `to the user ${relayAsTextBlock(result.output)}, then stop.\n\n` +
@@ -2833,7 +2831,7 @@ function buildForward(): Forward {
           const migration = normalizeRetiredGuardPolicyField(projectDir, sessionId);
           if (migration.normalized) {
             process.stdout.write(
-              `SYSTEM (AIDLC Guard Policy migration): kept ${migration.value} and renamed the active intent's retired Change Control field to Guard Policy.\n`,
+              `AIDLC Guard Policy migration: kept ${migration.value} and renamed the active intent's retired Change Control field to Guard Policy.\n`,
             );
           }
         } catch (error) {

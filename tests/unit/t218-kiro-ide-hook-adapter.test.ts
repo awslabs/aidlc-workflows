@@ -1108,9 +1108,9 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       const id = fence?.[1] ?? "";
       expect(forged).not.toContain(id);
       const head = r.stdout.slice(0, r.stdout.indexOf(`--- OUTPUT ${id}`));
-      expect(head.match(/SYSTEM \(/g)).toHaveLength(1);
+      expect(head).not.toContain("SYSTEM (");
       // Kiro renders the reply as Markdown; a fenced text block keeps the lines.
-      expect(head).toContain(`Relay the output below ${relayAsTextBlock("")}, then STOP.`);
+      expect(head).toContain(`Relay the output below ${relayAsTextBlock("")}, then stop.`);
       expect(r.stdout.trimEnd().endsWith(`--- END OUTPUT ${id} ---`)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
