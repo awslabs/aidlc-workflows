@@ -312,6 +312,7 @@ import {
   resolveCeremony,
   resolveProjectDir,
   resolveProjectFlag,
+  recentWorkspaceRecordNames,
   resolveWorkflowSelection,
   delegatedWorktreeIntent,
   scopeCostSummary,
@@ -363,12 +364,14 @@ import {
   assertNoSymlinkInChainOrThrow,
   sessionsDir,
   type WorkspaceCommand,
+  type WorkspaceNoun,
   type WorkflowSelection,
   withdrawProtectedReplyWords,
   writeActiveDirectiveMarker,
   writeEngineFileNoFollow,
   type PlanApprovalLegacyOfferCandidate,
   workspaceCommandUtilityArgv,
+  workspaceRecordExists,
   classifyStateVersion,
   currentSwarmAttemptObligations,
   effectiveUnitGateRhythm,
@@ -7585,6 +7588,14 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       emit(errorDirective(command.message));
       return;
     }
+    // A name that is no record (a verb mistyped, a name mistyped, a word that
+    // is neither) is the agent's to read, with the noun's verbs and records
+    // beside it; the tool never guesses, and the person never reads "Unknown
+    // intent" for it.
+    if (command.kind === "switch" && !workspaceRecordExists(resolveProjectDir(projectDir), command.noun, command.name)) {
+      emit(printDirective(unknownWorkspaceWordStep(resolveProjectDir(projectDir), command)));
+      return;
+    }
     const argv = workspaceCommandUtilityArgv(command);
     if (argv === null) {
       emit(errorDirective("Invalid workspace command."));
@@ -7601,6 +7612,17 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       ? `space ${tail[0] && !tail[0].startsWith("--") ? shellArg(tail.shift()!) : "list"}`
       : verb;
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
+    // Words typed after the name ride with the switch, whole, for the agent to
+    // act on for the work just selected: a request, or a setting such as
+    // `--guard-policy relaxed`. Nothing of theirs is dropped or read here.
+    if (command.kind === "switch" && command.words !== undefined) {
+      emit(printDirective(
+        `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, print its output verbatim. The person also asked: ` +
+          `"${command.words.join(" ")}". Act on that for the work just selected (read their words yourself), or ask ` +
+          "them once in plain words if you cannot tell what they meant.",
+      ));
+      return;
+    }
     // Picking work up from the pick question is a request to carry on with it.
     if (flags.carryOn && command.kind === "switch") {
       emit(printDirective(
@@ -14067,6 +14089,35 @@ function planApprovalAnswerStep(): string {
   return "Read the person's reply to the open Plan Approval question and record the choice they made with " +
     `\`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval --details '<their choice>'\`, ` +
     `then run \`${aidlcToolInvocation("orchestrate")} next\` with no answer arguments. If they have not replied, wait at that question.`;
+}
+
+// The agent's step for a word after `intent` or `space` that is neither a verb
+// nor a record's exact name: the noun's verbs, the records there, and what the
+// person typed, whole. The agent reads it (a mistyped verb or name, a request
+// for something the noun cannot do) and runs the command they meant, or asks
+// them once; nothing ran and nothing changed.
+function unknownWorkspaceWordStep(
+  pd: string,
+  command: { noun: WorkspaceNoun; name: string; explicit: boolean; words?: string[] },
+): string {
+  const { noun, name } = command;
+  const verbs = noun === "intent"
+    ? "list, switch <name>, create, archive <name>, unarchive <name>, add-repo <name>, remove-repo <name>"
+    : "list, switch <name>, create <name>";
+  const recent = recentWorkspaceRecordNames(pd, noun);
+  const records = recent.names.length === 0
+    ? `No ${noun} exists here yet.`
+    : `The ${noun}s here are: ${recent.names.join(", ")}` +
+      (recent.more > 0
+        ? ` (and ${recent.more} more; \`${aidlcDispatcherInvocation(noun)} list${noun === "intent" ? " --all" : ""}\` shows them all).`
+        : ".");
+  const typed = [noun, ...(command.explicit ? ["switch"] : []), name, ...(command.words ?? [])].join(" ");
+  const names = command.explicit
+    ? `\`${noun} switch ${name}\` names no ${noun}: none is named "${name}"`
+    : `\`${noun} ${name}\` names no ${noun} verb, and no ${noun} is named "${name}"`;
+  return `${names}, so nothing ran and nothing changed. The ${noun} verbs are: ${verbs}; run one as ` +
+    `\`${aidlcDispatcherInvocation(noun)} <verb> ...\`. ${records} The person typed: "${typed}". Read what they meant ` +
+    "and run that command; if you cannot tell, ask them once in plain words.";
 }
 
 // Complete the non-stage resume-choice round-trip by ROUTING the choice, not

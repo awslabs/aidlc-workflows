@@ -2252,7 +2252,7 @@ if (target === "verb-intercept") {
   recordPromptEmpty(sessionId, turn);
   notePromptCapability(sessionId);
   const invocation = promptTerminalInvocation(ide.prompt ?? "");
-  const command = classifyTerminalCommand(invocation.args);
+  const command = classifyTerminalCommand(invocation.args, projectDir);
   if (command === null) return 0;
   const result = runTerminalCommand(command);
   if (result === null) return 0;
@@ -2350,7 +2350,7 @@ if (target === "terminal-command-guard") {
     return 2;
   }
   if (invocation === null) return 0;
-  const command = classifyTerminalCommand(invocation.args);
+  const command = classifyTerminalCommand(invocation.args, projectDir);
   if (command === null) return 0;
   // Kiro runs every PreToolUse hook even after one blocks, so while the
   // approval-gate hook refuses this call, running the command here would still
