@@ -33,7 +33,7 @@ import { execCodex, setupCodexProject } from "../harness/exec-drive.ts";
 import { driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 import { driveAidlc } from "../harness/sdk-drive.ts";
 import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
-import { CORPUS, buildState, itemEnv, messageRecord, typedPrompt, waitsFor, type CorpusItem } from "../harness/aidlc-input-corpus.ts";
+import { CORPUS, buildState, codexWords, itemEnv, messageRecord, typedPrompt, waitsFor, type CorpusItem } from "../harness/aidlc-input-corpus.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { getField, listIntents, readAuditShardEvents, stateFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -107,7 +107,7 @@ function homeDigest(dir: string): { digest: string; files: Map<string, string> }
       // ephemeral CLAUDE_CONFIG_DIR: the tool's doing, not AI-DLC's, so it is left out like the logs.
       // Claude Code also writes its own session artifacts into the real home (teams/<session>, plugins/store, a
       // plugin's marker dotfile) under an ephemeral CLAUDE_CONFIG_DIR: the tool's doing, left out like the logs.
-      if (/(^|\/)(logs?|cache|caches|telemetry|tmp|shell-snapshots|projects|statsig|todos|sessions|backups|file-history|teams|plugins|history\.jsonl|\.last-cleanup|\.[a-z-]+-active)$/.test(path)) continue;
+      if (/(^|\/)(logs?|cache|caches|telemetry|tmp|shell-snapshots|projects|statsig|todos|sessions|backups|file-history|teams|plugins|paste-cache|history\.jsonl|\.last-cleanup|\.[a-z-]+-active)$/.test(path)) continue;
       if (entry.isDirectory()) walk(path);
       else if (entry.isFile()) {
         const s = statSync(path);
@@ -255,21 +255,6 @@ async function judgeText(item: CorpusItem, text: string): Promise<string | null>
   } finally {
     clearTimeout(timer);
   }
-}
-
-// What Codex said to the person: `codex exec` logs every event to stderr; the agent's messages follow a line that is
-// exactly "codex" and run until the next event marker (a hook, an exec, a user turn, the token count). The tool log and
-// the engine's JSON are not words to the person. Without any marker (an exec that failed early) the whole output stands.
-function codexWords(out: string): string {
-  const blocks: string[] = [];
-  let current: string[] | null = null;
-  for (const line of out.split("\n")) {
-    if (line === "codex") { current = []; blocks.push(""); continue; }
-    if (current && /^(hook: |exec$|user$|thinking$|tokens used$|\d{4}-\d{2}-\d{2}T\S+ (ERROR|WARN))/.test(line)) { blocks[blocks.length - 1] = current.join("\n").trim(); current = null; continue; }
-    if (current) current.push(line);
-  }
-  if (current) blocks[blocks.length - 1] = current.join("\n").trim();
-  return blocks.length > 0 ? blocks.filter((b) => b.length > 0).join("\n\n") : out;
 }
 
 async function drive(harness: LiveHarness, item: CorpusItem): Promise<Outcome> {
