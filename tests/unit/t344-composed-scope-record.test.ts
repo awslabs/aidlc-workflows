@@ -594,7 +594,7 @@ describe("t344 a scope name that is not one is never written or run", () => {
       const intents = join(proj, "aidlc", "spaces", "default", "intents");
       const intent = readdirSync(intents).find((name) => existsSync(join(intents, name, "aidlc-state.md")));
       const state = join(intents, String(intent), "aidlc-state.md");
-      const redo = () => tool("aidlc-orchestrate.ts", ["report", "--result", "resumed", "--user-input", "2"]);
+      const redo = () => tool("aidlc-orchestrate.ts", ["report", "--result", "resumed", "--choice", "redo"]);
       const kept = redo();
       expect(kept.status, kept.stderr).toBe(0);
       expect(kept.stdout).toContain("--direction redo --scope bugfix");

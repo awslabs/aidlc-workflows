@@ -2117,7 +2117,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
 
   function redo(p: string) {
     const answered = JSON.parse(tool(p, "orchestrate", [
-      "report", "--result", "resumed", "--user-input", "Redo the current stage",
+      "report", "--result", "resumed", "--choice", "redo",
     ]).stdout) as { kind: string; message: string };
     expect(answered.kind, JSON.stringify(answered)).toBe("print");
     return answered.message;
@@ -2216,6 +2216,9 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     const message = redo(p);
     expect(message).toMatch(/run `[^`]*aidlc-state\.ts unpark`, then `[^`]*aidlc-jump\.ts reopen /);
     for (const [, name, rest] of message.matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
+      // The move's own commands; the park the print names only for a person
+      // who also asked to stop there is not run here.
+      if (name === "orchestrate" && rest === "park") continue;
       const ran = tool(p, name, rest.split(" "));
       expect(ran.status, ran.out).toBe(0);
     }
@@ -2324,6 +2327,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
         );
         expect(message).not.toContain("unit resume");
         for (const [, name, rest] of message.matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
+          if (name === "orchestrate" && rest === "park") continue;
           const ran = tool(p, name, rest.split(" "));
           expect(ran.status, ran.out).toBe(0);
         }

@@ -339,6 +339,11 @@ space; add `--json` for structured output (every row, archived included) and
 `--all` to show archived intents in the human listing. `/aidlc intent <name>`
 switches the per-user active-intent cursor to an existing intent by unambiguous
 slug or full record-dir name. It never creates an intent or advances a workflow.
+A word after `intent` that is neither a verb nor an existing intent's exact name
+(a typo, or something intents cannot do) is handed to the agent with the verbs
+and the recent intent names, to read what you meant or ask you once; anything
+you type after a name (a request, or a setting such as `--guard-policy relaxed`)
+is handed to the agent whole, to act on for the intent just selected.
 
 ### `/aidlc intent archive <name>` — Retire an intent you will not finish
 
@@ -397,7 +402,9 @@ Bare `/aidlc space` lists spaces; add `--json` for structured output.
 `/aidlc space <name>` switches the per-user active-space cursor and writes that
 space's method files into `aidlc/active-memory/`, the git-ignored copy
 the harness-native method include reads. No tracked file changes. It never
-creates a space or advances an intent.
+creates a space or advances an intent. As for intents, a word that is neither a
+verb nor a space's exact name goes to the agent with the verbs and the space
+names, and words typed after a name travel with the switch for the agent to act on.
 
 ### `/aidlc space-create <name>` — Create a space
 

@@ -312,6 +312,7 @@ import {
   resolveCeremony,
   resolveProjectDir,
   resolveProjectFlag,
+  recentWorkspaceRecordNames,
   resolveWorkflowSelection,
   delegatedWorktreeIntent,
   scopeCostSummary,
@@ -363,12 +364,14 @@ import {
   assertNoSymlinkInChainOrThrow,
   sessionsDir,
   type WorkspaceCommand,
+  type WorkspaceNoun,
   type WorkflowSelection,
   withdrawProtectedReplyWords,
   writeActiveDirectiveMarker,
   writeEngineFileNoFollow,
   type PlanApprovalLegacyOfferCandidate,
   workspaceCommandUtilityArgv,
+  workspaceRecordExists,
   classifyStateVersion,
   currentSwarmAttemptObligations,
   effectiveUnitGateRhythm,
@@ -7585,6 +7588,14 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       emit(errorDirective(command.message));
       return;
     }
+    // A name that is no record (a verb mistyped, a name mistyped, a word that
+    // is neither) is the agent's to read, with the noun's verbs and records
+    // beside it; the tool never guesses, and the person never reads "Unknown
+    // intent" for it.
+    if (command.kind === "switch" && !workspaceRecordExists(resolveProjectDir(projectDir), command.noun, command.name)) {
+      emit(printDirective(unknownWorkspaceWordStep(resolveProjectDir(projectDir), command)));
+      return;
+    }
     const argv = workspaceCommandUtilityArgv(command);
     if (argv === null) {
       emit(errorDirective("Invalid workspace command."));
@@ -7601,6 +7612,17 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       ? `space ${tail[0] && !tail[0].startsWith("--") ? shellArg(tail.shift()!) : "list"}`
       : verb;
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
+    // Words typed after the name ride with the switch, whole, for the agent to
+    // act on for the work just selected: a request, or a setting such as
+    // `--guard-policy relaxed`. Nothing of theirs is dropped or read here.
+    if (command.kind === "switch" && command.words !== undefined) {
+      emit(printDirective(
+        `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, print its output verbatim. The person also asked: ` +
+          `"${command.words.join(" ")}". Act on that for the work just selected (read their words yourself), or ask ` +
+          "them once in plain words if you cannot tell what they meant.",
+      ));
+      return;
+    }
     // Picking work up from the pick question is a request to carry on with it.
     if (flags.carryOn && command.kind === "switch") {
       emit(printDirective(
@@ -14069,15 +14091,44 @@ function planApprovalAnswerStep(): string {
     `then run \`${aidlcToolInvocation("orchestrate")} next\` with no answer arguments. If they have not replied, wait at that question.`;
 }
 
+// The agent's step for a word after `intent` or `space` that is neither a verb
+// nor a record's exact name: the noun's verbs, the records there, and what the
+// person typed, whole. The agent reads it (a mistyped verb or name, a request
+// for something the noun cannot do) and runs the command they meant, or asks
+// them once; nothing ran and nothing changed.
+function unknownWorkspaceWordStep(
+  pd: string,
+  command: { noun: WorkspaceNoun; name: string; explicit: boolean; words?: string[] },
+): string {
+  const { noun, name } = command;
+  const verbs = noun === "intent"
+    ? "list, switch <name>, create, archive <name>, unarchive <name>, add-repo <name>, remove-repo <name>"
+    : "list, switch <name>, create <name>";
+  const recent = recentWorkspaceRecordNames(pd, noun);
+  const records = recent.names.length === 0
+    ? `No ${noun} exists here yet.`
+    : `The ${noun}s here are: ${recent.names.join(", ")}` +
+      (recent.more > 0
+        ? ` (and ${recent.more} more; \`${aidlcDispatcherInvocation(noun)} list${noun === "intent" ? " --all" : ""}\` shows them all).`
+        : ".");
+  const typed = [noun, ...(command.explicit ? ["switch"] : []), name, ...(command.words ?? [])].join(" ");
+  const names = command.explicit
+    ? `\`${noun} switch ${name}\` names no ${noun}: none is named "${name}"`
+    : `\`${noun} ${name}\` names no ${noun} verb, and no ${noun} is named "${name}"`;
+  return `${names}, so nothing ran and nothing changed. The ${noun} verbs are: ${verbs}; run one as ` +
+    `\`${aidlcDispatcherInvocation(noun)} <verb> ...\`. ${records} The person typed: "${typed}". Read what they meant ` +
+    "and run that command; if you cannot tell, ask them once in plain words.";
+}
+
 // Complete the non-stage resume-choice round-trip by ROUTING the choice, not
-// just accepting it. Resuming from the current checkpoint is read-only; the
-// other three choices are mutations, so the directive NAMES the move (the
-// existing verbs: jump execute --direction redo, next --stage, next
-// --new-intent) and the conductor runs it — report itself never mutates. The
-// keywords are matched against the engine's own Branch-6 question wording, so
-// they are stable even though the rendered option labels are LLM-authored.
-// In a solo unit-major walk with finished Unit work, Redo names no jump: it
-// stays with the Unit's own step (unitMajorRedo).
+// just accepting it. The conductor reads the person's words and reports the
+// choice they made as --choice; this report reads none of their words.
+// Resuming from the current checkpoint is read-only; the other three choices
+// are mutations, so the directive NAMES the move (the existing verbs: jump
+// execute --direction redo, next --stage, next --new-intent) and the conductor
+// runs it; report itself never mutates. In a solo unit-major walk with
+// finished Unit work, Redo names no jump: it stays with the Unit's own step
+// (unitMajorRedo).
 function handleResumeReport(
   flags: ReportFlags,
   projectDir: string | undefined,
@@ -14088,9 +14139,12 @@ function handleResumeReport(
     ));
     return;
   }
-  if (flags.choice === undefined && !flags.userInput?.trim()) {
-    emit(errorDirective(
-      "report --result resumed requires --choice <resume|redo|jump|fresh>, the choice you read from the person's words.",
+  // A correction to the agent's command is its next action, never an error
+  // that ends the turn.
+  if (flags.choice === undefined) {
+    emit(printDirective(
+      "`report --result resumed` names the choice with `--choice <resume|redo|jump|fresh>`: the one you read from " +
+        "the person's words. Run it again with `--choice` (add `--target <stage>` for a stage they named).",
     ));
     return;
   }
@@ -14109,50 +14163,7 @@ function handleResumeReport(
     ));
     return;
   }
-  if (flags.choice !== undefined) {
-    emitTypedResumeChoice(flags, pd, stateContent, slug);
-    return;
-  }
-  // Numbered-prose harnesses show this fixed menu as 1-4. Normalize an exact
-  // visible response key before semantic matching so the engine, not the
-  // conductor, owns that stable mapping.
-  const numericChoices: Readonly<Record<string, string>> = {
-    "1": "resume from last checkpoint",
-    "2": "redo the current stage",
-    "3": "jump to a stage",
-    "4": "start fresh",
-  };
-  const rawChoice = (flags.userInput ?? "").trim().toLowerCase();
-  const choice = numericChoices[rawChoice] ?? rawChoice;
-  if (choice.includes("redo")) {
-    emit(redoCurrentStage(pd, getField(stateContent, "Scope")?.trim() ?? "", stateContent, slug));
-    return;
-  }
-  if (choice.includes("jump")) {
-    emit(printDirective(
-      `Jump accepted. Run \`next --stage <slug>\` for the stage the person named; ask which stage only when they named none. The direction and the target are worked out and checked for you.`,
-    ));
-    return;
-  }
-  if (choice.includes("fresh") || choice.includes("start over")) {
-    emit(printDirective(
-      "Start-fresh accepted. Confirm the new work's scope and description with the human, then run `next --new-intent --scope <scope> \"<description>\"` — the existing workflow stays in place and the new intent starts alongside it.",
-    ));
-    return;
-  }
-  if (
-    choice.includes("resume") ||
-    choice.includes("checkpoint") ||
-    choice.includes("continue")
-  ) {
-    emit(printDirective(
-      `Resume choice accepted at "${slug}". Re-run \`next\` to continue from the last checkpoint.`,
-    ));
-    return;
-  }
-  emit(errorDirective(
-    `Unrecognized resume choice "${flags.userInput}". Accepted choices: 1/resume from last checkpoint, 2/redo the current stage, 3/jump to a stage, or 4/start fresh.`,
-  ));
+  emitTypedResumeChoice(flags, pd, stateContent, slug);
 }
 
 // The redo of the current stage, run only for a stage and a scope AI-DLC knows,
