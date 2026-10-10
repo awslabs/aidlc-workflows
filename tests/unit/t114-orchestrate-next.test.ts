@@ -353,17 +353,24 @@ describe("t114 scope precedence + validation", () => {
       d.kind === "ask"
         ? `ask ${d.ask_type}`
         : `${d.kind} ${String(d.message ?? d.reason ?? "").match(
-          /intent create --scope \w+|Dispatch the composer agent|Workflow complete/,
+          /intent create --scope \w+|Dispatch the composer agent|Workflow complete|cannot tell which they meant/,
         )?.[0] ?? ""}`;
     const newWork = (scope: string) => {
-      proj = createOrchestrationTestProject();
-      seedStateFile(proj, "state-completed.md");
-      const statePath = seededStateFile(proj);
-      writeFileSync(
-        statePath,
-        readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*$/m, `- **Scope**: ${scope}`),
-        "utf-8",
-      );
+      // Each of the two entry forms gets its own project: an offer one form
+      // leaves open is a question of ours that the next form's words would be
+      // read as a reply to, which is the point of the three ways to read a line.
+      const seeded = (): string => {
+        const dir = createOrchestrationTestProject();
+        seedStateFile(dir, "state-completed.md");
+        const statePath = seededStateFile(dir);
+        writeFileSync(
+          statePath,
+          readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*$/m, `- **Scope**: ${scope}`),
+          "utf-8",
+        );
+        return dir;
+      };
+      proj = seeded();
       const run = (args: string[]) =>
         JSON.parse(runNext(proj, args).out.trim().split("\n").at(-1) ?? "{}") as Record<string, unknown>;
       const answer = (command: unknown) => {
@@ -372,11 +379,14 @@ describe("t114 scope precedence + validation", () => {
       };
       const initOffer = run(["--new-intent", "fix the login redirect"]);
       const initComposed = answer(initOffer.compose_command);
+      const initConfirmed = answer(initOffer.confirm_command);
+      cleanupTestProject(proj);
+      proj = seeded();
       const freeTextOffer = run(["fix the login redirect"]);
       const freeTextComposed = answer(freeTextOffer.compose_command);
       const seen = {
         initOffer: shape(initOffer),
-        initConfirmed: shape(answer(initOffer.confirm_command)),
+        initConfirmed: shape(initConfirmed),
         initComposed: shape(initComposed),
         initComposedInFlight: String(initComposed.message).includes("mode in-flight"),
         freeTextOffer: shape(freeTextOffer),
@@ -402,7 +412,10 @@ describe("t114 scope precedence + validation", () => {
       freeTextComposed: "print Dispatch the composer agent",
       freeTextComposedInFlight: false,
       typedScope: "print intent create --scope bugfix",
-      positionalScope: "print intent create --scope bugfix",
+      // A plan's name at the start of their own sentence is ambiguous with
+      // their first word, so both readings go to the agent and nothing is
+      // created; a plan named by its flag still acts (typedScope above).
+      positionalScope: "print cannot tell which they meant",
     });
     expect(newWork("retired-lane")).toEqual(known);
   });

@@ -187,7 +187,10 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
       // agent's to read, so the delimiter is what keeps it theirs at creation.
       [["--new-scope", "--", "--enable SSO"], "--enable SSO"],
       [["bugfix", "--", "--enable"], "--enable"],
-      [["bugfix", "Fix", "duplicate", "todo", "persistence"], "Fix duplicate todo persistence"],
+      // A plan named with the colon mark keeps their words whole; the same words
+      // after a bare plan word are ambiguous with their own first word, and go
+      // to the agent as a reading step (t-three-ways-to-read-a-line).
+      [["bugfix:", "Fix duplicate todo persistence"], "Fix duplicate todo persistence"],
       [["--scope", "feature", "feature", "flags", "for", "billing"], "feature flags for billing"],
       [["bugfix", "Fix", "duplicate", "todo", "--scope", "mvp"], "bugfix Fix duplicate todo"],
     ] as const) {
@@ -733,20 +736,36 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(kept.message)).toContain("config set depth minimal --guard-policy relaxed` to update the configuration");
   });
 
-  test.each([
-    ["with a setting", ["--learnings", "off"]],
-    ["on its own", []],
-  ])("a plan named before a new description beside active work asks first, proposing that plan (%s)", (_label, typed) => {
+  test("a plan named with a setting before a new description beside active work asks first, proposing that plan", () => {
     proj = createTestProject();
     seedAidlcMemory(proj);
     seedStateFile(proj, MID_IDEATION);
     const before = readFileSync(seededStateFile(proj), "utf-8");
+    const typed = ["--learnings", "off"];
     const ask = directiveOf(runNext(proj, [...typed, "bugfix", "Fix the login crash when the session expires"]).out);
     expect(ask.ask_type).toBe("new-work-routing");
     expect(ask.proposed_scope).toBe("bugfix");
     expect(ask.new_work_description).toBe("Fix the login crash when the session expires");
     expect(String(ask.new_intent_command)).toContain(`--scope bugfix --request`);
-    if (typed.length > 0) expect(String(ask.new_intent_command)).toContain("--learnings off");
+    expect(String(ask.new_intent_command)).toContain("--learnings off");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+  });
+
+  test("a bare plan word before a new description beside active work goes to the agent, with nothing asked of them", () => {
+    // Settled 2026-10-10: a plan's name at the START of their own sentence,
+    // with nothing marking which it is, has two readings and only the agent can
+    // tell. With a setting typed first (above) the line is a command and the
+    // plan still acts; the mark (`bugfix:`, or `--`) makes it a command too.
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+    const step = directiveOf(runNext(proj, ["bugfix", "Fix the login crash when the session expires"]).out);
+    expect(step.kind).toBe("print");
+    expect(step.narration).toBeUndefined();
+    expect(step.ask_type).toBeUndefined();
+    expect(String(step.message)).toContain("--scope bugfix");
+    expect(String(step.message)).toContain("Fix the login crash when the session expires");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 

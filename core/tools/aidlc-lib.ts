@@ -39355,7 +39355,10 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
     }
     if (colon && plans.has(colon[1].toLowerCase())) return { kind: "exact" };
     if (plans.has(plan)) {
-      return words.length === 1 && mark < 0 ? { kind: "exact" } : { kind: "plan-word", scope: plan };
+      // The plan's name alone is the plan, and so is the plan's name with their
+      // words marked as theirs after it (`bugfix -- --enable`): the mark says
+      // which is which. Unmarked words after it are the ambiguous form.
+      return words.length === 1 ? { kind: "exact" } : { kind: "plan-word", scope: plan };
     }
     return { kind: "words" };
   }
