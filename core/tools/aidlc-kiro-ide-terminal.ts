@@ -156,9 +156,9 @@ export function kiroTerminalQuestionDue(env: NodeJS.ProcessEnv = process.env): b
 // and shows exit code -1 for every run; AI-DLC's steps take one to seven
 // seconds and print their reply at the end, so most replies come back empty.
 export const KIRO_TERMINAL_QUESTION =
-  "Kiro runs its agent's commands in Command Prompt, your default terminal, which hands AI-DLC a reply only when a " +
-  "step finishes within a second; most steps take longer, so their replies come back empty, and your words can get " +
-  "split. Set Kiro's terminal to PowerShell? It is a Kiro setting for all your projects.";
+  "Kiro runs its agent's commands in Command Prompt, your default terminal. In Command Prompt most AI-DLC steps come " +
+  "back with no reply and your words can get split. Set Kiro's terminal to PowerShell? It is a Kiro setting for all " +
+  "your projects.";
 
 /** The line after AI-DLC set Kiro's terminal to PowerShell. */
 export function kiroTerminalSetLine(): string {
@@ -172,8 +172,8 @@ export function kiroTerminalKeptLine(invoke: string): string {
 }
 
 export function kiroTerminalIssueMessage(): string {
-  return "Kiro runs its agent's commands in Command Prompt, which hands AI-DLC a step's reply only when it finishes " +
-    "within a second; most replies come back empty there, and your words can get split";
+  return "Kiro runs its agent's commands in Command Prompt, where most AI-DLC steps come back with no reply and your " +
+    "words can get split";
 }
 
 export function kiroTerminalFix(invoke: string): string {
@@ -313,6 +313,6 @@ export function kiroTerminalBreakWarning(env: NodeJS.ProcessEnv = process.env): 
     return "";
   }
   return "Tell the person this once, in their language, then go on with their request: \"Kiro's Command Prompt " +
-    "terminal hands AI-DLC a step's reply only when it finishes within a second; most steps take longer, so they " +
-    "take extra turns here. PowerShell avoids this; tell me if you want Kiro's terminal set to it.\"";
+    "terminal is cutting off AI-DLC's replies, so steps here take extra turns. Tell me if you want Kiro's terminal " +
+    "set to PowerShell, which avoids this.\"";
 }

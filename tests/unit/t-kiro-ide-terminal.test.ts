@@ -358,17 +358,18 @@ describe("what the agent reads", () => {
 // command printed within one second and nothing after it, with exit code -1
 // for every run. AI-DLC's step commands take one to seven seconds, so under
 // Command Prompt most of their replies come back empty. The person is told what
-// really breaks, every Command Prompt chat is told the mechanics and the one
-// setter, and a person who kept Command Prompt hears once, at the first slow
-// reply, what is happening.
+// they meet and can decide (never the mechanism), every Command Prompt chat is
+// told the mechanics and the one setter, and a person who kept Command Prompt
+// hears once, at the first slow reply, what is happening.
 describe("what the question and the diagnostics say breaks", () => {
-  test("the question and the doctor message name the empty replies first, then the split words", () => {
-    expect(KIRO_TERMINAL_QUESTION).toContain("hands AI-DLC a reply only when a step finishes within a second");
-    expect(KIRO_TERMINAL_QUESTION).toContain("their replies come back empty, and your words can get split");
+  test("the question and the doctor message name the empty replies first, then the split words, in the person's terms", () => {
+    expect(KIRO_TERMINAL_QUESTION).toContain("In Command Prompt most AI-DLC steps come back with no reply and your words can get split.");
+    expect(KIRO_TERMINAL_QUESTION).not.toContain("within a second");
     expect(KIRO_TERMINAL_QUESTION).toContain("Set Kiro's terminal to PowerShell? It is a Kiro setting for all your projects.");
     expect(KIRO_TERMINAL_QUESTION).not.toContain("every command looks like it failed");
     expect(kiroTerminalIssueMessage()).toMatch(/^Kiro runs its agent's commands in Command Prompt/);
-    expect(kiroTerminalIssueMessage()).toContain("within a second");
+    expect(kiroTerminalIssueMessage()).toContain("where most AI-DLC steps come back with no reply and your words can get split");
+    expect(kiroTerminalIssueMessage()).not.toContain("within a second");
     expect(kiroTerminalIssueMessage()).not.toContain("every command looks like it failed");
   });
 });
@@ -517,8 +518,9 @@ describe("the warning once, at the first slow reply, for a person who kept Comma
     withEnv(inKiro(m), () => {
       const line = kiroTerminalBreakWarning(process.env);
       expect(line).toContain("Tell the person this once, in their language, then go on with their request:");
-      expect(line).toContain("Kiro's Command Prompt terminal hands AI-DLC a step's reply only when it finishes within a second");
-      expect(line).toContain("PowerShell avoids this; tell me if you want Kiro's terminal set to it.");
+      expect(line).toContain("Kiro's Command Prompt terminal is cutting off AI-DLC's replies, so steps here take extra turns.");
+      expect(line).toContain("Tell me if you want Kiro's terminal set to PowerShell, which avoids this.");
+      expect(line).not.toContain("within a second");
       expect(line).not.toContain("?");
       expect(existsSync(warned(m))).toBe(true);
       expect(existsSync(dropped(m))).toBe(false);
@@ -556,10 +558,10 @@ describe("the warning once, at the first slow reply, for a person who kept Comma
       });
     const first = run();
     expect(first.status, `${first.stdout}${first.stderr}`).toBe(0);
-    expect(first.stdout).toContain("PowerShell avoids this; tell me if you want Kiro's terminal set to it.");
+    expect(first.stdout).toContain("Tell me if you want Kiro's terminal set to PowerShell, which avoids this.");
     const second = run();
     expect(second.status).toBe(0);
-    expect(second.stdout).not.toContain("PowerShell avoids this");
+    expect(second.stdout).not.toContain("cutting off AI-DLC's replies");
   });
 });
 
