@@ -2055,6 +2055,15 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
   );
 
   test("each admission reads fresh source inside a cached routing calculation", () => {
+    // The fixture has no Units and recordReview writes stage-level artifacts.
+    // Make that placement part of the approved plan, as on the sensor cases.
+    writeFileSync(
+      seededStateFile(proj),
+      readFileSync(seededStateFile(proj), "utf-8").replace(
+        "- [ ] units-generation — EXECUTE",
+        "- [S] units-generation — SKIP",
+      ),
+    );
     recordReview(proj);
     const stage = resolveStage("code-generation");
     if (!stage) throw new Error("code-generation stage missing");
@@ -2065,7 +2074,8 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       withWorkspaceSourceStateCache(() => {
         const before = workspaceSourceFingerprint(proj);
         const options = { action: "complete", entrypoint: "approve" } as const;
-        expect(guardPreflight(proj, state, stage, options).executable).toBe(true);
+        const admitted = guardPreflight(proj, state, stage, options);
+        expect(admitted.executable, JSON.stringify(admitted)).toBe(true);
         writeFileSync(src, "export const answer = 9002; // between admissions\n");
         // The routing calculation still owns its earlier observation.
         expect(workspaceSourceFingerprint(proj)).toBe(before);
