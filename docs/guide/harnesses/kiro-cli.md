@@ -128,7 +128,9 @@ First-run setup's step 2, "Session model", lists the models your Kiro account
 offers, in Kiro's order, with each model's credit multiplier and a `preview` or
 `internal` tag. Under Kiro auto (Kiro's own default, where Kiro picks the model
 for each task), AI-DLC recommends choosing a model, so your effort preset
-applies to it. The preset then sets one effort for the whole session:
+applies to it. The preset then sets one effort for the whole interactive
+session (Kiro CLI 2.28.0 does not apply the saved effort to a
+`kiro-cli chat --no-interactive` run; pass `--effort` there):
 
 | Preset | Session effort |
 |--------|----------------|
@@ -137,15 +139,23 @@ applies to it. The preset then sets one effort for the whole session:
 | `thorough` | `xhigh` (extra-high) |
 
 A model without that level gets its next level down, and a model with no
-effort setting keeps only the model. `aidlc config models` offers the same
+effort setting keeps only the model. The recommended defaults fill the effort
+only where you have not saved one for your model: an effort you already saved
+stays, and setup says so in one line when it differs from the preset. Choosing
+a preset yourself (in step 3 or with `aidlc config models`) or a session model
+with `aidlc config models` sets the preset's effort; an agent or group setting
+leaves it alone. `aidlc config models` offers the same
 choice later ("1 session model, 2 preset"), and
 `aidlc config models --session-model <id>` saves a model from your account's
 list without prompts. A saved model your account no longer offers fails every
 prompt, so setup asks for another instead of keeping it. `--dry-run` shows the
 personal Kiro settings change too and writes nothing. When Kiro refuses a write,
 AI-DLC says exactly what was saved and `config models` exits 5 (action needed).
-`aidlc doctor` checks the live setting: the model is still offered, the effort
-matches the preset, and no project file overrides it. Refreshing a project set
+`aidlc doctor` checks the live setting: the model is still offered, its saved
+effort is one the model offers (when a preset is recorded and Kiro lists the
+model's effort levels), and no project file overrides it. An effort you saved
+that differs from the preset is yours: doctor names the preset's level and the
+command that applies it, without a warning. Refreshing a project set
 up by an earlier release removes AI-DLC's old effort map (`claude-opus-4.8` at
 extra-high) from `.kiro/settings/cli.json` and says so; run
 `aidlc config models` to choose the session model.

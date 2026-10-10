@@ -545,7 +545,7 @@ run fails with usage guidance.
 
 Harnesses receive only settings they can read. Codex clamps `max` effort down
 to `xhigh`. opencode clamps `xhigh` down to `high`. On Kiro CLI a preset sets
-one effort for the whole session, saved with the session model in your personal
+one effort for the whole interactive session, saved with the session model in your personal
 Kiro settings
 ([Session model and effort](harnesses/kiro-cli.md#session-model-and-effort));
 explicit group dials have no Kiro surface, and a per-agent model exception
@@ -582,7 +582,9 @@ Claude Opus 4.8. Where you set the model and effort depends on the harness:
 - **Kiro CLI:** the session model and its one effort. `aidlc config models`
   saves them in your personal Kiro settings (a preset sets the effort:
   `minimal` low, `balanced` medium, `thorough` extra-high); `/model` and
-  `/effort` change them inside Kiro. See
+  `/effort` change them inside Kiro. Recommended setup keeps an effort you
+  already saved for your model. On Kiro IDE's row setup saves Kiro CLI's
+  session model only. See
   [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
 
 If your organization offers only a mid-tier model, such as a Claude Sonnet
