@@ -1332,7 +1332,7 @@ verdict.
 ## Learnings Ritual
 
 When a human corrects agent behavior, the correction can become a persistent
-rule (guardrail) for the next workflow. v0.5.0 handles this through the
+rule (guardrail) for later stages and workflows. v0.5.0 handles this through the
 tool-as-actor Learnings Ritual, not a separate guardrail-emission flow.
 
 *(Conditional module: `stage-protocol-learnings.md`, Section 13; the base protocol keeps a loading stub.)*
@@ -1357,7 +1357,9 @@ When `directive.protocol_modules` lists `learnings`, the ritual runs between the
    learning, installs the manifest + stage `sensors:` import in one locked
    transaction), emitting `RULE_LEARNED` / `SENSOR_PROPOSED`.
 
-Learnings apply on the **next** workflow's compile, not the in-flight run. See
+A persisted learning reaches the agent from the next stage delivery of the
+in-flight run — the engine re-reads the selected rule files before each stage —
+while a new Sensor binds at the next stage-graph compile. See
 `stage-protocol-learnings.md` §13 for the full tool-as-actor protocol, and
 [Rule System](08-rule-system.md) for the strict-additive resolution the written
 rules feed into.

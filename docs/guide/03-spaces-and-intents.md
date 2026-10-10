@@ -42,8 +42,8 @@ my-project/
 │       ├── default/              ★ the only space most people ever see
 │       │   ├── memory/           THE METHOD — how this team works (committed)
 │       │   │   ├── org.md          framework defaults
-│       │   │   ├── team.md         your team's practices  (overrides org)
-│       │   │   ├── project.md      project-specific practices (overrides team)
+│       │   │   ├── team.md         your team's practices  (adds to org)
+│       │   │   ├── project.md      project-specific practices (adds to org and team)
 │       │   │   ├── phases/         phase-scoped rules
 │       │   │   └── templates/      your output-format overrides, one per artifact
 │       │   │
