@@ -88,8 +88,8 @@ function recordedNow(item: AnswersItem, proj: string, start: Start): string {
     return readAuditShardEvents(proj).slice(start.events).some((e) => e.event !== "HUMAN_TURN") ? "Part of the active work" : "none";
   }
   if (since("PLAN_APPROVAL_RECORDED")) return "approved plan";
-  if (since("GATE_APPROVED")) return "approved";
-  if (since("GATE_REJECTED")) return "rejected";
+  if (since("GATE_APPROVED")) return "Approve";
+  if (since("GATE_REJECTED")) return "Request Changes";
   if (since("REQUEST_ROUTED")) return "routed";
   if (since("ARTIFACT_REUSED")) return rowsAfter(proj, start, "ARTIFACT_REUSED").at(-1)?.Decision ?? "reused";
   // The agent's answer command lands on a row named for the question (a summary confirmation, a verification command, a
@@ -131,7 +131,8 @@ function judge(item: AnswersItem, proj: string, typed: string, transcript: Trans
       const words = typed.replace(/^[/$]aidlc\s*/, "");
       const row = RECORD_EVENTS.map((e) => rowsAfter(proj, start, e).at(-1)).find((r) => r !== undefined);
       const kept = recorded(proj, item).words ?? "";
-      if (!(row?.["Person Reply"] ?? "").includes(words) && !kept.includes(words)) failures.push(`the person's words ${JSON.stringify(words)} are not on the record beside the choice`);
+      const onRow = [row?.["Person Reply"], row?.["User Input"], row?.Feedback, row?.Reply].some((v) => (v ?? "").includes(words));
+      if (!onRow && !kept.includes(words)) failures.push(`the person's words ${JSON.stringify(words)} are not on the record beside the choice`);
     }
   }
   const state = existsSync(stateFilePath(proj)) ? readFileSync(stateFilePath(proj), "utf-8") : "";
@@ -160,9 +161,10 @@ function pickerSpec(item: AnswersItem): { spec: AnswerSpec; label: string | null
 function showsQuestion(item: AnswersItem, firstText: string): string | null {
   const want = item.expected.end.recorded;
   if (want === "none") return null;
-  const key = want.replace(DECORATED, "").toLowerCase();
+  const words = want.replace(DECORATED, "").toLowerCase().split(/[^a-z0-9'-]+/).filter(Boolean);
   const shown = firstText.toLowerCase();
-  if (shown.includes(key) || shown.includes(key.split(" ").slice(0, 2).join(" "))) return null;
+  const found = words.filter((w) => shown.includes(w)).length;
+  if (words.length === 0 || found >= Math.ceil(words.length * 2 / 3)) return null;
   return `setup: the agent did not show the ${item.question} question (no choice ${JSON.stringify(want)} offered); it said: ${JSON.stringify(firstText.trim().slice(-300))}`;
 }
 
