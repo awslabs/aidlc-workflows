@@ -31,7 +31,7 @@ import { execCodex, execCodexResume } from "../harness/exec-drive.ts";
 import { AcpSession, driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 import { type AnswerSpec, driveAidlc, type DriveTurnEnd } from "../harness/sdk-drive.ts";
 import {
-  HOMES, drivesHome, homeDigest, judgeText, liveGate, liveHarnesses, liveProject, sampleByGroup, writeLiveReport,
+  HOMES, PERSON_READS_RULE, drivesHome, homeDigest, judgeText, liveGate, liveHarnesses, liveProject, sampleByGroup, writeLiveReport,
   type HomeDigest, type LiveHarness, type LiveOutcome, type Transcript,
 } from "../harness/live-corpus.ts";
 import { codexWords } from "../harness/aidlc-input-corpus.ts";
@@ -322,7 +322,7 @@ async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutco
     }
     // The questions put to the person: the boxes the driver saw, and the questions the judge reads in the prose (the
     // only kind on Codex and Kiro CLI, and what Claude's agent asks when it does not open a box).
-    const words = await judgeText({ typed: said, meaning: item.meaning, asksAllowed: asksAllowed(item), says: item.expected.end.says }, transcript.text, judgeDir);
+    const words = await judgeText({ typed: said, meaning: item.meaning, asksAllowed: asksAllowed(item), says: item.expected.end.says, engineWords: PERSON_READS_RULE }, transcript.text, judgeDir);
     if (words.asked !== null) transcript.asks = Math.max(transcript.asks ?? 0, words.asked);
     const { failures, endSummary } = judge(item, proj, said, transcript, start);
     if (words.failure !== null) failures.push(words.failure);

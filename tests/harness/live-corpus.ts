@@ -133,7 +133,21 @@ export interface JudgeInput {
   asksAllowed: number;
   /** What the person must have been told, by meaning (the answers corpus's `says`). */
   says?: string[];
+  /** The rubric's second criterion, what counts as engine words (ENGINE_WORDS_RULE when absent). */
+  engineWords?: string;
 }
+/** The rubric's second criterion as the input corpus's live check has judged it. */
+export const ENGINE_WORDS_RULE =
+  "(2) it shows the person no engine internals: no bun or script command lines, no tool names such as aidlc-*.ts, no JSON or raw field names, no words such as directive, orchestrate, hook, kind, and no engine files (anything under .claude, .codex, .kiro, .aidlc-engine or .aidlc-sessions, or named aidlc-*; the state and audit files). " +
+  "The product's own words are fine and expected: a /aidlc line the person could type next (with its documented flags), the words intent, space, scope, stage, gate, plan and unit, stage names (Requirements Analysis, Code Generation), settings (Guard Policy, plan approval, depth), a progress line, and ordinary English such as 'the next step'. " +
+  "The person's own project files, requirements and tests may be named, and so may the documents the work produces for them (the plan, requirements, questions and review files, with their path under aidlc/spaces); ";
+/** The same criterion as "What the person reads" (CLAUDE.local.md, Arden 2026-10-11) draws it: how the engine got there
+ * stays off the screen; the person's work, what they need to act, what they asked for, and a host's own frame do not count. */
+export const PERSON_READS_RULE =
+  "(2) it shows the person nothing of how the engine got there: no bun or script command lines they did not ask for, no tool names such as aidlc-*.ts, no JSON or raw field names, no words such as directive, orchestrate, hook, receipt, kind, and no engine files (anything under .claude, .codex, .kiro, .aidlc-engine or .aidlc-sessions, or named aidlc-*; the state and audit files). " +
+  "Not engine internals, and expected where they fit: the product's own words (a /aidlc line the person could type next with its documented flags; intent, space, scope, stage, gate, plan and unit; stage names such as Requirements Analysis; settings such as Guard Policy, plan approval, depth; a progress line; ordinary English such as 'the next step'); " +
+  "the person's own project files, requirements and tests, and the agent's account of them (files it read, tests it ran, what it found); the documents the work produces for them (the plan, requirements, questions and review files, with their path under aidlc/spaces); a command or path the person needs in order to act (an undo, a file to edit); and the doctor, status or audit output they asked for. " +
+  "A frame the host tool draws itself (Claude Code's Stop hook error text, Codex's Blocked by hook line) is the host's and is not judged, but the words inside it are ours and are; ";
 export interface WordsVerdict {
   /** The failure line, or null when the words pass. */
   failure: string | null;
@@ -156,9 +170,7 @@ export async function judgeText(input: JudgeInput, text: string, judgeDir: strin
       ? "A question back to the person is allowed once: the meaning leaves one choice to the person or the line is ambiguous. A reply that asks that one question plainly passes; so does a reply that acts consistently with the meaning without asking."
       : "A question back to the person is not allowed: the meaning is clear and the person asked for nothing to be confirmed.",
     "The reply passes when all three hold: (1) it says in plain words what was done, or what the person now needs to decide, consistent with what they meant; " +
-      "(2) it shows the person no engine internals: no bun or script command lines, no tool names such as aidlc-*.ts, no JSON or raw field names, no words such as directive, orchestrate, hook, kind, and no engine files (anything under .claude, .codex, .kiro, .aidlc-engine or .aidlc-sessions, or named aidlc-*; the state and audit files). " +
-      "The product's own words are fine and expected: a /aidlc line the person could type next (with its documented flags), the words intent, space, scope, stage, gate, plan and unit, stage names (Requirements Analysis, Code Generation), settings (Guard Policy, plan approval, depth), a progress line, and ordinary English such as 'the next step'. " +
-      "The person's own project files, requirements and tests may be named, and so may the documents the work produces for them (the plan, requirements, questions and review files, with their path under aidlc/spaces); " +
+      (input.engineWords ?? ENGINE_WORDS_RULE) +
       "(3) it asks a question only where allowed above; one question with several options is one question. Judge the assistant's words to the person, not its work log; a short confirmation of what happened is a pass.",
     'Answer with one line of JSON only, nothing else: {"ok": true or false, "asked": <how many questions the reply puts to the person about their reply or the same decision, 0 when none; one question with several options is one; a question that moves the work on to its next step is not one>, "reason": "<one sentence>"}',
     "The reply to judge follows.",
