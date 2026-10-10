@@ -1056,12 +1056,24 @@ if (import.meta.main) {
 // --- Subcommand handlers ---
 
 function handleGet(args: string[]): void {
-  if (args.length < 1) error("Usage: aidlc-state.ts get <field>");
-  const field = args.join(" ");
+  // --optional reads a field that may be absent, such as Plan, which only a
+  // composed plan carries: an absent field prints nothing and exits 0, so the
+  // read is not an error and leaves no ERROR_LOGGED row (#2264). Under it any
+  // other flag is refused: the dispatcher passes its own flags (--json) on to
+  // this command, and one read as part of the field name would find nothing
+  // and answer "absent" for a field that is there.
+  const usage = "Usage: aidlc-state.ts get [--optional] <field>";
+  const optional = args.includes("--optional");
+  const fieldWords = args.filter((arg) => arg !== "--optional");
+  if (fieldWords.length < 1) error(usage);
+  const flag = optional ? fieldWords.find((word) => word.startsWith("--")) : undefined;
+  if (flag !== undefined) error(`get --optional takes a field name, not ${flag}. ${usage}`);
+  const field = fieldWords.join(" ");
   const pd = resolveProjectDir(projectDir);
   const content = readStateFile(pd);
   const value = getField(content, field);
   if (value === null) {
+    if (optional) return;
     error(`Field not found: ${field}`);
   }
   console.log(value);
