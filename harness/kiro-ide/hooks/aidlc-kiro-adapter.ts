@@ -3844,7 +3844,7 @@ return result.code;
 // true whoever sent that message: with no payload, nobody knows whether it was
 // the person's or one Kiro made.
 const NO_MESSAGE_AGENT_LINE =
-  "Tell the person in one line: AI-DLC did not receive the last message in this chat, so if that message answered an AI-DLC question, the question will be asked again.";
+  "Tell the person in one line: The last message in this chat did not reach AI-DLC's record, so if it answered one of its questions, you will be asked that question again.";
 
 // The safety limit on the 1.x stdin read. Kiro writes the payload and closes
 // stdin, so the read ends when Kiro has finished sending, however late (a

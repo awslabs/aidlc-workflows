@@ -35,9 +35,10 @@ diagnostics and tests. When the limit passes with nothing on either channel,
 `record-human-turn` records no turn and no message (nothing on record says the
 person typed nothing, and no presence is minted for a message that may have
 been Kiro's own): a `kiro-adapter.drops` line names it for `doctor`, and the
-agent gets one line telling it to say that AI-DLC did not receive the last
-message in this chat (true whoever sent it: with no payload, nobody knows
-whether it was the person's or one Kiro made). Both field spellings are
+agent gets one line to say to the person: "The last message in this chat did
+not reach AI-DLC's record, so if it answered one of its questions, you will be
+asked that question again" (true whoever sent it: with no payload, nobody
+knows whether it was the person's or one Kiro made). Both field spellings are
 accepted. Acquisition is gated to the payload-dependent targets,
 including `plan-approval-guard`, `review-freeze`, `state-transition-guard`, the per-tool-call approval floor
 (`enforce-approval-gate`, which on 1.x reads the invoking chat's `session_id` so
