@@ -390,6 +390,7 @@ import {
   validateUnitName,
   resolveStageAnswerMode,
   editedReviewNotice,
+  dictatedReviewNotice,
   findStageBySlug,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
@@ -3836,6 +3837,8 @@ export interface ParsedFlags {
    * passed on from SessionStart, and none of the person's words.
    */
   agentSessionOnly?: boolean;
+  // An answer argument sent to `next` instead of the question's answer command.
+  misplacedChoice?: boolean;
   retiredFlags?: string[];
   retiredOnly?: boolean;
 }
@@ -4217,6 +4220,12 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       i++;
     } else if (a === "--rhythm") {
       flags.parseError = "--rhythm requires <per-stage|unit-end>.";
+    } else if ((a === "--choice" || a.startsWith("--choice=")) && intentWords.length === 0) {
+      // Like a leading --session, this is the agent's argument, not work the
+      // person asked to start. Its value grants nothing: the question's answer
+      // command still owns recording the person's actual reply.
+      flags.misplacedChoice = true;
+      if (a === "--choice" && i + 1 < args.length && !args[i + 1].startsWith("--")) i++;
     } else if (a === "--session" && intentWords.length === 0 && i + 1 < args.length && !args[i + 1].startsWith("--")) {
       // This chat's session id, which SessionStart gives the agent for Plan
       // Approval's --session; `next` finds its session on its own. Read as task
@@ -7196,6 +7205,21 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
+  if (flags.misplacedChoice) {
+    const open = openPlanApprovalQuestion(resolveProjectDir(projectDir), "");
+    const next = `${aidlcToolInvocation("orchestrate")} next`;
+    // A correction to the agent's command is its next action, not an error
+    // that ends the turn or a new-work question that replaces the pending ask.
+    emit(printDirective(
+      "`next` does not accept `--choice`. " +
+      (open && !open.editing
+        ? planApprovalAnswerStep()
+        : `Run \`${next}\` with no answer arguments and follow the step it returns. ` +
+          "Record a reply using the answer command issued for that question."),
+    ));
+    return;
+  }
+
   // All the person typed was something that reads like a setting, and no parser
   // here could read it: with no readable switch beside it the human-turn hook
   // said nothing, so running a stage now would leave them believing a check went
@@ -9236,13 +9260,18 @@ function applyConstructionCheckpointShape(
   if (directive.construction_policy) {
     directive.construction_policy.human_completion_required = checkpoint.human_required;
   }
-  // A review edited after the reviewer finished is said once, before the
-  // person is asked, in the line every other accepted change uses.
-  if (checkpoint.review_edited) {
-    const lines = checkpoint.review_edited.stages.map((slug) =>
-      editedReviewNotice(findStageBySlug(slug)?.name ?? slug, checkpoint.unit));
+  // A review edited after the reviewer finished, or a verdict the reviewer's
+  // dispatch dictated, is said once, before the person is asked, in the line
+  // every other accepted change uses.
+  const reviewLines = [
+    ...(checkpoint.review_edited?.stages ?? []).map((slug) =>
+      editedReviewNotice(findStageBySlug(slug)?.name ?? slug, checkpoint.unit)),
+    ...(checkpoint.review_dictated?.stages ?? []).map((slug) =>
+      dictatedReviewNotice(findStageBySlug(slug)?.name ?? slug, checkpoint.unit)),
+  ];
+  if (reviewLines.length > 0) {
     const noticed = directive as RunStageDirective & Pick<Directive, "change_notices">;
-    noticed.change_notices = [...new Set([...(noticed.change_notices ?? []), ...lines])];
+    noticed.change_notices = [...new Set([...(noticed.change_notices ?? []), ...reviewLines])];
   }
   // A re-check of changed code dispatches the reviewer; any other checkpoint
   // has had its reviews.
@@ -14031,6 +14060,15 @@ function approveArgs(slug: string, flags: ReportFlags): string[] {
   return args;
 }
 
+// The agent's way back to the engine's open Plan Approval question: read the
+// person's reply and record the choice they made, or wait for one. Said the
+// same way wherever an agent's command missed that question.
+function planApprovalAnswerStep(): string {
+  return "Read the person's reply to the open Plan Approval question and record the choice they made with " +
+    `\`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval --details '<their choice>'\`, ` +
+    `then run \`${aidlcToolInvocation("orchestrate")} next\` with no answer arguments. If they have not replied, wait at that question.`;
+}
+
 // Complete the non-stage resume-choice round-trip by ROUTING the choice, not
 // just accepting it. Resuming from the current checkpoint is read-only; the
 // other three choices are mutations, so the directive NAMES the move (the
@@ -14939,7 +14977,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       (flags.userInput?.trim()
         ? `received ${formatReceivedReply(flags.userInput)}, which is cancellation boilerplate, not a decision`
         : "names no choice");
-    emit(personSpokeSinceGate(pd, { replies: true })
+    // While the engine's Plan Approval question is the open one, the gate is
+    // not what the person is answering: the way on is that question's answer
+    // command, whether or not they have replied to it yet.
+    const plan = openPlanApprovalQuestion(pd, "");
+    emit(plan !== null && !plan.editing
+      ? printDirective(
+        `${refused}, and the open question is the Plan Approval question, not the gate for "${slug}". ${planApprovalAnswerStep()}`,
+      )
+      : personSpokeSinceGate(pd, { replies: true })
       ? printDirective(
         `${refused}. The person has replied since the gate was shown: report the choice they made with --user-input ` +
           '("Approve", say), without asking them again.',

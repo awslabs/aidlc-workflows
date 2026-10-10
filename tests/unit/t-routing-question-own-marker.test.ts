@@ -153,7 +153,7 @@ function run(proj: string, args: string[], input: string, extraEnv: NodeJS.Proce
 }
 
 // The person types `prompt`, through the host's own human-turn hook.
-function say(proj: string, prompt: string, harness: Harness = "claude", session = SESSION): void {
+function say(proj: string, prompt: string, harness: Harness = "claude", session = SESSION, turn = "t1"): void {
   if (harness === "claude") {
     run(proj, [DISPATCHER, "engine", "hook", "record-human-turn"],
       JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, cwd: proj, prompt }));
@@ -165,7 +165,7 @@ function say(proj: string, prompt: string, harness: Harness = "claude", session 
   if (harness === "codex") {
     writeSessionPidEntry(proj, process.pid, SESSION);
     run(proj, [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "record-human-turn"],
-      JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, turn_id: "t1", cwd: proj, prompt }),
+      JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, turn_id: turn, cwd: proj, prompt }),
       { ...unset, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined });
     return;
   }
@@ -207,6 +207,83 @@ function routingQuestionOverThePlan(proj: string, planQuestionOpen = true): Emit
   expect(routing.ask_type, JSON.stringify(routing)).toBe("new-work-routing");
   return routing;
 }
+
+describe("a misplaced --choice returns the agent to the pending answer command", () => {
+  for (const harness of ["claude", "codex"] as const) {
+    for (const words of ["Approve Plan", "looks good, build it"]) {
+      test(`${harness}: ${words} is recorded once without a new-work question`, () => {
+        const proj = project("strict");
+        expect(next(proj).ask_type).toBe("plan-approval");
+        say(proj, words, harness);
+        const before = planAnswers(proj);
+        const correction = next(proj, ["--choice", "Approve Plan"]);
+        expect(correction.kind, JSON.stringify(correction)).toBe("print");
+        expect(correction.message).toContain("answer --stage code-generation --checkpoint plan-approval");
+        expect(correction.message).not.toContain("--request");
+        expect(planAnswers(proj)).toEqual(before);
+        answer(proj, "Approve Plan");
+        const recorded = planAnswers(proj);
+        expect(recorded).toContain("PLAN_APPROVAL_RECORDED: Approve Plan");
+        // The existing answer owner handles a retry; next does not become a
+        // second approval writer and the human is not asked to approve again.
+        answer(proj, "Approve Plan");
+        expect(planAnswers(proj)).toEqual(recorded);
+        expect(next(proj).plan_approval?.status).toBe("approved");
+      });
+    }
+  }
+
+  for (const args of [["--choice", "Approve Plan"], ["--choice=Approve Plan"], ["--choice"]]) {
+    test(`an argument without a human reply grants no approval: ${args.join(" ")}`, () => {
+      const proj = project("strict");
+      expect(next(proj).ask_type).toBe("plan-approval");
+      const correction = next(proj, args);
+      expect(correction.kind, JSON.stringify(correction)).toBe("print");
+      expect(correction.message).toContain("answer --stage code-generation --checkpoint plan-approval");
+      expect(correction.message).not.toContain("--request");
+      const refused = spawnSync(BUN, [
+        LOG, "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+        "--details", "Approve Plan", "--project-dir", proj,
+      ], { cwd: proj, env: env(proj), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      expect(refused.status).not.toBe(0);
+      expect(`${refused.stdout}${refused.stderr}`).toContain("has not replied to the plan question");
+      expect(planAnswers(proj)).toEqual([]);
+      expect(blankAnswer(proj)).toBe(true);
+      expect(next(proj).ask_type).toBe("plan-approval");
+    });
+  }
+});
+
+// The agent reports the approval with the verb it knows for a stage gate while
+// the open question is the engine's plan question. The step it reads back is
+// that question's answer command; nothing is recorded, nothing is re-asked.
+describe("a stage report of the approval while the plan question is open names the plan answer command", () => {
+  for (const replied of [true, false]) {
+    test(replied ? "with the person's reply on record" : "with no reply yet", () => {
+      const proj = project("strict");
+      expect(next(proj).ask_type).toBe("plan-approval");
+      if (replied) say(proj, "Approve Plan");
+      const before = planAnswers(proj);
+      const result = spawnSync(BUN, [
+        ORCHESTRATE, "report", "--stage", "code-generation", "--result", "approved", "--project-dir", proj,
+      ], { cwd: proj, env: env(proj), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      const line = (result.stdout ?? "").split("\n").filter((entry) => entry.startsWith("{")).pop();
+      expect(line, `${result.stdout}${result.stderr}`).toBeDefined();
+      const step = JSON.parse(line as string) as Emitted;
+      expect(step.kind, JSON.stringify(step)).toBe("print");
+      expect(step.message).toContain("answer --stage code-generation --checkpoint plan-approval");
+      expect(step.message).not.toContain("show the gate");
+      expect(step.message).not.toContain("No reply from the person is on record");
+      expect(planAnswers(proj)).toEqual(before);
+      expect(readAuditShardEvents(proj).some((row) => row.event === "GATE_APPROVED")).toBe(false);
+      // The report added nothing: with no reply the plan question is asked
+      // again; with their exact pick on record, the engine carries the work on.
+      const after = next(proj);
+      if (replied) expect(after.plan_approval?.status, JSON.stringify(after)).toBe("approved");
+      else expect(after.ask_type, JSON.stringify(after)).toBe("plan-approval");
+    });
+  }
+});
 
 describe("a number for the routing question answers it alone while the code plan question is open", () => {
   for (const policy of ["off", "strict"] as const) {
@@ -456,6 +533,31 @@ function askVerification(proj: string): string {
   expect(asked.code, asked.out).toBe(0);
   return command;
 }
+
+test("Codex: register the verification question before the reply, then apply its receipt", () => {
+  const proj = checkpointProject("strict");
+  const command = verificationCommand(proj);
+  writeFileSync(join(seededRecordDir(proj), "verification-command.txt"), command);
+  const identity = ["--stage", "code-generation", "--checkpoint", "verification-command",
+    "--command-file", "verification-command.txt"];
+  // A reply before registration cannot authorize the later question.
+  say(proj, "Approve", "codex");
+  const asked = engine(proj, ["log", "decision", ...identity,
+    "--decision", "Use this command to verify each completed Unit?", "--options", "Approve,Request Changes"]);
+  expect(asked.code, asked.out).toBe(0);
+  const early = engine(proj, ["log", "answer", ...identity, "--details", "Approve"]);
+  expect(early.code, early.out).not.toBe(0);
+  expect(readAuditShardEvents(proj).filter((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toEqual([]);
+  // Show that registered question and wait. Do not log a new decision after
+  // the reply: the existing question now has the human-turn hook's evidence.
+  say(proj, "Approve", "codex", SESSION, "t2");
+  const approved = engine(proj, ["log", "answer", ...identity, "--details", "Approve"]);
+  expect(approved.code, approved.out).toBe(0);
+  const applied = engine(proj, ["state", "set-construction-verification-command",
+    "--command-file", "verification-command.txt"]);
+  expect(applied.code, applied.out).toBe(0);
+  expect(readAuditShardEvents(proj).filter((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toHaveLength(1);
+});
 
 // alpha's checkpoint question, asked in chat a101 after its plan was approved and built.
 function askCheckpoint(proj: string): void {

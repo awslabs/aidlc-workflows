@@ -65,6 +65,7 @@ import {
   seededRecordDir,
   seededStateFile,
   seedStateFile,
+  WORKER_BRIEF_SECTIONS_FIXTURE,
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 
@@ -1136,7 +1137,7 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
       tool_name: "Task",
       tool_input: {
         subagent_type: "aidlc-developer-agent",
-        prompt: `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${contract.contract_sha256}`,
+        prompt: `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${contract.contract_sha256}${WORKER_BRIEF_SECTIONS_FIXTURE}`,
       },
       cwd: proj,
     }, env);

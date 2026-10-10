@@ -84,6 +84,7 @@ import {
   guardStoodAsideLine,
   harnessDir,
   normalizeDriveLetter,
+  openReviewRequests,
   recordGuardStoodAside,
   hooksHealthDir,
   writeHookStatusFile,
@@ -109,6 +110,7 @@ import {
   resolveProjectFlag,
   resolveProjectDirFromHook,
   resolveWorkflowSelection,
+  reviewSectionVerdict,
   SKELETON_STANCES,
   stateFilePath,
   worktreesDir,
@@ -131,6 +133,7 @@ import {
   evaluateCodeGenerationApproval,
   planReviewAppendix,
   promptTestingContractMarkers,
+  WORKER_BRIEF_SECTIONS,
 } from "../tools/aidlc-testing-posture.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 
@@ -310,10 +313,10 @@ export interface PlanApprovalVerdict {
 
 /**
  * A developer handoff that names no target or several, names one this
- * workflow does not build, or carries the wrong contract line for an
- * approved plan.
+ * workflow does not build, carries the wrong contract line for an approved
+ * plan, or carries the marker lines without the brief they head.
  */
-export type HandoffDefect = "targets" | "unknown-target" | "contract";
+export type HandoffDefect = "targets" | "unknown-target" | "contract" | "brief";
 
 function approvalEvidenceIsCurrent(evidence: UnitEvidence | undefined): boolean {
   return (
@@ -408,15 +411,27 @@ export function evaluatePlanApprovalDispatch(
     target !== undefined && promptCarriesReviewAppendix(promptText, target.reviewAppendix);
   const approved = approvalEvidenceIsCurrent(target);
   const contractMatches = contractMarkers.length === 1 && contractMarkers[0] === target?.contractHash;
+  // The marker lines head the brief; alone they hand the developer none of the
+  // plan or instructions the approval covers. The brief's own sections, as the
+  // brief command prints them, say the brief is there.
+  const briefCarried = promptCarriesBriefSections(promptText);
   const handoff: HandoffDefect | undefined = target === undefined
     ? "unknown-target"
-    : approved && !contractMatches ? "contract" : undefined;
+    : approved && !contractMatches ? "contract" : approved && !briefCarried ? "brief" : undefined;
   return {
-    block: target === undefined || !approved || !contractMatches || appendixInBrief,
+    block: target === undefined || !approved || !contractMatches || appendixInBrief || !briefCarried,
     mentioned,
     ...(appendixInBrief ? { appendixInBrief: true } : {}),
     ...(handoff ? { handoff } : {}),
   };
+}
+
+/** One line of each of the brief's section families, whitespace-folded: the
+ *  plan and instructions headings in their fence-on or fence-off wording. */
+export function promptCarriesBriefSections(promptText: string): boolean {
+  const fold = (text: string): string => text.replace(/\s+/g, " ").trim();
+  const folded = fold(promptText);
+  return WORKER_BRIEF_SECTIONS.every((family) => family.some((heading) => folded.includes(fold(heading))));
 }
 
 /** Whitespace-insensitive containment of a non-trivial appendix in the prompt. */
@@ -521,7 +536,9 @@ export function handoffBlockReason(
       : "names no target"
     : cause === "unknown-target"
       ? `names ${mentioned[0]}, which is not a Code Generation target of this workflow`
-      : "has an AIDLC-TESTING-CONTRACT line that is missing, repeated, or not the approved plan's";
+      : cause === "brief"
+        ? "carries the marker lines without the brief they head"
+        : "has an AIDLC-TESTING-CONTRACT line that is missing, repeated, or not the approved plan's";
   return (
     `Code generation cannot start: the developer handoff ${what}. Hand the developer the output of ` +
     `${briefCommand(mentioned, targets)} first, exactly as printed: it names the one target and its ` +
@@ -2296,6 +2313,56 @@ async function mutationIntent(
 
 // --- Main ---------------------------------------------------------------------
 
+// The one dispatch the hook records rather than judges: a brief handed to the
+// reviewer of an open review request that already reads as a verdict (the
+// engine's own verdict reader finds a rendered `**Verdict:** READY|NOT-READY`
+// line; the knowledge template's `READY | NOT-READY` line is not one). The row
+// names the reviewer, the verdict, the tool, and the open requests whose
+// review file the brief names (every open request of that reviewer when it
+// names none). Evidence only: a ledger that cannot be read or locked leaves
+// nothing behind, and the dispatch goes through either way.
+function recordDictatedReviewerDispatch(projectDir: string, parsed: ClaudeCodeHookInput): void {
+  try {
+    const toolName = parsed.tool_name ?? "";
+    if (!DISPATCH_TOOLS.has(toolName)) return;
+    const toolInput = parsed.tool_input ?? {};
+    const reviewer = typeof toolInput.subagent_type === "string" ? toolInput.subagent_type.trim() : "";
+    if (reviewer === "" || reviewer === GUARDED_AGENT) return;
+    const prompt = [toolInput.prompt, toolInput.description]
+      .filter((value): value is string => typeof value === "string")
+      .join("\n");
+    const verdict = reviewSectionVerdict(prompt);
+    if (verdict === null) return;
+    if (!existsSync(auditFilePath(projectDir))) return;
+    const open = openReviewRequests(readAuditShardEvents(projectDir))
+      .filter((request) => request.reviewer === reviewer);
+    if (open.length === 0) return;
+    const pasted = prompt.replaceAll("\\", "/");
+    const named = open.filter((request) => pasted.includes(request.reviewFile));
+    const requests = named.length > 0 ? named : open;
+    if (!acquireAuditLock(projectDir, 5, 50)) {
+      recordHookDrop(projectDir, HOOK_NAME, "audit lock contended; REVIEW_VERDICT_DICTATED row dropped");
+      return;
+    }
+    try {
+      appendAuditEntryUnlocked(
+        "REVIEW_VERDICT_DICTATED",
+        {
+          "Agent Type": reviewer,
+          Verdict: verdict,
+          Tool: toolName,
+          "Request Id": requests.map((request) => request.requestId).join(", "),
+        },
+        projectDir,
+      );
+    } finally {
+      releaseAuditLock(projectDir);
+    }
+  } catch (e) {
+    recordHookDrop(projectDir, HOOK_NAME, `reviewer dispatch verdict not recorded: ${errorMessage(e)}`);
+  }
+}
+
 // The off-switch is deterministic but no longer silent: while a workflow exists,
 // the first tool call that passes under it appends one GUARD_DISABLED row, and
 // consecutive calls append nothing until some other row lands in the active
@@ -2391,6 +2458,12 @@ async function evaluate(
   } catch {
     // Heartbeat failure is non-fatal - never let it affect the decision.
   }
+
+  // A reviewer dispatch whose brief already carries the verdict is recorded,
+  // never refused (the line may be the person's): `log review --verdict` reads
+  // the row and marks a verdict the reviewer then wrote as told, and the gate
+  // says so once. A record, not a fence: it stands before the off-switch.
+  recordDictatedReviewerDispatch(projectDir, parsed);
 
   // Deterministic off-switch: the Plan Approval fence is disabled, recorded once.
   if (resolveProjectFlag("AIDLC_DISABLE_PLAN_APPROVAL_GUARD") === "1") {

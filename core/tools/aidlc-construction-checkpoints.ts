@@ -17,11 +17,12 @@ import {
   constructionSkeletonOn,
   auditBlockField,
   authorizedVerificationCommand,
-  VERIFICATION_COMMAND_RECOVERY,
+  verificationCommandRecovery,
   type VerificationCommand,
   claimAttemptFields,
   completionCarriesVerifiedReview,
   reviewCompletionDidNotFinish,
+  reviewCompletionDictated,
   reviewCompletionEdited,
   reviewRecordNotHere,
   effectivePlanAction,
@@ -180,6 +181,10 @@ export interface ConstructionCheckpoint {
    *  reviewer finished (strict; relaxed and off said it with the verdict). The
    *  checkpoint says so in one line before the person is asked. */
   review_edited?: { stages: string[] };
+  /** The stages whose fresh review records the verdict its dispatch dictated
+   *  (strict; relaxed and off said it with the verdict). The checkpoint says so
+   *  in one line before the person is asked. */
+  review_dictated?: { stages: string[] };
   /** From verify: the one line for each change to this Unit's reviewed work
    *  its Guard Policy accepted, said before the person is asked. */
   change_notices?: string[];
@@ -716,8 +721,10 @@ function snapshot(
   // Stages whose review ended in the NOT-READY fallback no reviewer gave:
   // ready as before, and asked about and approved as not finished.
   const endedUnfinished: string[] = [];
-  // Stages whose fresh review was edited after the reviewer finished.
+  // Stages whose fresh review was edited after the reviewer finished, and
+  // stages whose fresh review records the verdict its dispatch dictated.
   const editedReviews: string[] = [];
+  const dictatedReviews: string[] = [];
   let mayGoOn: boolean | null = null;
   const overAllowed = (): boolean => (mayGoOn ??= personMayApproveOverUnfinishedReview(projectDir, state));
   // The unfinished review `rereview` names is one the person may go on without.
@@ -990,6 +997,7 @@ function snapshot(
       }
     }
     if (review && reviewCompletionEdited(review.block) && !acceptsChanges()) editedReviews.push(slug);
+    if (review && reviewCompletionDictated(review.block) && !acceptsChanges()) dictatedReviews.push(slug);
     if (reviewClass === "none" || waived) {
       // No review re-checks this stage (or the person let the Unit go on
       // without it): a later change to the work the person approved, which
@@ -1144,6 +1152,7 @@ function snapshot(
           : { stages: unfinishedStages, question: `Approve ${unit}? Its ${reviewsNamed(unfinishedStages)} did not finish.` },
       } : {}),
       ...(editedReviews.length > 0 ? { review_edited: { stages: editedReviews } } : {}),
+      ...(dictatedReviews.length > 0 ? { review_dictated: { stages: dictatedReviews } } : {}),
       run_floor: floors[stages.at(-1)!] ?? "unstarted#0",
       run_floors: floors, proof_path: `${root}/${proofPath}`, verification: proof ?? restored,
       rereview, rechecked,
@@ -1302,7 +1311,7 @@ function verifyOnce(
     const notices = recordAcceptedChanges(projectDir, changes);
     const authorization = current.verificationCommand;
     if (!authorization) {
-      throw new Error("Construction verification requires the state's command and a matching current VERIFICATION_COMMAND_RECORDED receipt. " + VERIFICATION_COMMAND_RECOVERY);
+      throw new Error("Construction verification requires the state's command and a matching current VERIFICATION_COMMAND_RECORDED receipt. " + verificationCommandRecovery());
     }
     const proof: ConstructionCheckpointProof = {
       version: 4, id: randomUUID(), kind, unit, fingerprint: current.result.fingerprint,

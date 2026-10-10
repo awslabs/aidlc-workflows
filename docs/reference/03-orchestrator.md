@@ -82,6 +82,14 @@ Prose typed with a `--scope` that differs from the workflow's gets the same `new
 
 Freeform words alone over active work (nothing `next` reads as a flag, scope, verb or noun, and no open question or approval gate they could answer) get a `print` naming the typed re-entry report (`report --result resumed --choice <redo|jump|fresh>`, for words such as "take me back to requirements analysis") or `next --request <id>` (also when the conductor cannot tell), which asks the `new-work-routing` question with the words kept, so a redo, jump, or start-fresh request typed with `/aidlc` itself is that request; words with a setting typed beside them are asked about with it.
 
+`next` accepts no `--choice` answer flag. A misplaced leading `--choice <value>`
+or `--choice=<value>` returns a `print` directing the agent to the pending
+question's answer command, then bare `next`. For Plan Approval this is
+`log answer --stage code-generation --checkpoint plan-approval --details '<their choice>'`;
+the existing answer owner still requires the person's reply. The flag creates no
+new-work question and records no approval. A literal `--choice` inside a work
+description or after `--` remains part of that description.
+
 In a solo unit-major walk, a Unit's work, its summary confirmation and its checkpoint (the learnings question and the checkpoint approval) run ahead of Current Stage and log their questions under the stage `next` directs (a checkpoint under the block's last stage). Prose then reads that stage's open question by the Stop hook's same rule, so an answer typed in a new chat, after the one that asked ended, reaches the question it answers instead of the new-work routing ask. Once a Unit's approval was asked, its checkpoint step no longer lists `learnings`, so a new chat that runs the step again goes straight to the approval question.
 
 ### `/aidlc compose` -- The Adaptive Composer
@@ -489,8 +497,8 @@ The 6-step process:
 2. **Load conductor-owned context.** A mob directive carries its lead's complete
    path roster in `inline_context_paths`; fully dispatched subagent/pipeline
    directives carry an empty roster.
-3. **Prepare briefs: rules as content, artifacts as paths.** Paste the
-   accumulated steering bundle verbatim; pass relevant artifact paths and task
+3. **Prepare briefs: rules as content, artifacts as paths.** Deliver the
+   stage's rules per `stage-protocol.md` § "For subagent stages" step 2; pass relevant artifact paths and task
    instructions. The named
    harness agent config loads persona and knowledge; do not copy either into
    the prompt.
@@ -583,7 +591,9 @@ checkpoint. Before presenting the command, write it to
 be interpolated into a shell line, where substitutions could execute before
 approval. Both `log decision` and `log answer` take
 `--checkpoint verification-command --command-file verification-command.txt` and
-find the session they run in.
+find the session they run in. Run `log decision` **before showing the question**;
+after showing it, end the turn and wait. Keep an already-pending matching
+question rather than registering it again after the person's reply.
 Copy the complete canonical command exactly from the `command` field in the
 `decision` tool's JSON output into the verification-command question's code span;
 never abbreviate it. Choose a delimiter that preserves any command backticks.
@@ -598,7 +608,9 @@ does not. Never write `--details "Approve"` unless the human chose it; only then
 run `state set-construction-verification-command --command-file verification-command.txt` to write the matching Runtime State
 field. The latest current-workflow `VERIFICATION_COMMAND_RECORDED` receipt is the
 authority, not the field alone. When `command_authorized: false`, route to that
-question before any `verify`, even under autonomy, then re-run `next`. Every
+question before any `verify`, even under autonomy, then re-run `next`. Its
+`gate_note` carries that same registration and answer sequence with the current
+install's commands. Every
 Unit/batch checkpoint reuses the authorized command; changing it requires a new
 receipt and typed setter, never generic `state set`. The approval question shows
 "Verified with `<full command>` (exit 0)", using the complete canonical

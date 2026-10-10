@@ -1741,16 +1741,10 @@ describe("t278 wave protocol parity", () => {
       );
       expectWaveProse(authored);
       expectWaveProse(generated);
-      if (harness.name === "kiro" || harness.name === "kiro-ide") {
-        for (const body of [authored, generated]) {
-          expect(body).toContain(
-            'Deliver the `load-steering` rule bundle per `stage-protocol.md` § "For subagent stages" step 2',
-          );
-          expect(body).toContain("native preload where one exists, verbatim paste otherwise");
-        }
-      } else {
-        expect(authored).toContain("complete steering bundle verbatim");
-        expect(generated).toContain("complete steering bundle verbatim");
+      for (const body of [authored, generated]) {
+        expect(body).toContain(
+          'Deliver the stage\'s rules per `stage-protocol.md` § "For subagent stages" step 2.',
+        );
       }
       expect(authored).toContain(
         "Serialize reviews wherever the single reviewer-scope record is enforced",
@@ -1789,9 +1783,8 @@ describe("t278 wave protocol parity", () => {
     expect(core).toContain("UNIT_COMPLETED");
     expect(core).toContain("accumulated steering bundle");
     expect(core).toContain(
-      'Deliver the `load-steering` rule bundle per `stage-protocol.md` § "For subagent stages" step 2',
+      'Deliver the stage\'s rules per `stage-protocol.md` § "For subagent stages" step 2.',
     );
-    expect(core).toContain("native preload where one exists, verbatim paste otherwise");
     expect(core).not.toContain(
       "read `bolt_dag.batches` from the intent's `runtime-graph.json`",
     );

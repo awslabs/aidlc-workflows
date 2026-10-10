@@ -194,7 +194,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
       "utf-8",
     );
     expect(ensembleProtocol).toContain(
-      "rules as the accumulated `load-steering` bundle",
+      'rules per `stage-protocol.md` § "For subagent stages" step 2',
     );
     expect(existsSync(join(ENGINE, "hooks", "aidlc-deliver-stage-rules.ts"))).toBe(true);
     const questionRendering = readFileSync(

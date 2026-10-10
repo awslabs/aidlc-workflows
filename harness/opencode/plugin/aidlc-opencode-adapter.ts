@@ -856,9 +856,11 @@ export default async ({
       }
 
       if (input.tool === "task") {
+        // Every named dispatch goes to the core guard, which judges only the
+        // developer's and records a reviewer brief that already carries its verdict.
         const target =
           (args.subagent_type as string) ?? (args.agent as string) ?? "";
-        if (target === "aidlc-developer-agent") {
+        if (target !== "") {
           const guard = await runCore(
             "aidlc-plan-approval-guard.ts",
             {

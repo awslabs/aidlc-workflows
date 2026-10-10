@@ -20,6 +20,7 @@ import {
   type KiroLayout,
   knownActiveSpace,
   kiroTreeLayout,
+  quoteCommandArgument,
   resolveHarnessPath,
   runtimeHarnessDir,
   runtimeHarnessName,
@@ -5046,9 +5047,10 @@ export function requireProtectedResponse(
 ): void {
   const question = readProtectedQuestion(projectDir, session);
   const response = readProtectedResponse(projectDir, session);
-  const recovery = expected.kind === "verification-command" ? VERIFICATION_COMMAND_RECOVERY
+  const recovery = expected.kind === "verification-command" ? verificationCommandRecovery()
     : expected.kind === "construction-policy" ? CONSTRUCTION_POLICY_RECOVERY
-    : 'Re-ask with aidlc bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> or aidlc bolt swarm-checkpoint --action ask --batch <number> --units "<units>", then wait for Approve or Request Changes.';
+    : `Re-ask with ${aidlcToolInvocation("bolt")} checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> or ` +
+      `${aidlcToolInvocation("bolt")} swarm-checkpoint --action ask --batch <number> --units "<units>", then wait for Approve or Request Changes.`;
   // The person replied to this exact question (the hook's record); the choice
   // is the one the conductor read from their words. That reply is the
   // person's presence: with it on record, a misrecord is corrected by
@@ -6043,6 +6045,42 @@ export function writeSessionBinding(
   }
 }
 
+// A Codex helper agent's thread, mapped to the chat that spawned it. Codex gives
+// a spawned agent's shell its own CODEX_THREAD_ID and marks that agent's hook
+// payloads with agent_id = that thread id under the root session_id, so the
+// adapter notes the pair the first time it sees it and the resolver reads the
+// root session for the helper's commands. Machine-local runtime state beside the
+// session bindings; a write failure leaves the helper resolving as before.
+function helperSessionPath(projectDir: string, threadId: string): string {
+  const recordPath = sessionRecordPath(projectDir, threadId);
+  return recordPath ? `${recordPath}.helper-of` : "";
+}
+
+export function noteHelperSession(projectDir: string, rootSessionId: string, agentId: string): void {
+  const root = validSessionId(rootSessionId);
+  const agent = validSessionId(agentId);
+  if (!root || !agent || root === agent) return;
+  const path = helperSessionPath(projectDir, agent);
+  if (!path) return;
+  try {
+    if (existsSync(path) && readFileSync(path, "utf-8").trim() === root) return;
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileSync(path, `${root}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+export function helperSessionRoot(projectDir: string, threadId: string): string | null {
+  const path = helperSessionPath(projectDir, threadId);
+  if (!path) return null;
+  try {
+    return validSessionId(readFileSync(path, "utf-8").trim());
+  } catch {
+    return null;
+  }
+}
+
 function sessionRebindOfferPath(projectDir: string, sessionId: string): string {
   const recordPath = sessionRecordPath(projectDir, sessionId);
   return recordPath ? `${recordPath}.rebind-offer` : "";
@@ -6782,9 +6820,12 @@ export function resolveInvokingSessionId(projectDir: string): string | null {
   const overrideSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
   // Codex gives every command it runs CODEX_THREAD_ID, the session id its
   // hooks carry, so a Codex tool needs no override written into the command.
-  const codexSession = overrideSession === null && runtimeHarnessDir(projectDir) === ".codex"
+  // A spawned helper agent's shell carries the helper's own thread id; that
+  // thread resolves to the chat that spawned it (noteHelperSession).
+  const codexThread = overrideSession === null && runtimeHarnessDir(projectDir) === ".codex"
     ? validSessionId(process.env.CODEX_THREAD_ID)
     : null;
+  const codexSession = codexThread === null ? null : helperSessionRoot(projectDir, codexThread) ?? codexThread;
   const envSession = overrideSession ?? codexSession;
   // This refusal is a footgun guard against stale exported overrides, not a
   // security boundary. The SOURCE marker is an internal hookChildEnv contract.
@@ -12345,13 +12386,24 @@ export function authorizedVerificationCommand(
     ? command : null;
 }
 
-export const VERIFICATION_COMMAND_RECOVERY =
-  'Write the proposed command to <record>/verification-command.txt with the harness file-write tool (never shell echo or a heredoc); never interpolate repo-derived command text into a shell line. ' +
-  'Record the human choice with aidlc-log.ts decision --stage "<stage>" --checkpoint verification-command ' +
-  '--command-file verification-command.txt --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes", ' +
-  'then wait for the human\'s offered choice in that session and run aidlc-log.ts answer --stage "<stage>" --checkpoint verification-command --command-file verification-command.txt --details "Approve". ' +
-  'Both commands find the session they run in. ' +
-  'Apply the receipt with aidlc-state.ts set-construction-verification-command --command-file verification-command.txt.';
+// The same sequence rides with an unauthorized checkpoint and its refusals.
+// Registering the question after showing it loses the reply to that question.
+export function verificationCommandRecovery(
+  stage = "<stage>",
+  logInvocation = aidlcToolInvocation("log"),
+  stateInvocation = aidlcToolInvocation("state"),
+): string {
+  const identity = `--stage ${quoteCommandArgument(stage)} --checkpoint verification-command --command-file verification-command.txt`;
+  return "If this command already has a current approval receipt, apply it without asking again. Otherwise, " +
+    "write the proposed command to <record>/verification-command.txt with the harness file-write tool (never shell echo or a heredoc); never interpolate repo-derived command text into a shell line. " +
+    `Before showing the question, register it with \`${logInvocation} decision ${identity} ` +
+    '--decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"`. ' +
+    "Show the returned canonical command and the question with its choices, then end the turn and wait for the person's reply. " +
+    "If that question is already pending, keep it: do not register it again after the reply. " +
+    `Record the choice they made with \`${logInvocation} answer ${identity} --details '<their choice>'\`. ` +
+    "Both commands find the session they run in. Only an Approve receipt authorizes " +
+    `\`${stateInvocation} set-construction-verification-command --command-file verification-command.txt\`.`;
+}
 
 export const CONSTRUCTION_POLICY_CHECKPOINT = "Construction Policy";
 
@@ -15244,6 +15296,10 @@ export interface FreshReviewReceipts {
    *  records an edited review (reviewCompletionEdited). Read only beside
    *  stageVerdict / unitVerdicts, for the one line the gate says. */
   editedVerdicts?: Set<string>;
+  /** Scopes ("" for the stage, else the Unit) whose fresh terminal verdict
+   *  records the verdict its dispatch dictated (reviewCompletionDictated).
+   *  Read only beside stageVerdict / unitVerdicts, for the one line the gate says. */
+  dictatedVerdicts?: Set<string>;
   /**
    * Units with a merge-confirmed Bolt attempt. A name-only attempt is
    * confirmed by its BOLT_COMPLETED row; a slug-backed (worktree) attempt is
@@ -17343,24 +17399,56 @@ export function openReviewRequests(events: ReadonlyArray<AuditShardEvent>): Open
 }
 
 /**
- * The latest SUBAGENT_COMPLETED of `reviewer` that definitely follows `after`
- * (same shard: a later position; another shard: a later timestamp), or null
- * when the reviewer has not finished since. A cross-shard tie reads as not
- * after, so the callers fail open on it.
+ * The latest row of `event` whose `Agent Type` is `reviewer` that definitely
+ * follows `after` (same shard: a later position; another shard: a later
+ * timestamp) and that `accept` admits, or null when there is none. A
+ * cross-shard tie reads as not after, so the callers fail open on it.
  */
+export function latestReviewerRowAfter(
+  events: ReadonlyArray<AuditShardEvent>,
+  event: string,
+  reviewer: string,
+  after: AuditShardEvent,
+  accept: (row: AuditShardEvent) => boolean = () => true,
+): AuditShardEvent | null {
+  let latest: AuditShardEvent | null = null;
+  for (const row of sortAttemptEvents(events)) {
+    if (row.event !== event) continue;
+    if (auditBlockField(row.block, "Agent Type") !== reviewer) continue;
+    if (!attemptEventDefinitelyBefore(after, row)) continue;
+    if (!accept(row)) continue;
+    latest = row;
+  }
+  return latest;
+}
+
+/** The latest SUBAGENT_COMPLETED of `reviewer` definitely after `after`, or null when it has not finished since. */
 export function reviewerCompletionAfter(
   events: ReadonlyArray<AuditShardEvent>,
   reviewer: string,
   after: AuditShardEvent,
 ): AuditShardEvent | null {
-  let latest: AuditShardEvent | null = null;
-  for (const row of sortAttemptEvents(events)) {
-    if (row.event !== "SUBAGENT_COMPLETED") continue;
-    if (auditBlockField(row.block, "Agent Type") !== reviewer) continue;
-    if (!attemptEventDefinitelyBefore(after, row)) continue;
-    latest = row;
-  }
-  return latest;
+  return latestReviewerRowAfter(events, "SUBAGENT_COMPLETED", reviewer, after);
+}
+
+/** The row the plan-approval guard writes when a reviewer dispatch's brief already carries a rendered verdict line. */
+export const REVIEW_VERDICT_DICTATED_EVENT = "REVIEW_VERDICT_DICTATED";
+
+/**
+ * Whether a REVIEW_VERDICT_DICTATED row of `reviewer`, written after this
+ * request's row and naming its id, carried `verdict`: the verdict being recorded
+ * is the one the dispatch dictated. A row naming another request, an earlier
+ * row, or the other verdict is not.
+ */
+export function dispatchDictatedVerdict(
+  events: ReadonlyArray<AuditShardEvent>,
+  reviewer: string,
+  request: OpenReviewRequest,
+  verdict: ReviewVerdict,
+): boolean {
+  const row = latestReviewerRowAfter(events, REVIEW_VERDICT_DICTATED_EVENT, reviewer, request.row, (candidate) =>
+    (auditBlockField(candidate.block, "Request Id") ?? "").split(",").map((id) => id.trim()).includes(request.requestId));
+  return row !== null && auditBlockField(row.block, "Verdict") === verdict;
 }
 
 /** The SUBAGENT_COMPLETED field carrying `<review file>=<sha256 | absent>` per open request. */
@@ -17715,6 +17803,27 @@ export function reviewCompletionEdited(completionBlock: string): boolean {
  *  reviewer finished. */
 export function editedReviewNotice(stageName: string, unit?: string | null): string {
   return `The review file for ${stageName}${unit ? ` (${unit})` : ""} was edited after the reviewer finished.`;
+}
+
+/** The REVIEW_COMPLETED field the logger writes, as `yes`, when the verdict it
+ *  records is the one the reviewer's dispatch already carried (a
+ *  REVIEW_VERDICT_DICTATED row for this request with that verdict): the verdict
+ *  is on record as the dispatch's, not as the reviewer's own judgement. */
+export const REVIEW_DICTATED_FIELD = "Review Verdict Dictated";
+
+/** Whether a REVIEW_COMPLETED row records a verdict its dispatch dictated. Read
+ *  for what the person is told at the gate; it changes no readiness. */
+export function reviewCompletionDictated(completionBlock: string): boolean {
+  return auditBlockField(completionBlock, REVIEW_DICTATED_FIELD) === "yes";
+}
+
+/** The one line the person hears at the gate (strict) or with the verdict
+ *  (relaxed, off) when the review they are deciding on was dispatched with its
+ *  verdict already in the brief, in the person's words: no engine vocabulary. A
+ *  fact, not a judgement: a conductor quoting an earlier review's verdict on a
+ *  re-review carries it too. */
+export function dictatedReviewNotice(stageName: string, unit?: string | null): string {
+  return `The reviewer for ${stageName}${unit ? ` (${unit})` : ""} was told what to conclude before it looked.`;
 }
 
 /**
@@ -19628,6 +19737,7 @@ export function freshReviewReceipts(
     awaitingVerdict: new Set(),
     unfinishedVerdicts: new Set(),
     editedVerdicts: new Set(),
+    dictatedVerdicts: new Set(),
     mergedBoltUnits: new Set(),
     openBoltUnits: new Set(),
     acceptedChanges: [],
@@ -19731,10 +19841,12 @@ export function freshReviewReceipts(
   // an ambiguous matching path fails closed by clearing every unit receipt.
   const recordedRepos = new Set(intentRepos(projectDir));
   const unitVerdicts = new Map<string, ReviewVerdict>();
-  // Read beside the verdicts above: which of them no reviewer gave, and which
-  // record a review edited after the reviewer finished.
+  // Read beside the verdicts above: which of them no reviewer gave, which
+  // record a review edited after the reviewer finished, and which record the
+  // verdict the reviewer's dispatch dictated.
   const unfinishedVerdicts = new Set<string>();
   const editedVerdicts = new Set<string>();
+  const dictatedVerdicts = new Set<string>();
   const unitStale = new Set<string>();
   const unitStaleProgress = new Map<string, StaleReviewProgress>();
   const unitIterations = new Map<string, number>();
@@ -20164,6 +20276,8 @@ export function freshReviewReceipts(
     else unfinishedVerdicts.delete(unit ?? "");
     if (reviewCompletionEdited(e.block)) editedVerdicts.add(unit ?? "");
     else editedVerdicts.delete(unit ?? "");
+    if (reviewCompletionDictated(e.block)) dictatedVerdicts.add(unit ?? "");
+    else dictatedVerdicts.delete(unit ?? "");
     if (unit) {
       unitVerdicts.set(unit, terminalVerdict);
       unitStale.delete(unit);
@@ -20630,6 +20744,7 @@ export function freshReviewReceipts(
     awaitingVerdict,
     unfinishedVerdicts,
     editedVerdicts,
+    dictatedVerdicts,
     mergedBoltUnits,
     openBoltUnits,
     acceptedChanges: [

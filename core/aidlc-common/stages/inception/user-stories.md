@@ -137,8 +137,8 @@ participants, and the Product Leader reviews afterwards (`stage-protocol-reviewe
 **Round 1 — dispatch the mob.** Per stage-protocol-ensemble.md §5 `mode: mob`,
 dispatch exactly the collaborators the directive lists in `support_agents`, in
 parallel against the draft (artifacts by path: the two draft artifacts, the Q&A
-file, requirements.md; rules as the accumulated steering bundle), mutually
-blind. Each WRITES its contribution file at
+file, requirements.md; rules per `stage-protocol.md` § "For subagent stages" step 2),
+mutually blind. Each WRITES its contribution file at
 `<record>/inception/user-stories/contributions/<agent-slug>.md` (§11 format:
 identity-marker first line, Contribution, Positions): design on UX and
 persona fidelity, developer on implementability and story sizing, quality on
