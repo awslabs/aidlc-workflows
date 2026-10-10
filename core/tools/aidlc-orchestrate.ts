@@ -7212,9 +7212,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     emit(printDirective(
       "`next` does not accept `--choice`. " +
       (open && !open.editing
-        ? "Read the person's reply to the open Plan Approval question and record the choice they made with " +
-          `\`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval --details '<their choice>'\`, ` +
-          `then run \`${next}\` with no answer arguments. If they have not replied, wait at that question.`
+        ? planApprovalAnswerStep()
         : `Run \`${next}\` with no answer arguments and follow the step it returns. ` +
           "Record a reply using the answer command issued for that question."),
     ));
@@ -14056,6 +14054,15 @@ function approveArgs(slug: string, flags: ReportFlags): string[] {
   return args;
 }
 
+// The agent's way back to the engine's open Plan Approval question: read the
+// person's reply and record the choice they made, or wait for one. Said the
+// same way wherever an agent's command missed that question.
+function planApprovalAnswerStep(): string {
+  return "Read the person's reply to the open Plan Approval question and record the choice they made with " +
+    `\`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval --details '<their choice>'\`, ` +
+    `then run \`${aidlcToolInvocation("orchestrate")} next\` with no answer arguments. If they have not replied, wait at that question.`;
+}
+
 // Complete the non-stage resume-choice round-trip by ROUTING the choice, not
 // just accepting it. Resuming from the current checkpoint is read-only; the
 // other three choices are mutations, so the directive NAMES the move (the
@@ -14964,7 +14971,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       (flags.userInput?.trim()
         ? `received ${formatReceivedReply(flags.userInput)}, which is cancellation boilerplate, not a decision`
         : "names no choice");
-    emit(personSpokeSinceGate(pd, { replies: true })
+    // While the engine's Plan Approval question is the open one, the gate is
+    // not what the person is answering: the way on is that question's answer
+    // command, whether or not they have replied to it yet.
+    const plan = openPlanApprovalQuestion(pd, "");
+    emit(plan !== null && !plan.editing
+      ? printDirective(
+        `${refused}, and the open question is the Plan Approval question, not the gate for "${slug}". ${planApprovalAnswerStep()}`,
+      )
+      : personSpokeSinceGate(pd, { replies: true })
       ? printDirective(
         `${refused}. The person has replied since the gate was shown: report the choice they made with --user-input ` +
           '("Approve", say), without asking them again.',

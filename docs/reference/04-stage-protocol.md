@@ -156,8 +156,10 @@ and the engine parks the workflow, so `report` answers `parked`.
 
 When a report names no choice, the refusal says what to do: with the person's
 reply on record, report the choice they made from it, without asking again; with
-none, show the gate and wait for one. It does not report a lifecycle transition,
-record a decision, or consume the gate turn for that reply.
+none, show the gate and wait for one. While the engine's Plan Approval question
+is the open one, it names that question's answer command instead of the gate. It
+does not report a lifecycle transition, record a decision, or consume the gate
+turn for that reply.
 
 **No Emergent Behavior Rule:** Construction and Operation stages (phases 3-4)
 must always use this 2-option format. They must never introduce additional
