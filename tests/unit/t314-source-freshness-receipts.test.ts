@@ -1,4 +1,4 @@
-// covers: function:workspaceSourceFingerprint
+// covers: function:workspaceSourceFingerprint, function:unclaimableIgnoredSourceKeys
 // covers: function:gitCommitSourceListing
 // covers: function:unmergedRootSettingsNotices
 // covers: function:withWorkspaceSourceStateCache, subcommand:aidlc-state:gate-start, subcommand:aidlc-state:revise
@@ -2869,6 +2869,91 @@ describe("t314 multi-unit source attribution", () => {
     expect(r.rc).toBe(1);
     expect(r.out).toContain("Unclaimed source changes fail closed");
     expect(r.out).toContain("unreviewed.ts");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // #2244: a build or test run rewrites output the project's .gitignore keeps
+  // out of Git (a tsc outDir, a test runner's run record). No Unit can claim
+  // those paths (the manifest refuses ignored paths as review evidence), so
+  // they are not unclaimed changes either.
+  test("ignored output rewritten during the stage is not counted as unclaimed", () => {
+    writeFileSync(join(proj, ".gitignore"), "/.build/\n/.artifacts/\n", "utf-8");
+    git(proj, ["add", ".gitignore"]);
+    git(proj, ["commit", "-qm", "ignore build output"]);
+    mkdirSync(join(proj, ".build", "scripts", "ci"), { recursive: true });
+    writeFileSync(join(proj, ".build", "scripts", "ci", "bundle.js"), "bundle(1);\n", "utf-8");
+    appendAuditEntry(
+      "WORKFLOW_STARTED",
+      {
+        Scope: "feature",
+        ...sourceBaselineAuditFields(proj, "code-generation"),
+      },
+      proj,
+    );
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "unit code"]);
+    writeFileSync(join(proj, ".build", "scripts", "ci", "bundle.js"), "bundle(2);\n", "utf-8");
+    writeFileSync(join(proj, ".build", "scripts", "ci", "bundle.js.map"), "{}\n", "utf-8");
+    mkdirSync(join(proj, ".artifacts", "run", "browser"), { recursive: true });
+    writeFileSync(join(proj, ".artifacts", "run", "browser", ".last-run.json"), "{\"status\":\"passed\"}\n", "utf-8");
+    expect(() =>
+      recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [
+        { path: "alpha.ts" },
+        { path: ".build/scripts/ci/bundle.js" },
+      ])
+    ).toThrow("is ignored by Git and cannot be source-review evidence");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    expect(gate.rc, gate.out).toBe(0);
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("Unclaimed source changes fail closed");
+    expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // An ignored path a Unit could claim is still counted: a file HEAD tracks
+  // despite the ignore rule, and a path registered in .aidlc-source-paths.json.
+  test("an ignored path a Unit could claim is still refused as unclaimed", () => {
+    writeFileSync(join(proj, ".gitignore"), "/.build/\n/generated/\n", "utf-8");
+    writeFileSync(
+      join(proj, ".aidlc-source-paths.json"),
+      `${JSON.stringify({ version: 1, paths: ["generated/schema.ts"] })}\n`,
+      "utf-8",
+    );
+    mkdirSync(join(proj, ".build"), { recursive: true });
+    writeFileSync(join(proj, ".build", "tracked.ts"), "export const tracked = 1;\n", "utf-8");
+    git(proj, ["add", ".gitignore", ".aidlc-source-paths.json"]);
+    git(proj, ["add", "-f", ".build/tracked.ts"]);
+    git(proj, ["commit", "-qm", "ignore rules, a tracked ignored file, a registered ignored path"]);
+    appendAuditEntry(
+      "WORKFLOW_STARTED",
+      {
+        Scope: "feature",
+        ...sourceBaselineAuditFields(proj, "code-generation"),
+      },
+      proj,
+    );
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    writeFileSync(join(proj, ".build", "tracked.ts"), "export const tracked = 2;\n", "utf-8");
+    mkdirSync(join(proj, "generated"), { recursive: true });
+    writeFileSync(join(proj, "generated", "schema.ts"), "export const schema = 1;\n", "utf-8");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    expect(gate.rc, gate.out).toBe(0);
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc).toBe(1);
+    expect(r.out).toContain("Unclaimed source changes fail closed");
+    expect(r.out).toContain(".build/tracked.ts");
+    expect(r.out).toContain("generated/schema.ts");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // A stage-entry baseline the earlier walk recorded lists .DS_Store and the

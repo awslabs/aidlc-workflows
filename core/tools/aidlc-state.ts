@@ -196,6 +196,7 @@ import {
   stageGateApproval,
   swarmConvergedUnits,
   teamUnitGateStatus,
+  unclaimableIgnoredSourceKeys,
   unitCompletedReceipts,
   unitGateStatus,
   unitMajorConstructionStageSlugs,
@@ -4569,12 +4570,15 @@ function verifyReviewerPrecondition(
     }
     const claimModels = [...receipts.freshUnitClaims.values()];
     // AI-DLC's own files (its .gitignore block, AGENTS.md, a second tool's
-    // install) are no Unit's to claim.
+    // install) are no Unit's to claim, and neither is a path Git ignores that
+    // a source manifest refuses to claim (build output, a test run's record).
     const aidlcOwned = aidlcOwnedSourceKey(pd);
-    baselineUnclaimed = [...baselineChanged]
-      .filter((pathKey) =>
-        !aidlcOwned(pathKey) && !claimModels.some((claims) => sourceClaimCovers(pathKey, claims))
-      )
+    const outsideClaims = [...baselineChanged].filter((pathKey) =>
+      !aidlcOwned(pathKey) && !claimModels.some((claims) => sourceClaimCovers(pathKey, claims))
+    );
+    const unclaimable = unclaimableIgnoredSourceKeys(pd, outsideClaims);
+    baselineUnclaimed = outsideClaims
+      .filter((pathKey) => !unclaimable.has(pathKey))
       .sort();
   }
   const resolutionForReconciliation = perUnit ? resolveBoltDag(pd) : null;
