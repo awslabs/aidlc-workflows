@@ -1316,15 +1316,18 @@ person has arrived since the last decision, refuses with:
 > Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
 Direct `scope change --guard-policy relaxed|off` uses the same rule. Direct
-`intent create --guard-policy relaxed|off` from chat is refused when the value
-is below that default (`relaxed` on an `off` scope is a raise and applies):
-create the piece of work, and the agent runs the setter when the person asks for the lower value. Typed by the person before the work exists, or in the same message as new work, Guard Policy `relaxed` or `off` is kept for the piece of work this chat starts next and answers that request: `intent create --request <id>` for it records `Guard Policy: <value> (set by you)`, with or without the flag, and any open work keeps its own policy. Naming the scope's own default at creation records the scope's
+`intent create --guard-policy relaxed|off` from chat is carried out when the
+person has asked for it in this chat, the way the setter is on work already under
+way: their message is the authority behind it, and the new work records
+`Guard Policy: <value> (set by you)`. Before any work exists that message is the
+one the hook kept as it arrived; once work exists it is their turn since the last
+decision. A command the person runs at their own terminal carries itself. Typed by the person before the work exists, or in the same message as new work, Guard Policy `relaxed` or `off` is kept for the piece of work this chat starts next and answers that request: `intent create --request <id>` for it records `Guard Policy: <value> (set by you)`, with or without the flag, and any open work keeps its own policy. Naming the scope's own default at creation records the scope's
 value without another prompt. A running workflow moving to a scope with a lower
 default takes it when the person asked for the scope change; otherwise it keeps
-its stricter policy and says so in one line. Creation that would lower the
-policy to `relaxed` refuses with:
+its stricter policy and says so in one line. With no message of theirs on record
+in this chat, creation refuses with:
 
-> Creating this intent with Guard Policy relaxed would lower fences, which is the person's call. Create it, then, when they ask for it in their own words, run `aidlc engine config set guard-policy relaxed` yourself and say in one line what changed. A scope default applies without asking.
+> Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
 The `off` refusals use `off` in place of `relaxed`; unattended runs also receive
 the driver guidance. When the person picks a guard-recovery `lower-fence`

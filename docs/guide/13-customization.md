@@ -245,9 +245,11 @@ words, or a Guard Policy or fence switch, together with the settings typed
 beside it), or when the agent turns off a check you asked it to turn off in the
 chat. Sensors, learnings or summary confirmation you type with a request
 (`/aidlc --learnings on build the export`), or before any work exists, also
-read `set by you` on the work that request creates. Any other change, including
-a flag the agent adds to the command that starts new work, is made by a command
-the agent or a script runs and reads `set by a command`. A change to work already under way records `CEREMONY_SET`
+read `set by you` on the work that request creates. So does plan approval or a
+Guard Policy the command that starts new work carries once you have asked for it
+in that chat: the engine puts your words behind the flag rather than the command.
+A flag the agent adds on its own, with no message of yours behind it, is made by
+a command the agent or a script runs and reads `set by a command`. A change to work already under way records `CEREMONY_SET`
 either way; a flag on the command that starts new work is stored in the new
 state file without one. Turning summary
 confirmation or plan approval off for work already under way needs your own
@@ -469,9 +471,9 @@ A setter that would change the policy to `relaxed`, run when no reply from you h
 
 > Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
-Creation with an explicit `relaxed` flag says:
+Creation with an explicit `relaxed` flag, run with no message of yours on record in that chat, says the same:
 
-> Creating this intent with Guard Policy relaxed would lower fences, which is the person's call. Create it, then, when they ask for it in their own words, run `aidlc engine config set guard-policy relaxed` yourself and say in one line what changed. A scope default applies without asking.
+> Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
 Other fence names and `off` use the corresponding name or value; unattended runs append the driver guidance. Memory-held strict refuses before applying a switch or checking a bypass and instead names the memory file to edit. A human-presence refusal names no switch; it says no reply from the person is on record and what happened to one they already sent (the harness's hook steps, or `/aidlc --doctor`), and never asks them to reply again.
 

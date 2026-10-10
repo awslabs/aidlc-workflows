@@ -644,13 +644,23 @@ describe("t114 help-request routing", () => {
 
   // Live (Claude Code, poc and express): the request printed AI-DLC's version
   // and started nothing, so the person had to say it again.
-  test("a utility flag inside a description stays part of the request", () => {
+  // A flag-shaped word inside a description is never AI-DLC's own utility, and
+  // it is never read as one. What it IS depends on what the person meant, which
+  // only the agent can tell, so `next` takes nothing from the line and names
+  // what it could not take; one re-run with the delimiter keeps their words
+  // whole, flag-shaped word and all.
+  test("a utility flag inside a description is not run, and survives the delimiter", () => {
     for (const flag of ["--version", "--status", "--help", "--doctor"]) {
       proj = createOrchestrationTestProject();
       const said = `add a ${flag} flag that prints the version from package.json`;
-      const out = runNext(proj, said.split(" ")).out;
-      expect(out, flag).toContain('"kind":"ask"');
-      expect(out, flag).not.toContain(" version`, print its output verbatim");
+      const first = runNext(proj, said.split(" "));
+      expect(first.out, flag).toContain('"kind":"print"');
+      expect(first.out, flag).toContain(flag);
+      expect(first.out, flag).not.toContain(" version`, print its output verbatim");
+      expect(first.out, flag).not.toContain('"narration"');
+      const again = runNext(proj, ["--", said]).out;
+      expect(again, flag).toContain('"kind":"ask"');
+      expect(again, flag).toContain(said);
       cleanupTestProject(proj);
       proj = "";
     }
@@ -1745,15 +1755,22 @@ describe("t114 retired flags are consumed, not description text", () => {
     expect(pendingDescription(proj, out)).toBe("build auth across both repos");
   });
 
-  test("genuinely unknown flag-looking tokens remain lossless task text (#847)", () => {
+  test("genuinely unknown flag-looking tokens stay lossless, through the delimiter (#847)", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
+    // The engine takes no `--dark-mode`, so it starts no work named after it
+    // and tells the agent what it could not take.
+    const first = runNext(proj, ["--new-intent", "--scope", "poc", "a dashboard with", "--dark-mode"]).out;
+    expect(first).toContain('"kind":"print"');
+    expect(first).toContain("--dark-mode");
+    expect(first).not.toContain("intent create");
+    // Marked as the person's words, every token of theirs reaches creation.
     const out = runNext(proj, [
       "--new-intent",
       "--scope",
       "poc",
-      "a dashboard with",
-      "--dark-mode",
+      "--",
+      "a dashboard with --dark-mode",
     ]).out;
     expect(out).toContain("intent create");
     expect(pendingDescription(proj, out)).toBe("a dashboard with --dark-mode");
@@ -1775,7 +1792,7 @@ describe("t114 retired flags are consumed, not description text", () => {
   });
 
   test.each([
-    [["document", "--choice", "in the CLI"], "document --choice in the CLI"],
+    [["--", "document", "--choice", "in the CLI"], "document --choice in the CLI"],
     [["--", "--choice", "Approve Plan"], "--choice Approve Plan"],
     [["--", "--choice=Approve Plan"], "--choice=Approve Plan"],
   ])("a literal --choice remains work the person requested: %j", (words, description) => {
