@@ -6170,8 +6170,8 @@ function sensorStateAtGate(pd: string, stage: GateStage): string {
 
 // What the person hears when a gate opens, or is shown again, while a check
 // still fails on a declared output (#2201): one line per failing check, in
-// plain words, with the detail file the agent corrects from (stage protocol
-// section 14), at most three lines and then a count. The orchestrator carries
+// plain words (the agent corrects from the detail file the stage protocol's
+// section 14 names), at most three lines and then a count. The orchestrator carries
 // them in the gate reply's `narration`, beside what the stage produced, which
 // every harness's agent says to the person with the approval question. Nothing
 // is re-fired; a check that passed later, or never ran, says nothing, and an
@@ -6192,10 +6192,10 @@ export function failedCheckNotices(pd: string, stage: GateStage, unit: string | 
   } catch {
     return [];
   }
-  const lines = failed.slice(0, FAILED_CHECK_LINES).map(({ id, rel, findings, detail }) => {
+  const lines = failed.slice(0, FAILED_CHECK_LINES).map(({ id, rel, findings }) => {
     const check = id.endsWith("check") ? id : `${id} check`;
     const count = /^\d+$/.test(findings) ? `${findings} finding${findings === "1" ? "" : "s"}` : "findings";
-    return `The ${check} reports ${count} in ${basename(rel)}${detail ? ` (details: ${detail})` : ""}.`;
+    return `The ${check} reports ${count} in ${basename(rel)}.`;
   });
   const more = failed.length - lines.length;
   if (more > 0) lines.push(`${more} more check${more === 1 ? " reports" : "s report"} findings on this stage's outputs.`);

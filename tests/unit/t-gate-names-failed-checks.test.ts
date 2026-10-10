@@ -132,12 +132,12 @@ describe("t-gate-names-failed-checks: a check that still fails is said with the 
   });
   afterEach(() => cleanupTestProject(proj));
 
-  test("opening the gate names the failing check, the file, the count and the detail file, in one line", () => {
+  test("opening the gate names the failing check, the file and the count, in one line", () => {
     const rel = outputPath(writeArtifact("feasibility-assessment"));
     sensorRow("SENSOR_FAILED", "aaaa0002", rel, 3);
     const opened = openGate();
     expect(opened.narration).toContain(
-      `The required-sections check reports 3 findings in feasibility-assessment.md (details: ${DETAIL("aaaa0002")}).`,
+      `The required-sections check reports 3 findings in feasibility-assessment.md.`,
     );
     // The change lines stay what changed: a failing check is not a change.
     expect(opened.change_notices).toBeUndefined();
@@ -154,7 +154,7 @@ describe("t-gate-names-failed-checks: a check that still fails is said with the 
     const shown = shownAgain();
     expect(shown.gate_only, JSON.stringify(shown)).toBe(true);
     expect(shown.narration).toContain(
-      `The required-sections check reports 1 finding in feasibility-assessment.md (details: ${DETAIL("aaaa0002")}).`,
+      `The required-sections check reports 1 finding in feasibility-assessment.md.`,
     );
     expect(shown.change_notices).toBeUndefined();
     sensorRow("SENSOR_PASSED", "aaaa0003", rel);
@@ -182,7 +182,7 @@ describe("t-gate-names-failed-checks: a check that still fails is said with the 
     sensorRow("SENSOR_FAILED", "aaaa0003", raid, 4);
     sensorRow("SENSOR_FAILED", "aaaa0004", assessment, 5, "upstream-coverage");
     const narration = String(openGate().narration ?? "");
-    expect(narration.match(/The [a-z-]+ check reports \d+ findings? in [a-z-]+\.md \(details: /g) ?? []).toHaveLength(3);
+    expect(narration.match(/The [a-z-]+ check reports \d+ findings? in [a-z-]+\.md\./g) ?? []).toHaveLength(3);
     expect(narration).toContain("1 more check reports findings on this stage's outputs.");
   });
 
@@ -211,7 +211,7 @@ describe("t-gate-names-failed-checks: a check that still fails is said with the 
     sensorRow("SENSOR_PASSED", "aaaa0003", rel, 1, "required-sections", "tool-unavailable");
     const opened = openGate();
     expect(opened.narration).toContain(
-      `The required-sections check reports 3 findings in feasibility-assessment.md (details: ${DETAIL("aaaa0002")}).`,
+      `The required-sections check reports 3 findings in feasibility-assessment.md.`,
     );
     sensorRow("SENSOR_PASSED", "aaaa0004", rel);
     const again = shownAgain();
@@ -323,7 +323,7 @@ describe("t-gate-names-failed-checks: a team's Unit gate names that Unit's outpu
     expect(gate.kind, JSON.stringify(gate)).toBe("print");
     const narration = String(gate.narration ?? "");
     expect(narration).toContain(
-      `The required-sections check reports 2 findings in functional-spec.md (details: ${DETAIL("aaaa0011")}).`,
+      `The required-sections check reports 2 findings in functional-spec.md.`,
     );
     expect(narration).not.toContain("5 findings");
     expect(gate.change_notices).toBeUndefined();
