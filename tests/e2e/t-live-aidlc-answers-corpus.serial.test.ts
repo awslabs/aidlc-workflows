@@ -106,7 +106,9 @@ function endReached(item: AnswersItem, proj: string, start: Start): boolean {
   if (now === "none") return false;
   return now.toLowerCase().includes(end.recorded.toLowerCase().split(" ")[0]) || end.recorded.toLowerCase().includes(now.toLowerCase());
 }
-const asksAllowed = (item: AnswersItem): number => item.expected.end.asks;
+// How many questions the item allows after the reply. A non-answer (the host's cancellation text, an empty line: the
+// corpus keeps no words for it) leaves the question standing, so showing it again is not asking twice.
+const asksAllowed = (item: AnswersItem): number => item.expected.engine.words === null ? Math.max(item.expected.end.asks, 1) : item.expected.end.asks;
 const SETTING_FIELDS: Record<string, string> = { "plan-approval": "Plan Approval", review: "Review", "guard-policy": "Guard Policy" };
 
 // The end state against `expected.end`, and the record against the typed line.
@@ -179,6 +181,8 @@ function firstPrompt(item: AnswersItem, harness: LiveHarness): string | null {
   return line === null ? null : harness === "codex" ? line.replace(/^\/aidlc/, "$aidlc") : line;
 }
 
+class DriveLedgerRefusal extends Error {}
+
 const REAL_CODEX_HOME = join(homedir(), ".codex");
 // Answering one question takes the agent a handful of tool calls; a drive still running past this many after the reply
 // has left the question behind (a runaway into later stages), and what it did there is not what the item judges.
@@ -229,6 +233,12 @@ async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutco
           return (reachedAt !== null && results.length > reachedAt + 1) || (replied && since > REPLY_TOOL_BUDGET);
         },
         timeoutMs: remainingOperationTimeoutMs(CASE_TIMEOUT_MS),
+      }).catch((e: unknown) => {
+        // The driver's own ledger refuses a drive whose decisions no turn of the person backs (a box submission backs
+        // as many decisions as it carried picks: one pick that approves every plan of a group writes one row per plan).
+        // That is the drive's accounting, reported as such; the item is not judged.
+        if (e instanceof Error && /recorded \d+ decision\(s\) as the person's/.test(e.message)) throw new DriveLedgerRefusal(e.message);
+        throw e;
       });
       // What the person read after their reply: the prose after turn 1 (chat), or after the box they answered (picker);
       // every box after the question itself is a question put to the person after their reply.
@@ -273,6 +283,11 @@ async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutco
     const setup = first === null ? null : showsQuestion(item, firstText);
     // A reply to a question the agent never showed judges nothing about the reply: the setup line stands alone.
     return { item, harness, prompt: said, failures: setup !== null ? [setup, ...driveFailures] : [...driveFailures, ...failures], endSummary, transcript: { ...transcript, text: `[shown first]\n${firstText}\n[after the reply]\n${transcript.text}` } };
+  } catch (e) {
+    if (e instanceof DriveLedgerRefusal) {
+      return { item, harness, prompt: said, failures: [`drive: ${e.message.replace(/\s+/g, " ").trim()}`], endSummary: "drive aborted by its ledger", transcript: { tools: [], text: firstText, asks: null } };
+    }
+    throw e;
   } finally {
     cleanup();
   }
