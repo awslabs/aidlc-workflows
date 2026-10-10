@@ -454,7 +454,11 @@ applicable unit has fresh modern evidence, completion compares baseline to the
 current listing. Under Guard Policy strict it refuses any changed
 application-source path outside the fresh claims union; under relaxed or off it
 records those paths once as `CHANGE_ACCEPTED` (checkpoint `review-receipt`) and
-names them to the person in one line. Unit-major Construction always uses the workflow/jump
+names them to the person in one line. A path Git ignores that is neither
+tracked at HEAD nor registered in `.aidlc-source-paths.json` is left out of that
+comparison: a source manifest refuses it as review evidence, so no Unit can
+claim it (build output or a test run's record the project's `.gitignore` keeps
+out of Git). It stays in the fingerprint and listing. Unit-major Construction always uses the workflow/jump
 boundary because source work can precede its late `STAGE_STARTED`. Equal-second
 cross-shard rows that would decide a boundary or newest claimant fail closed
 instead of trusting shard filename order.

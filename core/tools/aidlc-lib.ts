@@ -25193,6 +25193,68 @@ function sourcePathIsRegistered(
   return false;
 }
 
+// A path Git ignores is source evidence a Unit may claim only when it is
+// registered in .aidlc-source-paths.json, or when the claim names a file HEAD
+// already tracks.
+function ignoredPathClaimable(
+  sourceRepoDir: string,
+  literalPath: string,
+  trackedFileClaim: boolean,
+  carriesWorkspaceShell: boolean,
+): boolean {
+  return trackedFileClaim ||
+    sourcePathIsRegistered(sourceRepoDir, carriesWorkspaceShell, literalPath);
+}
+
+/**
+ * The source keys (`<repo>\0<path>`) among `keys` that no Unit can claim
+ * because Git ignores them: the paths a source manifest refuses as review
+ * evidence (`ignoredSourceClaimReason`). A path whose ignore rule or HEAD
+ * membership cannot be read is not returned.
+ */
+export function unclaimableIgnoredSourceKeys(
+  projectDir: string,
+  keys: readonly string[],
+): Set<string> {
+  const unclaimable = new Set<string>();
+  if (keys.length === 0) return unclaimable;
+  let recordedRepos: string[];
+  try {
+    recordedRepos = intentRepos(projectDir);
+  } catch {
+    return unclaimable;
+  }
+  const carriesWorkspaceShell = recordedRepos.length === 0;
+  const sourceClaimValidation: GitSourceClaimValidationCache = new Map();
+  const candidates: { key: string; sourceRepoDir: string; path: string }[] = [];
+  for (const key of keys) {
+    const parsed = splitSourcePathKey(key);
+    if (parsed === null) continue;
+    const sourceRepoDir = parsed.repo === "" ? projectDir : repoDir(projectDir, parsed.repo);
+    if (!isGitRepoDir(sourceRepoDir)) continue;
+    seedGitSourceClaimIgnorePath(sourceRepoDir, parsed.path, sourceClaimValidation);
+    candidates.push({ key, sourceRepoDir, path: parsed.path });
+  }
+  for (const { key, sourceRepoDir, path } of candidates) {
+    const ignored = gitSourceClaimIgnored(sourceRepoDir, `./${path}`, sourceClaimValidation);
+    if (!ignored.ok || !ignored.ignored) continue;
+    const { treeModes } = gitSourceClaimHeadAndTree(sourceRepoDir, sourceClaimValidation);
+    if (treeModes === null) continue;
+    const headMode = treeModes.get(path);
+    let currentIsDirectory = false;
+    try {
+      currentIsDirectory = lstatSync(join(sourceRepoDir, path)).isDirectory();
+    } catch {
+      // A deleted path is checked against HEAD alone.
+    }
+    const trackedFile = headMode !== undefined && headMode !== "040000" && !currentIsDirectory;
+    if (!ignoredPathClaimable(sourceRepoDir, path, trackedFile, carriesWorkspaceShell)) {
+      unclaimable.add(key);
+    }
+  }
+  return unclaimable;
+}
+
 function ignoredSourceClaimReason(
   sourceRepoDir: string,
   path: string,
@@ -25251,15 +25313,15 @@ function ignoredSourceClaimReason(
   }
   if (ignored.ignored) {
     if (
-      sourcePathIsRegistered(
+      ignoredPathClaimable(
         sourceRepoDir,
-        carriesWorkspaceShell,
         literalPath,
+        !prefix && headTracked && !currentIsDirectory,
+        carriesWorkspaceShell,
       )
     ) {
       return null;
     }
-    if (!prefix && headTracked && !currentIsDirectory) return null;
     return `${JSON.stringify(path)} is ignored by Git and cannot be source-review evidence`;
   }
   if (!prefix && currentIsDirectory) {
