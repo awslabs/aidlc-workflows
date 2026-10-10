@@ -143,9 +143,10 @@ const KIRO_ACP_CLIENT = "If you drive Kiro from an ACP client, the Kiro IDE guid
 const KIRO_CLI_ACP_STEP = `${KIRO_CLI_RESTART}. ${KIRO_ACP_CLIENT}`;
 
 // The agent's own step when the hooks never ran: the new chat never saw the
-// request, which the engine keeps for the first bare entry there, so the
-// person is told to type it. The missed-reply line is shown unfilled, so
-// <entry> stays out of the constant it shares.
+// request, so the person is told to type the entry there. With no workflow
+// selected the engine keeps the request for that first bare entry; inside a
+// workflow the entry resumes from saved state. The missed-reply line is shown
+// unfilled, so <entry> stays out of the constant it shares.
 const KIRO_CLI_ACP_RESTART_STEP = `${KIRO_CLI_RESTART}, then type <entry> to carry on. ${KIRO_ACP_CLIENT}`;
 
 // The words the agent relays when the person's answer was not recorded.
