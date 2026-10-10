@@ -1,4 +1,4 @@
-// covers: function:codexWords, function:codexExecArgs
+// covers: function:codexWords, function:codexExecArgs, function:codexResumeArgs
 //
 // The live input check reads what Codex said to the person out of `codex exec` output, and hands Codex the typed line.
 // Three ways that capture once blamed the agent for the tool's own output: codex exec prints the workspace diff after
@@ -7,7 +7,7 @@
 // error was judged as the agent's words; and without any message marker the whole output stood as the agent's words.
 import { describe, expect, test } from "bun:test";
 import { codexWords } from "../harness/aidlc-input-corpus.ts";
-import { codexExecArgs } from "../harness/exec-drive.ts";
+import { codexExecArgs, codexResumeArgs } from "../harness/exec-drive.ts";
 
 const EVENT_LOG = [
   "OpenAI Codex v0.160.0",
@@ -67,6 +67,13 @@ describe("the typed line reaches Codex as the prompt", () => {
       const argv = codexExecArgs(line);
       expect(argv.at(-1), line).toBe(line);
       expect(argv.at(-2), `${line}: options end before the prompt`).toBe("--");
+    }
+  });
+
+  test("the person's next turn resumes the newest session with the typed line whole (codex exec takes the lone positional after --last as the prompt)", () => {
+    for (const line of ["approve", "--change-control strict", "resume", "$aidlc yes"]) {
+      const argv = codexResumeArgs(line);
+      expect(argv.slice(-4), line).toEqual(["resume", "--last", "--", line]);
     }
   });
 });

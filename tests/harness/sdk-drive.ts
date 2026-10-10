@@ -515,6 +515,8 @@ export interface DriveTurnEnd {
   askedQuestions: number;
   toolResults: number;
   stopHooks: number;
+  /** The assistant's prose so far (a prefix of DriveResult.assistantText): what the person had read when this turn ended. */
+  assistantText: string;
 }
 
 /** One Stop hook run, from the SDK's hook_response event. */
@@ -774,6 +776,7 @@ export async function driveAidlc(
       askedQuestions: askedQuestions.length,
       toolResults: toolResults.length,
       stopHooks: stopHooks.length,
+      assistantText,
     };
     turns.push(ended);
     const next = resultEvent?.is_error ? undefined : opts.nextMessage?.(ended);

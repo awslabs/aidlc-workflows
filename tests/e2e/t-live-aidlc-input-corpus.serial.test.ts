@@ -15,119 +15,40 @@
 // Sample: AIDLC_INPUT_SAMPLE = a comma list of item ids, or a number per category (default 3), seeded by
 // AIDLC_INPUT_SEED (default 1), from the items that carry `expected.end` and wait for nothing.
 // Harnesses: AIDLC_INPUT_HARNESSES (default claude,codex,kiro).
+// The mechanics shared with the answers corpus's live check live in tests/harness/live-corpus.ts.
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, relative } from "node:path";
-import {
-  LIVE_COMMAND_TIMEOUT_MS,
-  LIVE_SETUP_TIMEOUT_MS,
-  NATIVE_STARTUP_TIMEOUT_MS,
-  liveCaseTimeoutMs,
-  remainingOperationTimeoutMs,
-} from "../harness/test-budget.ts";
-import { REPO_ROOT, cleanupTestProject, seedAidlcMemory, seedWorkspaceShell, setupIntegrationProject } from "../harness/fixtures.ts";
-import { execCodex, setupCodexProject } from "../harness/exec-drive.ts";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { LIVE_COMMAND_TIMEOUT_MS, LIVE_SETUP_TIMEOUT_MS, liveCaseTimeoutMs, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { REPO_ROOT } from "../harness/fixtures.ts";
+import { execCodex } from "../harness/exec-drive.ts";
 import { driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 import { driveAidlc } from "../harness/sdk-drive.ts";
-import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
+import {
+  HOMES, drivesHome, homeDigest, judgeText, liveGate, liveHarnesses, liveProject, sampleByGroup, writeLiveReport,
+  type HomeDigest, type LiveHarness, type LiveOutcome, type Transcript,
+} from "../harness/live-corpus.ts";
 import { CORPUS, buildState, codexWords, itemEnv, messageRecord, typedPrompt, waitsFor, type CorpusItem } from "../harness/aidlc-input-corpus.ts";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { getField, listIntents, readAuditShardEvents, stateFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(LIVE_SETUP_TIMEOUT_MS);
 
-type LiveHarness = "claude" | "codex" | "kiro";
 const LIVE = process.env.AIDLC_INPUT_LIVE === "1";
-const KNOWN_HARNESSES: readonly LiveHarness[] = ["claude", "codex", "kiro"];
-// The agents this run drives, each named exactly: a name this check does not know (a typo of one) stops the file here,
-// before any agent runs, instead of falling through to one the person did not choose.
-const HARNESSES = [...new Set((process.env.AIDLC_INPUT_HARNESSES ?? "claude,codex,kiro").split(",").map((s) => s.trim()).filter(Boolean))].map((name) => {
-  if (!(KNOWN_HARNESSES as readonly string[]).includes(name)) throw new Error(`AIDLC_INPUT_HARNESSES names ${JSON.stringify(name)}, which this check does not drive; it knows ${KNOWN_HARNESSES.join(", ")}`);
-  return name as LiveHarness;
-});
+const HARNESSES = liveHarnesses(process.env.AIDLC_INPUT_HARNESSES, "AIDLC_INPUT_HARNESSES");
 const CASE_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_COMMAND_TIMEOUT_MS);
 const REPORT_DIR = process.env.AIDLC_INPUT_REPORT_DIR ?? join(REPO_ROOT, "tests", "logs", "aidlc-input-live");
+const gate = (harness: LiveHarness): string | null => liveGate(harness, LIVE, "set AIDLC_INPUT_LIVE=1 to drive the input corpus through real agents (spends tokens)");
 
-function gate(harness: LiveHarness): string | null {
-  if (!LIVE) return "set AIDLC_INPUT_LIVE=1 to drive the input corpus through real agents (spends tokens)";
-  if (harness === "claude" && !Bun.which("claude")) return "claude binary not found";
-  if (harness === "codex" && process.env.AIDLC_CODEX_EXEC_LIVE !== "1") return "set AIDLC_CODEX_EXEC_LIVE=1 for the Codex half";
-  if (harness === "codex" && !Bun.which(process.env.AIDLC_CODEX_BIN ?? "codex")) return "codex binary not found";
-  if (harness === "kiro" && process.env.AIDLC_KIRO_ACP_LIVE !== "1") return "set AIDLC_KIRO_ACP_LIVE=1 for the Kiro CLI half";
-  if (harness === "kiro" && !Bun.which("kiro-cli")) return "kiro-cli binary not found";
-  return null;
-}
-
-// A seeded sample so a re-run drives the same items.
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 function sample(): CorpusItem[] {
   // Hooks-off items need the host's hooks not to run; a real agent session runs them, so they stay with the unit check.
   const eligible = CORPUS.filter((item) => item.expected.end !== undefined && waitsFor(item) === null && item.state !== "hooks-off");
-  const spec = process.env.AIDLC_INPUT_SAMPLE ?? "3";
-  if (/^\d+$/.test(spec) === false) {
-    const ids = new Set(spec.split(",").map((s) => s.trim()));
-    return eligible.filter((item) => ids.has(item.id));
-  }
-  const perCategory = Number.parseInt(spec, 10);
-  const random = mulberry32(Number.parseInt(process.env.AIDLC_INPUT_SEED ?? "1", 10) || 1);
-  const out: CorpusItem[] = [];
-  for (const category of [...new Set(eligible.map((i) => i.category))]) {
-    const pool = eligible.filter((i) => i.category === category);
-    for (let i = pool.length - 1; i > 0; i--) {
-      const j = Math.floor(random() * (i + 1));
-      [pool[i], pool[j]] = [pool[j], pool[i]];
-    }
-    out.push(...pool.slice(0, perCategory));
-  }
-  return out;
+  return sampleByGroup(eligible, process.env.AIDLC_INPUT_SAMPLE ?? "3", process.env.AIDLC_INPUT_SEED, (item) => item.category);
 }
 const SAMPLE = sample();
 
-// The real homes, listed and hashed: path, size and mtime of every file outside logs and caches.
-function homeDigest(dir: string): { digest: string; files: Map<string, string> } {
-  const files = new Map<string, string>();
-  const walk = (d: string): void => {
-    if (!existsSync(d)) return;
-    for (const entry of readdirSync(d, { withFileTypes: true })) {
-      const path = join(d, entry.name);
-      // Claude Code rotates backups/.claude.json.backup.<ts> on its own start, in the real home even under an
-      // ephemeral CLAUDE_CONFIG_DIR: the tool's doing, not AI-DLC's, so it is left out like the logs.
-      // Claude Code also writes its own session artifacts into the real home (teams/<session>, plugins/store, a
-      // plugin's marker dotfile) under an ephemeral CLAUDE_CONFIG_DIR: the tool's doing, left out like the logs.
-      if (/(^|\/)(logs?|cache|caches|telemetry|tmp|shell-snapshots|projects|statsig|todos|sessions|backups|file-history|teams|plugins|paste-cache|history\.jsonl|\.last-cleanup|\.[a-z-]+-active)$/.test(path)) continue;
-      if (entry.isDirectory()) walk(path);
-      else if (entry.isFile()) {
-        const s = statSync(path);
-        files.set(relative(dir, path), `${s.size}:${Math.floor(s.mtimeMs)}`);
-      }
-    }
-  };
-  walk(dir);
-  const digest = createHash("sha256").update([...files.entries()].sort().map(([p, v]) => `${p} ${v}`).join("\n")).digest("hex");
-  return { digest, files };
-}
-// Each tool's real home, hashed strictly before and after. A home this run drives must come back unchanged; a home
-// of a tool this run does not drive can change under another process on the same box (another live run, the tool's
-// own daemon), which the report names as such rather than hiding.
-const HOMES = ["claude", "codex", "kiro"].map((name) => join(homedir(), `.${name}`));
-const drivesHome = (home: string): boolean => HARNESSES.some((h) => home.endsWith(`.${h}`)) || home.endsWith(".claude");
-const before = new Map<string, ReturnType<typeof homeDigest>>();
-
-interface Transcript { tools: string[]; text: string; asks: number | null; raw?: string }
-interface Outcome { item: CorpusItem; harness: LiveHarness; prompt: string; failures: string[]; endSummary: string; transcript: Transcript }
+const before = new Map<string, HomeDigest>();
+type Outcome = LiveOutcome<CorpusItem>;
 const outcomes: Outcome[] = [];
 
 interface Snapshot { records: number; active: string | null; stateFile: string }
@@ -215,71 +136,10 @@ function judge(item: CorpusItem, proj: string, prompt: string, start: Snapshot, 
   return { failures, endSummary: summary };
 }
 
-// What the agent told the person, judged by a model against MEANING and a short rubric (Arden, 2026-10-10): plain
-// words, no engine terms, a question only where the item is ambiguous. What happened on disk stays a script above.
-// The judge runs `claude -p` with no tools from an empty folder and its own config dir, so no hook and no home is
-// touched; its verdict is one JSON line.
 let judgeDir = "";
-async function judgeText(item: CorpusItem, text: string): Promise<string | null> {
-  if (text.trim().length === 0) return "the agent said nothing to the person before carrying on (no line about what it did)";
-  const rubric = [
-    "You judge one reply an AI assistant gave to a person who typed a line in a software project tool.",
-    `The person typed: ${JSON.stringify(typedPrompt(item))}`,
-    `What the person meant: ${item.meaning}`,
-    asksAllowedFor(item) > 0
-      ? "A question back to the person is allowed once: the meaning leaves one choice to the person or the line is ambiguous. A reply that asks that one question plainly passes; so does a reply that acts consistently with the meaning without asking."
-      : "A question back to the person is not allowed: the meaning is clear and the person asked for nothing to be confirmed.",
-    "The reply passes when all three hold: (1) it says in plain words what was done, or what the person now needs to decide, consistent with what they meant; " +
-      "(2) it shows the person no engine internals: no bun or script command lines, no tool names such as aidlc-*.ts, no JSON or raw field names, no words such as directive, orchestrate, hook, kind, and no engine files (anything under .claude, .codex, .kiro, .aidlc-engine or .aidlc-sessions, or named aidlc-*; the state and audit files). " +
-      "The product's own words are fine and expected: a /aidlc line the person could type next (with its documented flags), the words intent, space, scope, stage, gate, plan and unit, stage names (Requirements Analysis, Code Generation), settings (Guard Policy, plan approval, depth), a progress line, and ordinary English such as 'the next step'. " +
-      "The person's own project files, requirements and tests may be named, and so may the documents the work produces for them (the plan, requirements, questions and review files, with their path under aidlc/spaces); " +
-      "(3) it asks a question only where allowed above; one question with several options is one question. Judge the assistant's words to the person, not its work log; a short confirmation of what happened is a pass.",
-    'Answer with one line of JSON only, nothing else: {"ok": true or false, "reason": "<one sentence>"}',
-    "The reply to judge follows.",
-    text.slice(-4000),
-  ].join("\n\n");
-  const proc = Bun.spawn(
-    ["claude", "-p", rubric, "--output-format", "json", "--model", "sonnet", "--no-session-persistence", "--permission-mode", "default",
-      "--disallowedTools", "Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "Skill", "AskUserQuestion"],
-    { cwd: judgeDir, stdout: "pipe", stderr: "pipe", env: { ...process.env, CLAUDE_CONFIG_DIR: join(judgeDir, "config") } },
-  );
-  const timer = setTimeout(() => proc.kill(), remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS));
-  try {
-    const [stdout, stderr, status] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-    if (status !== 0) return `the judge could not run (exit ${status}): ${stderr.slice(0, 200)}`;
-    const result = String((JSON.parse(stdout) as { result?: string }).result ?? "");
-    const verdict = /\{[^{}]*"ok"\s*:\s*(true|false)[^{}]*\}/.exec(result);
-    if (!verdict) return `the judge gave no verdict: ${result.slice(0, 200)}`;
-    const parsed = JSON.parse(verdict[0]) as { ok: boolean; reason?: string };
-    return parsed.ok ? null : `the agent's words: ${parsed.reason ?? "did not match what the person meant"}`;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 async function drive(harness: LiveHarness, item: CorpusItem): Promise<Outcome> {
   const prompt = harness === "codex" && item.entry === undefined ? typedPrompt(item).replace(/^\/aidlc/, "$aidlc") : typedPrompt(item);
-  let proj: string;
-  let home: string | undefined;
-  let cleanup: () => void = () => {};
-  if (harness === "claude") {
-    proj = setupIntegrationProject();
-    cleanup = () => cleanupTestProject(proj);
-  } else if (harness === "codex") {
-    const codex = setupCodexProject({ workspaceWrite: true });
-    proj = codex.proj;
-    home = codex.home;
-    seedAidlcMemory(proj);
-    seedWorkspaceShell(proj);
-    cleanup = () => cleanupTestProject(codex.root);
-  } else if (harness === "kiro") {
-    proj = setupTuiProject({ harness: "kiro", noAidlcDocs: true });
-    seedAidlcMemory(proj);
-    seedWorkspaceShell(proj);
-    cleanup = () => cleanupTuiProject(proj);
-  } else {
-    throw new Error(`no drive for harness ${JSON.stringify(harness)}`);
-  }
+  const { proj, home, cleanup } = liveProject(harness);
   // The item's own environment (unattended runs) reaches the agent's process the way a person's shell would.
   const extraEnv = itemEnv(item);
   const previous = Object.fromEntries(Object.keys(extraEnv).map((k) => [k, process.env[k]]));
@@ -324,8 +184,8 @@ async function drive(harness: LiveHarness, item: CorpusItem): Promise<Outcome> {
       };
     }
     const { failures, endSummary } = judge(item, proj, prompt, start, transcript);
-    const words = await judgeText(item, transcript.text);
-    if (words !== null) failures.push(words);
+    const words = await judgeText({ typed: typedPrompt(item), meaning: item.meaning, asksAllowed: asksAllowedFor(item) }, transcript.text, judgeDir);
+    if (words.failure !== null) failures.push(words.failure);
     return { item, harness, prompt, failures, endSummary, transcript };
   } finally {
     for (const [k, v] of Object.entries(previous)) {
@@ -336,49 +196,6 @@ async function drive(harness: LiveHarness, item: CorpusItem): Promise<Outcome> {
   }
 }
 
-// A miss is one or more of: the records are wrong or missing (work, active record, setting, gate, plan, the typed
-// line), a question the item did not allow, engine words in what the agent told the person.
-function missKinds(failures: string[]): { record: boolean; question: boolean; words: boolean } {
-  const question = failures.some((f) => /question\(s\) to the person/.test(f));
-  const words = failures.some((f) => /^the agent's words:|^the agent said nothing|^the judge /.test(f));
-  const record = failures.some((f) => !/question\(s\) to the person|^the agent's words:|^the agent said nothing|^the judge /.test(f));
-  return { record, question, words };
-}
-
-function writeReport(): void {
-  if (outcomes.length === 0) return;
-  mkdirSync(REPORT_DIR, { recursive: true });
-  const sha = spawnSync("git", ["rev-parse", "--short", "HEAD"], { cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) }).stdout.trim();
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  for (const harness of [...new Set(outcomes.map((o) => o.harness))]) {
-    const mine = outcomes.filter((o) => o.harness === harness);
-    const lines = [`# Live input corpus: ${harness} at ${sha} (${stamp})`, "", `Sample: ${process.env.AIDLC_INPUT_SAMPLE ?? "3"} per category, seed ${process.env.AIDLC_INPUT_SEED ?? "1"}. Items driven: ${mine.length}.`, "", "## Score per category", "", "Misses are counted three ways: record (wrong or missing record: work, active record, setting, gate, plan, the typed line), question (one the item did not allow), words (engine words in what the agent told the person). One miss can count in several.", "", "| category | pass | total | record | question | words |", "|---|---|---|---|---|---|"];
-    for (const category of [...new Set(mine.map((o) => o.item.category))]) {
-      const rows = mine.filter((o) => o.item.category === category);
-      const kinds = rows.map((o) => missKinds(o.failures));
-      lines.push(`| ${category} | ${rows.filter((o) => o.failures.length === 0).length} | ${rows.length} | ${kinds.filter((k) => k.record).length} | ${kinds.filter((k) => k.question).length} | ${kinds.filter((k) => k.words).length} |`);
-    }
-    const all = mine.filter((o) => o.failures.length > 0).map((o) => missKinds(o.failures));
-    lines.push("", `Misses: ${all.length} of ${mine.length}; record ${all.filter((k) => k.record).length}, question ${all.filter((k) => k.question).length}, words ${all.filter((k) => k.words).length}; words only ${all.filter((k) => k.words && !k.record && !k.question).length}.`);
-    lines.push("", "## Misses", "");
-    for (const o of mine.filter((o) => o.failures.length > 0)) {
-      lines.push(`### ${o.item.id} [${o.item.state}] ${JSON.stringify(o.prompt)}`, "", `MEANING: ${o.item.meaning}`, "", ...o.failures.map((f) => `- ${f}`), "", `End state: ${o.endSummary}`, "", "Transcript excerpt:", "", "```", ...o.transcript.tools.slice(-8), "", o.transcript.text.slice(-600), "```", "");
-    }
-    for (const home of HOMES) {
-      const was = before.get(home);
-      if (!was) continue;
-      const now = homeDigest(home);
-      const changed = [...now.files.entries()].filter(([p, v]) => was.files.get(p) !== v).map(([p]) => p);
-      const how = drivesHome(home) ? "CHANGED by this run" : "CHANGED by another process (this run did not drive that tool)";
-      lines.push(`Home ${home}: ${was.digest === now.digest ? "unchanged" : `${how}: ${changed.slice(0, 20).join(", ")}`}`);
-    }
-    writeFileSync(join(REPORT_DIR, `REPORT-${harness}-${sha}-${stamp}.md`), `${lines.join("\n")}\n`, "utf-8");
-    // Every transcript as judged, one JSON line per item, so the words can be re-read without driving the agents again.
-    const rows = mine.map((o) => JSON.stringify({ id: o.item.id, prompt: o.prompt, failures: o.failures, end: o.endSummary, asks: o.transcript.asks, text: o.transcript.text, tools: o.transcript.tools }));
-    writeFileSync(join(REPORT_DIR, `TRANSCRIPTS-${harness}-${sha}-${stamp}.jsonl`), `${rows.join("\n")}\n`, "utf-8");
-  }
-}
-
 beforeAll(() => {
   for (const home of HOMES) before.set(home, homeDigest(home));
   judgeDir = mkdtempSync(join(tmpdir(), "aidlc-input-judge-"));
@@ -386,12 +203,17 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  writeReport();
+  writeLiveReport({
+    dir: REPORT_DIR, title: "Live input corpus", outcomes, groupName: "category", group: (o) => o.item.category,
+    recordMeans: "wrong or missing record: work, active record, setting, gate, plan, the typed line", label: (o) => o.item.state,
+    sampleLine: `Sample: ${process.env.AIDLC_INPUT_SAMPLE ?? "3"} per category, seed ${process.env.AIDLC_INPUT_SEED ?? "1"}.`,
+    homes: before, drives: (home) => drivesHome(home, HARNESSES),
+  });
   if (judgeDir) rmSync(judgeDir, { recursive: true, force: true });
   if (!LIVE) return;
   // The judge's own claude -p runs under its own config dir, so ~/.claude is owed unchanged on every run; a driven
   // Codex home too. Kiro CLI writes its own session data under ~/.kiro while it runs, so that home is reported, not asserted.
-  for (const home of HOMES.filter((h) => !h.endsWith(".kiro") && drivesHome(h))) {
+  for (const home of HOMES.filter((h) => !h.endsWith(".kiro") && drivesHome(h, HARNESSES))) {
     const was = before.get(home);
     if (was) expect(homeDigest(home).digest, `${home} changed during the live run`).toBe(was.digest);
   }
