@@ -45,6 +45,7 @@ import {
   type GuardFence,
   type SwitchableGuardFence,
   isSwitchableGuardFence,
+  guardFenceFromConfigKey,
 } from "./aidlc-guard-fences.ts";
 export {
   GUARD_FENCES,
@@ -38995,6 +38996,121 @@ export function formatGuardPolicy(value: GuardPolicy, source: string): string {
 /** Retired alias of formatGuardPolicy. */
 export const formatChangeControl = formatGuardPolicy;
 
+/**
+ * What `next` does with the token after each flag it takes: `none` takes no
+ * value, `free` takes any word, `words` only the words listed. `needsFollowing`
+ * marks the four whose branch reads `a === "--x" && i + 1 < args.length`, so
+ * with nothing after them this engine does not take them at all.
+ */
+export interface NextFlagShape {
+  value: "none" | "free" | "words";
+  words?: readonly string[];
+  needsFollowing?: true;
+}
+
+// Written out rather than imported from aidlc-guard-switch.ts, which imports
+// this module: t-next-flag-table pins them equal to VALID_DEPTHS and
+// VALID_TEST_STRATEGIES there.
+const DEPTH_VALUES = ["minimal", "standard", "comprehensive"] as const;
+
+/**
+ * Every flag `next`'s flag loop takes, in one table.
+ *
+ * The loop in parseNextFlags reads it (nextTokenKind below) to decide whether a
+ * flag-shaped token is one this engine takes, so a flag missing from the table
+ * can never be taken and the two cannot drift. A harness seam that has to read
+ * a line before any agent sees it reads the same table, instead of mirroring
+ * the loop's branches by hand.
+ *
+ * Absent on purpose, because they are not the flag loop's: the read-only flags
+ * (READ_ONLY_FLAGS, taken earlier and only when the line carries no words of
+ * the person's own), `--doctor`'s own `--export`/`--output`/`--verbose`,
+ * `--config` and `--project-dir` (read before the loop), and `--pick` (a
+ * leading command). The ceremony flags and the per-check `--guard.<fence>`
+ * family come from their own tables, in nextFlagShape.
+ */
+export const NEXT_FLAGS: ReadonlyMap<string, NextFlagShape> = new Map<string, NextFlagShape>([
+  ["--resume", { value: "none" }],
+  ["--single", { value: "none" }],
+  ["--new-intent", { value: "none" }],
+  ["--new-scope", { value: "none" }],
+  ["--continue", { value: "none" }],
+  ["--change", { value: "none" }],
+  ["--every-unit", { value: "none" }],
+  // Retired, still taken so the token never becomes task text.
+  ["--init", { value: "none" }],
+  ["--force", { value: "none" }],
+  ["--scope", { value: "free", needsFollowing: true }],
+  ["--stage", { value: "free", needsFollowing: true }],
+  ["--phase", { value: "free", needsFollowing: true }],
+  ["--report", { value: "free", needsFollowing: true }],
+  // Valued: a missing or `--`-prefixed value is this engine's own refusal, with
+  // the flag named, not a token it does not take.
+  ["--request", { value: "free" }],
+  ["--record", { value: "free" }],
+  ["--unit", { value: "free" }],
+  ["--plan-name", { value: "free" }],
+  ["--skip", { value: "free" }],
+  ["--add", { value: "free" }],
+  ["--claim", { value: "free" }],
+  ["--release", { value: "free" }],
+  ["--team", { value: "free" }],
+  ["--rhythm", { value: "free" }],
+  ["--depth", { value: "words", words: DEPTH_VALUES }],
+  ["--test-strategy", { value: "words", words: DEPTH_VALUES }],
+  ["--review", { value: "words", words: ["adversarial", "advisory", "none"] }],
+  ["--guard-policy", { value: "words", words: GUARD_POLICY_VALUES }],
+  ["--change-control", { value: "words", words: GUARD_POLICY_VALUES }],
+  ["--project-type", { value: "words", words: ["greenfield", "brownfield"] }],
+]);
+
+/** The shape of a flag `next` takes, or null when it takes no such flag. */
+export function nextFlagShape(token: string): NextFlagShape | null {
+  const listed = NEXT_FLAGS.get(token);
+  if (listed !== undefined) return listed;
+  if (CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === token)) {
+    return { value: "words", words: CEREMONY_SETTINGS };
+  }
+  if (token.startsWith("--") && guardFenceFromConfigKey(token.slice(2)) !== null) {
+    return { value: "words", words: CEREMONY_SETTINGS };
+  }
+  return null;
+}
+
+/**
+ * Whether one argument is flags and their values and nothing else. One quoted
+ * argument can hold the whole request, as Kiro IDE's PowerShell hands it over,
+ * so a bare word inside it that is not a flag's value makes it the person's
+ * sentence: "--help flag for the reverser" is what they asked for, while
+ * "--choice=Approve Plan" is one flag and its value. Only the second kind is a
+ * token `next` can refuse to take without dropping a word of a request.
+ */
+export function argumentIsFlagShaped(arg: string): boolean {
+  const tokens = arg.split(/\s+/).filter((token) => token.length > 0);
+  if (tokens.length === 0) return false;
+  for (let index = 0; index < tokens.length; index++) {
+    if (!tokens[index].startsWith("--")) return false;
+    const next = tokens[index + 1];
+    if (next !== undefined && !next.startsWith("-")) index++;
+  }
+  return true;
+}
+
+/**
+ * Which of the three kinds one token on a `next` line is: a flag this engine
+ * takes, a flag-shaped token it does not take (the agent's own argument, a name
+ * the person misspelt, or a flag they are asking to have built), or a word of
+ * the person's own.
+ *
+ * `following` is the token after it, which is what settles the four flags this
+ * engine takes only when something follows them.
+ */
+export function nextTokenKind(token: string, following: string | undefined): "flag" | "untaken" | "words" {
+  const shape = nextFlagShape(token);
+  if (shape !== null && (shape.needsFollowing !== true || following !== undefined)) return "flag";
+  return argumentIsFlagShaped(token) ? "untaken" : "words";
+}
+
 // Scope-owned ceremonies: env kill switch, then intent, then scope, then on.
 export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation", "plan_approval", "collaborators"] as const;
 export type CeremonyKey = (typeof CEREMONY_KEYS)[number];
@@ -39022,6 +39138,7 @@ export const CEREMONY_FLAGS: Record<CeremonyKey, string> = {
   plan_approval: "--plan-approval",
   collaborators: "--collaborators",
 };
+
 export type CeremonyPolicy = Record<CeremonyKey, CeremonySetting>;
 export interface CeremonyResolution {
   key: CeremonyKey;
