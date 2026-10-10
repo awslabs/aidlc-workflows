@@ -490,7 +490,6 @@ import {
   fencesOffCreationGranted,
   guardPolicyCreationGranted,
   guardPolicyNamed,
-  unreadSettingLine,
   planApprovalOffAtCreation,
   planApprovalEnv,
   planApprovalOffForOpenRequest,
@@ -2245,9 +2244,18 @@ function scopeCommands(
 // confirmation, and collaborators switches typed with a description ride on
 // the plan offer's answer commands, so the work the person confirms is created
 // as the offer previewed it. Each was checked against its allowed words when
-// parsed. Plan approval rides only as on: only the person's own words turn it
-// off, on their own path.
-const CARRIED_CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation", "collaborators"] as const;
+// parsed. Plan approval rides the same way, off as well as on: the person typed
+// it with the work they are describing, so it belongs to the work they pick,
+// and creation takes it from the command once they have asked in this chat
+// (handleIntentCreate). Before this it rode only as `on`, so an `off` they typed
+// reached the new work through the human-turn hook's grant alone.
+const CARRIED_CEREMONY_KEYS = [
+  "sensors",
+  "learnings",
+  "summary_confirmation",
+  "collaborators",
+  "plan_approval",
+] as const;
 
 function carriedCeremonyFlags(flags: ParsedFlags): string[] {
   const carried: string[] = [];
@@ -2255,7 +2263,6 @@ function carriedCeremonyFlags(flags: ParsedFlags): string[] {
     const value = flags.ceremony?.[key];
     if (value) carried.push(`${CEREMONY_FLAGS[key]} ${value}`);
   }
-  if (flags.ceremony?.plan_approval === "on") carried.push(`${CEREMONY_FLAGS.plan_approval} on`);
   return carried;
 }
 
@@ -3824,19 +3831,24 @@ export interface ParsedFlags {
   projectDir?: string;
   parseError?: string;
   /**
-   * A flag-shaped token that is all the person typed, which no parser here reads
-   * as a setting (`--review-freeze off` without the `guard.` prefix, or a
-   * misspelt name). It describes no work, so `next` ends the turn naming it
-   * rather than running a stage while they believe a check went off.
+   * A flag-shaped token before the person's first word that this engine does not
+   * take: an argument the agent sent to the wrong command (`--details`, this
+   * chat's `--session`), or a name the person misspelt (`--plan-aprroval`,
+   * `--review-freeze` without its `guard.` prefix). `next` cannot take the line
+   * whole either way, so it says so to the agent and reads the token as nothing:
+   * not a setting, not the work's name, and nothing of the person's.
    */
-  unreadSetting?: string;
+  untakenFlag?: string;
+  /** The value that token took, when a word followed it, so the print names both. */
+  untakenFlagValue?: string;
   /**
-   * The line was only `--session <id>`: this chat's session, which the agent
-   * passed on from SessionStart, and none of the person's words.
+   * The person's words as they typed them, when `intent` cannot hold them whole:
+   * a flag-shaped token this engine does not take is folded out of `intent`,
+   * because `next` acts on none of the line, but it is still one of their words
+   * and the record's job is to prove what they said (`Person Reply` in the
+   * ledger comes from it). Absent when `intent` already holds every word.
    */
-  agentSessionOnly?: boolean;
-  // An answer argument sent to `next` instead of the question's answer command.
-  misplacedChoice?: boolean;
+  personWords?: string;
   retiredFlags?: string[];
   retiredOnly?: boolean;
 }
@@ -3864,27 +3876,22 @@ type ConfigSection = (typeof CONFIG_SECTIONS)[number];
 const ENTRY_WORD_PREFIX = /^[/$]aidlc\s+/i;
 
 /**
- * The first flag-shaped token of a line that describes no work, or null when the
- * line is a description. A line made only of flag-shaped tokens this engine does
- * not know, and the values that follow them, describes nothing: the person typed
- * a setting whose name could not be read, and starting a piece of work called
- * "--nonsense 1" would spend what they set on work they never asked for. The
- * token comes back so the step can name it: with no readable switch beside it on
- * the line, the human-turn hook read nothing and said nothing, so the step is the
- * only place the person hears that their setting was not read.
- * One flag-shaped word among real words is still their sentence, as the typed
- * switch parser reads it the same way, and so are words the person marked as
- * theirs (after `--`, or beside a plan they named), which this is not asked about.
+ * Whether one argument is flags and their values and nothing else. One quoted
+ * argument can hold the whole request, as Kiro IDE's PowerShell hands it over,
+ * so a bare word inside it that is not a flag's value makes it the person's
+ * sentence: "--help flag for the reverser" is what they asked for, while
+ * "--choice=Approve Plan" is one flag and its value. Only the second kind is a
+ * token `next` can refuse to take without dropping a word of a request.
  */
-function unreadSettingOnly(words: readonly string[]): string | null {
-  // One quoted argument can hold the whole request, as Kiro IDE's PowerShell hands it over.
-  const tokens = words.flatMap((word) => word.split(/\s+/)).filter((token) => token.length > 0);
+function argumentIsFlagShaped(arg: string): boolean {
+  const tokens = arg.split(/\s+/).filter((token) => token.length > 0);
+  if (tokens.length === 0) return false;
   for (let index = 0; index < tokens.length; index++) {
-    if (!tokens[index].startsWith("--")) return null;
+    if (!tokens[index].startsWith("--")) return false;
     const next = tokens[index + 1];
     if (next !== undefined && !next.startsWith("-")) index++;
   }
-  return tokens[0] ?? null;
+  return true;
 }
 
 export function parseNextFlags(argv: string[]): ParsedFlags {
@@ -3973,12 +3980,20 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   }
   const flags: ParsedFlags = {};
   const intentWords: string[] = [];
+  // Every token that is the person's own word, including a flag-shaped one this
+  // engine does not take and the word after it: `intent` drops those (nothing
+  // on the line is acted on), the record keeps them.
+  const wordTokens: string[] = [];
   const requestWords = nextArgsCarryRequestWords(args);
   let literalIntent = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (literalIntent) {
       intentWords.push(a);
+      // Theirs on the record too: the delimiter marks the words as the person's,
+      // so leaving them out of `wordTokens` made the record of what they said
+      // omit the request itself when a token earlier on the line was untaken.
+      wordTokens.push(a);
       continue;
     }
     if (a === "--") {
@@ -4218,19 +4233,6 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       i++;
     } else if (a === "--rhythm") {
       flags.parseError = "--rhythm requires <per-stage|unit-end>.";
-    } else if ((a === "--choice" || a.startsWith("--choice=")) && intentWords.length === 0) {
-      // Like a leading --session, this is the agent's argument, not work the
-      // person asked to start. Its value grants nothing: the question's answer
-      // command still owns recording the person's actual reply.
-      flags.misplacedChoice = true;
-      if (a === "--choice" && i + 1 < args.length && !args[i + 1].startsWith("--")) i++;
-    } else if (a === "--session" && intentWords.length === 0 && i + 1 < args.length && !args[i + 1].startsWith("--")) {
-      // This chat's session id, which SessionStart gives the agent for Plan
-      // Approval's --session; `next` finds its session on its own. Read as task
-      // text it named the work "--session sess_...". After a word of the
-      // person's it is one of their words.
-      if (args.length === 2) flags.agentSessionOnly = true;
-      i++;
     } else if (a === "--init" || a === "--force") {
       // RETIRED flags; see the named "Branch 3 — the legacy `--init` flag —
       // retired in P4" note in routeNext. Record and consume them so they never
@@ -4240,11 +4242,36 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       // the token spells it via the `--` delimiter.
       flags.retiredFlags ??= [];
       flags.retiredFlags.push(a);
+    } else if (argumentIsFlagShaped(a)) {
+      // One rule for every flag-shaped token this engine does not take, wherever
+      // it sits on the line: an argument the agent sent to the wrong command
+      // (`--details`), a name the person misspelt (`--plan-aprroval off` at the
+      // end of their sentence, which means a setting), or a flag they are asking
+      // to have built (`add a --verbose flag`, which means their words). Which
+      // one it is is the person's meaning, and only the agent can read that, so
+      // `next` takes nothing from the line and routeNext says what it could not
+      // take; the agent has their own line in the chat and comes back with `--`
+      // before their words, or with the flag this engine does take. Read as task
+      // text instead, a misspelt setting became part of the work's name while
+      // the check they asked to drop stayed on, and nothing said so.
+      // After the `--` delimiter nothing reaches here (the loop keeps it as
+      // theirs), and one quoted argument holding a sentence is not flag-shaped,
+      // so `--help flag for the reverser` is still what they asked for.
+      flags.untakenFlag ??= a;
+      wordTokens.push(a);
+      const value = args[i + 1];
+      if (value !== undefined && !value.startsWith("--")) {
+        flags.untakenFlagValue ??= value;
+        wordTokens.push(value);
+        i++;
+      }
     } else {
-      // Unknown flag-looking tokens are task text, not disposable noise. Use
-      // the standard `--` delimiter when a task must contain a token that is
-      // otherwise a recognized AIDLC flag (for example `compose -- --scope`).
+      // Among the person's own words a flag-shaped token is one of their words,
+      // never noise (#847). Use the standard `--` delimiter when a task must
+      // contain a token that is otherwise a recognized AIDLC flag (for example
+      // `compose -- --scope`).
       intentWords.push(a);
+      wordTokens.push(a);
     }
   }
   // A leading valid scope token is positional scope syntax, even when a
@@ -4280,16 +4307,14 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       else intentWords.shift();
     }
   }
-  // Words the person marked as theirs stand as they are: after the literal
-  // delimiter, or beside a plan they named, flag-shaped tokens are kept at
-  // creation (`t198-compose-surfaces`). Only an unmarked line the engine cannot
-  // read as a description is not one.
-  const planNamed = Boolean(flags.scope || flags.positionalScope || flags.newScope);
-  const unreadSetting = literalIntent || planNamed ? null : unreadSettingOnly(intentWords);
-  if (intentWords.length > 0 && unreadSetting === null) {
+  if (intentWords.length > 0) {
     flags.intent = intentWords.join(" ").replace(ENTRY_WORD_PREFIX, "");
-  } else if (unreadSetting !== null) {
-    flags.unreadSetting = unreadSetting;
+  }
+  // Only when the two readings differ: a line whose words `intent` already holds
+  // needs no second copy, and every reader of the parse keeps one meaning.
+  if (flags.untakenFlag !== undefined && wordTokens.length > 0) {
+    const said = wordTokens.join(" ").replace(ENTRY_WORD_PREFIX, "").trim();
+    if (said.length > 0 && said !== flags.intent) flags.personWords = said;
   }
   if (!flags.claim && (flags.claimTeam || flags.claimRhythm)) {
     flags.parseError = "--team and --rhythm require --claim <unit>.";
@@ -4310,7 +4335,14 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
 export function nextArgsAreOnlyWords(args: string[]): boolean {
   if (args.length === 0) return false;
   const parsed = parseNextFlags(args);
-  return typeof parsed.intent === "string" && Object.keys(parsed).length === 1;
+  // A flag-shaped token this engine does not take is no command of this
+  // engine's: "approve, but add a --verbose flag" is the person approving and
+  // asking for a change, so the line stays their reply and their words are kept
+  // for the question they answered. Only what `next` does take makes it a
+  // command. The agent still gets the print naming the token it could not take.
+  const read = Object.keys(parsed).filter((key) =>
+    key !== "untakenFlag" && key !== "untakenFlagValue" && key !== "personWords");
+  return typeof parsed.intent === "string" && read.length === 1;
 }
 
 // Appended to the `done` reason emitted when the ACTIVE intent has no in-scope
@@ -7203,47 +7235,39 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
-  if (flags.misplacedChoice) {
+  // A flag-shaped token this engine does not take, before the person said a
+  // word: the agent's own argument, or a name they misspelt. The line cannot be
+  // taken whole, so nothing of it is read as a setting or as the work's name,
+  // and this print is the whole of what happens: a correction to the command the
+  // agent just ran, which is its next action, not an error that ends the turn
+  // and not a question put to the person about words they may never have typed.
+  // No narration, so nothing here reaches them; the agent has their own line in
+  // the chat and reads what they meant, then runs `next` again.
+  if (flags.untakenFlag !== undefined) {
     const open = openPlanApprovalQuestion(resolveProjectDir(projectDir), "");
     const next = `${aidlcToolInvocation("orchestrate")} next`;
-    // A correction to the agent's command is its next action, not an error
-    // that ends the turn or a new-work question that replaces the pending ask.
+    const named = flags.untakenFlagValue === undefined
+      ? `\`${flags.untakenFlag}\``
+      : `\`${flags.untakenFlag} ${flags.untakenFlagValue}\``;
+    // Which reading it is depends on what the person meant, so the print names
+    // every reading there is and the agent, which has their line, picks one. An
+    // open Plan Approval question is one of those readings, never the only one:
+    // naming it alone sent a misspelt setting typed at that gate to an answer
+    // command that then refused for want of a reply, leaving their own request
+    // with no way on.
+    const readings = `If it is your own argument, run \`${next}\` again with only the person's words. ` +
+      "If it is part of what the person asked for, run " +
+      `\`${next}\` again with \`--\` before their words, word for word, which keeps every token of theirs. ` +
+      `If they meant a setting, run \`${next}\` again with the flag \`next\` takes and their words. ` +
+      "If you cannot tell, ask them once in plain words.";
     emit(printDirective(
-      "`next` does not accept `--choice`. " +
+      `\`next\` does not take ${named}. ` +
       (open && !open.editing
-        ? planApprovalAnswerStep()
-        : `Run \`${next}\` with no answer arguments and follow the step it returns. ` +
-          "Record a reply using the answer command issued for that question."),
+        ? `It may be the person's answer to the open Plan Approval question: ${planApprovalAnswerStep()} ` +
+          `If it is not their answer: ${readings}`
+        : readings),
     ));
     return;
-  }
-
-  // All the person typed was something that reads like a setting, and no parser
-  // here could read it: with no readable switch beside it the human-turn hook
-  // said nothing, so running a stage now would leave them believing a check went
-  // off while it is still on. The turn ends with the one sentence that is true,
-  // in the same words the hook uses when it can say it, and the agent runs the
-  // setter once they say what they meant. Nothing of theirs has changed.
-  if (flags.unreadSetting !== undefined) {
-    const line = unreadSettingLine(flags.unreadSetting);
-    // When the hook already said that sentence, a readable switch was on the line
-    // with it: what they set was applied, they have heard which part was not
-    // read, and the step they need now is the ordinary one for where they are
-    // (the one that keeps their switch for the work they start next, or the
-    // stage). Only when nothing said it is this the person's only word on it.
-    const heard = engineProjectDir && engineSessionId
-      ? pendingPersonLines(engineProjectDir, engineSessionId).lines
-      : [];
-    if (!heard.includes(line)) {
-      const step = turnEndingPrint(
-        "The person typed something that reads like a setting, and this engine cannot read it. Say the line above in " +
-          "your reply and wait: nothing of theirs changed, no stage ran, and when they say which setting they meant, " +
-          "run the setter for it.",
-      );
-      step.narration = line;
-      emit(step);
-      return;
-    }
   }
 
   if (flags.retiredOnly) {
@@ -8578,18 +8602,6 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // just typed `/aidlc <scope>` to type exactly that — circular now that a
   // named scope creates).
   if (!stateContent) {
-    // The agent passed this chat's session in place of the person's request.
-    // They may well have described their work, so the error below would ask
-    // them for it again: the agent runs `next` once more with their words.
-    if (flags.agentSessionOnly) {
-      const orchestrate = aidlcToolInvocation("orchestrate");
-      emit(printDirective(
-        "`next` takes the person's request, not `--session`, so nothing ran. Run " +
-          `\`${orchestrate} next "<what the person typed after ${entrySkillInvocation()}, word for word>"\` now and ` +
-          `follow what it returns; if they typed nothing after it, run \`${orchestrate} next\`.`,
-      ));
-      return;
-    }
     // Work in progress here with none selected (a teammate's fresh clone, or a
     // conversation that has not joined the record it found) is put to the
     // person by name, never answered as if there were none.

@@ -733,7 +733,8 @@ A setter or creation that lowers a check is carried out when a person has spoken
 
 > Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
-> Creating this intent with Guard Policy relaxed would lower fences, which is the person's call. Create it, then, when they ask for it in their own words, run `aidlc engine config set guard-policy relaxed` yourself and say in one line what changed. A scope default applies without asking.
+Creation that carries the lowering flag refuses with the same line: a person who
+has asked in this chat gets the work created with it, whoever runs the command.
 
 Other fences and the `off` value use their corresponding names; Codex uses
 `$aidlc`, and unattended refusals append the driver guidance.

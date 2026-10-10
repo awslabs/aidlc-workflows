@@ -1,5 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { hasStoredMessages } from "./aidlc-message-store.ts";
+import { hasStoredMessages, latestMessage } from "./aidlc-message-store.ts";
 import { createHash, randomUUID } from "node:crypto";
 import {
   constants as fsConstants,
@@ -342,6 +342,7 @@ import {
   isScopeName,
   scopeArg,
   stateFilePath,
+  commandAtPersonsTerminal,
   clearSessionIntentUuid,
   sourceBaselineAuditFields,
   unitDependencyPath,
@@ -8013,12 +8014,39 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       ceremonySetByPerson[key] = true;
     }
   }
+  // A lowering the command carries is the person's when they asked for it in
+  // this chat, exactly as it is when the agent runs the setter on open work
+  // (applyIntentSettings in aidlc-guard-switch.ts): their turn is the authority,
+  // and the record keeps the message it stands on. The flag now reaches creation
+  // on the plan offer's own answer commands (carriedCeremonyFlags), so a person
+  // who typed `--plan-approval off` with the work they are describing gets it on
+  // the work they pick instead of a refusal telling the agent to create the work
+  // and run the setter afterwards.
+  // Their own words, or their own terminal: either makes the lowering theirs, so
+  // the work records it as set by them. Before any work exists there is no
+  // decision for a turn to be "since", and no HUMAN_TURN row either: the hook
+  // writes that row only once a state file is there, and keeps the person's
+  // message from their first prompt on (aidlc-message-store.ts). The message of
+  // this chat is the proof then, as the turn is once work exists. Per chat,
+  // never the project's messages: a teammate's turn in their own chat is not
+  // this one's.
+  const personAskedForThisLowering = (): boolean =>
+    commandAtPersonsTerminal() ||
+    (existsSync(stateFilePath(projectDir))
+      ? personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true })
+      : latestMessage(projectDir, initialSelection.sessionId) !== null);
+  // A recorded presence bypass authorizes the lowering, as it does on main, but
+  // it is nobody's word: the setting stays "set by a command".
+  const loweringAuthorized = (): boolean =>
+    personAskedForThisLowering() || fenceKeyBypassed(projectDir, initialSelection.sessionId);
   if (requestedCeremony.plan_approval === "off") {
     if (preflightMemoryStrict !== null) die(planApprovalMemoryLockRefusal(preflightMemoryStrict.path));
     if (scopeCeremonyDefault("plan_approval", scope) !== "off" && ceremonySetByPerson.plan_approval !== true) {
       const wanted: GuardSwitch = { key: "plan-approval", value: "off" };
-      if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted, "intent-create"));
-      if (!fenceKeyBypassed(projectDir, initialSelection.sessionId)) die(guardSwitchRefusal(wanted, "intent-create"));
+      // An unattended driver never lowers a check, whoever asked.
+      if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted));
+      if (!loweringAuthorized()) die(guardSwitchRefusal(wanted, false, projectDir));
+      if (personAskedForThisLowering()) ceremonySetByPerson.plan_approval = true;
     }
   }
   // Only a value below the scope default lowers fences: relaxed on an off scope raises them.
@@ -8028,10 +8056,8 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   ) {
     const wanted: GuardSwitch = { key: "guard-policy", value: requestedChangeControl };
     // An unattended driver never lowers fences, including a recorded presence bypass.
-    if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted, "intent-create"));
-    if (!fenceKeyBypassed(projectDir, initialSelection.sessionId)) {
-      die(guardSwitchRefusal(wanted, "intent-create"));
-    }
+    if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted));
+    if (!loweringAuthorized()) die(guardSwitchRefusal(wanted, false, projectDir));
   }
   // A flat aidlc-docs/ layout is migrated into the DEFAULT space by the first
   // creation (below, under the lock). An explicit other space cannot be honored
