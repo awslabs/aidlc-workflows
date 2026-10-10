@@ -346,6 +346,17 @@ describe("the flag parser over a seeded sweep of lines", () => {
         expect(parsed.parseError, note).toBeUndefined();
       }
 
+      // Whatever the engine takes from the line, every word the person typed is
+      // still readable from the parse: `intent` when it holds them all, else
+      // `personWords`. Nothing of theirs is dropped by the reading.
+      if (testCase.tail !== null && parsed.parseError === undefined) {
+        const said = parsed.personWords ?? parsed.intent ?? "";
+        for (const word of testCase.tail) {
+          if (word.trim().length === 0) continue;
+          expect(said, `${note} said=${JSON.stringify(said)}`).toContain(word.trim());
+        }
+      }
+
       // A typed line that is the person's words stays their words, whatever
       // flag-shaped token sits among them: the human-turn hook reads this to
       // decide their `/aidlc` line is a reply, so a token this engine does not
@@ -494,8 +505,11 @@ describe("a host's human-turn hook keeps the same reading of the line", () => {
       // A line the parser refuses keeps their words whole instead, since the
       // record's job is to prove what they said (aidlc-message-store.ts).
       const parsed = parseNextFlags(testCase.argv);
+      // Their words, not the engine's reading of them: a flag-shaped token
+      // `next` does not take stays in the record (personWords), and a line the
+      // parser refuses keeps the line whole.
       const expected = parsed.parseError === undefined
-        ? parsed.intent?.trim() || null
+        ? (parsed.personWords ?? parsed.intent)?.trim() || null
         : testCase.argv.join(" ");
       expect(records[0].words, `${note} record=${JSON.stringify(records[0])}`).toBe(expected);
       // Either way the whole line is on record, as the host delivered it.

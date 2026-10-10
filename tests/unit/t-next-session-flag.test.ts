@@ -92,9 +92,15 @@ describe("t-next-session-flag: how next reads a --session", () => {
       .toBe("Build a small notes app");
   });
 
-  test("among the person's words, or after --, it is one of their words", () => {
-    expect(parseNextFlags(["add", "a", "--session", "timeout", "option"]).intent).toBe("add a --session timeout option");
+  // Among their words it is still not a flag this engine takes, so `next` acts
+  // on none of the line and says so; their words stay whole on the record, and
+  // after the `--` delimiter they are the request itself.
+  test("among the person's words it is untaken, and their words are kept whole", () => {
+    const amongWords = parseNextFlags(["add", "a", "--session", "timeout", "option"]);
+    expect(amongWords.untakenFlag).toBe("--session");
+    expect(amongWords.personWords).toBe("add a --session timeout option");
     expect(parseNextFlags(["--", "--session", "timeout"]).intent).toBe("--session timeout");
+    expect(parseNextFlags(["--", "--session", "timeout"]).untakenFlag).toBeUndefined();
   });
 });
 

@@ -3843,6 +3843,14 @@ export interface ParsedFlags {
   untakenFlag?: string;
   /** The value that token took, when a word followed it, so the print names both. */
   untakenFlagValue?: string;
+  /**
+   * The person's words as they typed them, when `intent` cannot hold them whole:
+   * a flag-shaped token this engine does not take is folded out of `intent`,
+   * because `next` acts on none of the line, but it is still one of their words
+   * and the record's job is to prove what they said (`Person Reply` in the
+   * ledger comes from it). Absent when `intent` already holds every word.
+   */
+  personWords?: string;
   retiredFlags?: string[];
   retiredOnly?: boolean;
 }
@@ -3974,6 +3982,10 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   }
   const flags: ParsedFlags = {};
   const intentWords: string[] = [];
+  // Every token that is the person's own word, including a flag-shaped one this
+  // engine does not take and the word after it: `intent` drops those (nothing
+  // on the line is acted on), the record keeps them.
+  const wordTokens: string[] = [];
   const requestWords = nextArgsCarryRequestWords(args);
   let literalIntent = false;
   for (let i = 0; i < args.length; i++) {
@@ -4244,9 +4256,11 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       // theirs), and one quoted argument holding a sentence is not flag-shaped,
       // so `--help flag for the reverser` is still what they asked for.
       flags.untakenFlag ??= a;
+      wordTokens.push(a);
       const value = args[i + 1];
       if (value !== undefined && !value.startsWith("--")) {
         flags.untakenFlagValue ??= value;
+        wordTokens.push(value);
         i++;
       }
     } else {
@@ -4255,6 +4269,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       // contain a token that is otherwise a recognized AIDLC flag (for example
       // `compose -- --scope`).
       intentWords.push(a);
+      wordTokens.push(a);
     }
   }
   // A leading valid scope token is positional scope syntax, even when a
@@ -4293,6 +4308,12 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   if (intentWords.length > 0) {
     flags.intent = intentWords.join(" ").replace(ENTRY_WORD_PREFIX, "");
   }
+  // Only when the two readings differ: a line whose words `intent` already holds
+  // needs no second copy, and every reader of the parse keeps one meaning.
+  if (flags.untakenFlag !== undefined && wordTokens.length > 0) {
+    const said = wordTokens.join(" ").replace(ENTRY_WORD_PREFIX, "").trim();
+    if (said.length > 0 && said !== flags.intent) flags.personWords = said;
+  }
   if (!flags.claim && (flags.claimTeam || flags.claimRhythm)) {
     flags.parseError = "--team and --rhythm require --claim <unit>.";
   }
@@ -4317,7 +4338,8 @@ export function nextArgsAreOnlyWords(args: string[]): boolean {
   // asking for a change, so the line stays their reply and their words are kept
   // for the question they answered. Only what `next` does take makes it a
   // command. The agent still gets the print naming the token it could not take.
-  const read = Object.keys(parsed).filter((key) => key !== "untakenFlag" && key !== "untakenFlagValue");
+  const read = Object.keys(parsed).filter((key) =>
+    key !== "untakenFlag" && key !== "untakenFlagValue" && key !== "personWords");
   return typeof parsed.intent === "string" && read.length === 1;
 }
 

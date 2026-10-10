@@ -159,7 +159,9 @@ async function messageParse(typedPrompt: string): Promise<Pick<StoredMessage, "w
     const flags = parseNextFlags(splitKiroCommandArgs(entryWords));
     if (flags.parseError) return { words, settings: [], route };
     return {
-      words: flags.intent?.trim() || null,
+      // What they said, not what the engine acts on: a flag-shaped token `next`
+      // does not take is still one of their words (personWords in the parse).
+      words: (flags.personWords ?? flags.intent)?.trim() || null,
       settings: typedSettingModifiers(flags).map((modifier) => {
         const space = modifier.indexOf(" ");
         return { key: modifier.slice(0, space), value: modifier.slice(space + 1) };
