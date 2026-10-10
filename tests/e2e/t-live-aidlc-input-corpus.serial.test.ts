@@ -42,7 +42,13 @@ setDefaultTimeout(LIVE_SETUP_TIMEOUT_MS);
 
 type LiveHarness = "claude" | "codex" | "kiro";
 const LIVE = process.env.AIDLC_INPUT_LIVE === "1";
-const HARNESSES = (process.env.AIDLC_INPUT_HARNESSES ?? "claude,codex,kiro").split(",").map((s) => s.trim()).filter(Boolean) as LiveHarness[];
+const KNOWN_HARNESSES: readonly LiveHarness[] = ["claude", "codex", "kiro"];
+// The agents this run drives, each named exactly: a name this check does not know (a typo of one) stops the file here,
+// before any agent runs, instead of falling through to one the person did not choose.
+const HARNESSES = [...new Set((process.env.AIDLC_INPUT_HARNESSES ?? "claude,codex,kiro").split(",").map((s) => s.trim()).filter(Boolean))].map((name) => {
+  if (!(KNOWN_HARNESSES as readonly string[]).includes(name)) throw new Error(`AIDLC_INPUT_HARNESSES names ${JSON.stringify(name)}, which this check does not drive; it knows ${KNOWN_HARNESSES.join(", ")}`);
+  return name as LiveHarness;
+});
 const CASE_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_COMMAND_TIMEOUT_MS);
 const REPORT_DIR = process.env.AIDLC_INPUT_REPORT_DIR ?? join(REPO_ROOT, "tests", "logs", "aidlc-input-live");
 
@@ -281,11 +287,13 @@ async function drive(harness: LiveHarness, item: CorpusItem): Promise<Outcome> {
     seedAidlcMemory(proj);
     seedWorkspaceShell(proj);
     cleanup = () => cleanupTestProject(codex.root);
-  } else {
+  } else if (harness === "kiro") {
     proj = setupTuiProject({ harness: "kiro", noAidlcDocs: true });
     seedAidlcMemory(proj);
     seedWorkspaceShell(proj);
     cleanup = () => cleanupTuiProject(proj);
+  } else {
+    throw new Error(`no drive for harness ${JSON.stringify(harness)}`);
   }
   // The item's own environment (unattended runs) reaches the agent's process the way a person's shell would.
   const extraEnv = itemEnv(item);
