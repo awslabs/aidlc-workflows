@@ -231,9 +231,12 @@ new Sensor binds, only when the stage graph is next compiled.
 
 The same holds when you author by hand: editing `team.md` mid-workflow reaches
 the next stage delivery of the run in progress (it does not retroactively
-change stages already run). Sensor configuration is different from rule text:
-bindings and `matches` globs live in the compiled graph, so adding a Sensor or
-editing an existing one takes effect at the next compile boundary.
+change stages already run). Sensor configuration splits in two: the binding
+(which stages a Sensor attaches to) and the hook's gating fields (the `matches`
+glob, fire-on) live in the compiled graph, so adding a Sensor or re-aiming an
+existing one takes effect at the next compile boundary — while the manifest's
+execution fields (command, timeout, input schema) are re-read at each fire, so
+editing those on an already-bound Sensor changes its next fire immediately.
 
 ---
 
