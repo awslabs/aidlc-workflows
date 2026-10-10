@@ -372,7 +372,8 @@
       },
       "end": {
         "asks": 0,
-        "work": "same"
+        "work": "same",
+        "active": "auth"
       }
     }
   },
@@ -464,12 +465,13 @@
           "intent auht"
         ],
         "never": [
-          "auth-fix"
+          "engine intent auth-fix",
+          "intent create"
         ]
       },
       "end": {
         "work": "same",
-        "active": "auth-fix",
+        "active": "auth",
         "asks": 1
       }
     }
@@ -520,12 +522,14 @@
           "intent Auth"
         ],
         "never": [
-          "auth-fix"
+          "engine intent auth-fix",
+          "intent create"
         ]
       },
       "end": {
         "asks": 0,
-        "work": "same"
+        "work": "same",
+        "active": "auth"
       }
     },
     "unsure": true
@@ -548,13 +552,14 @@
           "intent switch auht"
         ],
         "never": [
-          "auth-fix"
+          "engine intent auth-fix",
+          "intent create"
         ]
       },
       "end": {
         "asks": 0,
         "work": "same",
-        "active": "auht"
+        "active": "auth"
       }
     }
   },
@@ -1111,7 +1116,7 @@
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "same"
       }
     }
@@ -1805,11 +1810,10 @@
         "words": null,
         "settings": [],
         "no_ask": true,
-        "names": [
-          "intent 'caf\u00e9'"
-        ],
+        "names": [],
         "never": [
-          "auth"
+          "engine intent auth",
+          "intent create"
         ]
       },
       "end": {
@@ -2604,7 +2608,8 @@
       },
       "end": {
         "asks": 0,
-        "work": "same"
+        "work": "same",
+        "active": "auth"
       }
     },
     "after": "pending"
@@ -3090,7 +3095,7 @@
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "same"
       }
     }
@@ -7422,7 +7427,7 @@
         "asks": 0,
         "work": {
           "scope": "bugfix",
-          "words": "2"
+          "words": "fix the login"
         }
       }
     }
@@ -7471,7 +7476,7 @@
       "end": {
         "asks": 0,
         "work": {
-          "words": "Separate new piece of work"
+          "words": "fix the login"
         }
       }
     }
@@ -7517,7 +7522,9 @@
       },
       "end": {
         "asks": 0,
-        "work": "same"
+        "work": {
+          "words": "fix the login"
+        }
       }
     }
   },
@@ -7630,7 +7637,7 @@
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "same"
       }
     }
@@ -7887,7 +7894,7 @@
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "same"
       }
     },
@@ -9857,7 +9864,8 @@
       },
       "end": {
         "asks": 1,
-        "work": "same"
+        "work": "same",
+        "active": "auth-fix"
       }
     },
     "entry": "",
@@ -9910,7 +9918,8 @@
       },
       "end": {
         "asks": 1,
-        "work": "same"
+        "work": "same",
+        "active": "auth"
       }
     },
     "entry": "",
@@ -10172,7 +10181,8 @@
       },
       "end": {
         "asks": 1,
-        "work": "same"
+        "work": "same",
+        "active": "auth"
       }
     },
     "entry": "",
@@ -11270,7 +11280,9 @@
       },
       "end": {
         "asks": 1,
-        "work": "same"
+        "work": {
+          "words": "fix the login"
+        }
       }
     },
     "entry": "",
@@ -11323,7 +11335,9 @@
       },
       "end": {
         "asks": 1,
-        "work": "same"
+        "work": {
+          "words": "fix the login"
+        }
       }
     },
     "entry": "",
@@ -11376,7 +11390,9 @@
       },
       "end": {
         "asks": 1,
-        "work": "same"
+        "work": {
+          "words": "fix the login"
+        }
       }
     },
     "entry": "",
@@ -11935,14 +11951,15 @@
         ],
         "words": null,
         "settings": [],
-        "names": [
-          "engine intent login"
+        "names": [],
+        "never": [
+          "engine intent login",
+          "intent create"
         ]
       },
       "end": {
         "asks": 1,
-        "work": "same",
-        "active": "login"
+        "work": "none"
       }
     },
     "ambiguous": true
@@ -11962,10 +11979,12 @@
         ],
         "words": null,
         "settings": [],
-        "names": [
-          "engine intent login"
-        ],
-        "no_ask": true
+        "names": [],
+        "no_ask": true,
+        "never": [
+          "engine intent login",
+          "intent create"
+        ]
       },
       "end": {
         "asks": 0,
@@ -12204,10 +12223,13 @@
         ],
         "words": null,
         "settings": [],
-        "names": [
-          "engine space 'My Space'"
-        ],
-        "no_ask": true
+        "names": [],
+        "no_ask": true,
+        "never": [
+          "engine space 'My Space'",
+          "engine space my-space",
+          "space create"
+        ]
       },
       "end": {
         "asks": 0,
@@ -12230,10 +12252,13 @@
         ],
         "words": null,
         "settings": [],
-        "names": [
-          "engine space 'My Space'"
-        ],
-        "no_ask": true
+        "names": [],
+        "no_ask": true,
+        "never": [
+          "engine space 'My Space'",
+          "engine space my-space",
+          "space create"
+        ]
       },
       "end": {
         "asks": 0,
@@ -12771,14 +12796,15 @@
         ],
         "words": null,
         "settings": [],
-        "names": [
-          "engine intent auth"
+        "names": [],
+        "never": [
+          "engine intent auth",
+          "intent create"
         ]
       },
       "end": {
         "asks": 1,
-        "work": "same",
-        "active": "auth"
+        "work": "none"
       }
     },
     "ambiguous": true
@@ -12798,10 +12824,12 @@
         ],
         "words": null,
         "settings": [],
-        "names": [
-          "engine intent auth"
-        ],
-        "no_ask": true
+        "names": [],
+        "no_ask": true,
+        "never": [
+          "engine intent auth",
+          "intent create"
+        ]
       },
       "end": {
         "asks": 0,
@@ -12825,10 +12853,13 @@
         ],
         "words": null,
         "settings": [],
-        "names": [
-          "engine intent switch auth"
-        ],
-        "no_ask": true
+        "names": [],
+        "no_ask": true,
+        "never": [
+          "engine intent switch auth",
+          "engine intent auth",
+          "intent create"
+        ]
       },
       "end": {
         "asks": 0,
@@ -12852,10 +12883,13 @@
         ],
         "words": null,
         "settings": [],
-        "names": [
-          "engine intent switch auth"
-        ],
-        "no_ask": true
+        "names": [],
+        "no_ask": true,
+        "never": [
+          "engine intent switch auth",
+          "engine intent auth",
+          "intent create"
+        ]
       },
       "end": {
         "asks": 0,
@@ -12879,10 +12913,12 @@
         ],
         "words": null,
         "settings": [],
-        "names": [
-          "engine space teamb"
-        ],
-        "no_ask": true
+        "names": [],
+        "no_ask": true,
+        "never": [
+          "engine space teamb",
+          "space create"
+        ]
       },
       "end": {
         "asks": 0,
@@ -12905,10 +12941,12 @@
         ],
         "words": null,
         "settings": [],
-        "names": [
-          "engine space teamb"
-        ],
-        "no_ask": true
+        "names": [],
+        "no_ask": true,
+        "never": [
+          "engine space teamb",
+          "space create"
+        ]
       },
       "end": {
         "asks": 0,
@@ -16476,10 +16514,14 @@
     "expected": {
       "engine": {
         "kinds": [
+          "print",
           "ask"
         ],
         "words": "add a --version flag that prints the version from package.json",
-        "settings": []
+        "settings": [],
+        "never": [
+          "intent create"
+        ]
       },
       "end": {
         "asks": 1,
@@ -16920,7 +16962,7 @@
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": {
           "words": "why was config set guard.plan-approval off suggested?"
         }
@@ -16947,7 +16989,7 @@
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "same"
       }
     }
