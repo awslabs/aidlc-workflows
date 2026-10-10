@@ -1856,8 +1856,9 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
         devinRunSubagent("aidlc-developer-agent", "Implement the feature per the plan"),
       );
       expect(r.code).toBe(2);
-      // The zero-marker wording names the actual defect (no target marker in
-      // the brief) instead of claiming the plan is unapproved.
+      // The plan really is unapproved here, so the one-target wording applies
+      // and names the missing target; an approved plan would get the
+      // names-no-target handoff wording instead (handoffBlockReason).
       expect(r.stderr).toContain("the brief does not name it");
       expect(r.stderr).not.toContain("not currently approved");
       expect(readAudit(dir)).toContain("**Unit**: (missing marker)");
