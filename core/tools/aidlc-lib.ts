@@ -37956,6 +37956,12 @@ export function planWithChanges(
   return { stages, errors };
 }
 
+/** `scope`'s own grid over every compiled stage: the base a plan's stage
+ *  changes are checked against. */
+export function scopePlanGrid(scope: string): Record<string, "EXECUTE" | "SKIP"> {
+  return planWithChanges(scope, { skip: [], add: [] }).stages;
+}
+
 // A per-unit stage uses one stage-level artifact set when the approved plan
 // excludes the Unit DAG producer.
 export function usesStageLevelPerUnitArtifacts(

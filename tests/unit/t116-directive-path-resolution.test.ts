@@ -611,6 +611,32 @@ describe("t116 consumes presence split (consumes_absent)", () => {
     expect(expectedByPath.get("environment-inventory.md")).toBe(false);
     expect(expectedByPath.get("test-results.md")).toBe(false);
   });
+
+  // "On the path" is this work's plan, not its scope's stock grid: the state's
+  // EXECUTE/SKIP suffixes carry the stage changes made at creation (--skip /
+  // --add) and by recompose. A producer the person left out of the plan owns
+  // its absence (expected); one they put on it does not.
+  test("19: a producer the plan skips makes its missing output expected, though the scope runs it", () => {
+    const reqRel = `${RP}/inception/requirements-analysis/requirements.md`;
+    const dir = emitFor("state-brownfield-feature.md", "domain-design", (proj) => {
+      sedReplaceInFile(
+        seededStateFile(proj),
+        /^- \[.\] requirements-analysis — EXECUTE/m,
+        "- [ ] requirements-analysis — SKIP",
+      );
+    });
+    expect(dir.consumes_absent).toEqual([{ path: reqRel, expected: true }]);
+  });
+
+  test("20: a producer the plan adds makes its missing output a real gap, though the scope skips it", () => {
+    // poc skips units-generation; this plan runs it (its suffix says EXECUTE),
+    // so the unit-of-work code-generation needs should have been written.
+    const dir = emitFor("state-construction.md", "code-generation", (proj) => {
+      sedReplaceInFile(seededStateFile(proj), /^- \*\*Scope\*\*: feature$/m, "- **Scope**: poc");
+    });
+    const units = (dir.consumes_absent ?? []).find((entry) => basename(entry.path) === "unit-of-work.md");
+    expect(units).toEqual({ path: `${RP}/inception/units-generation/unit-of-work.md`, expected: false });
+  });
 });
 
 describe("t116 inline context roster", () => {

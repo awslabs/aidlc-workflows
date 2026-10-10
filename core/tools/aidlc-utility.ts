@@ -98,7 +98,8 @@ import {
   selectionDroppedOrderingEdges,
   stageGraphDrift,
   type GraphStage,
-  validateGrid,
+  planStructureErrors,
+  validatePlan,
   validateScope,
 } from "./aidlc-graph.ts";
 import { ACTIVE_MEMORY_DIR, activeMemoryCopyDrift, addRootBlocks, refreshActiveMemory } from "./aidlc-includes.ts";
@@ -280,6 +281,7 @@ import {
   PLAN_FIELD,
   type PlanChanges,
   planWithChanges,
+  scopePlanGrid,
   composedPlanLabel,
   PLAN_NAME_PATTERN,
   splitSlugList,
@@ -6603,8 +6605,14 @@ export async function collectDoctorReport(
       if (stages !== undefined && Object.keys(stages).length > 0) continue;
       (records[name] === undefined ? phantomsNoRecord : phantoms).push(name);
     }
+    // (d) A record whose grid breaks the rules every plan obeys (a slug that is
+    // no stage, an initialization stage not run). Compile refuses it and leaves
+    // it unprojected, so it is named here with its own fix, not compile's.
+    const invalidGrids = Object.keys(records)
+      .filter((name) => !stockScopeNames.has(name) && planStructureErrors(records[name].stages).length > 0)
+      .sort();
     const unprojected = Object.keys(records)
-      .filter((name) => enabled[name] === undefined)
+      .filter((name) => enabled[name] === undefined && !invalidGrids.includes(name))
       .sort();
     const dangling: string[] = [];
     for (const space of listSpaces(projectDir)) {
@@ -6632,7 +6640,7 @@ export async function collectDoctorReport(
     }
 
     const total =
-      phantoms.length + phantomsNoRecord.length + unprojected.length + dangling.length;
+      phantoms.length + phantomsNoRecord.length + unprojected.length + dangling.length + invalidGrids.length;
     if (total === 0) {
       const count = Object.keys(records).length;
       results.push({
@@ -6655,6 +6663,9 @@ export async function collectDoctorReport(
         dangling.length > 0
           ? `${dangling.length} workflow(s) reference an unresolvable scope [${dangling.join(", ")}]`
           : "",
+        invalidGrids.length > 0
+          ? `${invalidGrids.length} record(s) with a stage grid no plan can run [${invalidGrids.map((name) => `${name}: ${planStructureErrors(records[name].stages).join(" ")}`).join("; ")}]`
+          : "",
       ].filter(Boolean).join("; ");
       const fixes = [
         phantoms.length > 0 || unprojected.length > 0 ? compileFix : "",
@@ -6663,6 +6674,9 @@ export async function collectDoctorReport(
           : "",
         dangling.length > 0
           ? `for an unresolvable scope, restore its \`aidlc/scopes/<name>.md\` record (a composed scope travels with the shared \`aidlc/\` tree, so pull it from the collaborator or checkout that composed it), then ${compileFix}`
+          : "",
+        invalidGrids.length > 0
+          ? `fix the grid in each named \`aidlc/scopes/<name>.md\` record (only stage slugs, every initialization stage EXECUTE), or delete the record, then ${compileFix}`
           : "",
       ].filter(Boolean).join(". ");
       results.push({
@@ -7930,6 +7944,12 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   if (plannedStages.errors.length > 0) {
     die(`intent-create refused: ${plannedStages.errors.join(" ")}`);
   }
+  // Stage changes get the check every plan change gets (recompose included),
+  // against the scope they change, before anything is written.
+  if (composedPlan) {
+    const planErrors = validatePlan(scopePlanGrid(scope), plannedStages.stages).errors;
+    if (planErrors.length > 0) die(`intent-create refused: ${planErrors.join(" ")}`);
+  }
   // The creation target. An explicit --space is the one selector creation takes:
   // the intent is created under that space, that space's memory layers govern
   // its Change Control, and the refusal rows land under that space (main seeds
@@ -8713,10 +8733,22 @@ ${stageProgress}
     uninitSubmodules.length > 0
       ? `Warning: ${uninitSubmodules.length} uninitialized git submodule path(s) (${enumerateSubmodulePaths(uninitSubmodules)}) - run '${SUBMODULE_INIT_REMEDY}' before proceeding so reverse-engineering can read the code.\n`
       : "";
+  // A stage change that leaves a later stage without a required input is the
+  // person's call at creation, as at the composer's gate: it is said here, never
+  // refused (recompose, which changes a plan already under way, refuses it).
+  const starved = composedPlan === null
+    ? []
+    : validatePlan(scopePlanGrid(scope), composedPlan, {
+      projectType: projectType === "Brownfield" ? "brownfield" : "greenfield",
+      label: composedPlanLabel(flags["plan-name"]),
+    }).advisories;
+  const starvedLines = starved.length > 0
+    ? `Inputs this plan leaves without their producer (the stage runs without them):\n${starved.map((line) => `  - ${line.replace(/ Ensure existing artifact is current\.$/, "")}\n`).join("")}`
+    : "";
   process.stdout.write(
     `Intent created: ${createdDir} (space: ${createdSpace})
 State initialized: ${scope} scope, ${totalInScope} stages, ${effectiveDepth} depth
-${composedPlan ? `Plan: ${composedPlanLabel(flags["plan-name"])}, for this piece of work only (no scope file written)\n` : ""}Project type: ${projectType}${declaredType ? " (you said so)" : ""}
+${composedPlan ? `Plan: ${composedPlanLabel(flags["plan-name"])}, for this piece of work only (no scope file written)\n` : ""}${starvedLines}Project type: ${projectType}${declaredType ? " (you said so)" : ""}
 ${declaredType === "Brownfield" && scan.projectType !== "Brownfield" ? `${NO_CODE_FOUND_YET}\n` : ""}Languages: ${scan.languages}
 Frameworks: ${scan.frameworks}
 Build System: ${scan.buildSystem}
@@ -11941,16 +11973,11 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     const pt = projectType === "brownfield" || projectType === "greenfield"
       ? (projectType as "brownfield" | "greenfield")
       : undefined;
-    const label = `recomposed ${scope}`;
-    const baseErrors = new Set(
-      validateGrid(baseGrid, { strict: true, projectType: pt, label }).errors,
-    );
-    const validation = validateGrid(proposed, {
+    const newErrors = validatePlan(baseGrid, proposed, {
       strict: true,
       projectType: pt,
-      label,
-    });
-    const newErrors = validation.errors.filter((e) => !baseErrors.has(e));
+      label: `recomposed ${scope}`,
+    }).errors;
     if (newErrors.length > 0) {
       die(
         `Recompose rejected by the strict validator:\n${newErrors.map((e) => `  - ${e}`).join("\n")}\n` +
