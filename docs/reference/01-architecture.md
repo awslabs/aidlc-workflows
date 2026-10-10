@@ -93,7 +93,7 @@ Crossing the two axes gives four quadrants. Three are populated; one is intentio
 
 The framework doesn't produce per-workflow artefacts because such outputs would have to ship with the distribution — which makes them framework-authored harness config, not per-workflow output. The empty cell is the routing rule's signature, not a gap.
 
-> **Framework-authored = ships from upstream; treat as immutable in your project.** Nothing in git or the file system enforces this — `.claude/` is editable territory and you can edit `org.md` or the `phases/*.md` files if you want. But the convention is: override at `team.md` / `project.md` (the right-hand cell) instead of mutating the framework defaults. That keeps your overrides visible at review time, lets the framework upgrade cleanly, and prevents drift between projects sharing the same framework version.
+> **Framework-authored = ships from upstream; treat as immutable in your project.** Nothing in git or the file system enforces this — `.claude/` is editable territory and you can edit `org.md` or the `phases/*.md` files if you want. But the convention is: add your practices at `team.md` / `project.md` (the right-hand cell) instead of mutating the framework defaults. That keeps your additions visible at review time, lets the framework upgrade cleanly, and prevents drift between projects sharing the same framework version.
 
 ### Boundary tests for placing a new concern
 
@@ -117,9 +117,9 @@ The top row partitions further by **form of content**:
 
 - **Framework harness mechanics** → frontmatter / JSON. Workflow ordering, stage definitions, artifact production, gate semantics. Read by tools deterministically. Lives in `.claude/skills/`, `.claude/tools/data/`.
 - **Framework domain reference** → agent KB prose under `.claude/knowledge/aidlc-<agent>-agent/`. The menu of options for a domain (the 5 branching strategies, the deployment patterns, the testing methodologies). Read by the owning agent when it needs the menu.
-- **Framework methodology defaults** → prose at `aidlc/spaces/<active-space>/memory/org.md`. What the framework recommends until a team affirms otherwise. Written in the team's voice (because if the team doesn't override, the org defaults *are* the team's voice).
+- **Framework methodology defaults** → prose at `aidlc/spaces/<active-space>/memory/org.md`. What the framework recommends until a team affirms otherwise. Written in the team's voice (because until the team adds its own practices, the org defaults *are* the team's voice).
 - **Team practices** → prose at `aidlc/spaces/<active-space>/memory/team.md`. The team's selection — "this is how we work", populated by practices-discovery's affirmation gate. Read by agents at decision points (delivery-planning reads branching strategy; the conductor reads walking-skeleton stance in `SKILL.md`).
-- **Project overrides** → prose at `aidlc/spaces/<active-space>/memory/project.md`. Project-specific corrections that override team and org defaults; also populated by practices-discovery's affirmation gate.
+- **Project overrides** → prose at `aidlc/spaces/<active-space>/memory/project.md`. Project-specific corrections loaded alongside the team and org defaults — every applicable layer is additive; fields that declare their own resolution use their own resolvers (`tier_cap` gives project precedence over team and org); also populated by practices-discovery's affirmation gate.
 - **Guardrails** (`## Forbidden`, `## Mandated`, `## Corrections` sections) — present in `org.md`, `team.md`, and `project.md`. Corrective rules for agents — `ALWAYS X`, `NEVER Y`. Loaded into agent context continuously.
 
 ### What not to put in `.claude/` directly
@@ -947,7 +947,7 @@ readers read the rows they share once (`copiedAuditBlocks` in
 
 9. **Minimal rules** -- Only guardrails (~35 lines total) live in the active space memory layer (`aidlc/spaces/<active-space>/memory/`, pulled in via the `.claude/rules/aidlc.md` @-import stub). Everything else (verification, brownfield safeguards, audit format, adaptive patterns) lives in `knowledge/aidlc-shared/` or the static/conditional protocol files. This prevents context bloat in non-AI-DLC conversations since rules are always loaded.
 
-10. **Self-learning loop** -- When a human corrects agent behavior, the correction can become a persistent Rule. The §13 Learnings Ritual (tool-as-actor: `aidlc-learnings.ts` surfaces and persists; the user confirms) writes each confirmed learning as a practice into the active space memory layer — `aidlc/spaces/<active-space>/memory/project.md` (default), one-click promote to `memory/team.md` — or scaffolds a Sensor, applying on the next workflow's compile. See [Rule System](08-rule-system.md).
+10. **Self-learning loop** -- When a human corrects agent behavior, the correction can become a persistent Rule. The §13 Learnings Ritual (tool-as-actor: `aidlc-learnings.ts` surfaces and persists; the user confirms) writes each confirmed learning as a practice into the active space memory layer — `aidlc/spaces/<active-space>/memory/project.md` (default), one-click promote to `memory/team.md` — applying from the next stage delivery of the in-flight workflow — or scaffolds a Sensor, which binds at the next stage-graph compile. See [Rule System](08-rule-system.md).
 
 11. **Phase boundary verification** -- Traceability checks run automatically at phase transitions (Initialization->Ideation auto-proceed, Ideation->Inception, Inception->Construction, Construction->Operation). This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 

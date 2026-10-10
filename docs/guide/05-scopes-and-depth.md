@@ -106,9 +106,11 @@ resolves to `off` from classic. Enable summary confirmation with
 Saved per-intent ceremony choices remain in effect.
 Environment kill switches still take precedence.
 
-Classic's reviewer cap also changes immediately: every reviewer-bearing stage
-runs one advisory pass, and `--review adversarial` cannot raise that cap
-(`--review none` still lowers it). To run the previous classic graph, with CI
+Classic's reviewer cap also changes immediately: reviewer-bearing stages run
+one advisory pass unless overridden. A per-work `--review` level replaces the
+scope cap but cannot exceed a stage's own review class: `--review adversarial`
+restores adversarial review on the stages that declare it, stages declared
+advisory stay advisory, and `--review none` still lowers it. To run the previous classic graph, with CI
 Pipeline and the Operation stages, change the intent to workshop with
 `aidlc engine scope change --scope workshop`; workshop retains the full
 Inception-through-Operation plan and uses a Minimal test strategy by default.

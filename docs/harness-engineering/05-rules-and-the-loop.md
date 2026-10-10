@@ -220,19 +220,20 @@ grows; the stage body is never touched. From there you flesh out the manifest by
 hand using [Sensors](06-sensors.md) — the loop scaffolds the binding; you author
 the check.
 
-### Learnings apply on the next workflow, not the one in flight
+### Learnings apply from the next stage delivery
 
-A learning captured at a gate does **not** change the rules for the rest of the
-current run. You already corrected the agent in conversation for this workflow;
-the rule is for next time. The new line is on disk, but the in-flight workflow
-keeps the compiled view it started with. The *next* `/aidlc` you run recompiles,
-the directory walk picks up the new file, and the rule applies from stage one
-onward.
+A learning captured at a gate lands in an already-selected rule file
+(`project.md` or `team.md`), and the engine re-reads the selected files' text
+before each stage delivery. So the rule reaches the agent at the next
+applicable stage of the current run, and every later workflow. What waits is
+the selection itself: a brand-new rule file enters the directory walk, and a
+new Sensor binds, only when the stage graph is next compiled.
 
-This matters when you author by hand too: editing `team.md` mid-workflow
-will not retroactively change the run in progress. Rules take effect at the next
-compile boundary. If you need a change to bite immediately, finish or restart the
-workflow so the compile re-reads your edit.
+The same holds when you author by hand: editing `team.md` mid-workflow reaches
+the next stage delivery of the run in progress (it does not retroactively
+change stages already run). Sensor configuration is different from rule text:
+bindings and `matches` globs live in the compiled graph, so adding a Sensor or
+editing an existing one takes effect at the next compile boundary.
 
 ---
 

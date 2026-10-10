@@ -99,7 +99,7 @@ dir of per-clone shards under `<record>/audit/`.)
 | Reactive flow install (PACKET_IN) | Learning loop: data plane reports an observation → user confirms → file write into rules/sensors plus a frontmatter edit on the originating stage when a new sensor binding is captured |
 | Proactive route install (BGP advertisement) | Framework PR: ships new stages/rules/sensors before any workflow runs |
 | Topology change → recompute routes | Workflow start → compile reads current source files; subsequent recomputes triggered by next workflow |
-| Pre-installed FIB stable across packet flight | Learning-loop writes during a workflow don't affect the in-flight compiled view; they apply at next workflow start (see §5) |
+| Pre-installed FIB stable across packet flight | Learning-loop writes during a workflow don't change the in-flight compiled selection; rule text in the selected files is re-read at each stage delivery, while new files and sensor bindings wait for the next compile (see §4) |
 | Line-rate forwarding by table lookup | Orchestrator + dispatcher read pre-resolved fields off graph nodes; no resolution walks at runtime |
 
 The plane labels in `stage-graph.json` and the runtime read patterns
@@ -154,10 +154,13 @@ registries:
 The compile emits `stage-graph.json` with the answers baked into each
 stage node. Throughout the workflow, the orchestrator and dispatcher
 read those pre-resolved fields. Learning-loop writes during the
-workflow update source files but don't affect the in-flight compiled
-view — the user already corrected the orchestrator in-stage; the rule
-is for next time. The next workflow's compile picks them up. Same
-shape as BGP not recomputing routes mid-packet-flight.
+workflow update source files but don't change the in-flight compiled
+selection. The selected rule files' text is read fresh before each
+stage delivery, so an admitted learning reaches the next stage of the
+same workflow; a brand-new rule file or Sensor binding enters the
+selection at the next graph compile. Same shape as BGP not
+recomputing routes mid-packet-flight: the topology (selection) is
+stable, the payload (rule text) is read live.
 
 ### Locked and atomic
 
@@ -260,7 +263,9 @@ universal-default rules picked up by filename. Throughout the workflow,
 runtime reads pre-resolved fields off graph nodes. BGP doesn't
 recompute routes mid-packet-flight; AI-DLC doesn't recompile
 mid-workflow. Learning-loop writes during a workflow update source
-files; they enter the compiled view at the next workflow start.
+files; already-selected rule files are re-read at each stage delivery,
+and new selections (files, sensor bindings) enter the compiled view at
+the next graph compile.
 
 ---
 
