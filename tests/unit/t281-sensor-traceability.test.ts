@@ -422,6 +422,11 @@ describe("t281 upstream and target verification", () => {
         { id: "FR2", status: "OK", target: "u2-profile" },
       ],
     });
+    write(proj, "inception/units-generation/unit-requirement-assignments.json", JSON.stringify({ version: 1, assignments: [
+      { id: "FR1", owner: "u1-auth", related: [], required_for: "owner" },
+      { id: "FR2", owner: "u2-profile", related: [], required_for: "owner" },
+      { id: "NFR1", owner: "u2-profile", related: [], required_for: "all" },
+    ] }));
     let out = run(proj, "units-generation", file);
     expect(out.result.pass).toBe(true);
     expect(out.result.gaps).toEqual([]);

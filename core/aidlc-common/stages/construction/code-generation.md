@@ -33,6 +33,8 @@ consumes:
     required: false
   - artifact: unit-of-work
     required: true
+  - artifact: unit-requirement-assignments
+    required: false
   - artifact: requirements
     required: true
 requires_stage:
@@ -85,6 +87,7 @@ Read all design artifacts for the current unit:
 - Domain design (component catalogue) from `<record>/inception/domain-design/components.md` (if exists)
 - Contracts from `<record>/inception/contract-design/contract-summary.md` (if exists)
 - Unit definition from `<record>/inception/units-generation/unit-of-work.md` (if exists)
+- Without stories and with a Unit, read `<record>/inception/units-generation/unit-requirement-assignments.json` for the independent FR/NFR set: owner plus explicitly required participants or all Units. Keep shared requirements. If the file is absent, the sensor can recover only complete, explicit upstream assignments; otherwise follow its exact assignment repair guidance and normal Units Generation review. Never trim expectations to match code coverage.
 - Story map from `<record>/inception/units-generation/unit-of-work-story-map.md` (if exists)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md` (if exists)
 

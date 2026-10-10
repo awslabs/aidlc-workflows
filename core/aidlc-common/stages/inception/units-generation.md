@@ -17,6 +17,8 @@ produces:
   - unit-of-work-dependency
   - unit-of-work-story-map
   - traceability
+optional_produces:
+  - unit-requirement-assignments
 consumes:
   - artifact: components
     required: true
@@ -39,7 +41,7 @@ scopes:
   - classic
   - workshop
 inputs: <record>/inception/domain-design/components.md, <record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced)
-outputs: unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map.md, traceability.json (under this stage's record dir, engine-resolved)
+outputs: unit-requirement-assignments.json (required when stories.md is absent), unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map.md, traceability.json (under this stage's record dir, engine-resolved)
 ---
 
 # Units Generation
@@ -97,7 +99,7 @@ Present the decomposition plan to the user as a structured question:
 
 ### Step 5: Execute Plan — Generate Unit Artifacts
 
-Based on the approved plan, generate 4 artifacts in `<record>/inception/units-generation/` (the three Unit artifacts below plus `traceability.json`, whose contents are specified at the end of this step):
+Based on the approved plan, generate the Unit artifacts in `<record>/inception/units-generation/` (the three Unit markdown artifacts below plus `traceability.json`, and when stories are absent, `unit-requirement-assignments.json`):
 
 **unit-of-work.md:**
 - Unit definitions (name, description, boundaries)
@@ -134,6 +136,26 @@ NOTE: This artifact describes topology only. It does NOT pick a single "recommen
 - Rows that span multiple units (cross-cutting concerns)
 - Implementation order within each unit
 - Coverage verification: every enumerated ID assigned, every unit has rows
+
+**unit-requirement-assignments.json (required when `stories.md` is absent):**
+- Enumerate every FR and intent-level NFR ID in `requirements.md`, including FR group IDs. Never take the expected set from downstream traceability or coverage.
+- Assign one accountable `owner` (exact DAG directory name) per ID. Declare `related` directories explicitly and `required_for`: `owner` checks only the owner, `participants` checks owner plus related Units, `all` checks every DAG Unit. Shared NFRs and cross-cutting FRs must keep their full applicability; being related alone does not mean required.
+- Resolve unclear ownership or applicability with the human in the decomposition plan. Do not guess from implementation evidence. Include the assignments in the completion summary and architecture review.
+- Use schema version 1 with one row per requirement; no duplicates, unknown IDs/Units, draft markers, or omitted NFRs.
+
+```json
+{
+  "version": 1,
+  "assignments": [
+    { "id": "FR1", "owner": "u1-api", "related": [], "required_for": "owner" },
+    { "id": "NFR1", "owner": "u1-api", "related": ["u2-ui"], "required_for": "all" }
+  ]
+}
+```
+
+The traceability sensor validates this input at Units Generation and uses the
+same contract for per-Unit Code Generation. It is an optional declared artifact
+only because workflows with stories keep their existing US/AC route.
 
 Create `<record>/inception/units-generation/traceability.json`. When
 `stories.md` exists, enumerate every `USx.y`; otherwise enumerate every `FR`.
@@ -176,7 +198,9 @@ For `unit-of-work-dependency.md`, `required-sections` also requires a
 well-formed, cycle-free fenced `yaml` edge block. `traceability` owns
 `traceability.json`, derives the Unit set, and verifies every story, or every
 fallback `FR` when `stories.md` is not produced, maps to its declared target
-Unit.
+Unit. Without stories it also validates the complete independent FR/NFR
+assignment document, including common applicability; it never learns the
+expected set from `traceability.json`.
 
 ## Learn
 

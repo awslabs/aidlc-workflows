@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { migrateProjectRequirementAssignments } from "./aidlc-unit-requirements.ts";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import {
@@ -12683,6 +12684,7 @@ export async function main(
     } else {
       executeSettingsAndProjectMutation(settingsMutation, plan);
     }
+    if (refreshing && !recordOnly) prepared.notes.push(...migrateProjectRequirementAssignments(projectDir));
     // Said as soon as it is done, so no later step can leave it unsaid.
     if (options.mode === "human") {
       writeMenuLines("", retiredFilesReport(projectDir, actions, stamp.frameworkVersion, true, switchedRows));
