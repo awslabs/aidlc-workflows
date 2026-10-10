@@ -908,7 +908,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     const bad = lastDirective(run(ORCHESTRATE, ["next", "--guard-policy", "maybe"], proj).stdout);
     expect(bad.kind).toBe("print");
     expect(bad.message).toContain("takes `--guard-policy` with strict|relaxed|off");
-    expect(bad.message).toContain("does not take `maybe`");
+    expect(bad.message).toContain('does not take "maybe"');
     const bare = lastDirective(run(ORCHESTRATE, ["next", "--guard-policy"], proj).stdout);
     expect(bare.kind).toBe("error");
     expect(bare.message).toContain("--guard-policy requires <strict|relaxed|off>.");

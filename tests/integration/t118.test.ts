@@ -693,7 +693,11 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(existsSync(statePath(p))).toBe(false);
   });
 
-  test("SP5a positional scope + description -> creation preserves the request and does not ask", () => {
+  test("SP5a positional scope + loose words -> both readings, nothing created, nothing asked", () => {
+    // A plan's name at the start of their own sentence is ambiguous with their
+    // first word, so the engine takes nothing from the line and names both
+    // readings (t-three-ways-to-read-a-line): their words are kept whole, no
+    // question is stored, and no state is written.
     const p = cleanProj();
     const r = run(ORCHESTRATE, [
       "next",
@@ -707,11 +711,11 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ]);
     const d = directive(r);
     expect(d.kind).toBe("print");
-    expect(d.message).toContain("intent create --scope bugfix");
-    const id = String(d.message).match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
-    expect(id).toMatch(/^[0-9a-f]{8}$/);
-    const stored = JSON.parse(readFileSync(join(p, "aidlc", ".aidlc-sessions", "questions", `${id}.json`), "utf-8"));
-    expect(stored.text).toBe("Fix duplicate todo persistence");
+    expect(d.message).not.toContain("intent create --scope bugfix");
+    expect(d.message).toContain("--scope bugfix -- 'Fix duplicate todo persistence'");
+    expect(d.message).toContain("'bugfix Fix duplicate todo persistence'");
+    expect(String(d.message)).not.toMatch(/--request [0-9a-f]{8}/);
+    expect(existsSync(join(p, "aidlc", ".aidlc-sessions", "questions"))).toBe(false);
     expect(d.kind).not.toBe("ask");
     expect(existsSync(statePath(p))).toBe(false);
   });

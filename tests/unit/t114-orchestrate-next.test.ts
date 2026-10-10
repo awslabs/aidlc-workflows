@@ -521,7 +521,7 @@ describe("t114 in-session config alias", () => {
       const out = runNext(proj, args).out;
       expect(out, args.join(" ")).toContain('"kind":"print"');
       expect(out, args.join(" ")).toContain(`takes \`${args[0]}\` with`);
-      expect(out, args.join(" ")).toContain(`does not take \`${args[1]}\``);
+      expect(out, args.join(" ")).toContain(`does not take ${JSON.stringify(JSON.stringify(args[1])).slice(1, -1)}`);
       expect(existsSync(engineTouchMarkerPath(proj)), args.join(" ")).toBe(false);
     }
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);

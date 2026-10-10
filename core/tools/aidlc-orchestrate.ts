@@ -832,6 +832,10 @@ const KEPT_REQUEST_LINE = "Carrying on with your earlier request.";
 const KEPT_REQUEST_FLAGS = new Set([
   "intent", "scope", "positionalScope", "depth", "testStrategy", "projectType", "review",
   "changeControl", "ceremony", "planChanges", "newIntent", "compose", "newScope",
+  // How the line reads is still a request: words the delimiter marked as
+  // theirs, and a line only the agent can read whole. Both keep their words,
+  // so the restart carries on with what they asked for rather than losing it.
+  "markedWords", "readingStep",
 ]);
 // Said first on the step the kept request leads to.
 let activeKeptRequestLine: string | null = null;
@@ -3978,7 +3982,10 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       ? { configCommand: args, parseError: usage }
       : { configCommand: args };
   }
-  const configIndex = args.indexOf("--config");
+  // Behind the delimiter `--config` is one of their words, like every other
+  // token there, so the scan for this engine's own flag stops at the mark.
+  const beforeMark = args.indexOf("--");
+  const configIndex = (beforeMark < 0 ? args : args.slice(0, beforeMark)).indexOf("--config");
   if (configIndex >= 0) {
     const trailing = args.slice(configIndex + 1);
     if (
@@ -7308,11 +7315,15 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     const theirs = `run \`${next} -- ${quoteCommandArgument(said)}\`, which keeps every word of theirs`;
     const ask = "If you cannot tell, ask them once in plain words.";
     if (step.kind === "value") {
+      // Their value is shown as a quoted string, never inside backticks: in
+      // every directive of this engine a backticked span is a command to run,
+      // and a value of theirs is not one. The only command here that carries
+      // their text is the delimiter one above, where it is one quoted argument.
       emit(printDirective(
         `\`next\` takes \`${step.flag}\` with ${step.valid.join("|")}, and does not take ` +
-        `\`${step.value}\`. If the person meant one of those, run \`${next}\` again with ` +
+        `${JSON.stringify(step.value)}. If the person meant one of those, run \`${next}\` again with ` +
         `\`${step.flag}\` and that word, and their own words after it. ` +
-        `If \`${step.value}\` is part of what they asked for, ${theirs}. ${ask}`,
+        `If that value is part of what they asked for, ${theirs}. ${ask}`,
       ));
       return;
     }
