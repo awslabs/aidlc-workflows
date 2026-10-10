@@ -353,6 +353,7 @@ import {
   authoritativeProjectDescription,
   harnessDir,
   hookActivation,
+  hookChildEnv,
   hookLiveness,
   hooksOffAgentStep,
   OWN_TERMINAL_PRESENCE_STEP,
@@ -729,13 +730,7 @@ function engineRelativeRecordDir(projectDir: string): string | null {
 function engineChildEnv(
   extra: Record<string, string> = {},
 ): Record<string, string | undefined> {
-  return {
-    ...process.env,
-    ...extra,
-    ...(engineSessionId
-      ? { AIDLC_SESSION_OVERRIDE: engineSessionId }
-      : {}),
-  };
+  return hookChildEnv(engineProjectDir ?? "", engineSessionId, extra);
 }
 
 // The person's only in-session word that a host is skipping every hook: a
