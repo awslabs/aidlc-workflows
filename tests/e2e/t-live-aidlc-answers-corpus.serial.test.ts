@@ -49,15 +49,9 @@ const gate = (harness: LiveHarness): string | null => liveGate(harness, LIVE, "s
 // Items a real agent can be driven through: a fixture exists, nothing is waited for, and the reply is one a person can
 // give in a live chat (a dismissed box is the unit check's). Codex and Kiro CLI have no question box, so picker items
 // stay with Claude Code; a `$aidlc` line is Codex's.
-/** Questions no real agent can be driven through yet, with the reason the report carries. */
-const LIVE_SKIP: Partial<Record<AnswersItem["question"], string>> = {
-  // The fixture's typed line ("build a notes app") gets the compose offer, which names no numbered options (reply
-  // "compose" or a plan by name); the items' labels are the scope-confirm question's. A corpus finding, not driven.
-  "plan-offer": "the fixture shows the compose offer (no numbered options); the items' labels are the scope-confirm question's",
-};
 function eligible(harness: LiveHarness): AnswersItem[] {
   return ANSWERS.filter((item) =>
-    NO_FIXTURE[item.question] === undefined && LIVE_SKIP[item.question] === undefined && waitsFor(item) === null &&
+    NO_FIXTURE[item.question] === undefined && waitsFor(item) === null &&
     !(item.via === "picker" && (item.picker?.answer === null || item.picker?.answer === "" || harness !== "claude")) &&
     !(item.via === "codex" && harness !== "codex"));
 }
@@ -67,9 +61,18 @@ const sample = (harness: LiveHarness): AnswersItem[] =>
 const before = new Map<string, HomeDigest>();
 const outcomes: LiveOutcome<AnswersItem>[] = [];
 
-// What the project held before the person replied: the records, and how long the audit was.
-interface Start { records: number; events: number }
-const startOf = (proj: string): Start => ({ records: listIntents(proj).length, events: readAuditShardEvents(proj).length });
+// What the project held before the person replied: the records, how long the audit was, and how many rows of each
+// event the fixture itself carries (a gate fixture holds its own summary confirmation, say): only rows after that are
+// the reply's.
+interface Start { records: number; events: number; rowsBefore: Record<string, number> }
+const RECORD_EVENTS = ["PLAN_APPROVAL_RECORDED", "GATE_APPROVED", "GATE_REJECTED", "REQUEST_ROUTED", "ARTIFACT_REUSED", "QUESTION_ANSWERED", "SUMMARY_CONFIRMATION_RECORDED", "VERIFICATION_COMMAND_RECORDED", "CONSTRUCTION_POLICY_RECORDED"];
+const ANSWER_EVENTS = ["QUESTION_ANSWERED", "SUMMARY_CONFIRMATION_RECORDED", "VERIFICATION_COMMAND_RECORDED", "CONSTRUCTION_POLICY_RECORDED"];
+const startOf = (proj: string): Start => ({
+  records: listIntents(proj).length,
+  events: readAuditShardEvents(proj).length,
+  rowsBefore: Object.fromEntries(RECORD_EVENTS.map((event) => [event, rows(proj, event).length])),
+});
+const rowsAfter = (proj: string, start: Start, event: string) => rows(proj, event).slice(start.rowsBefore[event] ?? 0);
 
 // The choice on record now, as the item's `end.recorded` names it: the harness's own readers first, then the audit rows
 // the agent's answer commands write. A routing reply leaves no row of its own: separate new work is a new record, and
@@ -78,24 +81,23 @@ function recordedNow(item: AnswersItem, proj: string, start: Start): string {
   const choice = recorded(proj, item).choice;
   // "unknown" is the plan question no longer open: the agent answered it, and the record is the audit row.
   if (choice !== "none" && choice !== "unknown") return choice;
-  const events = readAuditShardEvents(proj).map((e) => e.event);
+  const since = (event: string) => rowsAfter(proj, start, event).length > 0;
   if (item.question === "routing") {
     if (listIntents(proj).length > start.records) return "Separate new piece of work";
-    if (events.includes("REQUEST_ROUTED")) return "Reshape the active work";
-    return events.slice(start.events).some((e) => e !== "HUMAN_TURN") ? "Part of the active work" : "none";
+    if (since("REQUEST_ROUTED")) return "Reshape the active work";
+    return readAuditShardEvents(proj).slice(start.events).some((e) => e.event !== "HUMAN_TURN") ? "Part of the active work" : "none";
   }
-  if (events.includes("PLAN_APPROVAL_RECORDED")) return "approved plan";
-  if (events.includes("GATE_APPROVED")) return "approved";
-  if (events.includes("GATE_REJECTED")) return "rejected";
-  if (events.includes("REQUEST_ROUTED")) return "routed";
-  if (events.includes("ARTIFACT_REUSED")) return rows(proj, "ARTIFACT_REUSED").at(-1)?.Decision ?? "reused";
+  if (since("PLAN_APPROVAL_RECORDED")) return "approved plan";
+  if (since("GATE_APPROVED")) return "approved";
+  if (since("GATE_REJECTED")) return "rejected";
+  if (since("REQUEST_ROUTED")) return "routed";
+  if (since("ARTIFACT_REUSED")) return rowsAfter(proj, start, "ARTIFACT_REUSED").at(-1)?.Decision ?? "reused";
   // The agent's answer command lands on a row named for the question (a summary confirmation, a verification command, a
   // Construction policy) or on QUESTION_ANSWERED; the row carries the choice.
-  const answered = ANSWER_EVENTS.flatMap((event) => rows(proj, event)).at(-1);
+  const answered = ANSWER_EVENTS.flatMap((event) => rowsAfter(proj, start, event)).at(-1);
   if (answered) return answered.Choice ?? answered.Details ?? answered.Decision ?? "answered";
   return "none";
 }
-const ANSWER_EVENTS = ["QUESTION_ANSWERED", "SUMMARY_CONFIRMATION_RECORDED", "VERIFICATION_COMMAND_RECORDED", "CONSTRUCTION_POLICY_RECORDED"];
 // True once the choice the item expects is on record: the drive stops at that point.
 function endReached(item: AnswersItem, proj: string, start: Start): boolean {
   const end = item.expected.end;
@@ -125,7 +127,7 @@ function judge(item: AnswersItem, proj: string, typed: string, transcript: Trans
     else if (!endReached(item, proj, start)) failures.push(`recorded ${JSON.stringify(now)}, expected ${JSON.stringify(end.recorded)}`);
     if (end.words && item.via !== "picker") {
       const words = typed.replace(/^[/$]aidlc\s*/, "");
-      const row = ["GATE_APPROVED", "GATE_REJECTED", "QUESTION_ANSWERED", "PLAN_APPROVAL_RECORDED"].map((e) => rows(proj, e).at(-1)).find((r) => r !== undefined);
+      const row = RECORD_EVENTS.map((e) => rowsAfter(proj, start, e).at(-1)).find((r) => r !== undefined);
       const kept = recorded(proj, item).words ?? "";
       if (!(row?.["Person Reply"] ?? "").includes(words) && !kept.includes(words)) failures.push(`the person's words ${JSON.stringify(words)} are not on the record beside the choice`);
     }
@@ -167,7 +169,7 @@ function showsQuestion(item: AnswersItem, firstText: string): string | null {
  * so that line (the fixture's own) is said first; null where the item's own line is the whole exchange. */
 const FIRST_PROMPT: Partial<Record<AnswersItem["question"], string | null>> = {
   routing: "/aidlc fix the login",
-  "plan-offer": "/aidlc build a notes app",
+  "plan-offer": "/aidlc fix the login: it rejects a correct password",
   "scope-confirm": "/aidlc fix the login timeout",
   "resume-reentry": null,
   "jump-target": null,
@@ -305,7 +307,6 @@ for (const harness of HARNESSES) {
       test.skip(`skipped: ${reason}`, () => {});
       return;
     }
-    for (const [question, reason] of Object.entries(LIVE_SKIP)) test.skip(`${question}: ${reason}`, () => {});
     for (const item of sample(harness)) {
       test(`${item.id} ${item.question} ${item.via} ${JSON.stringify(item.input)}`, async () => {
         const outcome = await drive(harness, item);
