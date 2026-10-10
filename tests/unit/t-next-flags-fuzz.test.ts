@@ -28,8 +28,14 @@ import {
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 import {
+  argumentIsFlagShaped,
+  classifyTerminalCommand,
   hooksHealthDir,
+  isReadOnlyNextArgv,
+  isRefusedModifierNextArgv,
+  isRetiredOnlyNextArgv,
   readAuditShardEvents,
+  readNextLine,
   splitKiroCommandArgs,
   validScopes,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -402,6 +408,42 @@ describe("the flag parser over a seeded sweep of lines", () => {
       checked++;
     }
     expect(checked).toBeGreaterThan(50);
+  });
+
+  // One reading per line, and the seams that run before any agent reads take
+  // the same one: a line the engine would hand to the agent is never run from a
+  // seam, and one quoted argument that holds only flags reads as the tokens in
+  // it. This is the invariant row 3 broke, where the two readings of one line
+  // disagreed.
+  test(`reads each of the ${CASES} lines exactly one way, and both seams take that reading`, () => {
+    const kinds = new Set(["exact", "words", "untaken-flag", "value", "plan-word", "noun"]);
+    let exact = 0;
+    let handed = 0;
+    for (const testCase of cases) {
+      const note = where(testCase);
+      const reading = readNextLine(testCase.argv);
+      expect(kinds.has(reading.kind), `${note} kind=${reading.kind}`).toBe(true);
+      if (reading.kind === "exact") exact++;
+      else handed++;
+      // A line the engine hands to the agent is not a terminal command and not
+      // a read-only mode at either seam, save this engine's own refusals, which
+      // carry no workflow work either way.
+      if (reading.kind !== "exact" && !isRefusedModifierNextArgv(testCase.argv)) {
+        expect(classifyTerminalCommand([...testCase.argv]), note).toBeNull();
+        expect(isReadOnlyNextArgv(testCase.argv), note).toBe(isRetiredOnlyNextArgv(testCase.argv));
+      }
+      // The same line as one quoted argument: when it holds nothing but flags
+      // and their values it reads as those tokens; holding a bare word it is
+      // the person's sentence, which is theirs whole.
+      if (testCase.argv.length > 1 && !testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token))) {
+        const line = testCase.argv.join(" ");
+        const quoted = readNextLine([line]);
+        expect(argumentIsFlagShaped(line) ? quoted.kind : "words", `quoted ${note}`)
+          .toBe(argumentIsFlagShaped(line) ? reading.kind : "words");
+      }
+    }
+    expect(exact, "some of the generated lines act").toBeGreaterThan(50);
+    expect(handed, "some of them go to the agent").toBeGreaterThan(50);
   });
 });
 

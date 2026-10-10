@@ -54,6 +54,7 @@ import {
   activeSpace,
   agentsDir,
   classifyTerminalCommand,
+  readNextLine,
   decodeHarnessPlainText,
   fenceCommandOutput,
   relayAsTextBlock,
@@ -550,6 +551,12 @@ const PRE_DISPATCH_FLAGS = new Set([
 ]);
 
 function shouldPreDispatchNext(args: string[], cwd: string): boolean {
+  // Only a line the engine reads exactly is run from here. Anything it would
+  // hand to the agent (a flag it does not take, a value its table does not
+  // hold, a plan word at the start of their sentence, one of its nouns with
+  // their sentence after it) goes to the agent untouched, so no seam acts on
+  // the person's words before anyone has read them.
+  if (readNextLine(args).kind !== "exact") return false;
   // A single-stage next owns its issuance/audit boundary. Let the conductor's
   // exact first tool call issue it once, rather than issuing inside this hook.
   if (args.includes("--single")) return false;
