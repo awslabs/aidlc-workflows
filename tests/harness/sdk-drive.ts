@@ -160,6 +160,11 @@ export interface DriveResult {
    * rendering, non-deterministic. Provided for debugging only — do not assert.
    */
   assistantText: string;
+  /**
+   * The assistant's prose up to its first AskUserQuestion call: what the person had read when the question appeared.
+   * The whole prose when it asked nothing. Same DANGER as assistantText; for judging words, never for asserting bytes.
+   */
+  assistantTextBeforeFirstAsk?: string;
   /** The SDK's terminal result event, or undefined if the stream never ended. */
   resultEvent: ResultEvent | undefined;
   /** Contents of aidlc-docs/aidlc-state.md after the run, if it exists. */
@@ -723,6 +728,7 @@ export async function driveAidlc(
   >();
   const permissionToolInputs = new Map<string, Record<string, unknown>>();
   let assistantText = "";
+  let assistantTextBeforeFirstAsk: string | undefined;
   let resultEvent: ResultEvent | undefined;
   let askMenuIndex = 0;
   let turn = 1;
@@ -957,6 +963,7 @@ export async function driveAidlc(
                 block.name === "AskUserQuestion"
               ) {
                 askUserQuestionToolUseIndex++;
+                assistantTextBeforeFirstAsk ??= assistantText;
                 if (
                   askUserQuestionToolUseIndex ===
                     stopAfterAskUserQuestionAt &&
@@ -1162,6 +1169,7 @@ export async function driveAidlc(
   const result: DriveResult = {
     toolResults,
     assistantText,
+    assistantTextBeforeFirstAsk: assistantTextBeforeFirstAsk ?? assistantText,
     resultEvent,
     askedQuestions,
     timedOut,
