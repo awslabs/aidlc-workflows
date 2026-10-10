@@ -97,6 +97,7 @@ import {
   selectedGuardRecoveryRemedyAction,
   normalizeGuardRecoveryText,
   personsGateFeedback,
+  personsGateMessagePointer,
   personsGateWords,
   personsLatestGatePick,
   resolveInvokingSessionId,
@@ -329,10 +330,19 @@ function revisionCountOf(content: string): number {
 // since it was shown, kept verbatim by the human-turn hook. The conductor read
 // them and reported the choice; the receipt carries both.
 const PERSONS_WORDS_FIELD = "Person Reply";
+// The same field the log tool pairs with their words on a decision row.
+const PERSONS_MESSAGE_FIELD = "Message Id";
 function personsWordsFields(pd: string, slug: string, unit?: string): Record<string, string> {
   try {
-    const words = personsGateWords(pd, resolveInvokingSessionId(pd), { stage: slug, ...(unit ? { unit } : {}) });
-    return words ? { [PERSONS_WORDS_FIELD]: words } : {};
+    const gate = { stage: slug, ...(unit ? { unit } : {}) };
+    const words = personsGateWords(pd, resolveInvokingSessionId(pd), gate);
+    if (words) return { [PERSONS_WORDS_FIELD]: words };
+    // No words means the engine could not tell which chat answered (their
+    // words are kept per chat), so the row points at the message the hook
+    // kept for them rather than saying nothing about the person at all. The
+    // pointer is the record's own; the agent never types their words here.
+    const pointer = personsGateMessagePointer(pd, gate);
+    return pointer ? { [PERSONS_MESSAGE_FIELD]: pointer } : {};
   } catch {
     return {};
   }

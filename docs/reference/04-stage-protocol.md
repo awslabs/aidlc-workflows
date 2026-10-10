@@ -149,9 +149,14 @@ choice is available. The engine never reads meaning into the reply
 text, the `(Recommended)` decoration, and the offered labels). It requires a
 human turn since the gate was shown and records the person's exact words, kept by
 the human-turn hook for that chat, on `GATE_APPROVED` as `Person Reply` and on
-`GATE_REJECTED` as the feedback. An approval with an instruction ("looks fine but
-rename the handler") is recorded as **Approve**, and the conductor then does what
-they asked. An approval that also asks to stop for now is reported with `--park`,
+`GATE_REJECTED` as the feedback. Those words are kept per chat. When the engine
+cannot tell which chat ran the command (an agent shell no host names it in), the
+row instead carries `Message Id`, naming the message the hook kept for their
+latest reply after the gate was shown, so the record says where their words are
+rather than nothing about the person. It is never a copy the agent typed, and it
+is left out when more than one chat has replied since the gate was shown. An
+approval with an instruction ("looks fine but rename the handler") is recorded as
+**Approve**, and the conductor then does what they asked. An approval that also asks to stop for now is reported with `--park`,
 and the engine parks the workflow, so `report` answers `parked`.
 
 When a report names no choice, the refusal says what to do: with the person's
