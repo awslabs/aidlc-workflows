@@ -849,6 +849,44 @@ function seedTwoBoundIntents(proj: string): void {
 }
 
 describe("t265b hook lifecycle", () => {
+  test("summary confirmation is a planning prerequisite, never Plan Approval (#2265)", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation", "todo-core");
+      for (const prefix of ["aidlc", "bun .claude/tools/aidlc.ts"]) {
+        for (const verb of ["decision", "answer"]) {
+          const command = `${prefix} engine log ${verb} --stage code-generation --checkpoint summary-confirmation --questions-file ${RECORD_REL}/construction/todo-core/code-generation/questions.md --unit todo-core --details 'Looks correct'`;
+          const result = runHook(proj, BASH(command));
+          expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+          for (const foreign of [
+            command.replace("--stage code-generation", "--stage build-and-test"),
+            command.replace("--checkpoint summary-confirmation", "--checkpoint unrelated"),
+            `${command} > src/generated.ts`,
+            `${command}; printf code > src/generated.ts`,
+          ]) expect(runHook(proj, BASH(foreign)).code, foreign).toBe(2);
+        }
+      }
+      // Admission records no approval: source mutation and developer dispatch
+      // still fail, and the log owner refuses missing confirmation evidence.
+      expect(runHook(proj, WRITE(join(proj, "src", "generated.ts"))).code).toBe(2);
+      expect(runHook(proj, {
+        hook_event_name: "PreToolUse", tool_name: "Task",
+        tool_input: { subagent_type: "aidlc-developer-agent", prompt: "AIDLC-UNIT: todo-core\nImplement todo-core" },
+      }).code).toBe(2);
+      const missing = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-log.ts"),
+        "answer", "--stage", "code-generation", "--checkpoint", "summary-confirmation",
+        "--questions-file", join(proj, RECORD_REL, "missing.md"), "--details", "Looks correct",
+        "--unit", "todo-core", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env: { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "0" }, encoding: "utf-8",
+      });
+      expect(missing.status).not.toBe(0);
+      expect(readAllAuditShards(proj)).not.toContain("**Event**: SUMMARY_CONFIRMATION_RECORDED");
+      expect(readAllAuditShards(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    } finally { rmSync(proj, { recursive: true, force: true }); }
+  });
+
   // The bytes the approval excludes must never reach the worker, on either path.
   const APPENDIX =
     "\n## Review\n\n**Verdict:** READY\n**Reviewer:** aidlc-architecture-reviewer-agent\n" +
@@ -2189,8 +2227,8 @@ describe("t265b hook lifecycle", () => {
           `bun ${entry} engine bolt swarm-checkpoint --action verify --batch 1 --units todo-core,auth`,
           `bun ${entry} engine bolt swarm-checkpoint --action status > src/inline.ts`,
           `bun ${entry} engine bolt swarm-checkpoint --action status; printf code > src/inline.ts`,
-          `bun ${entry} engine log decision --stage code-generation --checkpoint summary-confirmation`,
-          `bun ${entry} engine log answer --stage code-generation --checkpoint plan-approval --checkpoint summary-confirmation`,
+          `bun ${entry} engine log decision --stage code-generation --checkpoint unrelated`,
+          `bun ${entry} engine log answer --stage code-generation --checkpoint plan-approval --checkpoint unrelated`,
           `bun ${entry} system lifecycle uninstall --yes`,
           `bun ${entry} engine orchestrate next > src/inline.ts`,
           `bun ${entry} engine orchestrate next; printf code > src/inline.ts`,
@@ -2565,8 +2603,8 @@ describe("t265b hook lifecycle", () => {
         "aidlc engine bolt checkpoint --action status --action verify --unit todo-core",
         "aidlc engine bolt start --name todo-core",
         "aidlc engine bolt swarm-checkpoint --action status > src/inline.ts",
-        "aidlc engine log decision --stage code-generation --checkpoint summary-confirmation",
-        "aidlc engine log decision --stage code-generation --checkpoint plan-approval --checkpoint summary-confirmation",
+        "aidlc engine log decision --stage code-generation --checkpoint unrelated",
+        "aidlc engine log decision --stage code-generation --checkpoint plan-approval --checkpoint unrelated",
         "aidlc engine log review --stage code-generation",
         "aidlc engine state advance",
         "aidlc system lifecycle uninstall --yes",

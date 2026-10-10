@@ -1752,10 +1752,12 @@ function isPlanApprovalPrerequisite(
   if (noun === "testing-posture" && verb === "begin") return true;
   if (noun !== "log" || (verb !== "decision" && verb !== "answer")) return false;
 
+  // Summary confirmation precedes plan generation. Admission delegates reply,
+  // questions-file and Unit validation to the log owner; it grants no approval.
   const routeArgs = args.slice(3);
   return (
     lastFlagValue(routeArgs, "--stage") === GUARDED_STAGE &&
-    lastFlagValue(routeArgs, "--checkpoint") === "plan-approval"
+    ["plan-approval", "summary-confirmation"].includes(lastFlagValue(routeArgs, "--checkpoint") ?? "")
   );
 }
 
