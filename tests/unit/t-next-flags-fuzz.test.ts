@@ -135,6 +135,9 @@ type Shape =
   | "untaken-equals"
   | "flag-after-words"
   | "after-delimiter"
+  | "plan-word-split"
+  | "plan-word-quoted"
+  | "plan-word-named"
   | "blank";
 
 interface Case {
@@ -168,6 +171,7 @@ function buildCase(next: () => number): Case {
     "words-only", "valued-flag", "ceremony-flag", "fence-flag", "boolean-flag", "bad-value",
     "missing-value", "valueless-positional", "untaken-answer", "untaken-misspelt", "untaken-unknown",
     "untaken-equals", "flag-after-words", "after-delimiter", "blank",
+    "plan-word-split", "plan-word-quoted", "plan-word-named",
   ];
   const shape = shapes[Math.floor(next() * shapes.length)];
   const tailLength = 1 + Math.floor(next() * 3);
@@ -176,6 +180,27 @@ function buildCase(next: () => number): Case {
   switch (shape) {
     case "words-only":
       return { shape, argv: [...tail], tail };
+    // The same line, as the three harnesses hand it over: the person's own
+    // sentence opening with a word that is also a plan's name, split into
+    // tokens or quoted whole (both ambiguous), and the plan named in its own
+    // argument, which is the reading the orchestrator skill asks the agent for.
+    case "plan-word-split": {
+      // Nothing of theirs is spent on a reading step, so the whole line is
+      // their words; with one word after the plan name it is the plan and that
+      // description, as it is in every form of the line.
+      const plan = pick([...SCOPES]);
+      const words = tail.length > 1 ? [plan, ...tail] : tail;
+      return { shape, argv: [plan, ...tail], tail: words };
+    }
+    case "plan-word-quoted": {
+      // One argument holding the whole line: the engine never splits their
+      // sentence for them, so every word of it is the request.
+      const plan = pick([...SCOPES]);
+      const line = [plan, ...tail].join(" ");
+      return { shape, argv: [line], tail: [line] };
+    }
+    case "plan-word-named":
+      return { shape, argv: [pick([...SCOPES]), tail.join(" ")], tail: [tail.join(" ")] };
     case "valued-flag": {
       const entry = pick(VALUED_FLAGS);
       const withTail = next() < 0.6;
@@ -432,14 +457,31 @@ describe("the flag parser over a seeded sweep of lines", () => {
         expect(classifyTerminalCommand([...testCase.argv]), note).toBeNull();
         expect(isReadOnlyNextArgv(testCase.argv), note).toBe(isRetiredOnlyNextArgv(testCase.argv));
       }
-      // The same line as one quoted argument: when it holds nothing but flags
-      // and their values it reads as those tokens; holding a bare word it is
-      // the person's sentence, which is theirs whole.
+      // The same line as one quoted argument, as a harness that quotes the
+      // whole turn hands it over. Nothing but flags and their values reads as
+      // those tokens; a sentence opening with a plan's name is the same reading
+      // step either way, because it is the same line; any other sentence is
+      // theirs whole.
       if (testCase.argv.length > 1 && !testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token))) {
         const line = testCase.argv.join(" ");
         const quoted = readNextLine([line]);
-        expect(argumentIsFlagShaped(line) ? quoted.kind : "words", `quoted ${note}`)
-          .toBe(argumentIsFlagShaped(line) ? reading.kind : "words");
+        if (argumentIsFlagShaped(line) || reading.kind === "plan-word") {
+          // A sentence opening with a plan's name is the same reading step
+          // either way, because it is the same line.
+          expect(quoted, `quoted ${note}`).toEqual(reading);
+        } else {
+          // Otherwise the engine cannot see a flag or a noun inside one
+          // argument of theirs, so the line is their words whole, and never a
+          // reading it would act on differently.
+          expect([reading.kind, "words"], `quoted ${note} -> ${quoted.kind}`).toContain(quoted.kind);
+        }
+        // And the seams stand back from the quoted form exactly as from the
+        // split one: one line, one reading, wherever it is read.
+        // One line, so this engine's own refusal is read off the same tokens.
+        if (quoted.kind !== "exact" && !isRefusedModifierNextArgv(testCase.argv)) {
+          expect(classifyTerminalCommand([line]), `quoted ${note}`).toBeNull();
+          expect(isReadOnlyNextArgv([line]), `quoted ${note}`).toBe(isRetiredOnlyNextArgv([line]));
+        }
       }
     }
     expect(exact, "some of the generated lines act").toBeGreaterThan(50);

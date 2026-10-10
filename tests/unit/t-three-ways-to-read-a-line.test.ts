@@ -206,6 +206,28 @@ describe("a plan word at the start of their sentence", () => {
     expect(colon.readingStep).toBeUndefined();
   });
 
+  test("the three ways a harness hands that line over read the same", () => {
+    // Settled with the conductor 2026-10-10: the person's sentence opening with
+    // a plan's name is the same reading step however it arrives, and the plan
+    // named in its own argument (what the orchestrator skill asks the agent
+    // for) is the reading already made, so it acts.
+    const line = "classic car rental website";
+    const split = splitKiroCommandArgs(line);
+    for (const argv of [split, [line]]) {
+      const parsed = parseNextFlags([...argv]);
+      expect(parsed.readingStep?.kind, JSON.stringify(argv)).toBe("plan-word");
+      expect(parsed.intent, JSON.stringify(argv)).toBe(line);
+      expect(parsed.positionalScope, JSON.stringify(argv)).toBeUndefined();
+      // No seam acts on it before the agent reads it, in either form.
+      expect(classifyTerminalCommand([...argv]), JSON.stringify(argv)).toBeNull();
+      expect(isReadOnlyNextArgv(argv), JSON.stringify(argv)).toBe(false);
+    }
+    const named = parseNextFlags(["classic", "car rental website"]);
+    expect(named.readingStep).toBeUndefined();
+    expect(named.positionalScope).toBe("classic");
+    expect(named.intent).toBe("car rental website");
+  });
+
   test("a plan named by its flag with a clean tail of their words still acts", () => {
     const parsed = parseNextFlags(["--scope", "bugfix", "fix", "the", "login", "crash"]);
     expect(parsed.scope).toBe("bugfix");

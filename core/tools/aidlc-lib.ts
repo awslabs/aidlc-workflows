@@ -39354,17 +39354,28 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
       return { kind: "words" };
     }
     if (colon && plans.has(colon[1].toLowerCase())) return { kind: "exact" };
-    if (plans.has(plan)) {
-      // Three ways a plan's name can lead, and only one is ambiguous.
-      // Its own argument with the rest of the request in one more (or none) is
-      // the deliberate naming the orchestrator skill asks the agent for
-      // (`next classic 'Build a notes app'`), and the mark says the same
-      // (`bugfix -- --enable`): the reading is already made, so the engine acts
-      // on it. Loose words after it, as a harness hands a raw line over
-      // (`bugfix Fix duplicate todos`, `classic car rental website`), is the
-      // person's own sentence opening with a word that is also a plan's name,
-      // and only the agent can tell which they meant.
-      return words.length <= 2 ? { kind: "exact" } : { kind: "plan-word", scope: plan };
+    // Three shapes a plan's name can lead in, and only one of them is a reading
+    // already made: the name in its OWN argument with the rest of the request
+    // in one more, or in none, which is what the orchestrator skill asks the
+    // agent for (`next classic 'Build a notes app'`), and what the mark says
+    // too (`bugfix -- --enable`). The engine acts on that one.
+    // The other two are the person's own sentence as a harness hands it over,
+    // opening with a word that is also a plan's name: loose words after it
+    // (`bugfix Fix duplicate todos`), or the whole line in one argument, as
+    // Kiro IDE's PowerShell hands it over (`classic car rental website`).
+    // Both read the same way, because they are the same line, and only the
+    // agent can tell whether that first word is their plan or their own word.
+    const opening = plan.split(/\s+/)[0];
+    if (plans.has(opening)) {
+      // The plan named in its own argument with the rest of the request in one
+      // more: the agent packaged it that way, which is the reading made.
+      const namedByArgument = words.length === 2 && !/\s/.test(words[0]);
+      // And a line of two words is the plan and a one-word description however
+      // it arrives, so the two forms of one line never disagree.
+      const tokens = words.flatMap((word) => word.split(/\s+/)).filter((token) => token.length > 0);
+      return namedByArgument || tokens.length <= 2
+        ? { kind: "exact" }
+        : { kind: "plan-word", scope: opening };
     }
     return { kind: "words" };
   }
