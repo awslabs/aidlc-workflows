@@ -7838,11 +7838,11 @@
         "kinds": [
           "print"
         ],
-        "words": "add CSV export",
+        "words": "feature add CSV export",
         "settings": [],
         "no_ask": true,
         "names": [
-          "--scope feature"
+          "--scope feature -- add CSV export"
         ]
       },
       "end": {
@@ -12056,10 +12056,10 @@
         "kinds": [
           "print"
         ],
-        "words": "Fix the crash",
+        "words": "bugfix Fix the crash",
         "settings": [],
         "names": [
-          "engine intent create --scope bugfix"
+          "--scope bugfix -- Fix the crash"
         ],
         "no_ask": true
       },
@@ -17121,10 +17121,10 @@
         "kinds": [
           "print"
         ],
-        "words": "Read ./vision.md and build what it describes",
+        "words": "workshop Read ./vision.md and build what it describes",
         "settings": [],
         "names": [
-          "engine intent create --scope workshop"
+          "--scope workshop -- Read ./vision.md and build what it describes"
         ],
         "no_ask": true
       },
@@ -17963,10 +17963,10 @@
         "kinds": [
           "print"
         ],
-        "words": "Build a notes app",
+        "words": "classic Build a notes app",
         "settings": [],
         "names": [
-          "engine intent create --scope classic"
+          "--scope classic -- Build a notes app"
         ],
         "no_ask": true
       },
