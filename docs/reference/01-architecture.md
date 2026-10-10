@@ -805,8 +805,9 @@ aidlc/                                    # neutral, harness-independent, commit
 ```
 
 **Resolution.** Workflow identity is resolved at one library chokepoint with
-precedence `in-process sessionId > AIDLC_SESSION_OVERRIDE > CODEX_THREAD_ID
-(Codex tools only) > PID ancestry > none`. Hook payload identity uses the in-process option and is authoritative.
+precedence `in-process sessionId > AIDLC_SESSION_OVERRIDE > the chat the host
+names in the agent's shell (CODEX_THREAD_ID; CLAUDE_CODE_SESSION_ID while its
+CLAUDE_PID process is alive; KIRO_SESSION_ID) > PID ancestry > none`. Hook payload identity uses the in-process option and is authoritative.
 Whatever id that yields passes through `resolveChat` before a binding is read: a
 helper's id maps to its root chat through the `<id>.helper-of` record the adapter
 wrote (Codex agents and review threads, Kiro CLI delegations, Copilot subagents),

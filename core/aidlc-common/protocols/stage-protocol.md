@@ -1303,7 +1303,7 @@ Failed checks emit a `SENSOR_FAILED` audit row and write findings to
 file to correct the output and run the check again.
 
 When a gate opens, or is shown again, the engine's reply names each check that
-still fails on a declared output, with its detail file, in its `narration`
+still fails on a declared output in its `narration`
 on its own line after what the stage produced: say it to the person with the
 approval question, never claim coverage a
 check reports against (every requirement traced, every section present), and

@@ -1,6 +1,6 @@
 ---
 description: >
-  AI-DLC workflow orchestrator. Start, resume, or manage an AI-driven
+  AI-DLC. Start, resume, or manage an AI-driven
   development lifecycle. Utilities: --status, --doctor, --stage, --phase,
   --scope, --depth, --test-strategy, --version, --help, plus the intent and
   space verbs. Or describe what you want to build and the scope will be

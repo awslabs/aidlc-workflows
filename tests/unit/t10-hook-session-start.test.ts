@@ -241,6 +241,20 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     expect(parsed.additionalContext).not.toContain("offer the user the standard resume options");
   });
 
+  test("the context carries no label the agent could read back to the person", () => {
+    // Live (2026-10-10 baseline) the agent told the person "Per the forwarding loop, the engine owns
+    // routing", "This is a {kind:"print"} directive naming a command" and "Per the carry-on protocol":
+    // the headings of this block, not its rules. The rules stay; the headings go.
+    seedStateFile(proj, MID_IDEATION);
+    const context = String(JSON.parse(fire(proj).stdout.trim()).additionalContext);
+    for (const label of ["FORWARDING-LOOP", "STEP 1:", '{kind:"print"}', "protocol violation", "in short:", "Follow the aidlc skill's"]) {
+      expect(context, `the context carries ${JSON.stringify(label)}`).not.toContain(label);
+    }
+    expect(context).toContain("take everything the user typed after `/aidlc` and append it to the first `next` call UNCHANGED");
+    expect(context).toContain("that named command is your IMMEDIATE next tool call");
+    expect(context).toContain("If you just asked the person a question you have not recorded, record it with `log decision`");
+  });
+
   test("after a compaction the context still says what to do with the one-line end-of-turn note", () => {
     // The Stop hook's note is one plain line the person can read, so the agent's
     // steps for it live in the skill and here, re-sent after every compaction.
@@ -251,7 +265,7 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
       "It is from AI-DLC, not the person: never record it as their answer, and say nothing about it.",
     );
     expect(parsed.additionalContext).toContain(
-      "if you just asked the person a question you have not recorded, record it with `log decision` and end the turn without asking it again or saying anything else",
+      "If you just asked the person a question you have not recorded, record it with `log decision` and end the turn without asking it again or saying anything else",
     );
     // The line names the stage by its name only: the report comes from the
     // run-stage the agent holds.

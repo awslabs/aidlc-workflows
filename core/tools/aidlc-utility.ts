@@ -296,6 +296,9 @@ import {
   readUnitScopeStamp,
   recordHookDrop,
   readCurrentSessionId,
+  resolveChat,
+  SELECTION_NOTICE_FOLLOW,
+  writeSessionSelectionNotice,
   relativeRecordDir,
   resolveAuditWorktreePath,
   resolveBoltIdentity,
@@ -8971,9 +8974,10 @@ function handleIntent(
   // session → its stamp moves, not ours → a genuine resume of our session still
   // offers the rebind. writeSessionIntentUuid no-ops on a blank uuid, so an
   // orphan (registry-less) record is fail-safe. Best-effort throughout.
-  const sid =
-    selection.sessionId ??
-    readCurrentSessionId(projectDir);
+  // Only the chat this command runs in moves. One typed somewhere else moves
+  // the shared selection and asks the open chat once (askTheOpenChatToFollow).
+  const sid = selection.sessionId;
+  if (!sid) askTheOpenChatToFollow(projectDir, space, match.dirName, `\`${intentDisplayLabel(match)}\``);
   if (sid) {
     writeSessionBinding(projectDir, sid, space, match.dirName, "switch");
     clearSessionRebindOffer(projectDir, sid);
@@ -8996,6 +9000,58 @@ function handleIntent(
   // by the name they know it by.
   const where = space === DEFAULT_SPACE ? "" : ` in space \`${space}\``;
   process.stdout.write(`Now working on \`${intentDisplayLabel(match)}\`${where}.\n`);
+}
+
+// A switch this command cannot tie to a chat was typed somewhere else: another
+// window, or a terminal of the person's own. The shared selection moves, which
+// is that place's own, and the chat the project last saw is left ONE question
+// instead of being moved behind the person's back. The engine delivers it on
+// that chat's next step and takes it away as it goes, so it is asked once and
+// never again for the same switch.
+function askTheOpenChatToFollow(
+  projectDir: string,
+  destinationSpace: string,
+  destinationRecord: string | null,
+  destination: string,
+): void {
+  try {
+    // Through the one door, so a helper's own id names the chat it belongs to
+    // and nothing here settles a chat's work: the question is read-only.
+    const chat = resolveChat(projectDir, readCurrentSessionId(projectDir), { bind: false });
+    const binding = chat?.binding;
+    if (!chat || !binding) return;
+    if (binding.space === destinationSpace && binding.intent === destinationRecord) return;
+    const here = binding.intent === null
+      ? `space \`${binding.space}\``
+      : `\`${intentDisplayLabel(
+          listIntents(projectDir, binding.space).find((entry) => entry.dirName === binding.intent) ??
+            { dirName: binding.intent },
+        )}\``;
+    // The command the AGENT runs, in this install's own spelling, so a yes is
+    // one step on every harness: a slash form is the person's, and no agent can
+    // run one everywhere. A record name selects itself only inside the space
+    // the chat is in, so from any other space the step is the space switch,
+    // which lands on that space's own selection: this record, in one step. A
+    // record name that is not safe for a model to read stays out of the
+    // command for the same reason the rejoin offer leaves it out; the space
+    // switch carries it.
+    if (!SPACE_NAME_REGEX.test(destinationSpace)) return;
+    const follow =
+      binding.space === destinationSpace && destinationRecord !== null &&
+        isSafeIntentRecordName(destinationRecord)
+        ? `${aidlcToolInvocation("utility")} intent ${destinationRecord}`
+        : `${aidlcToolInvocation("utility")} space ${destinationSpace}`;
+    writeSessionSelectionNotice(
+      projectDir,
+      chat.chatId,
+      `Another window switched to ${destination}. This chat is still on ${here}. ` +
+        `Do you want this chat on ${destination} too? Ask them exactly that and act on their answer: ` +
+        `on yes run \`${follow}\` in this chat, on no carry on with the work this chat is on. Ask once.`,
+      SELECTION_NOTICE_FOLLOW,
+    );
+  } catch {
+    /* per-user runtime state; the chat keeps the work it is on either way */
+  }
 }
 
 // A human's free-text `--reason` becomes one audit field value: one physical
@@ -9335,7 +9391,15 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   // handleIntent.
   const selected = activeIntent(projectDir, target);
   if (selected !== null) markSelectedWork(projectDir, selected, target);
-  const sessionId = selection.sessionId ?? readCurrentSessionId(projectDir);
+  const sessionId = selection.sessionId;
+  if (!sessionId) {
+    const found = activeIntent(projectDir, target);
+    const record = found !== null && isBindableIntentRecordName(found) ? found : null;
+    const label = record === null
+      ? `space \`${target}\``
+      : `\`${intentDisplayLabel(listIntents(projectDir, target).find((entry) => entry.dirName === record) ?? { dirName: record })}\``;
+    askTheOpenChatToFollow(projectDir, target, record, label);
+  }
   const priorUuid = sessionId ? readSessionIntentUuid(projectDir, sessionId) : null;
   let spaceHasNoIntent = false;
   let loneIntent: string | null = null;

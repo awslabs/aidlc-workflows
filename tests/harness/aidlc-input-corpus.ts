@@ -4,6 +4,8 @@
 // engine's first step for every item; the live check (tests/e2e/t-live-aidlc-input-corpus.serial.test.ts) drives a
 // sample through real agents.
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import corpus from "../fixtures/aidlc-input/corpus.json";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
@@ -137,12 +139,16 @@ export function argvVariants(item: CorpusItem): Array<[ArgvVariant, string[]]> {
 
 export interface Exec { status: number; stdout: string; stderr: string }
 export async function exec(cmd: string[], opts: { cwd: string; env: NodeJS.ProcessEnv; input?: string }): Promise<Exec> {
-  // The input goes in as one buffer the runtime writes and closes itself: a hook that starts slowly under load still
-  // reads the whole line, where a pipe written and ended by hand once reached a Kiro IDE hook empty on Windows.
+  // The input is a file the child reads as its stdin, not a pipe this process has to write: the Kiro IDE hook gives a
+  // pipe two seconds before it settles for an empty payload, and on a loaded Windows runner this single-threaded parent
+  // (copying fixtures for other items) has written the pipe later than that, recording an empty turn. A file is complete
+  // before the child starts, whatever the parent is doing.
+  const payload = opts.input === undefined ? null : join(tmpdir(), `aidlc-input-stdin-${process.pid}-${randomUUID()}.json`);
+  if (payload !== null) writeFileSync(payload, opts.input as string, "utf-8");
   const proc = Bun.spawn(cmd, {
     cwd: opts.cwd,
     env: opts.env as Record<string, string>,
-    stdin: opts.input === undefined ? "ignore" : new TextEncoder().encode(opts.input),
+    stdin: payload === null ? "ignore" : Bun.file(payload),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -156,6 +162,7 @@ export async function exec(cmd: string[], opts: { cwd: string; env: NodeJS.Proce
     return { status, stdout, stderr };
   } finally {
     clearTimeout(timer);
+    if (payload !== null) rmSync(payload, { force: true });
   }
 }
 
@@ -391,4 +398,20 @@ export function messageRecord(proj: string, prompt: string): StoredRecord | null
   const records = readdirSync(dir).filter((f) => f.endsWith(".json"))
     .map((f) => JSON.parse(readFileSync(join(dir, f), "utf-8")) as StoredRecord & { at: string });
   return records.find((r) => r.text === prompt) ?? records.sort((a, b) => a.at.localeCompare(b.at)).at(-1) ?? null;
+}
+
+// What Codex said to the person: `codex exec` logs every event to stderr; the agent's messages follow a line that is
+// exactly "codex" and run until the next event marker (a hook, an exec, a user turn, the token count, the workspace diff
+// codex exec prints after the last message). The tool log, the engine's JSON and the diff are not words to the person.
+// Without any marker the agent never spoke (codex exec stopped at its own usage text or error): nothing is its words.
+export function codexWords(out: string): string {
+  const blocks: string[] = [];
+  let current: string[] | null = null;
+  for (const line of out.split("\n")) {
+    if (line === "codex") { current = []; blocks.push(""); continue; }
+    if (current && /^(hook: |exec$|user$|thinking$|tokens used$|diff --git |\d{4}-\d{2}-\d{2}T\S+ (ERROR|WARN))/.test(line)) { blocks[blocks.length - 1] = current.join("\n").trim(); current = null; continue; }
+    if (current) current.push(line);
+  }
+  if (current) blocks[blocks.length - 1] = current.join("\n").trim();
+  return blocks.filter((b) => b.length > 0).join("\n\n");
 }

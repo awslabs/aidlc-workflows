@@ -1093,9 +1093,17 @@ export function isBareContinuationPhrase(text: string): boolean {
 // One rule for the Copilot adapter claim gate and isTerminalUtilityNext, mirroring
 // parseNextFlags/routeNext's terminal early returns and engine-marker exclusion.
 export function isReadOnlyNextArgv(argv: readonly string[]): boolean {
-  const args = withoutEntryWord(argv);
+  const args = splitFlagShapedArguments(withoutEntryWord(argv));
+  // A line the engine would hand to the agent is never acted on here: a seam
+  // that runs before any agent reads the line must stand back from it, which is
+  // what readNextLine answers for both of us. Only an exact line is this
+  // engine's own command.
   if (isRetiredOnlyNextArgv(args)) return true;
+  // A modifier whose value this engine refuses is its own terminal refusal, and
+  // stays one when the refusal becomes a reading step: either way the turn
+  // carries no workflow work (Full Suite 36549553601).
   if (isRefusedModifierNextArgv(args)) return true;
+  if (readNextLine(args).kind !== "exact") return false;
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) return true;
   const verb = leadingOrchestratorVerb(args);
   if (verb === "team-board") return true;
@@ -1789,7 +1797,12 @@ function terminalCommandFromWorkspaceCommand(
 // `sessionId` names the chat whose selection decides the space (a hook knows
 // its payload's chat; the invoking session is used otherwise).
 export function classifyTerminalCommand(argv: string[], projectDir?: string, sessionId?: string): TerminalCommand | null {
-  const args = withoutEntryWord(argv);
+  const args = splitFlagShapedArguments(withoutEntryWord(argv));
+  // A line the engine would hand to the agent is never acted on here: a seam
+  // that runs before any agent reads the line must stand back from it, which is
+  // what readNextLine answers for both of us. Only an exact line is this
+  // engine's own command.
+  if (readNextLine(args).kind !== "exact") return null;
   // A SOLE bare `help` / `-h` token is a help REQUEST (terminal, read-only);
   // mirrors parseNextFlags in the engine. Without this the token reads as
   // freeform intent text and the funnel offers to create an intent named
@@ -6237,14 +6250,28 @@ function sessionSelectionNoticePath(projectDir: string, sessionId: string): stri
   return recordPath ? `${recordPath}.selection-notice` : "";
 }
 
-export function writeSessionSelectionNotice(projectDir: string, sessionId: string, line: string): void {
+// The kind of a notice the engine can take back when it asks the same thing
+// another way: the follow question a switch made somewhere else leaves behind.
+export const SELECTION_NOTICE_FOLLOW = "follow";
+
+export function writeSessionSelectionNotice(
+  projectDir: string,
+  sessionId: string,
+  line: string,
+  kind?: string,
+): void {
   const path = sessionSelectionNoticePath(projectDir, sessionId);
   if (!path || !line) return;
   // The line is true only while this chat stays on the work it is on now.
   const binding = readSessionBinding(projectDir, sessionId);
   try {
     mkdirSync(sessionsDir(projectDir), { recursive: true });
-    writeFileSync(path, `${JSON.stringify({ line, space: binding?.space ?? null, intent: binding?.intent ?? null })}\n`, "utf-8");
+    writeFileSync(path, `${JSON.stringify({
+      line,
+      space: binding?.space ?? null,
+      intent: binding?.intent ?? null,
+      ...(kind ? { kind } : {}),
+    })}\n`, "utf-8");
   } catch {
     /* per-user runtime state; best-effort */
   }
@@ -6259,6 +6286,20 @@ export function promptMovesSelection(prompt: string): boolean {
   if (head === null) return false;
   const kind = parseWorkspaceCommand(splitKiroCommandArgs(text.slice(head[0].length).trim())).kind;
   return kind === "switch" || kind === "create" || kind === "create-intent";
+}
+
+// A notice of this kind goes when the engine asks the person about the same
+// thing in its own words on the same turn, so they are asked once. Only that
+// kind is taken: another line waiting here is not this one's to remove.
+export function dropSessionSelectionNotice(projectDir: string, sessionId: string, kind: string): void {
+  const path = sessionSelectionNoticePath(projectDir, sessionId);
+  if (!path) return;
+  try {
+    const saved = JSON.parse(readFileSync(path, "utf-8")) as { kind?: unknown };
+    if (saved.kind === kind) unlinkSync(path);
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
 }
 
 export function takeSessionSelectionNotice(projectDir: string, sessionId: string): string | null {
@@ -7001,24 +7042,52 @@ export function classifyFirstContact(
 // named none: the hook-injected override first, then the process ancestry.
 // Throws SessionResolutionConflictError when the two disagree and the override
 // did not come from a validated hook payload.
+// The chat the host names in the agent's own shell. Each host that names one
+// does it its own way, and the engine needs no override written into the
+// command: Codex gives every command CODEX_THREAD_ID, Claude Code gives
+// CLAUDE_CODE_SESSION_ID beside the pid of the process running that chat, and
+// Kiro CLI gives KIRO_SESSION_ID (measured: its shell carries no pid).
+//
+// A variable is only as good as the chat it names. A shell the person started
+// from inside a chat keeps the variable after that chat is gone, so Claude
+// Code's id counts only while the process it names is alive; a dead or absent
+// pid leaves the id unread and the process ancestry decides, as before. Kiro
+// CLI has no pid in the shell to check, so its id stands on its own, as Codex's
+// does. Every other harness names no chat in the shell.
+function hostNamedChat(projectDir: string): string | null {
+  switch (runtimeHarnessDir(projectDir)) {
+    case ".codex":
+      return validSessionId(process.env.CODEX_THREAD_ID);
+    case ".claude": {
+      const pid = Number.parseInt(process.env.CLAUDE_PID ?? "", 10);
+      return Number.isSafeInteger(pid) && processIsAlive(pid)
+        ? validSessionId(process.env.CLAUDE_CODE_SESSION_ID)
+        : null;
+    }
+    case ".kiro":
+      return validSessionId(process.env.KIRO_SESSION_ID);
+    default:
+      return null;
+  }
+}
+
 export function resolveInvokingSessionId(projectDir: string): string | null {
   const overrideSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
-  // Codex gives every command it runs CODEX_THREAD_ID, the session id its
-  // hooks carry, so a Codex tool needs no override written into the command.
   // A spawned helper agent's shell carries the helper's own thread id; that
   // thread resolves to the chat that spawned it (noteHelperSession).
-  const codexThread = overrideSession === null && runtimeHarnessDir(projectDir) === ".codex"
-    ? validSessionId(process.env.CODEX_THREAD_ID)
-    : null;
-  const codexSession = codexThread === null ? null : helperSessionRoot(projectDir, codexThread) ?? codexThread;
-  const envSession = overrideSession ?? codexSession;
+  const hostThread = overrideSession === null ? hostNamedChat(projectDir) : null;
+  const hostSession = hostThread === null ? null : helperSessionRoot(projectDir, hostThread) ?? hostThread;
+  const envSession = overrideSession ?? hostSession;
   // This refusal is a footgun guard against stale exported overrides, not a
   // security boundary. The SOURCE marker is an internal hookChildEnv contract.
   // Deliberately setting both variables is an intentional same-user act
   // equivalent to a sanctioned session switch; no privilege boundary exists
   // between callers that could authenticate it.
+  // The host's own word for the chat this shell runs in is not a stale export:
+  // process ancestry is the engine's reconstruction of the same fact, and a
+  // second chat starting is enough to make the two differ.
   const payloadOverride =
-    codexSession !== null ||
+    hostSession !== null ||
     (overrideSession !== null && process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload");
   const ancestrySession = resolveSessionIdFromAncestry(projectDir);
   if (
@@ -27882,6 +27951,54 @@ export function personsGateWords(
   return words.length > 0 ? words.join("\n") : null;
 }
 
+// Where the person's words are, when the engine cannot tell which chat said
+// them. Their words are kept per chat (personsGateWords above), so a command
+// the engine cannot tie to a chat records a gate with nothing of theirs on it,
+// which reads as though they never answered. This is the pointer that row
+// carries instead: the message the human-turn hook kept for their latest reply
+// after this gate was shown, never a copy of the words themselves. Null when
+// more than one chat has replied since, because which of them answered is not
+// the engine's to guess, and null when no reply was kept.
+export function personsGateMessagePointer(
+  projectDir: string,
+  gate: { stage: string; unit?: string },
+): string | null {
+  try {
+    // This machine's own shard only, as the kept-words reader above does.
+    // Shards are per clone and committed, and a concatenated read lists them
+    // in filename order, which is not causal order (see AuditShardEvent): a
+    // teammate's shard can sort either side of ours and carry its own showing
+    // of this same gate. The showing this approval answers happened here and
+    // the hook kept their reply here, so one shard is both necessary and
+    // enough; a gate shown on another machine leaves no pointer rather than
+    // the wrong one.
+    const mine = projectRelativePath(projectDir, auditFilePath(projectDir));
+    const rows = readAuditShardEvents(projectDir)
+      .filter((row) => projectRelativePath(projectDir, row.shard) === mine);
+    let shown = -1;
+    rows.forEach((row, at) => {
+      if (
+        row.event === "STAGE_AWAITING_APPROVAL" &&
+        auditBlockField(row.block, "Stage") === gate.stage &&
+        (gate.unit === undefined || auditBlockField(row.block, "Unit") === gate.unit) &&
+        auditBlockField(row.block, "Recovered") !== "true"
+      ) {
+        shown = at;
+      }
+    });
+    if (shown < 0) return null;
+    const replies = rows.slice(shown + 1).filter((row) => isReplyTurn(row));
+    if (new Set(replies.map((row) => auditBlockField(row.block, "Session") ?? "")).size > 1) return null;
+    for (let at = replies.length - 1; at >= 0; at -= 1) {
+      const id = auditBlockField(replies[at].block, "Message Id");
+      if (id) return id;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // What the person asked to change at a stage gate, in their own words: every
 // message they typed since the gate was presented, in order and verbatim,
 // leaving out a message that is only an option pick ("2", "Request Changes"),
@@ -39255,6 +39372,166 @@ export function nextTokenKind(token: string, following: string | undefined): "fl
   const shape = nextFlagShape(token);
   if (shape !== null && (shape.needsFollowing !== true || following !== undefined)) return "flag";
   return argumentIsFlagShaped(token) ? "untaken" : "words";
+}
+
+/**
+ * Which of the three ways the engine reads what the person typed after
+ * `/aidlc`.
+ *
+ * `exact`: every token was read under the grammar, and any free words are
+ * marked as theirs (the `--` delimiter, or a plan named with a colon). It acts.
+ * `words`: nothing on the line was read, so it is a request. Anything else is a
+ * reading step: the line has two readings and only the agent, which has their
+ * chat, can tell which they meant, so the engine takes nothing from it and says
+ * what it could not read. Nothing is created, switched, jumped, dropped or
+ * refused first.
+ *
+ * One function, so the parser and the prompt-time seams that read a line before
+ * any agent sees it cannot disagree about it. The seams split each argument on
+ * whitespace before calling this, because a harness can hand the whole line
+ * over as one quoted argument.
+ */
+export type NextLineReading =
+  | { kind: "exact" }
+  | { kind: "words" }
+  | { kind: "untaken-flag"; token: string; value?: string }
+  | { kind: "value"; flag: string; value: string; valid: readonly string[] }
+  | { kind: "plan-word"; scope: string }
+  | { kind: "noun"; noun: string };
+
+/**
+ * One argument that is nothing but flags and their values is that command,
+ * however the harness quoted it (`"--doctor --export"` from Kiro IDE's
+ * PowerShell), so it reads as the tokens it holds. One that holds a bare word
+ * is the person's sentence and stays whole, which is what keeps every word of
+ * "--help flag for the reverser" theirs.
+ */
+export function splitFlagShapedArguments(argv: readonly string[]): string[] {
+  return argv.flatMap((arg) =>
+    /\s/.test(arg) && argumentIsFlagShaped(arg) ? arg.split(/\s+/).filter((token) => token.length > 0) : [arg]
+  ).filter((token) => token.length > 0);
+}
+
+export function readNextLine(argv: readonly string[]): NextLineReading {
+  const args = splitFlagShapedArguments(argv);
+  if (args.length === 0) return { kind: "exact" };
+  // Words behind the delimiter are theirs and marked, so what is in front of it
+  // decides and their words never make a reading step.
+  const mark = args.indexOf("--");
+  const head = mark >= 0 ? args.slice(0, mark) : args;
+  if (head.length === 0) return mark + 1 < args.length ? { kind: "words" } : { kind: "exact" };
+
+  // A leading noun owns its argv, and that noun's own parser says whether it can
+  // read the rest as its command. One word after the noun is a verb or a name,
+  // however it is spelt, so the engine's own refusal naming its verbs is the
+  // answer. Two or more words of theirs cannot be either, so the noun may be
+  // their own first word (`intent is to build a notes app`) and only the agent
+  // can tell; this engine must not run that as a command first.
+  const theirSentenceAfter = head.length > 2 && !head[1].startsWith("-");
+  const plugin = parsePluginCommand(head);
+  if (plugin.kind !== "not-plugin") {
+    return plugin.kind === "error" && theirSentenceAfter ? { kind: "noun", noun: head[0] } : { kind: "exact" };
+  }
+  const knowledge = parseKnowledgeCommand(head);
+  if (knowledge.kind !== "not-knowledge") {
+    return knowledge.kind === "error" && theirSentenceAfter ? { kind: "noun", noun: head[0] } : { kind: "exact" };
+  }
+  const workspace = parseWorkspaceCommand(head);
+  if (workspace.kind !== "not-workspace") {
+    const theirs = workspace.kind === "switch" && !workspace.explicit && workspace.words !== undefined;
+    return theirs ? { kind: "noun", noun: workspace.noun } : { kind: "exact" };
+  }
+  // The rest of the engine's own leading forms own their argv as they are.
+  if (leadingOrchestratorVerb(head) !== null) return { kind: "exact" };
+  if (head[0] === "config" || head[0] === "compose" || head[0] === "--pick") return { kind: "exact" };
+  if (head.includes("--config")) return { kind: "exact" };
+  if (head.length === 1 && (head[0] === "help" || head[0] === "-h")) return { kind: "exact" };
+
+  const requestWords = nextArgsCarryRequestWords(args);
+  const words: string[] = [];
+  let took = false;
+  let readOnly: string | undefined;
+  for (let i = 0; i < head.length; i++) {
+    const token = head[i];
+    const following = head[i + 1];
+    // A utility flag among their own words is one of their words; alone, or
+    // among other flags, it is the utility.
+    if (READ_ONLY_FLAGS.has(token) && !requestWords) {
+      readOnly = token;
+      took = true;
+      continue;
+    }
+    if (readOnly === "--doctor" && (token === "--export" || token === "--verbose")) {
+      took = true;
+      continue;
+    }
+    if (readOnly === "--doctor" && token === "--output") {
+      took = true;
+      if (following !== undefined && !following.startsWith("--")) i++;
+      continue;
+    }
+    const kind = nextTokenKind(token, following);
+    if (kind === "words") {
+      words.push(token);
+      continue;
+    }
+    if (kind === "untaken") {
+      return { kind: "untaken-flag", token, ...(following !== undefined && !following.startsWith("--") ? { value: following } : {}) };
+    }
+    took = true;
+    const shape = nextFlagShape(token);
+    if (shape === null || shape.value === "none") continue;
+    if (following === undefined || following.startsWith("--")) continue; // the engine's own refusal, by name
+    i++;
+    // A flag this engine takes, with a value its own table does not hold: the
+    // person meant one of the words it does hold, and the agent re-runs it.
+    if (shape.value === "words" && shape.words !== undefined &&
+      !shape.words.includes(following.toLowerCase())) {
+      return { kind: "value", flag: token, value: following, valid: shape.words };
+    }
+  }
+  if (!took && words.length === 0) return { kind: "exact" };
+  if (!took) {
+    // Nothing on the line was read: a request, unless it opens with the name of
+    // a plan, which is ambiguous with their own first word.
+    const plan = words[0];
+    const colon = plan.match(/^([A-Za-z][\w-]*):(?:\s+([\s\S]*))?$/);
+    // The plan names come from the stage graph. A tree without it (a seam
+    // reading a line before the engine is installed, a bare checkout) reads
+    // their words as words, which is the reading that acts on nothing.
+    let plans: ReadonlySet<string>;
+    try {
+      plans = validScopes();
+    } catch {
+      return { kind: "words" };
+    }
+    if (colon && plans.has(colon[1].toLowerCase())) return { kind: "exact" };
+    // Three shapes a plan's name can lead in, and only one of them is a reading
+    // already made: the name in its OWN argument with the rest of the request
+    // in one more, or in none, which is what the orchestrator skill asks the
+    // agent for (`next classic 'Build a notes app'`), and what the mark says
+    // too (`bugfix -- --enable`). The engine acts on that one.
+    // The other two are the person's own sentence as a harness hands it over,
+    // opening with a word that is also a plan's name: loose words after it
+    // (`bugfix Fix duplicate todos`), or the whole line in one argument, as
+    // Kiro IDE's PowerShell hands it over (`classic car rental website`).
+    // Both read the same way, because they are the same line, and only the
+    // agent can tell whether that first word is their plan or their own word.
+    const opening = plan.split(/\s+/)[0];
+    if (plans.has(opening)) {
+      // The plan named in its own argument with the rest of the request in one
+      // more: the agent packaged it that way, which is the reading made.
+      const namedByArgument = words.length === 2 && !/\s/.test(words[0]);
+      // And a line of two words is the plan and a one-word description however
+      // it arrives, so the two forms of one line never disagree.
+      const tokens = words.flatMap((word) => word.split(/\s+/)).filter((token) => token.length > 0);
+      return namedByArgument || tokens.length <= 2
+        ? { kind: "exact" }
+        : { kind: "plan-word", scope: opening };
+    }
+    return { kind: "words" };
+  }
+  return { kind: "exact" };
 }
 
 // Scope-owned ceremonies: env kill switch, then intent, then scope, then on.

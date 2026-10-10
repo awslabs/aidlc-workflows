@@ -1,7 +1,7 @@
 ---
 name: aidlc
 description: >
-  AI-DLC workflow orchestrator. Start, resume, or manage an AI-driven
+  AI-DLC. Start, resume, or manage an AI-driven
   development lifecycle. Scopes are defined one file per scope under
   `.claude/scopes/`; run
   `{{INVOKE}} engine orchestrate help` for the authoritative list
@@ -16,7 +16,7 @@ argument-hint: "[description | --status | --config [section] | --stage <slug|#> 
 user-invocable: true
 ---
 
-# AI-DLC Orchestrator
+# AI-DLC
 
 ## Welcome
 

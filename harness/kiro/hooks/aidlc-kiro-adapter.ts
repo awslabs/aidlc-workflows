@@ -54,6 +54,7 @@ import {
   activeSpace,
   agentsDir,
   classifyTerminalCommand,
+  readNextLine,
   decodeHarnessPlainText,
   fenceCommandOutput,
   relayAsTextBlock,
@@ -550,6 +551,12 @@ const PRE_DISPATCH_FLAGS = new Set([
 ]);
 
 function shouldPreDispatchNext(args: string[], cwd: string): boolean {
+  // Only a line the engine reads exactly is run from here. Anything it would
+  // hand to the agent (a flag it does not take, a value its table does not
+  // hold, a plan word at the start of their sentence, one of its nouns with
+  // their sentence after it) goes to the agent untouched, so no seam acts on
+  // the person's words before anyone has read them.
+  if (readNextLine(args).kind !== "exact") return false;
   // A single-stage next owns its issuance/audit boundary. Let the conductor's
   // exact first tool call issue it once, rather than issuing inside this hook.
   if (args.includes("--single")) return false;
@@ -655,11 +662,9 @@ if (target === "verb-intercept") {
         if (run.exitCode === 0 && directive.length > 0) {
           const parsed: unknown = JSON.parse(directive);
           const packet =
-            "SYSTEM (deterministic engine pre-dispatch): The harness has ALREADY " +
-              "run the exact first `aidlc-orchestrate.ts next` invocation with " +
-              "every user argument preserved. Treat the JSON below as the " +
-              "authoritative directive and act on it now. Do NOT call `next` " +
-              "again for this invocation.\n\n" +
+            "The first `next` for this message has already run, with every " +
+              "argument kept. Act on its reply below now; do not call `next` " +
+              "again for this message.\n\n" +
               `--- DIRECTIVE ---\n${directive}\n--- END DIRECTIVE ---\n`;
           // Never move the token ahead of rules to make it survive truncation.
           // Fall through without publishing either when the full packet cannot
@@ -716,8 +721,8 @@ if (target === "verb-intercept") {
       } catch { /* forwarding backstop best-effort */ }
       process.stdout.write(
         preface +
-        "SYSTEM (deterministic argument forwarding): Your immediate first tool call " +
-          "must be exactly the engine call below. Preserve every argument; do not run a bare `next`.\n\n" +
+        "Your first tool call is exactly the call below, every argument kept; " +
+          "do not run a bare `next`.\n\n" +
           `{{INVOKE}} engine orchestrate next ${forwarded}\n`,
       );
     } else if (preface) {
@@ -779,7 +784,7 @@ if (target === "verb-intercept") {
     : (cmd.display ?? [cmd.subcommand, ...forwarded].join(" "));
   process.stdout.write(
     preface +
-    `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness: it is a terminal utility that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user ${relayAsTextBlock(out)}, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n` +
+    `The command \`/aidlc ${typed}\` has already run; it carries no workflow work. Its output is below. Your only action this turn: relay that output to the user ${relayAsTextBlock(out)}, then stop. Do not run \`aidlc-orchestrate.ts next\`. Do not advance, resume, or run any workflow stage.\n\n` +
       fenceCommandOutput(out),
   );
   return 0;

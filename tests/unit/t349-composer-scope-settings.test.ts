@@ -670,7 +670,7 @@ describe("t349 (9) a review level set for the work replaces its scope's ceiling"
     expect(preview(["--scope", "feature", "--review", "none"])).toMatch(/no reviewers/);
   });
 
-  test("next refuses any settings value outside the allowed words, so no command text rides along", () => {
+  test("next takes no settings value outside the allowed words, and no command text rides along", () => {
     const proj = project();
     seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
     const hostile = ["off;touch /tmp/t349-pwn", "$(touch /tmp/t349-pwn)", "off --scope express", "on`id`"];
@@ -679,8 +679,22 @@ describe("t349 (9) a review level set for the work replaces its scope's ceiling"
         const res = runOrchestrateNext(ORCH, proj, [flag, value], { cwd: proj, env: process.env });
         const line = res.out.split("\n").find((entry) => entry.trim().startsWith("{"));
         const directive = JSON.parse(line ?? "{}") as { kind?: unknown; message?: unknown };
-        expect(directive.kind, `${flag} ${value}`).toBe("error");
-        expect(String(directive.message)).toBe(`${flag} requires ${words}; received ${JSON.stringify(value)}.`);
+        // A value this engine's own table does not hold is a reading step now
+        // (t-three-ways-to-read-a-line): the words it does hold are named, and
+        // the value is shown as a quoted string. The security contract this
+        // case exists for is unchanged and checked below: nothing of theirs is
+        // a command, and an unheld value never runs.
+        expect(directive.kind, `${flag} ${value}`).toBe("print");
+        const message = String(directive.message);
+        expect(message, `${flag} ${value}`).toContain(words.replace(/[<>]/g, ""));
+        expect(message, `${flag} ${value}`).toContain(JSON.stringify(value));
+        // In every directive of this engine a backticked span is a command to
+        // run: no span may hold their value, and the one command that carries
+        // their line has it as a single quoted argument.
+        for (const span of [...message.matchAll(/`([^`]*)`/g)].map((m) => m[1])) {
+          const quoted = span.includes(`'${flag} ${value}'`);
+          expect(quoted || !span.includes(value), `${flag} ${value}: ${span}`).toBe(true);
+        }
       }
     }
     expect(existsSync("/tmp/t349-pwn")).toBe(false);

@@ -1,7 +1,7 @@
 ---
 name: aidlc
 description: >
-  AI-DLC workflow orchestrator. Start, resume, or manage an AI-driven
+  AI-DLC. Start, resume, or manage an AI-driven
   development lifecycle. Scopes are defined one file per scope under
   `.aidlc/scopes/`; run
   `{{INVOKE}} engine orchestrate help` for the authoritative list
@@ -14,7 +14,7 @@ description: >
   Or describe what you want to build and the scope will be auto-detected.
 ---
 
-# AI-DLC Orchestrator (opencode harness)
+# AI-DLC (opencode harness)
 
 ## Welcome
 

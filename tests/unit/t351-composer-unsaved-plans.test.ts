@@ -484,8 +484,16 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     for (const flag of ["--depth", "--test-strategy"]) {
       for (const value of hostile) {
         const d = nextDirective(proj, ["--scope", "bugfix", flag, value, "--", "x"]);
-        expect(d.kind, `${flag} ${value}`).toBe("error");
-        expect(d.message).toBe(`${flag} requires <minimal|standard|comprehensive>; received ${JSON.stringify(value)}.`);
+        // A value this engine's table does not hold is a reading step now
+        // (t-three-ways-to-read-a-line). What this case exists for is
+        // unchanged: their value is never a command, and it never runs.
+        expect(d.kind, `${flag} ${value}`).toBe("print");
+        expect(d.message, `${flag} ${value}`).toContain("minimal|standard|comprehensive");
+        expect(d.message, `${flag} ${value}`).toContain(JSON.stringify(value));
+        for (const span of [...d.message.matchAll(/`([^`]*)`/g)].map((m) => m[1])) {
+          const quoted = span.includes(`-- '`);
+          expect(quoted || !span.includes(value), `${flag} ${value}: ${span}`).toBe(true);
+        }
       }
     }
     for (const flag of ["--skip", "--add"]) {

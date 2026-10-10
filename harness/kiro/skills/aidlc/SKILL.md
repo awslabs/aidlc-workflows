@@ -1,7 +1,7 @@
 ---
 name: aidlc
 description: >
-  AI-DLC workflow orchestrator. Start, resume, or manage an AI-driven
+  AI-DLC. Start, resume, or manage an AI-driven
   development lifecycle. Scopes are defined one file per scope under
   `.kiro/scopes/`; run
   `{{INVOKE}} engine orchestrate help` for the authoritative list
@@ -14,9 +14,9 @@ description: >
   Or describe what you want to build and the scope will be auto-detected.
 ---
 
-# AI-DLC Orchestrator (Kiro CLI harness)
+# AI-DLC (Kiro CLI harness)
 
-**Read all of this file before any AI-DLC command.** Kiro shows only part of a long file, whether it comes as this skill or from a file read, and a read that comes back cut short is not all of it. So read `{{HARNESS_DIR}}/skills/aidlc/SKILL.md` with your file tool in parts of at most 40 lines (offset and limit), from the first line to the last, unless you already read every line of it in this chat. Every other AI-DLC file you read (a protocol module, a stage file) is cut the same way: read it in parts of at most 200 lines, to its last line, before acting on it.
+**Read all of this file before any AI-DLC command.** Kiro shows only part of a long file, whether it comes as this skill or from a file read, and a read that comes back cut short is not all of it. So read `{{HARNESS_DIR}}/skills/aidlc/SKILL.md` with your file tool in parts of at most 40 lines (offset and limit), from the first line to the last, unless every line of it is already in this chat. Every other AI-DLC file you read (a protocol module, a stage file) is cut the same way: read it in parts of at most 200 lines, to its last line, before acting on it.
 
 ## Welcome
 
@@ -373,4 +373,4 @@ The engine reads the compiled `data/stage-graph.json` directly for all routing; 
 
 ## Read all of this skill
 
-If you have not read every line of this file in this chat, do it now: read `{{HARNESS_DIR}}/skills/aidlc/SKILL.md` with your file tool in parts of at most 40 lines (offset and limit), from the first line to the last. Kiro shows only part of a long file, and a read that comes back cut short is not all of it.
+If every line of this file is not already in this chat, do it now: read `{{HARNESS_DIR}}/skills/aidlc/SKILL.md` with your file tool in parts of at most 40 lines (offset and limit), from the first line to the last. Kiro shows only part of a long file, and a read that comes back cut short is not all of it.

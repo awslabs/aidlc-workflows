@@ -1108,9 +1108,9 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       const id = fence?.[1] ?? "";
       expect(forged).not.toContain(id);
       const head = r.stdout.slice(0, r.stdout.indexOf(`--- OUTPUT ${id}`));
-      expect(head.match(/SYSTEM \(/g)).toHaveLength(1);
+      expect(head).not.toContain("SYSTEM (");
       // Kiro renders the reply as Markdown; a fenced text block keeps the lines.
-      expect(head).toContain(`Relay the output below ${relayAsTextBlock("")}, then STOP.`);
+      expect(head).toContain(`Relay the output below ${relayAsTextBlock("")}, then stop.`);
       expect(r.stdout.trimEnd().endsWith(`--- END OUTPUT ${id} ---`)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -5122,6 +5122,13 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
   });
   const auditEvents = (dir: string, event: string) =>
     readAudit(dir).split("\n").filter((line) => line === `**Event**: ${event}`).length;
+  // The Runtime Session line must never run into whatever follows it: every
+  // piece the session-start context can add after it begins with its own
+  // newline, and the adapter inserts one between two forwarded hooks' output
+  // (aidlc-kiro-adapter.ts, the `printed` join). When the context is the last
+  // output there is nothing to separate, so the line ends the text.
+  const sessionLineStandsAlone = (stdout: string, session: string) =>
+    new RegExp(`AIDLC Runtime Session: ${session}(\\r?\\n|$)`).test(stdout);
 
   test.each([
     ["adapter", runIdeStdin],
@@ -5132,7 +5139,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     try {
       const first = invoke(dir, "record-human-turn", chatPrompt("sess_chat_one"));
       expect(first.code, first.stderr).toBe(0);
-      expect(first.stdout).toContain("AIDLC Runtime Session: sess_chat_one\n");
+      expect(sessionLineStandsAlone(first.stdout, "sess_chat_one"), first.stdout).toBe(true);
       expect(readFileSync(join(sessions, ".current-session"), "utf8").trim()).toBe("sess_chat_one");
       expect(existsSync(join(sessions, "sess_chat_one.binding.json"))).toBe(true);
 
@@ -5142,7 +5149,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
 
       const other = invoke(dir, "record-human-turn", chatPrompt("sess_chat_two"));
       expect(other.code, other.stderr).toBe(0);
-      expect(other.stdout).toContain("AIDLC Runtime Session: sess_chat_two\n");
+      expect(sessionLineStandsAlone(other.stdout, "sess_chat_two"), other.stdout).toBe(true);
       expect(readFileSync(join(sessions, ".current-session"), "utf8").trim()).toBe("sess_chat_two");
     } finally {
       rmSync(dir, { recursive: true, force: true });
