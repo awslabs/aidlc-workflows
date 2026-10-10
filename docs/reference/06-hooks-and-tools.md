@@ -495,8 +495,8 @@ Claude Code 2.1.281 source inspection shows that SessionEnd clamps its shutdown
 wait to 60 seconds unless the user explicitly supplies
 `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS`; AIDLC does not set that override.
 Increasing only the hook's `timeout` cannot raise this native cap. Kiro IDE's
-[2-second broken-stdin fallback](kiro-ide-hook-payload.md) is a payload-read
-limit, separate from execution. These registrations do not establish runtime
+[60-second stdin safety limit](kiro-ide-hook-payload.md) is a payload-read
+limit for a channel that never closes, separate from execution. These registrations do not establish runtime
 coverage for every host/version or guarantee that every fanout fits an outer
 host limit.
 

@@ -12,9 +12,11 @@
 //   1. IDE 1.x (v2 hooks, `.kiro/hooks/aidlc-*.json`): context arrives as JSON
 //      on STDIN, snake_case: { session_id, hook_event_name, cwd, tool_name,
 //      tool_input, tool_response } — no success flag. USER_PROMPT is empty.
-//      stdin is written AND closed, so a read resolves promptly. A non-empty
-//      USER_PROMPT is nevertheless checked first to identify the legacy channel;
-//      the stdin read retains a short broken-channel timeout.
+//      stdin is written AND closed: the read waits for that close, so a
+//      message Kiro hands over late (a busy machine) is still read whole; a
+//      60 s safety limit (stdinTimeoutMs) ends only a channel that never
+//      closes. A non-empty USER_PROMPT is nevertheless checked first to
+//      identify the legacy channel.
 //   2. IDE 0.12 (legacy `.kiro.hook` era): stdin was OPENED BUT NEVER
 //      WRITTEN/CLOSED — reading it hangs. Context came through the
 //      `USER_PROMPT` env var instead, camelCase: { toolName, toolArgs,
@@ -35,7 +37,7 @@
 // terminal-command seams, and lifecycle boundaries that carry modern session
 // identity (SessionStart and Stop). Every other target is payload-independent
 // and never touches stdin. The guard card fires on every PreToolUse but a
-// read, and a 2s stall on a never-closing stdin there would be felt on nearly
+// read, and a stall on a never-closing stdin there would be felt on nearly
 // every tool call.
 //
 // Consequences, by target:
@@ -1708,6 +1710,11 @@ hookDebug(projectDir, "kiro-adapter", "invoked", {
 });
 const promptEmpty = ide.prompt !== undefined && ide.prompt.trim() === "" &&
   (ide.malformedFields?.length ?? 0) === 0;
+// Nothing came on either channel: the host ran the hook but delivered no
+// context (stdin closed empty or never closed before the limit, USER_PROMPT
+// empty). Distinct from a payload whose prompt is "" (promptEmpty above).
+const noPayload = INPUT_TARGETS.has(target) && input.trim() === "" &&
+  (process.env.USER_PROMPT ?? "").trim() === "";
 
 // Persist the effective startup or event-local prompt identity under the existing gitignored
 // runtime dir so separate adapter processes can forward it to payload-free
@@ -2786,6 +2793,21 @@ function buildForward(): Forward {
 
     case "record-human-turn": {
       recordPreWorkflowHeartbeat(projectDir, "record-human-turn");
+      if (noPayload) {
+        // Whose message this was and what it said are unknown, so nothing is
+        // recorded as the person's: no turn, no message record, no session
+        // started or remembered. A turn with prompt "" would say they typed
+        // nothing, and presence minted here could be a prompt Kiro made. The
+        // record keeps that the hook ran and got nothing (doctor's drops), and
+        // the agent hears what to tell the person.
+        recordHookDrop(
+          projectDir,
+          "kiro-adapter",
+          `record-human-turn: no payload (nothing on stdin before it closed or within ${stdinTimeoutMs()} ms, no USER_PROMPT) - turn not recorded`,
+        );
+        process.stdout.write(`${NO_MESSAGE_AGENT_LINE}\n`);
+        return null;
+      }
       const eventSessionId = ide.sessionId?.trim();
       // Who sent the turn (kiroTurnOrigin): a message Kiro's own chat record
       // marks as its own, or one of Kiro's fixed workflow sentences (a Kiro
@@ -3817,13 +3839,22 @@ if (result.code === 2 && result.stderr) process.stderr.write(result.stderr);
 return result.code;
 }
 
-// The broken-channel ceiling for the 1.x stdin read. 2s in production; the
-// AIDLC_IDE_STDIN_TIMEOUT_MS seam lets the latency tests raise it far above any
-// plausible CI scheduling delay, so "did this path probe stdin at all?" becomes
-// a deterministic assertion instead of a tight millisecond budget.
+// What the agent hears when the person's message never reached the hook. It
+// names no engine part: the agent repeats these words to the person.
+const NO_MESSAGE_AGENT_LINE =
+  "Tell the person in one line: AI-DLC did not receive their last message, so if it answered an AI-DLC question they will be asked it again.";
+
+// The safety limit on the 1.x stdin read. Kiro writes the payload and closes
+// stdin, so the read ends when Kiro has finished sending, however late (a
+// write landing 3.5 s after the hook started was measured on a busy machine);
+// the limit ends only a channel that never closes. 60 s is Kiro's own default
+// budget for a command hook (kiro.dev/docs/hooks), well under the 1800 s the
+// registrations set, so the hook gives up on its own terms and records that.
+// The AIDLC_IDE_STDIN_TIMEOUT_MS seam lets tests shorten it (a never-closing
+// stdin) or stretch it (proving a path never probed stdin at all).
 function stdinTimeoutMs(): number {
   const override = Number(process.env.AIDLC_IDE_STDIN_TIMEOUT_MS ?? "");
-  return Number.isFinite(override) && override > 0 ? override : 2000;
+  return Number.isFinite(override) && override > 0 ? override : 60_000;
 }
 
 async function readStdinWithTimeout(timeoutMs: number): Promise<string> {
@@ -3845,10 +3876,10 @@ if (import.meta.main) {
   // Acquire input only for targets that need tool payload, session identity, or
   // the human response text. A non-empty
   // USER_PROMPT identifies the 0.12 channel and is consumed immediately: that
-  // IDE leaves stdin open forever, so probing stdin first imposed a mandatory
-  // 2s delay on every payload hook. IDE 1.x sends USER_PROMPT empty and writes
-  // + closes stdin; retain the timeout only as a defensive broken-channel
-  // ceiling. Every other target skips both channels (zero latency).
+  // IDE leaves stdin open forever, so probing stdin first would stall every
+  // payload hook. IDE 1.x sends USER_PROMPT empty and writes + closes stdin;
+  // the read waits for that close, bounded only by the safety limit above.
+  // Every other target skips both channels (zero latency).
   let input = "";
   if (INPUT_TARGETS.has(target)) {
     const legacyPayload = process.env.USER_PROMPT ?? "";
