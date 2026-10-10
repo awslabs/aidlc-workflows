@@ -1168,12 +1168,6 @@ export const SPACE_VERBS: ReadonlySet<string> = new Set([
   "create",
 ]);
 
-export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
-  "rename",
-  "show",
-  "birth",
-]);
-
 // The two intent lifecycle verbs that retire and revive a record without
 // touching its files: `archive` moves an in-flight or completed intent to the
 // `archived` status, `unarchive` brings it back to the status it had.
@@ -1187,7 +1181,10 @@ export type WorkspaceCommand =
   // `all` is only ever set (true) for `intent list --all`; a plain list omits
   // it so existing shape consumers keep matching the two-field object.
   | { kind: "list"; noun: WorkspaceNoun; json: boolean; all?: true }
-  | { kind: "switch"; noun: WorkspaceNoun; name: string; explicit: boolean }
+  // `words`: every token the person typed after the name, kept whole for the
+  // agent to read (a request, or a setting for the work selected); never for
+  // the utility. Present only when there are any.
+  | { kind: "switch"; noun: WorkspaceNoun; name: string; explicit: boolean; words?: string[] }
   | { kind: "create"; noun: "space"; name: string }
   | { kind: "create-intent"; noun: "intent"; rest: string[] }
   // `rest` carries the verb's trailing flags (`--reason <text>`) through to the
@@ -1200,13 +1197,6 @@ export type WorkspaceCommand =
       noun: WorkspaceNoun;
       code: "missing-name" | "unexpected-arguments";
       verb: "switch" | "create" | "space-create" | IntentLifecycleVerb | IntentRepoVerb;
-      message: string;
-    }
-  | {
-      kind: "error";
-      noun: WorkspaceNoun;
-      code: "reserved-future-verb";
-      verb: string;
       message: string;
     }
   | { kind: "not-workspace" };
@@ -1243,29 +1233,8 @@ function unexpectedWorkspaceArguments(
   };
 }
 
-function reservedFutureWorkspaceVerb(
-  noun: WorkspaceNoun,
-  verb: string,
-): WorkspaceCommand {
-  return {
-    kind: "error",
-    noun,
-    code: "reserved-future-verb",
-    verb,
-    message:
-      `${noun} ${verb} is reserved for a future workspace verb and is not implemented yet. ` +
-      `Use ${noun} switch ${verb} to select an existing record with that name.`,
-  };
-}
-
 export function isWorkspaceNoun(token: string | undefined): token is WorkspaceNoun {
   return (WORKSPACE_NOUNS as readonly (string | undefined)[]).includes(token);
-}
-
-function isReservedFutureWorkspaceVerb(
-  token: string | undefined,
-): token is string {
-  return token !== undefined && RESERVED_FUTURE.has(token);
 }
 
 function isIntentLifecycleVerb(token: string | undefined): token is IntentLifecycleVerb {
@@ -1317,17 +1286,13 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
   if (verbOrName === "help" || verbOrName === "-h") {
     return { kind: "help", noun };
   }
-  if (isReservedFutureWorkspaceVerb(verbOrName)) {
-    return reservedFutureWorkspaceVerb(noun, verbOrName);
-  }
 
   if (noun === "intent") {
     if (verbOrName === "list") return explicitWorkspaceList(noun, tokens);
     if (verbOrName === "switch") {
       const name = tokens[2];
       if (name === undefined) return missingWorkspaceName(noun, "switch");
-      if (tokens.length > 3) return unexpectedWorkspaceArguments(noun, "switch");
-      return { kind: "switch", noun, name, explicit: true };
+      return switchWithWords(noun, name, true, tokens.slice(3));
     }
     if (verbOrName === "create") {
       return { kind: "create-intent", noun, rest: tokens.slice(2) };
@@ -1346,8 +1311,7 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     if (verbOrName === "switch") {
       const name = tokens[2];
       if (name === undefined) return missingWorkspaceName(noun, "switch");
-      if (tokens.length > 3) return unexpectedWorkspaceArguments(noun, "switch");
-      return { kind: "switch", noun, name, explicit: true };
+      return switchWithWords(noun, name, true, tokens.slice(3));
     }
     if (verbOrName === "create") {
       const name = tokens[2];
@@ -1357,10 +1321,20 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     }
   }
 
-  if (tokens.slice(2).some((token) => token.startsWith("--"))) {
-    return unexpectedWorkspaceArguments(noun, "switch");
-  }
-  return { kind: "switch", noun, name: verbOrName, explicit: false };
+  return switchWithWords(noun, verbOrName, false, tokens.slice(2));
+}
+
+// A switch keeps whatever the person typed after the name, flags included: the
+// engine hands those words to the agent whole with the switch (Branch 1b), so
+// "intent auth --guard-policy relaxed" selects auth and the agent sets the
+// policy for it. Nothing here reads them.
+function switchWithWords(
+  noun: WorkspaceNoun,
+  name: string,
+  explicit: boolean,
+  rest: readonly string[],
+): WorkspaceCommand {
+  return { kind: "switch", noun, name, explicit, ...(rest.length > 0 ? { words: [...rest] } : {}) };
 }
 
 export function workspaceCommandUtilityArgv(
@@ -1540,15 +1514,15 @@ export function splitKiroCommandArgs(raw: string): string[] {
 }
 
 export const RESERVED_RECORD_NAME_LIST = Object.freeze(
-  [...new Set(["help", ...INTENT_VERBS, ...SPACE_VERBS, ...RESERVED_FUTURE])],
+  [...new Set(["help", ...INTENT_VERBS, ...SPACE_VERBS])],
 );
 
 // Slugs a record (intent or space) may never take. These names are grammar:
-// help, current workspace verbs, and reserved future verbs all change how the
-// router reads `intent <token>` / `space <token>`. Refusing them at the
-// creation chokepoints keeps new records reachable. Pre-existing records with
-// these names remain reachable via explicit `switch`; doctor flags them as an
-// advisory so humans can rename them deliberately.
+// help and the workspace verbs change how the router reads `intent <token>` /
+// `space <token>`. Refusing them at the creation chokepoints keeps new records
+// reachable. Pre-existing records with these names remain reachable via
+// explicit `switch`; doctor flags them as an advisory so humans can rename
+// them deliberately.
 export const RESERVED_RECORD_NAMES: ReadonlySet<string> = new Set(
   RESERVED_RECORD_NAME_LIST,
 );
@@ -1775,7 +1749,7 @@ function terminalCommandFromWorkspaceCommand(
 // matching rules are byte-for-byte the engine's parseNextFlags terminal branches
 // (read-only flag anywhere; workspace verb only at index 0) so the seam and the
 // engine can never disagree about what is terminal.
-export function classifyTerminalCommand(argv: string[]): TerminalCommand | null {
+export function classifyTerminalCommand(argv: string[], projectDir?: string): TerminalCommand | null {
   const args = withoutEntryWord(argv);
   // A SOLE bare `help` / `-h` token is a help REQUEST (terminal, read-only);
   // mirrors parseNextFlags in the engine. Without this the token reads as
@@ -1805,6 +1779,17 @@ export function classifyTerminalCommand(argv: string[]): TerminalCommand | null 
     // no session_id, while the shell PostToolUse event does; executing creation
     // off-band would make exact session ownership impossible.
     if (workspaceCommand.kind === "create-intent") return null;
+    // A switch is terminal only when it is exactly a record's name: words after
+    // the name are the agent's to read (the engine hands them over with the
+    // switch), and a name that is no record goes to the agent with the noun's
+    // verbs and records (Branch 1b). The seam knows the project; without one
+    // the shape alone is classified, as the engine's parser does.
+    if (workspaceCommand.kind === "switch") {
+      if (workspaceCommand.words !== undefined) return null;
+      if (projectDir !== undefined && !workspaceRecordExists(projectDir, workspaceCommand.noun, workspaceCommand.name)) {
+        return null;
+      }
+    }
     return terminalCommandFromWorkspaceCommand(workspaceCommand, args);
   }
   // Among the person's own words a utility flag is part of their request.
@@ -4296,6 +4281,46 @@ export function listIntents(
     });
   }
   return infos;
+}
+
+// The records a bare name after `intent` or `space` can select, newest last:
+// the selected space's intents by slug (the record dir counts as the same
+// name, as `intent <name>` resolves it), or the spaces by name. Structure
+// only, read from the registry and the spaces dir; anything unreadable is an
+// empty list.
+function workspaceRecordList(
+  projectDir: string,
+  noun: WorkspaceNoun,
+): Array<{ name: string; dirName: string | null }> {
+  try {
+    if (noun === "space") return listSpaces(projectDir).map((space) => ({ name: space.name, dirName: null }));
+    const space = resolveWorkflowSelection(projectDir).space;
+    return listIntents(projectDir, space).map((intent) => ({ name: intent.slug, dirName: intent.dirName }));
+  } catch {
+    return [];
+  }
+}
+
+// Whether a name after `intent` or `space` is exactly a record the switch
+// would select: an intent by slug or record dir; a space by name, or by the
+// slug the utility stores it under (`space "My Space"` selects my-space). Any
+// other word is the agent's to read (Branch 1b).
+export function workspaceRecordExists(projectDir: string, noun: WorkspaceNoun, name: string): boolean {
+  const slug = noun === "space" ? slugify(name) : name;
+  return workspaceRecordList(projectDir, noun).some((record) =>
+    record.name === name || record.name === slug || record.dirName === name);
+}
+
+// The most recent record names for the noun, newest first, capped, with how
+// many more there are: what the agent is shown beside an unknown word so a
+// typo of a name is read as that name.
+export function recentWorkspaceRecordNames(
+  projectDir: string,
+  noun: WorkspaceNoun,
+  limit = 20,
+): { names: string[]; more: number } {
+  const names = [...new Set(workspaceRecordList(projectDir, noun).map((record) => record.name))].reverse();
+  return { names: names.slice(0, limit), more: Math.max(0, names.length - limit) };
 }
 
 // The workflows still running in a project: every space's intents that neither
@@ -11815,25 +11840,6 @@ export function personCheckSwitchAllowed(projectDir: string, key: string, value:
   const values = Object.hasOwn(PERSON_CHECK_SWITCH_VALUES, key) ? PERSON_CHECK_SWITCH_VALUES[key] : undefined;
   if (values === undefined) return false;
   return values.on.includes(value) || (values.off.includes(value) && personAskedSinceGate(projectDir));
-}
-
-// The gate's "Request Changes" choice, matched the way a person types it: any
-// case, an optional option prefix ("B." or "2)"), surrounding quotes, and
-// trailing punctuation are all the same choice, as is the "(Recommended)" label
-// decorator the question-rendering guide asks the conductor to add. The words
-// themselves must be present; a paraphrase ("please change it") is not this
-// label. A paraphrase is the conductor's to read; the shared reply reader
-// (aidlc-reply-reader.ts) matches only exact picks and judges no meaning.
-// Shape of an accepted reply: optional option prefix, then the words
-// "request changes", then wrapper noise (whitespace, quotes, . or !), then at
-// most ONE "(recommended)" decorator, then wrapper noise again. Because the
-// noise is allowed on both sides of the decorator, the decorator composes with
-// quotes and punctuation whether it sits inside or outside them, and there is
-// no pass ordering that can silently drop one direction (PR #1133 review).
-const REQUEST_CHANGES_CHOICE_RE =
-  /^(?:(?:[A-Za-z]|\d+)[.)])?[\s"'`]*request\s+changes[\s"'`.!]*(?:\(recommended\)[\s"'`.!]*)?$/i;
-export function isRequestChangesChoice(text: string | undefined | null): boolean {
-  return REQUEST_CHANGES_CHOICE_RE.test((text ?? "").trim());
 }
 
 // The approval the conductor reports at a held stage gate. The conductor reads

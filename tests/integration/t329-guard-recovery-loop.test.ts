@@ -1,6 +1,6 @@
 // covers: directive:guard-recovery, function:consumeSharedDirectiveAsk,
 // function:guardRecoveryFeedbackStatus, function:currentGuardRecoveryAskMarker,
-// function:isRequestChangesChoice, function:recordGuardRefusal
+// function:recordGuardRefusal
 //
 // A GUARD-RECOVERY ASK IS A HUMAN WAIT, AND THE HUMAN'S SELECTION SURVIVES.
 //
