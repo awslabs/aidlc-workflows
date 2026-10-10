@@ -8311,6 +8311,7 @@ describe("t243 projection channel", () => {
           "sha256:648f12cb08d05e7bdf97ad4e69e36b7d2b76687d047811d58d196623fd9191bf",
           "sha256:e82d7773f981dabccc1a0a8a31dad4feb26c2af4a65cc7d686bb2a0581ce0ecb",
           "sha256:868e1d383dd57fe7f103d626e1db27b61ec65d67a1c9c4d7a56ecae9e398edb2",
+          "sha256:07122ee7d74669b22d693783f07053b9562e53978e73f15df5305fea06ac69c3",
         ],
         "AGENTS.md": [
           "sha256:30a9f5f43d87cd29b63e75333b8ef6695f8f4e11909fd6af64e2b6cf0b8cb292",

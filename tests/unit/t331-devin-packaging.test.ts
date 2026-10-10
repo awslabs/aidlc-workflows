@@ -237,7 +237,7 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     const allow = [
       "Read(**)", "edit", "write", "grep", "glob",
       "Exec(bun .devin/tools/*)", "Exec(bun run .devin/tools/*)",
-      "Exec(date -u)", "run_subagent", "ask_user_question", "web_search", "webfetch",
+      "run_subagent", "ask_user_question", "web_search", "webfetch",
     ];
     // The copy projection expands each authored glob into the engine prefix,
     // the dispatcher's listed read-only commands, and every non-machine-
@@ -255,7 +255,7 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       "Read(**)", "edit", "write", "grep", "glob",
       ...expandedGrants("bun "),
       ...expandedGrants("bun run "),
-      "Exec(date -u)", "run_subagent", "ask_user_question", "web_search", "webfetch",
+      "run_subagent", "ask_user_question", "web_search", "webfetch",
     ];
     // The native projection drops every Exec(bun …) entry and runs the same
     // commands through the installed aidlc command.

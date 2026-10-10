@@ -1370,8 +1370,8 @@ function rewriteNativeOnboarding(value: string, exactReads = false): string {
     )
     .replace(/^- \*\*Permissions\*\*:.*$/gm, nativePermissionsLine(exactReads))
     .replace(
-      "Framework shell grants cover the `aidlc.ts engine` prefix, the dispatcher's listed read-only commands, and each approved `.devin/tools/` script, in both `bun` and `bun run` spellings, plus `date -u`.",
-      `Framework shell grants cover the installed \`${trustedCommand()}\` command prefix, its listed read-only commands, and \`date -u\`.`,
+      "Framework shell grants cover the `aidlc.ts engine` prefix, the dispatcher's listed read-only commands, and each approved `.devin/tools/` script, in both `bun` and `bun run` spellings.",
+      `Framework shell grants cover the installed \`${trustedCommand()}\` command prefix and its listed read-only commands.`,
     )
     .replace(
       /TypeScript, run via bun/g,

@@ -89,6 +89,7 @@ const manifest: HarnessManifest = {
           "sha256:469dbf89f83865b58b2ae4c51dd2f2fe51fd80a9e2033bfb233688141d0cf632",
           "sha256:648f12cb08d05e7bdf97ad4e69e36b7d2b76687d047811d58d196623fd9191bf",
           "sha256:e82d7773f981dabccc1a0a8a31dad4feb26c2af4a65cc7d686bb2a0581ce0ecb",
+          "sha256:868e1d383dd57fe7f103d626e1db27b61ec65d67a1c9c4d7a56ecae9e398edb2",
         ],
       },
     },

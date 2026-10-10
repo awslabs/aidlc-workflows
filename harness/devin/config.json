@@ -8,7 +8,6 @@
       "glob",
       "Exec(bun .devin/tools/*)",
       "Exec(bun run .devin/tools/*)",
-      "Exec(date -u)",
       "run_subagent",
       "ask_user_question",
       "web_search",
