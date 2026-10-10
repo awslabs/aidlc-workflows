@@ -3249,7 +3249,7 @@ function runtimeIdentityMatches(
 
 export const PLAN_APPROVAL_BATCH_FALLBACK =
   "Use decision/answer --stage code-generation --checkpoint plan-approval " +
-  "--unit <unit> --questions-file <path> --session <id> separately for each unit.";
+  "--unit <unit> --questions-file <path> separately for each unit.";
 
 interface PlanApprovalBatchSelection {
   batch: string;

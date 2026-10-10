@@ -367,7 +367,7 @@ choices and a blank `[Answer]:`. Record the prompt, then present exactly the two
 those labels into any file:
 
 ```bash
-bun {{HARNESS_DIR}}/tools/aidlc-log.ts decision --stage code-generation --checkpoint plan-approval --session "<Runtime Session from SessionStart context>" --questions-file "<code-generation-record>/code-generation-questions.md" --decision "Approve this exact Code Generation plan?" --options "Approve Plan,Request Changes" --unit "<directive.unit>"
+bun {{HARNESS_DIR}}/tools/aidlc-log.ts decision --stage code-generation --checkpoint plan-approval --questions-file "<code-generation-record>/code-generation-questions.md" --decision "Approve this exact Code Generation plan?" --options "Approve Plan,Request Changes" --unit "<directive.unit>"
 ```
 
 Map the selected label back to `Approve Plan` or `Request Changes`, write it
@@ -375,7 +375,7 @@ after `[Answer]:`, and record it (again `--stage-level` for zero-Unit work). On
 `Request Changes`, revise, blank the answer, and repeat from the fingerprint:
 
 ```bash
-bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --session "<same Runtime Session>" --questions-file "<code-generation-record>/code-generation-questions.md" --details '<exact choice>' --unit "<directive.unit>"
+bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --questions-file "<code-generation-record>/code-generation-questions.md" --details '<exact choice>' --unit "<directive.unit>"
 ```
 
 ### Step 4: PART 2 — Generation
