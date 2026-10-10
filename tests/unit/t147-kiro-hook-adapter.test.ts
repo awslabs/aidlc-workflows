@@ -961,7 +961,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(r.stdout).not.toContain("Cwd=C:\\shell\\noise");
       // Kiro renders the reply as Markdown, which joins single line breaks; a
       // fenced text block keeps doctor and help on their own lines.
-      expect(r.stdout).toContain(`relay that output to the user ${relayAsTextBlock("")}, then STOP.`);
+      expect(r.stdout).toContain(`relay that output to the user ${relayAsTextBlock("")}, then stop.`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1157,7 +1157,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       const calls = stubNext(dir, empty);
       const first = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
       expect(first.code).toBe(0);
-      expect(first.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
+      expect(first.stdout).toContain("Act on its reply below now");
       const framing = Buffer.byteLength(first.stdout) - Buffer.byteLength(empty);
       expect(framing).toBeGreaterThan(0);
       for (const packetBytes of [10 * 1024 - 1, 10 * 1024, 10 * 1024 + 1]) {
@@ -1176,8 +1176,8 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           expect(result.stdout).toContain(`--- DIRECTIVE ---\n${response}\n--- END DIRECTIVE ---`);
           expect(existsSync(latch)).toBe(false);
         } else {
-          expect(result.stdout).toContain("deterministic argument forwarding");
-          expect(result.stdout).not.toContain("ALREADY");
+          expect(result.stdout).toContain("Your first tool call is exactly the call below");
+          expect(result.stdout).not.toContain("has already run");
           expect(result.stdout).not.toContain(message);
           expect(JSON.parse(readFileSync(latch, "utf8")).args).toEqual(args);
         }
@@ -1212,7 +1212,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         expect(hook.stdout).toContain(`engine orchestrate next ${raw}`);
         expect(hook.stdout).not.toContain(token);
         expect(hook.stdout).not.toContain("rules_content");
-        expect(hook.stdout).not.toContain("ALREADY");
+        expect(hook.stdout).not.toContain("has already run");
         const guard = (suffix: string) => runAdapter(dir, "guard-tool-call", {
           cwd: dir, tool_name,
           tool_input: { command: `bun .kiro/tools/aidlc.ts engine orchestrate next${suffix}` },
@@ -1232,7 +1232,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         .toEqual(Array.from({ length: 6 }, () => ["next", ...args]));
       writeFileSync(join(dir, "next-response.txt"), '{"kind":"print","message":"incomplete');
       const incomplete = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: `/aidlc ${raw}` });
-      expect(incomplete.stdout).toContain("deterministic argument forwarding");
+      expect(incomplete.stdout).toContain("Your first tool call is exactly the call below");
       expect(incomplete.stdout).not.toContain("--- DIRECTIVE ---");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
@@ -1245,7 +1245,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       const result = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: "/aidlc --config" });
       expect(result.code).toBe(0);
       expect(result.stdout).toContain(response);
-      expect(result.stdout).toContain("deterministic engine pre-dispatch");
+      expect(result.stdout).toContain("Act on its reply below now");
       expect(JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-readonly-latch"), "utf8")).source)
         .toBe("config-alias");
       for (const tool_name of ["execute_bash", "execute_pwsh", "shell"]) {
@@ -1271,7 +1271,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       const hook = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: `/aidlc ${raw}` });
       expect(hook.code).toBe(0);
       expect(hook.stdout).toContain(`engine orchestrate next ${raw}`);
-      expect(hook.stdout).not.toContain("ALREADY");
+      expect(hook.stdout).not.toContain("has already run");
       expect(started()).toBe(before); // No hook-side isolated attempt or issuance.
       expect(existsSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"))).toBe(false);
       const accepted = runAdapter(dir, "guard-tool-call", {
@@ -1329,7 +1329,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         cwd: dir, prompt: "/aidlc --stage reverse-engineering --single",
       }, [], env);
       expect(single.code).toBe(0);
-      expect(single.stdout).toContain("deterministic argument forwarding");
+      expect(single.stdout).toContain("Your first tool call is exactly the call below");
       expect(existsSync(called)).toBe(false);
       const ordinary = runAdapter(dir, "verb-intercept", {
         cwd: dir, prompt: "/aidlc --stage reverse-engineering",
@@ -2764,7 +2764,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       const calls = stubNext(dir, JSON.stringify({ kind: "print", message: "" }));
       const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(`--scope classic ${pasted}`) }, [], env);
       expect(r.code, r.stderr).toBe(0);
-      expect(r.stdout).toContain("ALREADY");
+      expect(r.stdout).toContain("has already run");
       expect(readFileSync(calls, "utf8").trim().split("\n").map((line) => JSON.parse(line)))
         .toEqual([["next", "--scope", "classic", ...words]]);
     } finally { rmSync(dir, { recursive: true, force: true }); }
