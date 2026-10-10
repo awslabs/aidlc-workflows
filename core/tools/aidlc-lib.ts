@@ -9,7 +9,6 @@ import { TextDecoder } from "node:util";
 import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
-  aidlcDispatcherInvocation,
   aidlcInvocation,
   aidlcToolInvocation,
   entrySkillInvocation,
@@ -39845,7 +39844,6 @@ export function parseTypedGuardSwitches(prompt: string): GuardSwitch[] {
 
 export function guardSwitchRefusal(
   wanted: GuardSwitch,
-  context: "config" | "intent-create",
   // The person only asked about the switch since the last decision.
   asked = false,
   projectDir?: string,
@@ -39868,22 +39866,6 @@ export function guardSwitchRefusal(
   // works there is named in place of the chat's.
   const ownTerminal = humanTurnMintAllowed() && personAtOwnTerminal(projectDir);
   const hint = humanTurnMintAllowed() && !ownTerminal ? "" : unattendedHumanPresenceHint(projectDir);
-  // Before the work exists, the person's own words at the compose gate or
-  // scope confirmation are what turn a check off for it. Otherwise the agent
-  // creates the work and then runs the setter itself for what they asked.
-  if (context === "intent-create") {
-    if (wanted.key === "plan-approval") {
-      const setter = renderGuardOperation({ kind: "lower-fence", fence: "plan-approval" }, { harnessDir: harnessDir() });
-      return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call. Create the piece of work without it; when they ask for it in their own words, run \`${setter}\` yourself and say in one line that it is off for this piece of work.${hint}`;
-    }
-    if (wanted.key === "guard-policy") {
-      // The source install runs the utility directly, as the lower-fence setter does.
-      const setter = aidlcInvocation().startsWith("bun ")
-        ? `${aidlcToolInvocation("utility")} config-change --guard-policy ${wanted.value}`
-        : aidlcDispatcherInvocation(`config set guard-policy ${wanted.value}`);
-      return `Creating this intent with Guard Policy ${wanted.value} would lower fences, which is the person's call. Create it, then, when they ask for it in their own words, run \`${setter}\` yourself and say in one line what changed. A scope default applies without asking.${hint}`;
-    }
-  }
   // Lowering a check is the person's call: the setter carries it out when a
   // person has spoken since the last decision, so this refusal means no reply
   // from them has arrived (or an unattended driver is running).

@@ -434,7 +434,7 @@ export function applyIntentSettings(
   }
   // An unattended driver never lowers fences, including a recorded presence bypass.
   if (lowering.length > 0 && process.env.AIDLC_UNATTENDED === "1") {
-    die(guardSwitchRefusal(lowering[0], "config"));
+    die(guardSwitchRefusal(lowering[0]));
   }
   // Lowering a fence is the person's call. Their typed switch carries it out,
   // and so does this setter when a person has spoken since the last decision
@@ -453,7 +453,7 @@ export function applyIntentSettings(
     !personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true })
   ) {
     // A question about the switch ("skip plan approval?") asks for nothing.
-    die(guardSwitchRefusal(lowering[0], "config", personSpokeSinceGate(projectDir), projectDir));
+    die(guardSwitchRefusal(lowering[0], personSpokeSinceGate(projectDir), projectDir));
   }
   // The setter carries out what the person asked: their words go on the record.
   // A command they ran themselves, at their own terminal, is their own act and

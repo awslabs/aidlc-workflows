@@ -936,13 +936,19 @@ describe("asked before the piece of work exists", () => {
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
   });
 
-  test("the agent passing the flag with no such turn is refused", () => {
+  // The command may carry the flag once the person has spoken in this chat, the
+  // way the setter runs on open work once they have: their message is the
+  // authority and the record keeps it. With no message of theirs here, there is
+  // nothing behind the flag and it is refused. Reading what a message of theirs
+  // asked for is the agent's to do, so a question of theirs ("why is plan
+  // approval on?") is a message like any other here and the agent answers it.
+  test("the agent passing the flag with no message of theirs in this chat is refused", () => {
     const proj = emptyProject();
     const asked = requestOf(proj, "build the export");
-    reply(proj, "why is plan approval on?");
     const refused = utility(proj, ["intent-create", "--request", asked.id, "--plan-approval", "off"]);
     expect(refused.status).toBe(1);
     expect(refused.stderr).toContain("Turning plan approval off lets code generation start without the person approving the plan");
+    expect(refused.stderr).toContain("No reply from the person has arrived since the last decision");
   });
 
   test("a memory lock refuses it at the gate and at creation, naming the file", () => {

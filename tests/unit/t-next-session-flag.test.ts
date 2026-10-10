@@ -79,7 +79,10 @@ describe("t-next-session-flag: how next reads a --session", () => {
   test("alone, it is not a setting the person typed and not a description", () => {
     const parsed = parseNextFlags(["--session", SESSION]);
     expect(parsed.intent).toBeUndefined();
-    expect(parsed.unreadSetting).toBeUndefined();
+    // A flag `next` does not take, before the person's first word: the agent's
+    // own argument, read as nothing (t-flags-next-does-not-take holds the rule).
+    expect(parsed.untakenFlag).toBe("--session");
+    expect(parsed.untakenFlagValue).toBe(SESSION);
     expect(parsed.parseError).toBeUndefined();
   });
 
@@ -95,29 +98,40 @@ describe("t-next-session-flag: how next reads a --session", () => {
   });
 });
 
+// One print for the agent, whatever is on the rest of the line, and nothing for
+// the person: `next` cannot take the line whole, so it takes nothing from it and
+// says so to the agent, which runs it again with only what the person asked for.
 describe("t-next-session-flag: what the step is", () => {
-  test("with work in progress, the step a bare next gives", () => {
+  test("with work in progress, the agent is told the flag is not taken and nothing runs", () => {
     const plain = next(openWork(), []).directive;
     const withSession = next(openWork(), ["--session", SESSION]);
     expect(withSession.out).not.toContain(UNREAD);
-    expect(withSession.directive.kind).toBe(plain.kind);
-    expect(withSession.directive.stage).toBe(plain.stage);
+    expect(withSession.directive.kind, withSession.out).toBe("print");
+    expect(withSession.directive.narration).toBeUndefined();
+    expect(String(withSession.directive.message)).toContain("--session");
+    // The step itself is untouched: the next call with no argument of the
+    // agent's own returns what a bare `next` always returned.
+    expect(next(openWork(), []).directive.kind).toBe(plain.kind);
+    expect(next(openWork(), []).directive.stage).toBe(plain.stage);
   });
 
-  test("with no work yet and nothing else on the line, the agent is sent back for the person's words", () => {
+  test("with no work yet and nothing else on the line, the same print, no error", () => {
     const { directive, out } = next(emptyProject(), ["--session", SESSION]);
     expect(out).not.toContain(UNREAD);
     expect(out).not.toContain("No workflow state found");
     expect(directive.kind, out).toBe("print");
     // Nothing for the person: the agent runs `next` again with what they typed.
     expect(directive.narration).toBeUndefined();
-    const message = String(directive.message);
-    expect(message).toMatch(/Run `[^`]*aidlc-orchestrate\.ts next "<what the person typed after \/aidlc, word for word>"` now/);
-    expect(message).toMatch(/if they typed nothing after it, run `[^`]*aidlc-orchestrate\.ts next`\.$/);
+    expect(String(directive.message)).toContain("--session");
+    expect(String(directive.message)).toContain("only the person's words");
   });
 
-  test("with no work yet and the person's words after it, the plan question is about their words", () => {
-    const { directive, out } = next(emptyProject(), ["--session", SESSION, "Build a small notes app"]);
+  test("their words after it reach the plan question on the call that carries only them", () => {
+    const proj = emptyProject();
+    const first = next(proj, ["--session", SESSION, "Build a small notes app"]);
+    expect(first.directive.kind, first.out).toBe("print");
+    expect(first.directive.narration).toBeUndefined();
+    const { directive, out } = next(proj, ["Build a small notes app"]);
     expect(directive.kind, out).toBe("ask");
     expect(String(directive.question)).toContain('"Build a small notes app"');
     expect(out).not.toContain("--session");
