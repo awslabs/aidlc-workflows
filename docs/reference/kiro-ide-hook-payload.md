@@ -398,8 +398,8 @@ cards doing the work, and the guard notes nothing for them.
   reached the engine as `add a Save button`, measured on Kiro IDE 1.2.37), and
   through `aidlc.cmd` cmd.exe also replaces a `%NAME%` pair, ends the command at
   a line break, and acts on `&`, `|`, `<`, `>` and `^`. So on `execute_pwsh`
-  every request goes through the request file: `terminal-command-guard`
-  refuses an AI-DLC call that runs `next` with request words on the command
+  the skill sends every request through the request file, and
+  `terminal-command-guard` refuses an AI-DLC call that runs `next` with request words on the command
   line (native `aidlc`, `aidlc.cmd` or `aidlc.exe`, the dispatcher's shortcuts
   such as `aidlc compose`, or the copy channel's `aidlc.ts` or
   `aidlc-orchestrate.ts` run by bun). Which call runs `next` is the
@@ -408,8 +408,15 @@ cards doing the work, and the guard notes nothing for them.
   `--help` or one the engine refuses passes. A word after `next` that
   PowerShell fills in only when the command runs (`--depth $depth`) may be one
   the engine accepts, so a line holding one is not counted as refused and its
-  request is. Through `aidlc` or `aidlc.cmd`, a value PowerShell builds from
-  code or into free text is refused first, by the checks below. The fixed reason asks the agent to write
+  request is, and so is a request PowerShell builds from a variable, an
+  expression or code. A statement holding an empty argument is read both with
+  it and without it, before the dispatcher reads it (Windows PowerShell 5.1
+  drops it, and so does a newer PowerShell for `aidlc.cmd`), and carries a
+  request when either reading does. This check runs after the refusal for an
+  `aidlc` or `aidlc.cmd` line that cannot be checked (below), and before the
+  refusals for a value PowerShell builds, which see only values the engine
+  does not read as the request; if the engine cannot be loaded, a request
+  from a variable is not refused here. The fixed reason asks the agent to write
   the request's words, exactly as typed and without its flags, plan name or
   compose verb, with its file tool to `aidlc/.aidlc-request-text/request.txt`
   and run the same command with `--request-file` in its place; the skill has
@@ -444,11 +451,12 @@ cards doing the work, and the guard notes nothing for them.
   `aidlc.cmd` runs are refused as well, because the check cannot see what
   reaches cmd.exe. That is the value of `--details`, `--decision`,
   `--rationale`, `--reason`, `--user-input`, `--feedback`, `--override` or
-  `--arguments`, or the request after `next`, given as a variable such as `$x`
+  `--arguments`, given as a variable such as `$x`
   or `$env:X`, an expression such as `$(...)`, or a double-quoted string
   holding `$` or a backtick. The reason says the value comes from a
   PowerShell variable or expression and asks for the value itself in single
-  quotes. A variable for any other flag or for a positional token, such as
+  quotes. The request after `next` is the request-file check's (above).
+  A variable for any other flag or for a positional token, such as
   the receipt in `continue $obj.receipt`, passes, unless its own text holds a
   metacharacter or a `%NAME%` pair; so does a variable in any other command.
   A statement it cannot

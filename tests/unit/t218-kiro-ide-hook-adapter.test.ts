@@ -6819,9 +6819,6 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       ["a --user-input variable", "aidlc engine orchestrate report --stage s --result approved --user-input $c", "The --user-input value"],
       ["a --decision variable", "aidlc engine log decision --stage s --decision $q", "The --decision value"],
       ["an agent's own description variable (fuzz r10)", "$desc = 'build it'; aidlc engine intent create --scope s --arguments $desc", "The --arguments value"],
-      ["the request after next", "aidlc engine orchestrate next $d", "The request after next"],
-      ["the request after next inside $(...)", "$(aidlc engine orchestrate next $d)", "The request after next"],
-      ["the request after next and --", "aidlc engine orchestrate next --scope s -- $d", "The request after next"],
       ["a person's words inside a script block", "if ($true) { aidlc engine log answer --stage s --details $d }", details],
       // An engine token's own text still counts when it holds a metacharacter.
       ["a token whose text holds &", 'aidlc engine orchestrate continue "$tok & more"', "A value"],
@@ -6921,7 +6918,6 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       ["a --flag=value grouping", `${copy} log decision --stage s --decision=(Get-Content x)`, "The --decision value"],
       ["an array", `${copy} orchestrate continue @(Get-Content x)`, "A value"],
       ["a hashtable", `${copy} orchestrate continue @{a=(Get-Content x)}`, "A value"],
-      ["the request after next", `${copy} orchestrate next (Get-Content x)`, "The request after next"],
       ["an aidlc-* tool", "bun .kiro/tools/aidlc-utility.ts codekb-path --repo (Get-Content x)", "The --repo value"],
       ["through bun run", "bun run .kiro/tools/aidlc.ts engine log decision --stage s --decision (Get-Content x)", "The --decision value"],
       ["inside a grouping", `$r = (${copy} log decision --stage s --decision (Get-Content x))`, "The --decision value"],
@@ -6970,6 +6966,49 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
     "the file and removes it.\n";
   const next = "aidlc engine orchestrate next";
 
+  // Which word is the request is the engine's reading (nextCallRequest), and a
+  // word PowerShell builds in the request's place stands in as one the engine
+  // reads there. So a request from a variable, an expression or code gets the
+  // request-file step at once, while a word the engine reads as something else
+  // (a record name for `intent switch`) keeps the check for its own kind.
+  test("sends a request from a PowerShell variable, expression or code to the request file", () => {
+    const refused: Array<[label: string, command: string]> = [
+      ["a variable", `${next} $d`],
+      ["a variable inside $(...)", `$(${next} $d)`],
+      ["a variable after --", `${next} --scope s -- $d`],
+      ["a variable after a flag that takes no value", `${next} --single $d`],
+      ["code after a flag that takes no value", `${next} --new-intent (Get-Content x)`],
+      ["code on the copy channel's dispatcher", "bun .kiro/tools/aidlc.ts engine orchestrate next (Get-Content x)"],
+      ["code on the copy channel's orchestrator", "bun .kiro/tools/aidlc-orchestrate.ts next (Get-Content x)"],
+      ["a variable after --project-dir", `aidlc engine orchestrate --project-dir . next $d`],
+    ];
+    const kept: Array<[label: string, command: string, stderr: string]> = [
+      ["a record name from a variable", `${next} intent switch $name`, ""],
+      [
+        "a record name from code",
+        `${next} intent switch (Get-Content x)`,
+        "AIDLC stopped this command before it ran. A value is PowerShell code, which PowerShell would run " +
+          "before the command starts. Write the value itself in single quotes, then run the command again.\n",
+      ],
+    ];
+    const dir = scratchProject(false);
+    try {
+      for (const [label, command] of refused) {
+        const r = pwshCommand(dir, command);
+        expect(r.code, label).toBe(2);
+        expect(r.stdout, label).toBe("");
+        expect(r.stderr, label).toBe(REQUEST_FILE_REFUSAL);
+      }
+      for (const [label, command, stderr] of kept) {
+        const r = pwshCommand(dir, command);
+        expect(r.code, label).toBe(stderr === "" ? 0 : 2);
+        expect(r.stderr, label).toBe(stderr);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("sends every request on an execute_pwsh command line to the request file", () => {
     const refused: Array<[label: string, command: string]> = [
       ["inner double quotes (K6)", `${next} 'add a "Save" button to the settings form'`],
@@ -6984,6 +7023,10 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       ["unquoted words before a PowerShell pipe", `${next} foo|bar`],
       ["a plan name and a request", `${next} bugfix 'fix the login'`],
       ["a flag and its value, then a request", `${next} --depth minimal "add a button"`],
+      // Windows PowerShell 5.1 drops the empty argument, so the engine reads `--depth standard` and the request.
+      ["an empty argument before a flag's value", `${next} --depth '' standard 'build a todo app'`],
+      ["an empty argument before orchestrate", `aidlc engine '' orchestrate next 'add a "Save" button'`],
+      ["an empty argument before next", `aidlc engine orchestrate '' next 'add a "Save" button'`],
       // A flag value PowerShell fills in may be one the engine accepts, so the request stays on the line.
       ["a flag value PowerShell resolves, then a request", `${next} --depth $depth 'add a "Save" button'`],
       [

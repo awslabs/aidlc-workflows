@@ -1063,9 +1063,10 @@ function valueFlag(args: PowerShellWord[], index: number): string | null {
 // --override (the typed break-glass reason), and --arguments (intent create,
 // whose text is recorded as the request). --label is left out: intent create
 // slugifies it into a folder name, so it never reaches the record as written.
-// A value for one of these, or the request after `next`, must be written
-// literally; a variable or expression for any other flag, or for a positional
-// token (a receipt, slug or id the engine printed), is agent work and passes.
+// A value for one of these must be written literally; a variable or
+// expression for any other flag, or for a positional token (a receipt, slug or
+// id the engine printed), is agent work and passes. The request after `next`
+// is the engine's to find (requestOnCommandLine), and goes through a file.
 const FREE_TEXT_FLAGS: ReadonlySet<string> = new Set([
   "--details",
   "--decision",
@@ -1080,19 +1081,14 @@ const FREE_TEXT_FLAGS: ReadonlySet<string> = new Set([
 type CmdHazard =
   | { kind: "metacharacter"; flag: string | null; char: string }
   | { kind: "variable"; flag: string | null; logAnswer: boolean }
-  | { kind: "expression"; flag: string | null; request: boolean }
+  | { kind: "expression"; flag: string | null }
   | { kind: "unchecked" };
 
-// Whether the opaque word at `index` carries a person's words: the value of a
-// free-text flag, or (after `orchestrate next`) a positional word, which is
-// the request. A word right after any other --flag is that flag's value.
+// Whether the opaque word at `index` is the value of a free-text flag, which
+// carries a person's words. A word right after any other --flag is that flag's value.
 function freeTextOpaque(args: PowerShellWord[], index: number): CmdHazard | null {
   const flag = valueFlag(args, index);
-  if (flag !== null) return FREE_TEXT_FLAGS.has(flag) ? { kind: "expression", flag, request: false } : null;
-  const next = args.findIndex(
-    (word, at) => at > 0 && !word.opaque && word.value === "next" && args[at - 1].value === "orchestrate",
-  );
-  return next >= 0 && index > next ? { kind: "expression", flag: null, request: true } : null;
+  return flag !== null && FREE_TEXT_FLAGS.has(flag) ? { kind: "expression", flag } : null;
 }
 
 // The first `aidlc` (or `aidlc.cmd`, bare or by path) argument that cmd.exe
@@ -1124,7 +1120,7 @@ function cmdMetacharacterHazard(command: string): CmdHazard | null {
       // expands a %NAME% pair in it whatever PowerShell resolves, and a
       // metacharacter in it may land outside cmd.exe's quotes.
       if (CMD_VARIABLE_PAIR.test(word.value)) return { kind: "variable", flag: valueFlag(args, index), logAnswer };
-      if (/[&|<>^]/.test(word.value)) return { kind: "expression", flag: valueFlag(args, index), request: false };
+      if (/[&|<>^]/.test(word.value)) return { kind: "expression", flag: valueFlag(args, index) };
     }
     let line = "";
     const owners: number[] = [];
@@ -1293,11 +1289,7 @@ function cmdMetacharacterRefusal(hazard: CmdHazard): string {
       "stop-parsing token or a block comment, with each value in quotes and every quote closed.\n"
     );
   }
-  const subject = hazard.kind === "expression" && hazard.request
-    ? "The request after next"
-    : hazard.flag === null
-    ? "A value"
-    : `The ${hazard.flag} value`;
+  const subject = hazard.flag === null ? "A value" : `The ${hazard.flag} value`;
   if (hazard.kind === "expression") {
     return (
       `AIDLC stopped this command before it ran. ${subject} comes from a PowerShell variable or expression, ` +
@@ -1394,8 +1386,17 @@ function orchestratorArgv(statement: PowerShellWord[]): string[] | null {
 // check stands aside.
 async function requestOnCommandLine(command: string): Promise<boolean> {
   const reading = powerShellStatements(command);
+  // Windows PowerShell 5.1 drops an empty argument before the program runs
+  // (see cmdMetacharacterHazard), and so does a newer PowerShell for a .cmd
+  // file such as aidlc.cmd, while it keeps one for other programs; so a
+  // statement holding one is read both ways, before the dispatcher reads it,
+  // since a dropped word moves every word after it (`--project-dir ''`).
+  const readings = (words: PowerShellWord[]): PowerShellWord[][] => {
+    const dropped = words.filter((word) => word.opaque || word.redirect || word.value !== "");
+    return dropped.length === words.length ? [words] : [words, dropped];
+  };
   const calls = (statements: PowerShellWord[][]): string[][] =>
-    statements.flatMap((words) => {
+    statements.flatMap(readings).flatMap((words) => {
       const argv = orchestratorArgv(words);
       // Only a call that names `next` can run it; the engine is loaded for those alone.
       return argv === null || !argv.includes("next") ? [] : [argv];
@@ -1451,7 +1452,6 @@ function copyChannelCommandArgs(words: PowerShellWord[]): PowerShellWord[] | nul
 
 interface CodeArgumentHazard {
   flag: string | null;
-  request: boolean;
 }
 
 // The first argument of an AI-DLC command (either channel), in any statement,
@@ -1463,22 +1463,14 @@ function aidlcCodeArgumentHazard(command: string): CodeArgumentHazard | null {
     const args = found.filter((word) => !word.redirect);
     const index = args.findIndex((word) => word.code);
     if (index < 0) continue;
-    const flag = valueFlag(args, index);
-    const next = args.findIndex(
-      (word, at) => at > 0 && !word.opaque && word.value === "next" && args[at - 1].value === "orchestrate",
-    );
-    return { flag, request: flag === null && next >= 0 && index > next };
+    return { flag: valueFlag(args, index) };
   }
   return null;
 }
 
 // A fixed template: only a plain flag name is filled in, never the value.
 function aidlcCodeArgumentRefusal(hazard: CodeArgumentHazard): string {
-  const subject = hazard.request
-    ? "The request after next"
-    : hazard.flag === null
-    ? "A value"
-    : `The ${hazard.flag} value`;
+  const subject = hazard.flag === null ? "A value" : `The ${hazard.flag} value`;
   return (
     `AIDLC stopped this command before it ran. ${subject} is PowerShell code, which PowerShell would run ` +
     "before the command starts. Write the value itself in single quotes, then run the command again.\n"
@@ -2485,23 +2477,28 @@ if (target === "terminal-command-guard") {
     return 2;
   }
   // Before anything below runs a command: this call would not reach the
-  // engine as written (see cmdMetacharacterHazard). A value PowerShell builds
-  // or a line this check cannot read is refused first; then the person's
-  // request goes through the request file (see requestOnCommandLine), so a
-  // character in it never asks for other words; any other value is
+  // engine as written (see cmdMetacharacterHazard). An aidlc line this check
+  // cannot read to the end is refused first, since its remedy is to rewrite
+  // the line; then the person's request goes through the request file (see
+  // requestOnCommandLine), wherever PowerShell builds it from, as the engine
+  // reads the line; then a value PowerShell builds; any other value is
   // cmdMetacharacterHazard's.
   const cmdHazard = isKiroPowerShellTool(tool) ? cmdMetacharacterHazard(rawCommand) : null;
-  if (cmdHazard !== null && (cmdHazard.kind === "expression" || cmdHazard.kind === "unchecked")) {
+  if (cmdHazard !== null && cmdHazard.kind === "unchecked") {
+    process.stderr.write(cmdMetacharacterRefusal(cmdHazard));
+    return 2;
+  }
+  if (isKiroPowerShellTool(tool) && await requestOnCommandLine(rawCommand)) {
+    process.stderr.write(REQUEST_FILE_REFUSAL);
+    return 2;
+  }
+  if (cmdHazard !== null && cmdHazard.kind === "expression") {
     process.stderr.write(cmdMetacharacterRefusal(cmdHazard));
     return 2;
   }
   const codeHazard = isKiroPowerShellTool(tool) ? aidlcCodeArgumentHazard(rawCommand) : null;
   if (codeHazard !== null) {
     process.stderr.write(aidlcCodeArgumentRefusal(codeHazard));
-    return 2;
-  }
-  if (isKiroPowerShellTool(tool) && await requestOnCommandLine(rawCommand)) {
-    process.stderr.write(REQUEST_FILE_REFUSAL);
     return 2;
   }
   if (cmdHazard !== null) {
