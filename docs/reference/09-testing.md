@@ -900,6 +900,10 @@ Pre-seeded construction phase output for tests that jump to mid-construction sta
 
 Contents: 1 minimal .md file (functional-design) describing the todo-core unit's component specs and state management.
 
+### Input Corpus: `tests/fixtures/aidlc-input/corpus.json`
+
+What people type after `/aidlc`, and in plain chat once work is under way: one item per typed line at one workspace state (`fresh`, `work-open`, `plan-question-open`, `gate-open`, `two-similar-records`), with `meaning` (what the person means, in plain words) and `expected.engine` (what the engine's first step must do: the directive kinds allowed, the command or words it must name, the message record's words and settings, whether a question may reach the person). Seeded from every `/aidlc` example the docs, skills, stage prose and help text ship (`source` and `documented` carry the origin), from the input-forms audit, and from variations: typos, word order, quoting per shell, CRLF and unicode, replies at gates and plan questions, workspace words, settings in plain words, retired flags, empty lines, ambiguous lines. Items whose expectation needs a change not merged yet carry `after` and are skipped until that change is in the source. The shared mechanics live in `tests/harness/aidlc-input-corpus.ts`; `tests/unit/t-aidlc-input-corpus.test.ts` runs every item through each host's human-turn hook and `next` (`AIDLC_INPUT_ONLY=<ids>` narrows a run, `AIDLC_INPUT_PARALLEL` sets the fixture pool).
+
 ## State Fixtures
 
 | Fixture | Project Type | Scope | State | Used By |
