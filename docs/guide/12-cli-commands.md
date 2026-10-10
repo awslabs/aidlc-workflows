@@ -202,12 +202,14 @@ Describe what you want to build and the engine auto-detects the appropriate scop
 ```
 
 **A request no shell can carry.** On Windows, cmd.exe ends a command at a line
-break and replaces a `%NAME%` or `!NAME!` pair even inside quotes, and the aidlc
-launcher is read by cmd.exe again. A request holding one of those reaches the
+break and replaces a `%NAME%` or `!NAME!` pair even inside quotes, the aidlc
+launcher is read by cmd.exe again, and Windows PowerShell drops a double quote
+inside an argument. A request holding one of those reaches the
 engine through a file instead of the command line: the agent writes it to
 `aidlc/.aidlc-request-text/request.txt` and runs `aidlc engine orchestrate next
---request-file aidlc/.aidlc-request-text/request.txt` with any other flags. The
-engine reads only a plain file directly inside `aidlc/.aidlc-request-text/`,
+--request-file aidlc/.aidlc-request-text/request.txt` with any other flags. On
+Kiro IDE's PowerShell (`execute_pwsh`) the agent always sends the person's
+request this way, whatever it holds. The engine reads only a plain file directly inside `aidlc/.aidlc-request-text/`,
 through no link, up to 64 KiB, uses its words exactly as written, and removes
 the file once the command goes ahead.
 

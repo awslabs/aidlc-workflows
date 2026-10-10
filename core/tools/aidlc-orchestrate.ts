@@ -185,6 +185,7 @@ import {
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
+  REQUEST_TEXT_DIR,
   evaluateGuardRefusal,
   filterProducesByKind,
   firstInScopeStageOfPhase,
@@ -16028,11 +16029,10 @@ function engineWorkflowSelection(projectDir: string): WorkflowSelection {
   }
 }
 
-// The folder where the agent writes a person's request for `next
-// --request-file`, so the words reach AI-DLC with no shell on the way: on
+// REQUEST_TEXT_DIR is the folder where the agent writes a person's request for
+// `next --request-file`, so the words reach AI-DLC with no shell on the way: on
 // Windows, cmd.exe ends a command at a line break and replaces a %NAME% pair
 // even inside quotes, and the aidlc launcher is read by cmd.exe again.
-const REQUEST_TEXT_DIR = "aidlc/.aidlc-request-text";
 const REQUEST_TEXT_MAX_BYTES = 64 * 1024;
 
 // The file's words take the flag's place as one argument after `--`, so none
@@ -16089,21 +16089,52 @@ function nextArgsWithRequestFile(
   };
 }
 
+// What aidlc-orchestrate.ts run with these arguments does with `next`:
+// "none" when it does not run `next`, "carries" when the person's request is
+// on the command line, else "clear". The request is the words parseNextFlags
+// reads as the request after main() takes its --project-dir and
+// --aidlc-attempt-id pairs (engineArguments). A line that names a request
+// file carries none (nextArgsWithRequestFile reads the request from it, or
+// refuses the line), and neither does a line the engine refuses or answers
+// without starting work (help, status, a verb). `filledIn` holds the indexes
+// in `argv` of words a shell fills in only when the command runs: a value the
+// engine rejects may be one of them (`--depth $depth`), so a line holding one
+// after `next` still carries the request it reads. A hook that keeps the request off a
+// command line asks this instead of reading the flags itself.
+export function nextCallRequest(
+  argv: readonly string[],
+  filledIn: ReadonlySet<number> = new Set(),
+): "none" | "clear" | "carries" {
+  const { kept } = engineArguments(argv);
+  if (argv[kept[0]] !== "next") return "none";
+  const rest = kept.slice(1);
+  const args = rest.map((at) => argv[at]);
+  if (args.includes("--request-file")) return "clear";
+  const flags = parseNextFlags(args);
+  if (flags.intent === undefined || flags.readOnly !== undefined) return "clear";
+  return flags.parseError === undefined || rest.some((at) => filledIn.has(at)) ? "carries" : "clear";
+}
+
 // --- CLI entry point ---
 
-export function main(argv: string[]): void {
-  const rawArgs = argv;
-
-  // Extract --project-dir (mirrors aidlc-jump.ts / aidlc-state.ts).
+// The arguments main() keeps, by index, and the --project-dir and
+// --aidlc-attempt-id values it takes out of them first (before any `--`;
+// mirrors aidlc-jump.ts / aidlc-state.ts).
+function engineArguments(rawArgs: readonly string[]): {
+  kept: number[];
+  projectDir: string | undefined;
+  attemptId: string | undefined;
+  conflictingAttemptId: boolean;
+} {
   let projectDir: string | undefined;
   let attemptId: string | undefined;
   let conflictingAttemptId = false;
-  const filteredArgs: string[] = [];
+  const kept: number[] = [];
   let literalArgs = false;
   for (let i = 0; i < rawArgs.length; i++) {
     if (rawArgs[i] === "--") {
       literalArgs = true;
-      filteredArgs.push(rawArgs[i]);
+      kept.push(i);
     } else if (!literalArgs && rawArgs[i] === "--project-dir" && i + 1 < rawArgs.length) {
       projectDir = rawArgs[i + 1];
       i++;
@@ -16115,9 +16146,16 @@ export function main(argv: string[]): void {
       }
       i++;
     } else {
-      filteredArgs.push(rawArgs[i]);
+      kept.push(i);
     }
   }
+  return { kept, projectDir, attemptId, conflictingAttemptId };
+}
+
+export function main(argv: string[]): void {
+  const rawArgs = argv;
+  const { kept, projectDir, attemptId, conflictingAttemptId } = engineArguments(rawArgs);
+  const filteredArgs = kept.map((at) => rawArgs[at]);
 
   const subcommand = filteredArgs[0];
   let subArgs = filteredArgs.slice(1);

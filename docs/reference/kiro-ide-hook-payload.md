@@ -392,12 +392,42 @@ cards doing the work, and the guard notes nothing for them.
   these per-chat ones: the engine could tell one chat's latch from another's
   only through process ancestry, and the chats of one Kiro IDE window share a
   process.
+- **The request after `next`**: Windows PowerShell 5.1 hands a native program
+  a value holding a space wrapped in double quotes with its own double quotes
+  left bare, so the next reader drops them (`next 'add a "Save" button'`
+  reached the engine as `add a Save button`, measured on Kiro IDE 1.2.37), and
+  through `aidlc.cmd` cmd.exe also replaces a `%NAME%` pair, ends the command at
+  a line break, and acts on `&`, `|`, `<`, `>` and `^`. So on `execute_pwsh`
+  the skill sends every request through the request file, and
+  `terminal-command-guard` refuses an AI-DLC call that runs `next` with request words on the command
+  line (native `aidlc`, `aidlc.cmd` or `aidlc.exe`, the dispatcher's shortcuts
+  such as `aidlc compose`, or the copy channel's `aidlc.ts` or
+  `aidlc-orchestrate.ts` run by bun). Which call runs `next` is the
+  dispatcher's reading (`resolveAction`) and whether it carries a request is
+  the engine's (`nextCallRequest`), so a line of flags, `--request-file`,
+  `--help` or one the engine refuses passes. A word after `next` that
+  PowerShell fills in only when the command runs (`--depth $depth`) may be one
+  the engine accepts, so a line holding one is not counted as refused and its
+  request is, and so is a request PowerShell builds from a variable, an
+  expression or code. A statement holding an empty argument is read both with
+  it and without it, before the dispatcher reads it (Windows PowerShell 5.1
+  drops it, and so does a newer PowerShell for `aidlc.cmd`), and carries a
+  request when either reading does. This check runs after the refusal for an
+  `aidlc` or `aidlc.cmd` line that cannot be checked (below), and before the
+  refusals for a value PowerShell builds, which see only values the engine
+  does not read as the request; if the engine cannot be loaded, a request
+  from a variable is not refused here. The fixed reason asks the agent to write
+  the request's words, exactly as typed and without its flags, plan name or
+  compose verb, with its file tool to `aidlc/.aidlc-request-text/request.txt`
+  and run the same command with `--request-file` in its place; the skill has
+  it do that in the same turn, and the write passes the shared Plan Approval
+  guard in every state, as an answer-text file does.
 - **cmd.exe metacharacters**: native Windows `aidlc` is `aidlc.cmd`, so cmd.exe
   reads the command line Windows PowerShell 5.1 builds for it: a value holding
   a space is wrapped in double quotes with its own double quotes left as they
   are, and cmd.exe acts on `&`, `|`, `<`, `>` and `^` outside its quotes. So
   `--details 'Use "R & D" team'`, or the same with `\"`, runs `D" team"` as a
-  separate command. Before anything else, `terminal-command-guard` refuses
+  separate command. Before the command runs, `terminal-command-guard` refuses
   (exit 2 with the reason on stderr) an `execute_pwsh` call of `aidlc` or
   `aidlc.cmd` in which one of those characters would reach cmd.exe outside its
   quotes, or in which a value holds a `%NAME%` pair (cmd.exe replaces it with
@@ -405,7 +435,9 @@ cards doing the work, and the guard notes nothing for them.
   and so does a pair whose name would start or end with a space, such as the
   one in `10% and 20%`). The reason is a fixed sentence that names the flag
   whose value is at fault (or "A value") and the character or "a %NAME% pair",
-  and never repeats the value, so text in a value cannot add lines to it. It
+  and never repeats the value, so text in a value cannot add lines to it. For
+  a pair in the `--details` or `--on-instruction` value of `log answer` it names
+  `--details-file` or `--on-instruction-file` instead of changing the words. It
   simulates PowerShell 5.1's argument passing (an empty argument dropped, a
   value with a space or tab wrapped in double quotes) and cmd.exe's quote
   toggling, reading past a `#` comment and a closed `<# ... #>` block comment,
@@ -419,11 +451,12 @@ cards doing the work, and the guard notes nothing for them.
   `aidlc.cmd` runs are refused as well, because the check cannot see what
   reaches cmd.exe. That is the value of `--details`, `--decision`,
   `--rationale`, `--reason`, `--user-input`, `--feedback`, `--override` or
-  `--arguments`, or the request after `next`, given as a variable such as `$x`
+  `--arguments`, given as a variable such as `$x`
   or `$env:X`, an expression such as `$(...)`, or a double-quoted string
   holding `$` or a backtick. The reason says the value comes from a
   PowerShell variable or expression and asks for the value itself in single
-  quotes. A variable for any other flag or for a positional token, such as
+  quotes. The request after `next` is the request-file check's (above).
+  A variable for any other flag or for a positional token, such as
   the receipt in `continue $obj.receipt`, passes, unless its own text holds a
   metacharacter or a `%NAME%` pair; so does a variable in any other command.
   A statement it cannot

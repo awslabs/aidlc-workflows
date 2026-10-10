@@ -714,6 +714,13 @@ describe("t148 dist/kiro file structure", () => {
     }
     expect(fm).not.toContain("toolsSettings");
     expect(fm).toContain(`        - "aidlc/.aidlc-compose-pending"`);
+    // The request file a request after `next` goes through on Windows (next --request-file).
+    expect(fm).toContain(`        - "aidlc/.aidlc-request-text/**"`);
+    // The engine leaves that file in its folder when a command stops before any
+    // work, so the folder Kiro IDE writes it to is git-ignored: a person's
+    // request never shows up as a file to commit.
+    expect(readFileSync(join(KIRO_IDE, ".gitignore"), "utf-8").split("\n"))
+      .toContain("aidlc/.aidlc-request-text/");
   });
 
   // Kiro's documented shell matching (kiro.dev/docs/permissions): a command
