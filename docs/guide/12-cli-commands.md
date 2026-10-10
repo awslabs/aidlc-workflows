@@ -207,7 +207,11 @@ launcher is read by cmd.exe again, and Windows PowerShell drops a double quote
 inside an argument. A request holding one of those reaches the
 engine through a file instead of the command line: the agent writes it to
 `aidlc/.aidlc-request-text/request.txt` and runs `aidlc engine orchestrate next
---request-file aidlc/.aidlc-request-text/request.txt` with any other flags. On
+--request-file aidlc/.aidlc-request-text/request.txt` with any other flags.
+When the words after `next` start with an intent or space switch (`next intent
+auth --request-file …`), the switch, its record name and any options (a word
+that starts with `--`, and its one-word value) stay on the line, and only the person's
+words go in the file. On
 Kiro IDE's PowerShell (`execute_pwsh`) the agent always sends the person's
 request this way, whatever it holds. The engine reads only a plain file directly inside `aidlc/.aidlc-request-text/`,
 through no link, up to 64 KiB, uses its words exactly as written, and removes

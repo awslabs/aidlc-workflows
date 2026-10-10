@@ -352,7 +352,9 @@ const REQUEST_FILE = "aidlc/.aidlc-request-text/request.txt";
 const REQUEST_FILE_STEP =
   "Write the person's request, exactly as they typed it, with your file tool to " +
   `${REQUEST_FILE} in this project, and run the same command with --request-file ${REQUEST_FILE} ` +
-  "in place of the request's words. AI-DLC reads the file and removes it.";
+  "in place of the request's words. When the words after next start with an intent or space switch (such as " +
+  "intent auth), the switch and its record name stay on the line with any options (a word that starts with --, " +
+  "and its one-word value), and only the person's words go in the file. AI-DLC reads the file and removes it.";
 const NEXT_COMMAND = new RegExp(
   `^(?:aidlc|bun[ \\t]+\\.aidlc/tools/aidlc\\.ts)[ \\t]+${PROJECTED_TRUSTED_NAMESPACE}[ \\t]+orchestrate[ \\t]+next(?:[ \\t]|$)`,
 );

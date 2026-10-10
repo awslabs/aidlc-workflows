@@ -21,9 +21,11 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LAUNCHER_GLOBAL_FLAGS } from "../../core/tools/aidlc-command.ts";
 import {
   createIntent,
   classifyTerminalCommand,
+  DISPATCHER_GLOBAL_FLAGS,
   INTENT_VERBS,
   parseWorkspaceCommand,
   RESERVED_RECORD_NAME_LIST,
@@ -875,5 +877,37 @@ describe("Kiro quoted argv tokenizer", () => {
     } finally {
       cleanup(projectDir);
     }
+  });
+});
+
+// A dispatcher global flag (`--json`, `--no-color`, …) and the `--` delimiter
+// are options a person gives a command, never words of what they ask for. The
+// dispatcher moves its global flags to the end of the line it hands on, so
+// after a switch they are left out of the words, and where the record name
+// goes they name no record. A flag inside a sentence the person wrote stays.
+describe("option words are none of the person's words after a switch", () => {
+  test("the switch parser's list of dispatcher flags is the dispatcher's own", () => {
+    expect([...DISPATCHER_GLOBAL_FLAGS].sort()).toEqual([...LAUNCHER_GLOBAL_FLAGS].sort());
+  });
+
+  test("left out of a switch's words and never read as the record name", () => {
+    expect(parseWorkspaceCommand(["intent", "auth", "--json"])).toEqual({
+      kind: "switch", noun: "intent", name: "auth", explicit: false,
+    });
+    expect(parseWorkspaceCommand(["intent", "auth", "--", "add", "a", "button", "--no-color"])).toEqual({
+      kind: "switch", noun: "intent", name: "auth", explicit: false, words: ["add", "a", "button"],
+    });
+    expect(parseWorkspaceCommand(["space", "x", "add a --json output option"])).toEqual({
+      kind: "switch", noun: "space", name: "x", explicit: false, words: ["add a --json output option"],
+    });
+    expect(parseWorkspaceCommand(["intent", "switch", "--json"])).toMatchObject({ kind: "error", code: "missing-name" });
+    expect(parseWorkspaceCommand(["space", "switch", "--"])).toMatchObject({ kind: "error", code: "missing-name" });
+    expect(parseWorkspaceCommand(["intent", "--verbose"])).toMatchObject({ kind: "list", noun: "intent" });
+    expect(parseWorkspaceCommand(["intent", "--json"])).toMatchObject({ kind: "list", noun: "intent", json: true });
+    // Any option where the name goes names no record, and the word after it is never read as a verb.
+    expect(parseWorkspaceCommand(["intent", "switch", "--guard-policy", "relaxed"])).toMatchObject({ kind: "error", code: "missing-name" });
+    expect(parseWorkspaceCommand(["intent", "--", "archive", "auth"])).toEqual({
+      kind: "switch", noun: "intent", name: "archive", explicit: false, words: ["auth"],
+    });
   });
 });

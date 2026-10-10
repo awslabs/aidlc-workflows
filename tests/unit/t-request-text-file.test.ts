@@ -99,6 +99,78 @@ describe("next --request-file: the person's words arrive exactly, through no she
     expect(existsSync(join(proj, FILE))).toBe(false);
   });
 
+  // After an intent switch the words that follow are the person's request for
+  // the record picked, read as words, so the file's words join them as they
+  // are: a `--` before them would be reported as one of the person's words.
+  test("words after an intent switch come from the file as they are, and the file is removed", () => {
+    const proj = installed();
+    for (const label of ["auth", "billing"]) {
+      const created = spawnSync(process.execPath, [join(proj, ".aidlc", "tools", "aidlc-utility.ts"), "intent-create", "--label", label], {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1", AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined },
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(created.status, created.stderr).toBe(0);
+    }
+    for (const line of [["intent", "auth"], ["intent", "switch", "auth"]]) {
+      writeRequest(proj, 'add a "Save" button\n');
+      const directive = next(proj, [...line, "--request-file", FILE]);
+      expect(directive.kind, JSON.stringify(directive)).toBe("print");
+      expect(directive.message ?? "", line.join(" ")).toContain('The person also asked: "add a "Save" button".');
+      expect(existsSync(join(proj, FILE)), line.join(" ")).toBe(false);
+    }
+    // A setting typed after the switch is one of those words too.
+    writeRequest(proj, "--guard-policy relaxed add a button\n");
+    const setting = next(proj, ["intent", "auth", "--request-file", FILE]);
+    expect(setting.message ?? "", JSON.stringify(setting)).toContain('The person also asked: "--guard-policy relaxed add a button".');
+    // An option may stay on the line beside the file: it is none of the person's words.
+    writeRequest(proj, "add a button\n");
+    const option = next(proj, ["intent", "auth", "--guard-policy", "relaxed", "--request-file", FILE]);
+    expect(option.kind, JSON.stringify(option)).toBe("print");
+    expect(option.message ?? "").toContain('The person also asked: "--guard-policy relaxed add a button".');
+    // A word of theirs left on the line beside the file has crossed a shell: refused before the file is read.
+    writeRequest(proj, "add a button\n");
+    const mixed = next(proj, ["intent", "auth", "add", "--request-file", FILE]);
+    expect(mixed.kind, JSON.stringify(mixed)).toBe("error");
+    expect(mixed.message ?? "").toContain("When the words after next start with an intent or space switch, the switch, its record name and any options stay on the line");
+    expect(existsSync(join(proj, FILE))).toBe(true);
+    // The same for the explicit and space forms, plain words and a `--` left on the line.
+    for (const line of [
+      ["intent", "switch", "auth", "add", "a", "button"],
+      ["space", "x", "add", "a", "button"],
+      ["intent", "auth", "--", "add", "a", "button"],
+    ]) {
+      const refused = next(proj, [...line, "--request-file", FILE]);
+      expect(refused.kind, line.join(" ")).toBe("error");
+      expect(refused.message ?? "", line.join(" ")).toContain("When the words after next start with an intent or space switch");
+      expect(existsSync(join(proj, FILE)), line.join(" ")).toBe(true);
+    }
+    // The record name stays on the line: without it the file's words would follow a `--` read as the name.
+    for (const line of [["intent"], ["intent", "switch"], ["space"]]) {
+      const refused = next(proj, [...line, "--request-file", FILE]);
+      expect(refused.kind, line.join(" ")).toBe("error");
+      expect(refused.message ?? "", line.join(" ")).toContain("An intent or space switch names its record on the line");
+      expect(existsSync(join(proj, FILE)), line.join(" ")).toBe(true);
+    }
+    // The dispatcher moves its global flags after the switch: they are none of the person's words.
+    writeRequest(proj, 'add a "Save" button\n');
+    const flagged = next(proj, ["intent", "auth", "--request-file", FILE, "--no-color"]);
+    expect(flagged.kind, JSON.stringify(flagged)).toBe("print");
+    expect(flagged.message ?? "").toContain('The person also asked: "add a "Save" button".');
+    expect(existsSync(join(proj, FILE))).toBe(false);
+    writeRequest(proj, "add a button\n");
+    const flaggedBare = next(proj, ["intent", "--request-file", FILE, "--json"]);
+    expect(flaggedBare.message ?? "", JSON.stringify(flaggedBare)).toContain("An intent or space switch names its record on the line");
+    // Other intent and space commands are not switches, so they are not told to rerun as one.
+    for (const line of [["intent", "list"], ["intent", "archive", "auth"]]) {
+      writeRequest(proj, "add a button\n");
+      const other = next(proj, [...line, "--request-file", FILE]);
+      expect(other.kind, `${line.join(" ")}: ${JSON.stringify(other)}`).toBe("print");
+      expect(other.message ?? "", line.join(" ")).not.toContain("intent or space switch");
+    }
+  });
+
   test("Windows slashes name the same file, and a scope typed with it still names the plan", () => {
     const proj = installed();
     writeRequest(proj, WORDS);

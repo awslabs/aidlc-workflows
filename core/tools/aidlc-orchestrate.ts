@@ -280,8 +280,11 @@ import {
   PHASE_NUMBERS,
   PHASES,
   parseTeamBoardArgs,
+  isOptionName,
+  isOptionWord,
   parseWorkspaceCommand,
   nextArgsCarryRequestWords,
+  nextFlagShape,
   nextTokenKind,
   READ_ONLY_FLAGS,
   readKiroIdeLegacyPlanApprovalHost,
@@ -16021,11 +16024,43 @@ function engineWorkflowSelection(projectDir: string): WorkflowSelection {
 // even inside quotes, and the aidlc launcher is read by cmd.exe again.
 const REQUEST_TEXT_MAX_BYTES = 64 * 1024;
 
+// The person's words among the words after a switch. A standalone word that
+// starts with `--` is an option they give the command, as `--help` is, never
+// words of theirs, and so is the value after an option `next` takes with one
+// (`--guard-policy relaxed`): one word. A quoted sentence (`'add a --json
+// output option'`, `'please add a button'`) is one word with spaces, and theirs.
+// The switch parser keeps such options among its words so the agent can act on
+// them; only the dispatcher's own flags and `--` are dropped there.
+function switchRequestWords(
+  words: readonly string[] | undefined,
+  filledIn: (word: string) => boolean = () => false,
+): string[] {
+  const all = words ?? [];
+  const request: string[] = [];
+  for (let index = 0; index < all.length; index++) {
+    const word = all[index];
+    if (!isOptionName(word)) {
+      request.push(word);
+      continue;
+    }
+    const following = all[index + 1];
+    const shape = nextTokenKind(word, following) === "flag" ? nextFlagShape(word) : null;
+    if (shape === null || shape.value === "none" || following === undefined || isOptionName(following)) continue;
+    // A value a shell fills in is the option's, whatever it turns out to be.
+    if (filledIn(following) || !/\s/.test(following)) index++;
+  }
+  return request;
+}
+
 // The file's words take the flag's place as one argument after `--`, so none
-// of them is read as a flag. Only a plain file directly inside the folder,
-// reached through no link, is read. It is removed once the command goes ahead
-// (a probe leaves it), so a command stopped before any work runs again exactly
-// as it was written. A string is the refusal.
+// of them is read as a flag. After an intent or space switch (`intent auth`,
+// `space x`) the words that follow are already read as words, the person's
+// request for the record picked, so the file's words follow the switch and its
+// options as they are: a `--` there would be reported as one of their words.
+// Only a plain file directly inside the folder, reached through no link, is
+// read. It is removed once the command goes ahead (a probe leaves it), so a
+// command stopped before any work runs again exactly as it was written. A
+// string is the refusal.
 function nextArgsWithRequestFile(
   args: readonly string[],
   projectDir: string,
@@ -16039,6 +16074,31 @@ function nextArgsWithRequestFile(
   const rest = [...args.slice(0, at), ...args.slice(at + 2)];
   if (file === undefined || file.startsWith("--")) return usage;
   if (rest.includes("--request-file")) return "Pass --request-file once.";
+  // After a switch the person's words all come from the file: one left on the
+  // line beside it has crossed a shell (options may stay). The record name stays on the line, or the file's
+  // words would follow a `--` read as the name. Refused before the file is
+  // read, so it stays. parseNextFlags reads a leading switch with the same
+  // parseWorkspaceCommand, after its own earlier forms (`--pick`, `--config`,
+  // a verb), whose lines keep the `--` and are refused or routed as before.
+  const lineWords = withoutEntryWord(rest);
+  const switched = parseWorkspaceCommand(lineWords);
+  const switchStep = `the switch, its record name and any options stay on the line (next intent [switch] <name> or ` +
+    `next space [switch] <name>), ` +
+    `with --request-file and a file directly inside ${REQUEST_TEXT_DIR}/; the person's words after the record ` +
+    `name (not its options) go in that file, exactly as they typed them (not as the line holds them now).`;
+  if (switched.kind === "switch" && switchRequestWords(switched.words).length > 0) {
+    return `When the words after next start with an intent or space switch, ${switchStep}`;
+  }
+  // A bare noun reads as a list and `intent switch` as a missing name: the
+  // parser's own reading of a switch whose record name went into the file.
+  // An option word (a dispatcher flag moved to the end) is not the record name.
+  const ownWords = lineWords.filter((word) => !isOptionWord(word));
+  const own = parseWorkspaceCommand(ownWords);
+  const recordless = (own.kind === "list" && ownWords.length === 1) ||
+    (own.kind === "error" && own.code === "missing-name" && own.verb === "switch");
+  if (recordless) {
+    return `An intent or space switch names its record on the line: ${switchStep}`;
+  }
   if (rest.includes("--")) return "Pass the request either after -- or with --request-file, not both.";
   const relativePath = file.replaceAll("\\", "/");
   const parts = relativePath.split("/");
@@ -16063,7 +16123,7 @@ function nextArgsWithRequestFile(
   }
   if (text.trim() === "") return `The request in ${relativePath} is empty. Send your request again.`;
   return {
-    args: [...rest, "--", text],
+    args: switched.kind === "switch" ? [...rest, text] : [...rest, "--", text],
     spend: () => {
       if (isReadOnlyEngineProbe()) return;
       try {
@@ -16078,11 +16138,15 @@ function nextArgsWithRequestFile(
 // What aidlc-orchestrate.ts run with these arguments does with `next`:
 // "none" when it does not run `next`, "carries" when the person's request is
 // on the command line, else "clear". The request is the words parseNextFlags
-// reads as the request after main() takes its --project-dir and
+// reads as the request (or as the words after an intent or space switch)
+// after main() takes its --project-dir and
 // --aidlc-attempt-id pairs (engineArguments). A line that names a request
 // file carries none (nextArgsWithRequestFile reads the request from it, or
 // refuses the line), and neither does a line the engine refuses or answers
-// without starting work (help, status, a verb). `filledIn` holds the indexes
+// without starting work (help, status, a verb). After a leading intent or
+// space switch the person's words (switchRequestWords, not its options) are
+// the request (and, like any line naming the file, one with --request-file
+// carries none). `filledIn` holds the indexes
 // in `argv` of words a shell fills in only when the command runs: a value the
 // engine rejects may be one of them (`--depth $depth`), so a line holding one
 // after `next` still carries the request it reads. A hook that keeps the request off a
@@ -16097,6 +16161,14 @@ export function nextCallRequest(
   const args = rest.map((at) => argv[at]);
   if (args.includes("--request-file")) return "clear";
   const flags = parseNextFlags(args);
+  // After an intent or space switch the person's words are the request for the
+  // record picked (`next intent auth add a button`); its options are not.
+  const workspace = flags.workspaceCommand;
+  if (workspace?.kind === "switch") {
+    // Words a shell fills in are placeholders, each named by its own index.
+    const filledWords = new Set(rest.flatMap((at) => filledIn.has(at) ? [argv[at]] : []));
+    return switchRequestWords(workspace.words, (word) => filledWords.has(word)).length > 0 ? "carries" : "clear";
+  }
   if (flags.intent === undefined || flags.readOnly !== undefined) return "clear";
   return flags.parseError === undefined || rest.some((at) => filledIn.has(at)) ? "carries" : "clear";
 }

@@ -404,8 +404,10 @@ cards doing the work, and the guard notes nothing for them.
   such as `aidlc compose`, or the copy channel's `aidlc.ts` or
   `aidlc-orchestrate.ts` run by bun). Which call runs `next` is the
   dispatcher's reading (`resolveAction`) and whether it carries a request is
-  the engine's (`nextCallRequest`), so a line of flags, `--request-file`,
-  `--help` or one the engine refuses passes. A word after `next` that
+  the engine's (`nextCallRequest`, which also counts the person's words after
+  an intent or space switch, such as `next intent auth …`, but not its options), so a line of flags, `--request-file`,
+  `--help` or one the engine refuses passes (request words beside a flag `next`
+  does not take still count). A word after `next` that
   PowerShell fills in only when the command runs (`--depth $depth`) may be one
   the engine accepts, so a line holding one is not counted as refused and its
   request is, and so is a request PowerShell builds from a variable, an
@@ -417,9 +419,12 @@ cards doing the work, and the guard notes nothing for them.
   refusals for a value PowerShell builds, which see only values the engine
   does not read as the request; if the engine cannot be loaded, a request
   from a variable is not refused here. The fixed reason asks the agent to write
-  the request's words, exactly as typed and without its flags, plan name or
-  compose verb, with its file tool to `aidlc/.aidlc-request-text/request.txt`
-  and run the same command with `--request-file` in its place; the skill has
+  the request's words, exactly as typed and without its options (a word
+  that starts with `--`, and its one-word value), plan name, compose verb or intent or
+  space switch, with its file tool to `aidlc/.aidlc-request-text/request.txt`
+  and run the same command with `--request-file` in its place (the switch and its
+  record name stay on the line; the engine refuses, before it reads the file,
+  a switch that keeps words on the line beside the file or names no record); the skill has
   it do that in the same turn, and the write passes the shared Plan Approval
   guard in every state, as an answer-text file does.
 - **cmd.exe metacharacters**: native Windows `aidlc` is `aidlc.cmd`, so cmd.exe

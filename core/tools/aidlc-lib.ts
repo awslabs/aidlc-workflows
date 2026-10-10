@@ -1291,7 +1291,7 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     if (verbOrName === "list") return explicitWorkspaceList(noun, tokens);
     if (verbOrName === "switch") {
       const name = tokens[2];
-      if (name === undefined) return missingWorkspaceName(noun, "switch");
+      if (name === undefined || isOptionName(name)) return missingWorkspaceName(noun, "switch");
       return switchWithWords(noun, name, true, tokens.slice(3));
     }
     if (verbOrName === "create") {
@@ -1310,7 +1310,7 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     if (verbOrName === "list") return explicitWorkspaceList(noun, tokens);
     if (verbOrName === "switch") {
       const name = tokens[2];
-      if (name === undefined) return missingWorkspaceName(noun, "switch");
+      if (name === undefined || isOptionName(name)) return missingWorkspaceName(noun, "switch");
       return switchWithWords(noun, name, true, tokens.slice(3));
     }
     if (verbOrName === "create") {
@@ -1321,20 +1321,56 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     }
   }
 
+  // An option where the record name goes names no record: the next word that is
+  // not one is the name (never read as a verb), or with none it is a list.
+  if (isOptionName(verbOrName)) {
+    const at = tokens.findIndex((token, index) => index >= 2 && !isOptionName(token));
+    return at < 0 ? { kind: "list", noun, json: false } : switchWithWords(noun, tokens[at], false, tokens.slice(at + 1));
+  }
   return switchWithWords(noun, verbOrName, false, tokens.slice(2));
 }
 
-// A switch keeps whatever the person typed after the name, flags included: the
-// engine hands those words to the agent whole with the switch (Branch 1b), so
-// "intent auth --guard-policy relaxed" selects auth and the agent sets the
-// policy for it. Nothing here reads them.
+// The dispatcher's global flags (`--json`, `--no-color`, …) and the `--`
+// delimiter are options a person gives a command, as they give `--help`,
+// never words of what they ask for. `aidlc` also moves its global flags to the
+// end of the line it hands on (`aidlc --json … intent auth` arrives as
+// `intent auth --json`), so after a switch they would otherwise read as words.
+export function isOptionWord(word: string): boolean {
+  return word === "--" || DISPATCHER_GLOBAL_FLAGS.has(word);
+}
+
+// The dispatcher's global flags, LAUNCHER_GLOBAL_FLAGS in aidlc-command.ts.
+// Hooks load this module with only a few of its siblings beside it, so it keeps
+// the list itself rather than importing aidlc-command.ts; t229 checks the two
+// stay the same.
+export const DISPATCHER_GLOBAL_FLAGS: ReadonlySet<string> = new Set([
+  "--json",
+  "--quiet",
+  "--no-color",
+  "--yes",
+  "--offline",
+  "--verbose",
+]);
+
+// Any standalone word that starts with `--` is an option, never a record name
+// or a word of the person's (a quoted sentence holding one has spaces).
+export function isOptionName(word: string): boolean {
+  return word.startsWith("--") && !/\s/.test(word);
+}
+
+// A switch keeps whatever the person typed after the name, flags such as
+// `--guard-policy relaxed` included: the engine hands those words to the agent
+// whole with the switch (Branch 1b), so "intent auth --guard-policy relaxed"
+// selects auth and the agent sets the policy for it. Nothing here reads them.
+// Option words (isOptionWord) are none of the person's words and are left out.
 function switchWithWords(
   noun: WorkspaceNoun,
   name: string,
   explicit: boolean,
   rest: readonly string[],
 ): WorkspaceCommand {
-  return { kind: "switch", noun, name, explicit, ...(rest.length > 0 ? { words: [...rest] } : {}) };
+  const words = rest.filter((word) => !isOptionWord(word));
+  return { kind: "switch", noun, name, explicit, ...(words.length > 0 ? { words } : {}) };
 }
 
 export function workspaceCommandUtilityArgv(

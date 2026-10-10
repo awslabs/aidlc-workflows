@@ -7022,10 +7022,12 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
   const REQUEST_FILE_REFUSAL =
     "AIDLC stopped this command before it ran: on PowerShell the request after next goes through a file, so " +
     "the command line never changes it. Write the words of the person's request exactly as they typed them, " +
-    "without its flags, plan name or compose verb, with your file tool to aidlc/.aidlc-request-text/request.txt in " +
-    "this project, and run the same command with --request-file aidlc/.aidlc-request-text/request.txt in place of " +
-    "those words (and any -- before them), keeping the flags, plan name and compose verb on the line. AI-DLC reads " +
-    "the file and removes it.\n";
+    "without its options (a word that starts with --, and the one-word value of an option that takes one), plan " +
+    "name, " +
+    "compose verb or switch (such as intent auth or intent switch auth), with your file tool to " +
+    "aidlc/.aidlc-request-text/request.txt in this project, and run the same command with --request-file " +
+    "aidlc/.aidlc-request-text/request.txt in place of those words (and any -- before them), keeping the rest on " +
+    "the line. AI-DLC reads the file and removes it.\n";
   const next = "aidlc engine orchestrate next";
 
   // Which word is the request is the engine's reading (nextCallRequest), and a
@@ -7089,6 +7091,18 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       ["an empty argument before a flag's value", `${next} --depth '' standard 'build a todo app'`],
       ["an empty argument before orchestrate", `aidlc engine '' orchestrate next 'add a "Save" button'`],
       ["an empty argument before next", `aidlc engine orchestrate '' next 'add a "Save" button'`],
+      // The words after an intent or space switch are the person's request for the record picked.
+      ["words after an intent switch", `${next} intent auth 'add a "Save" button'`],
+      ["words after an explicit intent switch", `${next} intent switch auth 'add a "Save" button'`],
+      ["words after a space switch", `${next} space x 'do it'`],
+      ["words after an intent switch behind a global flag", `aidlc --json engine orchestrate next intent auth 'add a "Save" button'`],
+      // A sentence or a word an option does not take is the person's, not that option's value.
+      ["a sentence after a setting and --", `${next} intent auth --guard-policy -- 'add a "Save" button'`],
+      ["a sentence after a setting", `${next} intent auth --guard-policy 'please add a button'`],
+      ["a setting and words after an intent switch", `${next} intent auth --guard-policy relaxed 'add a button'`],
+      // The engine hands every word after a switch to the agent, whatever `next` would read it as.
+      ["a flag next does not take after an intent switch", `${next} intent auth --details 'use %APPDATA% here'`],
+      ["words that read like a command after an intent switch", `${next} intent auth space out the header`],
       // A flag value PowerShell fills in may be one the engine accepts, so the request stays on the line.
       ["a flag value PowerShell resolves, then a request", `${next} --depth $depth 'add a "Save" button'`],
       [
@@ -7143,7 +7157,8 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
     expect(skill).toContain(
       "A hook refusal that names the request file (`--request-file`) or an answer file (`--details-file`, " +
         "`--on-instruction-file`) is carried out at once, in the same turn: write the person's exact words with your " +
-        "file tool where it says (for a request, without its flags, plan name or `compose`, which stay on the line) and " +
+        "file tool where it says (for a request, without its options, plan name, `compose` or switch, which stay on the " +
+        "line) and " +
         "run the same command with that flag in place of their words",
     );
     const dir = scratchProject(false);
@@ -7182,6 +7197,13 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       ["compose with the request file", `${next} compose --request-file aidlc/.aidlc-request-text/request.txt`],
       ["compose with an engine-issued request id", `${next} compose --request abcd1234`],
       ["flags only", `${next} --skip market-research`],
+      ["a bare intent switch", `${next} intent auth`],
+      // The dispatcher moves its own global flags after the switch; they are none of the person's words.
+      ["a bare intent switch after a global flag", "aidlc --json engine orchestrate next intent auth"],
+      // An option and its value are none of the person's words, so a switch that carries only those runs as typed.
+      ["only a setting after an intent switch", `${next} intent auth --guard-policy relaxed`],
+      ["a setting value PowerShell fills in after an intent switch", `${next} intent auth --guard-policy $p`],
+      ["an intent switch with the request file", `${next} intent auth --request-file aidlc/.aidlc-request-text/request.txt`],
       ["a project type only", `${next} --project-type brownfield`],
       ["a flag and its value only", `${next} --depth minimal`],
       ["a flag value PowerShell resolves only", `${next} --depth $depth`],
