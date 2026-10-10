@@ -5,21 +5,28 @@
 // command that puts the person's words on the record beside the choice it read. The unit check
 // (tests/unit/t-aidlc-answers-corpus.test.ts) runs every item; the live check drives a sample through real agents.
 // Shared mechanics (exec, env, next, say, the message record, six of the states) come from aidlc-input-corpus.ts.
+import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import corpus from "../fixtures/aidlc-answers/corpus.json";
-import { AIDLC_SRC, FIXTURES_DIR, REPO_ROOT, createOrchestrationTestProject, recordArtifactWriteViaHook, seedBoltDag, seededRecordDir, seededStateFile } from "./fixtures.ts";
+import { AIDLC_SRC, FIXTURES_DIR, REPO_ROOT, createOrchestrationTestProject, recordArtifactWriteViaHook, seedBoltDag, seedBoltDagBatches, seededRecordDir, seededStateFile } from "./fixtures.ts";
 import {
   LOG, ORCHESTRATE, SESSION, UTILITY, buildState, env, exec, messageRecord, next, say,
   type Directive, type Exec, type Harness, type StoredRecord,
 } from "./aidlc-input-corpus.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
-  artifactFilename, auditBlockField, findStageBySlug, latestMainWorkflowStageRunFloorForProject, latestPersonTurn,
-  personsGateWords, personsLatestGatePick, readActiveDirectiveMarker, readAuditShardEvents, readProtectedResponse,
-  reviewArtifactFingerprint, stateDigest, writeActiveDirectiveMarker, writeSessionPidEntry,
+  artifactFilename, auditBlockField, authorizedVerificationCommand, currentSwarmSourceMergeChain, findStageBySlug,
+  gitCommitSourceListing, latestMainWorkflowStageRunFloorForProject, latestPersonTurn, personsGateWords,
+  personsLatestGatePick, readActiveDirectiveMarker, readAuditShardEvents, readProtectedResponse, readUnitSourceManifest,
+  reviewArtifactFingerprint, serializeSourceListing, sourceListingSha256, stateDigest, unitSourceFingerprint,
+  workspaceSourceFingerprint, workspaceSourceListing, writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
+  writeSessionPidEntry,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { openPlanApprovalQuestion } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
+import {
+  approvalFingerprint, codeGenerationRecordDir, renderTestingContract, resolveCodeGenerationAuthority, resolveTestingPosture,
+} from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 export type Question =
   | "stage-gate" | "stage-gate-accept-as-is" | "stage-gate-sensor-failure" | "code-plan" | "code-plan-grouped"
@@ -69,11 +76,8 @@ export interface AnswersItem {
 
 export const ANSWERS = corpus as AnswersItem[];
 export const QUESTIONS = [...new Set(ANSWERS.map((item) => item.question))];
-/** Questions with no fixture yet: their items are reported as skipped with this reason. */
-export const NO_FIXTURE: Partial<Record<Question, string>> = {
-  "code-plan-grouped": "needs a swarm fixture (t340's publish + two plans); not built yet",
-  "batch-checkpoint": "needs a swarm fixture with a converged batch (t343's prepare + converge); not built yet",
-};
+/** Questions with no fixture: their items are reported as skipped with this reason. */
+export const NO_FIXTURE: Partial<Record<Question, string>> = {};
 
 const coreTool = (name: string) => readFileSync(join(AIDLC_SRC, "tools", name), "utf-8");
 /** Whether the change an `after` item waits for is in this source. */
@@ -196,6 +200,137 @@ async function recordVerificationCommand(proj: string): Promise<string> {
   await tool(proj, STATE, ["set-construction-verification-command", command], skip);
   return command;
 }
+
+// --- swarm fixtures (t340 and t343's recipes: real git, hand-written receipts, no swarm run) -----------------------------
+
+const CG = "code-generation";
+const BATCH = ["alpha", "beta"];
+const SWARM_CHECK = "git diff --check";
+async function git(proj: string, args: string[]): Promise<string> {
+  const result = await exec(["git", ...args], { cwd: proj, env: process.env });
+  if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+  return result.stdout.trim();
+}
+/** A feature at Code Generation run as a swarm (stage-major, two Units in batch 1, gamma in batch 2), with the source
+ * committed and baselined, as t343 and t340 build it. */
+async function swarmFixture(proj: string, units: string[][]): Promise<void> {
+  writeFileSync(seededStateFile(proj), `# AI-DLC State Tracking
+
+## Project Information
+- **Scope**: feature
+- **Project Type**: Greenfield
+- **State Version**: 8
+- **Skeleton Stance**: off
+
+## Runtime State
+- **Construction Checkpoints**: enabled
+- **Construction Iteration**: stage-major
+- **Construction Execution**: swarm
+- **Construction Verification Command**: ${SWARM_CHECK}
+- **Construction Autonomy Mode**: gated
+- **Unit Ownership**: solo
+- **Review Override**: none
+- **Change Control**: strict
+- **Bolt Refs**: [empty list]
+- **Worktree Path**: -
+
+## Scope Configuration
+- **Stages to Execute**: all
+- **Stages to Skip**: none
+- **Test Strategy**: Standard
+
+## Stage Progress
+### CONSTRUCTION PHASE
+- [x] functional-design ${DASH} EXECUTE
+- [x] nfr-requirements ${DASH} EXECUTE
+- [x] nfr-design ${DASH} EXECUTE
+- [x] infrastructure-design ${DASH} EXECUTE
+- [-] code-generation ${DASH} EXECUTE
+- [ ] build-and-test ${DASH} EXECUTE
+
+## Current Status
+- **Lifecycle Phase**: CONSTRUCTION
+- **Current Stage**: code-generation
+- **Status**: Running
+`, "utf-8");
+  seedBoltDagBatches(proj, units);
+  writeFileSync(join(proj, ".gitignore"), [
+    ".aidlc/", "aidlc/.aidlc-*", "aidlc/active-space", "aidlc/spaces/*/intents/active-intent", "aidlc/spaces/*/intents/*/audit/",
+    "aidlc/spaces/*/intents/*/runtime-graph.json", "aidlc/spaces/*/intents/*/.aidlc-*", "",
+  ].join("\n"), "utf-8");
+  mkdirSync(join(proj, "src"), { recursive: true });
+  const definition = findStageBySlug(CG)!;
+  for (const unit of units.flat()) {
+    writeFileSync(join(proj, "src", `${unit}.ts`), `export const ${unit} = 1;\n`, "utf-8");
+    const dir = join(seededRecordDir(proj), "construction", unit, CG);
+    mkdirSync(dir, { recursive: true });
+    for (const name of definition.produces ?? []) writeFileSync(join(dir, artifactFilename(name)), `# ${CG} ${unit} ${name}\n`, "utf-8");
+    writeFileSync(join(dir, "source-manifest.json"), JSON.stringify({ stage: CG, unit, version: 1, writes: [{ path: `src/${unit}.ts` }] }), "utf-8");
+  }
+  for (const args of [["init", "-q"], ["config", "user.name", "AI-DLC Tests"], ["config", "user.email", "tests@example.com"], ["add", "-A"], ["commit", "-qm", "baseline"]]) {
+    await git(proj, args);
+  }
+  const baseline = writeBaselineSourceSnapshot(proj, CG, workspaceSourceListing(proj)!);
+  appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, proj);
+  appendAuditEntry("STAGE_STARTED", { Stage: CG, "Source Baseline": baseline }, proj);
+  // The verification command, approved by another chat (t343's recordCommand).
+  const identity = ["--stage", CG, "--checkpoint", "verification-command", "--command", SWARM_CHECK, "--session", CMD_SESSION];
+  await tool(proj, LOG, ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"]);
+  await say(proj, "Approve", "claude", { session: CMD_SESSION });
+  await tool(proj, LOG, ["answer", ...identity, "--details", "Approve"]);
+  await tool(proj, STATE, ["set-construction-verification-command", SWARM_CHECK]);
+}
+/** Batch 1 built, reviewed, verified and merged, by the receipts the swarm's own emitters write (t343's converge). */
+async function convergeBatch(proj: string): Promise<void> {
+  const floor = latestMainWorkflowStageRunFloorForProject(proj, CG);
+  const listing = workspaceSourceListing(proj)!;
+  const fingerprint = workspaceSourceFingerprint(proj)!;
+  const chain = currentSwarmSourceMergeChain(proj, CG);
+  let previous = chain.state === "ready" ? chain.fingerprint : sourceListingSha256(serializeSourceListing(listing));
+  appendAuditEntry("SWARM_STARTED", { Stage: CG, "Run floor": floor, "Batch number": "1", "Unit obligations": "alpha, beta, gamma" }, proj);
+  const state = readFileSync(seededStateFile(proj), "utf-8");
+  for (const unit of BATCH) {
+    const commit = await git(proj, ["rev-parse", "HEAD"]);
+    const committed = gitCommitSourceListing(proj, commit, true);
+    if (committed === null) throw new Error("no committed source listing");
+    const manifest = readUnitSourceManifest(proj, CG, unit);
+    if (!manifest.ok) throw new Error(manifest.reason);
+    appendAuditEntry("REVIEW_COMPLETED", {
+      Stage: CG, Unit: unit, Verdict: "approved",
+      "Artifact Fingerprint": reviewArtifactFingerprint(proj, findStageBySlug(CG)!, unit, { requireRequiredArtifacts: true })!,
+      "Source Fingerprint": fingerprint,
+      "Unit Source Fingerprint": unitSourceFingerprint(committed, manifest, manifest.rawBytesSha256),
+    }, proj);
+    appendAuditEntry("SWARM_UNIT_CONVERGED", {
+      Stage: CG, "Run floor": floor, "Batch number": "1", "Unit name": unit,
+      "Command SHA-256": authorizedVerificationCommand(proj, state)!.sha256,
+      "Source Commit": commit, "Source Fingerprint": fingerprint,
+    }, proj);
+    appendAuditEntry("SWARM_SOURCE_MERGED", {
+      Stage: CG, "Run floor": floor, "Batch number": "1", "Unit name": unit,
+      "Source Commit": commit, "Merge commit": commit, Repo: "-",
+      "Previous Source Fingerprint": previous, "Source Fingerprint": fingerprint,
+    }, proj);
+    previous = fingerprint;
+  }
+}
+/** A code plan written for `unit`, with its questions file, as t340's plan(). */
+function writeUnitPlan(proj: string, unit: string): void {
+  const dir = codeGenerationRecordDir(proj, unit);
+  mkdirSync(dir, { recursive: true });
+  const contract = resolveTestingPosture(proj);
+  const body = `# ${unit} plan\n\n${renderTestingContract(contract)}\n## Steps\n- [ ] Implement\n`;
+  const instructions = "# Unit Test Instructions\n\nRun unit tests.\n";
+  writeFileSync(join(dir, "code-generation-plan.md"), body, "utf-8");
+  writeFileSync(join(dir, "unit-test-instructions.md"), instructions, "utf-8");
+  writeFileSync(join(dir, "code-generation-questions.md"), [
+    "## Plan Approval",
+    `[Approval Fingerprint]: ${approvalFingerprint(body, instructions, contract.contract_sha256, resolveCodeGenerationAuthority(proj, { unit }))}`,
+    `[Planned Source]: ${workspaceSourceFingerprint(proj)}`,
+    "A. Approve Plan", "B. Request Changes", "[Answer]:", "",
+  ].join("\n"), "utf-8");
+}
+void createHash;
 
 /** A project at the state where `question` is open, exactly as a run leaves it. `proj` holds the engine already. */
 export async function buildQuestion(proj: string, question: Question): Promise<void> {
@@ -343,18 +478,35 @@ export async function buildQuestion(proj: string, question: Question): Promise<v
     case "learnings":
       workOpen(proj);
       return askInChat(proj, "Anything to add for next time?", "Nothing to add,Add a note");
-    case "code-plan-grouped":
-    case "batch-checkpoint":
-      throw new Error(NO_FIXTURE[question]);
+    case "batch-checkpoint": {
+      await swarmFixture(proj, [BATCH, ["gamma"]]);
+      await convergeBatch(proj);
+      await tool(proj, BOLT, ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", SESSION]);
+      return;
+    }
+    case "code-plan-grouped": {
+      await swarmFixture(proj, [BATCH]);
+      appendAuditEntry("SESSION_STARTED", { Session: SESSION, Source: "answers corpus fixture" }, proj);
+      writeActiveDirectiveMarker(proj, { kind: "invoke-swarm", stage: CG, units: BATCH, state_sha256: stateDigest(readFileSync(seededStateFile(proj), "utf-8")) });
+      for (const unit of BATCH) writeUnitPlan(proj, unit);
+      await git(proj, ["add", "-A"]);
+      await git(proj, ["commit", "-qm", "plans"]);
+      await say(proj, "/aidlc", "claude");
+      const asked = await next(proj, []);
+      if (asked.directive?.ask_type !== "plan-approval") throw new Error(`grouped plan question did not open: ${asked.out.slice(0, 600)}`);
+      return;
+    }
   }
 }
 /** One built fixture per question, copied for each item: the states are heavier than the input corpus's, and a copy
  * is byte-identical to a build (the engine keys everything on the project folder). */
 const templates = new Map<Question, Promise<string>>();
+const built: string[] = [];
 export async function projectAt(question: Question): Promise<string> {
   if (!templates.has(question)) {
     templates.set(question, (async () => {
       const proj = createOrchestrationTestProject();
+      built.push(proj);
       await buildQuestion(proj, question);
       return proj;
     })());
@@ -365,14 +517,8 @@ export async function projectAt(question: Question): Promise<string> {
   cpSync(template, proj, { recursive: true });
   return proj;
 }
-/** The templates, for the caller's cleanup. */
-export function templateProjects(): string[] {
-  return [...templates.values()].map((promise) => {
-    let value = "";
-    promise.then((proj) => { value = proj; }).catch(() => undefined);
-    return value;
-  }).filter(Boolean);
-}
+/** The templates built so far, for the caller's cleanup. */
+export const templateProjects = (): string[] => [...built];
 
 /** What the person typed, as the host hands it to the hook (the entry word for an /aidlc or $aidlc line). */
 export function typedPrompt(item: AnswersItem): string {
@@ -428,14 +574,17 @@ export function recorded(proj: string, item: AnswersItem): Recorded {
       const pickLabel = personsLatestGatePick(proj, SESSION, gate, item.question === "stage-gate-accept-as-is");
       return { choice: pickLabel ?? "none", words: personsGateWords(proj, SESSION, gate) };
     }
-    case "code-plan": {
+    case "code-plan":
+    case "code-plan-grouped": {
       const open = openPlanApprovalQuestion(proj, item.input);
       if (open === null) return { choice: "unknown", words: turn };
       if (open.editing) return { choice: "I'll edit the files", words: turn };
       if (!open.answered) return { choice: "none", words: turn };
-      return { choice: open.picked === "approve" ? "Approve Plan" : open.picked === "request-changes" ? "Request Changes" : open.picked === "edit" ? "I'll edit the files" : "answered", words: turn };
+      const approve = item.question === "code-plan-grouped" ? "Approve all" : "Approve Plan";
+      return { choice: open.picked === "approve" ? approve : open.picked === "request-changes" ? "Request Changes" : open.picked === "edit" ? "I'll edit the files" : "answered", words: turn };
     }
     case "unit-checkpoint":
+    case "batch-checkpoint":
     case "verification-command":
     case "construction-policy": {
       const response = readProtectedResponse(proj, SESSION);
@@ -500,11 +649,18 @@ export async function recordByAgent(proj: string, item: AnswersItem, choice: str
       return { event: approved ? "GATE_APPROVED" : "GATE_REJECTED", exec: result };
     }
     case "code-plan":
-      // Approve Plan writes PLAN_APPROVAL_RECORDED; Request Changes and the edit choice land on the ask record only.
-      return { event: choice === "Approve Plan" ? "PLAN_APPROVAL_RECORDED" : "", exec: await log(["--stage", "code-generation", "--checkpoint", "plan-approval", "--details", choice]) };
+    case "code-plan-grouped":
+      // Approve Plan (Approve all) writes PLAN_APPROVAL_RECORDED; Request Changes and the edit choice land on the ask record only.
+      return { event: choice.startsWith("Approve") ? "PLAN_APPROVAL_RECORDED" : "", exec: await log(["--stage", "code-generation", "--checkpoint", "plan-approval", "--details", choice]) };
     case "unit-checkpoint": {
       const approved = choice === "Approve";
       const args = ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", approved ? "approve" : "reject", "--session", SESSION, "--user-input", item.input, "--project-dir", proj];
+      const result = await exec([process.execPath, BOLT, ...args], { cwd: proj, env: env(proj) });
+      return { event: approved ? "GATE_APPROVED" : "GATE_REJECTED", exec: result };
+    }
+    case "batch-checkpoint": {
+      const approved = choice === "Approve";
+      const args = ["swarm-checkpoint", "--batch", "1", "--units", BATCH.join(","), "--action", approved ? "approve" : "reject", "--session", SESSION, "--user-input", item.input, "--project-dir", proj];
       const result = await exec([process.execPath, BOLT, ...args], { cwd: proj, env: env(proj) });
       return { event: approved ? "GATE_APPROVED" : "GATE_REJECTED", exec: result };
     }

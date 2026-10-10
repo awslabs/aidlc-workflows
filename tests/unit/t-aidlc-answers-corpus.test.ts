@@ -34,12 +34,14 @@ const ONLY = process.env.AIDLC_ANSWERS_ONLY?.split(",").map((s) => s.trim()).fil
 /** Questions whose exact pick a tool records at the hook, before any agent runs. The others are recorded only by the
  * agent's command, where the tool checks the label it passes (offeredChoiceLabel). */
 const HOOK_RECORDS = new Set<Question>([
-  "stage-gate", "stage-gate-accept-as-is", "code-plan", "unit-checkpoint", "verification-command", "construction-policy", "guard-recovery",
+  "stage-gate", "stage-gate-accept-as-is", "code-plan", "code-plan-grouped", "unit-checkpoint", "batch-checkpoint",
+  "verification-command", "construction-policy", "guard-recovery",
 ]);
 /** Questions with an answer command of the agent's that this check runs (step 4). */
 const AGENT_RECORDS = new Set<Question>([
-  "stage-gate", "stage-gate-accept-as-is", "stage-gate-sensor-failure", "code-plan", "unit-checkpoint", "verification-command",
-  "construction-policy", "summary-confirmation", "stage-question", "answer-mode", "learnings", "reopened-stage", "guard-recovery",
+  "stage-gate", "stage-gate-accept-as-is", "stage-gate-sensor-failure", "code-plan", "code-plan-grouped", "unit-checkpoint",
+  "batch-checkpoint", "verification-command", "construction-policy", "summary-confirmation", "stage-question", "answer-mode",
+  "learnings", "reopened-stage", "guard-recovery",
 ]);
 /** The engine reads the typed reply itself when the agent forwards it to `next`. */
 const ENGINE_READS = new Set<Question>(["routing"]);
@@ -129,12 +131,13 @@ describe("the answers corpus: a tool records only an exact pick as shown, keeps 
         }
         // A plan approved from an exact pick writes its row at once; the edit choice and every other question's pick
         // land on their own record, never on a choice row.
-        const rowsAllowed = item.question === "code-plan" && hookChoice !== "none" ? [0, 1] : [0];
+        const rowsAllowed = item.question === "code-plan" && hookChoice !== "none" ? [0, 1]
+          : item.question === "code-plan-grouped" && hookChoice !== "none" ? [0, 2] : [0];
         expect(rowsAllowed, `${harness}: choice rows the hook alone added (${hook.delta})`).toContain(hook.delta);
         // The words: kept whole where the question keeps them; nothing kept for a non-answer.
-        if (hook.recorded.words !== null && item.question !== "code-plan") {
+        if (hook.recorded.words !== null && !item.question.startsWith("code-plan")) {
           if (engine.words === null) {
-            if (["stage-gate", "stage-gate-accept-as-is", "unit-checkpoint", "verification-command", "construction-policy"].includes(item.question)) {
+            if (["stage-gate", "stage-gate-accept-as-is", "unit-checkpoint", "batch-checkpoint", "verification-command", "construction-policy"].includes(item.question)) {
               expect(hook.recorded.words, `${harness}: a non-answer kept as a reply`).toBeNull();
             }
           } else if (text !== "") {

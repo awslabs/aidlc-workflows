@@ -30,7 +30,7 @@
   "shown": "numbered",
   "via": "chat",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request Changes); the agent asks what should change only when they did not say",
+  "meaning": "the person means: ask for changes to the requirements (option 2, Request Changes); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -57,7 +57,7 @@
   "shown": "numbered",
   "via": "chat",
   "input": "2.",
-  "meaning": "the person means: pick option 2 (Request Changes) (a trailing dot)",
+  "meaning": "the person means: ask for changes to the requirements (option 2 with a trailing dot); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -72,7 +72,8 @@
     "asks": 1,
     "change": "what they name next",
     "says": [
-     "the change they asked for is being made and the requirements come back for approval"
+     "the change they asked for is being made and the requirements come back for approval",
+     "what should change, asked once"
     ]
    }
   }
@@ -1311,7 +1312,7 @@
   "shown": "numbered",
   "via": "aidlc",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request Changes) (typed after /aidlc); recorded as the pick, the agent asks what should change once",
+  "meaning": "the person means: ask for changes to the requirements (option 2, typed after /aidlc); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -1326,7 +1327,8 @@
     "asks": 1,
     "change": "what they name next",
     "says": [
-     "the change they asked for is being made and the requirements come back for approval"
+     "the change they asked for is being made and the requirements come back for approval",
+     "what should change, asked once"
     ]
    }
   }
@@ -1482,16 +1484,8 @@
   "shown": "picker",
   "via": "picker",
   "input": "Request Changes (Recommended)",
-  "meaning": "the person means: ask for changes to the requirements (picked in the box, the recommended one); the agent asks what should change, once",
+  "meaning": "the person means: ask for changes to the requirements (picked in the box, the recommended one); the agent asks what should change, once, because they did not say",
   "reader": "tool",
-  "picker": {
-   "question": "Requirements Analysis complete. How would you like to proceed?",
-   "options": [
-    "Request Changes (Recommended)",
-    "Approve"
-   ],
-   "answer": "Request Changes (Recommended)"
-  },
   "expected": {
    "engine": {
     "recorded": "Request Changes",
@@ -1505,9 +1499,18 @@
     "asks": 1,
     "change": "what they name next",
     "says": [
-     "the change they asked for is being made and the requirements come back for approval"
+     "the change they asked for is being made and the requirements come back for approval",
+     "what should change, asked once"
     ]
    }
+  },
+  "picker": {
+   "question": "Requirements Analysis complete. How would you like to proceed?",
+   "options": [
+    "Request Changes (Recommended)",
+    "Approve"
+   ],
+   "answer": "Request Changes (Recommended)"
   }
  },
  {
@@ -1608,7 +1611,7 @@
   "shown": "numbered",
   "via": "chat",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request Changes); the agent asks what should change only when they did not say",
+  "meaning": "the person means: ask for changes to the requirements (option 2, Request Changes); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -2217,7 +2220,7 @@
   "shown": "numbered",
   "via": "aidlc",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request Changes) (typed after /aidlc); recorded as the pick, the agent asks what should change once",
+  "meaning": "the person means: ask for changes to the requirements (option 2, typed after /aidlc); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -2232,7 +2235,8 @@
     "asks": 1,
     "change": "what they name next",
     "says": [
-     "the change they asked for is being made and the requirements come back for approval"
+     "the change they asked for is being made and the requirements come back for approval",
+     "what should change, asked once"
     ]
    }
   }
@@ -2302,7 +2306,7 @@
   "shown": "numbered",
   "via": "chat",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request Changes); the agent asks what should change only when they did not say",
+  "meaning": "the person means: ask for changes to the code plan (option 2, Request Changes); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -2329,7 +2333,7 @@
   "shown": "numbered",
   "via": "chat",
   "input": "2.",
-  "meaning": "the person means: pick option 2 (Request Changes) (a trailing dot)",
+  "meaning": "the person means: ask for changes to the code plan (option 2 with a trailing dot); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -2344,7 +2348,8 @@
     "asks": 1,
     "change": "what they name next",
     "says": [
-     "the plan is being changed as asked and comes back for approval"
+     "the plan is being changed as asked and comes back for approval",
+     "what should change, asked once"
     ]
    }
   }
@@ -3583,7 +3588,7 @@
   "shown": "numbered",
   "via": "aidlc",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request Changes) (typed after /aidlc); recorded as the pick, the agent asks what should change once",
+  "meaning": "the person means: ask for changes to the code plan (option 2, typed after /aidlc); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -3598,7 +3603,8 @@
     "asks": 1,
     "change": "what they name next",
     "says": [
-     "the plan is being changed as asked and comes back for approval"
+     "the plan is being changed as asked and comes back for approval",
+     "what should change, asked once"
     ]
    }
   }
@@ -3756,17 +3762,8 @@
   "shown": "picker",
   "via": "picker",
   "input": "Request Changes (Recommended)",
-  "meaning": "the person means: ask for changes to the code plan (picked in the box, the recommended one); the agent asks what should change, once",
+  "meaning": "the person means: ask for changes to the code plan (picked in the box, the recommended one); the agent asks what should change, once, because they did not say",
   "reader": "tool",
-  "picker": {
-   "question": "Here is the code plan for u1-login. How would you like to proceed?",
-   "options": [
-    "Request Changes (Recommended)",
-    "Approve Plan",
-    "I'll edit the files"
-   ],
-   "answer": "Request Changes (Recommended)"
-  },
   "expected": {
    "engine": {
     "recorded": "Request Changes",
@@ -3780,9 +3777,19 @@
     "asks": 1,
     "change": "what they name next",
     "says": [
-     "the plan is being changed as asked and comes back for approval"
+     "the plan is being changed as asked and comes back for approval",
+     "what should change, asked once"
     ]
    }
+  },
+  "picker": {
+   "question": "Here is the code plan for u1-login. How would you like to proceed?",
+   "options": [
+    "Request Changes (Recommended)",
+    "Approve Plan",
+    "I'll edit the files"
+   ],
+   "answer": "Request Changes (Recommended)"
   }
  },
  {
@@ -3885,23 +3892,23 @@
   "shown": "numbered",
   "via": "chat",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request Changes); the agent asks what should change only when they did not say",
-  "reader": "tool",
+  "meaning": "the person means: ask for changes to the two code plans (option 2, Request Changes); with several plans, which plan is unsaid, so no tool records it and the agent asks which plan and what should change, once",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": true,
     "asks": 1,
     "change": "what they name next",
     "says": [
      "the plan is being changed as asked and comes back for approval",
-     "what should change, asked once"
+     "which plan and what should change, asked once"
     ]
    }
   }
@@ -3937,23 +3944,23 @@
   "shown": "picker",
   "via": "chat",
   "input": "Request Changes",
-  "meaning": "the person means: ask for changes to the two code plans (the label as shown); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "meaning": "the person means: ask for changes to the two code plans (the label as shown); with several plans, which plan is unsaid, so no tool records it and the agent asks which plan and what should change, once",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "Request Changes",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": true,
     "asks": 1,
     "change": "what they name next",
     "says": [
      "the plan is being changed as asked and comes back for approval",
-     "what should change, asked once"
+     "which plan and what should change, asked once"
     ]
    }
   }
@@ -4469,22 +4476,23 @@
   "shown": "numbered",
   "via": "aidlc",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request Changes) (typed after /aidlc); recorded as the pick, the agent asks what should change once",
-  "reader": "tool",
+  "meaning": "the person means: ask for changes to the two code plans (option 2, typed after /aidlc); with several plans, which plan is unsaid, so no tool records it and the agent asks which plan and what should change, once",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": true,
     "asks": 1,
     "change": "what they name next",
     "says": [
-     "the plan is being changed as asked and comes back for approval"
+     "the plan is being changed as asked and comes back for approval",
+     "which plan and what should change, asked once"
     ]
    }
   }
@@ -4554,7 +4562,7 @@
   "shown": "numbered",
   "via": "chat",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request Changes); the agent asks what should change only when they did not say",
+  "meaning": "the person means: ask for changes to the Unit u1-login (option 2, Request Changes); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -5114,7 +5122,7 @@
   "shown": "numbered",
   "via": "aidlc",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request Changes) (typed after /aidlc); recorded as the pick, the agent asks what should change once",
+  "meaning": "the person means: ask for changes to the Unit u1-login (option 2, typed after /aidlc); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -5129,7 +5137,8 @@
     "asks": 1,
     "change": "what they name next",
     "says": [
-     "the change is being made and the Unit comes back for approval"
+     "the change is being made and the Unit comes back for approval",
+     "what should change, asked once"
     ]
    }
   }
@@ -5233,7 +5242,7 @@
   "shown": "numbered",
   "via": "chat",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request Changes); the agent asks what should change only when they did not say",
+  "meaning": "the person means: ask for changes to the batch of two Units (option 2, Request Changes); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -5793,7 +5802,7 @@
   "shown": "numbered",
   "via": "aidlc",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request Changes) (typed after /aidlc); recorded as the pick, the agent asks what should change once",
+  "meaning": "the person means: ask for changes to the batch of two Units (option 2, typed after /aidlc); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -5808,7 +5817,8 @@
     "asks": 1,
     "change": "what they name next",
     "says": [
-     "the change is being made and the Unit comes back for approval"
+     "the change is being made and the Unit comes back for approval",
+     "what should change, asked once"
     ]
    }
   }
@@ -5877,7 +5887,7 @@
   "shown": "numbered",
   "via": "chat",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request Changes); the agent asks what should change only when they did not say",
+  "meaning": "the person means: ask for changes to the verification command (option 2, Request Changes); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -6437,7 +6447,7 @@
   "shown": "numbered",
   "via": "aidlc",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request Changes) (typed after /aidlc); recorded as the pick, the agent asks what should change once",
+  "meaning": "the person means: ask for changes to the verification command (option 2, typed after /aidlc); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -6452,7 +6462,8 @@
     "asks": 1,
     "change": "what they name next",
     "says": [
-     "the command is being changed as asked and comes back for approval"
+     "the command is being changed as asked and comes back for approval",
+     "what should change, asked once"
     ]
    }
   }
@@ -6521,7 +6532,7 @@
   "shown": "numbered",
   "via": "chat",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request Changes); the agent asks what should change only when they did not say",
+  "meaning": "the person means: ask for changes to the Construction change (option 2, Request Changes); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -7054,7 +7065,7 @@
   "shown": "numbered",
   "via": "aidlc",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request Changes) (typed after /aidlc); recorded as the pick, the agent asks what should change once",
+  "meaning": "the person means: ask for changes to the Construction change (option 2, typed after /aidlc); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -7069,7 +7080,8 @@
     "asks": 1,
     "change": "what they name next",
     "says": [
-     "nothing is changed, as they asked"
+     "nothing is changed, as they asked",
+     "what should change, asked once"
     ]
    }
   }
@@ -7138,7 +7150,7 @@
   "shown": "numbered",
   "via": "chat",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request changes); the agent asks what should change only when they did not say",
+  "meaning": "the person means: ask for changes to the summary (option 2, Request changes); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -7697,7 +7709,7 @@
   "shown": "numbered",
   "via": "aidlc",
   "input": "2",
-  "meaning": "the person means: pick option 2 (Request changes) (typed after /aidlc); recorded as the pick, the agent asks what should change once",
+  "meaning": "the person means: ask for changes to the summary (option 2, typed after /aidlc); the agent asks what should change, once, because they did not say",
   "reader": "tool",
   "expected": {
    "engine": {
@@ -7712,7 +7724,8 @@
     "asks": 1,
     "change": "what they name next",
     "says": [
-     "the answer is being corrected and the summary comes back"
+     "the answer is being corrected and the summary comes back",
+     "what should change, asked once"
     ]
    }
   }
