@@ -90,8 +90,8 @@ const HARNESSES: Harness[] = [
     name: "kiro-ide",
     dir: ".kiro",
     lines: () => [
-      "In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder. If you drive Kiro from an ACP client, " +
-        "the Kiro IDE guide names what that client must send.",
+      "In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder, then type /aidlc to carry on. If you " +
+        "drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
     ],
   },
 ];

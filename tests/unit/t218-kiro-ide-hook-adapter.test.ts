@@ -6415,7 +6415,12 @@ describe("t218 enforce-approval-gate refusal names doctor's trust step", () => {
     expect(activation.agentStepInHost.env).toEqual(activation.missedReplyInHost.env);
     expect(activation.agentStepInHost.text).toContain(`Show the person this line: "${activation.recovery.slice(0, split)}"`);
     expect(activation.agentStepInHost.text).not.toContain("Kiro CLI");
-    expect(activation.agentStep).toContain(`Show the person this line: "${activation.recovery.slice(split + 1)}"`);
+    // Doctor's Kiro CLI step, plus the entry that carries the kept request on
+    // (the descriptor holds the text before <entry> is filled).
+    const cliStep = activation.recovery.slice(split + 1);
+    const restartStep = cliStep.replace(" in this folder. ", " in this folder, then type <entry> to carry on. ");
+    expect(restartStep).not.toBe(cliStep);
+    expect(activation.agentStep).toContain(`Show the person this line: "${restartStep}"`);
     expect(activation.agentStep).not.toContain("Reload Window");
   });
 

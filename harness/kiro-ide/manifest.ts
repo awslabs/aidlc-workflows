@@ -138,9 +138,16 @@ const KIRO_IDE_TRUST_STEP =
   "carry on.";
 
 // The same step outside Kiro IDE, for Kiro CLI and an ACP client on this tree.
-const KIRO_CLI_ACP_STEP =
-  "In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder. If you drive Kiro from an ACP client, " +
-  "the Kiro IDE guide names what that client must send.";
+const KIRO_CLI_RESTART = "In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder";
+const KIRO_ACP_CLIENT = "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.";
+const KIRO_CLI_ACP_STEP = `${KIRO_CLI_RESTART}. ${KIRO_ACP_CLIENT}`;
+
+// The agent's own step when the hooks never ran: the new chat never saw the
+// request, so the person is told to type the entry there. With no workflow
+// selected the engine keeps the request for that first bare entry; inside a
+// workflow the entry resumes from saved state. The missed-reply line is shown
+// unfilled, so <entry> stays out of the constant it shares.
+const KIRO_CLI_ACP_RESTART_STEP = `${KIRO_CLI_RESTART}, then type <entry> to carry on. ${KIRO_ACP_CLIENT}`;
 
 // The words the agent relays when the person's answer was not recorded.
 const ANSWER_NOT_RECORDED = "Your answer was not recorded, so you don't need to answer again.";
@@ -233,7 +240,7 @@ const manifest: HarnessManifest = {
     // instead of the person finding out at the first approval. Given both
     // lines, Kiro IDE's agent showed the Kiro CLI one there (live, 1.2.37), so
     // inside Kiro IDE, by the missed-reply line's signal, it gets its own alone.
-    agentStep: `${KIRO_HOOKS_OFF_AGENT} Show the person this line: "${KIRO_CLI_ACP_STEP}" Then end your turn.`,
+    agentStep: `${KIRO_HOOKS_OFF_AGENT} Show the person this line: "${KIRO_CLI_ACP_RESTART_STEP}" Then end your turn.`,
     agentStepInHost: {
       env: KIRO_IDE_AGENT_SHELL,
       text: `${KIRO_HOOKS_OFF_AGENT} Show the person this line: "${KIRO_IDE_TRUST_STEP}" Then end your turn.`,
