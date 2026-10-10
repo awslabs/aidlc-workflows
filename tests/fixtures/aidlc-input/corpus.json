@@ -7842,7 +7842,7 @@
         "settings": [],
         "no_ask": true,
         "names": [
-          "--scope feature -- add CSV export"
+          "--scope feature -- 'add CSV export'"
         ]
       },
       "end": {
@@ -12059,7 +12059,7 @@
         "words": "bugfix Fix the crash",
         "settings": [],
         "names": [
-          "--scope bugfix -- Fix the crash"
+          "--scope bugfix -- 'Fix the crash'"
         ],
         "no_ask": true
       },
@@ -17124,7 +17124,7 @@
         "words": "workshop Read ./vision.md and build what it describes",
         "settings": [],
         "names": [
-          "--scope workshop -- Read ./vision.md and build what it describes"
+          "--scope workshop -- 'Read ./vision.md and build what it describes'"
         ],
         "no_ask": true
       },
@@ -17966,7 +17966,7 @@
         "words": "classic Build a notes app",
         "settings": [],
         "names": [
-          "--scope classic -- Build a notes app"
+          "--scope classic -- 'Build a notes app'"
         ],
         "no_ask": true
       },

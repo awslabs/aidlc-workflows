@@ -292,6 +292,84 @@ describe("a flag the engine takes with a value it does not", () => {
 });
 
 // ---------------------------------------------------------------------------
+// A reading step names commands for someone to run, so nothing of the
+// person's own text is ever bare shell syntax in one
+// ---------------------------------------------------------------------------
+
+describe("their own words in a command the step names are one quoted argument", () => {
+  const shellish = [
+    "classic car rental; rm -rf /tmp/aidlc-should-not-run",
+    "classic rental `whoami` site",
+    "classic rental $(id) site",
+    "bugfix fix the \"login\" crash && echo no",
+  ];
+  test.each(shellish)("%j is quoted in every command the step names", (line) => {
+    const proj = emptyProject();
+    const argv = splitKiroCommandArgs(line);
+    const said = argv.join(" ");
+    const { d, out } = next(proj, argv);
+    expect(d.kind, out).toBe("print");
+    const message = String(d.message);
+    // Their text reaches the commands the step names as ONE single-quoted
+    // argument, so no separator, substitution or redirection of theirs is
+    // syntax when the agent runs it.
+    expect(message, out).toContain(`-- '${said}'`);
+    // And nothing of theirs is left bare after a delimiter anywhere.
+    for (const after of message.split(" -- ").slice(1)) {
+      expect(after.startsWith("'") || after.startsWith("`"), message).toBe(true);
+    }
+    // Their words are still all there, and nothing ran.
+    expect(message).toContain(said);
+    expect(activeIntent(proj)).toBe("");
+    cleanupTestProject(created.pop());
+  });
+
+  test("a reply while the plan question is open quotes their words too", () => {
+    const proj = emptyProject();
+    expect(next(proj, ["build a small notes app for my team"]).d.ask_type).toBe("compose-offer");
+    const { d, out } = next(proj, splitKiroCommandArgs("yes; rm -rf /tmp/aidlc-should-not-run"));
+    expect(d.kind, out).toBe("print");
+    expect(String(d.message)).toContain("-- 'yes; rm -rf /tmp/aidlc-should-not-run'");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Two chats, two questions: a reply never answers the one the person
+// cannot see
+// ---------------------------------------------------------------------------
+
+describe("a reply reaches no question but the one in front of them", () => {
+  test("with a question open in another chat too, their words stay their request", () => {
+    const proj = emptyProject();
+    // The first chat's offer, then a second chat's offer for its own request.
+    const first = next(proj, ["build a small notes app for my team"]);
+    expect(first.d.ask_type, first.out).toBe("compose-offer");
+    // The second chat names a plan, which is a line this engine reads exactly,
+    // so it gets its own question however many are already open.
+    const second = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "poc", "build the CSV export"], {
+      env: { ...env(proj), AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000001b02" },
+    });
+    const asked = questions(proj);
+    expect(asked.length, second.out).toBe(2);
+
+    // A reply in the first chat must not carry the second question's id, and
+    // must not start or compose the work that question asked about.
+    const answered = next(proj, ["yes"]);
+    const message = String(answered.d.message ?? "");
+    const question = String(answered.d.question ?? "");
+    expect(answered.d.kind, answered.out).toBe("print");
+    for (const stored of asked) {
+      expect(message, `named ${stored.id}`).not.toContain(stored.id);
+    }
+    // It says which it cannot tell, and points at the question the agent itself
+    // asked, so their reply still reaches that one and nothing starts here.
+    expect(message).toContain("as that question still stands in your own chat");
+    expect(`${message}${question}`).not.toContain("CSV export");
+    expect(activeIntent(proj)).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The seams that act before any agent reads
 // ---------------------------------------------------------------------------
 

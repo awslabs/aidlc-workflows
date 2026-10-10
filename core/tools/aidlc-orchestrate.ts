@@ -98,6 +98,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   deleteQuestion,
+  firstFrontQuestionSince,
   latestFrontQuestionId,
   latestQuestion,
   pruneExpiredQuestions,
@@ -458,6 +459,7 @@ import {
   type DirectiveLimit,
   entrySkillInvocation,
   isCompiledExecutable,
+  quoteCommandArgument,
   resolveHarnessPath,
   resolveHarnessRoot,
   runtimeHarnessName,
@@ -2420,10 +2422,19 @@ function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boole
  * started from it. A question whose answer created work is answered, and a
  * routing question is read back by its own options.
  */
-function openFrontQuestion(projectDir: string): StoredQuestion | null {
+function openFrontQuestion(
+  projectDir: string,
+): { question: StoredQuestion; sole: boolean } | null {
   const latest = latestQuestion(projectDir);
   if (latest === null || latest.origin !== "front") return null;
-  return intentStartedByQuestion(projectDir, latest.id) === null ? latest : null;
+  if (intentStartedByQuestion(projectDir, latest.id) !== null) return null;
+  // A question copy does not say which chat it was shown in, and a reply
+  // answers a question of this work from any chat, so with more than one still
+  // open this engine cannot tell WHICH question the person is answering. It
+  // says so instead of naming one: the agent has the question it asked in its
+  // own chat, with that question's own commands.
+  const earliest = firstFrontQuestionSince(projectDir, new Date(0).toISOString(), Number.POSITIVE_INFINITY);
+  return { question: latest, sole: earliest === null || earliest === latest.id };
 }
 
 function carriedFromQuestion(question: StoredQuestion, flags: ParsedFlags): RoutingCarried | null {
@@ -7289,7 +7300,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (step !== undefined) {
     const next = `${aidlcToolInvocation("orchestrate")} next`;
     const said = flags.intent ?? "";
-    const theirs = `run \`${next} -- ${said}\`, which keeps every word of theirs`;
+    // Their own text goes into a command someone runs, so it is one quoted
+    // argument (quoteCommandArgument, platform-aware): a line of theirs that
+    // mentions shell syntax says what they said and runs nothing of its own.
+    // After the delimiter one quoted argument is read as the request whole, so
+    // the command means exactly what it did unquoted.
+    const theirs = `run \`${next} -- ${quoteCommandArgument(said)}\`, which keeps every word of theirs`;
     const ask = "If you cannot tell, ask them once in plain words.";
     if (step.kind === "value") {
       emit(printDirective(
@@ -7305,7 +7321,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         `\`${step.scope}\` is the name of a plan and also the first word of what the person typed, ` +
         `and \`next\` cannot tell which they meant, so it took nothing from the line. ` +
         `If they named the plan, run \`${next} --scope ${step.scope} -- ` +
-        `${said.slice(step.scope.length).trim()}\`. ` +
+        `${quoteCommandArgument(said.slice(step.scope.length).trim())}\`. ` +
         `If \`${step.scope}\` is their own word, ${theirs}. ${ask}`,
       ));
       return;
@@ -7389,16 +7405,23 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     : null;
   if (openFront !== null) {
     const tool = `${aidlcToolInvocation("orchestrate")} next`;
-    const answer = openFront.proposedScope.length > 0
-      ? `\`${tool} --scope ${scopeArg(openFront.proposedScope)} --request ${openFront.id}\`, ` +
-        `or \`${tool} compose --request ${openFront.id}\` for a plan tailored to it`
-      : `\`${tool} compose --request ${openFront.id}\`, or one of the plan commands that question listed, ` +
-        `each with \`--request ${openFront.id}\``;
+    const open = openFront.question;
+    const answer = !openFront.sole
+      // More than one plan question is open on this work, so which one they are
+      // answering is the agent's to know: it ran the one it showed them, and
+      // that question's own commands carry its own `--request` id.
+      ? "the command that question gave for their choice, as that question still stands in your own chat, " +
+        "with the `--request` id it came with"
+      : open.proposedScope.length > 0
+        ? `\`${tool} --scope ${scopeArg(open.proposedScope)} --request ${open.id}\`, ` +
+          `or \`${tool} compose --request ${open.id}\` for a plan tailored to it`
+        : `\`${tool} compose --request ${open.id}\`, or one of the plan commands that question listed, ` +
+          `each with \`--request ${open.id}\``;
     emit(printDirective(
       "The person has not answered the plan question they were asked, so `next` cannot tell their reply from a " +
       `new request and took nothing from the line. If their words answer that question, run the command it gave ` +
       `for their choice: ${answer}. If they are asking for something else, run ` +
-      `\`${tool} -- ${flags.intent ?? ""}\`, which keeps every word of theirs. ` +
+      `\`${tool} -- ${quoteCommandArgument(flags.intent ?? "")}\`, which keeps every word of theirs. ` +
       "If you cannot tell, ask them once in plain words.",
     ));
     return;
@@ -14246,7 +14269,8 @@ function unknownWorkspaceWordStep(
   // it is named too; a mistyped verb or name alone has no such reading.
   const theirs = (command.words?.length ?? 0) > 0
     ? ` If \`${noun}\` is their own first word and the line is a request, run ` +
-      `\`${aidlcToolInvocation("orchestrate")} next -- ${typed}\` instead, which keeps every word of theirs.`
+      `\`${aidlcToolInvocation("orchestrate")} next -- ${quoteCommandArgument(typed)}\` instead, ` +
+      "which keeps every word of theirs."
     : "";
   return `${names}, so nothing ran and nothing changed. The ${noun} verbs are: ${verbs}; run one as ` +
     `\`${aidlcDispatcherInvocation(noun)} <verb> ...\`. ${records} The person typed: "${typed}". Read what they meant ` +
