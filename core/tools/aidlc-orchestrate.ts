@@ -3992,6 +3992,10 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
     const a = args[i];
     if (literalIntent) {
       intentWords.push(a);
+      // Theirs on the record too: the delimiter marks the words as the person's,
+      // so leaving them out of `wordTokens` made the record of what they said
+      // omit the request itself when a token earlier on the line was untaken.
+      wordTokens.push(a);
       continue;
     }
     if (a === "--") {
@@ -7247,15 +7251,23 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     const named = flags.untakenFlagValue === undefined
       ? `\`${flags.untakenFlag}\``
       : `\`${flags.untakenFlag} ${flags.untakenFlagValue}\``;
+    // Which reading it is depends on what the person meant, so the print names
+    // every reading there is and the agent, which has their line, picks one. An
+    // open Plan Approval question is one of those readings, never the only one:
+    // naming it alone sent a misspelt setting typed at that gate to an answer
+    // command that then refused for want of a reply, leaving their own request
+    // with no way on.
+    const readings = `If it is your own argument, run \`${next}\` again with only the person's words. ` +
+      "If it is part of what the person asked for, run " +
+      `\`${next}\` again with \`--\` before their words, word for word, which keeps every token of theirs. ` +
+      `If they meant a setting, run \`${next}\` again with the flag \`next\` takes and their words. ` +
+      "If you cannot tell, ask them once in plain words.";
     emit(printDirective(
       `\`next\` does not take ${named}. ` +
       (open && !open.editing
-        ? planApprovalAnswerStep()
-        : `If it is your own argument, run \`${next}\` again with only the person's words. ` +
-          "If it is part of what the person asked for, run " +
-          `\`${next}\` again with \`--\` before their words, word for word, which keeps every token of theirs. ` +
-          `If they meant a setting, run \`${next}\` again with the flag \`next\` takes and their words. ` +
-          "If you cannot tell, ask them once in plain words."),
+        ? `It may be the person's answer to the open Plan Approval question: ${planApprovalAnswerStep()} ` +
+          `If it is not their answer: ${readings}`
+        : readings),
     ));
     return;
   }

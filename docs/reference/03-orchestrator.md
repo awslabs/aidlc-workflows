@@ -83,22 +83,25 @@ Prose typed with a `--scope` that differs from the workflow's gets the same `new
 Freeform words alone over active work (nothing `next` reads as a flag, scope, verb or noun, and no open question or approval gate they could answer) get a `print` naming the typed re-entry report (`report --result resumed --choice <redo|jump|fresh>`, for words such as "take me back to requirements analysis") or `next --request <id>` (also when the conductor cannot tell), which asks the `new-work-routing` question with the words kept, so a redo, jump, or start-fresh request typed with `/aidlc` itself is that request; words with a setting typed beside them are asked about with it.
 
 `next` takes no answer flag, and one rule covers every flag-shaped token it does
-not take. Before the person's first word, such a token is either an argument the
+not take, wherever it sits on the line. Such a token is either an argument the
 agent sent to the wrong command (`--choice`, `--details`, `--result`, this chat's
-`--session`) or a name the person misspelt (`--plan-aprroval`, `--review-freeze`
-without its `guard.` prefix). `next` cannot take the line whole either way, so it
-takes nothing from it and returns a `print` naming the token and the value it
-took, with no `narration`: nothing reaches the person, no new-work question is
-asked about words they may never have typed, no question copy is stored and
-nothing is recorded. With the Plan Approval question open the print names its
-answer command, `log answer --stage code-generation --checkpoint plan-approval
---details '<their choice>'`, then bare `next`; the existing answer owner still
-requires the person's reply. Otherwise it tells the agent to run `next` again
-with only the person's words, or, when the person typed the token, to read what
-they meant and run `next` again with the flag `next` takes and their words. A
-flag-shaped token among the person's own words, after `--`, or beside a plan they
-named stays part of their description, and so does one quoted argument that holds
-a whole request (`--help flag for the reverser`).
+`--session`), a name the person misspelt (`--plan-aprroval`, `--review-freeze`
+without its `guard.` prefix), or a flag they are asking to have built (`add a
+--verbose flag`); where it sits says nothing about which, and only the agent can
+read that. `next` cannot take the line whole in any of those cases, so it takes
+nothing from it and returns a `print` naming the token and the value it took,
+with no `narration`: nothing reaches the person, no new-work question is asked
+about words they may never have typed, no question copy is stored and nothing is
+recorded. The print names each reading the agent chooses between: run `next`
+again with only the person's words, or with `--` before their words word for
+word, which keeps every token of theirs, or with the flag `next` takes and their
+words; and it asks them once in plain words when it cannot tell. With the Plan
+Approval question open that question's answer command, `log answer --stage
+code-generation --checkpoint plan-approval --details '<their choice>'` then bare
+`next`, is named as one more reading, never as the only one; the existing answer
+owner still requires the person's reply. Two things mark a token as the person's
+and keep it whole: the `--` delimiter, and one quoted argument that holds a whole
+request (`--help flag for the reverser`).
 
 In a solo unit-major walk, a Unit's work, its summary confirmation and its checkpoint (the learnings question and the checkpoint approval) run ahead of Current Stage and log their questions under the stage `next` directs (a checkpoint under the block's last stage). Prose then reads that stage's open question by the Stop hook's same rule, so an answer typed in a new chat, after the one that asked ended, reaches the question it answers instead of the new-work routing ask. Once a Unit's approval was asked, its checkpoint step no longer lists `learnings`, so a new chat that runs the step again goes straight to the approval question.
 

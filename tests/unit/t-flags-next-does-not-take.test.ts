@@ -727,6 +727,47 @@ describe("a misspelt setting after the person's words is not swallowed by the wo
     expect(String(ask.d.compose_command)).toContain("--plan-approval off");
   });
 
+  // The open Plan Approval question is one reading of the token, not the only
+  // one. A misspelt setting typed at that gate is plainly not a plan answer, and
+  // before this the print named only the answer command, which then refused for
+  // want of a reply: the person's own request had no route.
+  test("with the plan question open, a misspelt setting still gets every reading", () => {
+    const proj = planQuestionProject();
+    expect(next(proj).d.ask_type).toBe("plan-approval");
+    say(proj, "/aidlc --plan-aprroval off");
+    const { d, out } = next(proj, ["--plan-aprroval", "off"]);
+    expect(d.kind, out).toBe("print");
+    expect(d.narration, out).toBeUndefined();
+    expect(String(d.message)).toContain("--plan-aprroval off");
+    // The open question is named, as it was.
+    expect(String(d.message)).toContain(ANSWER_COMMAND);
+    // And so is the way on for a line that is not its answer.
+    expect(String(d.message)).toContain("only the person's words");
+    expect(String(d.message)).toContain("`--` before their words");
+    expect(String(d.message)).toContain("the flag `next` takes");
+  });
+
+  // Their words behind the delimiter are still their words on the record: the
+  // field the ledger's `Person Reply` takes when the agent names the message
+  // must hold the whole of what they asked for.
+  test("a typo with the documented delimiter keeps every word of theirs", () => {
+    const parsed = parseNextFlags(["--plan-aprroval", "off", "--", "add the export"]);
+    expect(parsed.untakenFlag).toBe("--plan-aprroval");
+    expect(parsed.intent).toBe("add the export");
+    expect(parsed.personWords).toBe("--plan-aprroval off add the export");
+    // One of their words before the delimiter and one after it, both kept.
+    expect(parseNextFlags(["add", "a", "--verbose", "flag", "--", "in the CLI"]).personWords)
+      .toBe("add a --verbose flag in the CLI");
+  });
+
+  test("and the record the hook keeps holds their whole request", () => {
+    const proj = emptyProject();
+    say(proj, "/aidlc --plan-aprroval off -- add the export");
+    const [record] = listMessages(proj);
+    expect(record.words, JSON.stringify(record)).toBe("--plan-aprroval off add the export");
+    expect(record.text).toBe("/aidlc --plan-aprroval off -- add the export");
+  });
+
   test("a flag they are asking to have built stays their words, through the delimiter", () => {
     const proj = emptyProject();
     const { d, out } = next(proj, ["add", "a", "--verbose", "flag", "to", "the", "CLI"]);
