@@ -6201,14 +6201,28 @@ function sessionSelectionNoticePath(projectDir: string, sessionId: string): stri
   return recordPath ? `${recordPath}.selection-notice` : "";
 }
 
-export function writeSessionSelectionNotice(projectDir: string, sessionId: string, line: string): void {
+// The kind of a notice the engine can take back when it asks the same thing
+// another way: the follow question a switch made somewhere else leaves behind.
+export const SELECTION_NOTICE_FOLLOW = "follow";
+
+export function writeSessionSelectionNotice(
+  projectDir: string,
+  sessionId: string,
+  line: string,
+  kind?: string,
+): void {
   const path = sessionSelectionNoticePath(projectDir, sessionId);
   if (!path || !line) return;
   // The line is true only while this chat stays on the work it is on now.
   const binding = readSessionBinding(projectDir, sessionId);
   try {
     mkdirSync(sessionsDir(projectDir), { recursive: true });
-    writeFileSync(path, `${JSON.stringify({ line, space: binding?.space ?? null, intent: binding?.intent ?? null })}\n`, "utf-8");
+    writeFileSync(path, `${JSON.stringify({
+      line,
+      space: binding?.space ?? null,
+      intent: binding?.intent ?? null,
+      ...(kind ? { kind } : {}),
+    })}\n`, "utf-8");
   } catch {
     /* per-user runtime state; best-effort */
   }
@@ -6223,6 +6237,20 @@ export function promptMovesSelection(prompt: string): boolean {
   if (head === null) return false;
   const kind = parseWorkspaceCommand(splitKiroCommandArgs(text.slice(head[0].length).trim())).kind;
   return kind === "switch" || kind === "create" || kind === "create-intent";
+}
+
+// A notice of this kind goes when the engine asks the person about the same
+// thing in its own words on the same turn, so they are asked once. Only that
+// kind is taken: another line waiting here is not this one's to remove.
+export function dropSessionSelectionNotice(projectDir: string, sessionId: string, kind: string): void {
+  const path = sessionSelectionNoticePath(projectDir, sessionId);
+  if (!path) return;
+  try {
+    const saved = JSON.parse(readFileSync(path, "utf-8")) as { kind?: unknown };
+    if (saved.kind === kind) unlinkSync(path);
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
 }
 
 export function takeSessionSelectionNotice(projectDir: string, sessionId: string): string | null {

@@ -86,6 +86,8 @@ import {
   writeSessionIntentUuid,
   writeSessionPidAncestry,
   writeSessionRebindOffer,
+  dropSessionSelectionNotice,
+  SELECTION_NOTICE_FOLLOW,
   writeSessionSelectionNotice,
   clearSessionRebindOffer,
 } from "../tools/aidlc-lib.ts";
@@ -369,6 +371,9 @@ if (!existsSync(stateFile)) {
             `To pick ${slug} up again, run ${command}.`,
         );
       }
+      // This offer is about the same divergence a follow question waiting for
+      // this chat would ask about, so the person is asked once, here.
+      dropSessionSelectionNotice(projectDir, sessionId, SELECTION_NOTICE_FOLLOW);
     }
     process.stdout.write(hookContextLine(
       "SessionStart",
@@ -492,6 +497,9 @@ if (sessionId) {
             `Move the shared cursor back to ${intentDisplayLabel(was)}? [Y/n] - on Yes, ${switchInstruction}; ` +
             `on No, keep working ${intentDisplayLabel(was)} through this session binding. This changes only machine-local navigation.\n`;
           writeSessionRebindOffer(projectDir, sessionId, signature);
+          // Asked once: this offer and a follow question left by a switch made
+          // somewhere else are the same divergence, read from opposite ends.
+          dropSessionSelectionNotice(projectDir, sessionId, SELECTION_NOTICE_FOLLOW);
           if (rebindCheckOnly) {
             // The prompt that ran this probe goes through on this chat's own
             // work: its binding (or, for a chat stamped by an earlier version,
