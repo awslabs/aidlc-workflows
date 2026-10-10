@@ -19,7 +19,7 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import * as lib from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { DEFAULT_RECORD_DIR, DEFAULT_SPACE, REPO_ROOT, intentsDirOf, seedAidlcMemory, seededRecordDir } from "../harness/fixtures.ts";
 import { NATIVE_RUNTIME_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -159,8 +159,11 @@ describe("the pin: nothing else reads a binding or the cursor with a raw id", ()
     walk(root);
     return out;
   }
-  const files = [...sources(SRC), ...sources(HARNESS)].filter((path) => !path.endsWith("core/tools/aidlc-lib.ts"));
-  const rel = (path: string): string => path.slice(REPO_ROOT.length + 1).split("\\").join("/");
+  // The repository-relative name, with this platform's separator folded, so the
+  // library's own exclusion and the reader list below compare the same shape on
+  // Windows as on POSIX.
+  const rel = (path: string): string => path.slice(REPO_ROOT.length + 1).split(sep).join("/");
+  const files = [...sources(SRC), ...sources(HARNESS)].filter((path) => rel(path) !== "core/tools/aidlc-lib.ts");
 
   test("outside the library only the named pure readers read a binding, and nobody reads helper-of", () => {
     const bindingReaders = files.filter((path) => /\breadSessionBinding\(/.test(readFileSync(path, "utf-8"))).map(rel).sort();
