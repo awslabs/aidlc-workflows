@@ -407,7 +407,7 @@ cards doing the work, and the guard notes nothing for them.
   the engine's (`nextCallRequest`, which also counts the person's words after
   an intent or space switch, such as `next intent auth …`, but not its options), so a line of flags, `--request-file`,
   `--help` or one the engine refuses passes (request words beside a flag `next`
-  does not take still count). A word after `next` that
+  does not take, or beside a value it does not take, still count). A word after `next` that
   PowerShell fills in only when the command runs (`--depth $depth`) may be one
   the engine accepts, so a line holding one is not counted as refused and its
   request is, and so is a request PowerShell builds from a variable, an

@@ -16185,14 +16185,15 @@ function engineWorkflowSelection(projectDir: string): WorkflowSelection {
 // even inside quotes, and the aidlc launcher is read by cmd.exe again.
 const REQUEST_TEXT_MAX_BYTES = 64 * 1024;
 
-// The person's words among the words after a switch. A standalone word that
+// The person's words among words `next` hands on unread (after a switch, or a
+// line it only reads back for its value, #2293's reading step). A standalone word that
 // starts with `--` is an option they give the command, as `--help` is, never
 // words of theirs, and so is the value after an option `next` takes with one
 // (`--guard-policy relaxed`): one word. A quoted sentence (`'add a --json
 // output option'`, `'please add a button'`) is one word with spaces, and theirs.
 // The switch parser keeps such options among its words so the agent can act on
 // them; only the dispatcher's own flags and `--` are dropped there.
-function switchRequestWords(
+function personWordsOf(
   words: readonly string[] | undefined,
   filledIn: (word: string) => boolean = () => false,
 ): string[] {
@@ -16247,7 +16248,7 @@ function nextArgsWithRequestFile(
     `next space [switch] <name>), ` +
     `with --request-file and a file directly inside ${REQUEST_TEXT_DIR}/; the person's words after the record ` +
     `name (not its options) go in that file, exactly as they typed them (not as the line holds them now).`;
-  if (switched.kind === "switch" && switchRequestWords(switched.words).length > 0) {
+  if (switched.kind === "switch" && personWordsOf(switched.words).length > 0) {
     return `When the words after next start with an intent or space switch, ${switchStep}`;
   }
   // A bare noun reads as a list and `intent switch` as a missing name: the
@@ -16305,7 +16306,7 @@ function nextArgsWithRequestFile(
 // file carries none (nextArgsWithRequestFile reads the request from it, or
 // refuses the line), and neither does a line the engine refuses or answers
 // without starting work (help, status, a verb). After a leading intent or
-// space switch the person's words (switchRequestWords, not its options) are
+// space switch the person's words (personWordsOf, not its options) are
 // the request (and, like any line naming the file, one with --request-file
 // carries none). `filledIn` holds the indexes
 // in `argv` of words a shell fills in only when the command runs: a value the
@@ -16324,12 +16325,15 @@ export function nextCallRequest(
   const flags = parseNextFlags(args);
   // After an intent or space switch the person's words are the request for the
   // record picked (`next intent auth add a button`); its options are not.
+  // Words a shell fills in are placeholders, each named by its own index.
+  const filledWords = new Set(rest.flatMap((at) => filledIn.has(at) ? [argv[at]] : []));
+  const filled = (word: string): boolean => filledWords.has(word);
   const workspace = flags.workspaceCommand;
-  if (workspace?.kind === "switch") {
-    // Words a shell fills in are placeholders, each named by its own index.
-    const filledWords = new Set(rest.flatMap((at) => filledIn.has(at) ? [argv[at]] : []));
-    return switchRequestWords(workspace.words, (word) => filledWords.has(word)).length > 0 ? "carries" : "clear";
-  }
+  if (workspace?.kind === "switch") return personWordsOf(workspace.words, filled).length > 0 ? "carries" : "clear";
+  // A value `next` does not take (`--depth bogus`, or one a shell fills in)
+  // makes the line one it only reads back to the agent, whole: the person's
+  // words on it reach the agent through that step.
+  if (flags.readingStep?.kind === "value") return personWordsOf(args, filled).length > 0 ? "carries" : "clear";
   if (flags.intent === undefined || flags.readOnly !== undefined) return "clear";
   return flags.parseError === undefined || rest.some((at) => filledIn.has(at)) ? "carries" : "clear";
 }

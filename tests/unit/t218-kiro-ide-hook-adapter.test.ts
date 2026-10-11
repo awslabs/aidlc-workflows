@@ -7106,6 +7106,8 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       // A sentence or a word an option does not take is the person's, not that option's value.
       ["a sentence after a setting and --", `${next} intent auth --guard-policy -- 'add a "Save" button'`],
       ["a sentence after a setting", `${next} intent auth --guard-policy 'please add a button'`],
+      // A value `next` does not take makes the line one it reads back to the agent, with the words on it.
+      ["words after a flag value the engine does not take", `${next} --depth bogus 'add a "Save" button'`],
       ["a setting and words after an intent switch", `${next} intent auth --guard-policy relaxed 'add a button'`],
       // The engine hands every word after a switch to the agent, whatever `next` would read it as.
       ["a flag next does not take after an intent switch", `${next} intent auth --details 'use %APPDATA% here'`],
@@ -7218,7 +7220,6 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       ["a renamed flag", `${next} --change-control off --request-file aidlc/.aidlc-request-text/request.txt`],
       // The engine answers these without starting work, so there is no request to keep.
       ["words after --help", `${next} --help 'what does "compose" do'`],
-      ["words after a flag the engine refuses", `${next} --depth bogus 'add a "Save" button'`],
       ["a redirect and a reader pipe", `${next} 2>$null | Select-Object -First 1`],
       ["a POSIX shell", `${next} 'add a "Save" button'`, "execute_bash"],
       ["another program", `Write-Output 'aidlc engine orchestrate next "Save"'`],
