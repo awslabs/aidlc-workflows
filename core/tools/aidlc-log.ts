@@ -155,7 +155,7 @@ import {
   resolveProjectDir,
   resolveProjectFlag,
   sameWorkspaceSource,
-  readSessionBinding,
+  resolveChat,
   resolveWorkflowSelection,
   resolveReviewClass,
   selfAttributedDecisionMarker,
@@ -957,14 +957,17 @@ function messageIsReply(rows: AuditShardEvent[], message: StoredMessage): boolea
   return true;
 }
 
-// The chats that have sent messages since the last spending row. A chat bound to
-// no record (it met this workspace before the work was chosen here, or a cold
+// The chats that have sent messages since the last spending row. A chat on no
+// record (it met this workspace before the work was chosen here, or a cold
 // workspace) keeps its words but is not a chat on this work, so it does not make
-// the one chat that has spoken here ambiguous.
+// the one chat that has spoken here ambiguous. Which record a chat is on is read
+// the way every door reads it (resolveChat, read-only): a chat that joined the
+// work through its turn alone, before its own next command wrote the binding,
+// counts as the chat on this work that it is.
 function chatsSince(pd: string, spentAt: string | null): Set<string> {
   const onNoRecord = (session: string): boolean => {
     try {
-      return readSessionBinding(pd, session)?.intent === null;
+      return resolveChat(pd, session, { bind: false })?.binding?.intent === null;
     } catch {
       return false;
     }

@@ -199,4 +199,27 @@ describe("a fresh clone with no choice made on this machine stays as today", () 
     expect(logged.status, `${logged.stdout}${logged.stderr}`).toBe(0);
     expect(logged.stderr).not.toContain("more than one chat has sent messages");
   });
+
+  test("two chats that joined through their turns alone still make the work's chat ambiguous", () => {
+    // Both met the workspace before the choice; the choice is made here; both speak. Each hook turn joins its chat
+    // read-only (the binding file still says no record until the chat's own next command writes it), so the one-chat
+    // rule must read the chats the way the door does, not the file on disk.
+    const proj = openWork();
+    writeSessionBinding(proj, FIRST, "default", null, "unjoined");
+    said(proj, "approve", FIRST);
+    said(proj, "no, hold on");
+    expect(humanTurns(proj)).toHaveLength(2);
+    expect(readSessionBinding(proj, FIRST)).toMatchObject({ intent: null, source: "unjoined" });
+    const id = readdirSync(join(proj, "aidlc", ".aidlc-sessions", "messages")).filter((name) => name.endsWith(".json"))
+      .map((name) => JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", "messages", name), "utf-8")) as { id: string; session: string | null })
+      .find((message) => message.session === FIRST)!.id;
+    const logged = spawnSync(BUN, [LOG, "decision", "--stage", "requirements-analysis", "--decision", "Approve the draft", "--message", id, "--project-dir", proj], {
+      cwd: proj,
+      env: { ...process.env, ...CLEAR, AIDLC_SESSION_OVERRIDE: undefined, AIDLC_SESSION_OVERRIDE_SOURCE: undefined, CODEX_THREAD_ID: undefined, CLAUDE_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(logged.status, `${logged.stdout}${logged.stderr}`).not.toBe(0);
+    expect(`${logged.stdout}${logged.stderr}`).toContain("more than one chat has sent messages");
+  });
 });
