@@ -1528,7 +1528,7 @@ describe("t315 an approval given with the collaborators switch stands", () => {
   // in the current attempt, and the first collaborators flip after it decides.
   // A Recovered gate row, an Old that does not parse, or a closed gate fall
   // back to the current setting.
-  test("the anchor is the last organic open gate row; Recovered rows, an unparseable Old and a closed gate fall back", () => {
+  test("the anchor is the last organic open gate row; Recovered rows, an unparseable Old, the kill switch and a closed gate fall back", () => {
     const stage = { slug: RE_STAGE, support_agents: [FINAL] };
     const stamp = (seconds: number): string =>
       new Date(Date.now() + seconds * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -1568,6 +1568,18 @@ describe("t315 an approval given with the collaborators switch stands", () => {
     row(mirrored, "STAGE_AWAITING_APPROVAL", 10, { Stage: RE_STAGE });
     row(mirrored, "CEREMONY_SET", 20, { Key: "collaborators", Old: "on", New: "off", Source: "you" });
     expect(resolve(mirrored)).toEqual([FINAL]);
+
+    // The kill switch forces the lead alone whatever saved value a flip recorded
+    // as Old: the stage ran lead-only under it, so the gate owes nothing more.
+    const killed = switchedProject("off");
+    row(killed, "STAGE_AWAITING_APPROVAL", 10, { Stage: RE_STAGE });
+    row(killed, "CEREMONY_SET", 20, { Key: "collaborators", Old: "on", New: "off", Source: "you" });
+    expect(
+      supportAgentsAtOpenGate(killed, stage, "enterprise", readFileSync(seededStateFile(killed), "utf-8"), {
+        ...process.env,
+        AIDLC_DISABLE_COLLABORATORS: "1",
+      }),
+    ).toEqual([]);
   });
 
   test("the approval first, then the setter: the next stage carries the specialists", () => {

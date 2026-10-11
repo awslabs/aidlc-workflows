@@ -34592,9 +34592,10 @@ export function effectiveSupportAgentsForProject(
  * so a gate shown again has a later row) that no GATE_APPROVED, GATE_REJECTED or
  * STAGE_COMPLETED for the stage has closed. The FIRST CEREMONY_SET collaborators
  * row after that anchor carries, in Old, the setting the gate opened under. The
- * current setting applies when there is no organic gate row (a gate synthesized
- * as Recovered is written after the check), no flip after it, an Old that does
- * not parse, or a cross-shard timestamp tie.
+ * current setting applies under the AIDLC_DISABLE_COLLABORATORS kill switch, when
+ * there is no organic gate row (a gate synthesized as Recovered is written after
+ * the check), no flip after it, an Old that does not parse, or a cross-shard
+ * timestamp tie.
  */
 export function supportAgentsAtOpenGate(
   projectDir: string,
@@ -34605,7 +34606,9 @@ export function supportAgentsAtOpenGate(
 ): string[] {
   const declared = stage.support_agents ?? [];
   const current = effectiveSupportAgents(stage, scope, stateContent, env);
-  if (declared.length === 0) return current;
+  // The kill switch forces the lead alone for the whole run; a flip recorded while
+  // it is set carries the saved value as Old, never the lead-only run it made.
+  if (declared.length === 0 || resolveProjectFlag(CEREMONY_ENV.collaborators, env, projectDir) === "1") return current;
   let events: OrderedPipelineEvidenceEvent[];
   try {
     events = orderedPipelineEvidenceEvents(projectDir);
