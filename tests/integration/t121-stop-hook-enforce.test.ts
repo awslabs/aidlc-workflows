@@ -961,7 +961,13 @@ function terminalModifierDispatch(proj: string, flags: string[], command: string
 // next takes no level word outside the allowed ones, and names them instead of
 // a command: a reading step for the agent (t-three-ways-to-read-a-line), which
 // carries no workflow work either way, so the stop is still allowed below.
-function refusedModifierDispatch(proj: string, flags: string[]): string {
+// `refused` names the flag and value next does not take when the line carries
+// another flag beside them (the agent's own `--resume`).
+function refusedModifierDispatch(
+  proj: string,
+  flags: string[],
+  refused: readonly [string, string] = [flags[0], flags[1]],
+): string {
   const statePath = seededStateFile(proj);
   writeFileSync(statePath, `- **State Version**: 8\n${readFileSync(statePath, "utf-8")}`);
   const result = spawnSync(BUN, [
@@ -970,8 +976,8 @@ function refusedModifierDispatch(proj: string, flags: string[]): string {
   ], { encoding: "utf-8", env: process.env });
   const directive = JSON.parse(result.stdout);
   expect(directive.kind, result.stdout).toBe("print");
-  expect(directive.message).toContain(`takes \`${flags[0]}\` with`);
-  expect(directive.message).toContain(JSON.stringify(flags[1]));
+  expect(directive.message).toContain(`takes \`${refused[0]}\` with`);
+  expect(directive.message).toContain(JSON.stringify(refused[1]));
   return result.stdout;
 }
 
@@ -3817,11 +3823,23 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     // Full Suite 36549553601: t-tui-t27 typed `/aidlc --depth extreme`; next
     // refused the word, the conductor reported it, and the Stop hook kept
     // blocking, so the turn ran until the file deadline.
+    // Full Suite 38087105892: the agent sent the typed value beside its own
+    // `--resume` (`next --resume --depth extreme`); next refused the value the
+    // same way, and the Stop hook carried on with the stage, so the agent
+    // started it and asked a question nobody ordered.
+    const rows: Array<{ typed: string; refused: readonly [string, string] }> = [
+      { typed: "--depth extreme", refused: ["--depth", "extreme"] },
+      { typed: "--test-strategy Extreme", refused: ["--test-strategy", "Extreme"] },
+      { typed: "--review loud", refused: ["--review", "loud"] },
+      { typed: "--guard-policy loose", refused: ["--guard-policy", "loose"] },
+      { typed: "--resume --depth extreme", refused: ["--depth", "extreme"] },
+      { typed: "--depth extreme --resume", refused: ["--depth", "extreme"] },
+    ];
     for (const format of ["claude", "codex"] as const) {
-      for (const typed of ["--depth extreme", "--test-strategy Extreme", "--review loud", "--guard-policy loose"]) {
+      for (const { typed, refused } of rows) {
         const proj = makeProject();
         seedActive(proj);
-        const output = refusedModifierDispatch(proj, typed.split(" "));
+        const output = refusedModifierDispatch(proj, typed.split(" "), refused);
         const tp = seedTranscriptEntries(proj, format, [
           { kind: "human", text: `/aidlc ${typed}` },
           { kind: "bash", id: "modifier-call", command: `bun .claude/tools/aidlc.ts engine orchestrate next ${typed}` },

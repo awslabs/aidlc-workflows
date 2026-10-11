@@ -1038,10 +1038,20 @@ export function isRetiredOnlyNextArgv(args: readonly string[]): boolean {
 // (a depth, test-strategy, review, Guard Policy or ceremony word it does not
 // accept, or a missing value), returns that refusal before naming any command.
 // It is terminal, not workflow engagement (t-tui-t27, Full Suite 36549553601).
+// A flag that takes no value beside them (`--resume`, which the agent adds on a
+// re-entry, `--single`, `--new-intent`, ...: the `none` shapes in NEXT_FLAGS)
+// changes nothing about that answer, because parseNextFlags reads the refused
+// value first and takes nothing else from the line; so it is skipped here, and
+// the Stop hook lets the turn end where the engine already did nothing instead
+// of carrying on with a stage nobody asked for (Full Suite 38087105892).
 export function isRefusedModifierNextArgv(args: readonly string[]): boolean {
   let refused = false;
   for (let i = 0; i < args.length;) {
     const flag = args[i];
+    if (nextFlagShape(flag)?.value === "none") {
+      i += 1;
+      continue;
+    }
     const ceremony = CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === flag);
     const guard = flag === "--guard-policy" || flag === "--change-control";
     const words = flag === "--review"
