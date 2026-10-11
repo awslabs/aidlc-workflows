@@ -8,6 +8,7 @@
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -15,14 +16,17 @@ import {
   writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
-  DEFAULT_INTENT_UUID, DEFAULT_RECORD_DIR, seedAidlcMemory, seedBoltDagBatches, seededAuditDir, seededStateFile,
-  setupWorktreeFixture,
+  AIDLC_SRC, DEFAULT_INTENT_UUID, DEFAULT_RECORD_DIR, seedAidlcMemory, seedBoltDagBatches, seededAuditDir,
+  seededStateFile, setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 import {
-  CHECK, STAGE, approvalSnapshot, approvePlan, checkReviewFinalizeAndLand, checkpointChoice, cleanupCheckpointFixtures,
-  git, nextDirective, plan, prepare, projects, publish, recordCommand, runCheckpointTool, writeUnitSource, wt,
+  CHECK, ISOLATED_GIT_ENV, STAGE, approvalSnapshot, approvePlan, checkReviewFinalizeAndLand, checkpointChoice,
+  cleanupCheckpointFixtures, git, nextDirective, plan, prepare, projects, publish, recordCommand, runCheckpointTool,
+  writeUnitSource, wt,
 } from "../harness/swarm-checkpoint.ts";
-import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupCheckpointFixtures, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -239,5 +243,83 @@ describe("a child audit with the child's own rows is never taken for the inherit
     expect(refused.code).not.toBe(0);
     expect(`${refused.out}\n${refused.err}`).toContain("unmerged work after AUDIT_FORKED");
     expect(readFileSync(path).equals(written)).toBe(true);
+  });
+});
+
+// A project whose checkout is deep enough that the Bolt's nested audit path passes Windows MAX_PATH while the main
+// checkout's audit path stays under it. Git for Windows handles such a path only with core.longpaths, which the engine's
+// own git calls supply; the tools here run with the machine's Git config dropped and without the runner's long-path
+// entry, as on a machine that never enabled it. Elsewhere the depth changes nothing.
+function deepTempDir(): string {
+  const root = tmpdir();
+  const segments: string[] = [];
+  let dir = root;
+  while (join(dir, "aidlc-worktree-XXXXXX").length < 145) {
+    segments.push(`deep-swarm-path-${segments.length}`);
+    dir = join(root, ...segments);
+  }
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function prepareWithoutLongPaths(pd: string) {
+  const env: NodeJS.ProcessEnv = { ...ISOLATED_GIT_ENV, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd };
+  delete env.GIT_CONFIG_COUNT;
+  delete env.GIT_CONFIG_KEY_0;
+  delete env.GIT_CONFIG_VALUE_0;
+  const r = Bun.spawnSync([
+    process.execPath, join(AIDLC_SRC, "tools/aidlc-swarm.ts"),
+    "prepare", "--batch", "1", "--units", UNITS.join(","), "--base", "main", "--project-dir", pd,
+  ], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    cwd: pd, env, stdout: "pipe", stderr: "pipe",
+  });
+  return { code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() };
+}
+
+describe("the committed audit already holds fork rows for the Units (the records committed after a failed attempt)", () => {
+  test("in a deep checkout, the inherited copy is forked over and both Units start", () => {
+    const deep = deepTempDir();
+    const previous = process.env.TMPDIR;
+    process.env.TMPDIR = deep;
+    let pd: string;
+    try {
+      pd = setupWorktreeFixture();
+    } finally {
+      if (previous === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = previous;
+    }
+    projects.push(pd);
+    seedAidlcMemory(pd);
+    writeFileSync(seededStateFile(pd), STATE);
+    writeFileSync(join(pd, ".gitignore"), SHIPPED_GITIGNORE);
+    seedBoltDagBatches(pd, [UNITS, ["later"]]);
+    mkdirSync(join(pd, "src"), { recursive: true });
+    for (const unit of UNITS) writeFileSync(join(pd, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
+    const baseline = writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!);
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
+    appendAuditEntry("STAGE_STARTED", { Stage: STAGE, "Source Baseline": baseline }, pd);
+    recordCommand(pd, CHECK);
+    publish(pd, UNITS);
+    for (const unit of UNITS) plan(pd, unit);
+    // An earlier attempt forked each Unit and failed; its rows are in the audit the records commit carries.
+    for (const unit of UNITS) {
+      appendAuditEntry("AUDIT_FORKED", {
+        "Bolt slug": boltSlugForUnit(unit), "Source Audit Hash": "0".repeat(64), "Fork Boundary": "1",
+      }, pd);
+      appendAuditEntry("BOLT_FAILED", {
+        "Failed Bolt": unit, "Error summary": "Interrupted swarm preparation; source and records preserved for recovery",
+        "Bolt slug": boltSlugForUnit(unit),
+      }, pd);
+    }
+    git(pd, ["add", "-A"]);
+    git(pd, ["commit", "-qm", "AI-DLC records after the failed attempt"]);
+    for (const unit of UNITS) approvePlan(pd, unit);
+    const result = prepareWithoutLongPaths(pd);
+    expect(result.code, `${result.out}\n${result.err}`).toBe(0);
+    for (const unit of units(result)) expect(unit.ok, JSON.stringify(unit)).toBe(true);
+    const child = wt(pd, "alpha");
+    expect(child.length).toBeGreaterThan(pd.length + 30);
+    expect(readAuditShardEvents(child).at(-1)?.event).toBe("AUDIT_FORKED");
   });
 });

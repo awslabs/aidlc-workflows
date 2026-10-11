@@ -32,6 +32,7 @@ import {
   cloneIdPath,
   entrySkillInvocation,
   errorMessage,
+  GIT_PLATFORM_ARGS,
   hasUnsafeSingleLineCharacter,
   isoTimestamp,
   mergeReviewRecordsFromDelta,
@@ -1407,8 +1408,10 @@ function worktreeAuditInheritedFromBase(wtPath: string, wtAuditPath: string): bo
   const base = worktreeCreationCommit(wtPath);
   if (base === null) return false;
   const path = relative(wtPath, wtAuditPath).replaceAll("\\", "/");
+  // The diff walks the checkout, whose nested audit path can pass Windows
+  // MAX_PATH, so these calls opt in to long paths like the create that wrote it.
   const git = (args: string[]) =>
-    spawnSync("git", ["-C", wtPath, ...args], {
+    spawnSync("git", [...GIT_PLATFORM_ARGS, "-C", wtPath, ...args], {
       encoding: "utf-8",
       timeout: LONG_SUBPROCESS_TIMEOUT_MS,
     }).status;
