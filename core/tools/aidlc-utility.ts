@@ -2015,7 +2015,21 @@ To get started:
   const checkboxesAll = parseCheckboxes(content);
   const currentCheckbox = checkboxesAll.find((c) => c.slug === currentStage);
   let statusLine = status;
-  if (currentCheckbox?.state === "awaiting-approval") {
+  // Paused work is not running. A park (the person's "approve, and stop here",
+  // or the engine's own) stands where the cursor stands, whatever the checkbox
+  // says, so it is read first; a park the work has since moved past is stale
+  // and holds nothing, the same rule the router uses (parkedWhereItStands in
+  // aidlc-orchestrate.ts). The line carries the way back, in the harness's own
+  // entry word. A live run read "Status: Running" over paused work and the
+  // agent had to correct it.
+  const parkedAt = (getField(content, "Parked At Stage") ?? "").trim();
+  const parked = (getField(content, "Parked") ?? "").trim().length > 0 &&
+    parkedAt.length > 0 && parkedAt === currentStage &&
+    status !== "Completed" && status !== "Archived";
+  if (parked) {
+    const stopped = (getField(content, "Parked By") ?? "").trim() === "person" ? " (you stopped it)" : "";
+    statusLine = `Paused at ${currentName}${stopped}; pick it back up with ${entrySkillInvocation()} --resume`;
+  } else if (currentCheckbox?.state === "awaiting-approval") {
     const displayName = currentName;
     statusLine = `Awaiting your approval on ${displayName}`;
     try {

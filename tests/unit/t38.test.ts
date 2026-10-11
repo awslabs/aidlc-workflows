@@ -675,4 +675,37 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     sedState(p, /^- \*\*Test Strategy\*\*: .*$/m, "- **Test Strategy**: Standard\n- **Plan**: custom, based on bugfix");
     expect(status(p).out).toContain("Reviewers: advisory (from the approved plan)\n");
   });
+
+  // A live run (Claude Code, 2026-10-11) said "approve, and stop here" at the
+  // Build and Test gate, then asked for status: it read "Status: Running" and the
+  // agent had to say the work was paused. The park fields parkWorkflow writes
+  // under Runtime State were never read here.
+  test("11: paused work reads paused with the way back; a stale park and finished work read as before", () => {
+    const p = createTestProject();
+    tempDirs.push(p);
+    seedStateFile(p, join(REPO_ROOT, "tests", "fixtures", "state-operation.md"));
+    expect(status(p).out).toContain("Status:         Running\n");
+    // The person's own stop: parkWorkflow writes these three lines.
+    sedState(
+      p,
+      /^- \*\*Revision Count\*\*: 0$/m,
+      "- **Revision Count**: 0\n- **Parked**: 2026-10-11T08:27:33Z\n- **Parked At Stage**: deployment-pipeline\n- **Parked By**: person",
+    );
+    const paused = status(p);
+    expect(paused.status).toBe(0);
+    expect(paused.out).toContain(
+      "Status:         Paused at Deployment Pipeline (you stopped it); pick it back up with /aidlc --resume\n",
+    );
+    expect(paused.out).not.toContain("Status:         Running");
+    // A park nobody attended (no Parked By) is paused too, without "you stopped it".
+    deleteStateLines(p, /^- \*\*Parked By\*\*:/);
+    expect(status(p).out).toContain("Status:         Paused at Deployment Pipeline; pick it back up with /aidlc --resume\n");
+    // A park the work has since moved past holds nothing (the router's rule).
+    sedState(p, /^- \*\*Parked At Stage\*\*: .*$/m, "- **Parked At Stage**: ci-pipeline");
+    expect(status(p).out).toContain("Status:         Running\n");
+    // Finished work with park lines left behind still reads finished.
+    sedState(p, /^- \*\*Parked At Stage\*\*: .*$/m, "- **Parked At Stage**: deployment-pipeline");
+    sedState(p, /^- \*\*Status\*\*: .*$/m, "- **Status**: Completed");
+    expect(status(p).out).toContain("Status:         Completed\n");
+  });
 });
