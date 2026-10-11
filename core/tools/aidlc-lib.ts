@@ -2465,8 +2465,13 @@ export function isEngineToolCall(
 
 // Current legacy-shape engagement rules. Kept as a helper so the exported
 // classifier can preserve every old-shape result while adding the new grammar.
+// The stem of a legacy engine tool as a command word: `aidlc-state`, `aidlc-state.ts`,
+// `aidlc-state.t[sx]`, `aidlc-state>out`. A file that carries the stem with another
+// plain extension (`aidlc-state.md`, the record) is not the tool.
+const ENGINE_TOOL_STEM = /aidlc-(?:orchestrate|state|jump|bolt|swarm|unit)\b(?!\.(?!ts\b)[a-z]+(?![[\]*?a-z]))/;
+
 function legacyEngineEngagementSegment(seg: string): boolean {
-  if (!/aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg)) return false;
+  if (!ENGINE_TOOL_STEM.test(seg)) return false;
   // A PURE read-only query: a read-only flag present AND no mutating/advancing
   // verb in the SAME segment. `next --status` is read-only; `report --status`
   // (nonsensical, but) still has `report` so is engagement.
@@ -2857,7 +2862,7 @@ export function isEngineEngagementSegment(
     return /\baidlc\s/.test(seg) ||
       /\baidlc-(?:orchestrate|state|jump|bolt|swarm|unit)(?:\.ts)?["']?(?=\s|[<>;&|()])/.test(seg) ||
       (invocation === "uncertain" && (
-        /aidlc-(?:orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg) ||
+        ENGINE_TOOL_STEM.test(seg) ||
         /\baidlc\.ts\b/.test(seg)
       ));
   }
@@ -2871,7 +2876,7 @@ export function isEngineEngagementSegment(
     seg = `${invocation.command} ${invocation.args.join(" ")}`;
   }
   if (
-    /aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg) &&
+    ENGINE_TOOL_STEM.test(seg) &&
     legacyEngineEngagementSegment(seg)
   ) {
     return true;
