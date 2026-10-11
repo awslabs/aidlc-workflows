@@ -2157,24 +2157,44 @@ function writeTerminalLatch(
 // the recorded line (takePersonsOwnLine) and owns what follows. The entry word,
 // the words and the flags are the engine's own parse (nextArgsAreOnlyWords):
 // a line with a flag or verb stays the agent's, as today, and so does any
-// other line (`/aidlc-<runner>`, plain words). On the aidlc agent the line
-// repeats what its skill already says.
-async function firstStepLine(prompt: string): Promise<string> {
+// other line (`/aidlc-<runner>`, plain words). The engine reads the recorded
+// line only while no work is selected (a bare `next` with work under way is
+// the work's own continuation), so words typed while this chat's workflow
+// has a record are left to the agent as today: the aidlc agent's skill
+// passes them to `next` itself. A bare `/aidlc` is the resume gesture on
+// any path. On the aidlc agent the line repeats what its skill already says.
+async function firstStepLine(prompt: string, pd: string, sessionId: string): Promise<string> {
   const text = prompt.trim();
   const run = `Run \`${aidlcInvocation()} engine orchestrate next\` now and do only what it prints.`;
   const words = aidlcEntryWords(text);
-  if (words !== null) {
-    if (words !== "") {
-      try {
-        const { nextArgsAreOnlyWords } = await import("../tools/aidlc-orchestrate.ts");
-        if (!nextArgsAreOnlyWords(splitKiroCommandArgs(words))) return "";
-      } catch {
-        return "";
-      }
+  if (words === null) return "";
+  if (words !== "") {
+    if (workflowRecordSelected(pd, sessionId)) return "";
+    try {
+      const { nextArgsAreOnlyWords } = await import("../tools/aidlc-orchestrate.ts");
+      if (!nextArgsAreOnlyWords(splitKiroCommandArgs(words))) return "";
+    } catch {
+      return "";
     }
-    return `AI-DLC: this message is an AI-DLC request and AI-DLC has it on record. ${run}`;
   }
-  return "";
+  return `AI-DLC: this message is an AI-DLC request and AI-DLC has it on record. ${run}`;
+}
+
+// Whether the workflow this chat selects already has its record (the state
+// file the engine's bare `next` would read), judged the way the gate floor
+// judges it (enterHookWorkflow). Unreadable state counts as selected: the
+// line is then withheld rather than said where it may be wrong.
+function workflowRecordSelected(pd: string, sessionId: string): boolean {
+  try {
+    const workflow = enterHookWorkflow(pd, sessionId);
+    try {
+      return existsSync(stateFilePath(pd));
+    } finally {
+      workflow.restore();
+    }
+  } catch {
+    return true;
+  }
 }
 
 function terminalContext(result: TerminalResult): string {
@@ -2353,7 +2373,7 @@ if (target === "verb-intercept") {
   const invocation = promptTerminalInvocation(ide.prompt ?? "");
   const command = classifyTerminalCommand(invocation.args, projectDir, ide.sessionId?.trim() || undefined);
   if (command === null) {
-    const step = await firstStepLine(ide.prompt ?? "");
+    const step = await firstStepLine(ide.prompt ?? "", projectDir, ide.sessionId?.trim() || sessionId);
     if (step !== "") process.stdout.write(`${step}\n`);
     return 0;
   }
