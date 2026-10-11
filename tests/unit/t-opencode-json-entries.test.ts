@@ -17,7 +17,7 @@ import {
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { copyChannelOmits, projectionFiles, sha256Bytes } from "../../core/tools/aidlc-distribution.ts";
@@ -519,7 +519,12 @@ describe("an explicit provider choice reaches the team's opencode.json", () => {
 // the bash map AI-DLC writes into the project. Setup says so once, in one
 // line that names the file, and writes nothing there.
 describe("setup says once when the person's global opencode config holds a short-form permission rule", () => {
-  const LINE = 'Your opencode setting asks before every shell command; in this project AI-DLC\x27s permission rules replace that short form. To keep asking, write it as "bash": {"*": "ask"} in ~/.config/opencode/opencode.jsonc.';
+  // The line names the file as the person sees it: under "~" on Linux and
+  // macOS, the full path on Windows (opencode's home there is USERPROFILE).
+  const noteLine = (home: string, file: string) =>
+    `Your opencode setting asks before every shell command; in this project AI-DLC\x27s permission rules replace that short form. To keep asking, write it as "bash": {"*": "ask"} in ${
+      platform() === "win32" ? file : `~${file.slice(home.length)}`
+    }.`;
   function globalHome(text: string): { home: string; env: NodeJS.ProcessEnv; file: string } {
     const home = temp("aidlc-t-ocje-home-");
     const file = join(home, ".config", "opencode", "opencode.jsonc");
@@ -530,11 +535,12 @@ describe("setup says once when the person's global opencode config holds a short
 
   test("one Note line at setup naming the file, a Warning line in quiet mode, the line in --json, the file untouched", () => {
     const text = '{\n  // the person\x27s own file\n  "permission": { "bash": "ask" },\n}\n';
-    const { env, file } = globalHome(text);
+    const { home, env, file } = globalHome(text);
+    const LINE = noteLine(home, file);
     const dir = project();
     const result = configure(dir, OPENCODE_RELEASE, env);
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout.split(`Note: ${LINE}`).length - 1).toBe(1);
+    expect(result.stdout.split(`Note: ${LINE}`).length - 1, result.stdout).toBe(1);
     expect(readFileSync(file, "utf-8")).toBe(text);
     const quiet = configure(dir, OPENCODE_RELEASE, env, ["--quiet"]);
     expect(quiet.status, quiet.stdout + quiet.stderr).toBe(0);

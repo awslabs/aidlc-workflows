@@ -41,7 +41,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import createAdapter from "../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts";
@@ -315,7 +315,9 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       const text = '{\n  // the person\x27s own file\n  "permission": { "bash": "ask" },\n}\n';
       writeFileSync(file, text);
       const seen = doctor();
-      const line = 'Your opencode setting asks before every shell command; in this project AI-DLC\x27s permission rules replace that short form. To keep asking, write it as "bash": {"*": "ask"} in ~/.config/opencode/opencode.jsonc.';
+      // The file as the person sees it: "~/..." on Linux and macOS, the full path on Windows.
+      const shownFile = platform() === "win32" ? file : "~/.config/opencode/opencode.jsonc";
+      const line = `Your opencode setting asks before every shell command; in this project AI-DLC\x27s permission rules replace that short form. To keep asking, write it as "bash": {"*": "ask"} in ${shownFile}.`;
       expect(seen.stdout.split(line).length - 1, seen.stdout).toBe(1);
       const row = seen.stdout.split(/\r?\n/).find((candidate) => candidate.includes(line));
       expect(row ?? "").toMatch(/^\s*warn\s/);

@@ -15,7 +15,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir, platform, tmpdir } from "node:os";
 import { delimiter, join, posix, resolve } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { cleanupTestProject, createOrchestrationTestProject, REPO_ROOT } from "../harness/fixtures.ts";
@@ -1835,44 +1835,48 @@ describe("t294 trust diagnostics", () => {
     mkdirSync(dir, { recursive: true });
     const env = { HOME: home, XDG_CONFIG_HOME: join(home, ".config") };
     const jsonc = join(dir, "opencode.jsonc");
+    // The host's own platform and paths: the line names the file as the person
+    // sees it, under "~" on Linux and macOS, the full path on Windows.
+    const host = platform();
+    const shown = (file: string) => (host === "win32" ? file : `~${file.slice(home.length)}`);
     const tail = (file: string) => `in this project AI-DLC's permission rules replace that short form. To keep asking, write it as "bash": {"*": "ask"} in ${file}.`;
-    expect(note(env, "linux")).toBeNull();
+    expect(note(env, host)).toBeNull();
     // The short form opencode's own skill teaches, in a file with comments and a trailing comma.
     const shortForm = '{\n  // the person\x27s own file\n  "model": "amazon-bedrock/x",\n  "permission": { "bash": "ask", },\n}\n';
     writeFileSync(jsonc, shortForm);
-    expect(note(env, "linux")).toBe(`Your opencode setting asks before every shell command; ${tail("~/.config/opencode/opencode.jsonc")}`);
+    expect(note(env, host)).toBe(`Your opencode setting asks before every shell command; ${tail(shown(jsonc))}`);
     expect(readFileSync(jsonc, "utf-8")).toBe(shortForm);
     writeFileSync(jsonc, '{ "permission": { "edit": "deny" } }');
-    expect(note(env, "linux")).toBe(
-      'Your opencode setting refuses every file edit; in this project AI-DLC\x27s permission rules replace that short form. To keep refusing, write it as "edit": {"*": "deny"} in ~/.config/opencode/opencode.jsonc.',
+    expect(note(env, host)).toBe(
+      `Your opencode setting refuses every file edit; in this project AI-DLC\x27s permission rules replace that short form. To keep refusing, write it as "edit": {"*": "deny"} in ${shown(jsonc)}.`,
     );
     writeFileSync(jsonc, '{ "permission": { "bash": "ask", "edit": "deny" } }');
-    expect(note(env, "linux")).toBe(
-      'Your opencode settings ask before every shell command and refuse every file edit; in this project AI-DLC\x27s permission rules replace those short forms. To keep them, write them as "bash": {"*": "ask"} and "edit": {"*": "deny"} in ~/.config/opencode/opencode.jsonc.',
+    expect(note(env, host)).toBe(
+      `Your opencode settings ask before every shell command and refuse every file edit; in this project AI-DLC\x27s permission rules replace those short forms. To keep them, write them as "bash": {"*": "ask"} and "edit": {"*": "deny"} in ${shown(jsonc)}.`,
     );
     // The map form, and allow (opencode's own default): nothing to say.
     writeFileSync(jsonc, '{ "permission": { "bash": { "*": "ask" }, "edit": "allow" } }');
-    expect(note(env, "linux")).toBeNull();
+    expect(note(env, host)).toBeNull();
     // opencode's order: config.json, opencode.json, opencode.jsonc, then OPENCODE_CONFIG; a later object replaces an earlier short form and the other way round.
     writeFileSync(join(dir, "config.json"), '{ "permission": { "bash": "ask" } }');
     writeFileSync(jsonc, '{ "permission": { "bash": { "git *": "allow" } } }');
-    expect(note(env, "linux")).toBeNull();
+    expect(note(env, host)).toBeNull();
     writeFileSync(join(dir, "config.json"), '{ "permission": { "bash": { "git *": "allow" } } }');
     writeFileSync(jsonc, '{ "permission": { "bash": "ask" } }');
-    expect(note(env, "linux")).toBe(`Your opencode setting asks before every shell command; ${tail("~/.config/opencode/opencode.jsonc")}`);
+    expect(note(env, host)).toBe(`Your opencode setting asks before every shell command; ${tail(shown(jsonc))}`);
     rmSync(join(dir, "config.json"));
     writeFileSync(jsonc, '{ "permission": { "bash": { "*": "ask" } } }');
     const custom = join(home, "team.jsonc");
     writeFileSync(custom, '{ "permission": { "bash": "ask" } }');
-    expect(note({ ...env, OPENCODE_CONFIG: custom }, "linux")).toBe(`Your opencode setting asks before every shell command; ${tail("~/team.jsonc")}`);
+    expect(note({ ...env, OPENCODE_CONFIG: custom }, host)).toBe(`Your opencode setting asks before every shell command; ${tail(shown(custom))}`);
     // A file outside the home is named in full; a malformed file is skipped and the others decide.
     const elsewhere = temp("aidlc-t294-oc-elsewhere-");
     const team = join(elsewhere, "team.json");
     writeFileSync(team, '{ "permission": { "bash": "ask" } }');
-    expect(note({ ...env, OPENCODE_CONFIG: team }, "linux")).toBe(`Your opencode setting asks before every shell command; ${tail(team)}`);
+    expect(note({ ...env, OPENCODE_CONFIG: team }, host)).toBe(`Your opencode setting asks before every shell command; ${tail(team)}`);
     writeFileSync(join(dir, "opencode.json"), "{ not json");
     writeFileSync(jsonc, '{ "permission": { "bash": "ask" } }');
-    expect(note(env, "linux")).toBe(`Your opencode setting asks before every shell command; ${tail("~/.config/opencode/opencode.jsonc")}`);
+    expect(note(env, host)).toBe(`Your opencode setting asks before every shell command; ${tail(shown(jsonc))}`);
   });
 
   test("Copilot folder trust matches entries the way the Copilot CLI does", () => {
