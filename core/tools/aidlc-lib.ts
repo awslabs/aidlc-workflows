@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TextDecoder } from "node:util";
 import { inflateSync } from "node:zlib";
@@ -3522,6 +3522,12 @@ export function parseReScope(body: string): ReScopeParse {
   return { ok: true, scope };
 }
 
+// A git alternate-store entry: C-quoted, so git reads the path whole where an
+// unquoted one is split at the PATH delimiter (":" on Unix, ";" on Windows).
+export function gitAlternateEntry(path: string): string {
+  return `"${path.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
 // Content fingerprint of the WORKING TREE restricted to the scope's analyzed
 // paths: `git write-tree` over a temporary index populated by `git add -A --
 // <paths>`. Hashes what is actually on disk (uncommitted edits included), so
@@ -3606,8 +3612,30 @@ export function codekbScopeFingerprint(
       }
     }
   }
-  const indexFile = join(tmpdir(), `.aidlc-scope-index-${randomUUID()}`);
-  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  // The scratch index and a scratch object store, both under the OS temp
+  // dir. The repository's own store is read through the alternate and never
+  // written: under a harness sandbox (Codex workspace-write keeps .git
+  // read-only) one write there fails the whole add, and outside one it
+  // leaves unreferenced objects behind. The tree hash is content-addressed,
+  // so the value is the same either way. The person's own alternates stay
+  // in front of ours.
+  const objects = spawnSync("git", ["rev-parse", "--git-path", "objects"], { cwd: repoDir, encoding: "utf-8" });
+  if (objects.status !== 0) return null;
+  const scratch = randomUUID();
+  const indexFile = join(tmpdir(), `.aidlc-scope-index-${scratch}`);
+  const objectDir = join(tmpdir(), `.aidlc-scope-objects-${scratch}`);
+  // git refuses repository discovery while GIT_OBJECT_DIRECTORY names a
+  // missing directory, so it exists before the first call that carries it.
+  mkdirSync(objectDir, { recursive: true });
+  const env = {
+    ...process.env,
+    GIT_INDEX_FILE: indexFile,
+    GIT_OBJECT_DIRECTORY: objectDir,
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: [
+      process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES,
+      gitAlternateEntry(resolvePath(repoDir, objects.stdout.trim())),
+    ].filter(Boolean).join(delimiter),
+  };
   try {
     const add = spawnSync(
       "git",
@@ -3639,6 +3667,11 @@ export function codekbScopeFingerprint(
       unlinkSync(indexFile);
     } catch {
       // best-effort cleanup - a leaked temp index is inert
+    }
+    try {
+      rmSync(objectDir, { recursive: true, force: true });
+    } catch {
+      // best-effort cleanup - a leaked scratch store is inert (Windows EBUSY)
     }
   }
 }
