@@ -69,6 +69,14 @@ export function sampleByGroup<T extends { id: string }>(pool: T[], spec: string,
   return out;
 }
 
+/** The build of the tool a harness drives, as the tool reports it ("unknown" when it cannot be asked). */
+export function toolVersion(harness: LiveHarness): string {
+  const bin = harness === "claude" ? "claude" : harness === "codex" ? process.env.AIDLC_CODEX_BIN ?? "codex" : "kiro-cli";
+  const r = spawnSync(bin, ["--version"], { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+  const line = `${r.stdout ?? ""}`.trim().split("\n")[0] ?? "";
+  return line === "" ? "unknown" : line;
+}
+
 export interface HomeDigest { digest: string; files: Map<string, string> }
 // The real homes, listed and hashed: path, size and mtime of every file outside logs and caches.
 export function homeDigest(dir: string): HomeDigest {
@@ -179,7 +187,9 @@ export async function judgeText(input: JudgeInput, text: string, judgeDir: strin
   const proc = Bun.spawn(
     ["claude", "-p", rubric, "--output-format", "json", "--model", "sonnet", "--no-session-persistence", "--permission-mode", "default",
       "--disallowedTools", "Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "Skill", "AskUserQuestion"],
-    { cwd: judgeDir, stdout: "pipe", stderr: "pipe", env: { ...process.env, CLAUDE_CONFIG_DIR: join(judgeDir, "config") } },
+    // DISABLE_AUTOUPDATER: the judge is Claude Code as well, and a scratch config dir carries no autoUpdates setting,
+    // so without this one judge run can update the install under the agents this check is measuring.
+    { cwd: judgeDir, stdout: "pipe", stderr: "pipe", env: { ...process.env, CLAUDE_CONFIG_DIR: join(judgeDir, "config"), DISABLE_AUTOUPDATER: "1" } },
   );
   const timer = setTimeout(() => proc.kill(), remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS));
   try {
@@ -230,7 +240,8 @@ export function writeLiveReport<T extends { id: string; meaning: string }>(repor
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   for (const harness of [...new Set(outcomes.map((o) => o.harness))]) {
     const mine = outcomes.filter((o) => o.harness === harness);
-    const lines = [`# ${report.title}: ${harness} at ${sha} (${stamp})`, "", `${report.sampleLine} Items driven: ${mine.length}.`, "", `## Score per ${report.groupName}`, "", `Misses are counted three ways: record (${report.recordMeans}), question (one the item did not allow), words (engine words in what the agent told the person). One miss can count in several.`, "", `| ${report.groupName} | pass | total | record | question | words |`, "|---|---|---|---|---|---|"];
+    const lines = [`# ${report.title}: ${harness} at ${sha} (${stamp})`, "", `${report.sampleLine} Items driven: ${mine.length}.`,
+      `Driven: ${harness} ${toolVersion(harness)}. The judge of the words: claude ${toolVersion("claude")}.`, "", `## Score per ${report.groupName}`, "", `Misses are counted three ways: record (${report.recordMeans}), question (one the item did not allow), words (engine words in what the agent told the person). One miss can count in several.`, "", `| ${report.groupName} | pass | total | record | question | words |`, "|---|---|---|---|---|---|"];
     for (const name of [...new Set(mine.map(report.group))]) {
       const rows = mine.filter((o) => report.group(o) === name);
       const kinds = rows.map((o) => missKinds(o.failures));

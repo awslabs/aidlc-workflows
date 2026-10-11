@@ -133,6 +133,8 @@ export function setupCodexProject(opts: { workspaceWrite?: boolean } = {}): Code
       `model_provider = "amazon-bedrock"`,
       `model_context_window = 1000000`,
       `model_reasoning_effort = "low"`,
+      // No update check on start: a live run must not change the tool it measures (a root setting, as below).
+      `check_for_update_on_startup = false`,
       // A root setting: after the first table it would belong to that table.
       ...(opts.workspaceWrite ? [`sandbox_mode = "workspace-write"`] : []),
       ``,
