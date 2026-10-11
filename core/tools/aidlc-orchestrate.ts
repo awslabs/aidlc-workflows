@@ -1096,6 +1096,20 @@ function prepareEmission(directive: Directive): PreparedEmission {
       : null;
     if (line !== null) directive.narration = line;
   }
+  // The plan step is the conductor's own. The stage's dispatched mode would read
+  // "hand the draft to the developer" (a Kiro run did, and the guard refused the
+  // dispatch before approval), so while the plan is written, revised or repaired
+  // the step says inline and the line says who does what. The build after
+  // approval is the developer's, as the stage declares, with the line above.
+  if (
+    directive.kind === "run-stage" && directive.stage === "code-generation" &&
+    (directive.plan_approval?.status === "plan" || directive.plan_approval?.status === "revise" ||
+      directive.plan_approval?.status === "repair")
+  ) {
+    directive.mode = "inline";
+    const unit = directive.unit !== undefined && directive.unit !== UNIT_NAME_PLACEHOLDER ? ` for ${directive.unit}` : "";
+    directive.narration = `Writing the code plan for Code Generation${unit} first; the developer builds from it.`;
+  }
   if (activeKeptRequestLine !== null) {
     directive.narration = directive.narration
       ? `${activeKeptRequestLine} ${directive.narration}`

@@ -108,6 +108,8 @@ interface Emitted {
   kind: string;
   ask_type?: string;
   stage?: string;
+  mode?: string;
+  narration?: string;
   question?: string;
   message?: string;
   response_route?: string;
@@ -403,6 +405,11 @@ describe("the engine asks for Plan Approval", () => {
     expect(planning.kind).toBe("run-stage");
     expect(planning.stage).toBe("code-generation");
     expect(planning.plan_approval).toEqual({ status: "plan" });
+    // The conductor writes the plan itself: the step says so (a Kiro run read the
+    // stage's dispatched mode and handed the plan to the developer, which the
+    // guard refused), and the person hears who does what.
+    expect(planning.mode).toBe("inline");
+    expect(planning.narration).toBe("Writing the code plan for Code Generation first; the developer builds from it.");
 
     const ask = askFor(proj);
     expect(ask.question).toBe("Approve the code plan?");
@@ -535,6 +542,8 @@ describe("the engine asks for Plan Approval", () => {
     const build = next(proj);
     expect(build.kind).toBe("run-stage");
     expect(build.plan_approval).toEqual({ status: "approved" });
+    expect(build.mode).toBe("subagent");
+    expect(build.narration).toMatch(/^Generating code for \d+ plan steps?\b/);
   });
 
   // An approval and a request to stop the workflow for now is exactly that:
@@ -811,6 +820,7 @@ describe("the engine asks for Plan Approval", () => {
     const revise = next(proj);
     expect(revise.kind).toBe("run-stage");
     expect(revise.plan_approval).toEqual({ status: "revise", feedback: "rename slugify to toSlug" });
+    expect(revise.mode).toBe("inline");
     // Unchanged plan: still revising.
     expect(next(proj).plan_approval.status).toBe("revise");
     writePlan(proj, "- [ ] Step 2: rename slugify to toSlug\n");
