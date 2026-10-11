@@ -111,6 +111,8 @@ import {
   type StoredQuestion,
   saveQuestion,
 } from "./aidlc-question-store.ts";
+import { latestMessage } from "./aidlc-message-store.ts";
+import { aidlcEntryWords } from "./aidlc-reply-reader.ts";
 import {
   type AskDirective,
   type Directive,
@@ -356,6 +358,7 @@ import {
   validScopes,
   shellArg,
   scopeArg,
+  splitKiroCommandArgs,
   isScopeName,
   authoritativeProjectDescription,
   harnessDir,
@@ -7246,6 +7249,39 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
     !isRefusedModifierNextArgv(args);
 }
 
+// The person's own line, when the agent's command carries none of it. On a
+// workspace with no work yet, an agent that ran `next` bare, or `next --scope
+// <x>` with no words and no `--request`, handed the engine nothing of what the
+// person asked for; the engine then answered that empty command (an error naming
+// two ways to start, or a creation with no words), and the agent picked the plan
+// for them. The human-turn hook already kept their message as it arrived
+// (aidlc-message-store.ts), so when this chat's latest message came through their
+// own prompt and is an `/aidlc` line with words, that line is the request, and
+// `next` reads it exactly as if the agent had passed it: the same reply reading
+// while a plan question is open, the same plan question for words alone, the same
+// creation for a plan they named, their own settings carried. A scope the agent
+// named on its own is not theirs and gives way. Nothing here reads meaning: the
+// entry word, the words and the flags are the engine's own parse of their text,
+// and which plan fits stays their call at the question. Nothing happens without a
+// chat identity (no record is read), on a read-only probe (an observer learns the
+// directive and never asks), with work selected, or with any other message last
+// (a reply in plain words, a bare `/aidlc`, a utility).
+function takePersonsOwnLine(flags: ParsedFlags, pd: string): void {
+  if (engineSessionId === undefined || isReadOnlyEngineProbe()) return;
+  if (flags.intent !== undefined || flags.request !== undefined) return;
+  const carriesNothing = Object.entries(flags).every(([key, value]) =>
+    key === "scope" || key === "positionalScope" || value === undefined || value === false);
+  if (!carriesNothing) return;
+  if (loadStateFileIfPresent(pd) !== null) return;
+  const message = latestMessage(pd, engineSessionId);
+  if (message === null || message.source !== "prompt" || message.words === null) return;
+  const typed = aidlcEntryWords(message.text);
+  if (typed === null || typed.length === 0) return;
+  const own = parseNextFlags(splitKiroCommandArgs(typed));
+  for (const key of Object.keys(flags)) delete (flags as unknown as Record<string, unknown>)[key];
+  Object.assign(flags, own);
+}
+
 // The `next` handler reads workflow state and emits exactly one directive. A
 // normal rule-transport request may lazily mint its machine-local MAC key.
 // Internal observer modes are strictly read-only: route checks bypass transport,
@@ -7258,6 +7294,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   activeStageValidityAdvisory = undefined;
   activeRetiredGuardPolicyNotice = null;
   const flags = parseNextFlags(args);
+  takePersonsOwnLine(flags, resolveProjectDir(projectDir));
   pickingUp = flags.resume === true;
 
   // Turn-shape marker: a `next` that ASKS FOR THE NEXT MOVE is engagement with
@@ -8740,7 +8777,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // names the two explicit moves that DO start a workflow; it must not imply
   // the user already made one (the pre-hardening wording told a user who had
   // just typed `/aidlc <scope>` to type exactly that — circular now that a
-  // named scope creates).
+  // named scope creates). A bare `next` run for a person whose own `/aidlc` line
+  // carried words never reaches this error: takePersonsOwnLine read that line
+  // in the agent's place at the top of routeNext.
   if (!stateContent) {
     // Work in progress here with none selected (a teammate's fresh clone, or a
     // conversation that has not joined the record it found) is put to the
