@@ -63,7 +63,7 @@ const READS = [
   "knowledge/aidlc-architect-agent/patterns.md",
 ];
 const NON_READS = [
-  "agents/aidlc.md",
+  "agents/aidlc-aidlc.md",
   "skills/aidlc/SKILL.md",
   "aidlc-common/conductor.md",
   "aidlc-common/protocols/stage-definition.md",
@@ -193,10 +193,10 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     };
 
     const cli = run();
-    expect(cli).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");
+    expect(cli).toContain("ok    agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)");
     expect(cli).not.toContain("Kiro IDE ignore sources:");
 
-    writeFileSync(join(project, ".kiro", "agents", "aidlc.md"), "# AI-DLC conductor\n");
+    writeFileSync(join(project, ".kiro", "agents", "aidlc-aidlc.md"), "# AI-DLC conductor\n");
     const ide = run();
     expect(ide).toContain(`fail  Kiro IDE ignore sources: ${XDG_IGNORE}:1 hides .kiro/`);
   });
@@ -522,7 +522,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     for (const rule of [
       ".kiro/tools/", ".kiro/sensors/", ".kiro/hooks/", ".kiro/scopes/", ".kiro/steering/", ".kiro/settings/",
       // Loaded by the IDE or baked into directives by the engine.
-      ".kiro/agents/aidlc.md", "SKILL.md", ".kiro/aidlc-common/conductor.md",
+      ".kiro/agents/aidlc-aidlc.md", "SKILL.md", ".kiro/aidlc-common/conductor.md",
       // Contributor documentation the skills never load (#1402 F5).
       ".kiro/aidlc-common/protocols/stage-definition.md",
     ]) {
@@ -537,7 +537,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     const { project, globalFile, env } = setupProject();
     installFramework(project);
     writeFileSync(globalFile, [
-      ".kiro/agents/aidlc.md",
+      ".kiro/agents/aidlc-aidlc.md",
       ".kiro/skills/aidlc/SKILL.md",
       ".kiro/aidlc-common/protocols/stage-protocol.md",
       ".kiro/aidlc-common/stages/ideation/intent-capture.md",

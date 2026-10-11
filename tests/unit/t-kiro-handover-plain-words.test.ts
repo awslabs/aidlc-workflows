@@ -16,7 +16,7 @@ import { join } from "node:path";
 const REPO = join(import.meta.dir, "..", "..");
 const SHIPPED = [
   { tree: "kiro", adapter: "dist/kiro/.kiro/hooks/aidlc-kiro-adapter.ts", prompt: "dist/kiro/.kiro/agents/aidlc.json" },
-  { tree: "kiro-ide", adapter: "dist/kiro-ide/.kiro/hooks/aidlc-kiro-adapter.ts", prompt: "dist/kiro-ide/.kiro/agents/aidlc.md" },
+  { tree: "kiro-ide", adapter: "dist/kiro-ide/.kiro/hooks/aidlc-kiro-adapter.ts", prompt: "dist/kiro-ide/.kiro/agents/aidlc-aidlc.md" },
 ];
 // Words the agent read back to the person from the hand-over text.
 const LABEL_WORDS = ["SYSTEM (", "deterministic", "by the harness", "terminal utility"];

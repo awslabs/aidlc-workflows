@@ -400,6 +400,8 @@ import {
   toPosix,
   UTILITY_COMMANDS,
   carryPendingPersonLines,
+  isKiroConductorAgentFile,
+  KIRO_CONDUCTOR_AGENT_FILE,
 } from "./aidlc-lib.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
@@ -2398,7 +2400,7 @@ function namingMismatches(
   const mismatches: NamingMismatch[] = [];
   for (const f of readdirSync(dir).filter((name) => name.endsWith(".md")).sort()) {
     const filePath = join(dir, f);
-    if (kind === "Agent" && f !== "aidlc.md" && !isAidlcAgentFile(filePath)) continue;
+    if (kind === "Agent" && !isKiroConductorAgentFile(f) && !isAidlcAgentFile(filePath)) continue;
     if (!statSync(filePath).isFile()) continue;
     const { name, plugin } = frontmatterFields(filePath, kind);
     const stem = basename(f, ".md");
@@ -3331,7 +3333,7 @@ function defaultGlobalExcludesId(env: NodeJS.ProcessEnv): string {
 // byte cap), plus stage-protocol.md and its stage-protocol-<name>.md modules
 // (contributor-only protocol files such as stage-definition.md are not loaded)
 // and the files the skills name beside SKILL.md. SKILL.md files, the
-// IDE conductor agent (agents/aidlc.md), and aidlc-common/conductor.md are loaded
+// IDE conductor agent (agents/aidlc-aidlc.md), and aidlc-common/conductor.md are loaded
 // by the IDE or the engine, not through fs_read. Without a readable graph, every
 // stage file, persona, and knowledge file stands in for the stage roster; without
 // an installed tree, one read of each kind does.
@@ -3365,7 +3367,7 @@ function kiroIdeFrameworkReads(projectDir: string, harness: string): string[] {
   const inactiveRunners = new Set<string>();
   if (graph === null) {
     for (const path of markdownUnder("aidlc-common/stages")) reads.add(path);
-    for (const path of markdownUnder("agents")) if (path !== toPosix(join(harness, "agents", "aidlc.md"))) reads.add(path);
+    for (const path of markdownUnder("agents")) if (!isKiroConductorAgentFile(path)) reads.add(path);
     for (const path of markdownUnder("knowledge")) reads.add(path);
   } else {
     for (const node of graph) {
@@ -3974,7 +3976,7 @@ export async function collectDoctorReport(
         for (const name of readdirSync(agentsDir).filter((n) => n.endsWith(".md"))) {
           try {
             const allows = markdownShellAllows(readFileSync(join(agentsDir, name), "utf-8"));
-            (name === "aidlc.md" ? commands : personaCommands).push(...allows);
+            (isKiroConductorAgentFile(name) ? commands : personaCommands).push(...allows);
           } catch {
             // Existing structure checks report unreadable agent files.
           }
@@ -4570,16 +4572,16 @@ export async function collectDoctorReport(
 
   // 4. Harness wiring config present. Claude Code: settings.json (hooks +
   // permissions live there). Kiro CLI: agents/aidlc.json plus
-  // settings/cli.json; Kiro IDE: agents/aidlc.md. Codex CLI: config.toml +
+  // settings/cli.json; Kiro IDE: agents/aidlc-aidlc.md. Codex CLI: config.toml +
   // hooks.json (the hook wiring) + rules/default.rules (permissions).
   if (harness === ".kiro") {
     const jsonAgentPath = join(projectDir, harness, "agents", "aidlc.json");
-    const markdownAgentPath = join(projectDir, harness, "agents", "aidlc.md");
+    const markdownAgentPath = join(projectDir, harness, "agents", KIRO_CONDUCTOR_AGENT_FILE);
     const hasJsonAgent = existsSync(jsonAgentPath);
     results.push({
-      pass: hasJsonAgent || existsSync(markdownAgentPath),
-      label: "agents/aidlc.{json,md} present (conductor wiring)",
-      fix: `${projectedFileRepair("kiro", ".kiro/agents/aidlc.json")} (Kiro CLI) or ${projectedFileRepair("kiro-ide", ".kiro/agents/aidlc.md")} (Kiro IDE)`,
+      pass: hasJsonAgent || existsSync(markdownAgentPath) || existsSync(join(projectDir, harness, "agents", "aidlc.md")),
+      label: "agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)",
+      fix: `${projectedFileRepair("kiro", ".kiro/agents/aidlc.json")} (Kiro CLI) or ${projectedFileRepair("kiro-ide", ".kiro/agents/aidlc-aidlc.md")} (Kiro IDE)`,
     });
     results.push(...kiroDisabledHookChecks(projectDir, harness));
     if (hasJsonAgent) {
@@ -5119,11 +5121,14 @@ export async function collectDoctorReport(
   // 5a. Naming consistency for agent/scope files. Duplicate declared names are
   // loader corruption and fail through loadAgents()/validScopes(); stem/name
   // drift is recoverable authoring drift, so it is advisory and names the file.
+  // The Kiro IDE conductor ships as aidlc-aidlc.md and declares name aidlc (the
+  // stem makes /aidlc sort first in Kiro's menu), so its check is the name alone.
   try {
     pushNamingAdvisory(
       results,
       "Agent",
-      namingMismatches(agentsDir(), "Agent", (stem, name) => stem === name),
+      namingMismatches(agentsDir(), "Agent", (stem, name) =>
+        isKiroConductorAgentFile(`${stem}.md`) ? name === "aidlc" : stem === name),
     );
   } catch (e) {
     results.push({

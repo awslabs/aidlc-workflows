@@ -2,7 +2,7 @@
 // agent harness, which Kiro IDE 1.x and Kiro CLI v3 both run and both read
 // from the same .kiro/ tree.
 //
-//   - Agents ship as Markdown only. The conductor is an authored aidlc.md;
+//   - Agents ship as Markdown only. The conductor is an authored aidlc-aidlc.md;
 //     persona files come from core and receive native tools/permissions.
 //   - settings/cli.json pins Kiro CLI to the v3 engine and to the aidlc agent.
 //     The default v2 engine runs no .kiro/hooks at all, and a hook cannot
@@ -72,14 +72,14 @@ const copyShellDeny = new Map<string, string[]>(
 // the same AI-DLC prefix as the persona deny (riskyFormDenyLines), so the
 // person's own commands (a build, a test, a probe, with their redirects and
 // chains) meet no AI-DLC rule: Kiro's own rules and their Always allow decide
-// them (#2199). The conductor (agents/aidlc.md) carries the same list; t148
+// them (#2199). The conductor (agents/aidlc-aidlc.md) carries the same list; t148
 // checks every agent; the native release spells the prefix `aidlc`
 // (rewriteKiroNativeAllowlists in scripts/package.ts).
 const SHELL_FORM_ASKS = RISKY_SHELL_FORMS.map((form) => `bun .kiro/tools/aidlc*${form}*`);
 
 // A persona's own tools and permissions are enforced only when the conductor
 // dispatches through invoke_sub_agent (IDE) or orchestrate_subagent (CLI); the
-// conductor's tools list selects those (agents/aidlc.md). On that path its
+// conductor's tools list selects those (agents/aidlc-aidlc.md). On that path its
 // shell allow is not applied, the conductor's is (delegate-shell-deny.ts); the
 // allow still serves a persona the person selects directly. tools is enforced on
 // every dispatch path; it names no MCP server, so a persona reaches none (an
@@ -322,7 +322,14 @@ const manifest: HarnessManifest = {
     // The reference form; the packager writes the shipped memory's text over
     // it, as the engine does with the project's own memory for every chat.
     { src: "steering/aidlc-active-memory.md", dst: "steering/aidlc-active-memory.md" },
-    { src: "agents/aidlc.md", dst: "agents/aidlc.md" },
+    // The conductor file sorts before the aidlc-*-agent.md helpers ("aidlc-ai"
+    // before "aidlc-ar"): Kiro lists agents in file-name order, agents before
+    // skills, so Kiro's `/` menu and the picker show `aidlc` first and a bare
+    // `/aidlc` + Enter stays `/aidlc`. It ends in no -agent.md, so nothing that
+    // selects the personas by that suffix takes it for one; its `display_name:`
+    // is for the 2.11.0 agent loader, which claims every aidlc-*.md file and
+    // validates a refresh's projection before the new tools are in place.
+    { src: "agents/aidlc-aidlc.md", dst: "agents/aidlc-aidlc.md" },
     { src: "settings/cli.json", dst: "settings/cli.json" },
     { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },
     { src: "hooks/aidlc-kiro-tool-names.ts", dst: "hooks/aidlc-kiro-tool-names.ts" },

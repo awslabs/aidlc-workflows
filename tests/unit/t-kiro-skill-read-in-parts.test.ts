@@ -40,13 +40,13 @@ const TREES = [
 ] as const;
 
 function conductorPrompt(treeRoot: string): string {
-  const ide = join(REPO, treeRoot, ".kiro", "agents", "aidlc.md");
+  const ide = join(REPO, treeRoot, ".kiro", "agents", "aidlc-aidlc.md");
   if (existsSync(ide)) return skillBody(readFileSync(ide, "utf-8"));
   return (JSON.parse(readFileSync(join(REPO, treeRoot, ".kiro", "agents", "aidlc.json"), "utf-8")) as { prompt: string }).prompt;
 }
 
 function conductorResources(treeRoot: string): string[] {
-  const ide = join(REPO, treeRoot, ".kiro", "agents", "aidlc.md");
+  const ide = join(REPO, treeRoot, ".kiro", "agents", "aidlc-aidlc.md");
   if (existsSync(ide)) {
     return [...frontmatter(readFileSync(ide, "utf-8")).matchAll(/^\s+- "(file:\/\/[^"]+)"$/gm)].map((m) => m[1]);
   }
