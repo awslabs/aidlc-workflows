@@ -234,8 +234,11 @@ the next stage delivery of the run in progress (it does not retroactively
 change stages already run). Sensor configuration is different from rule text:
 part of it lives in the compiled graph and part is read again at fire time, and
 the split differs between the write hook, the gate path, and install forms. To
-make any Sensor edit — a new Sensor or a change to an already-bound one — take
-effect predictably, recompile the stage graph.
+make a Sensor edit — a new Sensor or a change to an already-bound one — take
+effect predictably, recompile the stage graph. One exception no recompile can
+reach: on a native install the bundled Sensors' workers are selected by id, so
+editing a bundled manifest's `command` runs nothing different — a changed check
+there needs its own Sensor id.
 
 ---
 
