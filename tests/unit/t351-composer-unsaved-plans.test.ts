@@ -515,7 +515,7 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(d.message).not.toContain("next compose");
     const command = /`([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? "";
     expect(command.endsWith("engine recompose --skip team-formation"), d.message).toBe(true);
-    expect(d.message).toContain('"Skipped team-formation. You can undo that any time."');
+    expect(d.message).toContain('"Skipped Team Formation. You can undo that any time."');
     expect(d.message).toContain("If they later ask to undo it, run `");
     expect(d.message.endsWith("recompose --add team-formation`."), d.message).toBe(true);
     // The one line is all the person hears: recompose's counts stay out of the reply.
@@ -530,7 +530,7 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     const again = nextDirective(proj, ["--skip", "team-formation"]);
     expect(again.kind).toBe("print");
     expect(again.message).not.toContain("engine recompose");
-    expect(again.message).toContain('"Team-formation is already skipped. The plan is unchanged."');
+    expect(again.message).toContain('"Team Formation is already skipped. The plan is unchanged."');
 
     // A setting typed with it runs first, so neither request is dropped.
     const both = nextDirective(proj, ["--add", "team-formation", "--depth", "minimal"]);
@@ -547,6 +547,77 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(combined.kind).toBe("error");
     expect(combined.message).toContain("Cannot combine --skip or --add");
     expect(combined.message).not.toContain("at creation");
+  });
+
+  // A live run on Claude Code: "approve build and test. and skip the deployment
+  // steps". The approval started Deployment Pipeline in the same second, so
+  // recompose refused the skip ("its checkbox is not pending") and named a jump
+  // to the other stage the person had asked to skip; the agent asked again. A
+  // stage the person asks to skip is skipped where it stands, through the
+  // report that routes forward, and the work goes on.
+  test("a stage the person asks to skip after it has started is skipped, and the work goes on", () => {
+    const proj = setupIntegrationProject({ withState: "state-operation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    // The live shape: the two deployment stages are the last ones on the plan.
+    let state = readFileSync(statePath, "utf-8").replace("- **Next Stage**: environment-provisioning", "- **Next Stage**: deployment-execution");
+    for (const slug of ["environment-provisioning", "observability-setup", "incident-response", "performance-validation", "feedback-optimization"]) {
+      state = state.replace(`- [ ] ${slug} \u2014 EXECUTE`, `- [ ] ${slug} \u2014 SKIP`);
+    }
+    writeFileSync(statePath, state);
+    expect(state).toContain("- [-] deployment-pipeline");
+    const d = nextDirective(proj, ["--skip", "deployment-pipeline,deployment-execution"]);
+    expect(d.kind).toBe("print");
+    const commands = [...d.message.matchAll(/`([^`]*\.ts [^`]*)`/g)].map((m) => m[1]);
+    const recompose = commands.find((c) => c.includes("engine recompose")) ?? "";
+    expect(recompose.endsWith("engine recompose --skip deployment-execution"), d.message).toBe(true);
+    const report = commands.find((c) => c.includes("report --stage deployment-pipeline --result skipped")) ?? "";
+    expect(report, d.message).toContain("--reason 'the person asked to skip it'");
+    expect(d.message).toContain('"Skipped Deployment Pipeline and Deployment Execution.');
+    expect(d.message).toContain("--stage deployment-pipeline --single");
+    expect(d.message).toMatch(/re-run `next`/);
+    expect(d.message).not.toContain("Then stop.");
+    expect(d.message).not.toContain("jump");
+    // The two commands it names do the whole thing on this state.
+    const words = recompose.split(" ");
+    const applied = runTool(proj, "aidlc.ts", words.slice(words.indexOf("engine")));
+    expect(applied.status, applied.out).toBe(0);
+    const skipped = runTool(proj, "aidlc-orchestrate.ts", [
+      "report", "--stage", "deployment-pipeline", "--result", "skipped", "--reason", "the person asked to skip it",
+    ]);
+    expect(skipped.status, skipped.out).toBe(0);
+    const after = readFileSync(statePath, "utf-8");
+    expect(after).toContain("- [S] deployment-pipeline");
+    expect(after).toContain("- [ ] deployment-execution \u2014 SKIP");
+    // Nothing is left on the plan, so the work is finished.
+    expect(after).toContain("- **Status**: Completed");
+  });
+
+  // The other order, seen on Codex: "approve, and skip deployment" at the Build
+  // and Test gate. The skip's step ended the turn, so the approval in the same
+  // message was never recorded and the person approved twice. At an open gate
+  // the step hands the agent the gate's report for the answer their message
+  // gave, and the work goes on from the changed plan.
+  test("a skip typed at an open gate hands the agent the gate's answer to record, then the work goes on", () => {
+    const proj = setupIntegrationProject({ withState: "state-operation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace("- [x] build-and-test", "- [?] build-and-test")
+      .replace("- [x] ci-pipeline", "- [ ] ci-pipeline")
+      .replace("- [-] deployment-pipeline", "- [ ] deployment-pipeline")
+      .replace("- **Lifecycle Phase**: OPERATION", "- **Lifecycle Phase**: CONSTRUCTION")
+      .replace("- **Current Stage**: deployment-pipeline", "- **Current Stage**: build-and-test")
+      .replace("- **Next Stage**: environment-provisioning", "- **Next Stage**: ci-pipeline"));
+    const d = nextDirective(proj, ["--skip", "deployment-pipeline,deployment-execution"]);
+    expect(d.kind).toBe("print");
+    expect(d.message).toContain("engine recompose --skip deployment-pipeline,deployment-execution`");
+    expect(d.message).toContain('"Skipped Deployment Pipeline and Deployment Execution. You can undo that any time."');
+    expect(d.message).toContain("the open Build and Test question");
+    expect(d.message).toContain("report --stage build-and-test --result approved --user-input Approve");
+    expect(d.message).toContain("re-run `next`");
+    expect(d.message).toContain("otherwise stop");
+    expect(d.message).not.toContain("Then stop.");
   });
 });
 

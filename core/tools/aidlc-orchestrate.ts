@@ -12549,10 +12549,20 @@ function keptWhilePlanWaits<T extends Directive>(directive: T, planWaits: boolea
 
 // A typed `--skip`/`--add` on a running workflow. The person named the
 // stages, so recompose applies them straight away (after any scope or setting
-// command typed with them), and one line says what changed and the opposite
-// flags that undo it; recompose's own counts are not shown. recompose refuses
-// only a flip the plan cannot take, and its refusal names what can be done
-// instead.
+// command typed with them), and one line says what changed and the way back;
+// recompose's own counts are not shown. recompose refuses only a flip the plan
+// cannot take, and its refusal names what can be done instead.
+//
+// Two live runs typed "approve, and skip deployment" at the Build and Test
+// gate. Approve first, and the next stage had started before the skip reached
+// recompose, which refused it as no longer pending; skip first, and this step
+// ended the turn before the approval was recorded, so the person approved
+// twice. So: a named stage that has already started is skipped where it
+// stands, through the report that routes forward (only a stage that may be
+// skipped at all, CONDITIONAL, takes it; a started ALWAYS stage keeps
+// recompose's refusal, which names the jump past it), and the work goes on;
+// and at an open gate the step hands the agent the gate's report for the
+// answer the person's message gave, so both happen once.
 function planChangeDirective(
   changes: PlanChanges,
   before: string | null,
@@ -12567,6 +12577,12 @@ function planChangeDirective(
   const end = " Then stop.";
   const parkedTail = stillParked === null ? "" : ` ${stillParked}`;
   const resume = stillParked === null ? "" : resumeOnYes();
+  // The person reads stage names, never slugs.
+  const name = (slug: string): string => nodeForSlug(slug)?.name || slug;
+  const named = (slugs: string[]): string => {
+    const names = slugs.map(name);
+    return names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  };
   // A stage the plan already skips or runs is no change: it is said, not sent
   // to recompose, so the undo line names only what changed. After a scope
   // change (plan null) the new plan is not known here, so every flip is sent.
@@ -12575,8 +12591,8 @@ function planChangeDirective(
   const skip = [...new Set(changes.skip)].filter((slug) => !already(slug, "SKIP"));
   const add = [...new Set(changes.add)].filter((slug) => !already(slug, "EXECUTE"));
   const unchanged = [
-    ...[...new Set(changes.skip)].filter((slug) => already(slug, "SKIP")).map((slug) => `${slug} is already skipped`),
-    ...[...new Set(changes.add)].filter((slug) => already(slug, "EXECUTE")).map((slug) => `${slug} is already on the plan`),
+    ...[...new Set(changes.skip)].filter((slug) => already(slug, "SKIP")).map((slug) => `${name(slug)} is already skipped`),
+    ...[...new Set(changes.add)].filter((slug) => already(slug, "EXECUTE")).map((slug) => `${name(slug)} is already on the plan`),
   ];
   const noted = unchanged.length > 0
     ? `${unchanged.join("; ").charAt(0).toUpperCase()}${unchanged.join("; ").slice(1)}.`
@@ -12587,25 +12603,66 @@ function planChangeDirective(
         `"${noted} The plan is unchanged.${parkedTail}"${end}${resume}`,
     ));
   }
+  // Where the work stands: the current stage, started or waiting at its gate.
+  const current = plan === null ? "" : (getField(plan.stateContent, "Current Stage") ?? "").trim();
+  const currentState = current === "" ? undefined : parseCheckboxes(plan!.stateContent).find((c) => c.slug === current)?.state;
+  const started = currentState === "in-progress" && skip.includes(current) && nodeForSlug(current)?.execution === "CONDITIONAL"
+    ? current
+    : null;
+  const gateOpen = currentState === "awaiting-approval" && !skip.includes(current) ? current : null;
+  const planSkip = skip.filter((slug) => slug !== started);
   const flips = (skipped: string[], added: string[]): string => [
     ...(skipped.length > 0 ? [`--skip ${skipped.join(",")}`] : []),
     ...(added.length > 0 ? [`--add ${added.join(",")}`] : []),
   ].join(" ");
   const summary = [
-    ...(skip.length > 0 ? [`skipped ${skip.join(", ")}`] : []),
-    ...(add.length > 0 ? [`added ${add.join(", ")}`] : []),
+    ...(skip.length > 0 ? [`skipped ${named(skip)}`] : []),
+    ...(add.length > 0 ? [`added ${named(add)}`] : []),
   ].join(" and ");
-  const recompose = `${aidlcDispatcherInvocation("recompose")} ${flips(skip, add)}`;
-  return kept(turnEndingPrint(
-    `${before ? `Run \`${before}\` and print its output verbatim, then run` : "Run"} \`${recompose}\` ` +
-      "to change this workflow's remaining stages as the person asked, and do not show its output: " +
-      "the one line below says what changed. " +
-      "If a command refuses, tell the person in plain words why it could not, and the way it names to do it " +
-      "instead, then stop. " +
-      `Otherwise tell the person in one line: "${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ` +
-      `You can undo that any time.${noted ? ` ${noted}` : ""}${parkedTail}"${end} If they later ask to undo it, run ` +
-      `\`${aidlcDispatcherInvocation("recompose")} ${flips(add, skip)}\`.${resume}`,
-  ));
+  const commands: { command: string; why: string }[] = [];
+  if (planSkip.length > 0 || add.length > 0) {
+    commands.push({
+      command: `${aidlcDispatcherInvocation("recompose")} ${flips(planSkip, add)}`,
+      why: "to change this workflow's remaining stages as the person asked",
+    });
+  }
+  if (started !== null) {
+    commands.push({
+      command: `${aidlcToolInvocation("orchestrate")} report --stage ${started} --result skipped ` +
+        `--reason ${shellArg("the person asked to skip it")}`,
+      why: `to skip ${name(started)}, which has already started`,
+    });
+  }
+  const run = commands
+    .map(({ command, why }, at) => `${at === 0 && before === null ? "Run" : "then run"} \`${command}\` ${why}`)
+    .join(", ");
+  const lead = before === null ? run : `Run \`${before}\` and print its output verbatim, ${run}`;
+  // The way back: a plan flip is undone by the opposite flip while the work
+  // runs; a stage skipped where it stood is run on its own, the route
+  // recompose itself names for a skipped stage.
+  const wayBack = started === null
+    ? "You can undo that any time."
+    : `To run ${skip.length === 1 ? "it" : "one"} after all, type \`${entrySkillInvocation()} --stage ${started} --single\`` +
+      `${planSkip.length > 0 ? ` (or ${planSkip.join(", ")})` : ""}.`;
+  const line = `"${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ${wayBack}${noted ? ` ${noted}` : ""}${parkedTail}"`;
+  const undo = `If they later ask to undo it, run \`${aidlcDispatcherInvocation("recompose")} ${flips(add, planSkip)}\`.`;
+  const message =
+    `${lead}, and do not show ${commands.length > 1 ? "their" : "its"} output: the one line below says what changed. ` +
+    "If a command refuses, tell the person in plain words why it could not, and the way it names to do it " +
+    "instead, then stop. " +
+    `Otherwise tell the person in one line: ${line}`;
+  if (started !== null) {
+    return kept(printDirective(`${message} Then re-run \`next\` to carry on with the work.${resume}`));
+  }
+  if (gateOpen !== null) {
+    return kept(turnEndingPrint(
+      `${message} If their message also answered the open ${name(gateOpen)} question, record it now with ` +
+        `\`${aidlcToolInvocation("orchestrate")} report --stage ${gateOpen} --result approved --user-input Approve\` ` +
+        `(a change request: \`--result rejected --user-input "Request Changes"\`) and re-run \`next\`; ` +
+        `otherwise stop: the question still waits. ${undo}${resume}`,
+    ));
+  }
+  return kept(turnEndingPrint(`${message}${end} ${undo}${resume}`));
 }
 
 // A jump to a stage the running plan skips. Ahead of the cursor, the jump
