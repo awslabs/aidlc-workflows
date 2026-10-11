@@ -1220,7 +1220,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
     const reason = (JSON.parse(r.out) as { reason: string }).reason;
     // The host shows the reason to the person (Claude Code prints it under its
-    // own hook label), so it is one line in plain words: the stage by its name,
+    // own hook label, as feedback from 2.1.163), so it is one line in plain words: the stage by its name,
     // no command, slug, receipt or note addressed to the agent. The agent's
     // steps for it live in the orchestrator skill and the session-start context.
     expect(reason).toBe("AI-DLC is carrying on with Requirements Analysis.");
@@ -1290,6 +1290,84 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     // Comfortably under the smallest documented hook-output cap.
     expect(reasonText.length).toBeLessThan(2000);
     expect(reasonText).not.toContain("as you go");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Claude Code draws a blocking Stop under "Stop hook error" and a Stop
+  // `additionalContext` under "Stop hook feedback"; both keep the turn going,
+  // under `stop_hook_active` and its own cap (its changelog, 2.1.163). Carrying
+  // on is no error, so on Claude Code 2.1.163 or later the hook sends the line
+  // as feedback, reading the version Claude Code stamps on every transcript
+  // entry. A problem keeps the block, which that label fits; so does every other
+  // tool, whose adapter reads the block; so does a Claude Code whose version is
+  // older or cannot be read (an older one would end the turn on feedback).
+  const CARRY_ON_LINE = "AI-DLC is carrying on with Requirements Analysis.";
+  const FEEDBACK = { hookSpecificOutput: { hookEventName: "Stop", additionalContext: CARRY_ON_LINE } };
+  /** A Claude transcript whose turn engaged the engine, every entry stamped with `version` (none when null). */
+  function claudeTranscriptAt(proj: string, version: string | null): string {
+    const stamp = version === null ? {} : { version };
+    const path = join(proj, "transcript.jsonl");
+    writeFileSync(path, `${[
+      JSON.stringify({ ...stamp, type: "user", message: { role: "user", content: "Carry on with the stage." } }),
+      JSON.stringify({
+        ...stamp,
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", name: "Bash", input: { command: "bun .claude/tools/aidlc-orchestrate.ts next" } }],
+        },
+      }),
+    ].join("\n")}\n`, "utf-8");
+    return path;
+  }
+  function stopOn(
+    tool: string,
+    proj: string,
+    transcript: string | null,
+    kind = "run-stage",
+    extraEnv: Record<string, string> = {},
+  ): Record<string, unknown> {
+    const payload = JSON.stringify({ stop_hook_active: false, ...(transcript ? { transcript_path: transcript } : {}) });
+    const r = runHook(proj, payload, kind, "", "", "requirements-analysis", "", false, { AIDLC_HARNESS_NAME: tool, ...extraEnv });
+    expect(r.rc, tool).toBe(0);
+    return JSON.parse(r.out) as Record<string, unknown>;
+  }
+
+  /** One stop in a fresh project (a second stop in the same one counts toward the no-progress cap). */
+  function freshStop(tool: string, transcript: (proj: string) => string | null, kind = "run-stage", extraEnv: Record<string, string> = {}): Record<string, unknown> {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    return stopOn(tool, proj, transcript(proj), kind, extraEnv);
+  }
+
+  test("(a) on Claude Code 2.1.163 or later the carry-on is Stop feedback, not a block", () => {
+    expect(freshStop("claude", (proj) => claudeTranscriptAt(proj, "2.1.296"))).toEqual(FEEDBACK);
+    expect(freshStop("claude", (proj) => claudeTranscriptAt(proj, "2.1.163"))).toEqual(FEEDBACK);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(a) a problem still ends the turn as a block on Claude Code, where the error label is true", () => {
+    const message = "State file has no Scope field.";
+    expect(freshStop("claude", (proj) => claudeTranscriptAt(proj, "2.1.296"), "error", { MOCK_MESSAGE: message })).toEqual({
+      decision: "block",
+      reason: `The last AI-DLC step stopped on a problem: ${message}`,
+    });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(a) every other tool keeps the block its adapter reads, with the same transcript", () => {
+    for (const tool of ["codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]) {
+      const parsed = freshStop(tool, (proj) => claudeTranscriptAt(proj, "2.1.296"));
+      expect(parsed.decision, tool).toBe("block");
+      expect((parsed.reason as string).split("\n")[0], tool).toBe(CARRY_ON_LINE);
+      expect(parsed.hookSpecificOutput, tool).toBeUndefined();
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(a) Claude Code below 2.1.163, with no version stamped, or with no transcript keeps the block", () => {
+    const block = { decision: "block", reason: CARRY_ON_LINE };
+    expect(freshStop("claude", (proj) => claudeTranscriptAt(proj, "2.1.162"))).toEqual(block);
+    expect(freshStop("claude", (proj) => claudeTranscriptAt(proj, "2.0.999"))).toEqual(block);
+    expect(freshStop("claude", (proj) => claudeTranscriptAt(proj, null))).toEqual(block);
+    expect(freshStop("claude", (proj) => join(proj, "no-such-transcript.jsonl"))).toEqual(block);
+    expect(freshStop("claude", () => null)).toEqual(block);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("(a2) first error directive blocks once with the exact diagnostic and no forwarding-loop instruction", () => {

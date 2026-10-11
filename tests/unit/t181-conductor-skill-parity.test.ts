@@ -386,7 +386,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  // Claude Code shows the stop note to the person ("Stop hook error"), so it
+  // Claude Code shows the stop note to the person ("Stop hook feedback", or
+  // "Stop hook error" before 2.1.163), so it
   // is one plain line with no command; what the agent does with it lives here.
   test("every shipped conductor SKILL says what to do when a stop note ends its turn", () => {
     const clause = "**When AI-DLC carries on by itself.** If you end your turn while this work still needs you, AI-DLC stops it with one line: " +
