@@ -501,10 +501,15 @@ Kiro IDE runs its agent's commands in your default terminal profile. When that
 is **Command Prompt**, Kiro hands AI-DLC a command's reply only when the
 command finishes within a second (Command Prompt has no shell integration, so
 Kiro reads the result one second after sending the command and shows exit code
--1 for every run). Most AI-DLC steps take longer, so their replies come back
-empty while the step itself has run, and the agent needs extra turns to catch
-up; AI-DLC's commands, written for PowerShell, can also split your words at
-their quotes. Kiro itself recommends PowerShell.
+-1 for every run). Most AI-DLC steps take longer. So in Command Prompt every
+AI-DLC command prints one line first, `AI-DLC reply: aidlc/.aidlc-sessions/replies/<id>.txt`,
+and writes its reply to that file as well as to the terminal; when Kiro cuts
+the result off at that line, the agent reads the reply from the file instead
+of running the command again (the newest twenty replies are kept, in a folder
+git ignores). A value the agent wrote in single quotes, the PowerShell way,
+arrives from Command Prompt as several words with the quotes still on them;
+AI-DLC joins them back into the one value. Steps still take extra turns, so
+Kiro itself recommends PowerShell.
 
 When Kiro's terminal is Command Prompt and you have not answered before on this
 computer, AI-DLC asks you once whether to set it to PowerShell: during

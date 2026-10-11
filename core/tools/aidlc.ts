@@ -3721,16 +3721,29 @@ export async function main(rawArgv: string[]): Promise<void> {
 }
 
 if (import.meta.main) {
-  // Kiro IDE's Command Prompt terminal, Windows only: note at exit a reply Kiro
-  // dropped. Loaded only there, so the dispatcher's front gate and the lean
-  // projections keep their import graph.
-  if (process.env.TERM_PROGRAM === "kiro" && process.platform === "win32") {
-    void import("./aidlc-kiro-ide-terminal.ts").then((m) => m.noteSlowReplyAtExit()).catch(() => {});
+  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
+  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
+  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // in Kiro's terminal, so the dispatcher's front gate and the lean projections
+  // keep their import graph.
+  if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {
+    import("./aidlc-kiro-ide-terminal.ts")
+      .then((m) => {
+        if (m.commandPromptReplyTee()) return;
+        m.noteSlowReplyAtExit();
+        run(m.rejoinCommandPromptQuotes(process.argv.slice(2)));
+      })
+      .catch(() => run(process.argv.slice(2)));
+  } else {
+    run(process.argv.slice(2));
   }
+}
+
+function run(args: string[]): void {
   // Keep pending stdin and async dispatch alive, while leaving this module
   // synchronous to import (completions imports its route table during dispatch).
   const keepAlive = setInterval(() => {}, 1_000);
-  void main(process.argv.slice(2)).catch((error) => {
+  void main(args).catch((error) => {
     // Recorded before the message is rendered, so a failing stderr write
     // still leaves the reason in the trace. Only hook routes are traced.
     if (tracedHookRoute(canonicalizeLegacyCopilotHookArgv(process.argv.slice(2))) !== undefined) {
