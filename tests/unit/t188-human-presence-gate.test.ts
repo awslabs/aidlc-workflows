@@ -1608,7 +1608,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       const protocol = readFileSync(join(REPO_ROOT, "core", "aidlc-common", "protocols", "stage-protocol.md"), "utf-8");
       expect(protocol).toContain(
         "Log every question a menu shows before you show the menu, and put all of one reply's answers in a " +
-          "single `log answer` (`--details 'Q1: <choice>; Q2: <choice>'`), even when the reply came before the log.",
+          "single `log answer` (`--details 'Q1: <choice>; Q2: <choice>'` when it answered both, `--details 'Q2: <choice>'` when it " +
+          "answered only Q2 and Q1 stays open), even when the reply came before the log.",
       );
       expect(protocol).toContain(
         "If they already replied, log the question now naming their message (`--message <id>`; a refused answer " +

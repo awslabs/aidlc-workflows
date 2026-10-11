@@ -231,6 +231,7 @@ import {
   inspectContinuationCursor,
   isPerUnitStage,
   isReadOnlyEngineProbe,
+  latestPersonTurn,
   noteProjectTypeAsked,
   isRefusedModifierNextArgv,
   isRetiredOnlyNextArgv,
@@ -2989,6 +2990,26 @@ function withdrawRoutedWords(projectDir: string, question: StoredQuestion): void
     }, projectDir);
   } catch (e) {
     recordHookDrop(projectDir, "routed-words", errorMessage(e));
+  }
+}
+
+// A setting, a scope change or a plan change the person typed while a
+// question of the work in progress is open is an instruction to the engine,
+// like words sent to new work: the question keeps none of it. The message the
+// engine is acting on is the person's latest, so its words are taken back from
+// the code plan question and the protected checkpoints, and the answer
+// recorded later holds the answer alone. A live run kept "turn the specialist
+// reviewers off for the rest of this work" as the first line of the plan
+// approval's Person Reply, above "looks good, go ahead".
+function withdrawSettingWords(projectDir: string): void {
+  if (isReadOnlyEngineProbe()) return;
+  try {
+    const words = latestPersonTurn(projectDir)?.words;
+    if (!words) return;
+    withdrawProtectedReplyWords(projectDir, words);
+    withdrawPlanApprovalReplies(projectDir, words);
+  } catch (e) {
+    recordHookDrop(projectDir, "setting-words", errorMessage(e));
   }
 }
 
@@ -8528,6 +8549,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       const parts = [`--scope ${scopeArg(flags.scope)}`];
       for (const modifier of modifiers) parts.push(`--${modifier}`);
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
+      withdrawSettingWords(pd);
       emit(planChanges ? planChangeDirective(planChanges, command, null, planApprovalAskIsOpen(pd), stillParked) : keptWhilePlanWaits(
         turnEndingPrint(`Run \`${command}\` to change scope, then ${verbatimThenStop}`),
         planApprovalAskIsOpen(pd),
@@ -8542,6 +8564,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // same-as-current --scope: no sibling modifier may be silently discarded.
     if (modifiers.length > 0 && !describedWork) {
       const command = configSetCommand(modifiers);
+      withdrawSettingWords(pd);
       emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd), stillParked) : keptWhilePlanWaits(
         withWorkPicksUpLine(
           turnEndingPrint(`Run \`${command}\` to update the configuration, then ${verbatimThenStop}`),
@@ -8552,12 +8575,14 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       return;
     }
     if (planChanges) {
+      withdrawSettingWords(pd);
       emit(planChangeDirective(planChanges, null, plan, planApprovalAskIsOpen(pd), stillParked));
       return;
     }
     // Only a setting the hook already applied was typed: the command is done,
     // and no stage work starts from it.
     if (!describedWork && !flags.resume && typedSettingModifiers(flags).length > 0) {
+      withdrawSettingWords(pd);
       emit(keptWhilePlanWaits(
         withWorkPicksUpLine(
           turnEndingPrint(stillParked === null
