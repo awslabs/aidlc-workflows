@@ -209,8 +209,9 @@ engine through a file instead of the command line: the agent writes it to
 `aidlc/.aidlc-request-text/request.txt` and runs `aidlc engine orchestrate next
 --request-file aidlc/.aidlc-request-text/request.txt` with any other flags.
 When the words after `next` start with an intent or space switch (`next intent
-auth --request-file …`), the switch, its record name and any options (a word
-that starts with `--`, and its one-word value) stay on the line, and only the person's
+auth --request-file …`), the switch, its record name and any flags (a word
+that starts with `--` and sets something, not one the person is asking about,
+and its one-word value) stay on the line, and only the person's
 words go in the file. On
 Kiro IDE's PowerShell (`execute_pwsh`) the agent always sends the person's
 request this way, whatever it holds. The engine reads only a plain file directly inside `aidlc/.aidlc-request-text/`,

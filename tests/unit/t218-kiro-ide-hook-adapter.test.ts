@@ -7029,8 +7029,8 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
   const REQUEST_FILE_REFUSAL =
     "AIDLC stopped this command before it ran: on PowerShell the request after next goes through a file, so " +
     "the command line never changes it. Write the words of the person's request exactly as they typed them, " +
-    "without its options (a word that starts with --, and the one-word value of an option that takes one), plan " +
-    "name, " +
+    "without its flags (a word that starts with -- and sets something, not one they are asking about, and the " +
+    "one-word value of a flag that takes one), plan name, " +
     "compose verb or switch (such as intent auth or intent switch auth), with your file tool to " +
     "aidlc/.aidlc-request-text/request.txt in this project, and run the same command with --request-file " +
     "aidlc/.aidlc-request-text/request.txt in place of those words (and any -- before them), keeping the rest on " +
@@ -7103,7 +7103,13 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       ["words after an explicit intent switch", `${next} intent switch auth 'add a "Save" button'`],
       ["words after a space switch", `${next} space x 'do it'`],
       ["words after an intent switch behind a global flag", `aidlc --json engine orchestrate next intent auth 'add a "Save" button'`],
-      // A sentence or a word an option does not take is the person's, not that option's value.
+      // Behind `--` every word is theirs, a flag they are asking about too (#847, #2281).
+      ["words with a flag they ask about after an intent switch and --", `${next} intent auth -- add a --json output option`],
+      ["a word behind -- after a setting with no value", `${next} intent auth --guard-policy -- refactor`],
+      ["words behind -- where the record name goes", `${next} intent -- add a "Save" button`],
+      ["a request-file word behind --", `${next} -- what does --request-file do`],
+      ["a flag-shaped word behind -- after a value next does not take", `${next} --depth bogus -- --verbose`],
+      // A sentence or a word a flag does not take is the person's, not that flag's value.
       ["a sentence after a setting and --", `${next} intent auth --guard-policy -- 'add a "Save" button'`],
       ["a sentence after a setting", `${next} intent auth --guard-policy 'please add a button'`],
       // A value `next` does not take makes the line one it reads back to the agent, with the words on it.
@@ -7166,7 +7172,7 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
     expect(skill).toContain(
       "A hook refusal that names the request file (`--request-file`) or an answer file (`--details-file`, " +
         "`--on-instruction-file`) is carried out at once, in the same turn: write the person's exact words with your " +
-        "file tool where it says (for a request, without its options, plan name, `compose` or switch, which stay on the " +
+        "file tool where it says (for a request, without its flags, plan name, `compose` or switch, which stay on the " +
         "line) and " +
         "run the same command with that flag in place of their words",
     );
@@ -7209,7 +7215,7 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       ["a bare intent switch", `${next} intent auth`],
       // The dispatcher moves its own global flags after the switch; they are none of the person's words.
       ["a bare intent switch after a global flag", "aidlc --json engine orchestrate next intent auth"],
-      // An option and its value are none of the person's words, so a switch that carries only those runs as typed.
+      // A flag and its value are none of the person's words, so a switch that carries only those runs as typed.
       ["only a setting after an intent switch", `${next} intent auth --guard-policy relaxed`],
       ["a setting value PowerShell fills in after an intent switch", `${next} intent auth --guard-policy $p`],
       ["an intent switch with the request file", `${next} intent auth --request-file aidlc/.aidlc-request-text/request.txt`],

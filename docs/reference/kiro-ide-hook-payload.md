@@ -405,7 +405,7 @@ cards doing the work, and the guard notes nothing for them.
   `aidlc-orchestrate.ts` run by bun). Which call runs `next` is the
   dispatcher's reading (`resolveAction`) and whether it carries a request is
   the engine's (`nextCallRequest`, which also counts the person's words after
-  an intent or space switch, such as `next intent auth …`, but not its options), so a line of flags, `--request-file`,
+  an intent or space switch, such as `next intent auth …`, but not its flags), so a line of flags, `--request-file`,
   `--help` or one the engine refuses passes (request words beside a flag `next`
   does not take, or beside a value it does not take, still count). A word after `next` that
   PowerShell fills in only when the command runs (`--depth $depth`) may be one
@@ -419,8 +419,9 @@ cards doing the work, and the guard notes nothing for them.
   refusals for a value PowerShell builds, which see only values the engine
   does not read as the request; if the engine cannot be loaded, a request
   from a variable is not refused here. The fixed reason asks the agent to write
-  the request's words, exactly as typed and without its options (a word
-  that starts with `--`, and its one-word value), plan name, compose verb or intent or
+  the request's words, exactly as typed and without its flags (a word
+  that starts with `--` and sets something, not one the person is asking about,
+  and its one-word value), plan name, compose verb or intent or
   space switch, with its file tool to `aidlc/.aidlc-request-text/request.txt`
   and run the same command with `--request-file` in its place (the switch and its
   record name stay on the line; the engine refuses, before it reads the file,

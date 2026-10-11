@@ -1192,7 +1192,9 @@ export type WorkspaceCommand =
   // `words`: every token the person typed after the name, kept whole for the
   // agent to read (a request, or a setting for the work selected); never for
   // the utility. Present only when there are any.
-  | { kind: "switch"; noun: WorkspaceNoun; name: string; explicit: boolean; words?: string[] }
+  // `marked`: the index in `words` from which they came after a `--`, the mark
+  // that keeps a word theirs whatever it looks like (`-- add a --json flag`).
+  | { kind: "switch"; noun: WorkspaceNoun; name: string; explicit: boolean; words?: string[]; marked?: number }
   | { kind: "create"; noun: "space"; name: string }
   | { kind: "create-intent"; noun: "intent"; rest: string[] }
   // `rest` carries the verb's trailing flags (`--reason <text>`) through to the
@@ -1299,7 +1301,7 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     if (verbOrName === "list") return explicitWorkspaceList(noun, tokens);
     if (verbOrName === "switch") {
       const name = tokens[2];
-      if (name === undefined || isOptionName(name)) return missingWorkspaceName(noun, "switch");
+      if (name === undefined || isFlagWord(name)) return missingWorkspaceName(noun, "switch");
       return switchWithWords(noun, name, true, tokens.slice(3));
     }
     if (verbOrName === "create") {
@@ -1318,7 +1320,7 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     if (verbOrName === "list") return explicitWorkspaceList(noun, tokens);
     if (verbOrName === "switch") {
       const name = tokens[2];
-      if (name === undefined || isOptionName(name)) return missingWorkspaceName(noun, "switch");
+      if (name === undefined || isFlagWord(name)) return missingWorkspaceName(noun, "switch");
       return switchWithWords(noun, name, true, tokens.slice(3));
     }
     if (verbOrName === "create") {
@@ -1329,21 +1331,32 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     }
   }
 
-  // An option where the record name goes names no record: the next word that is
-  // not one is the name (never read as a verb), or with none it is a list.
-  if (isOptionName(verbOrName)) {
-    const at = tokens.findIndex((token, index) => index >= 2 && !isOptionName(token));
-    return at < 0 ? { kind: "list", noun, json: false } : switchWithWords(noun, tokens[at], false, tokens.slice(at + 1));
+  // A flag where the record name goes names no record: the next word that is
+  // not one is the name (never read as a verb), or with none it is a list. A
+  // `--` before any name marks the rest as the person's words, none of them a
+  // record's name.
+  if (isFlagWord(verbOrName)) {
+    // Past each flag and the one-word value of a flag that takes one.
+    let at = 1;
+    while (at < tokens.length && isFlagWord(tokens[at])) {
+      if (tokens[at] === "--") return missingWorkspaceName(noun, "switch");
+      const shape = nextFlagShape(tokens[at]);
+      const following = tokens[at + 1];
+      const takesIt = shape !== null && shape.value !== "none" && following !== undefined &&
+        !isFlagWord(following) && !/\s/.test(following);
+      at += takesIt ? 2 : 1;
+    }
+    return at >= tokens.length ? { kind: "list", noun, json: false } : switchWithWords(noun, tokens[at], false, tokens.slice(at + 1));
   }
   return switchWithWords(noun, verbOrName, false, tokens.slice(2));
 }
 
 // The dispatcher's global flags (`--json`, `--no-color`, …) and the `--`
-// delimiter are options a person gives a command, as they give `--help`,
+// delimiter are flags a person gives a command, as they give `--help`,
 // never words of what they ask for. `aidlc` also moves its global flags to the
 // end of the line it hands on (`aidlc --json … intent auth` arrives as
 // `intent auth --json`), so after a switch they would otherwise read as words.
-export function isOptionWord(word: string): boolean {
+export function isLauncherWord(word: string): boolean {
   return word === "--" || DISPATCHER_GLOBAL_FLAGS.has(word);
 }
 
@@ -1360,9 +1373,9 @@ export const DISPATCHER_GLOBAL_FLAGS: ReadonlySet<string> = new Set([
   "--verbose",
 ]);
 
-// Any standalone word that starts with `--` is an option, never a record name
+// Any standalone word that starts with `--` is a flag, never a record name
 // or a word of the person's (a quoted sentence holding one has spaces).
-export function isOptionName(word: string): boolean {
+export function isFlagWord(word: string): boolean {
   return word.startsWith("--") && !/\s/.test(word);
 }
 
@@ -1370,15 +1383,22 @@ export function isOptionName(word: string): boolean {
 // `--guard-policy relaxed` included: the engine hands those words to the agent
 // whole with the switch (Branch 1b), so "intent auth --guard-policy relaxed"
 // selects auth and the agent sets the policy for it. Nothing here reads them.
-// Option words (isOptionWord) are none of the person's words and are left out.
+// Flag words (isLauncherWord) are none of the person's words and are left out,
+// up to a `--`: the words after it are theirs as typed, flag-shaped ones too
+// (#847, #2281: `-- add a --json output option`), and the `--` itself is the
+// mark, not a word. The dispatcher puts its own flags before a `--`.
 function switchWithWords(
   noun: WorkspaceNoun,
   name: string,
   explicit: boolean,
   rest: readonly string[],
 ): WorkspaceCommand {
-  const words = rest.filter((word) => !isOptionWord(word));
-  return { kind: "switch", noun, name, explicit, ...(words.length > 0 ? { words } : {}) };
+  const mark = rest.indexOf("--");
+  const before = (mark < 0 ? rest : rest.slice(0, mark)).filter((word) => !isLauncherWord(word));
+  const after = mark < 0 ? [] : rest.slice(mark + 1);
+  const words = [...before, ...after];
+  const marked = after.length > 0 ? { marked: before.length } : {};
+  return { kind: "switch", noun, name, explicit, ...(words.length > 0 ? { words, ...marked } : {}) };
 }
 
 export function workspaceCommandUtilityArgv(

@@ -1338,8 +1338,8 @@ const REQUEST_FILE = `${REQUEST_TEXT_DIR}/request.txt`;
 const REQUEST_FILE_REFUSAL =
   "AIDLC stopped this command before it ran: on PowerShell the request after next goes through a file, so " +
   "the command line never changes it. Write the words of the person's request exactly as they typed them, " +
-  "without its options (a word that starts with --, and the one-word value of an option that takes one), plan " +
-  "name, " +
+  "without its flags (a word that starts with -- and sets something, not one they are asking about, and the " +
+  "one-word value of a flag that takes one), plan name, " +
   "compose verb or switch (such as intent auth or intent switch auth), with your file tool to " +
   `${REQUEST_FILE} in this project, and run the same command with --request-file ${REQUEST_FILE} in place of ` +
   "those words (and any -- before them), keeping the rest on the line. AI-DLC reads the file and removes it.\n";

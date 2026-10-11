@@ -57,7 +57,9 @@ const REQUEST_FILE_STEP =
   "with your file tool to aidlc/.aidlc-request-text/request.txt in this project, and run the same command with " +
   "--request-file aidlc/.aidlc-request-text/request.txt in place of the request's words. When the words after next " +
   "start with an intent or space switch (such as intent auth), the switch and its record name stay on the line " +
-  "with any options (a word that starts with --, and its one-word value), and only the person's words go in the file";
+  "with any flags (a word that starts with -- and sets something, not one they are asking about, and its one-word " +
+  "value), and only the " +
+  "person's words go in the file";
 
 afterEach(() => {
   for (const dir of scratch.splice(0)) {

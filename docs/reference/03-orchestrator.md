@@ -101,7 +101,9 @@ code-generation --checkpoint plan-approval --details '<their choice>'` then bare
 `next`, is named as one more reading, never as the only one; the existing answer
 owner still requires the person's reply. Two things mark a token as the person's
 and keep it whole: the `--` delimiter, and one quoted argument that holds a whole
-request (`--help flag for the reverser`).
+request (`--help flag for the reverser`). The same holds after an intent or space
+switch: its words behind `--` are the person's as typed, and the `--` is the mark,
+not one of them.
 
 Three ways to read the line, decided once. `readNextLine` (`aidlc-lib.ts`) answers
 which, and every seam that runs before an agent sees the line reads the same

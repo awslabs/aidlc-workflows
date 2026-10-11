@@ -281,8 +281,8 @@ import {
   PHASE_NUMBERS,
   PHASES,
   parseTeamBoardArgs,
-  isOptionName,
-  isOptionWord,
+  isFlagWord,
+  isLauncherWord,
   parseWorkspaceCommand,
   isWorkspaceNoun,
   nextArgsCarryRequestWords,
@@ -16186,39 +16186,41 @@ function engineWorkflowSelection(projectDir: string): WorkflowSelection {
 const REQUEST_TEXT_MAX_BYTES = 64 * 1024;
 
 // The person's words among words `next` hands on unread (after a switch, or a
-// line it only reads back for its value, #2293's reading step). A standalone word that
-// starts with `--` is an option they give the command, as `--help` is, never
-// words of theirs, and so is the value after an option `next` takes with one
-// (`--guard-policy relaxed`): one word. A quoted sentence (`'add a --json
-// output option'`, `'please add a button'`) is one word with spaces, and theirs.
-// The switch parser keeps such options among its words so the agent can act on
-// them; only the dispatcher's own flags and `--` are dropped there.
+// line it only reads back for its value, #2293's reading step). A standalone
+// word that starts with `--` is a flag they give the command, as `--help` is,
+// not words of theirs, and so is the value after a flag `next` takes with one
+// (`--guard-policy relaxed`): one word. From the `--` mark on (`marked`), and
+// in a quoted sentence (`'add a --json output option'`, one word with spaces),
+// every word is theirs (#847, #2281). The switch parser keeps the flags before
+// the mark among its words so the agent can act on them; only the
+// dispatcher's own flags are dropped there, and the `--` is the mark.
 function personWordsOf(
   words: readonly string[] | undefined,
   filledIn: (word: string) => boolean = () => false,
+  marked = Number.POSITIVE_INFINITY,
 ): string[] {
   const all = words ?? [];
   const request: string[] = [];
   for (let index = 0; index < all.length; index++) {
     const word = all[index];
-    if (!isOptionName(word)) {
+    // From a `--` mark on, every word is theirs as typed (#847, #2281).
+    if (index >= marked || !isFlagWord(word)) {
       request.push(word);
       continue;
     }
-    const following = all[index + 1];
+    // A flag before the mark takes no value from behind it.
+    const following = index + 1 < marked ? all[index + 1] : undefined;
     const shape = nextTokenKind(word, following) === "flag" ? nextFlagShape(word) : null;
-    if (shape === null || shape.value === "none" || following === undefined || isOptionName(following)) continue;
-    // A value a shell fills in is the option's, whatever it turns out to be.
+    if (shape === null || shape.value === "none" || following === undefined || isFlagWord(following)) continue;
+    // A value a shell fills in is the flag's, whatever it turns out to be.
     if (filledIn(following) || !/\s/.test(following)) index++;
   }
   return request;
 }
 
 // The file's words take the flag's place as one argument after `--`, so none
-// of them is read as a flag. After an intent or space switch (`intent auth`,
-// `space x`) the words that follow are already read as words, the person's
-// request for the record picked, so the file's words follow the switch and its
-// options as they are: a `--` there would be reported as one of their words.
+// of them is read as a flag; after an intent or space switch too, where the
+// switch parser takes the `--` as the mark it is (switchWithWords).
 // Only a plain file directly inside the folder, reached through no link, is
 // read. It is removed once the command goes ahead (a probe leaves it), so a
 // command stopped before any work runs again exactly as it was written. A
@@ -16227,8 +16229,10 @@ function nextArgsWithRequestFile(
   args: readonly string[],
   projectDir: string,
 ): { args: string[]; spend(): void } | string {
+  // Behind a `--` mark `--request-file` is one of the person's words.
+  const mark = args.indexOf("--");
   const at = args.indexOf("--request-file");
-  if (at < 0) return { args: [...args], spend: () => {} };
+  if (at < 0 || (mark >= 0 && at > mark)) return { args: [...args], spend: () => {} };
   const usage =
     `--request-file needs a file directly inside ${REQUEST_TEXT_DIR}/ in this project, for example ` +
     `${REQUEST_TEXT_DIR}/request.txt.`;
@@ -16237,27 +16241,26 @@ function nextArgsWithRequestFile(
   if (file === undefined || file.startsWith("--")) return usage;
   if (rest.includes("--request-file")) return "Pass --request-file once.";
   // After a switch the person's words all come from the file: one left on the
-  // line beside it has crossed a shell (options may stay). The record name stays on the line, or the file's
+  // line beside it has crossed a shell (flags may stay). The record name stays on the line, or the file's
   // words would follow a `--` read as the name. Refused before the file is
   // read, so it stays. parseNextFlags reads a leading switch with the same
   // parseWorkspaceCommand, after its own earlier forms (`--pick`, `--config`,
   // a verb), whose lines keep the `--` and are refused or routed as before.
   const lineWords = withoutEntryWord(rest);
   const switched = parseWorkspaceCommand(lineWords);
-  const switchStep = `the switch, its record name and any options stay on the line (next intent [switch] <name> or ` +
+  const switchStep = `the switch, its record name and any flags stay on the line (next intent [switch] <name> or ` +
     `next space [switch] <name>), ` +
     `with --request-file and a file directly inside ${REQUEST_TEXT_DIR}/; the person's words after the record ` +
-    `name (not its options) go in that file, exactly as they typed them (not as the line holds them now).`;
-  if (switched.kind === "switch" && personWordsOf(switched.words).length > 0) {
+    `name (not its flags) go in that file, exactly as they typed them (not as the line holds them now).`;
+  if (switched.kind === "switch" && personWordsOf(switched.words, undefined, switched.marked).length > 0) {
     return `When the words after next start with an intent or space switch, ${switchStep}`;
   }
-  // A bare noun reads as a list and `intent switch` as a missing name: the
-  // parser's own reading of a switch whose record name went into the file.
-  // An option word (a dispatcher flag moved to the end) is not the record name.
-  const ownWords = lineWords.filter((word) => !isOptionWord(word));
-  const own = parseWorkspaceCommand(ownWords);
-  const recordless = (own.kind === "list" && ownWords.length === 1) ||
-    (own.kind === "error" && own.code === "missing-name" && own.verb === "switch");
+  // The line as it would read with the file's words behind the mark: when the
+  // parser finds the switch without a record name there, the name went into
+  // the file. A dispatcher flag moved to the end is not part of it.
+  const ownWords = lineWords.filter((word) => !isLauncherWord(word));
+  const probe = parseWorkspaceCommand([...ownWords, "--", "words"]);
+  const recordless = probe.kind === "error" && probe.code === "missing-name" && probe.verb === "switch";
   if (recordless) {
     return `An intent or space switch names its record on the line: ${switchStep}`;
   }
@@ -16285,7 +16288,7 @@ function nextArgsWithRequestFile(
   }
   if (text.trim() === "") return `The request in ${relativePath} is empty. Send your request again.`;
   return {
-    args: switched.kind === "switch" ? [...rest, text] : [...rest, "--", text],
+    args: [...rest, "--", text],
     spend: () => {
       if (isReadOnlyEngineProbe()) return;
       try {
@@ -16306,7 +16309,7 @@ function nextArgsWithRequestFile(
 // file carries none (nextArgsWithRequestFile reads the request from it, or
 // refuses the line), and neither does a line the engine refuses or answers
 // without starting work (help, status, a verb). After a leading intent or
-// space switch the person's words (personWordsOf, not its options) are
+// space switch the person's words (personWordsOf, not its flags) are
 // the request (and, like any line naming the file, one with --request-file
 // carries none). `filledIn` holds the indexes
 // in `argv` of words a shell fills in only when the command runs: a value the
@@ -16321,19 +16324,28 @@ export function nextCallRequest(
   if (argv[kept[0]] !== "next") return "none";
   const rest = kept.slice(1);
   const args = rest.map((at) => argv[at]);
-  if (args.includes("--request-file")) return "clear";
+  // Words behind a `--` mark are the person's, whatever reads the line before it.
+  const mark = args.indexOf("--");
+  const fileAt = args.indexOf("--request-file");
+  if (fileAt >= 0 && (mark < 0 || fileAt < mark)) return "clear";
+  if (mark >= 0 && mark + 1 < args.length) return "carries";
   const flags = parseNextFlags(args);
   // After an intent or space switch the person's words are the request for the
-  // record picked (`next intent auth add a button`); its options are not.
+  // record picked (`next intent auth add a button`); its flags are not.
   // Words a shell fills in are placeholders, each named by its own index.
   const filledWords = new Set(rest.flatMap((at) => filledIn.has(at) ? [argv[at]] : []));
   const filled = (word: string): boolean => filledWords.has(word);
   const workspace = flags.workspaceCommand;
-  if (workspace?.kind === "switch") return personWordsOf(workspace.words, filled).length > 0 ? "carries" : "clear";
+  if (workspace?.kind === "switch") {
+    return personWordsOf(workspace.words, filled, workspace.marked).length > 0 ? "carries" : "clear";
+  }
   // A value `next` does not take (`--depth bogus`, or one a shell fills in)
   // makes the line one it only reads back to the agent, whole: the person's
   // words on it reach the agent through that step.
-  if (flags.readingStep?.kind === "value") return personWordsOf(args, filled).length > 0 ? "carries" : "clear";
+  if (flags.readingStep?.kind === "value") {
+    const mark = args.indexOf("--");
+    return personWordsOf(args, filled, mark < 0 ? undefined : mark + 1).length > 0 ? "carries" : "clear";
+  }
   if (flags.intent === undefined || flags.readOnly !== undefined) return "clear";
   return flags.parseError === undefined || rest.some((at) => filledIn.has(at)) ? "carries" : "clear";
 }
