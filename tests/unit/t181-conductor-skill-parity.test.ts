@@ -1675,8 +1675,11 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       .replace(/\s+/g, " ");
     for (const rule of [
       'When a user leaves a choice to you ("up to you", "whatever you think is best", or "choose the recommended answers" for this stage), decide',
-      "--on-instruction '<their words that left it to you>'",
-      '**SAY:** "You left <the question> to me, so I chose <the choice>. Say if you want something else."',
+      "--on-instruction '<their words that left it to you>' --basis '<what each choice rests on>'",
+      '**SAY:** "You left <the question> to me, so I chose <the choice> (<its basis>). Say if you want something else."',
+      "**A proposal shows its basis.**",
+      "**When the person wants to see your picks first**",
+      "Read it, never ask them to retype a label or number",
       '**SAY:** "Approvals are still yours: I\'ll stop at each stage for you to approve."',
       "When the person's request already chose",
       "answers in their own words, those words are their answer",
