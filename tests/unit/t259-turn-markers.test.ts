@@ -35,6 +35,8 @@ import { spawnSync } from "node:child_process";
 import {
   createIntent,
   turnEndIsOpen,
+  composeMarkerPath,
+  COMPOSE_MARKER_TTL_MS,
   turnEndMarkerPath,
   engineTouchMarkerPath,
   humanTurnMarkerPath,
@@ -404,6 +406,39 @@ describe("t259 the engine's last word ended the turn", () => {
     const gateEnd = stop();
     expect(gateEnd.status, gateEnd.stderr).toBe(0);
     expect(gateEnd.stdout).not.toContain('"decision":"block"');
+  });
+
+  // A plan proposal waiting for the person's approve, edit or reject is a stop
+  // the engine itself put up: the Stop hook honours its marker while it is
+  // fresh. A setting typed under it must not hand the agent back to the work
+  // and walk past their pick; a stale orphan is no gate, as the hook reads it.
+  test("a setting typed while a plan proposal waits ends the turn, and a stale marker does not", async () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+    delete env[STOP_HOOK_PROBE_ENV];
+    const setting = () => {
+      markHumanTurn(proj);
+      return JSON.parse(spawnSync(process.execPath, [
+        ".claude/tools/aidlc.ts", "engine", "orchestrate", "next", "--depth", "minimal",
+      ], { cwd: proj, encoding: "utf-8", env }).stdout);
+    };
+    const marker = composeMarkerPath(proj);
+    writeFileSync(marker, "{}\n", "utf-8");
+    await Bun.sleep(20);
+    const waiting = setting();
+    expect(waiting.kind).toBe("print");
+    expect(waiting.message).toContain("print its output verbatim and stop");
+    expect(waiting.message).not.toContain("re-run next");
+    expect(existsSync(turnEndMarkerPath(proj))).toBe(true);
+    // Older than the freshness window the hook honours: no gate, so the work
+    // carries on as it does with no proposal at all.
+    const stale = (Date.now() - COMPOSE_MARKER_TTL_MS - 60_000) / 1000;
+    utimesSync(marker, stale, stale);
+    await Bun.sleep(20);
+    const orphaned = setting();
+    expect(orphaned.message).toContain("re-run next to carry on");
+    expect(existsSync(turnEndMarkerPath(proj))).toBe(false);
   });
 });
 
