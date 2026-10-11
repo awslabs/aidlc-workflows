@@ -421,9 +421,19 @@ cards doing the work, and the guard notes nothing for them.
   a trailing backslash in a value with a space, the reason names the request
   file instead, which the agent writes with its file tool for `next
   --request-file`, and says that a flag's value cannot go through the file
-  (the agent leaves the characters out of a value it wrote and asks the person
-  about one they gave). Which word is the request is the agent's to know; the
-  hook does not read it. It
+  (the agent writes a one-word value holding a metacharacter in double quotes
+  inside the single quotes, leaves other characters out of a value it wrote,
+  and asks the person about one they gave). That one form passes: one word in
+  double quotes with no `%`, double or typographic quote, or trailing backslash
+  (`--report '"scan&review.json"'`) after a flag `next` takes with any value
+  (`nextTokenKind`), while the words the engine gets after `next` (or a leading
+  `compose`) are flags and their values; the `--` mark, a word, a leading noun,
+  a flag the engine does not take, a variable, or a value the engine would not
+  take as the flag's (empty, starting with `--`, or not one the flag lists)
+  ends that; `--request-file`, `--project-dir` and `--aidlc-attempt-id`, which
+  the engine takes off the line first, are passed over with their value.
+  Which of the other words is the request is the agent's to know;
+  the hook does not read it. It
   simulates PowerShell 5.1's argument passing (an empty argument dropped, a
   value with a space or tab wrapped in double quotes) and cmd.exe's quote
   toggling, reading past a `#` comment and a closed `<# ... #>` block comment,

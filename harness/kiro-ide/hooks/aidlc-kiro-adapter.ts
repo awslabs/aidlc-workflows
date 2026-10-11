@@ -163,6 +163,8 @@ import {
   docsRoot,
   memoryFilePath,
   normalizeDriveLetter,
+  nextFlagShape,
+  nextTokenKind,
   REQUEST_TEXT_DIR,
 } from "../tools/aidlc-lib.ts";
 import {
@@ -1089,6 +1091,47 @@ function nextVerbIndex(args: PowerShellWord[]): number {
   );
 }
 
+// The words after `orchestrate next` that are a flag's value written the one
+// way the skill gives for a value holding & | < > ^: one word in double quotes
+// inside the single quotes ('"scan&review.json"'), which reaches the engine
+// whole. A value is the word after a flag `next` takes with any value
+// (nextTokenKind, nextFlagShape "free"), read over the words the engine gets
+// (PowerShell drops an empty one) while they are flags and their values, after
+// a leading `compose`. Anything else stops it: the `--` mark, a word, a leading
+// noun, a flag the engine does not take or one argument holding several, a
+// variable or expression, or a value the engine would not take as the flag's
+// (empty, starting with --, or not one the flag lists);
+// from there the engine reads the line its own way, and every word counts as
+// the request's.
+function nextQuotedFlagValues(args: PowerShellWord[], next: number): Set<number> {
+  const values = new Set<number>();
+  if (next < 0) return values;
+  const passed = args.flatMap((word, at) => (at > next && (word.opaque || word.value !== "") ? [at] : []));
+  for (let i = 0; i < passed.length - 1; i++) {
+    const word = args[passed[i]];
+    if (i === 0 && !word.opaque && word.value === "compose") continue;
+    // The engine takes these off the line with their value before it reads
+    // its flags (stripOrchestratorLauncherOptions, nextArgsWithRequestFile).
+    if (!word.opaque && ["--request-file", "--project-dir", "--aidlc-attempt-id"].includes(word.value)) {
+      i++;
+      continue;
+    }
+    if (word.opaque || nextTokenKind(word.value, args[passed[i + 1]].value) !== "flag") break;
+    const shape = nextFlagShape(word.value);
+    if (shape === null || shape.value === "none") continue;
+    const value = args[passed[++i]];
+    const reaches = value.opaque ? "" : value.value.replaceAll('"', "");
+    // A value the engine would not take as this flag's (an empty one, one it
+    // reads its own way, a word the flag does not list) ends the walk too.
+    const listed = shape.value !== "words" || shape.words?.includes(reaches.toLowerCase()) === true;
+    if (reaches === "" || reaches.startsWith("--") || !listed) break;
+    // No % at all: a %NAME% pair could start in it and end in a later word.
+    const quoted = /^"[^"\s%]*[^"\s%\\]"$/.test(value.value) && !shellWouldChange(value.value.slice(1, -1));
+    if (shape.value === "free" && quoted) values.add(passed[i]);
+  }
+  return values;
+}
+
 // Text Windows PowerShell 5.1 or cmd.exe would change on its way to aidlc.cmd
 // besides & | < > ^ and a %NAME% pair: a double quote (whether one survives
 // depends on the backslashes before it), a quote PowerShell reads other than
@@ -1119,8 +1162,10 @@ function freeTextOpaque(args: PowerShellWord[], index: number, next: number): Cm
 // that puts a cmd.exe metacharacter outside cmd.exe's quotes (named by its
 // flag, with that character); or one that holds a %NAME% pair, quoted or not.
 // After `orchestrate next`, any of these, or other text the shell would change
-// (shellWouldChange), is "next-text": which word is the person's request is the
-// agent's to know, so the hook does not read it and names the request file.
+// (shellWouldChange), outside a flag's value in double quotes
+// (nextQuotedFlagValues) is "next-text":
+// which of those words is the person's request is the agent's to know, so the
+// hook does not read it and names the request file.
 // The literal text of any other opaque word is checked for the same two. A
 // statement this check cannot read to the end is "unchecked" when its program
 // is aidlc, so it fails closed; any other statement passes as before.
@@ -1131,6 +1176,8 @@ function cmdMetacharacterHazard(command: string): CmdHazard | null {
     if (found === null) continue;
     const args = found.filter((word) => !word.redirect);
     const next = nextVerbIndex(args);
+    const values = nextQuotedFlagValues(args, next);
+    const nextText = (index: number) => next >= 0 && index > next && !values.has(index);
     for (let index = 0; index < args.length; index++) {
       const word = args[index];
       if (!word.opaque) continue;
@@ -1142,7 +1189,7 @@ function cmdMetacharacterHazard(command: string): CmdHazard | null {
       if (CMD_VARIABLE_PAIR.test(word.value)) return { kind: "variable", flag: valueFlag(args, index) };
       if (/[&|<>^]/.test(word.value)) return { kind: "expression", flag: valueFlag(args, index), request: false };
     }
-    if (next >= 0 && args.some((word, index) => index > next && !word.opaque && shellWouldChange(word.value))) {
+    if (args.some((word, index) => nextText(index) && !word.opaque && shellWouldChange(word.value))) {
       return { kind: "next-text" };
     }
     let line = "";
@@ -1158,13 +1205,13 @@ function cmdMetacharacterHazard(command: string): CmdHazard | null {
       const c = line[at];
       if (c === '"') quoted = !quoted;
       else if (!quoted && /[&|<>^]/.test(c)) {
-        if (next >= 0 && owners[at] > next) return { kind: "next-text" };
+        if (nextText(owners[at])) return { kind: "next-text" };
         return { kind: "metacharacter", flag: valueFlag(args, owners[at]), char: c };
       }
     }
     const variable = CMD_VARIABLE_PAIR.exec(line);
     if (variable !== null) {
-      if (next >= 0 && owners[variable.index] > next) return { kind: "next-text" };
+      if (nextText(owners[variable.index])) return { kind: "next-text" };
       return { kind: "variable", flag: valueFlag(args, owners[variable.index]) };
     }
   }
@@ -1321,8 +1368,10 @@ function cmdMetacharacterRefusal(hazard: CmdHazard): string {
       `exactly as they typed it, with your file tool to ${REQUEST_FILE} in this project, and run the same ` +
       `command with --request-file ${REQUEST_FILE} in place of their words (and the -- before them, if any), ` +
       "everything else on the line as it was. AI-DLC reads the file and removes it. A flag's value cannot go " +
-      "through the file: leave those characters out of a value you wrote, and ask the person how to write one " +
-      "they gave.\n"
+      "through the file: the value of a next flag that takes any word (such as --report), written before the " +
+      "request among the other flags, passes as one word holding & | < > ^ and no %, double or typographic quote, " +
+      "or trailing backslash, in double quotes inside the single quotes ('\"R&D\"'); leave other such characters out " +
+      "of a value you wrote, and ask the person how to write one they gave.\n"
     );
   }
   if (hazard.kind === "unchecked") {
