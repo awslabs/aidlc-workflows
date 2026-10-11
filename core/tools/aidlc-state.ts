@@ -4955,13 +4955,22 @@ function verifyReviewerPrecondition(
       }
       // The person's line: what changed, and the three ways through, in their
       // words. The agent knows the mechanics (the stage file and the reviewer
-      // protocol say how a manifest is written and a review recorded).
+      // protocol say how a manifest is written and a review recorded). The
+      // registry that reaches a path is the one in its own repo folder (the
+      // walk reads each repo root's file), so a recorded repo's path names it.
+      const registries = [...new Set(unclaimed.map((key) => {
+        const repo = key.slice(0, key.indexOf("\0"));
+        return repo ? `${inertPath(repo)}/.aidlc-source-paths.json` : ".aidlc-source-paths.json";
+      }))].sort();
+      const where = registries.length === 1 && registries[0] === ".aidlc-source-paths.json"
+        ? ".aidlc-source-paths.json"
+        : `the .aidlc-source-paths.json of the path's own folder (${registries.join(", ")})`;
       error(
         `Refusing to complete "${stage.slug}": ${unclaimed.length} change${unclaimed.length === 1 ? "" : "s"} made during ${stage.name} ` +
           `that no Unit's review covers (${rendered.join(", ")}${more}). A Unit that made one of them lists the path, exactly as ` +
           `printed, in its source manifest and is reviewed once more; a change nobody meant is undone; a path that is not source ` +
           `(a tool's cache, a build output, a folder that is not this project's code) is left out of the source checks by naming ` +
-          `it under "exclude" in .aidlc-source-paths.json.`,
+          `it under "exclude" in ${where}.`,
       );
     }
   }

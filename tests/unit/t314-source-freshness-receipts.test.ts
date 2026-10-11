@@ -3240,6 +3240,9 @@ describe("t314 multi-unit source attribution", () => {
     const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain("repo-a/.jest-cache/haste-map-abc");
+    // The line names the registry file of the path's own repo folder: the
+    // top-level file does not reach a recorded repo's paths.
+    expect(refused.out).toContain('under \\"exclude\\" in the .aidlc-source-paths.json of the path\'s own folder (repo-a/.aidlc-source-paths.json)');
     // Written in the wrong place (the root), the exclude changes nothing for
     // repo-a's keys, so the approve is still refused.
     sourceRegistry(proj, { exclude: ["repo-a/.jest-cache"] });
