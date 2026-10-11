@@ -284,6 +284,19 @@ See [Session Management](11-session-management.md) and [CLI Commands](12-cli-com
 
 ---
 
+## Leaving the Answers to the Agent
+
+You can hand a stage's questions to the agent in your own words, at any point:
+
+| You say | What happens |
+|---|---|
+| "Choose the recommended answers" (or "up to you") | The agent picks, records that you left the answers to it, and tells you in one line what it chose and why: each choice names the document and line, the code, or the earlier answer it rests on, or says plainly that it is an assumption. Say so and it changes any of them |
+| "What would you suggest?" or "Show me your picks first" | The agent shows each question with its proposed answer and the reason, and records nothing yet. Reply in your own words ("yes, those are fine", "all good except Q3, make it B"); no label or number to retype. What you say is what is recorded |
+
+Approvals stay yours either way: the agent stops at each stage for you to approve. There is no setting to turn this on or off, and nothing is blocked when Guard Policy is `off`.
+
+---
+
 ## Editing Files Yourself
 
 You can edit any artifact by hand. What happens next depends on where you are:

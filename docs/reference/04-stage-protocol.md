@@ -572,23 +572,38 @@ ask targeted follow-up. Do NOT proceed until resolved.
 - When the user leaves a choice to the agent ("up to you", "whatever you think
   is best", or "choose the recommended answers" for this stage), the agent
   decides: it picks the option that best fits what they have said and records
-  it with `log answer --on-instruction '<their words>'` (single-quoted, like
-  every piece of the person's text on a command line), so the record shows
-  the agent chose it as they asked. The tool keeps the words only when
-  something the person said holds them, case, spacing and punctuation aside
-  (`holdsQuote` and `personsSaidWords` in `aidlc-message-store.ts`, the same
-  check the live drives' person-turn check makes): a message the human-turn
-  hook kept, a question box's reply, or the request that started the work.
-  Otherwise it tells the agent to quote their words or show the questions and
-  wait. Where the record lacks some of what they said (a host that passed no
-  words, a message too long to keep whole, a message older than the store
-  keeps, no hook), the choice is recorded as before. The agent then says one
-  line: "You left <the question> to me, so I chose <the choice>. Say if you
-  want something else."
-  (for several questions, "You left <Stage>'s <N> questions to me, so I chose
-  the recommended answers: ... Say if you want any of them changed."), and
-  once per piece of work: "Approvals are still yours: I'll stop at each stage
-  for you to approve." A checkpoint or an approval is never left to the agent.
+  it with `log answer --on-instruction '<their words>' --basis '<what each
+  choice rests on>'` (single-quoted, like every piece of the person's text on a
+  command line), so the record shows the agent chose it as they asked, and why.
+  The tool keeps the words only when something the person said holds them,
+  case, spacing and punctuation aside (`holdsQuote` and `personsSaidWords` in
+  `aidlc-message-store.ts`, the same check the live drives' person-turn check
+  makes): a message the human-turn hook kept, a question box's reply, or the
+  request that started the work. Otherwise it tells the agent to quote their
+  words or show the questions and wait. Where the record lacks some of what
+  they said (a host that passed no words, a message too long to keep whole, a
+  message older than the store keeps, no hook), the choice is recorded as
+  before. The agent then says one line with each choice's basis in brackets:
+  "You left <the question> to me, so I chose <the choice> (<its basis>). Say if
+  you want something else." (for several questions, "You left <Stage>'s <N>
+  questions to me, so I chose the recommended answers: <question: choice
+  (basis); ...>. Say if you want any of them changed."), and once per piece of
+  work: "Approvals are still yours: I'll stop at each stage for you to
+  approve." A checkpoint or an approval is never left to the agent.
+- A proposal shows its basis. Every choice the agent proposes or makes carries
+  the document and line, the code, or the earlier answer it rests on, or the
+  word "assumption" when nothing supports it. Assumptions, and choices on
+  scope, security, compliance, cost, or retention, come first. A source the
+  agent cannot point to is an assumption.
+- When the person asks to see the agent's picks first ("what would you
+  suggest?"), the agent proposes and records nothing yet: each question with its
+  proposed choice and basis, logged like a Guide me batch (`log decision` before,
+  `log answer` after the reply). The reply can be in the person's own words
+  ("yes, those are fine", "all good except Q3, make it B"); the agent reads it
+  and never asks for a label or number. Nothing is an answer until they have
+  replied. There is no acceptance gate and no switch: the engine refuses nothing
+  for want of one, so it behaves the same with Guard Policy off. `--basis` is
+  context on the record only.
 
 ### Plan and Question File Location
 
