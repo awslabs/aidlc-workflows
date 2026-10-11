@@ -205,6 +205,7 @@ import {
   agentsDir,
   emitError,
   errorMessage,
+  isHarnessDirName,
   escapeRegex,
   effectivePlanAction,
   findAllEvents,
@@ -12665,9 +12666,12 @@ export function canonicalScopeTableRegion(table: string): string {
   return `${SCOPE_TABLE_BEGIN}\n\n${table}\n\n${SCOPE_TABLE_END}`;
 }
 
-function skillMdPath(projectDir?: string): string {
+function skillMdPath(projectDir?: string, harnessDir?: string): string {
   if (process.env.AIDLC_SKILL_MD_PATH) return process.env.AIDLC_SKILL_MD_PATH;
-  const location = projectDir === undefined ? {} : { projectDir };
+  const location = {
+    ...(projectDir === undefined ? {} : { projectDir }),
+    ...(harnessDir === undefined ? {} : { harnessDir }),
+  };
   const harnessSkill = resolveSkillsPath(["aidlc", "SKILL.md"], location);
   if (existsSync(harnessSkill)) return harnessSkill;
   const agentsSkill = join(
@@ -12688,11 +12692,18 @@ function skillMdPath(projectDir?: string): string {
 // tool's output is cut at 50 KiB and the rest saved outside the project, while
 // a !`...` line in a command template is run at command time and its output
 // put in the chat as written). The /aidlc command on that host prints the
-// skill into itself with `aidlc engine skill-text`. Read-only; no event.
+// skill into itself with `aidlc engine skill-text --harness-dir .aidlc`: the
+// command names its own harness, because a project may hold a second one and
+// the native launcher otherwise resolves them by precedence (`.claude` first).
+// Read-only; no event.
 // ---------------------------------------------------------------------------
 
-function handleSkillText(projectDir: string): void {
-  const skillPath = skillMdPath(projectDir);
+function handleSkillText(projectDir: string, flags: Record<string, string>): void {
+  const harnessDir = flags["harness-dir"];
+  if (harnessDir !== undefined && !isHarnessDirName(harnessDir)) {
+    die(`--harness-dir must name a harness folder such as .aidlc or .claude, not ${JSON.stringify(harnessDir)}.`);
+  }
+  const skillPath = skillMdPath(projectDir, harnessDir);
   let text: string;
   try {
     text = readFileSync(skillPath, "utf-8");
@@ -13172,7 +13183,7 @@ export async function main(argv: string[]): Promise<void> {
       handleStageTable(projectDir, flags, rawArgs);
       break;
     case "skill-text":
-      handleSkillText(projectDir);
+      handleSkillText(projectDir, flags);
       break;
     default:
       // `intent-birth` was renamed to `intent-create`; point the old name at

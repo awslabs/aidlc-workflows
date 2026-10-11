@@ -29,7 +29,7 @@ script (top-level dispatch, `process.exit`) crashes the session
   (`command/aidlc.md`), and the hook-adapter plugin
   (`plugin/aidlc-opencode-adapter.ts`, auto-discovered by opencode).
   The command prints the installed skill into itself each time it is typed
-  (`aidlc engine skill-text`), so the agent gets the skill whole: opencode
+  (`aidlc engine skill-text --harness-dir .aidlc`), so the agent gets the skill whole: opencode
   cuts a skill loaded through its own skill tool at 50 KiB and saves the rest
   under its data folder, outside the project.
 

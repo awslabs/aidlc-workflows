@@ -420,6 +420,10 @@ describe("t67 scope-table --check drift guard (migrated from t67 §4-6)", () => 
     tempFiles.push(seam);
     writeFileSync(seam, "# a skill\n\nwith `!NAME!` kept as written\n", "utf-8");
     expect(util(["skill-text"], seam).stdout).toBe("# a skill\n\nwith `!NAME!` kept as written\n");
+    // The harness the caller names must be a harness folder name.
+    const bad = util(["skill-text", "--harness-dir", "not a folder"]);
+    expect(bad.status).toBe(1);
+    expect(bad.out).toContain("--harness-dir");
   });
 });
 

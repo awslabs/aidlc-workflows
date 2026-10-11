@@ -14,4 +14,4 @@ until the engine says done.
 
 $ARGUMENTS
 
-!`{{INVOKE}} engine skill-text`
+!`{{INVOKE}} engine skill-text --harness-dir {{HARNESS_DIR}}`

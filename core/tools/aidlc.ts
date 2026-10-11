@@ -340,7 +340,7 @@ export const ROUTES: readonly Route[] = [
     ...HIDDEN_ENGINE,
     namespace: "engine",
     mutationScope: "none",
-    all: ["skill-text"],
+    all: ["skill-text [--harness-dir <dir>]"],
   },
   {
     id: "top-doctor",

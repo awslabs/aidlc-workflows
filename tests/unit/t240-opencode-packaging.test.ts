@@ -30,6 +30,7 @@ import {
   cpSync,
   copyFileSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -324,7 +325,7 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
   // skill into itself through the engine's own read-only verb.
   test("11: the /aidlc command prints the installed skill into itself, whole", () => {
     const command = readFileSync(join(SHELL, "command", "aidlc.md"), "utf-8");
-    expect(command).toContain("!`bun .aidlc/tools/aidlc.ts engine skill-text`");
+    expect(command).toContain("!`bun .aidlc/tools/aidlc.ts engine skill-text --harness-dir .aidlc`");
     expect(command).toContain("$ARGUMENTS");
     expect(command).not.toContain("Invoke the `aidlc` skill");
     // The native channel spells the same line with the installed launcher.
@@ -332,19 +333,19 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       join(REPO_ROOT, "dist-release", "opencode", ".opencode", "command", "aidlc.md"),
       "utf-8",
     );
-    expect(release).toContain("!`aidlc engine skill-text`");
+    expect(release).toContain("!`aidlc engine skill-text --harness-dir .aidlc`");
     expect(release).not.toContain("{{INVOKE}}");
     // What the line prints, run the way opencode runs it (from the project
     // folder, no --project-dir): the shipped skill, byte for byte, and longer
     // than opencode's 50 KiB tool-output cut.
     const r = spawnSync(
       process.execPath,
-      [join(ENGINE, "tools", "aidlc.ts"), "engine", "skill-text"],
+      [join(ENGINE, "tools", "aidlc.ts"), "engine", "skill-text", "--harness-dir", ".aidlc"],
       {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: OPENCODE_ROOT,
         encoding: "utf-8",
-        env: { ...process.env, AIDLC_HARNESS_DIR: ".aidlc" },
+        env: withoutHarnessEnv(),
       },
     );
     expect(r.status, r.stderr).toBe(0);
@@ -352,4 +353,58 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     expect(r.stdout).toBe(skill.endsWith("\n") ? skill : `${skill}\n`);
     expect(Buffer.byteLength(r.stdout, "utf-8")).toBeGreaterThan(50 * 1024);
   });
+
+  // Claude Code and opencode may share one project (the lifecycle guide's
+  // coexistence rule). The native launcher resolves a harness by precedence,
+  // `.claude` before `.aidlc`, so the opencode command names its own harness:
+  // with `--harness-dir .aidlc` the verb prints opencode's skill even when it
+  // runs from the Claude Code tools under a launcher that is not Bun by name
+  // (a copy of Bun named aidlc stands in for the compiled executable; under
+  // the name bun the tool's own tree always wins, so the flag shows only here).
+  test("12: --harness-dir picks the opencode skill in a project that also has Claude Code", () => {
+    const root = mkdtempSync(join(tmpdir(), "t240-two-trees-"));
+    try {
+      const project = join(root, "project");
+      cpSync(CLAUDE_SRC, join(project, ".claude"), { recursive: true });
+      cpSync(ENGINE, join(project, ".aidlc"), { recursive: true });
+      const launcher = join(root, process.platform === "win32" ? "aidlc.exe" : "aidlc");
+      try {
+        linkSync(process.execPath, launcher);
+      } catch {
+        copyFileSync(process.execPath, launcher);
+      }
+      const claudeSkill = readFileSync(join(project, ".claude", "skills", "aidlc", "SKILL.md"), "utf-8");
+      const opencodeSkill = readFileSync(join(project, ".aidlc", "skills", "aidlc", "SKILL.md"), "utf-8");
+      expect(claudeSkill).not.toBe(opencodeSkill);
+      const run = (...args: string[]) =>
+        spawnSync(
+          launcher,
+          [join(project, ".claude", "tools", "aidlc-utility.ts"), "skill-text", "--project-dir", project, ...args],
+          {
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+            cwd: project,
+            encoding: "utf-8",
+            env: withoutHarnessEnv(),
+          },
+        );
+      const named = run("--harness-dir", ".aidlc");
+      expect(named.status, named.stderr).toBe(0);
+      expect(named.stdout).toBe(opencodeSkill.endsWith("\n") ? opencodeSkill : `${opencodeSkill}\n`);
+      const ambient = run();
+      expect(ambient.status, ambient.stderr).toBe(0);
+      expect(ambient.stdout).toBe(claudeSkill.endsWith("\n") ? claudeSkill : `${claudeSkill}\n`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
+
+// The environment a person's shell gives the launcher: no AI-DLC harness or
+// runtime-root selector left over from this test process.
+function withoutHarnessEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.AIDLC_HARNESS_DIR;
+  delete env.AIDLC_RUNTIME_ROOT;
+  delete env.AIDLC_RUNTIME_HARNESS_ROOT;
+  return env;
+}
