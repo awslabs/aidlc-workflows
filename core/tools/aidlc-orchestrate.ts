@@ -100,6 +100,7 @@ import {
   deleteQuestion,
   firstFrontQuestionSince,
   latestFrontQuestionId,
+  wordsAlreadyRead,
   latestQuestion,
   pruneExpiredQuestions,
   QUESTION_UNAVAILABLE,
@@ -318,7 +319,6 @@ import {
   reviewAttemptWindow,
   setField,
   withoutEntryWord,
-  isBareContinuationPhrase,
   sortAttemptEvents,
   stageJumpReaches,
   resolveBoltDag,
@@ -3169,13 +3169,45 @@ function reentryReplyDirective(requestId: string, undo = "", work: string[] = []
     "no offer to resume. If their words fit more than one (a word several names share, such as a name that is part " +
     "of another), ask them once in plain words which they meant, then stop.";
   return printDirective(
-    `${undo}Work is in progress, and the person's words may ask to redo, jump to a stage, or start fresh. Read them. If ` +
-      `they do, run \`${orchestrate} report --result resumed --choice <redo|jump|fresh>\` with the choice you read ` +
-      "from their words (add `--target <stage slug>` for the stage they named, and `--unit <unit>` or `--every-unit` " +
-      "when they named a Unit or said every Unit), then follow the print it returns. If they are about something " +
-      `else, such as new work or a change to this work, or you cannot tell which, run \`${orchestrate} next ` +
-      `--request ${requestId}\` and follow what it returns: the engine kept their words and asks the person where ` +
+    `${undo}Work is in progress, and the person's words may ask to redo, jump to a stage, or start fresh, or may only ` +
+      "ask for it to go on. Read them. If they only ask for the work to go on (such as \"carry on\", \"proceed\" or " +
+      `"keep going"), run \`${orchestrate} next\` with nothing after it: the work continues where it stands. If they ` +
+      `ask to redo, jump or start fresh, run \`${orchestrate} report --result resumed --choice <redo|jump|fresh>\` with ` +
+      "the choice you read from their words (add `--target <stage slug>` for the stage they named, and `--unit <unit>` " +
+      "or `--every-unit` when they named a Unit or said every Unit), then follow the print it returns. If they are " +
+      `about something else, such as new work or a change to this work, or you cannot tell which, run \`${orchestrate} ` +
+      `next --request ${requestId}\` and follow what it returns: the engine kept their words and asks the person where ` +
       `that work belongs, and a redo or jump they say there is read the same way.${named}`,
+  );
+}
+
+// The same words in team mode (Unit Ownership: team), where the stage, gate and
+// plan readings above belong to the project's main checkout: go on, or a
+// request the engine asks the person about.
+function teamWordsReplyDirective(requestId: string): PrintDirective {
+  const orchestrate = aidlcToolInvocation("orchestrate");
+  return printDirective(
+    "Work is in progress, and the person's words may only ask for it to go on, or be new work or a change to this " +
+      "work. Read them. If they only ask for the work to go on (such as \"carry on\" or \"proceed\"), run " +
+      `\`${orchestrate} next\` with nothing after it: the work continues where it stands. Otherwise, or if you cannot ` +
+      `tell, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words ` +
+      "and asks the person where that work belongs.",
+  );
+}
+
+// Words alone where work is in progress but none is selected in this chat (a
+// teammate's clone, a chat that has not joined the work): the agent reads
+// whether they only ask to go on (the bare `next` asks which piece to pick up),
+// name one piece exactly, or describe new work. The engine kept the words.
+function unselectedWordsReplyDirective(requestId: string, work: string[]): PrintDirective {
+  const orchestrate = aidlcToolInvocation("orchestrate");
+  return printDirective(
+    `Work is in progress here (${work.join(", ")}), and none is selected in this chat. Read the person's words. If ` +
+      "they only ask for the work to go on (such as \"carry on\" or \"proceed\"), run " +
+      `\`${orchestrate} next\` with nothing after it: it asks them which piece to pick up. If their words name exactly ` +
+      `one of the pieces, run \`${aidlcDispatcherInvocation("intent")} switch <name>\`, say the line it prints, then ` +
+      "stop. Otherwise (new work, or you cannot tell which), run " +
+      `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words.`,
   );
 }
 
@@ -7481,6 +7513,10 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): void {
   const typed = aidlcEntryWords(message.text);
   if (typed === null || typed.length === 0) return;
   const own = parseNextFlags(splitKiroCommandArgs(typed));
+  // A line `next` already read for this chat (the reading step over work nobody
+  // has selected kept its words as a question) is not read again: the bare
+  // `next` the agent runs after that step asks which work to pick up.
+  if (own.intent !== undefined && wordsAlreadyRead(pd, own.intent, message.at)) return;
   for (const key of Object.keys(flags)) delete (flags as unknown as Record<string, unknown>)[key];
   Object.assign(flags, own);
 }
@@ -7716,9 +7752,6 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // The settings typed with the request ride this answer as they ride the
     // option's command: the question it names fills them in below.
   }
-  // "carry on", "keep going" and the like, said on their own, name no new
-  // work: while work is in progress they get what no words get (see below).
-  const bareContinuation = routingAnswer === null && onlyProse && isBareContinuationPhrase(flags.intent ?? "");
 
   // An answer names its question by id. The copy is removed once the answer
   // starts work, so a missing copy may mean a repeated answer: carry on with
@@ -7977,7 +8010,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // other words alone stay the agent's to read (Branch 9c).
   if (
     flags.workspaceCommand === undefined && typeof flags.intent === "string" && args.length === 1 &&
-    !bareContinuation && nextArgsAreOnlyWords(args) &&
+    nextArgsAreOnlyWords(args) &&
     workspaceRecordExists(resolveProjectDir(projectDir), "intent", args[0])
   ) {
     flags.workspaceCommand = { kind: "switch", noun: "intent", name: args[0], explicit: false };
@@ -8430,10 +8463,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       // or their own words): the work carries on, as `--resume` does, and
       // their words are read below. The Stop hook's probe still sees the park.
       const back = !isReadOnlyEngineProbe() && personSpokeSincePark(pd);
-      // "carry on", "resume" and the like, said on their own, are no words;
       // "part of that work, continue it", chosen on the routing question, is
       // that same carrying on (its words were read when the question was asked).
-      if (back && (args.length === 0 || bareContinuation || routingAnsweredAsActiveWork)) {
+      if (back && (args.length === 0 || routingAnsweredAsActiveWork)) {
         // The routing answer is re-run as it was, so the work it continues
         // still knows the person's words were about it (a bare `next` would
         // ask the code plan question again with their reply unread).
@@ -8943,12 +8975,23 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   //     COMPOSE OFFER, never a silent default. The conductor renders
   //     it; on "compose" it re-runs `next compose "<text>"` to reach the
   //     Branch 4c dispatch.
-  // A continuation phrase on its own where work is in progress but none is
-  // selected asks which work to pick up, as no words do.
-  if (!stateContent && bareContinuation) {
-    const pick = intentPickPromptIfRecordsExist(pd);
-    if (pick) {
-      emit(pick);
+  // Words alone where work is in progress but none is selected here (a
+  // teammate's clone, a chat that has not joined the work) are read by the
+  // agent before anything is offered, as words over selected work are (Branch
+  // 9c): the bare `next` the print names asks which piece to pick up, and
+  // `--request` brings the kept words back here as the request they may be.
+  // Read off the parse, not the argv, so the person's own line taken in the
+  // agent's place (takePersonsOwnLine) is read the same way; that bare `next`
+  // is not taken a second time (wordsAlreadyRead), so the chain ends.
+  if (!stateContent && onlyProse && flags.intent !== undefined && flags.markedWords !== true && flags.request === undefined) {
+    const here = unselectedRecords(pd);
+    if (here !== null && here.selectable.length > 0) {
+      const words = saveQuestion(pd, flags.intent, "", "routing", {
+        space: here.space,
+        targets: here.selectable.map(({ intent, selector }) => ({ intent: selector, uuid: intent.uuid ?? "" })),
+        pick: true,
+      });
+      emit(unselectedWordsReplyDirective(words.id, here.selectable.map(({ selector }) => selector)));
       return;
     }
   }
@@ -8958,7 +9001,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     !flags.scope &&
     !flags.positionalScope
   ) {
-    emit(freshWorkRoute(flags, flags.intent, pd));
+    emit(freshWorkRoute(flags, flags.intent, pd, question?.origin === "routing" ? question.id : undefined));
     return;
   }
 
@@ -9169,10 +9212,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       return;
     }
     // Words alone (nothing `next` reads as a flag, scope, verb or noun) may
-    // ask to redo, jump to a stage, or start fresh, read the same way; words
-    // with a setting typed beside them are asked about with it, as below. A
-    // continuation phrase on its own asks none of these: it carries on below.
-    if (nextArgsAreOnlyWords(args) && !bareContinuation) {
+    // only ask for the work to go on, or ask to redo, jump to a stage, or start
+    // fresh, read the same way; words with a setting typed beside them are
+    // asked about with it, as below.
+    if (nextArgsAreOnlyWords(args)) {
       const words = saveQuestion(
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
@@ -9181,10 +9224,19 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       return;
     }
   }
-  // A continuation phrase on its own continues the work in progress: no
-  // routing question, the same step no words get. A question or gate the
-  // person has open read the words as its possible answer above.
-  if (bareContinuation) flags.intent = undefined;
+  // In team mode (Unit Ownership: team) the readings above belong to the main
+  // checkout, so words alone are read here: go on, or a request.
+  if (
+    flags.intent && !flags.scope && !flags.positionalScope && !flags.resume && question === undefined &&
+    isTeamUnitOwnership(stateContent) && nextArgsAreOnlyWords(args)
+  ) {
+    const words = saveQuestion(
+      pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
+      undefined, routingSettings(carriedRoutingFlags(flags)),
+    );
+    emit(teamWordsReplyDirective(words.id));
+    return;
+  }
   // A plan named by its word before the description (`/aidlc bugfix Fix login`)
   // is the scope that new work would get, asked about the same way.
   if (

@@ -91,7 +91,24 @@ function util(args: string[], p = proj): Run {
   return runTool(UTIL, args, p);
 }
 function next(args: string[], p = proj, orchestrator = ORCH): Run {
-  return runTool(orchestrator, ["next", ...args], p);
+  return followUnselectedReading(runTool(orchestrator, ["next", ...args], p), p, orchestrator);
+}
+// Words alone where work is here but none is selected first reach the agent
+// (one print naming the pieces, a bare `next`, `intent switch` and
+// `next --request <id>`; t-carry-on-continues-the-work pins it). The cases
+// here are about the ask the "new work" reading then gets, so that reading is
+// followed as the agent follows it: one more engine call, the same ask.
+function followUnselectedReading(run: Run, p: string, orchestrator: string): Run {
+  let printed: { kind?: string; message?: string } | null = null;
+  try {
+    printed = JSON.parse(run.stdout.trim()) as { kind?: string; message?: string };
+  } catch {
+    return run;
+  }
+  if (printed?.kind !== "print" || typeof printed.message !== "string") return run;
+  if (!printed.message.startsWith("Work is in progress here (")) return run;
+  const id = /--request ([0-9a-f]{8})/.exec(printed.message)?.[1];
+  return id === undefined ? run : runTool(orchestrator, ["next", "--request", id], p);
 }
 // The same request, marked with the delimiter as the person's own words. With a
 // question of ours already open, a bare words line is read as a possible reply
@@ -917,7 +934,15 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       // A command as one conversation runs it.
       const emittedIn = (session: string, command: string) =>
         JSON.parse(runEmittedCommand(command, proj, { AIDLC_SESSION_OVERRIDE: session }).stdout.trim());
-      const inSession = (session: string, text: string) => emittedIn(session, `${ORCH_SH} next '${text}'`);
+      // Words alone first reach the agent (the none-selected reading print); its "new work" reading is followed in
+      // the same conversation, as the agent follows it.
+      const inSession = (session: string, text: string) => {
+        const first = emittedIn(session, `${ORCH_SH} next '${text}'`);
+        const id = first.kind === "print" && String(first.message).startsWith("Work is in progress here (")
+          ? /--request ([0-9a-f]{8})/.exec(String(first.message))?.[1]
+          : undefined;
+        return id === undefined ? first : emittedIn(session, `${ORCH_SH} next --request ${id}`);
+      };
       const questionCount = () => readdirSync(join(proj, "aidlc", ".aidlc-sessions", "questions")).length;
       const seedOneIntentNoCursor = (): string => {
         expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
