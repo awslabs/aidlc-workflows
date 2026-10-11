@@ -745,7 +745,9 @@ Approve, `practices-promote` must commit both the affirmed timestamp and a
 `PRACTICES_AFFIRMED` audit receipt from the current stage attempt before the
 conductor reports the stage approved. With collaborators off (the scope setting,
 shipped on only for `enterprise`), the directive lists no support agents and each
-of these stages runs its lead alone (`stage-protocol-ensemble.md`, section 5).
+of these stages runs its lead alone (`stage-protocol-ensemble.md`, section 5). A
+collaborators switch flipped while a stage waits at its gate applies from the next
+stage; the finished stage is held to the setting it ran with.
 
 ### The 11 Domain Agents
 

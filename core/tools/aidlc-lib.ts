@@ -34558,7 +34558,8 @@ export function pipelineLinks(
  * one switch owner. Fails open to the declared list if the state cannot be read,
  * so a resolution hiccup never strands a legitimately-run stage. An isolated
  * (`--single`) run reads the scope its attempt recorded and no state, as its
- * directive does: it never borrows the main workflow's settings.
+ * directive does: it never borrows the main workflow's settings. An open gate
+ * holds the stage to the switch it opened under (supportAgentsAtOpenGate).
  */
 export function effectiveSupportAgentsForProject(
   projectDir: string,
@@ -34578,7 +34579,66 @@ export function effectiveSupportAgentsForProject(
     return declared;
   }
   const scope = getField(stateContent, "Scope")?.trim() ?? null;
-  return effectiveSupportAgents(stage, scope, stateContent, env);
+  return supportAgentsAtOpenGate(projectDir, stage, scope, stateContent, env);
+}
+
+/**
+ * The collaborators a stage's open gate holds it to. While a stage waits at its
+ * gate, "Approve, and bring the specialists in" flips the switch for the next
+ * stage; the finished stage is never re-checked against a setting it did not run
+ * under (the rule unitFinishedBeforeSummaryOn applies to summary confirmation).
+ * The anchor is the stage's LAST organic STAGE_AWAITING_APPROVAL row in the
+ * current attempt (a relaxed Guard Policy keeps the floor after a GATE_REJECTED,
+ * so a gate shown again has a later row) that no GATE_APPROVED, GATE_REJECTED or
+ * STAGE_COMPLETED for the stage has closed. The FIRST CEREMONY_SET collaborators
+ * row after that anchor carries, in Old, the setting the gate opened under. The
+ * current setting applies when there is no organic gate row (a gate synthesized
+ * as Recovered is written after the check), no flip after it, an Old that does
+ * not parse, or a cross-shard timestamp tie.
+ */
+export function supportAgentsAtOpenGate(
+  projectDir: string,
+  stage: Pick<StageEntry, "slug" | "support_agents">,
+  scope: string | null | undefined,
+  stateContent: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const declared = stage.support_agents ?? [];
+  const current = effectiveSupportAgents(stage, scope, stateContent, env);
+  if (declared.length === 0) return current;
+  let events: OrderedPipelineEvidenceEvent[];
+  try {
+    events = orderedPipelineEvidenceEvents(projectDir);
+  } catch {
+    return current;
+  }
+  const floor = pipelineAttemptFloor(events, stage.slug, false, guardPolicyAcceptsChanges(projectDir));
+  let gate: OrderedPipelineEvidenceEvent | null = null;
+  for (const entry of events) {
+    if (!pipelineEventAfterFloor(entry, floor)) continue;
+    if (auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")) continue;
+    if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
+    if (entry.event === "STAGE_AWAITING_APPROVAL") {
+      if (!auditBlockField(entry.block, "Recovered")) gate = entry;
+    } else if (
+      entry.event === "GATE_APPROVED" ||
+      entry.event === "GATE_REJECTED" ||
+      entry.event === "STAGE_COMPLETED"
+    ) {
+      gate = null;
+    }
+  }
+  if (gate === null) return current;
+  const opened: PipelineAttemptFloor = { timestamp: gate.timestamp, rows: [gate] };
+  const flip = events.find((entry) =>
+    entry.event === "CEREMONY_SET" &&
+    auditBlockField(entry.block, "Key") === "collaborators" &&
+    pipelineEventAfterFloor(entry, opened)
+  );
+  if (flip === undefined) return current;
+  const before = parseCeremonySetting(auditBlockField(flip.block, "Old"));
+  if (before === null) return current;
+  return before === "off" ? [] : declared;
 }
 
 type OrderedPipelineEvidenceEvent = AuditShardEvent;
