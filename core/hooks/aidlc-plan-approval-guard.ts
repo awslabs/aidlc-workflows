@@ -1157,6 +1157,25 @@ function isAnswerTextTarget(projectDir: string, target: string): boolean {
 // The Code Generation stage's learnings diary (`<record>/construction/code-generation/memory.md`),
 // exactly, as a plain file inside AI-DLC's records: reached through no symlink
 // and not hard-linked to another file (isStageRecordOutput).
+// A phase-boundary verification report: `<record>/verification/<boundary>-verification.md`
+// (the governance protocol, written as the next phase begins) or
+// `phase-check-<phase>.md` (the phase's last stage). A Codex run wrote the
+// Inception->Construction one while Code Generation was planning, and the guard
+// read it as a workspace path. It is AI-DLC's own record of a check, not source
+// and not a plan-bound file, so the folder is admitted while the Code Generation
+// step is current, under the stage diary's fences (inside aidlc/spaces, not the
+// state, the intents index, an engine control or audit file, reached through no
+// symlink, not hard-linked). The drive letter is folded as for the diary, so a
+// VS Code host's `c:\` spelling is the same folder on Windows.
+function isPhaseVerificationTarget(projectDir: string, target: string): boolean {
+  try {
+    const folder = normalizeDriveLetter(resolve(join(docsRoot(projectDir), "verification")));
+    return isWithinDir(normalizeDriveLetter(resolve(target)), folder) && isStageRecordOutput(projectDir, target);
+  } catch {
+    return false;
+  }
+}
+
 function isStageDiaryTarget(projectDir: string, target: string): boolean {
   try {
     const diary = normalizeDriveLetter(resolve(memoryFilePath(projectDir, "construction", GUARDED_STAGE)));
@@ -2763,7 +2782,8 @@ async function evaluate(
         const approvalDir = resolve(codeGenerationRecordDir(projectDir, unit));
         const outsideRecord = mutation.targets.find(
           (candidate) =>
-            !isTrustedRecordTarget(projectDir, candidate, approvalDir),
+            !isTrustedRecordTarget(projectDir, candidate, approvalDir) &&
+            !isPhaseVerificationTarget(projectDir, candidate),
         );
         if (!outsideRecord && !mutation.opaqueShell) return 0;
         const approval = evaluateCodeGenerationApproval(projectDir, target);
