@@ -34,10 +34,11 @@ stateDiagram-v2
     Archived --> Running : WORKFLOW_UNARCHIVED
     Completed --> Archived : WORKFLOW_ARCHIVED
     Archived --> Completed : WORKFLOW_UNARCHIVED
+    Completed --> Running : SCOPE_CHANGED (a stage added after the last)
     Completed --> [*]
 ```
 
-<!-- Text fallback: initial state transitions to Running on WORKFLOW_STARTED; Running transitions to Completed on WORKFLOW_COMPLETED; Running or Completed transitions to Archived on WORKFLOW_ARCHIVED; Archived transitions back to the status it came from (Running or Completed) on WORKFLOW_UNARCHIVED; Completed is otherwise terminal. -->
+<!-- Text fallback: initial state transitions to Running on WORKFLOW_STARTED; Running transitions to Completed on WORKFLOW_COMPLETED; Running or Completed transitions to Archived on WORKFLOW_ARCHIVED; Archived transitions back to the status it came from (Running or Completed) on WORKFLOW_UNARCHIVED; Completed transitions back to Running on SCOPE_CHANGED when the new scope runs a stage after the last one (the work reopens at that stage); Completed is otherwise terminal. -->
 
 **Status values:** `Running`, `Completed`, `Archived`.
 
@@ -51,6 +52,7 @@ A workflow's `Running` state persists across Claude Code sessions. You start a w
 | `Running -> Completed` | Final stage outcome reported through `aidlc-orchestrate.ts report` | `tools/aidlc-state.ts` (internal emitter) |
 | `Running -> Archived`, `Completed -> Archived` | `aidlc-utility intent archive <name>` (human decision; refused only for claimed team Units) | `tools/aidlc-utility.ts` |
 | `Archived -> Running`, `Archived -> Completed` | `aidlc-utility intent unarchive <name>` (back to the status recorded in `Archived From`) | `tools/aidlc-utility.ts` |
+| `Completed -> Running` | `aidlc-utility scope-change` to a scope that runs a stage after the last one: the work reopens at that stage (`[-]`, one `STAGE_STARTED`, the registry row `in-flight`); `doctor` reads a `WORKFLOW_COMPLETED` followed by a later `STAGE_STARTED` as a reopened run, not drift | `tools/aidlc-utility.ts` |
 
 ---
 

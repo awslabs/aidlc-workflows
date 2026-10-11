@@ -263,6 +263,7 @@ import {
   resolveReviewClass,
   loadScopeMapping,
   nextInScopeStage,
+  stageReopenedByScopeChange,
   openPendingDecision,
   parseCheckboxes,
   parseGuardPolicy,
@@ -8970,8 +8971,15 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       for (const modifier of modifiers) parts.push(`--${modifier}`);
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
       withdrawSettingWords(pd);
+      // On finished work the change starts the first stage the new scope adds
+      // after the last one (the tool reads the same predicate), so nothing
+      // waits on the person: the agent carries on into it instead of ending
+      // the turn, as a setting over running work does (#2261).
+      const reopensFinishedWork = stageReopenedByScopeChange(stateContent, flags.scope) !== null;
       emit(planChanges ? planChangeDirective(planChanges, command, null, planApprovalAskIsOpen(pd), stillParked) : keptWhilePlanWaits(
-        turnEndingPrint(`Run \`${command}\` to change scope, then ${verbatimThenStop}`),
+        reopensFinishedWork
+          ? printDirective(`Run \`${command}\` to change scope, then print its output verbatim and re-run next to carry on with the work.`)
+          : turnEndingPrint(`Run \`${command}\` to change scope, then ${verbatimThenStop}`),
         planApprovalAskIsOpen(pd),
       ));
       return;

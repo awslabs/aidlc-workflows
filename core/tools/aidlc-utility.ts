@@ -269,6 +269,8 @@ import {
   migrateFlatLayout,
   needsFlatMigration,
   nextInScopeStage,
+  answerModeStageStartedFields,
+  stageReopenedByScopeChange,
   PHASES,
   parseArgs,
   parseBoltName,
@@ -5543,9 +5545,12 @@ export async function collectDoctorReport(
     try {
       const auditContent = auditAllShards;
       const stateContent = readFileSync(stateMdPath, "utf-8");
-      // Find last WORKFLOW_COMPLETED event
+      // The last WORKFLOW_COMPLETED, unless a stage started after it: that run
+      // was reopened (a scope change on finished work started the stage it
+      // added, #2261), so a Running status is the truth, not a lost write.
       const wcIdx = auditContent.lastIndexOf("**Event**: WORKFLOW_COMPLETED");
-      if (wcIdx !== -1) {
+      const reopenedIdx = auditContent.lastIndexOf("**Event**: STAGE_STARTED");
+      if (wcIdx !== -1 && reopenedIdx < wcIdx) {
         const status = stateContent.match(/^- \*\*Status\*\*:\s*(\S+)/m);
         if (status && !stateShowsCompletion(stateContent)) {
           results.push({
@@ -11602,11 +11607,15 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     let content = update.content;
     const auditEntries = update.audit;
     let outputLines = update.lines;
+    // Finished work the new scope extends past its last stage is reopened at
+    // the first stage it adds (#2261); `next` reads the same predicate.
+    let reopened: StageEntry | null = null;
     if (oldScope === newScope) {
       if (outputLines.length === 0) outputLines = [`Scope is already ${newScope}`];
     } else {
       const graph = loadStageGraph();
       const projectType = getField(content, "Project Type") || "Greenfield";
+      reopened = stageReopenedByScopeChange(contentBefore, newScope);
 
       // Compute adjusted mapping (greenfield reverse-engineering adjustment).
       const adjustedMapping = { ...newScopeDef.stages };
@@ -11700,6 +11709,21 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       content = setField(content, "Stages to Execute", executeStages.join(", "));
       content = setField(content, "Stages to Skip", skipStages.length > 0 ? skipStages.join(", ") : "none");
       content = setField(content, "Total Stages", String(executeStages.length));
+      // The person asked for a scope that runs a stage after the last one, and
+      // this write is the only one that can give the finished record a cursor
+      // to reach it: start that stage now, with the field set `advance` writes
+      // for a next stage. What they approved before stays approved.
+      if (reopened) {
+        content = setCheckbox(content, reopened.slug, "in-progress");
+        content = setField(content, "Current Stage", reopened.slug);
+        content = setField(content, "Lifecycle Phase", reopened.phase.toUpperCase());
+        content = setField(content, "Next Stage", nextInScopeStage(reopened.slug, newScope, content)?.slug ?? "none");
+        content = setField(content, "In Progress", reopened.slug);
+        content = setField(content, "Active Agent", reopened.lead_agent);
+        content = setField(content, "Status", "Running");
+        content = setField(content, "Next Action", `Execute ${reopened.name}`);
+        content = setPhaseProgress(content, reopened.phase, "Active");
+      }
 
       const updatedCheckboxes = parseCheckboxes(content);
       const executeSlugs = new Set(
@@ -11754,6 +11778,19 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
           },
         })),
       );
+      if (reopened) {
+        auditEntries.push({
+          eventType: "STAGE_STARTED",
+          fields: {
+            Stage: reopened.slug,
+            Agent: reopened.lead_agent,
+            ...answerModeStageStartedFields(projectDir, { intent, space }),
+            ...(reopened.workspace_requires
+              ? sourceBaselineAuditFields(projectDir, reopened.slug, intent, space)
+              : {}),
+          },
+        });
+      }
       const droppedUnitWork = droppedUnitWorkLine(projectDir, contentBefore, content, intent, space);
       // The stages after Initialization, the count the person reads everywhere
       // during a run (the creation line, the progress line).
@@ -11762,8 +11799,9 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
           graph.find((s) => s.slug === c.slug)?.phase !== "initialization",
       ).length;
       // What happened and how to go back, then each stage it skipped, the Unit
-      // work it dropped, and each setting whose value changed. Nothing runs
-      // until the person asks.
+      // work it dropped, and each setting whose value changed. Nothing else
+      // runs until the person asks: on finished work the stage started above
+      // is what they asked for, and `next` carries on into it.
       outputLines = [
         `Switched to ${newScope} (${SCOPE_GLOSS}): ${summary.shown} stages (${shownDone} done), ` +
           `${gates} approval gates${ceremonyOffClause(summary)}.` +
@@ -11793,6 +11831,8 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       }
       // The work list and a restart offer name the scope it runs on now.
       if (intent && oldScope !== newScope) updateIntentScope(projectDir, intent, newScope, space);
+      // Reopened work is in flight again on the work list.
+      if (intent && reopened) updateIntentStatus(projectDir, intent, "in-flight", space);
     }
     process.stdout.write(`${outputLines.join("\n")}\n`);
   }, intent, space));

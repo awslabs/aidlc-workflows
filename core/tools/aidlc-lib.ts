@@ -38404,6 +38404,37 @@ export function nextInScopeStage(
   return null;
 }
 
+// The stage a scope change to `scope` starts on FINISHED work: the first stage
+// after the cursor that the scope runs and that is not already done or skipped
+// (with the greenfield reverse-engineering adjustment the plan grid applies).
+// Null for running work, and when nothing the scope runs follows the cursor.
+// Shared by the scope change, which starts that stage as it rewrites the plan,
+// and by `next`, which then carries on into it instead of ending the turn, so
+// the two can never disagree (#2261).
+export function stageReopenedByScopeChange(
+  stateContent: string,
+  scope: string,
+): StageEntry | null {
+  if ((getField(stateContent, "Status") ?? "").trim() !== "Completed") return null;
+  const cursor = (getField(stateContent, "Current Stage") ?? "").trim();
+  const boxes = parseCheckboxes(stateContent);
+  const cursorState = boxes.find((c) => c.slug === cursor)?.state;
+  if (cursorState !== "completed" && cursorState !== "skipped") return null;
+  const mapping = loadScopeMapping()[scope];
+  if (!mapping) return null;
+  const greenfield = (getField(stateContent, "Project Type") || "Greenfield").toLowerCase() === "greenfield";
+  const graph = loadStageGraph();
+  const at = graph.findIndex((s) => s.slug === cursor);
+  if (at === -1) return null;
+  for (const stage of graph.slice(at + 1)) {
+    const box = boxes.find((c) => c.slug === stage.slug)?.state;
+    if (box === "completed" || box === "skipped") continue;
+    if (stage.slug === "reverse-engineering" && greenfield) continue;
+    if (mapping.stages[stage.slug] === "EXECUTE") return stage;
+  }
+  return null;
+}
+
 // Resolve one stage's action in the approved workflow plan. State suffixes
 // include recomposition and project-type overrides, so they take precedence
 // over the stock scope grid.
