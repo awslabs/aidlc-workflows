@@ -26,6 +26,7 @@ import {
   createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
+  followProposal,
   removeWorkspaceRecord,
   runOrchestrateNext,
   seededStateFile,
@@ -71,7 +72,9 @@ interface Emitted {
 }
 
 function next(proj: string, args: string[] = []): { d: Emitted; out: string } {
-  const result = runOrchestrateNext(ORCHESTRATE, proj, args, { env: env(proj) });
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const options = { env: env(proj) };
+  const result = followProposal(runOrchestrateNext(ORCHESTRATE, proj, args, options), ORCHESTRATE, proj, options);
   expect(result.directive, result.out).not.toBeNull();
   return { d: result.directive as unknown as Emitted, out: result.out };
 }
@@ -122,8 +125,11 @@ describe("their reply to the plan offer reaches that offer", () => {
     const proj = emptyProject();
     const offer = next(proj, ["build a small notes app for my team"]);
     expect(offer.d.ask_type, offer.out).toBe("compose-offer");
-    const asked = questions(proj);
-    expect(asked.length).toBe(1);
+    // The request the words were kept under (the agent's proposal step) and the
+    // plan question derived from it.
+    expect(questions(proj).length).toBe(2);
+    const offerId = /--request ([0-9a-f]{8})/.exec(String(offer.d.compose_command))?.[1];
+    expect(offerId, offer.out).toBeDefined();
 
     const answered = next(proj, splitKiroCommandArgs(reply));
     // Not the same offer again, and never an offer about their reply.
@@ -131,9 +137,9 @@ describe("their reply to the plan offer reaches that offer", () => {
     expect(answered.d.kind, answered.out).toBe("print");
     expect(answered.d.narration, answered.out).toBeUndefined();
     // It carries that question's own commands, by its id.
-    expect(String(answered.d.message)).toContain(asked[0].id);
+    expect(String(answered.d.message)).toContain(offerId!);
     // And nothing new was asked of them.
-    expect(questions(proj).length).toBe(1);
+    expect(questions(proj).length).toBe(2);
     cleanupTestProject(created.pop());
   });
 
@@ -141,10 +147,11 @@ describe("their reply to the plan offer reaches that offer", () => {
     const proj = emptyProject();
     const offer = next(proj, ["fix the login crash when the session expires"]);
     expect(offer.d.ask_type, offer.out).toBe("scope-confirm");
-    const asked = questions(proj);
+    const offerId = /--request ([0-9a-f]{8})/.exec(String(offer.d.confirm_command))?.[1];
+    expect(offerId, offer.out).toBeDefined();
     const answered = next(proj, ["yes"]);
     expect(answered.d.kind, answered.out).toBe("print");
-    expect(String(answered.d.message)).toContain(asked[0].id);
+    expect(String(answered.d.message)).toContain(offerId!);
     expect(String(answered.d.message)).toContain("--scope");
   });
 
@@ -163,31 +170,30 @@ describe("their reply to the plan offer reaches that offer", () => {
 });
 
 // ---------------------------------------------------------------------------
-// A bare plan word is ambiguous with their first word
+// A plan's name typed first is the person's pick of it, however many words
+// follow (Arden 2026-10-12: the two-word cutoff is gone)
 // ---------------------------------------------------------------------------
 
 describe("a plan word at the start of their sentence", () => {
-  test("with words after it, the agent is told both readings and nothing is created", () => {
+  test("with words after it, that plan acts for those words, and nothing is asked of them", () => {
     const proj = emptyProject();
     const { d, out } = next(proj, ["bugfix", "Fix", "duplicate", "todos"]);
     expect(d.kind, out).toBe("print");
-    expect(d.narration, out).toBeUndefined();
     expect(d.ask_type, out).toBeUndefined();
-    // The plan reading, and their words reading, each as a command to run.
-    expect(String(d.message)).toContain("--scope bugfix");
-    expect(String(d.message)).toContain("Fix duplicate todos");
-    expect(String(d.message)).toContain("--");
-    // Nothing was created and nothing was asked of them.
+    // The creation print for the plan they named; their words travel by request id.
+    expect(String(d.message)).toContain("intent create --scope bugfix --request");
+    expect(questions(proj).map((q) => q.text)).toEqual(["Fix duplicate todos"]);
+    // Nothing is created by the print itself.
     expect(activeIntent(proj)).toBe("");
-    expect(questions(proj).length).toBe(0);
   });
 
-  test("their own first word is never spent as a plan name", () => {
+  test("a plan's name first is their pick; the delimiter marks the first word as theirs", () => {
     const proj = emptyProject();
     const { d, out } = next(proj, ["classic", "car", "rental", "website"]);
     expect(d.kind, out).toBe("print");
-    expect(String(d.message)).toContain("classic car rental website");
-    // One re-run marked as theirs keeps every word.
+    expect(String(d.message)).toContain("intent create --scope classic --request");
+    expect(questions(proj).map((q) => q.text)).toEqual(["car rental website"]);
+    // Marked as theirs, every word stays their request and no plan is picked.
     const asked = next(proj, ["--", "classic car rental website"]);
     expect(asked.d.kind, asked.out).toBe("ask");
     expect(String(asked.d.question)).toContain("classic car rental website");
@@ -207,25 +213,20 @@ describe("a plan word at the start of their sentence", () => {
   });
 
   test("the three ways a harness hands that line over read the same", () => {
-    // Settled with the conductor 2026-10-10: the person's sentence opening with
-    // a plan's name is the same reading step however it arrives, and the plan
-    // named in its own argument (what the orchestrator skill asks the agent
-    // for) is the reading already made, so it acts.
+    // Arden 2026-10-12: the plan's name first is the pick and the words after
+    // it the request, split into tokens, quoted whole (Kiro IDE's PowerShell),
+    // or the plan in its own argument with the request in one more.
     const line = "classic car rental website";
     const split = splitKiroCommandArgs(line);
-    for (const argv of [split, [line]]) {
+    for (const argv of [split, [line], ["classic", "car rental website"]]) {
       const parsed = parseNextFlags([...argv]);
-      expect(parsed.readingStep?.kind, JSON.stringify(argv)).toBe("plan-word");
-      expect(parsed.intent, JSON.stringify(argv)).toBe(line);
-      expect(parsed.positionalScope, JSON.stringify(argv)).toBeUndefined();
-      // No seam acts on it before the agent reads it, in either form.
+      expect(parsed.readingStep, JSON.stringify(argv)).toBeUndefined();
+      expect(parsed.positionalScope, JSON.stringify(argv)).toBe("classic");
+      expect(parsed.intent, JSON.stringify(argv)).toBe("car rental website");
+      // No seam runs it as a command or a read-only mode, in any form.
       expect(classifyTerminalCommand([...argv]), JSON.stringify(argv)).toBeNull();
       expect(isReadOnlyNextArgv(argv), JSON.stringify(argv)).toBe(false);
     }
-    const named = parseNextFlags(["classic", "car rental website"]);
-    expect(named.readingStep).toBeUndefined();
-    expect(named.positionalScope).toBe("classic");
-    expect(named.intent).toBe("car rental website");
   });
 
   test("a plan named by its flag with a clean tail of their words still acts", () => {
@@ -292,8 +293,8 @@ describe("a flag the engine takes with a value it does not", () => {
 });
 
 // ---------------------------------------------------------------------------
-// A reading step names commands for someone to run, so nothing of the
-// person's own text is ever bare shell syntax in one
+// A step that names commands for someone to run never puts the person's own
+// text in one as bare shell syntax
 // ---------------------------------------------------------------------------
 
 describe("their own words in a command the step names are one quoted argument", () => {
@@ -303,23 +304,19 @@ describe("their own words in a command the step names are one quoted argument", 
     "classic rental $(id) site",
     "bugfix fix the \"login\" crash && echo no",
   ];
-  test.each(shellish)("%j is quoted in every command the step names", (line) => {
+  test.each(shellish)("%j: the plan acts, and the words travel by request id, never inside a command", (line) => {
     const proj = emptyProject();
     const argv = splitKiroCommandArgs(line);
-    const said = argv.join(" ");
+    const words = argv.slice(1).join(" ");
     const { d, out } = next(proj, argv);
     expect(d.kind, out).toBe("print");
     const message = String(d.message);
-    // Their text reaches the commands the step names as ONE single-quoted
-    // argument, so no separator, substitution or redirection of theirs is
-    // syntax when the agent runs it.
-    expect(message, out).toContain(`-- '${said}'`);
-    // And nothing of theirs is left bare after a delimiter anywhere.
-    for (const after of message.split(" -- ").slice(1)) {
-      expect(after.startsWith("'") || after.startsWith("`"), message).toBe(true);
-    }
-    // Their words are still all there, and nothing ran.
-    expect(message).toContain(said);
+    // The creation print for the plan they named carries their request by id:
+    // no separator, substitution or redirection of theirs is syntax in it.
+    expect(message, out).toContain(`intent create --scope ${argv[0]} --request`);
+    expect(message, out).not.toContain(words);
+    // Their words are kept whole, and nothing ran.
+    expect(questions(proj).map((q) => q.text)).toEqual([words]);
     expect(activeIntent(proj)).toBe("");
     cleanupTestProject(created.pop());
   });
@@ -349,8 +346,9 @@ describe("a reply reaches no question but the one in front of them", () => {
     const second = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "poc", "build the CSV export"], {
       env: { ...env(proj), AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000001b02" },
     });
+    // The first chat's proposal step and the plan question derived from it, then the second chat's own question.
     const asked = questions(proj);
-    expect(asked.length, second.out).toBe(2);
+    expect(asked.length, second.out).toBe(3);
 
     // A reply in the first chat must not carry the second question's id, and
     // must not start or compose the work that question asked about.

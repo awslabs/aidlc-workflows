@@ -84,6 +84,7 @@ import { join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
+  proposalFollowUp,
   removeWorkspaceRecord,
   resetAidlcEnv,
   runOrchestrateNext,
@@ -422,7 +423,11 @@ describe("t117 flag-validation, env-scope, scope/config change, phase jump, free
   // --- Test 14: freeform intent with no workflow → ask (scope confirmation) ---
   test("14: freeform intent with no workflow → ask directive (scope confirmation)", () => {
     const p = cleanProj(); // genuinely no workflow (seeded record stripped)
-    const r = next(["add a login form to the app"], p);
+    // The words first reach the agent as the plan proposal step; its plan
+    // (the test's stand-in reading) returns the plan question.
+    const first = next(["add a login form to the app"], p);
+    const proposal = proposalFollowUp(directive(first.stdout));
+    const r = proposal === null ? first : next(proposal, p);
     expect(r.out).toContain('"kind":"ask"');
     expect(directive(r.stdout).kind).toBe("ask");
   });

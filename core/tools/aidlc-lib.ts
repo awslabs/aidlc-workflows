@@ -217,9 +217,10 @@ export interface ScopeDefinition {
   depth: string;
   stages: Record<string, "EXECUTE" | "SKIP">;
   // Optional fields from scope-mapping.json. `testStrategy` can override
-  // the depth-derived default; `keywords` drives NL scope inference (see
-  // aidlc-utility.ts inferScopeFromText); `description` is a one-line
-  // scope summary rendered into HELP_TEXT.
+  // the depth-derived default; `keywords` are the hints the agent reads when it
+  // proposes a plan for a request (the plan proposal step in aidlc-orchestrate.ts;
+  // no tool matches them); `description` is a one-line scope summary rendered
+  // into HELP_TEXT and into that step.
   testStrategy?: string;
   keywords?: string[];
   description?: string;
@@ -39536,6 +39537,9 @@ export const NEXT_FLAGS: ReadonlyMap<string, NextFlagShape> = new Map<string, Ne
   ["--init", { value: "none" }],
   ["--force", { value: "none" }],
   ["--scope", { value: "free", needsFollowing: true }],
+  // The plan the agent proposes for a request; its words are read at call time
+  // (nextFlagShape), and a missing value is an agent-facing step, not a refusal.
+  ["--propose", { value: "free" }],
   ["--stage", { value: "free", needsFollowing: true }],
   ["--phase", { value: "free", needsFollowing: true }],
   ["--report", { value: "free", needsFollowing: true }],
@@ -39561,6 +39565,18 @@ export const NEXT_FLAGS: ReadonlyMap<string, NextFlagShape> = new Map<string, Ne
 
 /** The shape of a flag `next` takes, or null when it takes no such flag. */
 export function nextFlagShape(token: string): NextFlagShape | null {
+  // The agent's answer to a plan proposal step: one of the plans this install
+  // ships, or `compose`. Read from the plan table at call time, so a plugin's
+  // plan counts; a tree without the table (a seam before the install) takes
+  // any word, as the table entry says, and the engine's own route says what it
+  // takes.
+  if (token === "--propose") {
+    try {
+      return { value: "words", words: [...validScopes(), "compose"] };
+    } catch {
+      return NEXT_FLAGS.get(token) ?? { value: "free" };
+    }
+  }
   const listed = NEXT_FLAGS.get(token);
   if (listed !== undefined) return listed;
   if (CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === token)) {
@@ -39628,7 +39644,6 @@ export type NextLineReading =
   | { kind: "words" }
   | { kind: "untaken-flag"; token: string; value?: string }
   | { kind: "value"; flag: string; value: string; valid: readonly string[] }
-  | { kind: "plan-word"; scope: string }
   | { kind: "noun"; noun: string };
 
 /**
@@ -39738,29 +39753,16 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
       return { kind: "words" };
     }
     if (colon && plans.has(colon[1].toLowerCase())) return { kind: "exact" };
-    // Three shapes a plan's name can lead in, and only one of them is a reading
-    // already made: the name in its OWN argument with the rest of the request
-    // in one more, or in none, which is what the orchestrator skill asks the
-    // agent for (`next classic 'Build a notes app'`), and what the mark says
-    // too (`bugfix -- --enable`). The engine acts on that one.
-    // The other two are the person's own sentence as a harness hands it over,
-    // opening with a word that is also a plan's name: loose words after it
-    // (`bugfix Fix duplicate todos`), or the whole line in one argument, as
-    // Kiro IDE's PowerShell hands it over (`classic car rental website`).
-    // Both read the same way, because they are the same line, and only the
-    // agent can tell whether that first word is their plan or their own word.
+    // A plan's name typed first is the person's pick of that plan, and the words
+    // after it, however many, are their request, in every form a harness hands
+    // the line over: the name in its own argument with the rest in one more
+    // (`next classic 'Build a notes app'`, the form the orchestrator skill asks
+    // the agent for), loose words after it (`bugfix Fix duplicate todos`), or
+    // the whole line in one argument, as Kiro IDE's PowerShell hands it over
+    // (`classic car rental website`). One line, one reading, whatever its
+    // length (Arden 2026-10-12: the two-word cutoff goes).
     const opening = plan.split(/\s+/)[0];
-    if (plans.has(opening)) {
-      // The plan named in its own argument with the rest of the request in one
-      // more: the agent packaged it that way, which is the reading made.
-      const namedByArgument = words.length === 2 && !/\s/.test(words[0]);
-      // And a line of two words is the plan and a one-word description however
-      // it arrives, so the two forms of one line never disagree.
-      const tokens = words.flatMap((word) => word.split(/\s+/)).filter((token) => token.length > 0);
-      return namedByArgument || tokens.length <= 2
-        ? { kind: "exact" }
-        : { kind: "plan-word", scope: opening };
-    }
+    if (plans.has(opening)) return { kind: "exact" };
     return { kind: "words" };
   }
   return { kind: "exact" };

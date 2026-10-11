@@ -54,6 +54,12 @@ export interface StoredQuestion {
    */
   composedFrom?: string;
   /**
+   * The request whose answer started work from this question's chain (the one
+   * derived from it, or beside it from the same root). This copy is kept so a
+   * repeated answer by it carries on with that work, and it is no longer open.
+   */
+  answeredBy?: string;
+  /**
    * For a routing question shown with options: the asked workflow's state
    * digest when it was asked, or asked while none was selected, the digest of
    * the records it offered. It marks a question a reply naming one of its
@@ -149,7 +155,9 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
     (question.settings === undefined ||
       (isSettingTokens(question.settings?.newWork) && isSettingTokens(question.settings.existingWork))) &&
     (question.approvedRequest === undefined ||
-      (typeof question.approvedRequest === "string" && QUESTION_ID.test(question.approvedRequest)))
+      (typeof question.approvedRequest === "string" && QUESTION_ID.test(question.approvedRequest))) &&
+    (question.answeredBy === undefined ||
+      (typeof question.answeredBy === "string" && QUESTION_ID.test(question.answeredBy)))
   ) {
     return question as StoredQuestion;
   }
@@ -171,13 +179,14 @@ function readStoredQuestion(projectDir: string, id: string): StoredQuestion | nu
 }
 
 /**
- * The question behind `id`; null when it is missing, unreadable, or older than
+ * The question behind `id`; null when it is missing, unreadable, older than
  * the project's retention period (an expired question is never answered, even
- * before a later question prunes its file).
+ * before a later question prunes its file), or answered by a request that
+ * started work (`startedRequestFor` names that request).
  */
 export function readQuestion(projectDir: string, id: string): StoredQuestion | null {
   const question = readStoredQuestion(projectDir, id);
-  if (question?.origin === "compose") return null;
+  if (question?.origin === "compose" || question?.answeredBy !== undefined) return null;
   const days = question ? retentionDays(projectDir) : null;
   if (question && days !== null && Date.parse(question.createdAt) < Date.now() - days * DAY_MS) return null;
   return question;
@@ -260,6 +269,7 @@ export function wordsAlreadyRead(projectDir: string, text: string, sinceIso: str
     const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
     if (!QUESTION_ID.test(id)) continue;
     const question = readStoredQuestion(projectDir, id);
+    if (question?.answeredBy !== undefined) continue;
     if (question === null || question.origin !== "routing" || question.text !== text) continue;
     const at = Date.parse(question.createdAt);
     // The question is saved after the message that led to it, never before.
@@ -285,6 +295,7 @@ export function latestFrontQuestionId(projectDir: string, withinMs: number): str
     const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
     if (!QUESTION_ID.test(id)) continue;
     const question = readStoredQuestion(projectDir, id);
+    if (question?.answeredBy !== undefined) continue;
     const at = Date.parse(question?.createdAt ?? "");
     if (question === null || question.origin === "routing" || Number.isNaN(at) || Date.now() - at > withinMs) continue;
     if (latest === null || at > latest.at) latest = { id, at };
@@ -308,6 +319,7 @@ export function latestQuestion(projectDir: string): StoredQuestion | null {
     const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
     if (!QUESTION_ID.test(id)) continue;
     const question = readStoredQuestion(projectDir, id);
+    if (question?.answeredBy !== undefined) continue;
     const at = Date.parse(question?.createdAt ?? "");
     if (question === null || Number.isNaN(at)) continue;
     if (latest === null || at > latest.at) latest = { question, at };
@@ -343,6 +355,7 @@ export function firstFrontQuestionSince(
     const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
     if (!QUESTION_ID.test(id)) continue;
     const question = readStoredQuestion(projectDir, id);
+    if (question?.answeredBy !== undefined) continue;
     const at = Date.parse(question?.createdAt ?? "");
     if (question === null || (question.origin === "routing" && !options.routing) || Number.isNaN(at) ||
       at < from || at - from > withinMs) continue;
@@ -412,7 +425,7 @@ export function saveQuestion(
   return question;
 }
 
-/** Remove a question's copy once it started work; a missing file is already gone. */
+/** Remove a question's copy once it is spent; a missing file is already gone. */
 export function deleteQuestion(projectDir: string, id: string): void {
   if (!QUESTION_ID.test(id)) return;
   try {
@@ -422,6 +435,49 @@ export function deleteQuestion(projectDir: string, id: string): void {
   } catch {
     // Best effort: the work list already records which question started the work.
   }
+}
+
+/**
+ * Retire a request once its answer started work: its own copy is removed, and
+ * the other questions of the same request (the one it was derived from and
+ * every question derived from that root: the proposal step's question, the
+ * routing question beside it) are marked answered by it. None of them is open
+ * any more (one left open would meet the person's next words as a question
+ * they have not answered, about work already built), and a repeated answer by
+ * any of them still finds that work.
+ */
+export function retireRequest(projectDir: string, id: string): void {
+  if (!QUESTION_ID.test(id)) return;
+  const root = readStoredQuestion(projectDir, id)?.composedFrom ?? id;
+  const chain = new Set([root]);
+  try {
+    for (const name of readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)))) {
+      const other = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+      if (QUESTION_ID.test(other) && readStoredQuestion(projectDir, other)?.composedFrom === root) chain.add(other);
+    }
+  } catch {
+    // No question directory: nothing derived is left to mark.
+  }
+  chain.delete(id);
+  for (const member of chain) {
+    const kept = readStoredQuestion(projectDir, member);
+    if (kept === null || kept.answeredBy !== undefined) continue;
+    try {
+      writeRecordFileNoFollow(projectDir, questionRel(projectDir, member), `${JSON.stringify({ ...kept, answeredBy: id })}\n`);
+    } catch {
+      // Best effort: the copy stays as it was.
+    }
+  }
+  deleteQuestion(projectDir, id);
+}
+
+/**
+ * The request a repeated answer is about: for a question marked answered by a
+ * request that started work, that request (the work list names it); otherwise
+ * the question itself.
+ */
+export function startedRequestFor(projectDir: string, id: string): string {
+  return readStoredQuestion(projectDir, id)?.answeredBy ?? id;
 }
 
 /**

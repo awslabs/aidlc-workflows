@@ -464,8 +464,11 @@ describe("classifier and next parser parity", () => {
     expect(cmd).toBeNull();
     const projectDir = scratchProject();
     try {
+      // The words are a request: the engine hands them to the agent to propose
+      // a plan (t-plan-proposed-by-the-agent), never a workspace command.
       const d = directive(projectDir, ["build", "a", "space", "station"]);
-      expect(d.kind).toBe("ask");
+      expect(d.kind, JSON.stringify(d)).toBe("print");
+      expect(d.message).toContain("--propose <plan> --request");
     } finally {
       cleanup(projectDir);
     }

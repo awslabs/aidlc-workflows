@@ -161,7 +161,12 @@ function follow(
     } else {
       const id = REQUEST.exec(message)?.[1];
       expect(id, message).toBeDefined();
-      d = next(tools, proj, ["--request", id!], env);
+      // The "new work" reading: the kept words back as a request; on a
+      // workspace with no plan named that is the plan proposal step, which the
+      // agent answers with a plan (t-plan-proposed-by-the-agent).
+      d = message.includes("--propose <plan> --request")
+        ? next(tools, proj, ["--propose", "feature", "--request", id!], env)
+        : next(tools, proj, ["--request", id!], env);
     }
     calls++;
   }
@@ -378,7 +383,9 @@ describe("t-carry-on-continues-the-work: work here but none selected in this cha
       expect(request.last.kind, JSON.stringify(request.last).slice(0, 300)).toBe("ask");
       expect(request.last.ask_type).toBe(harness === "kiro" ? ROUTING_QUESTION : "scope-confirm");
       expect(String(request.last.question)).toContain("fix the login");
-      expect(request.calls).toBe(2);
+      // Kiro asks which work it belongs to at once; the others take the plan
+      // proposal step first, then the plan the agent proposes, then the question.
+      expect(request.calls).toBe(harness === "kiro" ? 2 : 3);
     });
   }
 
@@ -445,22 +452,35 @@ describe("t-carry-on-continues-the-work: words that name one piece and ask for i
   }
 });
 
-describe("t-carry-on-continues-the-work: no work in progress is unchanged", () => {
-  test("an empty workspace reads the words as before: one call, the plan offer", () => {
+describe("t-carry-on-continues-the-work: no work in progress is the agent's plan proposal", () => {
+  // Nothing to carry on: the words are a request like any other, so the agent
+  // gets the plan proposal step (t-plan-proposed-by-the-agent) and the person
+  // one question.
+  const PROPOSAL = "--propose <plan> --request";
+  function propose(p: string, args: string[]): { last: Directive; calls: number } {
+    const first = next(CLAUDE_TOOLS, p, args);
+    expect(first.kind, JSON.stringify(first).slice(0, 300)).toBe("print");
+    expect(String(first.message)).toContain(PROPOSAL);
+    const id = REQUEST.exec(String(first.message))?.[1];
+    expect(id).toBeDefined();
+    const last = next(CLAUDE_TOOLS, p, ["--propose", "compose", "--request", id!]);
+    expect(JSON.stringify(last)).not.toContain(PROPOSAL);
+    return { last, calls: 2 };
+  }
+
+  test("an empty workspace: the proposal step, then one question", () => {
     proj = createTestProject();
     removeWorkspaceRecord(proj);
-    const chain = follow(CLAUDE_TOOLS, proj, ["carry", "on"], "go-on");
+    const chain = propose(proj, ["carry", "on"]);
     expect(chain.last.kind).toBe("ask");
     expect(chain.last.ask_type, JSON.stringify(chain.last).slice(0, 300)).toBe("compose-offer");
-    expect(chain.calls).toBe(1);
   });
 
-  test("finished work reads the words as before: one call, the plan offer", () => {
+  test("finished work: the proposal step, then one question", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, COMPLETED);
     expect(next(CLAUDE_TOOLS, proj, []).kind).toBe("done");
-    const chain = follow(CLAUDE_TOOLS, proj, ["carry", "on"], "go-on");
+    const chain = propose(proj, ["carry", "on"]);
     expect(chain.last.ask_type, JSON.stringify(chain.last).slice(0, 300)).toBe("compose-offer");
-    expect(chain.calls).toBe(1);
   });
 });

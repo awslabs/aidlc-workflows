@@ -48,6 +48,8 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createOrchestrationTestProject,
+  followProposal,
+  proposalFollowUp,
   runOrchestrateNext,
 } from "../harness/fixtures.ts";
 import {
@@ -114,7 +116,13 @@ function reply(r: RunResult): string {
 function run(tool: string, proj: string, args: string[], env?: NodeJS.ProcessEnv): RunResult {
   // What the folder is, is the person's word: here they have just said it.
   if (tool === UTIL && args[0] === "reclassify" && hasWork(proj)) appendAuditEntry("HUMAN_TURN", {}, proj);
-  return spawnTool(tool, proj, args, env);
+  const result = spawnTool(tool, proj, args, env);
+  if (tool !== ORCH || args[0] !== "next") return result;
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  let directive: unknown = null;
+  try { directive = JSON.parse(result.stdout.trim()); } catch { /* the caller reads the raw output */ }
+  const proposal = proposalFollowUp(directive);
+  return proposal === null ? result : run(tool, proj, ["next", ...proposal], env);
 }
 
 function hasWork(proj: string): boolean {
@@ -200,7 +208,8 @@ function registryRow(proj: string): Record<string, unknown> | undefined {
 }
 
 function next(proj: string, args: string[] = []): Record<string, unknown> {
-  const result = runOrchestrateNext(ORCH, proj, args);
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const result = followProposal(runOrchestrateNext(ORCH, proj, args), ORCH, proj);
   expect(result.directive).not.toBeNull();
   return result.directive ?? {};
 }

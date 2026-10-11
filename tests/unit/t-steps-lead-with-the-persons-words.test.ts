@@ -18,7 +18,13 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { withPersonsWordsFirst } from "../../core/tools/aidlc-lib.ts";
 import {
-  AIDLC_SRC, cleanupTestProject, createOrchestrationTestProject, FIXTURES_DIR, runOrchestrateNext, seededRecordDir,
+  AIDLC_SRC,
+  cleanupTestProject,
+  createOrchestrationTestProject,
+  FIXTURES_DIR,
+  followProposal,
+  runOrchestrateNext,
+  seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
@@ -43,7 +49,8 @@ function project(): string {
 
 /** The one line the engine writes for this `next`, with the step it parses to. */
 function next(proj: string, args: string[] = []): { line: string; step: Step } {
-  const result = runOrchestrateNext(ORCH, proj, args, { env: ENV });
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const result = followProposal(runOrchestrateNext(ORCH, proj, args, { env: ENV }), ORCH, proj, { env: ENV });
   expect(result.status, result.out).toBe(0);
   expect(result.directive, result.out).not.toBeNull();
   return { line: result.stdout.trim(), step: result.directive as Step };

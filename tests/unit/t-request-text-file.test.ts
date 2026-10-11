@@ -12,7 +12,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hooksHealthDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { cleanupTestProject, REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
+import { cleanupTestProject, proposalFollowUp, REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -60,6 +60,13 @@ function next(proj: string, args: string[], extra: Record<string, string> = {}):
     env,
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  try {
+    const proposal = proposalFollowUp(JSON.parse((r.stdout ?? "").trim()));
+    if (proposal !== null) return next(proj, proposal, extra);
+  } catch {
+    // the caller reads the raw output
+  }
   expect(r.status, r.stderr).toBe(0);
   return JSON.parse(r.stdout) as Directive;
 }
@@ -84,7 +91,8 @@ describe("next --request-file: the person's words arrive exactly, through no she
     writeRequest(proj, `${WORDS}\n`);
     const directive = next(proj, ["--request-file", FILE]);
     expect(directive.kind, JSON.stringify(directive)).toBe("ask");
-    expect(keptRequests(proj)).toEqual([WORDS]);
+    // One request: the proposal step's question and the plan question derived from it hold the same words.
+    expect(new Set(keptRequests(proj))).toEqual(new Set([WORDS]));
     expect(existsSync(join(proj, FILE))).toBe(false);
   });
 
@@ -152,7 +160,7 @@ describe("next --request-file: the person's words arrive exactly, through no she
     writeFileSync(join(hooksHealthDir(proj), "record-human-turn.last"), new Date().toISOString(), "utf-8");
     const asked = next(proj, ["--request-file", FILE], { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
     expect(asked.kind, JSON.stringify(asked)).toBe("ask");
-    expect(keptRequests(proj)).toEqual([WORDS]);
+    expect(new Set(keptRequests(proj))).toEqual(new Set([WORDS]));
     expect(existsSync(join(proj, FILE))).toBe(false);
   });
 

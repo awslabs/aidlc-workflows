@@ -116,12 +116,11 @@ vision note.
 
 ## Keep side tasks small: name the scope
 
-A plain `/aidlc <description>` suggests a scope from its words or offers to
-compose a plan, and `classic`, the default, runs 18 of 33 stages. A
-description longer than five words is offered `bugfix` only when it asks for
-the fix ("Fix the export that drops rows", "please fix it"). Other bug reports
-get the offer to compose a plan, which lists `bugfix` first; picking the
-default there runs a much larger workflow. Name the scope as the first word:
+A plain `/aidlc <description>` has the agent propose a plan from its words, or
+offer to compose one, and `classic`, the default, runs 18 of 33 stages. A bug
+report in plain words is usually proposed `bugfix`; when the agent offers to
+compose instead, the list beside the offer names `bugfix` first, and picking
+the default runs a much larger workflow. Name the scope as the first word:
 
 | The side task is... | Type | Stages |
 |---|---|---|

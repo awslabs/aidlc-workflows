@@ -13,9 +13,10 @@ choice from different perspectives:
   route, depth, test strategy, review ceiling, and ceremony switches used for that workflow.
 
 Choose a profile explicitly with `/aidlc <profile>` or describe the work and let
-AI-DLC suggest one. A keyword match or compose offer confirms the route before
-starting; an explicitly named profile starts immediately and prints its stage
-and gate counts.
+AI-DLC suggest one. The assistant reads what you describe and proposes the
+profile that fits it, or offers the adaptive composer when none does; you
+confirm the route before anything starts. An explicitly named profile starts
+immediately and prints its stage and gate counts.
 
 ## Quick chooser
 
@@ -192,10 +193,10 @@ You do not need to memorize the profiles. Describe the work:
 /aidlc Create a lightweight prototype for the new search flow
 ```
 
-A clear keyword match proposes a stock profile and shows its stage and gate
-count for confirmation. Rich or ambiguous work receives an offer to use the
-adaptive composer, which proposes a tailored stage route and waits for approval
-before creating it.
+When a stock profile fits what you describe, the assistant proposes it and
+shows its stage and gate count for confirmation. Rich or ambiguous work
+receives an offer to use the adaptive composer, which proposes a tailored stage
+route and waits for approval before creating it.
 
 You can force that path with:
 

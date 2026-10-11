@@ -22,6 +22,8 @@ import { basename, join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
+  proposalFollowUp,
+  proposePlanLikeTheAgent,
   removeWorkspaceRecord,
   seedAidlcMemory,
 } from "../harness/fixtures.ts";
@@ -90,15 +92,34 @@ function runTool(tool: string, args: string[], p = proj): Run {
 function util(args: string[], p = proj): Run {
   return runTool(UTIL, args, p);
 }
-function next(args: string[], p = proj, orchestrator = ORCH): Run {
-  return followUnselectedReading(runTool(orchestrator, ["next", ...args], p), p, orchestrator);
+function next(args: string[], p = proj, orchestrator = ORCH, plan?: string): Run {
+  const words = args.filter((arg) => !arg.startsWith("--")).join(" ");
+  return followTheAgentsReading(runTool(orchestrator, ["next", ...args], p), words, (argv) => runTool(orchestrator, ["next", ...argv], p), plan);
+}
+// A `next` line run as the agent runs it (a command the engine handed out, or
+// one spelled with ORCH_SH), followed the same way, in the same environment.
+function emittedNext(command: string, words: string, extraEnv: Record<string, string> = {}): Run {
+  return followTheAgentsReading(
+    runEmittedCommand(command, proj, extraEnv),
+    words,
+    (argv) => runEmittedCommand(`${ORCH_SH} next ${argv.join(" ")}`, proj, extraEnv),
+  );
+}
+// The plan the agent proposes for a request, in these cases: the stand-in
+// reading, with the general plan where it would tailor one, so the cases about
+// the plan question's shape (its other plans, a pick of another) keep their ask.
+function planFor(words: string): string {
+  const plan = proposePlanLikeTheAgent(words);
+  return plan === "compose" ? "feature" : plan;
 }
 // Words alone where work is here but none is selected first reach the agent
 // (one print naming the pieces, a bare `next`, `intent switch` and
-// `next --request <id>`; t-carry-on-continues-the-work pins it). The cases
-// here are about the ask the "new work" reading then gets, so that reading is
-// followed as the agent follows it: one more engine call, the same ask.
-function followUnselectedReading(run: Run, p: string, orchestrator: string): Run {
+// `next --request <id>`; t-carry-on-continues-the-work pins it), and words
+// that describe new work with no plan named reach it as the plan proposal step
+// (t-plan-proposed-by-the-agent). The cases here are about the ask those
+// readings then get, so each is followed as the agent follows it: one more
+// engine call per step, with the plan the stand-in reading proposes.
+function followTheAgentsReading(run: Run, words: string, rerun: (argv: string[]) => Run, plan = planFor(words)): Run {
   let printed: { kind?: string; message?: string } | null = null;
   try {
     printed = JSON.parse(run.stdout.trim()) as { kind?: string; message?: string };
@@ -106,16 +127,18 @@ function followUnselectedReading(run: Run, p: string, orchestrator: string): Run
     return run;
   }
   if (printed?.kind !== "print" || typeof printed.message !== "string") return run;
+  const proposal = proposalFollowUp(printed, plan);
+  if (proposal !== null) return rerun(proposal);
   if (!printed.message.startsWith("Work is in progress here (")) return run;
   const id = /--request ([0-9a-f]{8})/.exec(printed.message)?.[1];
-  return id === undefined ? run : runTool(orchestrator, ["next", "--request", id], p);
+  return id === undefined ? run : rerun(["--request", id, "--propose", plan]);
 }
 // The same request, marked with the delimiter as the person's own words. With a
 // question of ours already open, a bare words line is read as a possible reply
 // to it (t-three-ways-to-read-a-line), so a case about a fresh REQUEST says so.
 // `--project-dir` goes ahead of the mark, or it would land in their words.
 function markedNext(text: string, p = proj, orchestrator = ORCH): Run {
-  return runToolArgv(orchestrator, ["next", "--project-dir", p, "--", text]);
+  return followTheAgentsReading(runToolArgv(orchestrator, ["next", "--project-dir", p, "--", text]), text, (argv) => runTool(orchestrator, ["next", ...argv], p));
 }
 function runEmittedCommand(command: string, p = proj, extraEnv: Record<string, string> = {}): Run {
   const env: NodeJS.ProcessEnv = {
@@ -157,7 +180,7 @@ function asWork(words: string) {
   expect(read.kind, JSON.stringify(read).slice(0, 300)).toBe("print");
   const request = /`([^`]* next --request [0-9a-f]{8})`/.exec(read.message)?.[1];
   expect(request, read.message).toBeDefined();
-  return JSON.parse(runEmittedCommand(request!).stdout.trim());
+  return JSON.parse(runEmittedCommand(`${request!} --propose ${planFor(words)}`).stdout.trim());
 }
 
 function printedCommand(message: string): string {
@@ -867,7 +890,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const ask = asWork("rename the settings page");
         expect(ask.ask_type).toBe("new-work-routing");
         expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent archive ${asked}`).status).toBe(0);
-        const again = JSON.parse(runEmittedCommand(ask[route]).stdout.trim());
+        const again = JSON.parse(emittedNext(ask[route], "rename the settings page").stdout.trim());
         expect(again.kind, JSON.stringify(again).slice(0, 300)).toBe("ask");
         expect(["scope-confirm", "compose-offer"]).toContain(again.ask_type);
         expect(recordDirs(proj), "no work is created unasked").toEqual([asked]);
@@ -941,7 +964,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const id = first.kind === "print" && String(first.message).startsWith("Work is in progress here (")
           ? /--request ([0-9a-f]{8})/.exec(String(first.message))?.[1]
           : undefined;
-        return id === undefined ? first : emittedIn(session, `${ORCH_SH} next --request ${id}`);
+        return id === undefined ? first : emittedIn(session, `${ORCH_SH} next --request ${id} --propose ${planFor(text)}`);
       };
       const questionCount = () => readdirSync(join(proj, "aidlc", ".aidlc-sessions", "questions")).length;
       const seedOneIntentNoCursor = (): string => {
@@ -1362,7 +1385,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
 
     test("compose-offer resolves its stored request and can select another scope", () => {
       const intentText = "build an onboarding portal for new engineers with SSO";
-      const directive = JSON.parse(next([intentText]).stdout.trim());
+      const directive = JSON.parse(next([intentText], proj, ORCH, "compose").stdout.trim());
       expect(directive.ask_type).toBe("compose-offer");
       const composed = runEmittedCommand(directive.compose_command);
       expect(composed.status, composed.out).toBe(0);
@@ -1563,7 +1586,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
 
     test("a late new-plan answer composes that new work even after other work became active", () => {
       const intentText = "build an onboarding portal for new engineers with SSO";
-      const offer = JSON.parse(next([intentText]).stdout.trim());
+      const offer = JSON.parse(next([intentText], proj, ORCH, "compose").stdout.trim());
       expect(offer.ask_type).toBe("compose-offer");
       expect(util(["intent-create", "--scope", "feature", "--arguments", "add search", "--label", "search"]).status).toBe(0);
       const [other] = recordDirs(proj);
@@ -1617,7 +1640,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       writeFileSync(mappingPath, JSON.stringify(mapping));
       try {
         const env = { AIDLC_SCOPE_MAPPING: mappingPath };
-        const ask = JSON.parse(runEmittedCommand(`${ORCH_SH} next 'fix the login bug'`, proj, env).stdout.trim());
+        const ask = JSON.parse(emittedNext(`${ORCH_SH} next 'fix the login bug'`, "fix the login bug", env).stdout.trim());
         expect(ask.ask_type).toBe("scope-confirm");
         const id: string = ask.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
         const rows = ask.scope_commands as Array<{ scope: string; command: string }>;
@@ -1720,7 +1743,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const recentId: string = recent.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
       ageQuestion(oldId, 3);
       const env = { AIDLC_QUESTION_RETENTION_DAYS: "2" };
-      expect(JSON.parse(runEmittedCommand(`${ORCH_SH} next -- 'fix the dashboard bug'`, proj, env).stdout.trim()).ask_type).toBe("scope-confirm");
+      expect(JSON.parse(emittedNext(`${ORCH_SH} next -- 'fix the dashboard bug'`, "fix the dashboard bug", env).stdout.trim()).ask_type).toBe("scope-confirm");
       expect(existsSync(questionFile(oldId)), "older than the retention period").toBe(false);
       expect(existsSync(questionFile(recentId)), "within the retention period").toBe(true);
       expect(JSON.parse(runEmittedCommand(old.confirm_command).stdout.trim()).message).toBe(
@@ -1740,8 +1763,9 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
     test("a set retention removes expired copies on the next run, with no new question asked", () => {
       const old = JSON.parse(next(["fix the login bug"]).stdout.trim());
       const oldId: string = old.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
-      ageQuestion(oldId, 3);
       const questions = join(proj, "aidlc", ".aidlc-sessions", "questions");
+      // The proposal step's question and the plan question were asked together and age together.
+      for (const file of readdirSync(questions)) ageQuestion(file.slice(0, 8), 3);
       const run = runEmittedCommand(`${ORCH_SH} next`, proj, { AIDLC_QUESTION_RETENTION_DAYS: "2" });
       expect(run.status, run.out).toBe(0);
       expect(existsSync(questionFile(oldId)), "older than the retention period").toBe(false);

@@ -26,8 +26,9 @@ import {
   createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
-  REPO_ROOT,
+  followProposal,
   removeWorkspaceRecord,
+  REPO_ROOT,
   runOrchestrateNext,
   seededRecordDir,
   seededStateFile,
@@ -100,7 +101,9 @@ interface Emitted {
 }
 
 function next(proj: string, args: string[] = [], extra: NodeJS.ProcessEnv = {}): { d: Emitted; out: string } {
-  const result = runOrchestrateNext(ORCHESTRATE, proj, args, { env: { ...env(proj), ...extra } });
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const options = { env: { ...env(proj), ...extra } };
+  const result = followProposal(runOrchestrateNext(ORCHESTRATE, proj, args, options), ORCHESTRATE, proj, options);
   expect(result.directive, result.out).not.toBeNull();
   return { d: result.directive as unknown as Emitted, out: result.out };
 }
@@ -458,13 +461,20 @@ describe("plan approval off typed with new work rides the answer commands", () =
 
   test("beside open work, it rides the new-work answer into the creation command", () => {
     const proj = openWork();
-    say(proj, "/aidlc --plan-approval off add the export");
-    const routing = next(proj, ["--plan-approval", "off", "add", "the", "export"]);
+    say(proj, "/aidlc --plan-approval off fix the export");
+    const routing = next(proj, ["--plan-approval", "off", "fix", "the", "export"]);
     expect(routing.d.ask_type, routing.out).toBe("new-work-routing");
     const command = String(routing.d.new_intent_command);
     expect(command).toContain("--plan-approval off");
-    const routed = next(proj, command.slice(command.indexOf(" next ") + 6).split(" "));
-    expect(String(routed.d.message), routed.out).toContain("--plan-approval off");
+    // No plan was named with the words, so the separate-work answer reaches the
+    // plan question (the agent's proposal, through the test's stand-in reading);
+    // the switch rides that hop onto the question's commands and the creation.
+    const offer = next(proj, command.slice(command.indexOf(" next ") + 6).split(" "));
+    expect(offer.d.ask_type, offer.out).toBe("scope-confirm");
+    const confirm = String(offer.d.confirm_command);
+    expect(confirm).toContain("--plan-approval off");
+    const created = next(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" "));
+    expect(String(created.d.message), created.out).toContain("--plan-approval off");
   });
 });
 

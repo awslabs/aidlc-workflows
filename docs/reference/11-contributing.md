@@ -338,7 +338,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 1. **Create `core/scopes/aidlc-hotfix.md`** — the scope's identity. Frontmatter:
    - `name` (required): the scope name; must equal the filename stem.
    - `depth` (required): `Minimal` | `Standard` | `Comprehensive`.
-   - `keywords` (optional): NL triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form. Word-boundary matched, alphabetical-scope tie-break. Empty list opts out of inference. Descriptions longer than five words require an affirmative match from the core high-specificity allowlist or a fix request (`fix` or `bugfix` used as the request itself); plugin-specific tokens retain the length heuristic. See [scope auto-detection](../guide/05-scopes-and-depth.md#auto-detection-from-freeform-intent).
+   - `keywords` (optional): hint words the agent reads when it proposes a plan for `/aidlc <freeform text>`; no tool matches them. Flat string lists may use block (`- item`) or flow (`[item, item]`) form. An empty list carries no hints. See [the agent proposes the plan](../guide/05-scopes-and-depth.md#the-agent-proposes-the-plan).
    - `description` (optional): one-line summary rendered in `/aidlc --help` and in SKILL.md's compiled scope-table.
    - `testStrategy` (optional): override test strategy independent of depth. Defaults to matching depth.
    - `review_cap` (optional): `adversarial` | `advisory` | `none`. Caps stage review classes for this scope; absence means no scope-level lowering. The cap can lower but never raise a stage declaration. Autonomous swarm reviews are exempt.
@@ -378,7 +378,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 
 5. **Verify `doctor` accepts it as an env default** — `AWS_AIDLC_DEFAULT_SCOPE=hotfix aidlc doctor` should report the env var as valid.
 
-6. **Verify keyword inference** (if `keywords` populated) — `aidlc engine scope detect --from-text --input "urgent customer issue" --project-dir /tmp/scope-smoke` should return `{"scope":"hotfix","source":"keyword","matches":["urgent"]}`.
+6. **Check the plan's hints read well** (if `keywords` populated) - the engine no longer matches them; the agent reads them in the plan proposal step (`next "<a request your plan is for>" --project-dir /tmp/scope-smoke` prints every plan with its hints). Make sure the line for yours says what the plan is for in plain words.
 
 7. **Verify plan parity (optional but recommended)** — `AIDLC_GRAPH_RESOLVE=1 aidlc engine graph resolve hotfix --stdout` emits the scope's plan; eyeball that the EXECUTE set matches what you tagged.
 
@@ -393,7 +393,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 - `/aidlc --doctor` treats `AWS_AIDLC_DEFAULT_SCOPE=hotfix` as valid.
 - `aidlc-utility scope-change --scope hotfix` on an in-flight workflow accepts the new scope.
 - The transpose drift guard: `aidlc-graph compile --check` fails the build if a stage's `scopes:` tag was edited without recompiling `scope-grid.json`. SKILL.md's compiled scope-table has its own `--check` drift guard (t67).
-- Keyword detection for freeform `/aidlc <text>` invocations reads each scope's `keywords` from its `.claude/scopes/*.md` frontmatter. Custom scopes with their own NL triggers auto-detect as soon as the `keywords` list is populated (no SKILL.md change needed). Users can still pass `--scope hotfix` explicitly to bypass inference.
+- The plan proposal step for freeform `/aidlc <text>` lists each scope with the `keywords` hints from its `.claude/scopes/*.md` frontmatter; the agent reads them and proposes a plan. Custom scopes appear in that list as soon as they are installed (no SKILL.md change needed). Users can still pass `--scope hotfix` explicitly to skip the proposal.
 
 ### What does NOT validate automatically
 

@@ -21,8 +21,15 @@ import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { stageValidationAuditFields } from "../../dist/claude/.claude/tools/aidlc-validity.ts";
 import {
-  AIDLC_SRC, cleanupTestProject, createOrchestrationTestProject, createTestProject, runOrchestrateNext,
-  seedAidlcMemory, seedBoltDag, seededStateFile,
+  AIDLC_SRC,
+  cleanupTestProject,
+  createOrchestrationTestProject,
+  createTestProject,
+  followProposal,
+  runOrchestrateNext,
+  seedAidlcMemory,
+  seedBoltDag,
+  seededStateFile,
 } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -88,7 +95,8 @@ function editTeamPractices(proj: string): void {
 }
 
 function next(proj: string, args: string[] = []): Json {
-  const result = runOrchestrateNext(ORCH, proj, args);
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const result = followProposal(runOrchestrateNext(ORCH, proj, args), ORCH, proj);
   expect(result.directive, result.stderr).not.toBeNull();
   return result.directive as Json;
 }

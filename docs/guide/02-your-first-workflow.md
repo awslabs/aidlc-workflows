@@ -30,7 +30,7 @@ while keeping you in control at every decision point.
 ## How It Works
 
 - **You decide, AI executes.** Every material decision goes through an approval gate.
-- **Adaptive scope.** Choose a scope or let AI auto-detect from your intent.
+- **Adaptive scope.** Choose a scope or let the agent propose a plan from your words.
 - **Traceable artifacts.** Every stage produces versioned documents in the intent's record dir.
 - **11 domain experts.** Specialized agent personas guide each stage.
 ```
@@ -137,8 +137,8 @@ Your word wins over the scan. Start with `/aidlc --project-type brownfield "<wha
 The orchestrator writes the intent's `aidlc-state.md` (under its record dir) with the full stage plan based on your scope, depth, test strategy, and the scanner's classification. It also analyzes your input and confirms a scope:
 
 ```
-─── Scope Detection ───────────────────────────────────────────────────────────
-Detected scope: feature (Standard depth, Standard test strategy, all 33 stages)
+─── Plan ──────────────────────────────────────────────────────────────────────
+Proposed plan: feature (Standard depth, Standard test strategy, all 33 stages)
 ▸ Approve scope? [Yes / Change scope / Change depth / Change test strategy]
 > Yes
 ```

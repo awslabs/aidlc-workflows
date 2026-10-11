@@ -21,6 +21,7 @@ import {
   createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
+  followProposal,
   removeWorkspaceRecord,
   runOrchestrateNext,
   seededStateFile,
@@ -157,7 +158,9 @@ function configSet(proj: string, args: string[], session: string | null): { stat
 }
 
 function next(proj: string, args: string[]): { directive: Record<string, unknown> | null; out: string } {
-  const result = runOrchestrateNext(ORCHESTRATE, proj, args, { env: { ...process.env, ...CLEAR } });
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const options = { env: { ...process.env, ...CLEAR } };
+  const result = followProposal(runOrchestrateNext(ORCHESTRATE, proj, args, options), ORCHESTRATE, proj, options);
   return { directive: result.directive as Record<string, unknown> | null, out: result.out };
 }
 
@@ -250,7 +253,12 @@ describe("a check typed off with a request, routed through a second question", (
     const routing = next(proj, ["--request", q1]);
     const ask = routing.directive as { ask_type?: string; new_intent_command?: string } | null;
     expect(ask?.ask_type, routing.out).toBe("new-work-routing");
-    const routed = next(proj, answerArgs(ask?.new_intent_command));
+    // No plan was named with the words, so the separate-work answer reaches the
+    // plan question (the agent's proposal) before the creation; the check rides
+    // that hop to the work it becomes.
+    const offer = next(proj, answerArgs(ask?.new_intent_command));
+    expect(offer.directive?.ask_type, offer.out).toBe("scope-confirm");
+    const routed = next(proj, answerArgs((offer.directive as { confirm_command?: string }).confirm_command));
     expect(heard(proj, routed), routed.out).toContain(FOR_NEW_WORK);
     expect(heard(proj, routed), routed.out).not.toContain(STARTS_ON);
     const made = createFromPrint(proj, routed);

@@ -90,7 +90,7 @@ With this set, implicit scope resolution uses `feature`. Alternatively, record a
 **Precedence (highest to lowest):**
 
 1. Explicit CLI flag: `/aidlc feature` or `/aidlc --scope bugfix` wins.
-2. Keyword detection in freeform text: `/aidlc fix the login bug` still maps to `bugfix`, and so does `/aidlc-init "fix the login bug"`. Users can override the detected scope at the existing confirmation prompt.
+2. The plan the agent proposes for freeform text: `/aidlc fix the login bug` is still proposed `bugfix`, and so does `/aidlc-init "fix the login bug"`. Users can override the detected scope at the existing confirmation prompt.
 3. The real `AWS_AIDLC_DEFAULT_SCOPE` environment variable, including the value supplied by `.claude/settings.json`.
 4. The recorded `aidlc config flags --default-scope` value (local settings override shared project settings).
 5. `classic` - the framework fallback used by unmatched-freeform resolution
@@ -119,12 +119,12 @@ Scopes control which stages execute and at what depth and test strategy. AI-DLC 
 
 ### Choosing a scope
 
-Specify explicitly or let the orchestrator auto-detect:
+Specify explicitly or let the agent propose one from your words:
 
 ```
 /aidlc enterprise       # Explicit scope
 /aidlc Build a payments API  # No keyword: offers composition; resolver fallback is "classic"
-/aidlc Fix the login bug     # Auto-detects "bugfix"
+/aidlc Fix the login bug     # The agent proposes "bugfix"; you confirm
 ```
 
 ### Overriding at runtime

@@ -246,24 +246,13 @@ function makePluginOnlyInstall(): string {
 // (`existing_code: true`). A NEW literal still fails.
 const KNOWN_COUPLINGS = new Set<string>();
 
-// The inference policy names input keywords, not scope identities. Limit the
-// exception to this named declaration and its complete vocabulary; another
-// scope-name array, even with the same three scope names, must still fail.
-function isInferenceKeywordPolicy(file: string, body: string, prefix: string): boolean {
-  return file === "aidlc-utility.ts" &&
-    /\bconst HIGH_SPECIFICITY_KEYWORDS = new Set<string>\(\s*$/.test(prefix) &&
-    body.replace(/\s+/g, " ").trim() ===
-      '"refactor", "mvp", "minimum viable", "poc", "proof of concept", "cve",';
-}
-
 describe("t225 static scope-name coupling probe", () => {
   test("core tools do not carry 3+ core scope names in one Set/array literal", () => {
     const failures: string[] = [];
     for (const file of readdirSync(CORE_TOOLS).filter((name) => name.endsWith(".ts")).sort()) {
       const path = join(CORE_TOOLS, file);
       const stripped = stripComments(readFileSync(path, "utf-8"));
-      for (const { body, prefix } of arrayLiteralBodies(stripped)) {
-        if (isInferenceKeywordPolicy(file, body, prefix)) continue;
+      for (const { body } of arrayLiteralBodies(stripped)) {
         const names = literalScopeNames(body);
         const signature = `${file}: [${names.join(", ")}]`;
         if (names.length >= 3 && !KNOWN_COUPLINGS.has(signature)) failures.push(signature);
@@ -271,41 +260,6 @@ describe("t225 static scope-name coupling probe", () => {
     }
     expect(failures).toEqual([]);
   });
-
-  test.each(["refactor", "mvp", "poc"])(
-    "high-specificity keyword %s resolves a renamed scope rather than a core scope name",
-    (keyword) => {
-      const project = tempDir("aidlc-t225-keyword-policy-");
-      const mappingPath = join(project, "scope-mapping.json");
-      writeFileSync(mappingPath, JSON.stringify({
-        "custom-work": {
-          depth: "Minimal",
-          stages: {},
-          keywords: [keyword],
-        },
-      }));
-      const result = spawnSync(
-        BUN,
-        [
-          join(DIST_CLAUDE, "tools", "aidlc-utility.ts"),
-          "detect-scope", "--from-text",
-          "--input", `Please use ${keyword} for the authentication task today`,
-          "--project-dir", project,
-        ],
-        {
-          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-          encoding: "utf-8",
-          env: { ...process.env, AIDLC_SCOPE_MAPPING: mappingPath },
-        },
-      );
-      expect(result.status).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        scope: "custom-work",
-        source: "keyword",
-        matches: [keyword],
-      });
-    },
-  );
 });
 
 describe("t225 skeleton scope metadata", () => {

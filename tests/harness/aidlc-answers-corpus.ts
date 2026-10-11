@@ -9,7 +9,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import corpus from "../fixtures/aidlc-answers/corpus.json";
-import { AIDLC_SRC, FIXTURES_DIR, REPO_ROOT, createOrchestrationTestProject, recordArtifactWriteViaHook, seedBoltDag, seedBoltDagBatches, seededRecordDir, seededStateFile } from "./fixtures.ts";
+import { AIDLC_SRC, FIXTURES_DIR, REPO_ROOT, createOrchestrationTestProject, proposalFollowUp, recordArtifactWriteViaHook, seedBoltDag, seedBoltDagBatches, seededRecordDir, seededStateFile } from "./fixtures.ts";
 import {
   LOG, ORCHESTRATE, SESSION, UTILITY, buildState, env, exec, messageRecord, next, say,
   type Directive, type Exec, type Harness, type StoredRecord,
@@ -394,7 +394,10 @@ export async function buildQuestion(proj: string, question: Question): Promise<v
       // The plan-offer items describe that numbered offer; a build-a-new-app line would get the compose offer instead.
       const line = question === "plan-offer" ? "/aidlc fix the login: it rejects a correct password" : "/aidlc fix the login timeout";
       await say(proj, line, "claude");
-      const offer = await next(proj, line.replace(/^\/aidlc\s*/, "").split(" "));
+      const read = await next(proj, line.replace(/^\/aidlc\s*/, "").split(" "));
+      // The agent's step after the plan proposal print: a fix line gets the bugfix plan proposed.
+      const proposal = proposalFollowUp(read.directive, "bugfix");
+      const offer = proposal === null ? read : await next(proj, proposal);
       if (offer.directive?.ask_type !== "scope-confirm") throw new Error(`the plan offer did not open: ${offer.out}`);
       return;
     }

@@ -902,3 +902,79 @@ export function cleanupWorkspaceJourney(journey: WorkspaceJourney | undefined): 
   }
   if (existsSync(journey.root)) removeTreeWithRetry(journey.root);
 }
+
+/**
+ * The plan question for a request typed with no plan named: the agent's two
+ * engine calls, as the orchestrator skill has it run them. `next <words>`
+ * returns the plan proposal step (a print for the agent naming every plan),
+ * the agent proposes `plan` with `next --propose <plan> --request <id>`, and
+ * the engine renders the question (`scope-confirm`, or the `compose-offer` for
+ * `plan === "compose"`). Where work is here but none is selected, the first
+ * call returns the none-selected reading print instead, whose "new work"
+ * reading is `next --request <id> --propose <plan>`; that is followed the same
+ * way. A first call that is already a question (or any other step) is returned
+ * as it is.
+ */
+export function planOffer(
+  tool: string,
+  proj: string,
+  words: string[],
+  plan: string = proposePlanLikeTheAgent(words.join(" ")),
+  options: { cwd?: string; env?: Record<string, string | undefined> } = {},
+): OrchestrateTestResult {
+  return followProposal(runOrchestrateNext(tool, proj, words, options), tool, proj, options, plan);
+}
+
+/**
+ * The agent's step after the plan proposal print, for a test: `next --propose
+ * <plan> --request <id>`, with the plan a test names or the stand-in below
+ * reads from the request. Any other result (a question, a reading print of
+ * another shape, an error) is returned as it came, so a test that is about
+ * the print itself sees it.
+ */
+export function followProposal(
+  first: OrchestrateTestResult,
+  tool: string,
+  proj: string,
+  options: { cwd?: string; env?: Record<string, string | undefined> } = {},
+  plan?: string,
+): OrchestrateTestResult {
+  const argv = proposalFollowUp(first.directive, plan);
+  return argv === null ? first : runOrchestrateNext(tool, proj, argv, options);
+}
+
+/**
+ * The `next` arguments the agent's proposal step runs after the plan proposal
+ * print (`--propose <plan> --request <id>`), or null when `directive` is not
+ * that print. For a test helper that spawns the engine its own way.
+ */
+export function proposalFollowUp(directive: unknown, plan?: string): string[] | null {
+  const d = directive as { kind?: unknown; message?: unknown } | null | undefined;
+  const message = d?.kind === "print" ? String(d.message ?? "") : "";
+  if (!message.includes("--propose <plan> --request")) return null;
+  const id = /--request ([0-9a-f]{8})/.exec(message)?.[1];
+  if (id === undefined) return null;
+  const request = /^The person asked for new work: "([^"]*)"/.exec(message)?.[1] ?? "";
+  return ["--propose", plan ?? proposePlanLikeTheAgent(request), "--request", id];
+}
+
+/**
+ * A stand-in for the agent's reading of a request, for tests only: the engine
+ * hands every plan to the agent and never reads the words itself (the plan
+ * proposal step, t-plan-proposed-by-the-agent), and a test cannot run a model,
+ * so this names the plan a reasonable agent proposes for the requests the
+ * tests type. Each test may name the plan it wants instead.
+ */
+export function proposePlanLikeTheAgent(request: string): string {
+  const words = request.toLowerCase();
+  const says = (...needles: string[]): boolean => needles.some((needle) => new RegExp(`\\b${needle}\\b`).test(words));
+  if (says("refactor", "clean up", "simplify")) return "refactor";
+  if (says("cve", "vulnerability", "security")) return "security-patch";
+  if (says("proof of concept", "prototype", "poc", "spike")) return "poc";
+  if (says("mvp", "minimum viable")) return "mvp";
+  if (says("workshop", "lab", "training")) return "workshop";
+  if (says("infrastructure", "infra", "deploy", "deployment")) return "infra";
+  if (says("express", "lightweight")) return "express";
+  if (says("fix", "bug", "broken", "crash", "bugfix")) return "bugfix";
+  return "compose";
+}

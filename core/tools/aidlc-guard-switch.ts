@@ -1080,9 +1080,11 @@ const OPEN_QUESTION_WINDOW_MS = 60 * 60 * 1000;
 
 /**
  * Whether the words behind `grant` are the ones `request` carries: the question
- * they answered, or the request that question was derived from, however many
- * asks the engine made on the way. Binding to a request is what keeps a plan the
- * person rejected from leaving its switch on the work they describe instead. A
+ * they answered, or any question derived from the same request, however many
+ * asks the engine made on the way (the plan proposal step, the plan question it
+ * builds, the same question brought back after a switch: one root, the words
+ * the person typed). Binding to a request is what keeps a plan the person
+ * rejected from leaving its switch on the work they describe instead. A
  * creation naming no request carries nobody's words.
  */
 function grantCovers(
@@ -1093,8 +1095,9 @@ function grantCovers(
   if (request === null) return false;
   const answered = grant.request ??
     firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: grant.withDescription === true });
-  return answered !== null &&
-    (answered === request || readQuestion(projectDir, request)?.composedFrom === answered);
+  if (answered === null) return false;
+  const rootOf = (id: string): string => readQuestion(projectDir, id)?.composedFrom ?? id;
+  return answered === request || rootOf(request) === rootOf(answered);
 }
 
 function planApprovalCreationGrantPath(projectDir: string, sessionId: string): string {

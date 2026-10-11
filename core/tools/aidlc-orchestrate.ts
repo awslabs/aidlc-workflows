@@ -104,6 +104,7 @@ import {
   latestQuestion,
   pruneExpiredQuestions,
   QUESTION_UNAVAILABLE,
+  startedRequestFor,
   type QuestionAskedAbout,
   type QuestionSettings,
   questionTargetSelected,
@@ -440,11 +441,11 @@ import {
   producersOf,
   subgraphForScope,
 } from "./aidlc-graph.ts";
-// inferScopeFromText is a PURE function (keyword matching over the scope
-// registry) - importing it keeps `next` read-only. The audit-emitting
-// detect-scope verb remains the conductor's separate recording move; the
-// import is safe (aidlc-utility.ts main() runs only under import.meta.main,
-// and utility never imports this module - no cycle).
+// The plan for a request the person described in their own words is proposed
+// by the agent (planProposalDirective), never inferred here from keywords; the
+// audit-emitting detect-scope verb remains a separate recording move. Importing
+// aidlc-utility.ts is safe (its main() runs only under import.meta.main, and
+// utility never imports this module - no cycle).
 import {
   capInlineContextPaths,
   type InlineContextEntry,
@@ -459,8 +460,6 @@ import {
   documentInputLooksSecret,
   GREENFIELD_RE_SKIP_LABEL,
   greenfieldWorkspaceGainedCode,
-  type InferResult,
-  inferScopeFromText,
   projectTypeRecordedAsPersons,
   reverseEngineeringOwedBehindCursor,
   scanSummary,
@@ -2522,7 +2521,9 @@ function routingSettings(carried: RoutingCarried): QuestionSettings {
 // the work it acts on when it continues or reshapes. A stored value the parser
 // refuses answers false, and nothing runs.
 function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boolean {
-  if (question.origin !== "routing" || !question.settings) return true;
+  // A routing question, or the plan proposal step's own question, keeps the
+  // settings typed with the request; a plan offer carries them on its commands.
+  if (!question.settings) return true;
   const existing = flags.continue === true || flags.compose === true;
   const kept = parseNextFlags(existing ? question.settings.existingWork : question.settings.newWork);
   if (kept.parseError) return false;
@@ -2561,9 +2562,11 @@ function openFrontQuestion(
   // answers a question of this work from any chat, so with more than one still
   // open this engine cannot tell WHICH question the person is answering. It
   // says so instead of naming one: the agent has the question it asked in its
-  // own chat, with that question's own commands.
+  // own chat, with that question's own commands. A question this one was
+  // derived from (the proposal step's request, answered by the agent's plan) is
+  // the same request, not another open question.
   const earliest = firstFrontQuestionSince(projectDir, new Date(0).toISOString(), Number.POSITIVE_INFINITY);
-  return { question: latest, sole: earliest === null || earliest === latest.id };
+  return { question: latest, sole: earliest === null || earliest === latest.id || earliest === latest.composedFrom };
 }
 
 function carriedFromQuestion(question: StoredQuestion, flags: ParsedFlags): RoutingCarried | null {
@@ -2583,9 +2586,12 @@ function scopeConfirmAskDirective(
   // The request these words reached this ask through, when an earlier question
   // held them: the answer to this one is still the answer to that request.
   derivedFrom?: string,
+  // The settings typed with the request, for an answer that arrives without
+  // its option's command (the proposal step's question keeps the same).
+  settings?: QuestionSettings,
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
-  const stored = saveQuestion(projectDir, intentText, proposedScope, "front", undefined, newWork, derivedFrom);
+  const stored = saveQuestion(projectDir, intentText, proposedScope, "front", undefined, newWork, derivedFrom, undefined, settings);
   const confirmCommand = `${tool} next --scope ${scopeArg(proposedScope)} --request ${stored.id}${carried}`;
   const composeCommand = `${tool} next compose --request ${stored.id}${carried}`;
   return {
@@ -2667,9 +2673,10 @@ function composeOfferAskDirective(
   declaredType?: "greenfield" | "brownfield",
   // As above: the request an earlier question held these words for.
   derivedFrom?: string,
+  settings?: QuestionSettings,
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
-  const stored = saveQuestion(projectDir, intentText, "", "front", undefined, newWork, derivedFrom);
+  const stored = saveQuestion(projectDir, intentText, "", "front", undefined, newWork, derivedFrom, undefined, settings);
   const document = namedDocumentNote(intentText, projectDir);
   return {
     kind: "ask",
@@ -2701,9 +2708,11 @@ function repeatedAnswerDirective(
     } catch {
       return null;
     }
+    // The plan it ran with, or the install's default when that plan is gone;
+    // the question offers a different plan either way.
     const scope = entry.scope && validScopes().has(entry.scope)
       ? entry.scope
-      : inferScopeFromText(authoritativeRequest(description)).scope;
+      : defaultScope();
     return scopeConfirmAskDirective(
       `You already started this as ${dirName}, which is ${archived ? "archived" : "complete"}. ` +
         `Do you want to start it again as new "${scope}" work, use a different plan, or have me tailor ` +
@@ -2799,7 +2808,9 @@ const NEW_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
   {
     route: "separate",
     label: "Separate new piece of work",
-    detail: (scope: string) => `Yes, set it up alongside the current one as "${scope}" work without changing it`,
+    detail: (scope: string) => scope
+      ? `Yes, set it up alongside the current one as "${scope}" work without changing it`
+      : "Yes, set it up alongside the current one without changing it; you pick its plan next",
   },
   { route: "reshape", label: "Reshape the active work", detail: (_scope: string) => "Change how the remaining plan is shaped" },
 ];
@@ -2832,7 +2843,9 @@ const EXISTING_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
   {
     route: "separate",
     label: "Separate new piece of work",
-    detail: (scope: string) => `Yes, set it up alongside the existing work as "${scope}" work without changing it`,
+    detail: (scope: string) => scope
+      ? `Yes, set it up alongside the existing work as "${scope}" work without changing it`
+      : "Yes, set it up alongside the existing work without changing it; you pick its plan next",
   },
   {
     route: "reshape",
@@ -3191,7 +3204,9 @@ function reentryReplyDirective(requestId: string, undo = "", work: string[] = []
       "or `--every-unit` when they named a Unit or said every Unit), then follow the print it returns. If they are " +
       `about something else, such as new work or a change to this work, or you cannot tell which, run \`${orchestrate} ` +
       `next --request ${requestId}\` and follow what it returns: the engine kept their words and asks the person where ` +
-      `that work belongs, and a redo or jump they say there is read the same way.${named}`,
+      "that work belongs, and a redo or jump they say there is read the same way. When their words describe new work, " +
+      "add `--propose <plan>` to that command, the plan from your scope table that fits the work, so the question " +
+      `can name it.${named}`,
   );
 }
 
@@ -3205,7 +3220,8 @@ function teamWordsReplyDirective(requestId: string): PrintDirective {
       "work. Read them. If they only ask for the work to go on (such as \"carry on\" or \"proceed\"), run " +
       `\`${orchestrate} next\` with nothing after it: the work continues where it stands. Otherwise, or if you cannot ` +
       `tell, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words ` +
-      "and asks the person where that work belongs.",
+      "and asks the person where that work belongs. When their words describe new work, add `--propose <plan>` to " +
+      "that command, the plan from your scope table that fits the work, so the question can name it.",
   );
 }
 
@@ -3225,7 +3241,8 @@ function unselectedWordsReplyDirective(requestId: string, work: string[]): Print
       `carries on with it. If their words only name exactly one of the pieces, run ` +
       `\`${aidlcDispatcherInvocation("intent")} switch <name>\`, say the line it prints, then stop. Otherwise (new work, ` +
       `or you cannot tell which), run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the ` +
-      "engine kept their words.",
+      "engine kept their words. When their words describe new work, add `--propose <plan>` to that command, the plan " +
+      "from your scope table that fits the work, so the question can name it.",
   );
 }
 
@@ -3310,8 +3327,10 @@ function newWorkRoutingAskDirective(
     routingSettings(carried), approvedRequest,
   );
   const tool = aidlcToolInvocation("orchestrate");
+  // With no plan proposed, the separate-work answer reaches the plan proposal
+  // step, which asks the plan next.
   const newIntentCommand =
-    `${tool} next --new-intent --scope ${scopeArg(proposedScope)} --request ${stored.id}${carried.newWork}${carried.planChanges}`;
+    `${tool} next --new-intent${proposedScope ? ` --scope ${scopeArg(proposedScope)}` : ""} --request ${stored.id}${carried.newWork}${carried.planChanges}`;
   // Beside active work this reshapes it; with records to pick it composes
   // the new work, like a plan offer's compose answer.
   const composeCommand =
@@ -4106,6 +4125,12 @@ export interface ParsedFlags {
   newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME creation directive (with the --label seam) the fresh-start path uses, instead of constructing intent-create from SKILL.md prose
   intent?: string; // freeform request text (no leading --flag)
   request?: string; // --request <id>: the engine question this invocation answers
+  /**
+   * --propose <plan|compose>: the plan the agent proposes for the request
+   * `--request` names, after the plan proposal step; "" when the flag came
+   * with no value (said to the agent, never a parse error).
+   */
+  propose?: string;
   continue?: boolean; // --continue: a routing question's "part of that work" answer
   record?: string; // --record <selector>: the listed record a routing question's reshape answer chose
   workspaceCommand?: WorkspaceCommand; // leading workspace command (space/space-create/intent)
@@ -4198,7 +4223,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   // (unknownWorkspaceWordStep), so the command stays parsed and that step runs.
   // The seams read the same reading and stand back from the line either way.
   if (
-    reading.kind === "value" || reading.kind === "plan-word" ||
+    reading.kind === "value" ||
     (reading.kind === "noun" && !isWorkspaceNoun(reading.noun))
   ) {
     const said = args.join(" ").replace(ENTRY_WORD_PREFIX, "").trim();
@@ -4423,6 +4448,17 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       flags.everyUnit = true;
     } else if (a === "--change") {
       flags.change = true;
+    } else if (a === "--propose") {
+      // The agent's plan for a proposal step. A word outside the plan table is
+      // the value reading step (readNextLine, before this loop); a missing
+      // value is the agent's own slip, said to the agent in routeNext.
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith("--")) {
+        flags.propose = "";
+      } else {
+        flags.propose = value.toLowerCase();
+        i++;
+      }
     } else if (a === "--depth" || a === "--test-strategy") {
       // Checked here, like --review: the value is echoed into the command the
       // conductor runs, so only the three level words may pass.
@@ -4598,10 +4634,10 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   // (`--new-intent --scope feature "feature flags for billing"`).
   // A scope name followed by a colon (`/aidlc classic: Build a notes app`)
   // names the plan the same way, also when the agent quotes the whole request
-  // as one argument, as Kiro IDE's PowerShell does. Without the colon, one
-  // quoted argument that only opens with a scope word stays the request
-  // ("classic car rental website"): splitting a plan name off it is the
-  // agent's reading of the person's words.
+  // as one argument, as Kiro IDE's PowerShell does. So does a scope name that
+  // opens one quoted argument ("classic car rental website"): the plan typed
+  // first is the person's pick, and the words after it are their request,
+  // however many (the same reading readNextLine makes of the line).
   if (
     intentWords.length > 0 &&
     !flags.scope &&
@@ -4612,12 +4648,20 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
     !flags.stage &&
     !flags.phase
   ) {
-    const colonNamed = intentWords[0].replace(ENTRY_WORD_PREFIX, "").match(/^([A-Za-z][\w-]*):(?:\s+([\s\S]*))?$/);
+    const opening = intentWords[0].replace(ENTRY_WORD_PREFIX, "");
+    const colonNamed = opening.match(/^([A-Za-z][\w-]*):(?:\s+([\s\S]*))?$/);
+    const lead = opening.split(/\s+/)[0];
     if (validScopes().has(intentWords[0])) {
       flags.positionalScope = intentWords.shift();
     } else if (colonNamed && validScopes().has(colonNamed[1].toLowerCase())) {
       flags.positionalScope = colonNamed[1].toLowerCase();
       const rest = (colonNamed[2] ?? "").trim();
+      if (rest) intentWords[0] = rest;
+      else intentWords.shift();
+    } else if (!literalIntent && /\s/.test(opening) && validScopes().has(lead)) {
+      // Words behind the delimiter are marked as theirs whole: no plan is peeled.
+      flags.positionalScope = lead;
+      const rest = opening.slice(lead.length).trim();
       if (rest) intentWords[0] = rest;
       else intentWords.shift();
     }
@@ -4682,26 +4726,37 @@ const NEW_WORK_HINT =
 function freshWorkOfferDirective(
   flags: ParsedFlags,
   pd: string,
-  inferred: InferResult,
+  // The plan the agent proposed for the request (`--propose`), or `compose`
+  // when no ready-made plan fits it.
+  plan: string,
   derivedFrom?: string,
+  newWork = flags.newIntent === true,
 ): AskDirective {
   const intentText = flags.intent ?? "";
-  if (inferred.source === "keyword") {
+  // New work picked on a routing question: the settings typed with the request
+  // ride the hop as that question's answers carry them, so a bare answer to the
+  // plan question takes them from its stored copy. On a fresh workspace the
+  // plan question's commands carry what they carried before.
+  const kept = derivedFrom === undefined ? null : readQuestion(pd, derivedFrom);
+  const root = kept === null ? null : kept.origin === "routing" ? kept : kept.composedFrom ? readQuestion(pd, kept.composedFrom) : null;
+  const settings = root?.origin === "routing" ? routingSettings(carriedRoutingFlags(flags)) : undefined;
+  if (plan !== "compose") {
     // Preview the ceremony the user is confirming: stage/gate counts from the
     // compiled grid (never estimates). Drop the clause if the scope does not
     // resolve (a fixture tree without it) rather than emit a broken preview.
-    const clause = costClause(inferred.scope, pd, flags.ceremony, undefined, undefined, null, flags.projectType);
+    const clause = costClause(plan, pd, flags.ceremony, undefined, undefined, null, flags.projectType);
     const cost = clause ? ` - ${clause}` : "";
     return scopeConfirmAskDirective(
-      `This looks like "${inferred.scope}" work, so I'd run the "${inferred.scope}" plan for: "${requestPreview(intentText)}"${cost}.${documentSplitSentence(intentText)} ` +
+      `I'd run the "${plan}" plan for: "${requestPreview(intentText)}"${cost}.${documentSplitSentence(intentText)} ` +
         "Do you want me to go ahead with it, use a different plan, or tailor one to this task?",
-      inferred.scope,
+      plan,
       intentText,
       pd,
       carriedCreationFlags(flags),
-      flags.newIntent === true,
+      newWork,
       flags.projectType,
       derivedFrom,
+      settings,
     );
   }
   // Anchor the compose offer with the counts for the named scopes so the
@@ -4723,9 +4778,49 @@ function freshWorkOfferDirective(
     intentText,
     pd,
     carriedCreationFlags(flags),
-    flags.newIntent === true,
+    newWork,
     flags.projectType,
     derivedFrom,
+    settings,
+  );
+}
+
+// The plan proposal step: a request that names no plan is kept as a question
+// and handed to the agent with every plan this install ships (its length here,
+// what it is for, and the hints its author wrote), so the agent proposes the
+// one that fits what the person described and the engine renders the plan
+// question with it. A tool never reads the request for meaning; the agent does.
+// Re-run with the same request (`--request <id>`), the step reuses that
+// question: the same id, the same print. A routing question's separate-work
+// answer derives a new-work question from it instead (one hop from the words),
+// so the agent's plan answers that question, never the routing one again.
+function planProposalDirective(
+  flags: ParsedFlags,
+  description: string,
+  pd: string,
+  derivedFrom?: string,
+): PrintDirective {
+  const kept = derivedFrom === undefined ? null : readQuestion(pd, derivedFrom);
+  const question = kept !== null && kept.origin === "front" && kept.text === description && !kept.proposedScope
+    ? kept
+    : saveQuestion(
+      pd, description, "", "front", undefined, flags.newIntent === true, derivedFrom, undefined,
+      routingSettings(carriedRoutingFlags(flags)),
+    );
+  const next = `${aidlcToolInvocation("orchestrate")} next`;
+  const metadata = loadScopeMetadata();
+  const plans = [...validScopes()].map((scope) => {
+    const cost = effectiveScopeCostSummary(scope, pd, undefined, undefined, undefined, flags.projectType);
+    const meta = metadata[scope];
+    const hints = meta?.keywords?.length ? `; hints: ${meta.keywords.join(", ")}` : "";
+    return `${scope}${cost ? ` (${cost.shown} ${cost.shown === 1 ? "stage" : "stages"})` : ""}: ${meta?.description ?? ""}${hints}`;
+  });
+  return printDirective(
+    `The person asked for new work: "${requestPreview(description)}".${documentSplitSentence(description)} No plan is ` +
+      "chosen for it yet. Read what they describe and propose the plan below that fits it: run " +
+      `\`${next} --propose <plan> --request ${question.id}\` and it returns the question to show them (go ahead, ` +
+      "a different plan, or a tailored one) with its answers; show it as given. When no ready-made plan fits, run " +
+      `\`${next} --propose compose --request ${question.id}\` instead. Create nothing yourself. Plans: ${plans.join(" / ")}`,
   );
 }
 
@@ -4758,17 +4853,20 @@ function freshWorkRoute(
   // request as its root, so what the person set for it still reaches the work.
   derivedFrom?: string,
 ): Directive {
-  const inferred = inferScopeFromText(authoritativeRequest(description));
+  // The plan the agent proposed with the request, when it did; none means the
+  // proposal step first.
+  const plan = flags.propose !== undefined && flags.propose !== "" ? flags.propose : null;
   if (isKiroRoutingHarness()) {
     const pick = intentPickPromptIfRecordsExist(pd, {
       description,
-      proposedScope: inferred.scope,
+      proposedScope: plan ?? "",
       carried: carriedRoutingFlags(flags),
       ...(derivedFrom === undefined ? {} : { derivedFrom }),
     });
     if (pick) return pick;
   }
-  return freshWorkOfferDirective(flags, pd, inferred, derivedFrom);
+  if (plan !== null) return freshWorkOfferDirective(flags, pd, plan, derivedFrom);
+  return planProposalDirective(flags, description, pd, derivedFrom);
 }
 
 // The selected workflow has nothing left to run: its current stage is done or
@@ -5326,9 +5424,8 @@ function intentPickPromptIfRecordsExist(
       `This project already has ${inProgress}, ` +
         `and none is currently selected: ${list}${unlisted}. You said: "${requestPreview(pendingWork.description)}".${documentSplitSentence(pendingWork.description)} ` +
         `Is this (1) part of existing work - select its record and continue it; ` +
-        `(2) a separate new piece of work - Yes, set it up alongside the existing work as ` +
-        `"${pendingWork.proposedScope}" work without changing it; or (3) a change to an ` +
-        "existing remaining plan - select its record, then reshape it?",
+        `(2) a separate new piece of work - ${EXISTING_WORK_ROUTING_OPTIONS[1].detail(pendingWork.proposedScope)}; ` +
+        "or (3) a change to an existing remaining plan - select its record, then reshape it?",
       {
         prompt: `This project already has ${inProgress}, ` +
           `and none is currently selected: ${list}${unlisted}. You said: "${requestPreview(pendingWork.description)}".${documentSplitSentence(pendingWork.description)} What should I do?`,
@@ -7621,16 +7718,6 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    if (step.kind === "plan-word") {
-      emit(printDirective(
-        `\`${step.scope}\` is the name of a plan and also the first word of what the person typed, ` +
-        `and \`next\` cannot tell which they meant, so it took nothing from the line. ` +
-        `If they named the plan, run \`${next} --scope ${step.scope} -- ` +
-        `${quoteCommandArgument(said.slice(step.scope.length).trim())}\`. ` +
-        `If \`${step.scope}\` is their own word, ${theirs}. ${ask}`,
-      ));
-      return;
-    }
     emit(printDirective(
       `\`${step.noun}\` is one of this engine's own nouns and also the first word of what the person ` +
       `typed, and \`next\` cannot tell which they meant, so it took nothing from the line. ` +
@@ -7771,6 +7858,37 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // option's command: the question it names fills them in below.
   }
 
+  // The agent's answer to a plan proposal step needs its shape: a plan (or
+  // `compose`) and the request it is for. A slip here is the agent's own, so it
+  // is said to the agent, never to the person, and never as an error.
+  if (flags.propose !== undefined) {
+    const next = `${aidlcToolInvocation("orchestrate")} next`;
+    const plans = [...validScopes()];
+    if (flags.propose === "") {
+      emit(printDirective(
+        `\`--propose\` needs the plan to propose. Run \`${next} --propose <plan> --request <id>\` with one of ` +
+          `${plans.join("|")}, or \`--propose compose\` when no ready-made plan fits, with the request id the ` +
+          "proposal step named.",
+      ));
+      return;
+    }
+    if (flags.request === undefined) {
+      emit(printDirective(
+        "`--propose` answers a plan proposal step and needs its request: run the command that step named, " +
+          `\`${next} --propose ${flags.propose} --request <id>\`. If no step named one, run \`${next}\` with the ` +
+          "person's words and follow what it returns.",
+      ));
+      return;
+    }
+    if (flags.propose !== "compose" && !validScopes().has(flags.propose)) {
+      emit(printDirective(
+        `\`next\` takes \`--propose\` with ${[...plans, "compose"].join("|")}, and does not take ` +
+          `${JSON.stringify(flags.propose)}. Run \`${next} --propose <plan> --request ${flags.request}\` again with one of those.`,
+      ));
+      return;
+    }
+  }
+
   // An answer names its question by id. The copy is removed once the answer
   // starts work, so a missing copy may mean a repeated answer: carry on with
   // the work it started instead of creating it twice.
@@ -7801,7 +7919,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     const found = readQuestion(questionDir, flags.request);
     if (!found) {
       pruneQuestions();
-      emit(repeatedAnswerDirective(questionDir, flags.request) ?? errorDirective(QUESTION_UNAVAILABLE));
+      emit(repeatedAnswerDirective(questionDir, startedRequestFor(questionDir, flags.request)) ?? errorDirective(QUESTION_UNAVAILABLE));
       return;
     }
     // A routing question that stopped an answer is answered once that answer's
@@ -7827,6 +7945,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     flags.intent = found.text;
     if (!flags.scope && !flags.positionalScope && !flags.compose && !flags.continue) {
       flags.scope = found.proposedScope || undefined;
+    }
+    // The agent's plan for the proposal step this engine asked it about this
+    // request (a front question with no plan yet): the plan question with that
+    // plan, so the person's yes runs the same prebuilt command as ever.
+    if (flags.propose !== undefined && flags.propose !== "" && found.origin === "front" && !found.proposedScope) {
+      emit(freshWorkOfferDirective(flags, questionDir, flags.propose, found.id, found.newWork === true || flags.newIntent === true));
+      return;
     }
   }
 
@@ -8697,25 +8822,37 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    // New work that names no scope (`/aidlc-init "<description>"`) gets the
-    // same plan offer as a fresh workspace, never the precedence-ladder scope
-    // (the ACTIVE intent's, or the default) the person did not see. The answer
-    // names --scope and --request: with work active, the front-question rule
-    // above routes it back here, and on a fresh workspace Branch 9a creates it.
+    // New work that names no scope gets the same plan proposal step as a fresh
+    // workspace (the plan question with the plan the agent proposed), never
+    // the precedence-ladder scope (the ACTIVE intent's, or the default) the
+    // person did not see. The answer names --scope and --request: with work
+    // active, the front-question rule above routes it back here, and on a
+    // fresh workspace Branch 9a creates it.
     if (!flags.scope) {
-      emit(freshWorkOfferDirective(flags, pd, inferScopeFromText(authoritativeRequest(description))));
+      const plan = flags.propose !== undefined && flags.propose !== "" ? flags.propose : null;
+      emit(plan !== null
+        ? freshWorkOfferDirective(flags, pd, plan, question?.id)
+        : planProposalDirective(flags, description, pd, question?.id));
       return;
     }
     // Use the EXPLICIT --scope, not the precedence-ladder `scope`, which lets
     // the ACTIVE intent's state scope win: the offer confirmed a scope for the
     // NEW work, independent of what's in flight. Branch 3b already validated it.
+    // New work picked on a routing question keeps that question's rules for a
+    // lowered Guard Policy and the checks typed with it, whether its answer
+    // created the work at once or through the plan question derived from it.
+    const routed = question?.origin === "routing"
+      ? question
+      : question?.composedFrom !== undefined
+        ? readQuestion(pd, question.composedFrom)
+        : null;
     emit(createPrintDirective(
       flags.scope,
       flags,
       pd,
       description,
-      question?.origin === "routing"
-        ? [routedGuardPolicyNote(flags, pd, question), routedFencesNote(flags, pd, question)].filter(Boolean).join(" ")
+      routed?.origin === "routing"
+        ? [routedGuardPolicyNote(flags, pd, routed), routedFencesNote(flags, pd, routed)].filter(Boolean).join(" ")
         : undefined,
     ));
     return;
@@ -8790,7 +8927,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       emit(createPrintDirective(typedScope, flags, pd, finishedWorkDescription));
       return;
     }
-    emit(freshWorkRoute(flags, flags.intent!, pd));
+    emit(freshWorkRoute(flags, flags.intent!, pd, question?.id));
     return;
   }
 
@@ -8981,18 +9118,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   //
   // Adaptive routing (replaces the old static default confirm, which
   // interpolated the precedence-ladder scope and silently defaulted rich prose):
-  // keyword inference (inferScopeFromText, a pure read; the
-  // audit-emitting detect-scope verb remains the conductor's recording move)
-  // now drives the ask.
-  //   - CLEAR KEYWORD HIT (source "keyword": short keyword input, or in long
-  //     prose an affirmative high-specificity match or a fix request): a
-  //     one-line confirm naming the MATCHED scope, with "name another scope"
-  //     and "compose" as outs.
-  //   - NO HIT / RICH PROSE (source "freeform": no keyword matched, or the
-  //     description is long enough that the match is likely incidental): the
-  //     COMPOSE OFFER, never a silent default. The conductor renders
-  //     it; on "compose" it re-runs `next compose "<text>"` to reach the
-  //     Branch 4c dispatch.
+  // the plan proposal step (planProposalDirective) hands the request and every
+  // plan to the agent, which proposes one with `--propose <plan>`; the engine
+  // then renders the one-line confirm naming that plan, with "a different plan"
+  // and "compose" as outs, or the COMPOSE OFFER when the agent proposes
+  // `compose`, never a silent default. On "compose" the conductor re-runs
+  // `next compose --request <id>` to reach the Branch 4c dispatch.
   // Words alone where work is in progress but none is selected here (a
   // teammate's clone, a chat that has not joined the work) are read by the
   // agent before anything is offered, as words over selected work are (Branch
@@ -9019,7 +9150,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     !flags.scope &&
     !flags.positionalScope
   ) {
-    emit(freshWorkRoute(flags, flags.intent, pd, question?.origin === "routing" ? question.id : undefined));
+    // The question these words came through (a reading step's, or the proposal
+    // step's own on a re-run) is the request's root, and the proposal step
+    // reuses it: the same id, the same print.
+    emit(freshWorkRoute(flags, flags.intent, pd, question?.id));
     return;
   }
 
@@ -9267,16 +9401,17 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // here): the active-work answer changes the work to it.
     const scopeChange = flags.scope !== undefined && flags.scope !== (getField(stateContent, "Scope") ?? "");
     const options = scopeChange ? SCOPE_CHANGE_ROUTING_OPTIONS : NEW_WORK_ROUTING_OPTIONS;
-    // Name the scope a confirmed new intent would get (the same pure
-    // inference Branch 8 uses) so the single ask carries everything the offer
-    // needs: active work, the new text, the proposed scope, and a "Yes"-led
-    // affirmative. Once emitted, this question is the sole route authority.
-    // inferScopeFromText always returns a deterministic scope, including its
-    // selection-aware fallback for rich prose.
-    // A typed same-scope --scope is the proposal; prose alone is inferred.
+    // Name the plan a confirmed new intent would get so the single ask carries
+    // everything the offer needs: active work, the new text, the plan, and a
+    // "Yes"-led affirmative. Once emitted, this question is the sole route
+    // authority. A typed same-scope --scope is the plan; otherwise the one the
+    // agent proposed when it read the words (`--propose`); with none, or with
+    // `compose` (no ready-made plan fits: the plan question after the answer
+    // offers the tailored one), the separate-work answer says the plan is
+    // picked next.
+    const proposed = flags.propose !== undefined && flags.propose !== "" && flags.propose !== "compose" ? flags.propose : "";
     const inferred = {
-      scope: routingScopeProposal ?? flags.scope ?? flags.positionalScope ??
-        inferScopeFromText(authoritativeRequest(flags.intent)).scope,
+      scope: routingScopeProposal ?? flags.scope ?? flags.positionalScope ?? proposed,
     };
     const carried = askedAgain?.carried ?? carriedRoutingFlags(flags);
     emit(newWorkRoutingAskDirective(
@@ -9285,7 +9420,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
           ? `Is this (1) a separate new piece of work - start new "${inferred.scope}" work for it, the current work stays as it is; ` +
             `(2) part of that work - change it to "${inferred.scope}" and continue it; `
           : "Is this (1) part of that work - continue it; (2) a separate new piece of work - " +
-            `Yes, set it up alongside the current one as "${inferred.scope}" work without changing it; `) +
+            `${NEW_WORK_ROUTING_OPTIONS[1].detail(inferred.scope)}; `) +
         "or (3) a change to how the remaining plan is shaped?",
       {
         prompt: `Work is already in progress on: "${activeLabel}". You said: "${requestPreview(flags.intent)}".${documentSplitSentence(flags.intent)} What should I do?`,

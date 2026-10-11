@@ -136,6 +136,7 @@ import {
   createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
+  proposalFollowUp,
   removeWorkspaceRecord,
   REPO_ROOT,
   resetAidlcEnv,
@@ -342,6 +343,21 @@ function emitNextNoState(...args: string[]): EmitResult {
   return { status: res.status ?? -1, directive: parseDirective(res.stdout ?? ""), raw, proj };
 }
 
+// The same line, then the agent's step after the plan proposal print (the
+// test's stand-in reading of the words), on the same fresh workspace.
+function emitNextNoStateThroughProposal(...args: string[]): EmitResult {
+  const first = emitNextNoState(...args);
+  const proposal = proposalFollowUp(first.directive);
+  if (proposal === null) return first;
+  const res = spawnSync(BUN, [TOOL, "next", "--project-dir", first.proj ?? "", ...proposal], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    env: cleanEnv(),
+  });
+  const raw = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+  return { status: res.status ?? -1, directive: parseDirective(res.stdout ?? ""), raw, proj: first.proj };
+}
+
 // The creation print names the request by question id; the exact text lives in
 // the private question copy.
 function questionText(r: EmitResult): string {
@@ -533,11 +549,10 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       expect(r.directive.kind).not.toBe("ask");
     });
 
-    test("no-state positional scope plus loose words -> both readings, the request preserved, never ask", () => {
-      // A plan's name at the start of their own sentence, with loose words
-      // after it, is ambiguous with their first word, so the engine takes
-      // nothing and names both readings (t-three-ways-to-read-a-line). Nothing
-      // is asked of the person and not a word of theirs is spent.
+    test("no-state positional scope plus loose words -> that plan's creation, the words after it the request, never ask", () => {
+      // A plan's name typed first is the person's pick of that plan, and the
+      // words after it, however many, are the request (Arden 2026-10-12: the
+      // two-word cutoff is gone). Nothing is asked and not a word is spent.
       const r = emitNextNoState(
         "bugfix",
         "Fix",
@@ -546,8 +561,8 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
         "persistence",
       );
       expect(r.directive.kind).toBe("print");
-      expect(r.directive.message ?? "").toContain("--scope bugfix -- 'Fix duplicate todo persistence'");
-      expect(r.directive.message ?? "").toContain("'bugfix Fix duplicate todo persistence'");
+      expect(r.directive.message ?? "").toContain("intent create --scope bugfix");
+      expect(questionText(r)).toBe("Fix duplicate todo persistence");
       expect(r.directive.kind).not.toBe("ask");
     });
 
@@ -568,21 +583,20 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       }
     });
 
-    // (1c) One quoted argument that only OPENS with a plan's name and no colon
-    // stays the person's request: "classic car rental website" describes a car
-    // site, and only the agent, reading the person's words, may split a plan
-    // name off as its own argument.
-    test("no-state one quoted argument opening with a scope word and no colon -> not read as the plan", () => {
-      // Opening with a plan's name, the one-argument form reads the same way as
-      // the split one: both readings go to the agent, and the plan is not
-      // assumed. A word that is no plan's name is still their request.
+    // (1c) One quoted argument that opens with a plan's name reads the same as
+    // the split line: the plan is the person's pick, the rest their request
+    // (Arden 2026-10-12). A plan's name anywhere else is one of their words.
+    test("no-state one quoted argument opening with a scope word and no colon -> that plan, the rest the request", () => {
       const opening = emitNextNoState("classic car rental website");
-      expect(opening.directive.message ?? "").not.toContain("intent create --scope classic");
       expect(opening.directive.kind).toBe("print");
-      expect(opening.directive.message ?? "").toContain("'classic car rental website'");
+      expect(opening.directive.message ?? "").toContain("intent create --scope classic");
+      expect(questionText(opening)).toBe("car rental website");
+      // A plan's name inside the sentence is their word: the request reaches the
+      // agent's plan proposal step, never a plan picked from it.
       const other = emitNextNoState("note: build a classic car site");
       expect(other.directive.message ?? "").not.toContain("intent create --scope classic");
-      expect(other.directive.kind).toBe("ask");
+      expect(other.directive.kind).toBe("print");
+      expect(other.directive.message ?? "").toContain("--propose <plan> --request");
     });
 
     // (2) Freeform (<=5-word) intent: `next add dark mode toggle` — genuine prose,
@@ -590,7 +604,9 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
     // read-only stand-in for the conductor's detect-scope + confirm). The control
     // proving the finding-2 fix narrows ONLY known-scope positionals.
     test("no-state freeform intent -> ask (scope confirmation; engine never calls AskUserQuestion)", () => {
-      const r = emitNextNoState("add", "dark", "mode", "toggle");
+      // The words reach the agent as the plan proposal step first; its plan
+      // returns the plan question (t-plan-proposed-by-the-agent).
+      const r = emitNextNoStateThroughProposal("add", "dark", "mode", "toggle");
       // .sh: assert_eq "$(json_field "$OUT" kind)" "ask"
       expect(r.directive.kind).toBe("ask");
     });

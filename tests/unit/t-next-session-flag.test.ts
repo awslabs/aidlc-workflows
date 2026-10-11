@@ -21,6 +21,7 @@ import {
   createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
+  followProposal,
   removeWorkspaceRecord,
   runOrchestrateNext,
   seededStateFile,
@@ -70,7 +71,9 @@ function emptyProject(): string {
 }
 
 function next(proj: string, args: string[]): { directive: Record<string, unknown>; out: string } {
-  const result = runOrchestrateNext(ORCHESTRATE, proj, args, { env: { ...process.env, ...ENV } });
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const options = { env: { ...process.env, ...ENV } };
+  const result = followProposal(runOrchestrateNext(ORCHESTRATE, proj, args, options), ORCHESTRATE, proj, options);
   expect(result.directive, result.out).not.toBeNull();
   return { directive: result.directive as Record<string, unknown>, out: result.out };
 }

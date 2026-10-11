@@ -1,11 +1,14 @@
-// covers: function:validScopes, subcommand:aidlc-utility:detect-scope, subcommand:aidlc-utility:scope-table
+// covers: function:validScopes, subcommand:aidlc-utility:scope-table
 //
 // CLI-contract port of tests/unit/t60-valid-scopes-derived.sh (TAP plan 9),
 // mechanism = cli. The .sh proves that DROPPING ONE .claude/scopes/aidlc-<name>.md
 // file (frontmatter name/depth/keywords/description) makes <name> a valid scope
 // that flows through EVERY tool that validates scopes (init, scope-change,
-// doctor) AND through the NL/summary surfaces (detect-scope --from-text,
-// scope-table) with no source edit and NO JSON file. Equal-or-stronger
+// doctor) AND through the summary surface (scope-table) with no source edit
+// and NO JSON file. The .sh's keyword cases (Test 7 inferScopeFromText, Test 9
+// detect-scope --from-text) went with the classifier: the engine no longer
+// reads the person's words for a plan; the agent proposes it
+// (t-plan-proposed-by-the-agent). Equal-or-stronger
 // migration: every .sh assertion is preserved by SPAWNING the real binary
 // (BUN + the tool .ts) against the SAME surface the .sh exercised — a fresh
 // project whose .claude/scopes/ has a dropped fixture-scope.md — and asserting
@@ -36,13 +39,10 @@
 //     (t60.sh:46). We preserve that exact mechanism (a spawned `bun -e`
 //     importing the shipped lib.ts symbol) so the function-unit credit is
 //     earned the same way — same observable (the sorted scope list printed to
-//     stdout). Likewise Test 7's inferScopeFromText is a spawned `bun -e`
-//     against the project's utility.ts, mirroring the .sh's inline `bun -e`
-//     at t60.sh:138-141 (a fresh process => no cache => reads the dropped .md).
-//   - detect-scope and scope-table are exercised through the real
-//     aidlc-utility.ts CLI subprocess + the audit.md it appends to and the
-//     table it prints — the .sh's `bun "$TOOL" detect-scope ...` /
-//     `bun "$TOOL" scope-table` (t60.sh:145-150).
+//     stdout).
+//   - scope-table is exercised through the real aidlc-utility.ts CLI
+//     subprocess and the table it prints — the .sh's `bun "$TOOL" scope-table`
+//     (t60.sh:145-150).
 //   - init / scope-change / doctor are also real-CLI spawns (the .sh shelled
 //     out to the same aidlc-utility.ts subcommands at t60.sh:87,101,110,123),
 //     credited transitively to the derivation contract under test.
@@ -66,17 +66,13 @@
 //       -> Test 6: combined out contains "fixture-scope" (same observable;
 //       the fix line is `valid values: …, fixture-scope, …`).
 //   - t60.sh Test 7  inferScopeFromText picks fixture-scope from keyword
-//       -> Test 7: spawned `bun -e` (utility infer against the project) stdout
-//       === "fixture-scope" (same observable).
+//       -> gone with the classifier (no tool reads the words for a plan).
 //   - t60.sh Test 8  scope-table includes "| fixture-scope" row -> Test 8:
 //       scope-table stdout contains "| fixture-scope" (same) + STRONGER:
 //       rc === 0.
 //   - t60.sh Test 9  detect-scope --from-text emits SCOPE_DETECTED w/
-//       Detected scope=fixture-scope AND Source=keyword -> Test 9: the
-//       SCOPE_DETECTED audit block carries Detected scope=fixture-scope AND
-//       Source=keyword (block-scoped field reads, STRONGER than the .sh's two
-//       file-wide greps) + STRONGER: SCOPE_DETECTED event count === 1 and the
-//       JSON ack on stdout names the scope+source.
+//       Detected scope=fixture-scope AND Source=keyword -> gone with the
+//       classifier (`--from-text` is refused as unknown).
 //   - (no .sh row) -> Test 0: STRONGER current-surface pin — scope-grid.json
 //       present, scope-mapping.json absent in the shipped tree.
 //
@@ -108,7 +104,6 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   REPO_ROOT,
-  seededAuditShard,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
@@ -149,7 +144,6 @@ const statePath = (proj: string): string =>
   join(recordDirOf(proj), "aidlc-state.md");
 // P9: the per-intent audit shard a spawned tool resolves once the seeded record
 // resolves (state present). Mirrors auditShardName() against the pinned clone-id.
-const auditPath = (proj: string): string => seededAuditShard(proj);
 
 const tempDirs: string[] = [];
 afterAll(() => {
@@ -253,44 +247,6 @@ function freshProject(opts: {
   });
   tempDirs.push(proj);
   return proj;
-}
-
-/**
- * Read the value of <key> from the FIRST audit block whose `**Event**:`
- * matches <ev>. Block-scoped (resets at `## ` headings and `---`). Mirrors the
- * audit_field helper in the sibling .cli ports. Returns "" when absent.
- */
-function auditField(file: string, ev: string, key: string): string {
-  if (!existsSync(file)) return "";
-  let matched = false;
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
-    if (line.startsWith("## ") || line === "---") {
-      matched = false;
-      continue;
-    }
-    if (line.startsWith("**Event**: ")) {
-      matched = line === `**Event**: ${ev}`;
-      continue;
-    }
-    if (matched && line.startsWith("**")) {
-      const stripped = line.replace(/^\*\*/, "");
-      const pos = stripped.indexOf("**: ");
-      if (pos > 0) {
-        const label = stripped.slice(0, pos);
-        const value = stripped.slice(pos + 4);
-        if (label === key) return value;
-      }
-    }
-  }
-  return "";
-}
-
-/** Count audit blocks with `**Event**: <ev>` (exact-line). */
-function auditEventCount(file: string, ev: string): number {
-  if (!existsSync(file)) return 0;
-  return readFileSync(file, "utf-8")
-    .split("\n")
-    .filter((l) => l === `**Event**: ${ev}`).length;
 }
 
 // The 11 alphabetically-sorted default scopes (t60.sh:45). Pins the derivation
@@ -404,24 +360,6 @@ describe("t60 valid-scopes derived from .claude/scopes/*.md (migrated from t60-v
     expect(r.out).toContain("fixture-scope");
   });
 
-  // --- Test 7: inferScopeFromText picks fixture-scope from its keyword ---
-  test("7: inferScopeFromText picks fixture-scope from its .md keyword", () => {
-    const proj = freshProject();
-    setupFixtureScope(proj, /* withKeyword */ true);
-    // The keyword is read from the dropped .claude/scopes/aidlc-fixture-scope.md
-    // frontmatter via loadScopeMapping()'s metadata source — no env var, no
-    // reset (a fresh `bun -e` process has no cache). Mirrors t60.sh:138-141.
-    const r = runEval(
-      [
-        `import { inferScopeFromText } from ${JSON.stringify(utilityIn(proj))};`,
-        `console.log(inferScopeFromText(process.env.T60_INPUT).scope);`,
-      ].join("\n"),
-      { T60_INPUT: "fixturetrigger test" },
-    );
-    expect(r.status).toBe(0);
-    expect(r.stdout.trim().split("\n").pop()).toBe("fixture-scope");
-  });
-
   // --- Test 8: scope-table includes a fixture-scope row from the dropped .md ---
   test("8: scope-table includes fixture-scope row from dropped .claude/scopes/ file", () => {
     const proj = freshProject();
@@ -431,35 +369,4 @@ describe("t60 valid-scopes derived from .claude/scopes/*.md (migrated from t60-v
     expect(r.out).toContain("| fixture-scope");
   });
 
-  // --- Test 9: detect-scope --from-text emits SCOPE_DETECTED (Source=keyword) ---
-  test("9: detect-scope --from-text emits SCOPE_DETECTED for fixture-scope (Source=keyword)", () => {
-    // P9: seed state so the per-intent record resolves — detect-scope's
-    // appendAuditEvent then lands SCOPE_DETECTED in that record's audit shard
-    // (seededAuditShard). An audit-less freshProject() strips the record, so the
-    // tool falls back to the bare space root and the seeded-shard read finds nothing.
-    const proj = freshProject({
-      withState: join(REPO_ROOT, "tests", "fixtures", "state-mid-ideation.md"),
-    });
-    setupFixtureScope(proj, /* withKeyword */ true);
-    const r = run(utilityIn(proj), [
-      "detect-scope",
-      "--from-text",
-      "--input",
-      "fixturetrigger",
-      "--project-dir",
-      proj,
-    ]);
-    expect(r.status).toBe(0);
-    // STRONGER than the .sh's two file-wide greps: block-scoped field reads on
-    // the SCOPE_DETECTED entry, plus an exact event count and a JSON-ack check.
-    const f = auditPath(proj);
-    expect(auditEventCount(f, "SCOPE_DETECTED")).toBe(1);
-    expect(auditField(f, "SCOPE_DETECTED", "Detected scope")).toBe(
-      "fixture-scope",
-    );
-    expect(auditField(f, "SCOPE_DETECTED", "Source")).toBe("keyword");
-    expect(r.stdout).toContain('"emitted":"SCOPE_DETECTED"');
-    expect(r.stdout).toContain('"scope":"fixture-scope"');
-    expect(r.stdout).toContain('"source":"keyword"');
-  });
 });

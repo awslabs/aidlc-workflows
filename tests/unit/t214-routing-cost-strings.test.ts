@@ -32,6 +32,7 @@ import {
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
+  proposalFollowUp,
   removeWorkspaceRecord,
   resetAidlcEnv,
   seedStateFile,
@@ -114,7 +115,11 @@ function runNext(proj: string, args: string[], env: Record<string, string> = {})
       ...env,
     },
   });
-  return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  let directive: unknown = null;
+  try { directive = JSON.parse((res.stdout ?? "").trim()); } catch { /* the caller reads the raw output */ }
+  const proposal = proposalFollowUp(directive);
+  return proposal === null ? { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` } : runNext(proj, proposal, env);
 }
 
 function runUtility(proj: string, args: string[]): RunResult {

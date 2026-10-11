@@ -165,10 +165,9 @@ and learnings off; choose **1** or **3** and they apply to the active intent
 and any other setting typed in the same message, applies to the active intent
 as you send the message; the new intent starts at the default Guard Policy, and
 AI-DLC says so when it creates it. Naming the plan first
-(`/aidlc bugfix Fix the timeout`) asks the same question, proposing that plan.
-When a plan's name is also your own first word (`classic car rental website`),
-the assistant reads which you meant and may ask you once, so your word is never
-spent on a plan you did not choose.
+(`/aidlc bugfix Fix the timeout on the export endpoint`) asks the same
+question, proposing that plan: a plan's name typed first is your pick of it,
+and every word after it is the request, however many.
 So does a scope that differs from the active intent's, typed with a
 description (`/aidlc --scope express "add a health endpoint"`), with new work
 first: choose **1** and the description starts new express work, the active

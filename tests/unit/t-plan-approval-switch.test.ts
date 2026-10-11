@@ -22,6 +22,7 @@ import {
   createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
+  followProposal,
   removeWorkspaceRecord,
   runOrchestrateNext,
   seededRecordDir,
@@ -826,7 +827,15 @@ describe("asked before the piece of work exists", () => {
       expect(ask?.ask_type, routing.out).toBe("new-work-routing");
       // The person picks new work.
       const command = String(ask?.new_intent_command);
-      const routed = runOrchestrateNext(ORCHESTRATE, proj, command.slice(command.indexOf(" next ") + 6).split(" "), {
+      // No plan was named with the words, so that answer reaches the plan question
+      // (the agent's proposal, through the test's stand-in reading) before the creation.
+      const offer = followProposal(
+        runOrchestrateNext(ORCHESTRATE, proj, command.slice(command.indexOf(" next ") + 6).split(" "), { env: { ...process.env, ...CLEAR } }),
+        ORCHESTRATE, proj, { env: { ...process.env, ...CLEAR } },
+      );
+      const confirm = String((offer.directive as { confirm_command?: string } | null)?.confirm_command);
+      expect(confirm, offer.out).toContain(" next ");
+      const routed = runOrchestrateNext(ORCHESTRATE, proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" "), {
         env: { ...process.env, ...CLEAR },
       });
       const message = String((routed.directive as { message?: unknown } | null)?.message);
@@ -853,7 +862,14 @@ describe("asked before the piece of work exists", () => {
     });
     const command = String((routing.directive as { new_intent_command?: string } | null)?.new_intent_command);
     expect(command, routing.out).toContain("--summary-confirmation off");
-    const routed = runOrchestrateNext(ORCHESTRATE, proj, command.slice(command.indexOf(" next ") + 6).split(" "), {
+    // The plan question comes first (no plan was named with the words), then its yes creates.
+    const offer = followProposal(
+      runOrchestrateNext(ORCHESTRATE, proj, command.slice(command.indexOf(" next ") + 6).split(" "), { env: { ...process.env, ...CLEAR } }),
+      ORCHESTRATE, proj, { env: { ...process.env, ...CLEAR } },
+    );
+    const confirm = String((offer.directive as { confirm_command?: string } | null)?.confirm_command);
+    expect(confirm, offer.out).toContain("--summary-confirmation off");
+    const routed = runOrchestrateNext(ORCHESTRATE, proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" "), {
       env: { ...process.env, ...CLEAR },
     });
     const message = String((routed.directive as { message?: unknown } | null)?.message);

@@ -45,11 +45,12 @@ import {
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
+  followProposal,
   intentsDirOf,
   removeWorkspaceRecord,
+  REPO_ROOT,
   resetAidlcEnv,
   runOrchestrateNext,
-  REPO_ROOT,
   seedAidlcMemory,
   seededStateFile,
   seedStateFile,
@@ -71,10 +72,9 @@ interface RunResult {
 }
 
 function runNext(proj: string, args: string[]): RunResult {
-  const res = runOrchestrateNext(ORCH, proj, args, {
-    cwd: proj,
-    env: process.env,
-  });
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const options = { cwd: proj, env: process.env };
+  const res = followProposal(runOrchestrateNext(ORCH, proj, args, options), ORCH, proj, options);
   return { rc: res.status, out: res.out };
 }
 
@@ -363,7 +363,7 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
       runNext(proj, ["Please refactor the authentication module without changing its behavior"]).out,
     );
     expect(d.kind).toBe("ask");
-    expect(String(d.question)).toContain('This looks like "refactor" work');
+    expect(String(d.question)).toContain('I\'d run the "refactor" plan for:');
     expect(String(d.question)).toContain("Do you want me to go ahead with it");
   });
 
@@ -375,7 +375,7 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(d.kind).toBe("ask");
     expect(d.ask_type).toBe("scope-confirm");
     expect(d.proposed_scope).toBe("bugfix");
-    expect(String(d.question)).toContain('This looks like "bugfix" work');
+    expect(String(d.question)).toContain('I\'d run the "bugfix" plan for:');
     expect(String(d.question)).toContain("Do you want me to go ahead with it");
     // The answers a host shows as options, worded for the person.
     expect(d.choices).toEqual([
@@ -636,6 +636,13 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
   // the person picks on the routing question, and the description is kept.
   const runEmitted = (command: string): Record<string, unknown> =>
     directiveOf(runNext(proj, command.slice(command.indexOf(" next ") + 6).split(" ")).out);
+  // No plan was named with the words, so the separate-work answer reaches the
+  // plan question (the agent's proposal, through the test's stand-in reading);
+  // the settings typed with the request ride that hop onto the creation.
+  const createdThrough = (answer: Record<string, unknown>): Record<string, unknown> => {
+    expect(answer.ask_type, JSON.stringify(answer).slice(0, 300)).toBe("scope-confirm");
+    return runEmitted(String(answer.confirm_command));
+  };
 
   test("a setting typed with a new description beside active work asks first and goes with the answer", () => {
     proj = createTestProject();
@@ -655,7 +662,7 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
       ...(ask.scope_commands as Array<{ command: string }>).map((entry) => entry.command),
     ];
     for (const command of commands) expect(command).toContain("--depth minimal --learnings off");
-    const created = runEmitted(String(ask.new_intent_command));
+    const created = createdThrough(runEmitted(String(ask.new_intent_command)));
     expect(created.kind).toBe("print");
     expect(String(created.message)).toContain("intent create --scope bugfix");
     expect(String(created.message)).toContain("--depth minimal --learnings off");
@@ -700,7 +707,7 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(ask.ask_type).toBe("new-work-routing");
     expect(String(ask.new_intent_command)).toContain("--review none --guard-policy strict");
     expect(String(ask.continue_command)).toContain("--review none --guard-policy strict");
-    const created = runEmitted(String(ask.new_intent_command));
+    const created = createdThrough(runEmitted(String(ask.new_intent_command)));
     const message = String(created.message);
     const create = /Run `([^`]+)` to start the new intent/.exec(message)?.[1] ?? "";
     // One step: nothing is left to apply once the work exists.
@@ -733,15 +740,17 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
       "--depth", "minimal", "--guard-policy", "relaxed", "Fix the login crash when the session expires",
     ]).out);
     expect(ask.ask_type).toBe("new-work-routing");
-    const separate = directiveOf(runNext(proj, ["2"]).out);
+    // Continuing the active work takes the typed Guard Policy with it.
+    const kept = directiveOf(runNext(proj, ["1"]).out);
+    expect(String(kept.message)).toContain("config set depth minimal --guard-policy relaxed` to update the configuration");
+    // The separate-work reply reaches the plan question, then the creation; once
+    // that question is in front of them, a bare number answers it, not this one.
+    const separate = createdThrough(directiveOf(runNext(proj, ["2"]).out));
     const create = /Run `([^`]+)` to start the new intent/.exec(String(separate.message))?.[1] ?? "";
     expect(create).toContain("intent create --scope bugfix");
     expect(create).toContain("--depth minimal");
     expect(create).not.toContain("--guard-policy");
     expect(String(separate.narration)).toContain("The new work starts at the default Guard Policy");
-    // Continuing the active work instead takes the typed Guard Policy with it.
-    const kept = directiveOf(runNext(proj, ["1"]).out);
-    expect(String(kept.message)).toContain("config set depth minimal --guard-policy relaxed` to update the configuration");
   });
 
   test.each([
@@ -761,22 +770,19 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 
-  test("a raw line of loose words after a plan word goes to the agent, with nothing asked of them", () => {
-    // Settled 2026-10-10: a plan's name at the START of their own sentence,
-    // with nothing marking which it is, has two readings and only the agent can
-    // tell. Named in its own argument with the request in one more (the test
-    // above, and what the orchestrator skill asks the agent for) the reading is
-    // already made and the plan acts.
+  test("a line of loose words after a plan word is that plan for those words, however many (the two-word cutoff is gone)", () => {
+    // Arden 2026-10-12: a plan's name typed first is the person's pick of it,
+    // and the words after it are their request, three or more as much as one
+    // or two; the agent reads the request, never which word is the plan.
     proj = createTestProject();
     seedAidlcMemory(proj);
     seedStateFile(proj, MID_IDEATION);
     const before = readFileSync(seededStateFile(proj), "utf-8");
-    const step = directiveOf(runNext(proj, ["bugfix", "Fix", "the", "login", "crash"]).out);
-    expect(step.kind).toBe("print");
-    expect(step.narration).toBeUndefined();
-    expect(step.ask_type).toBeUndefined();
-    expect(String(step.message)).toContain("--scope bugfix");
-    expect(String(step.message)).toContain("Fix the login crash");
+    const ask = directiveOf(runNext(proj, ["bugfix", "Fix", "the", "login", "crash"]).out);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
+    expect(ask.proposed_scope).toBe("bugfix");
+    expect(ask.new_work_description).toBe("Fix the login crash");
+    expect(String(ask.new_intent_command)).toContain("--scope bugfix --request");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 
@@ -792,7 +798,7 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(ask.ask_type).toBe("new-work-routing");
     // Other work is selected before the answer runs.
     expect(runUtility(proj, ["intent-create", "--scope", "poc", "--label", "spike"]).rc).toBe(0);
-    const created = runEmitted(String(ask.new_intent_command));
+    const created = createdThrough(runEmitted(String(ask.new_intent_command)));
     expect(String(created.narration)).toContain(
       "Guard Policy relaxed (AI-DLC carries on with a note when something you approved changes) is on for \"Test widget feature for e-commerce platform\", as you typed it with the request",
     );
@@ -820,7 +826,7 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     // work applies it there.
     expect(String(ask.continue_command)).toContain("--guard-policy relaxed");
     expect(String(ask.compose_command)).toContain("--guard-policy relaxed");
-    const created = runEmitted(String(ask.new_intent_command));
+    const created = createdThrough(runEmitted(String(ask.new_intent_command)));
     expect(String(created.message)).not.toContain("--guard-policy");
     expect(String(created.message)).not.toContain("config set");
     expect(String(created.narration)).toContain(note);
@@ -872,18 +878,9 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(ask.question)).toContain("bugfix = ");
   });
 
-  test.each([
-    "Do not refactor anything; add a new login screen",
-    "Build a production service, not a proof of concept",
-    // Not negated: "fix-up" names a step, it does not ask for a fix.
-    "add a fix-up step to the importer",
-  ])("negated or incidental scope word in long prose -> compose offer: %s", (input) => {
-    proj = createTestProject();
-    const d = directiveOf(runNext(proj, [input]).out);
-    expect(d.kind).toBe("ask");
-    expect(String(d.question)).toContain("None of the ready-made plans is an obvious fit");
-    expect(String(d.question)).toContain("compose");
-  });
+  // A negated or incidental plan word ("Do not refactor anything; add a new
+  // login screen") is the agent's to read: the engine proposes nothing from the
+  // words (t-plan-proposed-by-the-agent), so no case here pins a word's reading.
 
   test("known-scope positional still creates (Branch 7b untouched)", () => {
     proj = createTestProject();

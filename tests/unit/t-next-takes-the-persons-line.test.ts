@@ -19,7 +19,7 @@ import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { cleanupTestProject, createOrchestrationTestProject } from "../harness/fixtures.ts";
+import { cleanupTestProject, createOrchestrationTestProject, proposalFollowUp } from "../harness/fixtures.ts";
 import {
   copilotSkillPrompt,
   type Directive,
@@ -81,7 +81,9 @@ async function next(
   } catch {
     // The caller reports the raw output.
   }
-  return { directive, out };
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const proposal = proposalFollowUp(directive);
+  return proposal === null ? { directive, out } : next(proj, harness, proposal, opts);
 }
 
 function questionFiles(proj: string): string[] {
@@ -101,7 +103,9 @@ describe("next takes the person's own /aidlc line when the agent's command carri
       expect(directive.ask_type).toBe("scope-confirm");
       expect(directive.question ?? "").toContain(WORDS);
       expect(directive.proposed_scope).toBe("bugfix");
-      expect(questionFiles(proj)).toHaveLength(1);
+      // The request the line was kept under (the agent's proposal step) and the
+      // plan question derived from it: the words were taken once.
+      expect(questionFiles(proj)).toHaveLength(2);
     });
   }
 
@@ -134,15 +138,17 @@ describe("next takes the person's own /aidlc line when the agent's command carri
     expect(named.directive.message ?? "").not.toContain("--scope bugfix");
   });
 
-  test("kiro-ide: a plan word that opens the person's sentence gets the same two readings as typed words", async () => {
+  test("kiro-ide: a plan word that opens the person's sentence is their plan, with every word after it as the request", async () => {
+    // Arden 2026-10-12: the two-word cutoff is gone; a plan name typed first is
+    // the person's pick however many words follow, and it wins over a plan the
+    // agent names on its own.
     const proj = fresh();
     await say(proj, `/aidlc express ${WORDS}`, "kiro-ide");
     const { directive, out } = await next(proj, "kiro-ide", ["--scope", "bugfix"]);
     expect(directive.kind, out).toBe("print");
-    expect(directive.message ?? "").toContain("`express` is the name of a plan and also the first word");
-    expect(directive.message ?? "").toContain(`next --scope express -- '${WORDS}'`);
-    expect(directive.message ?? "").toContain(`next -- 'express ${WORDS}'`);
-    expect(questionFiles(proj)).toHaveLength(0);
+    expect(directive.message ?? "").toContain("intent create --scope express --request");
+    expect(directive.message ?? "").not.toContain("--scope bugfix");
+    expect(questionFiles(proj)).toHaveLength(1);
   });
 
   test("kiro-ide: the person's answer to the open plan question goes through the same reading as typed words", async () => {
@@ -160,7 +166,7 @@ describe("next takes the person's own /aidlc line when the agent's command carri
     expect(directive.message ?? "").toContain("has not answered the plan question");
     expect(directive.message ?? "").toContain(`--request ${id}`);
     expect(directive.message ?? "").toContain("go ahead");
-    expect(questionFiles(proj)).toHaveLength(1);
+    expect(questionFiles(proj)).toHaveLength(2); // the proposal step's request and the plan question; the reply adds none
   });
 
   test("kiro-ide: the question's own confirm command then creates the work for that request", async () => {
@@ -220,7 +226,7 @@ describe("next takes the person's own /aidlc line when the agent's command carri
     expect(directive.ask_type).toBe("scope-confirm");
     expect(directive.question ?? "").toContain(WORDS);
     expect(directive.proposed_scope).toBe("bugfix");
-    expect(questionFiles(proj)).toHaveLength(1);
+    expect(questionFiles(proj)).toHaveLength(2); // the proposal step's request and the plan question it derived
   });
 
   test("copilot: a wrapper that is not our skill file byte for byte is recorded as delivered, and leaves today's error", async () => {

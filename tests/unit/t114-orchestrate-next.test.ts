@@ -79,11 +79,12 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, write
 import { join } from "node:path";
 import {
   AIDLC_SRC,
-  REPO_ROOT,
   cleanupTestProject,
   createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
+  followProposal,
+  REPO_ROOT,
   resetAidlcEnv,
   runOrchestrateNext,
   seededAuditDir,
@@ -135,10 +136,9 @@ function runNext(
   args: string[],
   extraEnv: Record<string, string> = {},
 ): RunResult {
-  const res = runOrchestrateNext(TOOL, proj, args, {
-    cwd: proj,
-    env: { ...process.env, ...extraEnv },
-  });
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const options = { cwd: proj, env: { ...process.env, ...extraEnv } };
+  const res = followProposal(runOrchestrateNext(TOOL, proj, args, options), TOOL, proj, options);
   return { rc: res.status, out: res.out };
 }
 
@@ -1155,13 +1155,14 @@ describe("t114 parked branch (#367)", () => {
 describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
   // Words alone over active work may ask to redo, jump, or start fresh: the
   // engine hands the conductor both readings, and `next --request` is the
-  // routing ask with the words kept.
-  function askedAbout(words: string): string {
+  // routing ask with the words kept. The agent names the plan it read for the
+  // words beside the request (`--propose <plan>`), so the question names it.
+  function askedAbout(words: string, plan = "feature"): string {
     const read = JSON.parse(runNext(proj, [words]).out) as { kind: string; message: string };
     expect(read.kind, read.message).toBe("print");
     const request = /`[^`]* next (--request [0-9a-f]{8})`/.exec(read.message)?.[1];
     expect(request, read.message).toBeDefined();
-    return runNext(proj, request!.split(" ")).out;
+    return runNext(proj, [...request!.split(" "), "--propose", plan]).out;
   }
 
   test("words alone over an active workflow may be a redo, jump, or fresh start: both readings, the words kept", () => {
@@ -1237,7 +1238,7 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
   test("keyword-matching prose names the scope a confirmed new intent would get", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
-    const out = askedAbout("fix the broken login button");
+    const out = askedAbout("fix the broken login button", "bugfix");
     expect(out).toContain('"kind":"ask"');
     expect(out).toContain('as \\"bugfix\\" work');
     expect(out).toContain('"proposed_scope":"bugfix"');
@@ -1448,8 +1449,11 @@ describe("t114 Branch 9c: replies that are not new work", () => {
   // The engine's own command, run as emitted (every word after `next`).
   const runCommand = (command: string) =>
     directive(command.slice(command.indexOf(" next ") + " next ".length).split(" ").filter(Boolean));
+  // The `next --request` the reading print names, with the plan the agent read
+  // for the words beside it (`--propose <plan>`), so the routing question names
+  // the plan and its separate-work answer creates at once.
   const requestCommand = (message: string): string =>
-    (message.match(/`([^`]*next --request [0-9a-f]{8})`/) ?? [])[1] ?? "";
+    `${(message.match(/`([^`]*next --request [0-9a-f]{8})`/) ?? [])[1] ?? ""} --propose feature`;
   // Words alone over active work first get the re-entry readings (a redo,
   // jump, or fresh start, or else this); their `next --request` asks about
   // them as work, the words kept.

@@ -35,7 +35,7 @@ import {
   win32 as winPath,
 } from "node:path";
 import { pathToFileURL } from "node:url";
-import { deleteQuestion, QUESTION_UNAVAILABLE, readQuestion } from "./aidlc-question-store.ts";
+import { QUESTION_UNAVAILABLE, readQuestion, retireRequest, startedRequestFor } from "./aidlc-question-store.ts";
 import {
   appendAuditEntries,
   appendAuditEntry,
@@ -740,12 +740,12 @@ Utilities:
   --help            Show this help message
 
 Other:
-  <description>     Describe what to build - scope is auto-detected
+  <description>     Describe what to build - the agent proposes a plan, you confirm it
   (no arguments)    Resume existing workflow, or start fresh if none exists
 
 Examples:
   ${entrySkillInvocation()} feature                                Start a feature workflow
-  ${entrySkillInvocation()} Fix the login timeout bug              Auto-detected as bugfix scope
+  ${entrySkillInvocation()} Fix the login timeout bug              The agent proposes the bugfix plan
   ${entrySkillInvocation()} compose "harden the deploy pipeline"   Composer proposes a tailored plan
   ${entrySkillInvocation()} config list                         Show every workflow setting and fence
   ${entrySkillInvocation()} plugin list                         Show installed plugin selection
@@ -7886,7 +7886,7 @@ function failIntentCreateAt(point: "after-mint" | "before-state" | "after-state"
 // twice. Work still in flight is selected and continued; archived or completed
 // work goes back to the engine, which asks whether to start it again.
 function answerAlreadyStarted(projectDir: string, questionId: string, sessionId?: string): boolean {
-  const started = intentStartedByQuestion(projectDir, questionId);
+  const started = intentStartedByQuestion(projectDir, startedRequestFor(projectDir, questionId));
   const dirName = started?.entry.dirName;
   if (!started || !dirName) return false;
   const { entry, space } = started;
@@ -8300,7 +8300,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
         initialSelection.sessionId ?? undefined,
         questionId,
       );
-      deleteQuestion(projectDir, questionId);
+      retireRequest(projectDir, questionId);
       process.stdout.write(`Already started ${stranded.dirName}, continuing it.\n`);
       return;
     }
@@ -8451,7 +8451,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // This chat is now on the work it just created: anything it was still owed
     // (the creation line naming what the person set for this work) follows it.
     carryPendingPersonLines(projectDir, initialSelection.sessionId);
-    if (questionId !== undefined) deleteQuestion(projectDir, questionId);
+    if (questionId !== undefined) retireRequest(projectDir, questionId);
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
@@ -12469,173 +12469,6 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
   }
 }
 
-// ---------------------------------------------------------------------------
-// Scope inference from freeform text
-//
-// The keyword sets live in each scope's `.claude/scopes/aidlc-<name>.md`
-// frontmatter `keywords` field; this
-// helper resolves the scope using word-boundary matching (so "debug"
-// does not match "bug"),
-// alphabetical iteration over scopes (so first-match-wins is
-// deterministic), and a ">5 word" heuristic that requires an affirmative
-// high-specificity keyword or a request to fix something. Generic or negated
-// mentions in long descriptions fall back to the effective project default
-// scope.
-//
-// Exported for t67 unit tests; not a stable public API.
-
-export interface InferResult {
-  scope: string;
-  source: "keyword" | "freeform";
-  matches: Array<{ scope: string; keyword: string }>;
-}
-
-// These core-owned keywords can identify a scope in a long description
-// (issue #1072). Generic words still defer to the word-count heuristic.
-// Plugin vocabularies remain owned by their plugins; declaring specificity
-// in scope frontmatter is a separate follow-up.
-const HIGH_SPECIFICITY_KEYWORDS = new Set<string>([
-  "refactor",
-  "mvp",
-  "minimum viable",
-  "poc",
-  "proof of concept",
-  "cve",
-]);
-
-// A request to fix something: "Fix the export ...", "please fix it",
-// "Bugfix: ...". These words also name a thing or what a product does in
-// feature prose ("a fix-up step", "a linter that can fix the formatting"), so
-// in a long description they count only as the request itself (see
-// isFixRequest) and rank below the keywords above.
-const FIX_REQUEST_KEYWORDS = new Set<string>(["fix", "bugfix"]);
-
-// A polite or modal opener before the request word: "please fix", "can you
-// fix", "we need to fix".
-const FIX_REQUEST_OPENER =
-  /(?:please|pls|kindly|(?:(?:please|pls|kindly)\s+)?(?:(?:can|could|would|will)\s+(?:you|we)|(?:i|we)\s+(?:need|want|have)\s+to|(?:i|we)['\u2019]d\s+like\s+to|need\s+to|help\s+(?:me|us)(?:\s+to)?|let['\u2019]s|let\s+us))/
-    .source;
-
-// The request word opens the text or a sentence, after optional opening
-// punctuation, a list marker, or an opener; after a comma only an opener makes
-// it a request ("..., can you fix it", not "lint, fix, and format").
-const FIX_REQUEST_OPENING = new RegExp(
-  `(?:(?:^|\\n|[.!?;:]\\s)[\\s"'([*#>\\u2018\\u201c-]*(?:\\d+[.)]\\s+)?(?:${FIX_REQUEST_OPENER}\\s+)?|,\\s+${FIX_REQUEST_OPENER}\\s+)` +
-    "(?:(?:please|just)\\s+)?(?:bug\\s+)?$",
-);
-
-// A closing request after the symptom ("... and fix it.", "could you fix
-// that?"), counted only when its sentence asks someone ("you", "please"), so
-// "a link to fix it" describes the product instead.
-const FIX_REQUEST_CLOSING =
-  /^\s+(?:it|that|this)(?:\s+(?:please|asap|today|now|quickly))?\s*(?:[.!?;,]|$)/;
-const FIX_REQUEST_ASKER = /\b(?:you|please|pls|kindly|asap)\b/;
-
-// The keyword opens the request, a sentence, or a clause ("Fix crash on
-// logout", "The export drops rows, can you fix it", "Bugfix: ..."), or closes
-// a described symptom ("... please find out why and fix it."). A hyphenated
-// compound ("fix-up step", "auto-fix") is a thing, not the request.
-function isFixRequest(text: string, index: number, length: number): boolean {
-  if (text[index - 1] === "-" || text[index + length] === "-") return false;
-  const before = text.slice(0, index);
-  const after = text.slice(index + length);
-  if (FIX_REQUEST_OPENING.test(before)) return true;
-  if (!FIX_REQUEST_CLOSING.test(after)) return false;
-  const start = Math.max(...[".", "!", "?", "\n"].map((mark) => before.lastIndexOf(mark))) + 1;
-  const end = after.search(/[.!?\n]/);
-  return FIX_REQUEST_ASKER.test(text.slice(start, index + length + (end < 0 ? after.length : end)));
-}
-
-function isNegatedScopeKeyword(text: string, index: number): boolean {
-  // Keep this local to the occurrence: "refactor without changing behavior"
-  // is affirmative, and a new clause can request a different scope. This is
-  // a conservative lexical guard, not a general natural-language parser.
-  const prefix = text
-    .slice(0, index)
-    .split(/[.!?;:\n]|\b(?:but|however|instead)\b/)
-    .pop() ?? "";
-  const normalized = prefix.replace(/\bnot\s+(?:only|just|merely)\b/g, "");
-  return /\b(?:no|not|never|without|avoid(?:ing)?|skip(?:ping)?|exclud(?:e|ing)|[a-z]+n['’]t)\b(?:[\s"'“”‘’()-]+\w+){0,4}[\s"'“”‘’()-]*$/.test(normalized);
-}
-
-export function inferScopeFromText(input: string): InferResult {
-  const text = input.toLowerCase();
-  const trimmed = input.trim();
-  const wordCount = trimmed.length === 0 ? 0 : trimmed.split(/\s+/).length;
-  const mapping = loadScopeMapping();
-  const allMatches: Array<{ scope: string; keyword: string }> = [];
-  let specificMatch: { scope: string; keyword: string } | undefined;
-  let fixMatch: { scope: string; keyword: string } | undefined;
-
-  // Iterate in alphabetical order for determinism (not JSON insertion
-  // order). validScopes() already returns a sorted set. Multi-word
-  // keywords like "proof of concept" allow any whitespace run between
-  // tokens, so "proof  of  concept" (double-spaced) still matches.
-  for (const scope of [...validScopes()]) {
-    const keywords = mapping[scope]?.keywords ?? [];
-    let firstMatch: { scope: string; keyword: string } | undefined;
-    for (const kw of keywords) {
-      const normalized = kw.toLowerCase().trim().replace(/\s+/g, " ");
-      const tokens = normalized.split(" ").map(escapeRegex);
-      const re = new RegExp(`\\b${tokens.join("\\s+")}\\b`, "gi");
-      for (const match of text.matchAll(re)) {
-        firstMatch ??= { scope, keyword: kw };
-        if (
-          wordCount > 5 &&
-          specificMatch === undefined &&
-          HIGH_SPECIFICITY_KEYWORDS.has(normalized) &&
-          !isNegatedScopeKeyword(text, match.index)
-        ) {
-          specificMatch = { scope, keyword: kw };
-        }
-        if (
-          wordCount > 5 &&
-          fixMatch === undefined &&
-          FIX_REQUEST_KEYWORDS.has(normalized) &&
-          isFixRequest(text, match.index, match[0].length) &&
-          !isNegatedScopeKeyword(text, match.index)
-        ) {
-          fixMatch = { scope, keyword: kw };
-        }
-      }
-    }
-    // Preserve one diagnostic match per scope and short-input precedence,
-    // while checking every keyword for the long-input exemption.
-    if (firstMatch) allMatches.push(firstMatch);
-  }
-
-  // No matches at all → default (freeform).
-  if (allMatches.length === 0) {
-    return {
-      scope: defaultScope(),
-      source: "freeform",
-      matches: allMatches,
-    };
-  }
-
-  // Long descriptions need an affirmative high-specificity match or a
-  // request to fix something.
-  const longMatch = specificMatch ?? fixMatch;
-  if (wordCount > 5 && longMatch === undefined) {
-    return {
-      scope: defaultScope(),
-      source: "freeform",
-      matches: allMatches,
-    };
-  }
-
-  // First alphabetical match wins (deterministic across calls). In long
-  // prose a high-specificity match takes precedence over a fix request, and
-  // either over an alphabetically earlier incidental generic one.
-  const winner =
-    wordCount > 5 && longMatch !== undefined ? longMatch : allMatches[0];
-  return {
-    scope: winner.scope,
-    source: "keyword",
-    matches: allMatches,
-  };
-}
-
 /** Doctor uses this for keyword-overlap detection. */
 export function findScopeByKeyword(kw: string): string[] {
   const mapping = loadScopeMapping();
@@ -12876,15 +12709,10 @@ function handleStageTable(
 // ---------------------------------------------------------------------------
 // detect-scope — record a scope-detection event
 //
-// Two modes:
-//   1. Explicit: `--scope <scope> --input <text> [--source ...]`.
-//      Recorded unchanged.
-//   2. Inference: `--from-text --input <text>`.
-//      Resolves the scope via inferScopeFromText and emits SCOPE_DETECTED
-//      with Source=keyword (match) or Source=freeform (default fallback).
-//
-// Passing both `--scope` and `--from-text` is an error — they are
-// mutually exclusive modes. Missing both is also an error.
+// Explicit only: `--scope <scope> --input <text> [--source ...]`, recorded
+// unchanged. The engine no longer infers a plan from the words (the agent
+// proposes one and the plan question names it), so the former `--from-text`
+// mode is gone.
 
 const VALID_SCOPE_SOURCES: ReadonlySet<string> = new Set([
   "freeform",
@@ -12897,50 +12725,30 @@ function handleDetectScope(
   projectDir: string,
   flags: Record<string, string>
 ): void {
-  const fromText = flags["from-text"] !== undefined;
   const explicitScope = flags.scope;
-
-  if (fromText && explicitScope) {
-    die(
-      "Cannot combine --from-text and --scope. Use one or the other."
-    );
+  if (flags["from-text"] !== undefined) {
+    die("--from-text is no longer taken: the agent proposes the plan. Pass --scope <scope> --input <text>.");
   }
-  if (!fromText && !explicitScope) {
-    die(
-      "Missing --scope <scope> (or pass --from-text to infer from --input)."
-    );
+  if (!explicitScope) {
+    die("Missing --scope <scope>.");
   }
 
-  // --input requirement differs by mode:
-  //   --scope mode: --input is required (audit event needs original text).
-  //   --from-text mode: --input may be empty string — inferScopeFromText
-  //     returns the effective project default. Missing --input entirely is
-  //     still an error; an empty string is fine.
+  // --input is required: the audit event needs the original text.
   const input = flags.input;
   if (input === undefined) {
     die("Missing --input <original-text>");
   }
-  if (!fromText && input === "") {
-    die("--input cannot be empty under --scope mode.");
+  if (input === "") {
+    die("--input cannot be empty.");
   }
 
-  let scope: string;
-  let source: string;
-  let matchedKeywords: string[] = [];
-
-  if (fromText) {
-    const result = inferScopeFromText(input);
-    scope = result.scope;
-    source = result.source;
-    matchedKeywords = result.matches.map((m) => m.keyword);
-  } else {
-    scope = explicitScope;
-    source = flags.source || "freeform";
-    if (!VALID_SCOPE_SOURCES.has(source)) {
-      die(
-        `Unknown source: "${source}". Valid: ${[...VALID_SCOPE_SOURCES].join(", ")}.`
-      );
-    }
+  const scope: string = explicitScope;
+  const source: string = flags.source || "freeform";
+  const matchedKeywords: string[] = [];
+  if (!VALID_SCOPE_SOURCES.has(source)) {
+    die(
+      `Unknown source: "${source}". Valid: ${[...VALID_SCOPE_SOURCES].join(", ")}.`
+    );
   }
 
   if (!validScopes().has(scope)) {
@@ -12975,7 +12783,7 @@ function handleDetectScope(
 // The orchestrator's step 0 in SKILL.md calls this to resolve the configured
 // default deterministically. Real env overrides the recorded project flag.
 //   - No configured default: exit 0, no output. The orchestrator takes the
-//     non-env path (CLI flag, keyword detection, or framework fallback).
+//     non-env path (CLI flag, the plan the agent proposes, or framework fallback).
 //   - Configured default resolves to a valid scope: print `scope=<value>`.
 //     The orchestrator synthesizes `--scope <value>` into $ARGUMENTS.
 //   - Env names an installed but disabled scope: resolve the selection-aware

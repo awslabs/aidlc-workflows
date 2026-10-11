@@ -89,12 +89,12 @@ describe("words typed after /aidlc are a reply unless the dispatcher reads a com
     expect(validScopes().size).toBeGreaterThan(5);
     for (const args of leading) expect(nextArgsAreOnlyWords(args), args.join(" ")).toBe(false);
     expect(nextArgsAreOnlyWords([])).toBe(false);
-    // A plan's name alone is the plan; with their own words after it, unmarked,
-    // the two readings go to the agent and the words stay the person's, so a
-    // reply typed that way is still a reply.
+    // A plan's name first is the person's pick of that plan, alone or with their
+    // words after it, however many (Arden 2026-10-12: the two-word cutoff is
+    // gone): the line is a command, never a reply.
     for (const scope of validScopes()) {
       expect(nextArgsAreOnlyWords([scope]), scope).toBe(false);
-      expect(nextArgsAreOnlyWords([scope, "fix", "the", "login", "crash"]), scope).toBe(true);
+      expect(nextArgsAreOnlyWords([scope, "fix", "the", "login", "crash"]), scope).toBe(false);
     }
   });
 

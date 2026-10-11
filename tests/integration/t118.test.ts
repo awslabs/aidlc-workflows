@@ -693,11 +693,13 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(existsSync(statePath(p))).toBe(false);
   });
 
-  test("SP5a positional scope + loose words -> both readings, nothing created, nothing asked", () => {
-    // A plan's name at the start of their own sentence is ambiguous with their
-    // first word, so the engine takes nothing from the line and names both
-    // readings (t-three-ways-to-read-a-line): their words are kept whole, no
-    // question is stored, and no state is written.
+  test("SP5a positional scope + loose words -> that plan's creation, the words after it the request, nothing created, nothing asked", () => {
+    // A plan's name typed first is the person's pick of that plan, and the words
+    // after it, however many, are the request (Arden 2026-10-12: the two-word
+    // cutoff goes; t-three-ways-to-read-a-line, t-plan-proposed-by-the-agent).
+    // The engine names the creation for that plan, keeps the words as the
+    // request by id, asks nothing, and writes no state: creation stays the
+    // conductor's move.
     const p = cleanProj();
     const r = run(ORCHESTRATE, [
       // Ahead of their words, as every caller builds it.
@@ -712,11 +714,11 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ]);
     const d = directive(r);
     expect(d.kind).toBe("print");
-    expect(d.message).not.toContain("intent create --scope bugfix");
-    expect(d.message).toContain("--scope bugfix -- 'Fix duplicate todo persistence'");
-    expect(d.message).toContain("'bugfix Fix duplicate todo persistence'");
-    expect(String(d.message)).not.toMatch(/--request [0-9a-f]{8}/);
-    expect(existsSync(join(p, "aidlc", ".aidlc-sessions", "questions"))).toBe(false);
+    expect(d.message).toContain("intent create --scope bugfix");
+    const id = /--request ([0-9a-f]{8})/.exec(String(d.message))?.[1];
+    expect(id, String(d.message)).toBeDefined();
+    const kept = JSON.parse(readFileSync(join(p, "aidlc", ".aidlc-sessions", "questions", `${id}.json`), "utf-8")) as { text: string };
+    expect(kept.text).toBe("Fix duplicate todo persistence");
     expect(d.kind).not.toBe("ask");
     expect(existsSync(statePath(p))).toBe(false);
   });

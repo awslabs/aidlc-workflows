@@ -1981,12 +1981,11 @@ export function killSwitchAdvisories(
 }
 
 /** Check proposed (granted-at-the-gate) keywords against the keywords the
- *  existing scopes already claim - the same loadScopeMapping data both
- *  inference (inferScopeFromText) and findScopeByKeyword read. Inference
- *  takes the FIRST ALPHABETICAL keyword match, so a duplicate keyword would
- *  permanently shadow the incumbent scope on every future cold start; a
- *  collision is therefore a hard error naming the colliding scope, never an
- *  advisory. Comparison is case-insensitive exact equality, matching
+ *  existing scopes already claim - the same loadScopeMapping data the plan
+ *  proposal step (where the agent reads them as hints) and findScopeByKeyword
+ *  read. A duplicate keyword would point the agent at two plans with one hint
+ *  on every future cold start; a collision is therefore a hard error naming
+ *  the colliding scope, never an advisory. Comparison is case-insensitive exact equality, matching
  *  findScopeByKeyword. */
 export function keywordCollisions(granted: string[]): string[] {
   const mapping = loadScopeMapping();
@@ -2003,7 +2002,7 @@ export function keywordCollisions(granted: string[]): string[] {
       errors.push(
         `Keyword "${kw}" is already claimed by scope${holders.length > 1 ? "s" : ""} ` +
           `[${holders.join(", ")}] - granting it would shadow that scope in ` +
-          `keyword inference. Pick a keyword no existing scope claims.`
+          `the plan proposal step. Pick a keyword no existing scope claims.`
       );
     }
   }

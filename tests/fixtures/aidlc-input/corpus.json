@@ -3241,7 +3241,7 @@
       }
     },
     "unsure": true,
-    "after": "WO6"
+    "after": "pending"
   },
   {
     "id": "hs09-w",
@@ -3389,21 +3389,20 @@
         "kinds": [
           "print"
         ],
-        "words": "classic car rental site",
+        "words": "car rental site",
         "settings": [],
         "no_ask": true,
-        "never": [
+        "names": [
           "--scope classic"
         ]
       },
       "end": {
         "asks": 0,
         "work": {
-          "words": "classic car rental site"
+          "words": "car rental site"
         }
       }
-    },
-    "after": "pending"
+    }
   },
   {
     "id": "sl01-w",
@@ -3417,22 +3416,18 @@
           "ask",
           "print"
         ],
-        "words": "classic car rental site",
+        "words": "car rental site",
         "settings": [],
         "no_ask": false,
         "names": [
-          "classic car rental site"
-        ],
-        "never": [
-          "--scope classic"
+          "car rental site"
         ]
       },
       "end": {
         "asks": 1,
         "work": "same"
       }
-    },
-    "after": "pending"
+    }
   },
   {
     "id": "sl02-f",
@@ -3445,7 +3440,7 @@
         "kinds": [
           "print"
         ],
-        "words": "bugfix the login",
+        "words": "the login",
         "settings": [],
         "no_ask": true,
         "names": [
@@ -3456,12 +3451,11 @@
         "asks": 0,
         "work": {
           "scope": "bugfix",
-          "words": "bugfix the login"
+          "words": "the login"
         }
       }
     },
-    "unsure": true,
-    "after": "pending"
+    "unsure": true
   },
   {
     "id": "sl02-w",
@@ -3475,11 +3469,11 @@
           "ask",
           "print"
         ],
-        "words": "bugfix the login",
+        "words": "the login",
         "settings": [],
         "no_ask": false,
         "names": [
-          "bugfix the login"
+          "the login"
         ]
       },
       "end": {
@@ -3487,8 +3481,7 @@
         "work": "same"
       }
     },
-    "unsure": true,
-    "after": "pending"
+    "unsure": true
   },
   {
     "id": "sl03-f",
@@ -3501,21 +3494,20 @@
         "kinds": [
           "print"
         ],
-        "words": "feature flags for the admin page",
+        "words": "flags for the admin page",
         "settings": [],
         "no_ask": true,
-        "never": [
+        "names": [
           "--scope feature"
         ]
       },
       "end": {
         "asks": 0,
         "work": {
-          "words": "feature flags for the admin page"
+          "words": "flags for the admin page"
         }
       }
-    },
-    "after": "pending"
+    }
   },
   {
     "id": "sl03-w",
@@ -3529,22 +3521,18 @@
           "ask",
           "print"
         ],
-        "words": "feature flags for the admin page",
+        "words": "flags for the admin page",
         "settings": [],
         "no_ask": false,
         "names": [
-          "feature flags for the admin page"
-        ],
-        "never": [
-          "--scope feature"
+          "flags for the admin page"
         ]
       },
       "end": {
         "asks": 1,
         "work": "same"
       }
-    },
-    "after": "pending"
+    }
   },
   {
     "id": "sl04-f",
@@ -3557,21 +3545,20 @@
         "kinds": [
           "print"
         ],
-        "words": "express checkout for guests",
+        "words": "checkout for guests",
         "settings": [],
         "no_ask": true,
-        "never": [
+        "names": [
           "--scope express"
         ]
       },
       "end": {
         "asks": 0,
         "work": {
-          "words": "express checkout for guests"
+          "words": "checkout for guests"
         }
       }
-    },
-    "after": "pending"
+    }
   },
   {
     "id": "sl05-f",
@@ -3584,19 +3571,21 @@
         "kinds": [
           "print"
         ],
-        "words": "refactor the payment module",
+        "words": "the payment module",
         "settings": [],
-        "no_ask": true
+        "no_ask": true,
+        "names": [
+          "--scope refactor"
+        ]
       },
       "end": {
         "asks": 0,
         "work": {
-          "words": "refactor the payment module"
+          "words": "the payment module"
         }
       }
     },
-    "unsure": true,
-    "after": "pending"
+    "unsure": true
   },
   {
     "id": "sl06-f",
@@ -3609,19 +3598,21 @@
         "kinds": [
           "print"
         ],
-        "words": "poc for a chat widget",
+        "words": "for a chat widget",
         "settings": [],
-        "no_ask": true
+        "no_ask": true,
+        "names": [
+          "--scope poc"
+        ]
       },
       "end": {
         "asks": 0,
         "work": {
-          "words": "poc for a chat widget"
+          "words": "for a chat widget"
         }
       }
     },
-    "unsure": true,
-    "after": "pending"
+    "unsure": true
   },
   {
     "id": "sl07-f",
@@ -3707,8 +3698,7 @@
         "asks": 0
       }
     },
-    "documented": "a leading plan word picks that plan for the words after it",
-    "after": "WO6"
+    "documented": "a leading plan word picks that plan for the words after it"
   },
   {
     "id": "sl10-f",
@@ -3756,8 +3746,8 @@
       }
     },
     "unsure": true,
-    "after": "pending",
-    "ambiguous": true
+    "ambiguous": true,
+    "after": "pending"
   },
   {
     "id": "rt01-f",
@@ -6386,7 +6376,7 @@
       }
     },
     "source": "FORMS.md C11",
-    "after": "WO6"
+    "after": "pending"
   },
   {
     "id": "C12a-w",
@@ -7846,11 +7836,11 @@
         "kinds": [
           "print"
         ],
-        "words": "feature add CSV export",
+        "words": "add CSV export",
         "settings": [],
         "no_ask": true,
         "names": [
-          "--scope feature -- 'add CSV export'"
+          "intent create --scope feature --request"
         ]
       },
       "end": {
@@ -12064,10 +12054,10 @@
         "kinds": [
           "print"
         ],
-        "words": "bugfix Fix the crash",
+        "words": "Fix the crash",
         "settings": [],
         "names": [
-          "--scope bugfix -- 'Fix the crash'"
+          "intent create --scope bugfix --request"
         ],
         "no_ask": true
       },
@@ -12285,8 +12275,12 @@
     "expected": {
       "engine": {
         "kinds": [
-          "ask"
+          "print"
         ],
+        "names": [
+          "--propose <plan> --request"
+        ],
+        "no_ask": true,
         "words": "build a to-do app",
         "settings": []
       },
@@ -14421,8 +14415,12 @@
     "expected": {
       "engine": {
         "kinds": [
-          "ask"
+          "print"
         ],
+        "names": [
+          "--propose <plan> --request"
+        ],
+        "no_ask": true,
         "words": "build a to-do app",
         "settings": [
           [
@@ -14477,8 +14475,12 @@
     "expected": {
       "engine": {
         "kinds": [
-          "ask"
+          "print"
         ],
+        "names": [
+          "--propose <plan> --request"
+        ],
+        "no_ask": true,
         "words": "build a to-do app",
         "settings": [
           [
@@ -16652,8 +16654,12 @@
     "expected": {
       "engine": {
         "kinds": [
-          "ask"
+          "print"
         ],
+        "names": [
+          "--propose <plan> --request"
+        ],
+        "no_ask": true,
         "words": "build the export",
         "settings": [
           [
@@ -16773,8 +16779,12 @@
     "expected": {
       "engine": {
         "kinds": [
-          "ask"
+          "print"
         ],
+        "names": [
+          "--propose <plan> --request"
+        ],
+        "no_ask": true,
         "words": "fix the parser",
         "settings": [
           [
@@ -16908,8 +16918,12 @@
     "expected": {
       "engine": {
         "kinds": [
-          "ask"
+          "print"
         ],
+        "names": [
+          "--propose <plan> --request"
+        ],
+        "no_ask": true,
         "words": "build the auth service",
         "settings": [
           [
@@ -17130,10 +17144,10 @@
         "kinds": [
           "print"
         ],
-        "words": "workshop Read ./vision.md and build what it describes",
+        "words": "Read ./vision.md and build what it describes",
         "settings": [],
         "names": [
-          "--scope workshop -- 'Read ./vision.md and build what it describes'"
+          "intent create --scope workshop --request"
         ],
         "no_ask": true
       },
@@ -17783,8 +17797,12 @@
     "expected": {
       "engine": {
         "kinds": [
-          "ask"
+          "print"
         ],
+        "names": [
+          "--propose <plan> --request"
+        ],
+        "no_ask": true,
         "words": "build a to-do app",
         "settings": [
           [
@@ -17972,10 +17990,10 @@
         "kinds": [
           "print"
         ],
-        "words": "classic Build a notes app",
+        "words": "Build a notes app",
         "settings": [],
         "names": [
-          "--scope classic -- 'Build a notes app'"
+          "intent create --scope classic --request"
         ],
         "no_ask": true
       },
@@ -18045,7 +18063,6 @@
         }
       }
     },
-    "after": "pending",
     "documented_differs": "print: Setting up a classic workflow for this: 14 stages, 14 approval gates, 5 stages repeat per unit of work in Construction; no summary confirmation; lead agent only"
   },
   {

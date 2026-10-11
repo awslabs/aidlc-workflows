@@ -21,6 +21,7 @@ import {
   createTestProject,
   DEFAULT_SPACE,
   FIXTURES_DIR,
+  followProposal,
   removeWorkspaceRecord,
   runOrchestrateNext,
   seedAidlcMemory,
@@ -70,7 +71,9 @@ function directiveOf(out: string): Record<string, unknown> {
 }
 
 function runNext(proj: string, args: string[]): Record<string, unknown> {
-  return directiveOf(runOrchestrateNext(ORCH, proj, args, { cwd: proj, env: childEnv() }).out);
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const options = { cwd: proj, env: childEnv() };
+  return directiveOf(followProposal(runOrchestrateNext(ORCH, proj, args, options), ORCH, proj, options).out);
 }
 
 // An answer command the engine printed, run the way the agent runs it.
@@ -89,7 +92,13 @@ describe("t-collaborators-cli a switch typed with the request reaches the work",
     for (const command of [ask.new_intent_command, ask.continue_command, ask.compose_command]) {
       expect(String(command)).toContain("--collaborators on");
     }
-    const created = runEmitted(proj, String(ask.new_intent_command));
+    // No plan was named with the words, so the separate-work answer reaches the
+    // plan question (the agent's proposal, through the test's stand-in reading):
+    // the switch rides that hop too, onto the question's commands and the creation.
+    const offer = runEmitted(proj, String(ask.new_intent_command));
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 300)).toBe("scope-confirm");
+    expect(String(offer.confirm_command)).toContain("--collaborators on");
+    const created = runEmitted(proj, String(offer.confirm_command));
     expect(created.kind).toBe("print");
     expect(String(created.message)).toContain("intent create --scope bugfix");
     expect(String(created.message)).toContain("--collaborators on");

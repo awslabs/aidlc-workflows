@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import corpus from "../fixtures/aidlc-input/corpus.json";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
-import { AIDLC_SRC, FIXTURES_DIR, REPO_ROOT, createOrchestrationTestProject, intentsDirOf, recordArtifactWriteViaHook, seededRecordDir, seededStateFile } from "./fixtures.ts";
+import { AIDLC_SRC, FIXTURES_DIR, REPO_ROOT, createOrchestrationTestProject, intentsDirOf, proposalFollowUp, recordArtifactWriteViaHook, seededRecordDir, seededStateFile } from "./fixtures.ts";
 import { testGuardEnvironment } from "./runner-profile.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { splitKiroCommandArgs, writeSessionBinding, writeSessionPidEntry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -315,7 +315,10 @@ export async function buildState(proj: string, state: State): Promise<void> {
     case "plan-offer-open": {
       // The person typed "build a notes app" on a fresh workspace and the plan offer is on screen.
       await say(proj, "/aidlc build a notes app", "claude");
-      const offer = await next(proj, ["build", "a", "notes", "app"]);
+      const read = await next(proj, ["build", "a", "notes", "app"]);
+      // The agent's step after the plan proposal print: no ready-made plan fits a new app, so it proposes compose.
+      const proposal = proposalFollowUp(read.directive, "compose");
+      const offer = proposal === null ? read : await next(proj, proposal);
       if (offer.directive?.kind !== "ask") throw new Error(`plan offer did not open: ${offer.out}`);
       return;
     }
@@ -326,7 +329,8 @@ export async function buildState(proj: string, state: State): Promise<void> {
       const reading = await next(proj, ["fix", "the", "login"]);
       const request = /`[^`]* next (--request [0-9a-f]{8})`/.exec(reading.directive?.message ?? "")?.[1];
       if (!request) throw new Error(`no request id in the reading note: ${reading.out}`);
-      const routing = await next(proj, request.split(" "));
+      // The agent reads "fix the login" as a fix and names that plan with the request, as the reading print asks.
+      const routing = await next(proj, [...request.split(" "), "--propose", "bugfix"]);
       if (routing.directive?.ask_type !== "new-work-routing") throw new Error(`routing question did not open: ${routing.out}`);
       return;
     }

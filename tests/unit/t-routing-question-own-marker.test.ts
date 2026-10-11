@@ -30,6 +30,7 @@ import {
   createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
+  followProposal,
   REPO_ROOT,
   runOrchestrateNext,
   seedAidlcMemory,
@@ -129,7 +130,9 @@ function env(proj: string): NodeJS.ProcessEnv {
 }
 
 function next(proj: string, args: string[] = []): Emitted {
-  const result = runOrchestrateNext(ORCHESTRATE, proj, args, { env: env(proj) });
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const options = { env: env(proj) };
+  const result = followProposal(runOrchestrateNext(ORCHESTRATE, proj, args, options), ORCHESTRATE, proj, options);
   expect(result.status, result.out).toBe(0);
   expect(result.directive, result.out).not.toBeNull();
   return result.directive as unknown as Emitted;

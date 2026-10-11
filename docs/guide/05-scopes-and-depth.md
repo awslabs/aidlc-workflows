@@ -158,7 +158,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 | `classic` | 18 / 33 | Standard | Standard | V1-style Inception + Construction — the implicit default |
 | `workshop` | 26 / 33 | Standard | Minimal | Facilitated lifecycle with teaching-oriented tests |
 | `express` | 10 / 33 | Minimal | Minimal | Requirements to conditional deploy, no design or reviewers |
-| (auto-detect) | Varies | Varies | Varies | AI determines from freeform intent |
+| (proposed) | Varies | Varies | Varies | The agent proposes one from your freeform intent; you confirm it |
 
 Scopes differ by an order of magnitude in ceremony: `poc` runs a narrow single-pass path, while `feature` runs all 33 stages with 30 gates (32 stages and 29 gates on a new project, where Reverse Engineering is skipped) and five design stages that fan out per Unit of Work in Construction. The scope confirmation line names the effective numbers - stage count, approval-gate count, and any per-unit fan-out - computed from the compiled grid and workspace scan, never estimated. Greenfield work excludes reverse engineering, and scopes that skip `units-generation` omit the per-unit clause because no Unit DAG exists. You know what you are consenting to before the workflow starts.
 
@@ -213,40 +213,36 @@ A ✓ marks static scope membership — it means the stage is included in the sc
 
 ---
 
-## Auto-Detection from Freeform Intent
+## The Agent Proposes the Plan
 
-You don't have to specify a scope explicitly. Describe what you want, and the orchestrator detects the appropriate scope from keywords:
+You don't have to specify a scope explicitly. Describe what you want, and the
+agent proposes a plan from your words:
 
 ```
 /aidlc Build a REST API for inventory management
 ```
 
-The engine analyzes your intent against keyword patterns:
-
-| Keywords | Detected Scope |
-|----------|---------------|
-| "fix", "bug", "broken", "bugfix" | `bugfix` |
-| "refactor", "clean up", "simplify" | `refactor` |
-| "infrastructure", "deploy", "infra" | `infra` |
-| "security", "CVE", "vulnerability", "patch" | `security-patch` |
-| "proof of concept", "prototype", "poc", "spike" | `poc` |
-| "mvp", "minimum viable" | `mvp` |
-| "workshop", "lab", "training" | `workshop` |
-| "express", "lightweight" | `express` |
-| Explicit low-context fallback | `feature` when core is enabled; otherwise the sole enabled plugin's first scope when unambiguous |
-
-**Disambiguation rule:** Descriptions longer than five words normally receive the compose offer below. An affirmative match for `refactor`, `mvp`, `minimum viable`, `poc`, `proof of concept`, or `CVE` instead proposes the matching scope, regardless of length. For example, "refactor the legacy authentication module to improve maintainability" proposes `refactor`. A request to fix something proposes `bugfix` at any length: `fix` or `bugfix` opening the description, a sentence, or a list item, optionally after a polite opener ("Fix crash on logout when the session expired", "Bugfix: ...", "We need to fix ..."), after a comma behind such an opener ("The export drops the last row, can you fix it"), or "fix it" closing a sentence that asks someone ("... please find out why and fix it."). For example, "Fix a filter bug found while optimising a Power BI report" proposes `bugfix`. A high-specificity match outranks a fix request, so "Fix the CVE-2026-12345 vulnerability in the auth library" still proposes `security-patch`. Words that name a thing or what a product does, such as "a fix-up step", "a linter that can fix the formatting", "a bug tracker", or "a broken link button", and generic words such as `deploy` still receive the compose offer, which lists `bugfix` among the plans you can pick directly.
-
-The exemption checks every keyword, so "security vulnerability CVE-2026-12345" can identify `security-patch` even when `security` matches first. Nearby negation before a keyword, such as "do not refactor" or "not a proof of concept", does not activate the exemption; a later affirmative mention can still match. This is a lexical heuristic, so confirm that the proposed plan fits your intent. Among eligible scopes, the first alphabetical scope wins. Inputs of five words or fewer retain the existing alphabetical keyword matching. Plugin-specific keywords retain the length heuristic until plugins can declare their own keyword specificity.
-
-After a clear keyword match, you get a one-line confirmation naming the MATCHED scope and the ceremony it carries, straight from the compiled grid. On a new project it reads like this; on an existing codebase bugfix also runs Reverse Engineering, so the line says 6 stages and 6 approval gates:
+The engine keeps your request and hands it to the agent with every plan AI-DLC
+ships on this project: how many stages each runs here, what it is for, and the
+hint words its author wrote in the plan file (`keywords:` in
+`scopes/aidlc-<name>.md`). The hints are read by the agent, like the rest of
+your words; no tool matches them. The agent proposes the plan that fits what
+you described, and you get one question with it, straight from the compiled
+grid. On a new project it reads like this; on an existing codebase bugfix also
+runs Reverse Engineering, so the line says 6 stages and 6 approval gates:
 
 ```
-This looks like "bugfix" work, so I'd run the "bugfix" plan for: "fix login bug" - 5 stages, 5 approval gates; no learnings ritual or summary confirmation; lead agent only.
+I'd run the "bugfix" plan for: "fix login bug" - 5 stages, 5 approval gates; no learnings ritual or summary confirmation; lead agent only.
 Do you want me to go ahead with it, use a different plan, or tailor one to this task?
 ```
 
-Confirm to proceed, or reply with a different scope (or `compose`) to course-correct before the workflow starts.
+Confirm to proceed, reply with a different plan, or `compose` to course-correct
+before the workflow starts. When no ready-made plan fits what you described, the
+agent offers to tailor one instead ("None of the ready-made plans is an obvious
+fit for ..."), with the plans you can pick directly listed beside it. Settings
+you typed with the request (`--depth minimal`, `--learnings off`) ride the
+question's answers, so the work starts with them. Whichever plan is proposed,
+confirm that it fits your intent: the choice is yours at the question.
 
 ---
 
@@ -278,7 +274,7 @@ The composer agent reads your task, then estimates five implementation-entropy c
 
 **CodeKB grounding (optional):** CodeKB is an external MCP server that serves pre-computed structural analysis of a codebase (call graphs, component inventories, cross-package coupling). AI-DLC does not ship or require it - without it the composer scores structure from the bounded workspace scan, which is the normal path. When you do connect one, the composer uses it as the sole structural evidence source and cites it in the proposal (`method: codekb`). How to connect it depends on the harness: on Claude Code add the server to your project's `.mcp.json` (subagents inherit session MCP servers); on Codex add an `mcp_servers` entry to your `config.toml`; on opencode add it to your opencode config; on Copilot CLI add it to `~/.copilot/mcp-config.json`, and in VS Code to `.vscode/mcp.json`. On Kiro CLI the shipped composer config sets `includeMcpJson: true`, so connecting CodeKB means adding it to `.kiro/settings/mcp.json` without `"disabled": true` and adding its `@<server>` grant to the composer agent's `tools`; Kiro IDE remains fallback-only. Do not confuse CodeKB with the framework's own "codekb" directory (`aidlc/spaces/<space>/codekb/`) - that is the local artifact store the Reverse Engineering stage writes, unrelated to the MCP server. Note that with CodeKB evidence the composer may propose skipping Reverse Engineering; the proposal must disclose that downstream stages then run without that local store, and you decide at the gate.
 
-**Keyword hygiene:** saved scopes ship with `keywords: []`, so a saved plan never participates in keyword auto-detection. Making one inferable for future prompts is an explicit choice when you save it (`scope save --keywords <word,...>`, single words checked against the keywords other scopes already claim), never a side effect.
+**Keyword hygiene:** saved scopes ship with `keywords: []`, so a saved plan carries no hints into the agent's plan proposal step. Giving it hints for future prompts is an explicit choice when you save it (`scope save --keywords <word,...>`, single words checked against the keywords other scopes already claim), never a side effect.
 
 **In-flight recompose:** mid-workflow, `/aidlc compose` proposes re-shaping the PENDING stages of the running workflow - skip what you no longer need, add back a pending stage you realize you need. The composer re-estimates the entropy components from what completed stages actually resolved, so each proposed flip names the evidence that moved the score ("feasibility settled the integration questions - risk re-scores MED"). Flips apply only to pending, ahead-of-cursor stages (completed and in-progress stages are frozen), are strict-validated so no remaining stage is starved of a required input, and land through the deterministic `recompose` verb under the audit lock with a `RECOMPOSED` audit event. When one approval covers stage changes and settings, the same `recompose` applies both in one write, so the plan is never left half-changed; summary confirmation off stays your own switch to type. The first EXECUTE stage of Construction cannot be flipped by recompose. This protects the stage-routing anchor; it does not make a first design-stage review proof of a working integrated skeleton.
 

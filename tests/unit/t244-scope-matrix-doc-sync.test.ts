@@ -315,7 +315,7 @@ describe("t244 scope routing summary table doc drift guard", () => {
     counts: string;
     depth: string;
     tests: string;
-    /** real scope rows name the scope in backticks; the auto-detect row does not */
+    /** real scope rows name the scope in backticks; the proposed-plan row does not */
     quoted: boolean;
   }
 
@@ -378,14 +378,16 @@ describe("t244 scope routing summary table doc drift guard", () => {
     expect([...listed].sort()).toEqual(Object.keys(grid).sort());
   });
 
-  test("9b: the only non-scope summary row is the auto-detect sentinel", () => {
+  test("9b: the only non-scope summary row is the proposed-plan sentinel", () => {
     // The filter above drops rows that do not name a scope in backticks. Pin what
     // it is allowed to drop, or a future stray row would vanish silently instead
-    // of failing — the same reason test 4 checks rows in reverse.
+    // of failing — the same reason test 4 checks rows in reverse. The row was
+    // "(auto-detect)" while the engine read the plan from keywords; the agent
+    // proposes the plan now (t-plan-proposed-by-the-agent), and the row says so.
     const extra = allSummaryRows().filter((r) => !r.quoted);
-    expect(extra.map((r) => r.scope)).toEqual(["(auto-detect)"]);
+    expect(extra.map((r) => r.scope)).toEqual(["(proposed)"]);
     for (const r of extra) {
-      expect([r.counts, r.depth, r.tests], "auto-detect row should read Varies").toEqual([
+      expect([r.counts, r.depth, r.tests], "proposed-plan row should read Varies").toEqual([
         "Varies",
         "Varies",
         "Varies",
