@@ -784,9 +784,11 @@ again. See [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feat
 
 On Windows, Kiro IDE runs its agent's commands in your default terminal profile
 (`terminal.integrated.defaultProfile.windows` in Kiro's user settings). While
-it is Command Prompt and you have not answered on this computer, setup asks
-once whether to set it to PowerShell, `aidlc config --yes` sets it, and
-`--kiro-terminal powershell` sets it on its own; each changes that one key and
+it is Command Prompt (where Kiro shows a command's reply only when it finishes
+within a second, so most AI-DLC replies come back empty) and you have not
+answered on this computer, setup asks once whether to set it to PowerShell,
+`aidlc config --yes` sets it, and `--kiro-terminal powershell` sets it on its
+own (and says so when it already is PowerShell); each changes that one key and
 keeps every other byte of the file, and your answer is kept in
 `kiro-ide-terminal` in the AI-DLC install folder. See
 [Command Prompt as Kiro's terminal](harnesses/kiro-ide.md#command-prompt-as-kiros-terminal-on-windows).

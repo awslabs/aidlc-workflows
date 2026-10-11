@@ -8,13 +8,20 @@
 // and never touches any other byte of their settings file.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupTestProject, REPO_ROOT } from "../harness/fixtures.ts";
 import {
+  KIRO_TERMINAL_QUESTION,
   kiroIdeTerminalAsk,
+  kiroIdeTerminalStandingLine,
+  kiroTerminalBreakWarning,
+  kiroTerminalIssueMessage,
+  noteSlowReply,
   readKiroIdeTerminal,
+  readKiroTerminalShell,
+  recordKiroTerminalShell,
   readKiroTerminalAnswer,
   recordKiroTerminalAnswer,
   setKiroIdeTerminalPowerShell,
@@ -343,5 +350,242 @@ describe("what the agent reads", () => {
     for (const prompt of [ide, cli]) {
       expect(prompt).toContain("(5) run AI-DLC's commands as written and read their reply from the command's result: never send it to a file.");
     }
+  });
+});
+
+// Measured live on Kiro IDE 1.2.37 (the kiro-cmd investigation): without shell
+// integration, which cmd.exe never has, Kiro hands the agent whatever a
+// command printed within one second and nothing after it, with exit code -1
+// for every run. AI-DLC's step commands take one to seven seconds, so under
+// Command Prompt most of their replies come back empty. The person is told what
+// they meet and can decide (never the mechanism), every Command Prompt chat is
+// told the mechanics and the one setter, and a person who kept Command Prompt
+// hears once, at the first slow reply, what is happening.
+describe("what the question and the diagnostics say breaks", () => {
+  test("the question and the doctor message name the empty replies first, then the split words, in the person's terms", () => {
+    expect(KIRO_TERMINAL_QUESTION).toContain("In Command Prompt most AI-DLC steps come back with no reply and your words can get split.");
+    expect(KIRO_TERMINAL_QUESTION).not.toContain("within a second");
+    expect(KIRO_TERMINAL_QUESTION).toContain("Set Kiro's terminal to PowerShell? It is a Kiro setting for all your projects.");
+    expect(KIRO_TERMINAL_QUESTION).not.toContain("every command looks like it failed");
+    expect(kiroTerminalIssueMessage()).toMatch(/^Kiro runs its agent's commands in Command Prompt/);
+    expect(kiroTerminalIssueMessage()).toContain("where most AI-DLC steps come back with no reply and your words can get split");
+    expect(kiroTerminalIssueMessage()).not.toContain("within a second");
+    expect(kiroTerminalIssueMessage()).not.toContain("every command looks like it failed");
+  });
+});
+
+describe("every Command Prompt chat gets the standing line", () => {
+  const inKiro = (m: ReturnType<typeof machine>) => ({ ...m.env, VSCODE_CODE_CACHE_PATH: join(m.root, "ud", "CachedData", "abc") });
+  const INVOKE = "bun .kiro/tools/aidlc.ts";
+
+  test("the line names the one-second rule, the still-running result shape, double quotes and the setter, whatever the person answered", () => {
+    const m = machine(CMD_WITH_COMMENTS);
+    withEnv(inKiro(m), () => {
+      for (const answer of [null, "asked", "kept"] as const) {
+        if (answer !== null) recordKiroTerminalAnswer(answer);
+        const line = kiroIdeTerminalStandingLine(INVOKE, process.env);
+        expect(line, `answer ${answer}`).toContain("Kiro runs your commands in Command Prompt here (your shell tool is still named execute_pwsh");
+        expect(line).toContain("hands you a command's reply only when the command finishes within a second");
+        expect(line).toContain("only the echoed command and `Exit Code: -1`");
+        expect(line).toContain("still running when Kiro read the result, not a failure and not a lock");
+        expect(line).toContain("Write values in double quotes in this shell.");
+        expect(line).toContain("your shell tool is still named execute_pwsh and PowerShell commands run from it, but the terminal they run in is Command Prompt");
+        expect(line).toContain(`the one way is to run \`${INVOKE} config trust --kiro-terminal powershell --yes\` and tell them what it prints; unless they ask, say nothing about it.`);
+        expect(line).not.toContain("?");
+      }
+    });
+  });
+
+  test("the ASK ONCE question is unchanged and still asked once beside the standing line", () => {
+    const m = machine(CMD_WITH_COMMENTS);
+    withEnv(inKiro(m), () => {
+      const standing = kiroIdeTerminalStandingLine(INVOKE, process.env);
+      const ask = kiroIdeTerminalAsk(INVOKE, process.env);
+      expect(ask).toContain("ASK ONCE: after you answer the person's message, ask them this in their language:");
+      expect(ask).toContain("Do you want me to set Kiro's terminal to PowerShell? It is a Kiro setting for all your projects.");
+      expect(readKiroTerminalAnswer()).toBe("asked");
+      expect(kiroIdeTerminalAsk(INVOKE, process.env)).toBe("");
+      expect(kiroIdeTerminalStandingLine(INVOKE, process.env)).toBe(standing);
+    });
+  });
+
+  test("no standing line in PowerShell, outside Kiro IDE, or off Windows", () => {
+    const ps = machine(POWERSHELL_SET);
+    withEnv(inKiro(ps), () => expect(kiroIdeTerminalStandingLine(INVOKE, process.env)).toBe(""));
+    const absent = machine();
+    withEnv(inKiro(absent), () => expect(kiroIdeTerminalStandingLine(INVOKE, process.env)).toBe(""));
+    const cli = machine(CMD_WITH_COMMENTS);
+    withEnv(cli.env, () => expect(kiroIdeTerminalStandingLine(INVOKE, process.env)).toBe(""));
+    const mac = machine(CMD_WITH_COMMENTS, "darwin");
+    withEnv(inKiro(mac), () => expect(kiroIdeTerminalStandingLine(INVOKE, process.env)).toBe(""));
+  });
+});
+
+describe("the warning once, at the first slow reply, for a person who kept Command Prompt", () => {
+  const inKiro = (m: ReturnType<typeof machine>) => ({ ...m.env, VSCODE_CODE_CACHE_PATH: join(m.root, "ud", "CachedData", "abc") });
+  // The engine's own commands run in Kiro's terminal: TERM_PROGRAM=kiro, no VSCODE_CODE_CACHE_PATH (measured).
+  const inTerminal = (m: ReturnType<typeof machine>) => ({ ...m.env, TERM_PROGRAM: "kiro" });
+  const dropped = (m: ReturnType<typeof machine>) => join(m.env.AIDLC_INSTALL_ROOT, "kiro-ide-terminal-dropped");
+  const warned = (m: ReturnType<typeof machine>) => join(m.env.AIDLC_INSTALL_ROOT, "kiro-ide-terminal-warned");
+
+  test("a tool run over one second in Kiro's Command Prompt terminal notes the dropped reply, once the person kept or was asked", () => {
+    for (const answer of ["kept", "asked"] as const) {
+      const m = machine(CMD_WITH_COMMENTS);
+      withEnv(inTerminal(m), () => {
+        recordKiroTerminalAnswer(answer);
+        noteSlowReply(800, process.env);
+        expect(existsSync(dropped(m)), `${answer} under a second`).toBe(false);
+        noteSlowReply(1500, process.env);
+        expect(existsSync(dropped(m)), `${answer} over a second`).toBe(true);
+      });
+    }
+    const unanswered = machine(CMD_WITH_COMMENTS);
+    withEnv(inTerminal(unanswered), () => {
+      noteSlowReply(1500, process.env);
+      expect(existsSync(dropped(unanswered))).toBe(false);
+    });
+    const switched = machine(CMD_WITH_COMMENTS);
+    withEnv(inTerminal(switched), () => {
+      recordKiroTerminalAnswer("powershell");
+      noteSlowReply(1500, process.env);
+      expect(existsSync(dropped(switched))).toBe(false);
+    });
+    const powershell = machine(POWERSHELL_SET);
+    withEnv(inTerminal(powershell), () => {
+      recordKiroTerminalAnswer("kept");
+      noteSlowReply(1500, process.env);
+      expect(existsSync(dropped(powershell))).toBe(false);
+    });
+    const ownTerminal = machine(CMD_WITH_COMMENTS);
+    withEnv(ownTerminal.env, () => {
+      recordKiroTerminalAnswer("kept");
+      noteSlowReply(1500, process.env);
+      expect(existsSync(dropped(ownTerminal))).toBe(false);
+    });
+    const mac = machine(CMD_WITH_COMMENTS, "darwin");
+    withEnv(inTerminal(mac), () => {
+      recordKiroTerminalAnswer("kept");
+      noteSlowReply(1500, process.env);
+      expect(existsSync(dropped(mac))).toBe(false);
+    });
+  });
+
+  test("the chat's hook records which shell the running Kiro has, and the engine's own commands go by that record", () => {
+    // The agent's commands carry no VSCODE_CODE_CACHE_PATH, so a portable Kiro or a custom user data folder
+    // would be read from Kiro's default settings folder; the hook saw the running Kiro's settings.
+    const portable = machine(POWERSHELL_SET);
+    withEnv(inKiro({ ...portable, env: { ...portable.env, AIDLC_TEST_KIRO_IDE_SETTINGS: join(portable.root, "running-kiro.json") } }), () => {
+      mkdirSync(join(portable.root), { recursive: true });
+      writeFileSync(join(portable.root, "running-kiro.json"), CMD_WITH_COMMENTS);
+      recordKiroTerminalShell(process.env);
+      expect(readKiroTerminalShell()).toBe("cmd");
+    });
+    withEnv(inTerminal(portable), () => {
+      recordKiroTerminalAnswer("kept");
+      noteSlowReply(1500, process.env);
+      expect(existsSync(dropped(portable))).toBe(true);
+    });
+    const switched = machine(CMD_WITH_COMMENTS);
+    withEnv(inKiro({ ...switched, env: { ...switched.env, AIDLC_TEST_KIRO_IDE_SETTINGS: join(switched.root, "running-kiro.json") } }), () => {
+      writeFileSync(join(switched.root, "running-kiro.json"), POWERSHELL_SET);
+      recordKiroTerminalShell(process.env);
+      expect(readKiroTerminalShell()).toBe("powershell");
+    });
+    withEnv(inTerminal(switched), () => {
+      recordKiroTerminalAnswer("kept");
+      noteSlowReply(1500, process.env);
+      expect(existsSync(dropped(switched))).toBe(false);
+    });
+    const cli = machine(CMD_WITH_COMMENTS);
+    withEnv(cli.env, () => {
+      recordKiroTerminalShell(process.env);
+      expect(readKiroTerminalShell()).toBeNull();
+    });
+    const mac = machine(CMD_WITH_COMMENTS, "darwin");
+    withEnv(inKiro(mac), () => {
+      recordKiroTerminalShell(process.env);
+      expect(readKiroTerminalShell()).toBeNull();
+    });
+  });
+
+  test("the next hook run in the chat says it once to the person, in one line with no question, and never again on this machine", () => {
+    const m = machine(CMD_WITH_COMMENTS);
+    withEnv(inKiro(m), () => {
+      recordKiroTerminalAnswer("kept");
+      expect(kiroTerminalBreakWarning(process.env)).toBe("");
+    });
+    withEnv(inTerminal(m), () => noteSlowReply(1500, process.env));
+    withEnv(inKiro(m), () => {
+      const line = kiroTerminalBreakWarning(process.env);
+      expect(line).toContain("Tell the person this once, in their language, then go on with their request:");
+      expect(line).toContain("Kiro's Command Prompt terminal is cutting off AI-DLC's replies, so steps here take extra turns.");
+      expect(line).toContain("Tell me if you want Kiro's terminal set to PowerShell, which avoids this.");
+      expect(line).not.toContain("within a second");
+      expect(line).not.toContain("?");
+      expect(existsSync(warned(m))).toBe(true);
+      expect(existsSync(dropped(m))).toBe(false);
+      expect(kiroTerminalBreakWarning(process.env)).toBe("");
+    });
+    withEnv(inTerminal(m), () => {
+      noteSlowReply(3000, process.env);
+      expect(existsSync(dropped(m))).toBe(false);
+    });
+    withEnv(inKiro(m), () => expect(kiroTerminalBreakWarning(process.env)).toBe(""));
+  });
+
+  // Live on Kiro IDE 1.2.37: a line handed over before a tool call was
+  // swallowed by the agent mid-chain; one that comes with the person's own
+  // message is answered, so the person's message hook carries it.
+  test("the person's message hook carries the line with the answer to their next message, and only that once", () => {
+    const m = machine(CMD_WITH_COMMENTS);
+    const { project } = installKiroIde({ ...m.env, AIDLC_TEST_KIRO_IDE_SETTINGS: join(m.root, "none.json") });
+    withEnv(inTerminal(m), () => {
+      recordKiroTerminalAnswer("kept");
+      noteSlowReply(1500, process.env);
+    });
+    const payload = JSON.stringify({
+      hook_event_name: "UserPromptSubmit",
+      cwd: project,
+      session_id: "sess_kiro_terminal",
+      prompt: "Set Kiro's terminal to PowerShell.",
+    });
+    const run = () =>
+      spawnSync(process.execPath, [join(project, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "verb-intercept"], {
+        cwd: project,
+        input: payload,
+        encoding: "utf-8",
+        env: childEnv({ ...inKiro(m), CLAUDE_PROJECT_DIR: project }),
+      });
+    const first = run();
+    expect(first.status, `${first.stdout}${first.stderr}`).toBe(0);
+    expect(first.stdout).toContain("Tell me if you want Kiro's terminal set to PowerShell, which avoids this.");
+    const second = run();
+    expect(second.status).toBe(0);
+    expect(second.stdout).not.toContain("cutting off AI-DLC's replies");
+  });
+});
+
+describe("the setter when there is nothing to set", () => {
+  test("`config trust --kiro-terminal powershell --yes` on a PowerShell machine says so, writes nothing, and keeps the answer", () => {
+    const m = machine(POWERSHELL_SET);
+    const { project } = installKiroIde({ ...m.env, AIDLC_TEST_KIRO_IDE_SETTINGS: join(m.root, "none.json") });
+    const set = runInit(["config", "trust", "--project-dir", project, "--kiro-terminal", "powershell", "--yes"], project, m.env);
+    expect(set.status, set.out).toBe(0);
+    expect(set.out).toContain("Kiro's terminal is already PowerShell.");
+    expect(set.out).not.toContain("Set Kiro's terminal to PowerShell");
+    expect(readFileSync(m.settingsPath, "utf-8")).toBe(POWERSHELL_SET);
+    withEnv(m.env, () => expect(readKiroTerminalAnswer()).toBe("powershell"));
+
+    const absent = machine();
+    const other = installKiroIde({ ...absent.env, AIDLC_TEST_KIRO_IDE_SETTINGS: join(absent.root, "none.json") });
+    const kept = runInit(
+      ["config", "trust", "--project-dir", other.project, "--kiro-terminal", "powershell"],
+      other.project,
+      { ...absent.env, AIDLC_TEST_CONFIG_TTY: "1", AIDLC_TEST_CONFIG_INPUT: "" },
+    );
+    expect(kept.status, kept.out).toBe(0);
+    expect(kept.out).toContain("Kiro's terminal is already PowerShell.");
+    expect(kept.out).not.toContain("[Y/n]");
+    expect(existsSync(absent.settingsPath)).toBe(false);
   });
 });

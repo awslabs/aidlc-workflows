@@ -6,7 +6,7 @@
 // on Kiro IDE 1.2.37, #2167). Kiro itself recommends PowerShell. The default
 // profile is the person's own setting for all their projects, so AI-DLC sets it
 // only when they say yes, and keeps their answer once per machine.
-import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { insertJsoncSetting, jsoncRootMembers, jsoncSettingValue, replaceJsoncSetting } from "./aidlc-distribution.ts";
 import { installRoot } from "./aidlc-install-paths.ts";
@@ -151,10 +151,14 @@ export function kiroTerminalQuestionDue(env: NodeJS.ProcessEnv = process.env): b
   return readKiroIdeTerminal(env).commandPrompt && readKiroTerminalAnswer() === null;
 }
 
+// What breaks, measured on Kiro IDE 1.2.37: without shell integration, which
+// cmd.exe never has, Kiro reads a command's result one second after sending it
+// and shows exit code -1 for every run; AI-DLC's steps take one to seven
+// seconds and print their reply at the end, so most replies come back empty.
 export const KIRO_TERMINAL_QUESTION =
-  "Kiro runs its agent's commands in Command Prompt, your default terminal. AI-DLC's commands are written for " +
-  "PowerShell, and in Command Prompt your words can get split and every command looks like it failed. Set " +
-  "Kiro's terminal to PowerShell? It is a Kiro setting for all your projects.";
+  "Kiro runs its agent's commands in Command Prompt, your default terminal. In Command Prompt most AI-DLC steps come " +
+  "back with no reply and your words can get split. Set Kiro's terminal to PowerShell? It is a Kiro setting for all " +
+  "your projects.";
 
 /** The line after AI-DLC set Kiro's terminal to PowerShell. */
 export function kiroTerminalSetLine(): string {
@@ -168,8 +172,8 @@ export function kiroTerminalKeptLine(invoke: string): string {
 }
 
 export function kiroTerminalIssueMessage(): string {
-  return "Kiro runs its agent's commands in Command Prompt, where AI-DLC's commands can split your words and " +
-    "every command looks like it failed";
+  return "Kiro runs its agent's commands in Command Prompt, where most AI-DLC steps come back with no reply and your " +
+    "words can get split";
 }
 
 export function kiroTerminalFix(invoke: string): string {
@@ -195,4 +199,120 @@ export function kiroIdeTerminalAsk(invoke: string, env: NodeJS.ProcessEnv = proc
     "me to set Kiro's terminal to PowerShell? It is a Kiro setting for all your projects.\" On yes, run " +
     `\`${invoke} config trust --kiro-terminal powershell --yes\` and tell them what it prints. On no, leave it. ` +
     "Do not ask again.";
+}
+
+/**
+ * The mechanics every Kiro IDE chat gets while Kiro's terminal is Command
+ * Prompt, whatever the person answered: what an empty result means, how to
+ * quote in this shell, and the one command that sets PowerShell when the
+ * person asks for it. A fact line, never a question; "" everywhere else.
+ */
+export function kiroIdeTerminalStandingLine(invoke: string, env: NodeJS.ProcessEnv = process.env): string {
+  if (!insideKiroIde(env) || !readKiroIdeTerminal(env).commandPrompt) return "";
+  // Live, the agent read a PowerShell command that ran from this terminal as
+  // proof the terminal was PowerShell, and "do not raise it" as "do not do it".
+  return "Kiro runs your commands in Command Prompt here (your shell tool is still named execute_pwsh and PowerShell " +
+    "commands run from it, but the terminal they run in is Command Prompt). It hands you a command's reply only when " +
+    "the command finishes within a second: an AI-DLC result that holds only the echoed command and `Exit Code: -1` is " +
+    "a command that was still running when Kiro read the result, not a failure and not a lock. Write values in double " +
+    "quotes in this shell. When the person asks to set Kiro's terminal to PowerShell, the one way is to run " +
+    `\`${invoke} config trust --kiro-terminal powershell --yes\` and tell them what it prints; unless they ask, say ` +
+    "nothing about it.";
+}
+
+// Kiro's Command Prompt terminal reads a command's result one second after
+// sending it (Kiro IDE 1.2.37, measured), so a tool that ran longer lost its
+// reply for certain. The engine notes that at exit (the dropped marker); the
+// next hook run in the chat tells the person once (the warned marker), and
+// neither says anything again on this machine.
+const KIRO_TERMINAL_SNAPSHOT_MS = 1000;
+export const KIRO_TERMINAL_DROPPED_FILE = "kiro-ide-terminal-dropped";
+export const KIRO_TERMINAL_WARNED_FILE = "kiro-ide-terminal-warned";
+export const KIRO_TERMINAL_SHELL_FILE = "kiro-ide-terminal-shell";
+
+/**
+ * Which shell the running Kiro IDE's terminal is, as the chat's hook saw it
+ * (the hook has the running Kiro's user data; the agent's own commands do
+ * not, so a portable Kiro or a custom user data folder would otherwise be
+ * read from Kiro's default folder). Written at every chat start on Windows.
+ */
+export function recordKiroTerminalShell(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): void {
+  if (!insideKiroIde(env) || !kiroTerminalApplies(env, platform)) return;
+  const path = join(installRoot(), KIRO_TERMINAL_SHELL_FILE);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileAtomic(path, `${readKiroIdeTerminal(env, platform).commandPrompt ? "cmd" : "powershell"}\n`);
+}
+
+/** "cmd" or "powershell" as the last chat start recorded it, or null before any chat recorded it. */
+export function readKiroTerminalShell(): "cmd" | "powershell" | null {
+  try {
+    const value = readFileSync(join(installRoot(), KIRO_TERMINAL_SHELL_FILE), "utf-8").trim();
+    return value === "cmd" || value === "powershell" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Note a tool run Kiro's Command Prompt terminal could not have shown: over a
+ * second, in Kiro's terminal (TERM_PROGRAM=kiro; the agent's commands carry no
+ * VSCODE_CODE_CACHE_PATH, so the settings come from Kiro's default folder),
+ * for a person who kept Command Prompt or was asked and did not act. Nothing is
+ * noted before the question was asked, after the switch, or once warned.
+ */
+export function noteSlowReply(
+  elapsedMs: number,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (elapsedMs <= KIRO_TERMINAL_SNAPSHOT_MS || hostValue(env, "TERM_PROGRAM") !== "kiro") return;
+  // The shell as the chat's hook recorded it; before any chat recorded it, Kiro's default settings folder.
+  const recorded = readKiroTerminalShell();
+  const commandPrompt = recorded !== null
+    ? recorded === "cmd"
+    : kiroTerminalApplies(env, platform) && readKiroIdeTerminal(env, platform).commandPrompt;
+  if (!commandPrompt) return;
+  const answer = readKiroTerminalAnswer();
+  if (answer !== "kept" && answer !== "asked") return;
+  const root = installRoot();
+  if (existsSync(join(root, KIRO_TERMINAL_WARNED_FILE))) return;
+  try {
+    mkdirSync(root, { recursive: true });
+    writeFileAtomic(join(root, KIRO_TERMINAL_DROPPED_FILE), `${new Date().toISOString()}\n`);
+  } catch {
+    // Not noted rather than a failed tool run.
+  }
+}
+
+/** Called once as a tool starts: at exit it notes a run Kiro's Command Prompt terminal dropped. Nothing outside Kiro's terminal on Windows. */
+export function noteSlowReplyAtExit(env: NodeJS.ProcessEnv = process.env): void {
+  if (hostValue(env, "TERM_PROGRAM") !== "kiro" || process.platform !== "win32") return;
+  process.on("exit", () => {
+    try {
+      noteSlowReply(performance.now(), env);
+    } catch {
+      // Not noted rather than a failed exit.
+    }
+  });
+}
+
+/**
+ * The one line for the person after Kiro's Command Prompt terminal dropped a
+ * reply, said by the next hook run in a Kiro IDE chat and never again on this
+ * machine: a warning with no question, so their next message stays theirs.
+ */
+export function kiroTerminalBreakWarning(env: NodeJS.ProcessEnv = process.env): string {
+  if (!insideKiroIde(env) || !readKiroIdeTerminal(env).commandPrompt) return "";
+  const root = installRoot();
+  const dropped = join(root, KIRO_TERMINAL_DROPPED_FILE);
+  if (!existsSync(dropped) || existsSync(join(root, KIRO_TERMINAL_WARNED_FILE))) return "";
+  try {
+    writeFileAtomic(join(root, KIRO_TERMINAL_WARNED_FILE), `${new Date().toISOString()}\n`);
+    rmSync(dropped, { force: true });
+  } catch {
+    return "";
+  }
+  return "Tell the person this once, in their language, then go on with their request: \"Kiro's Command Prompt " +
+    "terminal is cutting off AI-DLC's replies, so steps here take extra turns. Tell me if you want Kiro's terminal " +
+    "set to PowerShell, which avoids this.\"";
 }

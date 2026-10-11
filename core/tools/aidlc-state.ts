@@ -1061,6 +1061,12 @@ export function main(argv: string[]): void {
 }
 
 if (import.meta.main) {
+  // Kiro IDE's Command Prompt terminal, Windows only: note at exit a reply Kiro
+  // dropped. Loaded only there, so the dispatcher's front gate and the lean
+  // projections keep their import graph.
+  if (process.env.TERM_PROGRAM === "kiro" && process.platform === "win32") {
+    void import("./aidlc-kiro-ide-terminal.ts").then((m) => m.noteSlowReplyAtExit()).catch(() => {});
+  }
   main(process.argv.slice(2));
 }
 

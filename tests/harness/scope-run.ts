@@ -354,8 +354,17 @@ export class ScopeHost {
     const out = res.stdout.trim();
     if (!out) return { blocked: false, reason: "" };
     try {
-      const parsed = JSON.parse(out) as { decision?: string; reason?: string };
-      return { blocked: parsed.decision === "block", reason: parsed.reason ?? "" };
+      // The block, or the carrying-on line as Stop feedback on Claude Code 2.1.163 or later.
+      const parsed = JSON.parse(out) as {
+        decision?: string;
+        reason?: string;
+        hookSpecificOutput?: { additionalContext?: string };
+      };
+      const feedback = parsed.hookSpecificOutput?.additionalContext;
+      return {
+        blocked: parsed.decision === "block" || typeof feedback === "string",
+        reason: parsed.reason ?? feedback ?? "",
+      };
     } catch {
       return { blocked: false, reason: out };
     }

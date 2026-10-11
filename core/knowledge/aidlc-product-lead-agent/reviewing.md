@@ -74,6 +74,7 @@ Use this exact format:
 **Reviewer:** aidlc-product-lead-agent
 **Date:** [the UTC time `{{INVOKE}} engine now` prints]
 **Iteration:** [1, 2, etc.]
+**Verdict Dictated:** yes | no
 
 ### Findings
 
@@ -96,6 +97,8 @@ Use this exact format:
 ```
 
 For the `Date` field, run `{{INVOKE}} engine now` and paste the time it prints. Never guess or infer the date.
+
+For the `Verdict Dictated` field, write `yes` when the brief you were given named the verdict to write or to prefer, and `no` otherwise. Read your brief for what it asked, in any words; the engine records your answer as written and, on `yes`, tells the person once that the reviewer was told what to conclude before it looked. Your verdict stays your own judgement either way.
 
 ### Severity Levels
 

@@ -2555,7 +2555,11 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       // Mirror the adapter entry point's dual-generation channel contract.
       // IDE 0.12 provides USER_PROMPT and leaves stdin open forever, so consume
       // a non-empty env payload immediately. IDE 1.x leaves USER_PROMPT empty
-      // and writes+closes stdin; the timeout is only a broken-channel ceiling.
+      // and writes+closes stdin: the read waits for that close, so a message
+      // handed over late is read whole; the limit ends only a channel that
+      // never closes (60 s, Kiro's own default budget for a command hook; the
+      // adapter's stdinTimeoutMs says why). On the limit the read yields "",
+      // never a half payload.
       const legacyPayload = process.env.USER_PROMPT ?? "";
       if (legacyPayload.trim().length > 0) {
         input = legacyPayload;
@@ -2563,7 +2567,7 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
         // AIDLC_IDE_STDIN_TIMEOUT_MS mirrors the adapter's test seam so both
         // entry points share one contract.
         const override = Number(process.env.AIDLC_IDE_STDIN_TIMEOUT_MS ?? "");
-        const ceiling = Number.isFinite(override) && override > 0 ? override : 2000;
+        const ceiling = Number.isFinite(override) && override > 0 ? override : 60_000;
         input = await readStdinWithTimeout(ceiling);
       }
     }
@@ -3717,6 +3721,12 @@ export async function main(rawArgv: string[]): Promise<void> {
 }
 
 if (import.meta.main) {
+  // Kiro IDE's Command Prompt terminal, Windows only: note at exit a reply Kiro
+  // dropped. Loaded only there, so the dispatcher's front gate and the lean
+  // projections keep their import graph.
+  if (process.env.TERM_PROGRAM === "kiro" && process.platform === "win32") {
+    void import("./aidlc-kiro-ide-terminal.ts").then((m) => m.noteSlowReplyAtExit()).catch(() => {});
+  }
   // Keep pending stdin and async dispatch alive, while leaving this module
   // synchronous to import (completions imports its route table during dispatch).
   const keepAlive = setInterval(() => {}, 1_000);

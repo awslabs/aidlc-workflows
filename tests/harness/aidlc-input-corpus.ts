@@ -139,8 +139,8 @@ export function argvVariants(item: CorpusItem): Array<[ArgvVariant, string[]]> {
 
 export interface Exec { status: number; stdout: string; stderr: string }
 export async function exec(cmd: string[], opts: { cwd: string; env: NodeJS.ProcessEnv; input?: string }): Promise<Exec> {
-  // The input is a file the child reads as its stdin, not a pipe this process has to write: the Kiro IDE hook gives a
-  // pipe two seconds before it settles for an empty payload, and on a loaded Windows runner this single-threaded parent
+  // The input is a file the child reads as its stdin, not a pipe this process has to write: the Kiro IDE hook once gave a
+  // pipe two seconds before settling for an empty payload (it now waits for the close), and on a loaded Windows runner this single-threaded parent
   // (copying fixtures for other items) has written the pipe later than that, recording an empty turn. A file is complete
   // before the child starts, whatever the parent is doing.
   const payload = opts.input === undefined ? null : join(tmpdir(), `aidlc-input-stdin-${process.pid}-${randomUUID()}.json`);

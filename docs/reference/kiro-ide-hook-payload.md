@@ -27,10 +27,19 @@ A live 1.0.165 PostToolUse capture, field-verbatim:
 
 The adapter uses a non-empty `USER_PROMPT` immediately (the 0.12 channel,
 whose stdin never closes). When that variable is empty, it reads stdin for the
-1.x channel, raced against a broken-channel timeout. The production default is
-2s; a positive `AIDLC_IDE_STDIN_TIMEOUT_MS` value overrides the ceiling in
-milliseconds for diagnostics and deterministic latency tests. Both field
-spellings are accepted. Acquisition is gated to the payload-dependent targets,
+1.x channel until Kiro closes it, so a message Kiro hands over late (a busy
+machine) is still read whole. A safety limit of 60 s, Kiro's own default
+budget for a command hook, ends only a channel that never closes; a positive
+`AIDLC_IDE_STDIN_TIMEOUT_MS` value overrides it in milliseconds for
+diagnostics and tests. When the limit passes with nothing on either channel,
+`record-human-turn` records no turn and no message (nothing on record says the
+person typed nothing, and no presence is minted for a message that may have
+been Kiro's own): a `kiro-adapter.drops` line names it for `doctor`, and the
+agent gets one line to say to the person: "The last message in this chat did
+not reach AI-DLC's record, so if it answered one of its questions, you will be
+asked that question again" (true whoever sent it: with no payload, nobody
+knows whether it was the person's or one Kiro made). Both field spellings are
+accepted. Acquisition is gated to the payload-dependent targets,
 including `plan-approval-guard`, `review-freeze`, `state-transition-guard`, the per-tool-call approval floor
 (`enforce-approval-gate`, which on 1.x reads the invoking chat's `session_id` so
 that concurrent chats are held by their own gates), the two terminal-command
