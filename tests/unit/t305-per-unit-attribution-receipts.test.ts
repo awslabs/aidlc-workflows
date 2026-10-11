@@ -191,6 +191,47 @@ describe("t305 strict source-manifest validation", () => {
     }
   });
 
+  // `d` is one of the characters in `[itemId]`. Read as a Git pathspec, the
+  // folder's claim is a character class that matches this ignored sibling, and
+  // the ignored-source probe refused the claim for it. The probe still reads the
+  // folder itself: an ignored file inside it refuses the claim.
+  test("a bracketed route folder claim is checked for ignored source as the literal folder it names", () => {
+    const { project, record } = fixture();
+    const items = join(project, "src", "app", "items");
+    mkdirSync(join(items, "[itemId]"), { recursive: true });
+    writeFileSync(join(items, "[itemId]", "page.tsx"), "export default function Item() {}\n");
+    writeFileSync(join(items, "d"), "ignored sibling\n");
+    writeFileSync(join(project, ".gitignore"), "src/app/items/d\n");
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "src/app/items/[itemId]/" }],
+    });
+
+    const accepted = readUnitSourceManifest(
+      project,
+      "code-generation",
+      "alpha",
+    );
+    expect(accepted.ok ? "accepted" : accepted.reason).toBe("accepted");
+    if (accepted.ok) {
+      expect(sourceClaimCovers("\0src/app/items/[itemId]/page.tsx", accepted)).toBe(true);
+      expect(sourceClaimCovers("\0src/app/items/d", accepted)).toBe(false);
+    }
+
+    writeFileSync(join(items, "[itemId]", "local.env"), "ignored inside\n");
+    writeFileSync(join(project, ".gitignore"), "src/app/items/d\n*.env\n");
+    const refused = readUnitSourceManifest(
+      project,
+      "code-generation",
+      "alpha",
+    );
+    expect(refused.ok ? "accepted" : refused.reason).toContain(
+      'contains ignored application source "src/app/items/[itemId]/local.env"',
+    );
+  });
+
   test("accepts an exact claim when a committed directory becomes a file", () => {
     const { project, record } = fixture();
     mkdirSync(join(project, "generated"), { recursive: true });
