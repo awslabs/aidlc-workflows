@@ -1285,13 +1285,16 @@ function validIdePermissionRule(
         : blockYamlListHasValue(lines, i + 1, indent, end);
     }
   }
-  return Boolean(capability && (effect === "allow" || effect === "deny") && match);
+  return Boolean(capability && (effect === "allow" || effect === "ask" || effect === "deny") && match);
 }
 
 // Kiro IDE dispatches Markdown agents only when their frontmatter carries a
 // non-empty tools grant and a permissions.rules list made entirely of
-// capability/effect/match entries. Fail closed on empty maps/lists and partial
-// entries: those files exist but do not grant a usable dispatch surface.
+// capability/effect/match entries whose effect is allow, ask, or deny. Core's
+// own personas carry all three: ask keeps the engine commands that change a
+// setting asking the person. Fail closed on empty maps/lists, partial entries,
+// and any other effect: those files exist but do not grant a usable dispatch
+// surface.
 function installedIdeAgentIsDispatchable(agentsDir: string, agent: string): boolean {
   let content = "";
   try {
