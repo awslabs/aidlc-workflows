@@ -200,6 +200,7 @@ import {
   swarmConvergedUnits,
   teamUnitGateStatus,
   unclaimableIgnoredSourceKeys,
+  registryExcludedSourceKeys,
   unitCompletedReceipts,
   unitGateStatus,
   unitMajorConstructionStageSlugs,
@@ -4653,13 +4654,17 @@ function verifyReviewerPrecondition(
     }
     const claimModels = [...receipts.freshUnitClaims.values()];
     // AI-DLC's own files (its .gitignore block, AGENTS.md, a second tool's
-    // install) are no Unit's to claim, and neither is a path Git ignores that
-    // a source manifest refuses to claim (build output, a test run's record).
+    // install, the source registry) are no Unit's to claim, and neither is a
+    // path Git ignores that a source manifest refuses to claim (build output, a
+    // test run's record), nor one the registry's exclude list now leaves out of
+    // the walk (a cache excluded after the stage started: its baseline entries
+    // are nobody's change).
     const aidlcOwned = aidlcOwnedSourceKey(pd);
     const outsideClaims = [...baselineChanged].filter((pathKey) =>
       !aidlcOwned(pathKey) && !claimModels.some((claims) => sourceClaimCovers(pathKey, claims))
     );
     const unclaimable = unclaimableIgnoredSourceKeys(pd, outsideClaims);
+    for (const key of registryExcludedSourceKeys(pd, outsideClaims)) unclaimable.add(key);
     baselineUnclaimed = outsideClaims
       .filter((pathKey) => !unclaimable.has(pathKey))
       .sort();
@@ -4948,12 +4953,15 @@ function verifyReviewerPrecondition(
         });
         return;
       }
+      // The person's line: what changed, and the three ways through, in their
+      // words. The agent knows the mechanics (the stage file and the reviewer
+      // protocol say how a manifest is written and a review recorded).
       error(
-        `Refusing to complete "${stage.slug}": ${unclaimed.length} application-source path(s) changed during this stage run ` +
-          `that no reviewed unit's source manifest claims (${rendered.join(", ")}${more}). Add each path to the owning ` +
-          `unit's source-manifest.json and record that unit's one bounded stale-receipt recovery review ` +
-          `(aidlc-log.ts review --stage ${stage.slug} --unit <unit> --reviewer ${reviewer} --iteration <next ordinal>, ` +
-          `then --verdict <READY|NOT-READY>), or revert the change. Unclaimed source changes fail closed (RFC #662).`,
+        `Refusing to complete "${stage.slug}": ${unclaimed.length} change${unclaimed.length === 1 ? "" : "s"} made during ${stage.name} ` +
+          `that no Unit's review covers (${rendered.join(", ")}${more}). A Unit that made one of them lists the path, exactly as ` +
+          `printed, in its source manifest and is reviewed once more; a change nobody meant is undone; a path that is not source ` +
+          `(a tool's cache, a build output, a folder that is not this project's code) is left out of the source checks by naming ` +
+          `it under "exclude" in .aidlc-source-paths.json.`,
       );
     }
   }

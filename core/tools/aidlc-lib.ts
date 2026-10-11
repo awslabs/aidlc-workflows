@@ -3884,12 +3884,15 @@ export function codekbFingerprintExcludes(projectDir: string, sourceDir: string)
 // AI-DLC's own files at the workspace root (an install or upgrade writing its
 // .gitignore block or AGENTS.md, a second tool added) is no Unit's application
 // source, so no Unit has to claim it. Keys are `<repo>\0<path>`; a sibling
-// repo holds none of these files.
+// repo holds none of these files. The source registry is AI-DLC's boundary
+// file, like its settings files, and every repo root may hold one.
 export function aidlcOwnedSourceKey(projectDir: string): (pathKey: string) => boolean {
   const owned = codekbFingerprintExcludes(projectDir, projectDir);
   return (pathKey) => {
     const parsed = splitSourcePathKey(pathKey);
-    return parsed !== null && parsed.repo === "" &&
+    if (parsed === null) return false;
+    if (parsed.path === SOURCE_FINGERPRINT_REGISTRY) return true;
+    return parsed.repo === "" &&
       owned.some((entry) => parsed.path === entry || parsed.path.startsWith(`${entry}/`));
   };
 }
@@ -25549,6 +25552,43 @@ export function unclaimableIgnoredSourceKeys(
     }
   }
   return unclaimable;
+}
+
+/**
+ * The source keys (`<repo>\0<path>`) among `keys` that the `exclude` list of
+ * that repo root's `.aidlc-source-paths.json` now leaves out of the walk: the
+ * path itself or anything under it, unless a registered `paths` entry names it
+ * or lies under it (a registered path always wins, as in the walk). The match
+ * is by path alone, whatever the entry's mode, so a nested repository's own
+ * entry (mode 160000) excluded after the stage started is left out like a
+ * file. Each repo root reads its own registry, as the walk does. A registry
+ * that cannot be read leaves every key counted.
+ */
+export function registryExcludedSourceKeys(
+  projectDir: string,
+  keys: readonly string[],
+): Set<string> {
+  const excluded = new Set<string>();
+  if (keys.length === 0) return excluded;
+  const registries = new Map<string, SourceFingerprintRegistry | null>();
+  for (const key of keys) {
+    const parsed = splitSourcePathKey(key);
+    if (parsed === null) continue;
+    const root = parsed.repo === "" ? projectDir : repoDir(projectDir, parsed.repo);
+    if (!registries.has(root)) {
+      // The lone root or the roof carries the workspace shell; a sibling does not.
+      const failure = lastSourceFailure;
+      registries.set(root, sourceFingerprintRegistry(root, parsed.repo === ""));
+      lastSourceFailure = failure;
+    }
+    const registry = registries.get(root);
+    if (!registry) continue;
+    const under = (entry: string): boolean => parsed.path === entry || parsed.path.startsWith(`${entry}/`);
+    if (![...registry.excludes].some(under)) continue;
+    const registered = [...registry.paths].some((entry) => under(entry) || entry.startsWith(`${parsed.path}/`));
+    if (!registered) excluded.add(key);
+  }
+  return excluded;
 }
 
 function ignoredSourceClaimReason(

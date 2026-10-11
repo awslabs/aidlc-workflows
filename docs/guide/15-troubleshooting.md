@@ -546,6 +546,23 @@ output-document bytes does not clear audit-recorded artifact staleness. After a
 session restart, retry the same pending request before replacing the Review
 section. The gate remains closed until the matching verdict is recorded.
 
+### Code Generation cannot complete because files changed that no Unit covers
+
+**Symptom**: Approving Code Generation answers with "N changes made during Code
+Generation that no Unit's review covers (...)".
+
+Something changed in the workspace during the stage that no Unit's source
+manifest lists. The line names the three ways through, and the assistant takes
+the one that fits: the Unit that made the change lists the path, exactly as
+printed, and is reviewed once more; a change nobody meant is undone; a path that
+is not source (a tool's cache written inside the repo, a build output, a nested
+repository that is not this project's code) is left out of the source checks by
+naming it under `exclude` in `.aidlc-source-paths.json` (the file in that repo's
+own folder for a recorded repo). The exclude works at once, with no further
+review; remove the line to put the path back. A path the project's `.gitignore`
+already ignores is never counted. Under Guard Policy relaxed or off the change
+is kept and said once instead.
+
 ### Plan Approval asked twice for the same plan
 
 **Symptom**: Code Generation presents the Plan Approval question again for a plan

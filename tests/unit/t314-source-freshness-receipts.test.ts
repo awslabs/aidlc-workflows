@@ -2945,7 +2945,7 @@ describe("t314 multi-unit source attribution", () => {
     expect(gate.rc, gate.out).toBe(0);
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).toBe(1);
-    expect(r.out).toContain("Unclaimed source changes fail closed");
+    expect(r.out).toContain("no Unit's review covers");
     expect(r.out).toContain("unreviewed.ts");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -2989,7 +2989,7 @@ describe("t314 multi-unit source attribution", () => {
     const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
     expect(gate.rc, gate.out).toBe(0);
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
-    expect(r.out).not.toContain("Unclaimed source changes fail closed");
+    expect(r.out).not.toContain("no Unit's review covers");
     expect(r.rc, r.out).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -3029,7 +3029,7 @@ describe("t314 multi-unit source attribution", () => {
     expect(gate.rc, gate.out).toBe(0);
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).toBe(1);
-    expect(r.out).toContain("Unclaimed source changes fail closed");
+    expect(r.out).toContain("no Unit's review covers");
     expect(r.out).toContain(".build/tracked.ts");
     expect(r.out).toContain("generated/schema.ts");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -3064,7 +3064,7 @@ describe("t314 multi-unit source attribution", () => {
     const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
     expect(gate.rc, gate.out).toBe(0);
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
-    expect(r.out).not.toContain("Unclaimed source changes fail closed");
+    expect(r.out).not.toContain("no Unit's review covers");
     expect(r.rc, r.out).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 

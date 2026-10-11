@@ -210,7 +210,13 @@ strict, an uncovered change or a stale unit blocks all four completion routes
 and offers that unit's one bounded stale-receipt recovery. A file Git ignores
 that no unit can claim (neither tracked nor registered in
 `.aidlc-source-paths.json`, such as build output or a test run's record) is not
-an uncovered change. Under relaxed or
+an uncovered change, nor is a path that file's `exclude` list leaves out of the
+walk, even when the line was written after the stage started (a tool's cache the
+project does not ignore, a nested repository that is not this project's code);
+the registry file itself is AI-DLC's own, so no unit claims it. The strict
+refusal names the three ways through: the unit that made a change lists the path
+and is reviewed once more, a change nobody meant is undone, or a path that is
+not source is excluded there. Under relaxed or
 off, an uncovered change is kept: completion records it once as
 `CHANGE_ACCEPTED` and names the files in one line ("These files changed outside
 any unit's work in Code Generation: ... Kept them."), and a stage-entry baseline
