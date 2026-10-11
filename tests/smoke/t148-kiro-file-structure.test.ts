@@ -276,7 +276,7 @@ describe("t148 dist/kiro file structure", () => {
     const names = readdirSync(join(KI, "agents")).sort();
     expect(names.filter((name) => name.endsWith(".json"))).toEqual([]);
     expect(names.filter((name) => name.endsWith(".md")).length).toBe(15);
-    expect(names).toContain("aidlc.md");
+    expect(names).toContain("aidlc-aidlc.md");
     expect(names.filter((name) => name.endsWith("-agent.md")).length).toBe(14);
     // Kiro CLI's default v2 engine runs no .kiro/hooks at all, and no hook can
     // detect that from inside, so the project settings file is the only guard.
@@ -363,7 +363,7 @@ describe("t148 dist/kiro file structure", () => {
     // its own permissions (Kiro IDE accepts only invoke_sub_agent, Kiro CLI
     // only orchestrate_subagent), not the `subagent` category, whose
     // subagent_<name> dispatch ignores them.
-    expect(fmToolsOf(join(IDE_AGENTS, "aidlc.md"))).toBe(
+    expect(fmToolsOf(join(IDE_AGENTS, "aidlc-aidlc.md"))).toBe(
       `["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent"]`,
     );
     // Leak guard: the grant is IDE-native and must not ship anywhere else.
@@ -650,7 +650,7 @@ describe("t148 dist/kiro file structure", () => {
       for (const command of allowed) expect(delegatedLifecycleCommand(command), command).toBeNull();
       const agents = join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents");
       for (const allow of allows) {
-        expect(frontmatter(join(agents, "aidlc.md")), `${tree} conductor`).toContain(`        - "${allow}"`);
+        expect(frontmatter(join(agents, "aidlc-aidlc.md")), `${tree} conductor`).toContain(`        - "${allow}"`);
       }
       expect(readdirSync(agents), `${tree} agents`).toContain("aidlc-pipeline-deploy-agent.md");
       for (const file of readdirSync(agents).filter((name) => name.endsWith("-agent.md"))) {
@@ -687,7 +687,7 @@ describe("t148 dist/kiro file structure", () => {
     const cliConductor = readJson(
       join(REPO_ROOT, "harness", "kiro", "agents", "aidlc.json"),
     );
-    const markdown = readFileSync(join(KI, "agents", "aidlc.md"), "utf-8");
+    const markdown = readFileSync(join(KI, "agents", "aidlc-aidlc.md"), "utf-8");
     const body = markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n+/, "").trim();
     expect(typeof cliConductor.prompt).toBe("string");
     expect(body).toBe(cliConductor.prompt as string);
@@ -696,7 +696,7 @@ describe("t148 dist/kiro file structure", () => {
     expect(body).toContain(
       "when their whole message is one of those, treat it as `/aidlc` with nothing after it, and say nothing about it.",
     );
-    const fm = frontmatter(join(KI, "agents", "aidlc.md"));
+    const fm = frontmatter(join(KI, "agents", "aidlc-aidlc.md"));
     expect(fm).toContain(`tools: ["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent"]`);
     expect(fm).toContain("    - capability: shell");
     expect(fm).toContain("      effect: deny");
@@ -810,7 +810,7 @@ describe("t148 dist/kiro file structure", () => {
       const skill = readFileSync(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
       expect(skill).toContain("use plain words on one line in single quotes, with no `$`, backtick, `>`, `<`, `&`, `@(`, or `@{`");
       expect(skill).toContain("Every agent brief you dispatch carries these two sentences as written.");
-      const fm = frontmatter(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents", "aidlc.md"));
+      const fm = frontmatter(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents", "aidlc-aidlc.md"));
       // Ordinary engine commands, a quoted label included, run with no card.
       for (const command of [
         "bun --version",
@@ -1033,7 +1033,7 @@ describe("t148 dist/kiro file structure", () => {
     expect(checked).toBeGreaterThanOrEqual(30);
     // The forms the rules exist for still reach the person on the conductor.
     for (const { tree, invoke } of KIRO_IDE_CHANNELS) {
-      const fm = frontmatter(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents", "aidlc.md"));
+      const fm = frontmatter(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents", "aidlc-aidlc.md"));
       for (const command of [
         `${invoke} config flags --bypass AIDLC_SKIP_ARTIFACT_GUARD --local --yes`,
         `${invoke} engine config set depth minimal`,
@@ -1108,7 +1108,7 @@ describe("t148 dist/kiro file structure", () => {
     const doctorSteps = read("harnesses", "kiro-ide.md").split(/\n\s*\n/).filter((paragraph) => /\brun\s+`\/aidlc --doctor`/.test(paragraph));
     expect(doctorSteps.length).toBeGreaterThanOrEqual(2);
     for (const paragraph of doctorSteps) expect(paragraph).toContain("agent picker");
-    const conductor = readFileSync(join(KI, "agents", "aidlc.md"), "utf-8");
+    const conductor = readFileSync(join(KI, "agents", "aidlc-aidlc.md"), "utf-8");
     expect(conductor).toContain("description: AI-DLC. Choose this agent in the agent picker");
   });
 
@@ -1125,7 +1125,7 @@ describe("t148 dist/kiro file structure", () => {
         return `${result.stdout ?? ""}${result.stderr ?? ""}`;
       };
       const ide = run(KIRO_IDE);
-      expect(ide).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");
+      expect(ide).toContain("ok    agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)");
       expect(ide).not.toContain("settings/cli.json present");
       const pin = 'settings/cli.json pins "chat.agentEngine": "v3" and "chat.defaultAgent": "aidlc"';
       expect(ide).toContain(`ok    ${pin}`);
@@ -1153,7 +1153,7 @@ describe("t148 dist/kiro file structure", () => {
       }
 
       const cli = run(KIRO);
-      expect(cli).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");
+      expect(cli).toContain("ok    agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)");
       expect(cli).toContain(
         "ok    settings/cli.json present (workspace default-agent activation)",
       );
