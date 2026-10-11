@@ -149,9 +149,14 @@ choice is available. The engine never reads meaning into the reply
 text, the `(Recommended)` decoration, and the offered labels). It requires a
 human turn since the gate was shown and records the person's exact words, kept by
 the human-turn hook for that chat, on `GATE_APPROVED` as `Person Reply` and on
-`GATE_REJECTED` as the feedback. An approval with an instruction ("looks fine but
-rename the handler") is recorded as **Approve**, and the conductor then does what
-they asked. An approval that also asks to stop for now is reported with `--park`,
+`GATE_REJECTED` as the feedback. Those words are kept per chat. When the engine
+cannot tell which chat ran the command (an agent shell no host names it in), the
+row instead carries `Message Id`, naming the message the hook kept for their
+latest reply after the gate was shown, so the record says where their words are
+rather than nothing about the person. It is never a copy the agent typed, and it
+is left out when more than one chat has replied since the gate was shown. An
+approval with an instruction ("looks fine but rename the handler") is recorded as
+**Approve**, and the conductor then does what they asked. An approval that also asks to stop for now is reported with `--park`,
 and the engine parks the workflow, so `report` answers `parked`.
 
 When a report names no choice, the refusal says what to do: with the person's
@@ -379,39 +384,32 @@ the stage's next step), never creating it again, writing new questions over it,
 or asking an answered question again (#1873). A redo the person asked for
 (`artifact_reuse`, which drops the field, or Redo from scratch) starts afresh.
 
-**Step 2: Use the directive's answer mode, or present the mode choice.** The
-run-stage directive carries `answer_mode` (`mode`, `ask`, `reused_from`,
-`notice`). The first stage with questions in a piece of work asks; the engine
-then reuses the latest recorded answer to the mode question
+**Step 2: How the person answers.** The run-stage directive carries
+`answer_mode` (`mode`, `ask`, `reused_from`, `notice`) and, beside it, the
+instruction the conductor follows, `answer_mode_note` (`answerModeNote` in
+`aidlc-directive.ts`). The first stage with questions in a piece of work asks;
+the engine then reuses the latest recorded answer to the mode question
 (`latestRecordedAnswerMode`, the same DECISION_RECORDED / QUESTION_ANSWERED
-pairing the Stop hook reads). When `ask` is false the conductor says `notice`
-as one line and goes straight to `mode` (Guide me, I'll edit the file, or Chat)
-without asking or logging a mode question, and the stage's `STAGE_STARTED` row
-records the reused mode in its `Answer Mode` field. When `ask` is true it
-presents the choice below. The conductor records the chosen mode as its option
-label, read from the person's reply in whatever words they used, and the engine
-reads only that label or its number. The person changes the mode by saying so;
-the new choice is recorded the same way. A reused mode opens no decision, so
-`hasPendingDecision` and the gate-answer pairing are unchanged.
-
-```
-AskUserQuestion({
-  questions: [{
-    question: "I've created [N] questions at `[file path]`. How would you like to answer them?",
-    header: "Questions",
-    multiSelect: false,
-    options: [
-      { label: "Guide me", description: "Walk through each question interactively here" },
-      { label: "I'll edit the file", description: "I'll fill in the answers in the file directly" },
-      { label: "Chat", description: "Discuss freely -- I'll extract decisions from our conversation" }
-    ]
-  }]
-})
-```
-
-Record the mode question and choice through `aidlc engine log decision` /
-`aidlc engine log answer`, like every non-gate question. Users can switch
-modes mid-stage.
+pairing the Stop hook reads). The note makes the branch the protocol used to
+make on the field: with `ask: true` it carries the question ("I've created [N]
+questions at [the questions file]. How would you like to answer them?"), the
+three choices with their descriptions (Guide me, I'll edit the file, Chat), the
+exact `log decision` and `log answer` commands for this stage, and the notice to
+say afterwards; with `ask: false` it says the notice to say and the way to take
+the questions, with no mode question and nothing recorded for the mode (the
+stage's `STAGE_STARTED` row records the reused mode in its `Answer Mode`
+field). Both variants open with the condition: only if this stage puts
+questions to the person, right before the first of them; a stage with none to
+ask (Code Generation, Build and Test, the deployment stages) gets no mode line.
+Whether a stage asks is the agent's call, so the condition rides with the
+instruction rather than in the engine. The conductor renders the question through its harness's
+question-rendering annex, records the chosen mode as its option label (read
+from the person's reply in whatever words they used; the engine reads only that
+label or its number), and the person changes the mode by saying so. A reused
+mode opens no decision, so `hasPendingDecision` and the gate-answer pairing are
+unchanged. The protocol's Step 2 keeps only what is the conductor's reading: a
+request that already said how to answer is recorded with `--on-instruction`,
+and an unclear reply gets one short follow-up.
 
 #### Guide Me (Interactive Mode)
 
@@ -740,7 +738,9 @@ Approve, `practices-promote` must commit both the affirmed timestamp and a
 `PRACTICES_AFFIRMED` audit receipt from the current stage attempt before the
 conductor reports the stage approved. With collaborators off (the scope setting,
 shipped on only for `enterprise`), the directive lists no support agents and each
-of these stages runs its lead alone (`stage-protocol-ensemble.md`, section 5).
+of these stages runs its lead alone (`stage-protocol-ensemble.md`, section 5). A
+collaborators switch flipped while a stage waits at its gate applies from the next
+stage; the finished stage is held to the setting it ran with.
 
 ### The 11 Domain Agents
 
@@ -1147,7 +1147,10 @@ change. See
    the same iteration is removed). It also returns `recordVerdict`, the exact
    command that closes the request - the same command with `--verdict
    <READY|NOT-READY>` added - because an unmatched request surfaces much later
-   as a refused completion. The directive's `review_artifact` field
+   as a refused completion. It returns `reviewed_at` too, the UTC time this
+   review is dated: the dispatch brief carries it as `Date for this review:`
+   and the reviewer writes its `**Date:**` line from the brief, so no reviewer
+   runs a command of its own for the time. The directive's `review_artifact` field
    names the required Markdown output the review is about: the record is
    keyed to it, the gate names it, and finding selectors address it; output
    ordering and plugin additions cannot change it, and nothing writes to it
@@ -1332,7 +1335,7 @@ verdict.
 ## Learnings Ritual
 
 When a human corrects agent behavior, the correction can become a persistent
-rule (guardrail) for the next workflow. v0.5.0 handles this through the
+rule (guardrail) for later stages and workflows. v0.5.0 handles this through the
 tool-as-actor Learnings Ritual, not a separate guardrail-emission flow.
 
 *(Conditional module: `stage-protocol-learnings.md`, Section 13; the base protocol keeps a loading stub.)*
@@ -1357,7 +1360,9 @@ When `directive.protocol_modules` lists `learnings`, the ritual runs between the
    learning, installs the manifest + stage `sensors:` import in one locked
    transaction), emitting `RULE_LEARNED` / `SENSOR_PROPOSED`.
 
-Learnings apply on the **next** workflow's compile, not the in-flight run. See
+A persisted learning reaches the agent from the next stage delivery of the
+in-flight run — the engine re-reads the selected rule files before each stage —
+while a new Sensor binds at the next stage-graph compile. See
 `stage-protocol-learnings.md` §13 for the full tool-as-actor protocol, and
 [Rule System](08-rule-system.md) for the strict-additive resolution the written
 rules feed into.

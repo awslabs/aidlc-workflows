@@ -306,7 +306,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     // work by the person, until Units Generation is approved) = 116;
     // HOST_TURN (a prompt the host made, never a human turn) = 117;
     // REVIEW_VERDICT_DICTATED (a reviewer dispatch whose brief already carried
-    // the verdict, recorded by the plan-approval guard) = 118.
+    // the verdict; no longer written, kept registered so earlier audits read) = 118.
     const auditSrc = readFileSync(
       join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-audit.ts"),
       "utf-8",

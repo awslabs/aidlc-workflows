@@ -121,7 +121,7 @@ describe("Claude hook project-root anchoring", () => {
       const blocked = run("printf changed > source.ts");
       expect(blocked.error).toBeUndefined();
       expect(blocked.status, blocked.stderr).toBe(2);
-      expect(blocked.stderr).toContain("the engine asks the person to approve it");
+      expect(blocked.stderr).toContain("plan approval is off for this work, so it starts the build without asking anyone");
       expect(blocked.stderr).toContain("Code generation cannot modify workspace paths");
       // Claude Code's own deny comes first, with the same reason: the person
       // reads only the reason, never the hook command in front of it.

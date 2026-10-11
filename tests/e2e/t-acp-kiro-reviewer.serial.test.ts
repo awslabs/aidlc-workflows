@@ -250,13 +250,17 @@ describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kir
         });
         expect(["READY", "NOT-READY"]).toContain(review.record.verdict);
         expect(review.record.body.trim().length).toBeGreaterThan(0);
-        expect(validateReviewAppendix(Buffer.from(review.record.body), {
+        const validity = validateReviewAppendix(Buffer.from(review.record.body), {
           verdict: review.record.verdict,
           reviewer: REVIEWER_SLUG,
           iteration: review.record.iteration,
           reviewChallenge: null,
           standalone: true,
-        })).toEqual({ valid: true });
+        });
+        expect(validity.valid).toBe(true);
+        // A live reviewer following its template answers the question it was not
+        // asked with `no`; an older template leaves the line out. Never `yes` here.
+        expect([null, "no"]).toContain(validity.valid ? validity.verdictDictated : "invalid");
 
         // The retired flat layout must not reappear: a reviewer (or conductor)
         // still pointed at the dead root path would recreate it here.

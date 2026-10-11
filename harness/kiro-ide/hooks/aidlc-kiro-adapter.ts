@@ -12,9 +12,11 @@
 //   1. IDE 1.x (v2 hooks, `.kiro/hooks/aidlc-*.json`): context arrives as JSON
 //      on STDIN, snake_case: { session_id, hook_event_name, cwd, tool_name,
 //      tool_input, tool_response } — no success flag. USER_PROMPT is empty.
-//      stdin is written AND closed, so a read resolves promptly. A non-empty
-//      USER_PROMPT is nevertheless checked first to identify the legacy channel;
-//      the stdin read retains a short broken-channel timeout.
+//      stdin is written AND closed: the read waits for that close, so a
+//      message Kiro hands over late (a busy machine) is still read whole; a
+//      60 s safety limit (stdinTimeoutMs) ends only a channel that never
+//      closes. A non-empty USER_PROMPT is nevertheless checked first to
+//      identify the legacy channel.
 //   2. IDE 0.12 (legacy `.kiro.hook` era): stdin was OPENED BUT NEVER
 //      WRITTEN/CLOSED — reading it hangs. Context came through the
 //      `USER_PROMPT` env var instead, camelCase: { toolName, toolArgs,
@@ -35,7 +37,7 @@
 // terminal-command seams, and lifecycle boundaries that carry modern session
 // identity (SessionStart and Stop). Every other target is payload-independent
 // and never touches stdin. The guard card fires on every PreToolUse but a
-// read, and a 2s stall on a never-closing stdin there would be felt on nearly
+// read, and a stall on a never-closing stdin there would be felt on nearly
 // every tool call.
 //
 // Consequences, by target:
@@ -177,6 +179,7 @@ import {
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcEntryWords } from "../tools/aidlc-reply-reader.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 import { forgetRulesDelivered, kiroIdeTurnOpen, noteKiroIdeTurn } from "../tools/aidlc-rules-held.ts";
 import {
@@ -1708,6 +1711,11 @@ hookDebug(projectDir, "kiro-adapter", "invoked", {
 });
 const promptEmpty = ide.prompt !== undefined && ide.prompt.trim() === "" &&
   (ide.malformedFields?.length ?? 0) === 0;
+// Nothing came on either channel: the host ran the hook but delivered no
+// context (stdin closed empty or never closed before the limit, USER_PROMPT
+// empty). Distinct from a payload whose prompt is "" (promptEmpty above).
+const noPayload = INPUT_TARGETS.has(target) && input.trim() === "" &&
+  (process.env.USER_PROMPT ?? "").trim() === "";
 
 // Persist the effective startup or event-local prompt identity under the existing gitignored
 // runtime dir so separate adapter processes can forward it to payload-free
@@ -2140,11 +2148,59 @@ function writeTerminalLatch(
   }
 }
 
+// Kiro IDE opens every new chat on Kiro's Default agent, which loads the aidlc
+// skill on its own judgement only (6 of 17 fresh chats, measured 2026-10-11);
+// the rest answer `/aidlc <words>` as a plain coding request. This member runs
+// on every typed line before the agent's first word and Kiro adds its stdout
+// to the agent's context, so when the line is AI-DLC's and no utility ran it
+// here, the agent hears the one first step: the engine's `next`, which reads
+// the recorded line (takePersonsOwnLine) and owns what follows. The entry word,
+// the words and the flags are the engine's own parse (nextArgsAreOnlyWords):
+// a line with a flag or verb stays the agent's, as today, and so does any
+// other line (`/aidlc-<runner>`, plain words). The engine reads the recorded
+// line only while no work is selected (a bare `next` with work under way is
+// the work's own continuation), so words typed while this chat's workflow
+// has a record are left to the agent as today: the aidlc agent's skill
+// passes them to `next` itself. A bare `/aidlc` is the resume gesture on
+// any path. On the aidlc agent the line repeats what its skill already says.
+async function firstStepLine(prompt: string, pd: string, sessionId: string): Promise<string> {
+  const text = prompt.trim();
+  const run = `Run \`${aidlcInvocation()} engine orchestrate next\` now and do only what it prints.`;
+  const words = aidlcEntryWords(text);
+  if (words === null) return "";
+  if (words !== "") {
+    if (workflowRecordSelected(pd, sessionId)) return "";
+    try {
+      const { nextArgsAreOnlyWords } = await import("../tools/aidlc-orchestrate.ts");
+      if (!nextArgsAreOnlyWords(splitKiroCommandArgs(words))) return "";
+    } catch {
+      return "";
+    }
+  }
+  return `AI-DLC: this message is an AI-DLC request and AI-DLC has it on record. ${run}`;
+}
+
+// Whether the workflow this chat selects already has its record (the state
+// file the engine's bare `next` would read), judged the way the gate floor
+// judges it (enterHookWorkflow). Unreadable state counts as selected: the
+// line is then withheld rather than said where it may be wrong.
+function workflowRecordSelected(pd: string, sessionId: string): boolean {
+  try {
+    const workflow = enterHookWorkflow(pd, sessionId);
+    try {
+      return existsSync(stateFilePath(pd));
+    } finally {
+      workflow.restore();
+    }
+  } catch {
+    return true;
+  }
+}
+
 function terminalContext(result: TerminalResult): string {
   return (
-    "SYSTEM (deterministic harness dispatch): The command " +
-    `\`/aidlc ${result.typed}\` has ALREADY been run by the harness. ` +
-    `It carries no workflow work. Relay the output below ${relayAsTextBlock(result.output)}, then STOP. ` +
+    `The command \`/aidlc ${result.typed}\` has already run. ` +
+    `It carries no workflow work. Relay the output below ${relayAsTextBlock(result.output)}, then stop. ` +
     "Do not run any shell command or call any AIDLC tool this turn.\n\n" +
     fenceCommandOutput(result.output, result.exitCode)
   );
@@ -2152,8 +2208,7 @@ function terminalContext(result: TerminalResult): string {
 
 function terminalRefusal(result: TerminalResult): string {
   return (
-    "AIDLC deterministic terminal command complete. The requested command has " +
-    "already run inside the hook, and this shell call is intentionally refused " +
+    "The requested command has already run inside the hook, and this shell call is refused " +
     "to keep Kiro's Windows shell transport from changing its UTF-8 output. " +
     "Do not retry or run another shell command this turn. Relay the output below " +
     `to the user ${relayAsTextBlock(result.output)}, then stop.\n\n` +
@@ -2299,13 +2354,29 @@ if (target === "verb-intercept") {
     if (chat !== "" && !kiroIdeTurnOpen(projectDir, chat)) endTerminalHold(terminalSessionId());
     return 0;
   }
+  // Kiro's Command Prompt terminal dropped a reply over a second long (the
+  // engine noted it at exit): the person hears why once, with the answer to
+  // this message of theirs, and never again on this machine. A line handed
+  // over before a tool call was swallowed live; one that comes with the
+  // person's message is answered.
+  // Windows only (Kiro reads the terminal setting there); a test that points
+  // AI-DLC at a settings file of its own names the platform in the same seam.
+  if (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS) {
+    const { kiroTerminalBreakWarning } = await import("../tools/aidlc-kiro-ide-terminal.ts");
+    const breakLine = kiroTerminalBreakWarning();
+    if (breakLine !== "") process.stdout.write(`${breakLine}\n`);
+  }
   const sessionId = terminalSessionId();
   const turn = bumpTurn(sessionId);
   recordPromptEmpty(sessionId, turn);
   notePromptCapability(sessionId);
   const invocation = promptTerminalInvocation(ide.prompt ?? "");
   const command = classifyTerminalCommand(invocation.args, projectDir, ide.sessionId?.trim() || undefined);
-  if (command === null) return 0;
+  if (command === null) {
+    const step = await firstStepLine(ide.prompt ?? "", projectDir, ide.sessionId?.trim() || sessionId);
+    if (step !== "") process.stdout.write(`${step}\n`);
+    return 0;
+  }
   const result = runTerminalCommand(command);
   if (result === null) return 0;
   writeTerminalLatch(sessionId, turn, invocation, result);
@@ -2788,6 +2859,21 @@ function buildForward(): Forward {
 
     case "record-human-turn": {
       recordPreWorkflowHeartbeat(projectDir, "record-human-turn");
+      if (noPayload) {
+        // Whose message this was and what it said are unknown, so nothing is
+        // recorded as the person's: no turn, no message record, no session
+        // started or remembered. A turn with prompt "" would say they typed
+        // nothing, and presence minted here could be a prompt Kiro made. The
+        // record keeps that the hook ran and got nothing (doctor's drops), and
+        // the agent hears what to tell the person.
+        recordHookDrop(
+          projectDir,
+          "kiro-adapter",
+          `record-human-turn: no payload (nothing on stdin before it closed or within ${stdinTimeoutMs()} ms, no USER_PROMPT) - turn not recorded`,
+        );
+        process.stdout.write(`${NO_MESSAGE_AGENT_LINE}\n`);
+        return null;
+      }
       const eventSessionId = ide.sessionId?.trim();
       // Who sent the turn (kiroTurnOrigin): a message Kiro's own chat record
       // marks as its own, or one of Kiro's fixed workflow sentences (a Kiro
@@ -2833,7 +2919,7 @@ function buildForward(): Forward {
           const migration = normalizeRetiredGuardPolicyField(projectDir, sessionId);
           if (migration.normalized) {
             process.stdout.write(
-              `SYSTEM (AIDLC Guard Policy migration): kept ${migration.value} and renamed the active intent's retired Change Control field to Guard Policy.\n`,
+              `AIDLC Guard Policy migration: kept ${migration.value} and renamed the active intent's retired Change Control field to Guard Policy.\n`,
             );
           }
         } catch (error) {
@@ -3286,12 +3372,9 @@ function buildForward(): Forward {
         // as one dispatch carrying every developer stage's prompt: a plan marker
         // on any stage then makes the whole pipeline a guarded dispatch, rather
         // than the first stage's prompt deciding for the rest.
-        // A named reviewer dispatch arrives as a Task too, as the developer's
-        // does: the core guard judges only the developer's and records a
-        // reviewer brief that already carries its verdict.
         const forwarded = developers.length > 1
           ? { ...developers[0], prompt: developers.map((t) => t.prompt).join("\n") }
-          : developers[0] ?? (generic || targets.length === 1 ? targets[0] : undefined);
+          : developers[0] ?? (generic ? targets[0] : undefined);
         if (forwarded) {
           return { hook: "aidlc-plan-approval-guard.ts", input: taskInput(forwarded) };
         }
@@ -3819,13 +3902,24 @@ if (result.code === 2 && result.stderr) process.stderr.write(result.stderr);
 return result.code;
 }
 
-// The broken-channel ceiling for the 1.x stdin read. 2s in production; the
-// AIDLC_IDE_STDIN_TIMEOUT_MS seam lets the latency tests raise it far above any
-// plausible CI scheduling delay, so "did this path probe stdin at all?" becomes
-// a deterministic assertion instead of a tight millisecond budget.
+// What the agent hears when the chat's last message never reached the hook. It
+// names no engine part (the agent repeats these words to the person), and it is
+// true whoever sent that message: with no payload, nobody knows whether it was
+// the person's or one Kiro made.
+const NO_MESSAGE_AGENT_LINE =
+  "Tell the person in one line: The last message in this chat did not reach AI-DLC's record, so if it answered one of its questions, you will be asked that question again.";
+
+// The safety limit on the 1.x stdin read. Kiro writes the payload and closes
+// stdin, so the read ends when Kiro has finished sending, however late (a
+// write landing 3.5 s after the hook started was measured on a busy machine);
+// the limit ends only a channel that never closes. 60 s is Kiro's own default
+// budget for a command hook (kiro.dev/docs/hooks), well under the 1800 s the
+// registrations set, so the hook gives up on its own terms and records that.
+// The AIDLC_IDE_STDIN_TIMEOUT_MS seam lets tests shorten it (a never-closing
+// stdin) or stretch it (proving a path never probed stdin at all).
 function stdinTimeoutMs(): number {
   const override = Number(process.env.AIDLC_IDE_STDIN_TIMEOUT_MS ?? "");
-  return Number.isFinite(override) && override > 0 ? override : 2000;
+  return Number.isFinite(override) && override > 0 ? override : 60_000;
 }
 
 async function readStdinWithTimeout(timeoutMs: number): Promise<string> {
@@ -3847,10 +3941,10 @@ if (import.meta.main) {
   // Acquire input only for targets that need tool payload, session identity, or
   // the human response text. A non-empty
   // USER_PROMPT identifies the 0.12 channel and is consumed immediately: that
-  // IDE leaves stdin open forever, so probing stdin first imposed a mandatory
-  // 2s delay on every payload hook. IDE 1.x sends USER_PROMPT empty and writes
-  // + closes stdin; retain the timeout only as a defensive broken-channel
-  // ceiling. Every other target skips both channels (zero latency).
+  // IDE leaves stdin open forever, so probing stdin first would stall every
+  // payload hook. IDE 1.x sends USER_PROMPT empty and writes + closes stdin;
+  // the read waits for that close, bounded only by the safety limit above.
+  // Every other target skips both channels (zero latency).
   let input = "";
   if (INPUT_TARGETS.has(target)) {
     const legacyPayload = process.env.USER_PROMPT ?? "";

@@ -125,7 +125,6 @@ import {
   editedReviewNotice,
   REVIEW_EDITED_FIELD,
   dictatedReviewNotice,
-  dispatchDictatedVerdict,
   REVIEW_DICTATED_FIELD,
   recordFileTargetOrThrow,
   relativeRecordDir,
@@ -957,9 +956,22 @@ function messageIsReply(rows: AuditShardEvent[], message: StoredMessage): boolea
   return true;
 }
 
-// The chats that have sent messages since the last spending row.
-function chatsSince(pd: string, spentAt: string | null): Set<string> {
-  return new Set(listMessages(pd).filter((m) => spentAt === null || m.at >= spentAt).map((m) => m.session ?? "terminal"));
+// The chats that have spoken on this work since the last spending row. A message
+// counts when a HUMAN_TURN row of this record names it: the hook wrote that row
+// only while the chat was on the work, so a chat that joined through its turn
+// alone counts from that turn, and words a chat typed while it was on nothing
+// (before the work was chosen here, or a cold workspace) never count, however
+// the chat stands now. A message no hook minted a row for (none exists today
+// besides those) is read as before.
+function chatsSince(rows: AuditShardEvent[], pd: string, spentAt: string | null): Set<string> {
+  const named = new Set<string>();
+  for (const row of rows) {
+    const id = row.event === "HUMAN_TURN" ? auditBlockField(row.block, "Message Id") : null;
+    if (id !== null) named.add(id);
+  }
+  return new Set(listMessages(pd)
+    .filter((m) => (spentAt === null || m.at >= spentAt) && (m.session === null || named.has(m.id)))
+    .map((m) => m.session ?? "terminal"));
 }
 
 function proveMessage(pd: string, id: string, what: "answer" | "decision"): { message: StoredMessage } | { refusal: string } {
@@ -995,7 +1007,7 @@ function proveMessage(pd: string, id: string, what: "answer" | "decision"): { me
     }
     return { message };
   }
-  const chats = chatsSince(pd, spentAt);
+  const chats = chatsSince(rows, pd, spentAt);
   if (chats.size > 1) {
     return {
       refusal: `Cannot record this ${what}: the engine cannot tell which chat this command serves, and more than ` +
@@ -1035,7 +1047,7 @@ function messagesBeforeQuestion(pd: string, stage: string, unit: string | undefi
   const spentAt = latestSpendingTimestamp(rows);
   const chat = invokingChat(pd);
   // With no chat the engine can name, the hint follows the proof's one-chat rule.
-  if (chat === null && chatsSince(pd, spentAt).size > 1) return [];
+  if (chat === null && chatsSince(rows, pd, spentAt).size > 1) return [];
   const turnOf = new Map<string, AuditShardEvent>();
   for (const row of rows) {
     if (row.event !== "HUMAN_TURN") continue;
@@ -3877,6 +3889,12 @@ function handleReview(args: string[]): void {
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
+      // The UTC time the reviewer's own `**Date:**` line carries. The
+      // reviewer used to run `engine now` for it, which on Claude Code is an
+      // absolute-path call to the engine from a subagent, so the person was
+      // asked to allow an AI-DLC internal step (two live runs). The request
+      // the conductor already runs hands the time over instead.
+      reviewed_at: isoTimestamp(),
       agent_note: reviewRequestNote(flags.reviewer, reviewFile ?? "the review file this request opened", recordVerdict),
       ...(retried ? { retry: "pending-request" } : {}),
       ...(upgraded ? { upgrade: "legacy-request" } : {}),
@@ -4146,19 +4164,6 @@ function handleReview(args: string[]): void {
             verdictChangeNotices.push(notice);
           }
         }
-        // The verdict the reviewer's dispatch already carried (a rendered
-        // verdict line in its brief, recorded by the plan-approval guard as
-        // REVIEW_VERDICT_DICTATED) is not the reviewer's own judgement when the
-        // reviewer wrote that same verdict: the row says so, and the person
-        // hears it once (with the verdict here; at the gate under strict). A
-        // reviewer that wrote the other verdict judged for itself: nothing.
-        if (
-          request !== undefined &&
-          dispatchDictatedVerdict(events, flags.reviewer, request, verdict as ReviewVerdict)
-        ) {
-          fields[REVIEW_DICTATED_FIELD] = "yes";
-          verdictChangeNotices.push(dictatedReviewNotice(node.name, flags.unit));
-        }
       }
       let reviewBytes = body ?? snapshot.appendix;
       if (!incompleteFallback) {
@@ -4192,6 +4197,17 @@ function handleReview(args: string[]): void {
           refuseReview(
             `Refusing REVIEW_COMPLETED for "${flags.stage}": ${validity.reason}.`,
           );
+        }
+        // The reviewer's own answer to whether its brief told it what to
+        // conclude, recorded as written. `yes` is not the reviewer's judgement
+        // alone, and the person hears that once (with the verdict here; at the
+        // gate under strict). The reviewer read its brief for that; the tool
+        // reads only the line, and a missing or unreadable one records nothing.
+        if (validity.verdictDictated !== null) {
+          fields[REVIEW_DICTATED_FIELD] = validity.verdictDictated;
+          if (validity.verdictDictated === "yes") {
+            verdictChangeNotices.push(dictatedReviewNotice(node.name, flags.unit));
+          }
         }
       }
 
@@ -4559,5 +4575,24 @@ function error(msg: string, changeNotices: readonly string[] = []): never {
 }
 
 if (import.meta.main) {
-  main(process.argv.slice(2));
+  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
+  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
+  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // in Kiro's terminal, so the dispatcher's front gate and the lean projections
+  // keep their import graph.
+  if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {
+    import("./aidlc-kiro-ide-terminal.ts")
+      .then(async (m) => {
+        if (await m.commandPromptReplyTee()) return;
+        m.noteSlowReplyAtExit();
+        run(m.rejoinCommandPromptQuotes(process.argv.slice(2)));
+      })
+      .catch(() => run(process.argv.slice(2)));
+  } else {
+    run(process.argv.slice(2));
+  }
+}
+
+function run(args: string[]): void {
+  main(args);
 }

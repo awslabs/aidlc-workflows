@@ -725,6 +725,51 @@ describe("utility handlers and reservation chokepoints", () => {
     }
   });
 
+  // A name typed alone after `/aidlc` (`/aidlc auth`) is a switch to that piece
+  // of work when it is exactly one record's name here, as `intent auth` is: the
+  // tool owns exact names and reads no other word. Any other word alone stays
+  // the agent's to read, and the seam leaves both to the engine.
+  test("a name typed alone that is exactly a piece of work here selects it, and the switch says the way back", () => {
+    const projectDir = scratchProject();
+    try {
+      const intentsRoot = join(projectDir, "aidlc", "spaces", "default", "intents");
+      for (const record of ["260711-auth", "260712-auth-fix"]) {
+        mkdirSync(join(intentsRoot, record), { recursive: true });
+        writeFileSync(join(intentsRoot, record, "aidlc-state.md"), "# AI-DLC State Tracking\n", "utf-8");
+      }
+      writeFileSync(join(projectDir, "aidlc", "active-space"), "default\n", "utf-8");
+      writeFileSync(join(intentsRoot, "active-intent"), "260712-auth-fix\n", "utf-8");
+      writeFileSync(join(intentsRoot, "intents.json"), `${JSON.stringify([
+        { uuid: "00000000-0000-7000-8000-000000000021", slug: "auth", dirName: "260711-auth", status: "in-flight" },
+        { uuid: "00000000-0000-7000-8000-000000000022", slug: "auth-fix", dirName: "260712-auth-fix", status: "in-flight" },
+      ], null, 2)}\n`, "utf-8");
+      // The slug, and the record dir, alone: the switch step, never the routing question.
+      for (const name of ["auth", "260711-auth"]) {
+        const d = directive(projectDir, [name]);
+        expect(d.kind, name).toBe("print");
+        expect(d.message, name).toContain(`aidlc.ts engine intent ${name}\`, print its output verbatim, then stop.`);
+        expect(d.message, name).not.toContain("--request");
+        expect(d.message, name).not.toContain("intent auth-fix");
+      }
+      // A word alone that is no record is not a switch, and a scope word alone is still the scope word.
+      for (const word of ["auht", "bugfix"]) {
+        expect(runNext(projectDir, [word]).stdout, word).not.toContain("engine intent");
+      }
+      // The seam leaves a bare name to the engine, as before.
+      expect(classifyTerminalCommand(["auth"], projectDir)).toBeNull();
+      // The switch says the way back when the chat was on another record; a self-switch does not.
+      const sw = runDispatcher(REPO_ROOT, ["engine", "intent", "auth", "--project-dir", projectDir]);
+      expect(sw.status, sw.stderr).toBe(0);
+      expect(sw.stdout).toContain("Now working on `auth`. You were on `auth-fix`: `/aidlc intent auth-fix` goes back.");
+      expect(activeIntentCursor(projectDir).trim()).toBe("260711-auth");
+      const self = runDispatcher(REPO_ROOT, ["engine", "intent", "auth", "--project-dir", projectDir]);
+      expect(self.stdout).toContain("Now working on `auth`.");
+      expect(self.stdout).not.toContain("goes back");
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
   test("words after a name switch and reach the agent whole, flags included", () => {
     const projectDir = scratchProject();
     try {

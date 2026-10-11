@@ -3272,9 +3272,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         expect(pre.stdout, spec.text).toBe("");
         const executed = runShell(dir, spec.text);
         expect(executed.status, executed.stderr).toBe(0);
+        // A value this engine's own table does not hold is a reading step, which
+        // is a print the agent acts on; it carries no workflow work either way,
+        // which is what this case guards (t-three-ways-to-read-a-line).
         expect(JSON.parse(executed.stdout.trim()), spec.text).toMatchObject({
-          kind: (args[1] === "team-board" && args.length > 2) || (args[1] === "--config" && (args.includes("bogus") || args.includes("extra"))) ||
-            args.includes("extreme") || args.includes("loud") ? "error" : "print",
+          kind: (args[1] === "team-board" && args.length > 2) ||
+            (args[1] === "--config" && (args.includes("bogus") || args.includes("extra"))) ? "error" : "print",
         });
         const post = runAdapter(dir, "post-tool", commandPayload(dir, session, spec.text, attempt, true, executed.stdout));
         expect(post.code, spec.text).toBe(0);
@@ -4641,5 +4644,59 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(elsewhere.hookSpecificOutput?.permissionDecision, String(shell)).toBe("deny");
       expect(elsewhere.hookSpecificOutput?.updatedInput, String(shell)).toBeUndefined();
     }
+  });
+});
+
+// VS Code brackets each delegation with SubagentStart carrying agent_id under
+// the chat's own session: that pair is the one fact the engine cannot learn by
+// itself, so the adapter notes it and a payload or shell carrying the
+// subagent's id resolves to the chat. The CLI puts a per-call toolu_ id where
+// VS Code puts the chat's session; a per-call id is no chat, so the engine is
+// told nothing rather than meeting a new "chat" on every tool call.
+describe("the subagent's id belongs to the chat, and a per-call id is no chat", () => {
+  const SESSION = "copilot-session-0001";
+  const SUBAGENT_CALL = "toolu_sub_0001";
+  function helperOf(dir: string, id: string): string | null {
+    try {
+      return readFileSync(join(dir, "aidlc", ".aidlc-sessions", `${id}.helper-of`), "utf-8").trim();
+    } catch {
+      return null;
+    }
+  }
+  function heartbeat(dir: string): string | null {
+    try {
+      return (JSON.parse(
+        readFileSync(join(dir, "aidlc", ".aidlc-sessions", "copilot-heartbeat.json"), "utf-8"),
+      ) as { session_id?: string }).session_id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  test("a subagent start notes its id under the chat's session", () => {
+    const dir = scratchProject(true);
+    const start = runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: SESSION,
+      cwd: dir,
+      agent_id: SUBAGENT_CALL,
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    expect(start.code, start.stderr).toBe(0);
+    expect(helperOf(dir, SUBAGENT_CALL)).toBe(SESSION);
+  });
+
+  test("a per-call CLI id is never passed on as the chat", () => {
+    const perCall = scratchProject(true);
+    const chat = scratchProject(true);
+    expect(runAdapter(perCall, "session-start", {
+      hook_event_name: "SessionStart", source: "new", cwd: perCall, session_id: "toolu_01callid0001",
+    }).code).toBe(0);
+    expect(heartbeat(perCall)).toBe("unknown");
+    expect(helperOf(perCall, "toolu_01callid0001")).toBeNull();
+    expect(runAdapter(chat, "session-start", {
+      hook_event_name: "SessionStart", source: "new", cwd: chat, session_id: SESSION,
+    }).code).toBe(0);
+    expect(heartbeat(chat)).toBe(SESSION);
   });
 });

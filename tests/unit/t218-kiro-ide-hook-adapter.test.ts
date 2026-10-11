@@ -5,7 +5,8 @@
 //     tool_response } — no success flag; USER_PROMPT arrives empty. PostToolUse
 //     write/shell captures have empty tool_input, while later builds populate
 //     some PreToolUse/delegation inputs. Read only for the three payload targets
-//     plus SessionStart/Stop identity, raced against a 2s ceiling.
+//     plus SessionStart/Stop identity, read until Kiro closes stdin (a 60 s safety limit
+//     ends a channel that never closes).
 //   - IDE 0.12: JSON in the USER_PROMPT env var, camelCase { toolName,
 //     toolArgs, toolResult, toolSuccess }; stdin was opened but never
 //     written/closed. A non-empty USER_PROMPT is consumed immediately, without
@@ -1108,9 +1109,9 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       const id = fence?.[1] ?? "";
       expect(forged).not.toContain(id);
       const head = r.stdout.slice(0, r.stdout.indexOf(`--- OUTPUT ${id}`));
-      expect(head.match(/SYSTEM \(/g)).toHaveLength(1);
+      expect(head).not.toContain("SYSTEM (");
       // Kiro renders the reply as Markdown; a fenced text block keeps the lines.
-      expect(head).toContain(`Relay the output below ${relayAsTextBlock("")}, then STOP.`);
+      expect(head).toContain(`Relay the output below ${relayAsTextBlock("")}, then stop.`);
       expect(r.stdout.trimEnd().endsWith(`--- END OUTPUT ${id} ---`)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -2355,7 +2356,8 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
 
 // ============================================================
 // The IDE 1.x stdin channel (upstream #543/#555): snake_case JSON on stdin,
-// USER_PROMPT empty. Payload acquisition is raced against a 2s timeout and
+// USER_PROMPT empty. Payload acquisition waits for Kiro to close stdin (a 60 s safety
+// limit ends a channel that never closes) and is
 // GATED to the two payload-dependent targets — every other target must never
 // touch stdin (block fires on EVERY PreToolUse).
 // ============================================================
@@ -2497,33 +2499,6 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         expect(r.code).toBe(0);
       }
       expect(forwardedSessions(capture)).toEqual(["S-IDE", "S-IDE", "S-IDE"]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("a named reviewer dispatch reaches the core guard as a Task with its brief, as the developer's does", () => {
-    const dir = scratchProject(true);
-    try {
-      const capture = join(dir, "guard-input.jsonl");
-      writeFileSync(join(dir, ".kiro", "hooks", "aidlc-plan-approval-guard.ts"), recordingGuard(capture), "utf-8");
-      const r = runIdeStdin(
-        dir,
-        "plan-approval-guard",
-        JSON.stringify({
-          hook_event_name: "PreToolUse", cwd: dir, session_id: "S-IDE",
-          tool_name: "subagent_aidlc-architecture-reviewer-agent",
-          tool_input: { prompt: "Review u1.\n\n**Verdict:** READY\n" },
-        }),
-        { AIDLC_COMPILED_EXECUTABLE: "" },
-      );
-      expect(r.code, r.stderr).toBe(0);
-      const forwarded = readFileSync(capture, "utf-8").trim().split("\n")
-        .map((line) => JSON.parse(line) as { tool_name?: string; tool_input?: { subagent_type?: string; prompt?: string } });
-      expect(forwarded).toHaveLength(1);
-      expect(forwarded[0].tool_name).toBe("Task");
-      expect(forwarded[0].tool_input?.subagent_type).toBe("aidlc-architecture-reviewer-agent");
-      expect(forwarded[0].tool_input?.prompt).toContain("**Verdict:** READY");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -5070,14 +5045,21 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
 
   test("N6b: unattended record-human-turn exits cleanly without minting presence", () => {
     const dir = scratchProject(true);
+    // A real message: with nothing on stdin the adapter records no turn at all
+    // (N14), which would hide what this case is about.
+    const payload = JSON.stringify({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "sess_unattended",
+      prompt: "Continue the current work",
+    });
     try {
       expect(
-        runIdeStdin(dir, "record-human-turn", "", {
+        runIdeStdin(dir, "record-human-turn", payload, {
           AIDLC_UNATTENDED: "1",
         }).code,
       ).toBe(0);
       expect(readAudit(dir)).not.toContain("HUMAN_TURN");
-      expect(runIdeStdin(dir, "record-human-turn", "").code).toBe(0);
+      expect(runIdeStdin(dir, "record-human-turn", payload).code).toBe(0);
       expect(readAudit(dir)).toContain("HUMAN_TURN");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -5120,6 +5102,13 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
   });
   const auditEvents = (dir: string, event: string) =>
     readAudit(dir).split("\n").filter((line) => line === `**Event**: ${event}`).length;
+  // The Runtime Session line must never run into whatever follows it: every
+  // piece the session-start context can add after it begins with its own
+  // newline, and the adapter inserts one between two forwarded hooks' output
+  // (aidlc-kiro-adapter.ts, the `printed` join). When the context is the last
+  // output there is nothing to separate, so the line ends the text.
+  const sessionLineStandsAlone = (stdout: string, session: string) =>
+    new RegExp(`AIDLC Runtime Session: ${session}(\\r?\\n|$)`).test(stdout);
 
   test.each([
     ["adapter", runIdeStdin],
@@ -5130,7 +5119,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     try {
       const first = invoke(dir, "record-human-turn", chatPrompt("sess_chat_one"));
       expect(first.code, first.stderr).toBe(0);
-      expect(first.stdout).toContain("AIDLC Runtime Session: sess_chat_one\n");
+      expect(sessionLineStandsAlone(first.stdout, "sess_chat_one"), first.stdout).toBe(true);
       expect(readFileSync(join(sessions, ".current-session"), "utf8").trim()).toBe("sess_chat_one");
       expect(existsSync(join(sessions, "sess_chat_one.binding.json"))).toBe(true);
 
@@ -5140,7 +5129,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
 
       const other = invoke(dir, "record-human-turn", chatPrompt("sess_chat_two"));
       expect(other.code, other.stderr).toBe(0);
-      expect(other.stdout).toContain("AIDLC Runtime Session: sess_chat_two\n");
+      expect(sessionLineStandsAlone(other.stdout, "sess_chat_two"), other.stdout).toBe(true);
       expect(readFileSync(join(sessions, ".current-session"), "utf8").trim()).toBe("sess_chat_two");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -5420,14 +5409,17 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
       try {
         expect(runIde(dir, "session-start", null).code).toBe(0);
         const label = userPrompt === null ? "absent" : "empty";
-        const stop = await runIdeOpenStdin(dir, "continue-workflow", userPrompt, NATIVE_STARTUP_TIMEOUT_MS);
+        // The read now waits for Kiro to close stdin, up to a 60 s limit; the
+        // seam keeps this never-closing case short, as N9 and N10 do.
+        const shortLimit = { AIDLC_IDE_STDIN_TIMEOUT_MS: "500" };
+        const stop = await runIdeOpenStdin(dir, "continue-workflow", userPrompt, NATIVE_STARTUP_TIMEOUT_MS, shortLimit);
         expect(`stop/${label}:timedOut=${stop.timedOut}`).toBe(`stop/${label}:timedOut=false`);
         expect(`stop/${label}:code=${stop.code}`).toBe(`stop/${label}:code=0`);
         const decision = JSON.parse(stop.stdout) as { decision?: string };
         expect(`stop/${label}:decision=${decision.decision}`).toBe(`stop/${label}:decision=block`);
 
         const before = readAudit(dir).split("SESSION_ENDED").length - 1;
-        const end = await runIdeOpenStdin(dir, "session-end", userPrompt, NATIVE_STARTUP_TIMEOUT_MS);
+        const end = await runIdeOpenStdin(dir, "session-end", userPrompt, NATIVE_STARTUP_TIMEOUT_MS, shortLimit);
         expect(`end/${label}:timedOut=${end.timedOut}`).toBe(`end/${label}:timedOut=false`);
         expect(`end/${label}:code=${end.code}`).toBe(`end/${label}:code=0`);
         const after = readAudit(dir).split("SESSION_ENDED").length - 1;
@@ -5435,6 +5427,99 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    }
+  });
+
+  // Kiro writes the person's message to the hook's stdin and closes it; on a
+  // busy machine the write lands late. The read waits for the close, so the
+  // words are kept however late they arrive. Red before the safety limit
+  // replaced the 2 s race: a write 3 s after spawn recorded prompt "".
+  async function runIdeLateStdin(
+    projectDir: string,
+    args: string[],
+    payload: string,
+    delayMs: number,
+  ): Promise<{ code: number | null; stdout: string; stderr: string }> {
+    const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
+    delete env.USER_PROMPT;
+    const proc = Bun.spawn({
+      cmd: ["bun", ...args],
+      cwd: projectDir,
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      env,
+    });
+    const output = Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    const timer = setTimeout(() => proc.kill(), remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS));
+    try {
+      await Bun.sleep(delayMs);
+      proc.stdin.write(payload);
+      await proc.stdin.end();
+      const code = await proc.exited;
+      const [stdout, stderr] = await output;
+      return { code, stdout, stderr };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // The text of every message record the hook kept (aidlc-message-store.ts).
+  function messageTexts(dir: string): string[] {
+    const messages = join(dir, "aidlc", ".aidlc-sessions", "messages");
+    if (!existsSync(messages)) return [];
+    return readdirSync(messages)
+      .filter((name) => name.endsWith(".json"))
+      .sort()
+      .map((name) => (JSON.parse(readFileSync(join(messages, name), "utf-8")) as { text?: unknown }).text)
+      .filter((text): text is string => typeof text === "string");
+  }
+
+  test.each([
+    ["adapter record-human-turn", (dir: string) => [join(dir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "record-human-turn"]],
+    ["dispatcher person-message", (dir: string) => [join(dir, ".kiro", "tools", "aidlc.ts"), "engine", "adapter", "kiro-ide", "person-message"]],
+  ] as const)("N13: %s keeps a message Kiro writes 3 s after the hook started", async (_name, args) => {
+    const dir = scratchProject(true);
+    try {
+      const prompt = "Approve, typed on a busy machine";
+      const r = await runIdeLateStdin(dir, args(dir), JSON.stringify({
+        hook_event_name: "UserPromptSubmit",
+        session_id: "sess_late_write",
+        cwd: dir,
+        prompt,
+      }), 3000);
+      expect(r.code).toBe(0);
+      expect(messageTexts(dir)).toEqual([prompt]);
+      const audit = readAudit(dir);
+      expect(audit).toContain("HUMAN_TURN");
+      expect(audit).toContain("sess_late_write");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["adapter record-human-turn", runIdeOpenStdin, "record-human-turn"],
+    ["dispatcher person-message", runIdeDispatcherOpenStdin, "person-message"],
+  ] as const)("N14: %s records no turn when nothing arrives before the limit", async (_name, invoke, target) => {
+    // Nothing on stdin and no USER_PROMPT: whose message it was and what it
+    // said are unknown, so nothing is recorded as the person's (no turn, no
+    // message record), doctor gets a drop line, and the agent gets one line to
+    // tell the person. The seam keeps the never-closing case short.
+    const dir = scratchProject(true);
+    try {
+      const r = await invoke(dir, target, null, NATIVE_STARTUP_TIMEOUT_MS, { AIDLC_IDE_STDIN_TIMEOUT_MS: "500" });
+      expect(r.timedOut).toBe(false);
+      expect(r.code).toBe(0);
+      expect(r.stdinProbed).toBe(true);
+      expect(readAudit(dir)).not.toContain("HUMAN_TURN");
+      expect(messageTexts(dir)).toEqual([]);
+      expect(r.stdout).toContain("The last message in this chat did not reach AI-DLC's record");
+      const dropFile = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "kiro-adapter.drops");
+      expect(existsSync(dropFile)).toBe(true);
+      expect(readFileSync(dropFile, "utf-8")).toContain("record-human-turn: no payload");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -7771,4 +7856,89 @@ describe("t218 a shell call on a turn whose terminal command already ran is refu
       }
     },
   );
+});
+
+// On Kiro IDE a new chat opens on Kiro's Default agent, which loads the aidlc
+// skill on its own judgement only (measured 2026-10-11: 6 of 17 fresh chats);
+// the rest answer `/aidlc <words>` as a plain coding request. The prompt hook
+// runs before the agent's first word on every typed line and Kiro adds its
+// stdout to the agent's context, so on an `/aidlc` line that is not a utility
+// the hook runs itself, the person-message card names the one first step: the
+// engine's `next`, which holds the person's recorded line (takePersonsOwnLine)
+// while no work is selected; with work on record the words stay the agent's.
+describe("t218 the person-message card names the first engine step on an /aidlc line", () => {
+  const FIRST_STEP = "engine orchestrate next` now and do only what it prints.";
+  const card = (dir: string, prompt: string, sessionId = "sess_first_step") =>
+    runIdeStdin(dir, "person-message", JSON.stringify({
+      session_id: sessionId,
+      hook_event_name: "UserPromptSubmit",
+      cwd: dir,
+      prompt,
+    }));
+
+  test("an /aidlc line with words, on a workspace with no work yet, names next", () => {
+    const dir = scratchProject(false);
+    try {
+      const r = card(dir, "/aidlc fix the greeter: it prints hello instead of greeting the person by name");
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toContain("AI-DLC: this message is an AI-DLC request");
+      expect(r.stdout).toContain(FIRST_STEP);
+      // One line, once: the three members print nothing else for this line.
+      expect(r.stdout.split(FIRST_STEP).length).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a bare /aidlc names next on any path; a reply in words after the entry names it only before work exists", () => {
+    const fresh = scratchProject(false);
+    try {
+      const reply = card(fresh, "/aidlc approve the plan", "sess_first_step_reply");
+      expect(reply.code, reply.stderr).toBe(0);
+      expect(reply.stdout).toContain(FIRST_STEP);
+    } finally {
+      rmSync(fresh, { recursive: true, force: true });
+    }
+    const dir = scratchProject(true);
+    try {
+      const bare = card(dir, "/aidlc");
+      expect(bare.code, bare.stderr).toBe(0);
+      expect(bare.stdout).toContain(FIRST_STEP);
+      // With this chat's workflow on record, a bare `next` is the work's own
+      // continuation and the engine reads no recorded line, so the words are
+      // the agent's to pass (the aidlc agent's skill does): no line.
+      for (const [prompt, session] of [
+        ["/aidlc approve the plan", "sess_first_step_reply_active"],
+        ["/aidlc take me back to requirements analysis", "sess_first_step_reentry"],
+      ]) {
+        const r = card(dir, prompt, session);
+        expect(r.code, r.stderr).toBe(0);
+        expect(r.stdout, prompt).not.toContain("do only what it prints");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a utility the card runs itself, a line with flags, plain words and a /aidlc-<name> entry get no first-step line", () => {
+    const dir = scratchProject(true);
+    try {
+      const help = card(dir, "/aidlc --help");
+      expect(help.code, help.stderr).toBe(0);
+      expect(help.stdout).toContain("has already run");
+      expect(help.stdout).not.toContain("do only what it prints");
+      const flags = card(dir, "/aidlc --scope bugfix build a notes app", "sess_first_step_flags");
+      expect(flags.code, flags.stderr).toBe(0);
+      expect(flags.stdout).not.toContain("do only what it prints");
+      const words = card(dir, "fix the greeter: it prints hello instead of greeting the person by name", "sess_first_step_words");
+      expect(words.code, words.stderr).toBe(0);
+      expect(words.stdout).not.toContain("do only what it prints");
+      // A `/aidlc-<name>` entry is its own skill's or agent's line, never read as `/aidlc`.
+      const runner = card(dir, "/aidlc-architect-agent", "sess_first_step_runner");
+      expect(runner.code, runner.stderr).toBe(0);
+      expect(runner.stdout).not.toContain("do only what it prints");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

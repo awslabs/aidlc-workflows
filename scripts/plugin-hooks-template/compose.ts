@@ -86,7 +86,7 @@ const KIRO_KAS_LAYOUT = (() => {
   } catch {
     // A tree without readable metadata still has its conductor file.
   }
-  return existsSync(join(HARNESS_DIR, "agents", "aidlc.md"));
+  return existsSync(join(HARNESS_DIR, "agents", "aidlc-aidlc.md")) || existsSync(join(HARNESS_DIR, "agents", "aidlc.md"));
 })();
 const IS_COPILOT = HARNESS_NAME === "copilot";
 const IS_OPENCODE = HARNESS_NAME === "opencode";

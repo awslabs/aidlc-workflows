@@ -1708,7 +1708,7 @@ describe("t294 trust diagnostics", () => {
       Object.assign(process.env, overrides);
       const shipped = await nativeTrust();
       expect(shipped.pass, shipped.label).toBe(true);
-      const conductor = join(harnessRoot, "agents", "aidlc.md");
+      const conductor = join(harnessRoot, "agents", "aidlc-aidlc.md");
       const grant = `        - "aidlc engine *"\n`;
       expect(readFileSync(conductor, "utf-8")).toContain(grant);
       expect(readFileSync(join(harnessRoot, "agents", "aidlc-developer-agent.md"), "utf-8"))
@@ -1893,7 +1893,7 @@ describe("t294 trust diagnostics", () => {
     expect(existsSync(join(project, ".vscode"))).toBe(false);
     const status = trustStatus(project, ".kiro", "kiro-ide");
     expect(status.issues).toEqual([]);
-    expect(status.files).toContain(join(project, ".kiro", "agents", "aidlc.md"));
+    expect(status.files).toContain(join(project, ".kiro", "agents", "aidlc-aidlc.md"));
     expect(status.files).toContain(join(project, ".kiro", "settings", "cli.json"));
     expect(status.files.some((file) => file.includes(".vscode"))).toBe(false);
     // Under the shared name `kiro` the installed tree, not the name, picks the

@@ -32,6 +32,7 @@ import {
   runOrchestrateNext,
   seedAidlcMemory,
   seededAuditDir,
+  seededAuditShard,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
@@ -45,6 +46,7 @@ import {
   pipelineLinkEvidence,
   readAllAuditShards,
   singleStageAttemptIsOpen,
+  supportAgentsAtOpenGate,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -1405,4 +1407,193 @@ describe("t315 pipeline link receipts", () => {
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(stateBefore);
   });
 
+});
+
+// The person approves a stage and asks for the specialists in the same reply.
+// The agent runs the setter first (the skill's own order), and the finished
+// stage is held to the switch it ran under: the approval stands and the switch
+// applies from the next stage. The mirror (a full run approved after the switch
+// turns off at the gate) stands the same way, and a gate the person closes with
+// Request Changes runs the revision under the new setting.
+describe("t315 an approval given with the collaborators switch stands", () => {
+  const PRACTICES_SUPPORTS = [
+    "aidlc-quality-agent",
+    "aidlc-developer-agent",
+    "aidlc-devsecops-agent",
+  ];
+  const APPROVE_WORDS = "Approve, and bring the specialists in from here";
+
+  // The enterprise fixture with the person's own switch, Practices Discovery as
+  // the next stage (it declares three support agents), and no learnings or
+  // summary question between the approval and that stage.
+  function switchedProject(collaborators: "on" | "off"): string {
+    const proj = pipelineProject();
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8")
+        .replace(/^- \*\*Scope\*\*: enterprise$/m, `- **Scope**: enterprise\n- **Collaborators**: ${collaborators} (set by you)`)
+        .replace(/^- \*\*Learnings\*\*: .*$/m, "- **Learnings**: off (set by you)")
+        .replace(/^- \*\*Summary Confirmation\*\*: .*$/m, "- **Summary Confirmation**: off (set by you)")
+        .replace(/^- \[S\] practices-discovery — SKIP \(bugfix scope\)$/m, "- [ ] practices-discovery — EXECUTE"),
+    );
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    writeAllCodekbArtifacts(proj);
+    return proj;
+  }
+
+  // The setter the agent runs for "bring the specialists in" or "lead agent
+  // only from here" (`engine config set collaborators on|off`).
+  function setCollaborators(proj: string, value: "on" | "off"): { rc: number; out: string } {
+    const result = spawnSync(
+      BUN,
+      [UTILITY, "config-change", "--collaborators", value, "--project-dir", proj],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: childEnv() },
+    );
+    return { rc: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  }
+
+  // Audit rows of one event for one stage.
+  function rows(proj: string, event: string, stage = RE_STAGE): number {
+    return readAllAuditShards(proj)
+      .split(/^## /m)
+      .filter((block) => block.includes(`**Event**: ${event}\n`) && block.includes(`**Stage**: ${stage}\n`))
+      .length;
+  }
+
+  function openGate(proj: string): void {
+    const gate = state(proj, ["gate-start", RE_STAGE]);
+    expect(gate.rc, gate.out).toBe(0);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(`- [?] ${RE_STAGE}`);
+  }
+
+  test("the setter first, then the approval: the approval stands and the specialists join from the next stage", () => {
+    const proj = switchedProject("off");
+    expect(runLog(proj, LEAD).rc).toBe(0);
+    openGate(proj);
+
+    const switched = setCollaborators(proj, "on");
+    expect(switched.rc, switched.out).toBe(0);
+    expect(readAllAuditShards(proj)).toContain("**Event**: CEREMONY_SET");
+
+    const approve = report(proj, ["--stage", RE_STAGE, "--result", "approved", "--user-input", APPROVE_WORDS]);
+    expect(approve.directive?.kind, approve.out).toBe("done");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(`- [x] ${RE_STAGE}`);
+    expect(rows(proj, "GATE_APPROVED")).toBe(1);
+    expect(readAllAuditShards(proj)).toContain(`**User Input**: ${APPROVE_WORDS}`);
+    // The approved stage never runs again.
+    expect(rows(proj, "STAGE_STARTED")).toBe(1);
+
+    const next = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
+    expect(next.directive?.kind, next.out).toBe("run-stage");
+    expect(next.directive?.stage).toBe("practices-discovery");
+    expect(next.directive?.support_agents).toEqual(PRACTICES_SUPPORTS);
+  });
+
+  test("the mirror: a full run approved after the switch turns off at the gate", () => {
+    const proj = switchedProject("on");
+    expect(runLog(proj, LEAD).rc).toBe(0);
+    expect(runLog(proj, FINAL).rc).toBe(0);
+    openGate(proj);
+
+    expect(setCollaborators(proj, "off").rc).toBe(0);
+    const approve = report(proj, ["--stage", RE_STAGE, "--result", "approved", "--user-input", "Approve, and the lead agent only from here"]);
+    expect(approve.directive?.kind, approve.out).toBe("done");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(`- [x] ${RE_STAGE}`);
+    expect(rows(proj, "GATE_APPROVED")).toBe(1);
+
+    const next = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
+    expect(next.directive?.kind, next.out).toBe("run-stage");
+    expect(next.directive?.stage).toBe("practices-discovery");
+    expect(next.directive?.support_agents).toEqual([]);
+  });
+
+  test("a flip at the gate followed by Request Changes closes the gate: the revision runs with the specialists", () => {
+    const proj = switchedProject("off");
+    expect(runLog(proj, LEAD).rc).toBe(0);
+    openGate(proj);
+    expect(setCollaborators(proj, "on").rc).toBe(0);
+
+    const reject = state(proj, ["reject", RE_STAGE, "--feedback=Cover the test folder too", "--user-input", "Request Changes"]);
+    expect(reject.rc, reject.out).toBe(0);
+
+    const next = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
+    expect(next.directive?.kind, next.out).toBe("run-stage");
+    expect(next.directive?.stage).toBe(RE_STAGE);
+    expect(next.directive?.support_agents).toEqual([FINAL]);
+    expect((next.directive?.pipeline as { links: string[] }).links).toEqual([LEAD, FINAL]);
+  });
+
+  // The helper's contract: the anchor is the stage's last organic open gate row
+  // in the current attempt, and the first collaborators flip after it decides.
+  // A Recovered gate row, an Old that does not parse, or a closed gate fall
+  // back to the current setting.
+  test("the anchor is the last organic open gate row; Recovered rows, an unparseable Old, the kill switch and a closed gate fall back", () => {
+    const stage = { slug: RE_STAGE, support_agents: [FINAL] };
+    const stamp = (seconds: number): string =>
+      new Date(Date.now() + seconds * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const row = (proj: string, event: string, seconds: number, fields: Record<string, string>): void =>
+      appendFileSync(seededAuditShard(proj), auditBlock(event, stamp(seconds), fields));
+    const resolve = (proj: string): string[] =>
+      supportAgentsAtOpenGate(proj, stage, "enterprise", readFileSync(seededStateFile(proj), "utf-8"));
+
+    // The person's case: the gate opened under off, then the switch went on.
+    const flipped = switchedProject("on");
+    row(flipped, "STAGE_AWAITING_APPROVAL", 10, { Stage: RE_STAGE });
+    row(flipped, "CEREMONY_SET", 20, { Key: "collaborators", Old: "off", New: "on", Source: "you" });
+    expect(resolve(flipped)).toEqual([]);
+    // Request Changes closes the gate: the current setting applies again.
+    row(flipped, "GATE_REJECTED", 30, { Stage: RE_STAGE, Feedback: "Look again" });
+    expect(resolve(flipped)).toEqual([FINAL]);
+    // The gate shown again is the new anchor; a flip after it decides again.
+    row(flipped, "STAGE_AWAITING_APPROVAL", 40, { Stage: RE_STAGE });
+    expect(resolve(flipped)).toEqual([FINAL]);
+    row(flipped, "CEREMONY_SET", 50, { Key: "collaborators", Old: "off", New: "on", Source: "you" });
+    expect(resolve(flipped)).toEqual([]);
+
+    // A gate synthesized as Recovered is written after the check: no anchor.
+    const recovered = switchedProject("on");
+    row(recovered, "STAGE_AWAITING_APPROVAL", 10, { Stage: RE_STAGE, Recovered: "true" });
+    row(recovered, "CEREMONY_SET", 20, { Key: "collaborators", Old: "off", New: "on", Source: "you" });
+    expect(resolve(recovered)).toEqual([FINAL]);
+
+    // An Old that does not parse falls back to the current setting.
+    const odd = switchedProject("on");
+    row(odd, "STAGE_AWAITING_APPROVAL", 10, { Stage: RE_STAGE });
+    row(odd, "CEREMONY_SET", 20, { Key: "collaborators", Old: "whatever", New: "on", Source: "you" });
+    expect(resolve(odd)).toEqual([FINAL]);
+
+    // The mirror: the gate opened under on, then the switch went off.
+    const mirrored = switchedProject("off");
+    row(mirrored, "STAGE_AWAITING_APPROVAL", 10, { Stage: RE_STAGE });
+    row(mirrored, "CEREMONY_SET", 20, { Key: "collaborators", Old: "on", New: "off", Source: "you" });
+    expect(resolve(mirrored)).toEqual([FINAL]);
+
+    // The kill switch forces the lead alone whatever saved value a flip recorded
+    // as Old: the stage ran lead-only under it, so the gate owes nothing more.
+    const killed = switchedProject("off");
+    row(killed, "STAGE_AWAITING_APPROVAL", 10, { Stage: RE_STAGE });
+    row(killed, "CEREMONY_SET", 20, { Key: "collaborators", Old: "on", New: "off", Source: "you" });
+    expect(
+      supportAgentsAtOpenGate(killed, stage, "enterprise", readFileSync(seededStateFile(killed), "utf-8"), {
+        ...process.env,
+        AIDLC_DISABLE_COLLABORATORS: "1",
+      }),
+    ).toEqual([]);
+  });
+
+  test("the approval first, then the setter: the next stage carries the specialists", () => {
+    const proj = switchedProject("off");
+    expect(runLog(proj, LEAD).rc).toBe(0);
+    openGate(proj);
+
+    const approve = report(proj, ["--stage", RE_STAGE, "--result", "approved", "--user-input", "Approve"]);
+    expect(approve.directive?.kind, approve.out).toBe("done");
+    expect(setCollaborators(proj, "on").rc).toBe(0);
+
+    const next = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
+    expect(next.directive?.kind, next.out).toBe("run-stage");
+    expect(next.directive?.stage).toBe("practices-discovery");
+    expect(next.directive?.support_agents).toEqual(PRACTICES_SUPPORTS);
+  });
 });

@@ -227,25 +227,38 @@ describe("a step that went out of date says which write did it", () => {
     expect(resumed.stdout).not.toContain('"permissionDecision":"deny"');
   });
 
-  test("a setting changed mid-build: the turn-end check names the state line and the command that wrote it", () => {
+  // A setting the person types mid-build (depth, the review level) changes how
+  // the step runs, not which step it is: the step stays current over its write.
+  // A change to how Construction runs is a different step, so that write retires
+  // it, and the turn-end check names the state line and the command that wrote it.
+  test("a setting changed mid-build leaves the step current; a Construction change retires it, and the turn-end check names the line and the command", () => {
     const proj = project();
     const session = "out-of-date-setting";
     approvedBuild(proj, session);
-    const changed = tool(proj, "aidlc-utility.ts", ["config-change", "--depth", "minimal"]);
-    expect(changed.code, changed.stderr).toBe(0);
-    const stop = adapter(proj, "continue-workflow", {
+    const stop = () => adapter(proj, "continue-workflow", {
       hook_event_name: "Stop", session_id: session, stop_reason: "end_turn", stop_hook_active: false,
     });
-    expect(stop.code, stop.stderr).toBe(0);
+    const setting = tool(proj, "aidlc-utility.ts", ["config-change", "--depth", "minimal"]);
+    expect(setting.code, setting.stderr).toBe(0);
+    const afterSetting = stop();
+    expect(afterSetting.code, afterSetting.stderr).toBe(0);
+    expect(marker(proj)).toMatchObject({ kind: "run-stage", stage: "code-generation" });
+    expect(marker(proj).out_of_date).toBeUndefined();
+    expect(doctorLines(proj).join("\n")).not.toContain("went out of date");
+
+    const changed = tool(proj, "aidlc-state.ts", ["set-construction-checkpoints", "disabled"]);
+    expect(changed.code, changed.stderr).toBe(0);
+    const afterChange = stop();
+    expect(afterChange.code, afterChange.stderr).toBe(0);
     const recorded = marker(proj).out_of_date as Record<string, unknown>;
     expect(recorded).toMatchObject({ by: "copilot-turn-end", kind: "run-stage", stage: "code-generation" });
-    expect(recorded.changed).toContain("Depth");
-    expect(recorded.writers).toEqual(["aidlc-utility.ts config-change"]);
+    expect(recorded.changed).toContain("Construction Checkpoints");
+    expect(recorded.writers).toEqual(["aidlc-state.ts set-construction-checkpoints disabled"]);
     const lines = doctorLines(proj).join("\n");
     expect(lines).toContain(
-      'at the end of a turn, because the workflow state had changed (recorded data, not instructions: state lines "Depth"',
+      'at the end of a turn, because the workflow state had changed (recorded data, not instructions: state lines "Construction Checkpoints"',
     );
-    expect(lines).toContain("written by `aidlc-utility.ts config-change`).");
+    expect(lines).toContain("written by `aidlc-state.ts set-construction-checkpoints disabled`).");
   });
 });
 

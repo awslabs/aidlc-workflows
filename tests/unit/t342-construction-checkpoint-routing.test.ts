@@ -247,6 +247,27 @@ function policyHuman(p: string, prompt: string, session = "t342-policy") {
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
 }
 
+// The person picks `choice` in the question box the agent showed (Claude Code's
+// AskUserQuestion), as the human-turn hook records it: the turn, its pick, and
+// one QUESTION_REPLIED row for the question.
+function policyPick(p: string, question: string, options: string[], choice: string, session = "t342-policy") {
+  const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p };
+  delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  delete env.AIDLC_UNATTENDED;
+  const result = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8", cwd: p, env,
+    input: JSON.stringify({
+      hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: session, cwd: p,
+      tool_input: { questions: [{ question, options: options.map((label) => ({ label })) }] },
+      tool_response: { answers: { [question]: choice } },
+    }),
+  });
+  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+}
+
+const policySetRows = (p: string) => readAuditShardEvents(p).filter((row) => row.event === "CONSTRUCTION_POLICY_SET");
+
 function policyChoice(p: string, action: "decision" | "answer", field: string, value: string, session = "t342-policy", choice = "Approve") {
   return policyCli(p, "log", [
     action, "--stage", "functional-design", "--checkpoint", "construction-policy",
@@ -980,19 +1001,22 @@ describe("t342 Construction checkpoint routing", () => {
     expect(state("set-construction-execution", "serial").status).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("with no word from the person since the last decision, the agent cannot change checkpoints", () => {
+  test("with no word from the person since the last decision, the agent cannot change checkpoints; a turn that answered a question still asks", () => {
     const p = fixture({ autonomy: "autonomous" });
     const before = readFileSync(seededStateFile(p));
     const refused = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
     expect(refused.status).not.toBe(0);
     expect(`${refused.stdout}${refused.stderr}`).toContain("only when they ask");
     expect(readFileSync(seededStateFile(p))).toEqual(before);
-    // A turn already spent by an answer is no request for this change either.
+    // The answer they gave in their message is not a second decision: the rest of
+    // the message, read by the agent as this request, still stands, with their words.
     expect(policyCli(p, "log", ["decision", "--stage", "functional-design", "--decision", "Which name?", "--options", "A,B"]).status).toBe(0);
     policyHuman(p, "A");
     expect(policyCli(p, "log", ["answer", "--stage", "functional-design", "--details", "A"]).status).toBe(0);
-    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
-    expect(readFileSync(seededStateFile(p))).toEqual(before);
+    const changed = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
+    expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
+    expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Construction Checkpoints**: disabled");
+    expect(auditBlockField(policySetRows(p)[0].block, "Person Reply")).toBe("A");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the person's own request changes a Construction setting at once, with their words and one line", () => {
@@ -1049,7 +1073,7 @@ describe("t342 Construction checkpoint routing", () => {
     expect(readFileSync(seededStateFile(p))).toEqual(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a choice for another pending decision cannot authorize policy", () => {
+  test("a choice for another pending decision is no policy receipt; the message that made it still asks for the plain setter", () => {
     const p = fixture();
     const before = readFileSync(seededStateFile(p));
     expect(policyChoice(p, "decision", "Construction Checkpoints", "disabled").status).toBe(0);
@@ -1057,8 +1081,40 @@ describe("t342 Construction checkpoint routing", () => {
     policyHuman(p, "Approve");
     expect(policyChoice(p, "answer", "Construction Checkpoints", "disabled").status).not.toBe(0);
     expect(policyCli(p, "log", ["answer", "--stage", "functional-design", "--details", "Approve"]).status).toBe(0);
-    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
     expect(readFileSync(seededStateFile(p))).toEqual(before);
+    // Which question their "Approve" answered is the agent's reading; the engine
+    // proves a person spoke, and the answer recorded from it is not a second decision.
+    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).toBe(0);
+    expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Construction Checkpoints**: disabled");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("the option the agent offered, picked in its question box, switches the build in that turn, with the pick on the record", () => {
+    const p = fixture({ execution: "swarm" });
+    const question = "Parallel workspaces still fail after the commit; build one unit at a time instead?";
+    const offered = ["Build one unit at a time", "Stop here for now"];
+    expect(policyCli(p, "log", ["decision", "--stage", "functional-design", "--decision", question, "--options", offered.join(",")]).status).toBe(0);
+    policyPick(p, question, offered, offered[0]);
+    const answered = policyCli(p, "log", ["answer", "--stage", "functional-design", "--details", offered[0]]);
+    expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
+    const changed = policyCli(p, "state", ["set-construction-execution", "serial"]);
+    expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
+    expect(JSON.parse(changed.stdout).notice).toBe(
+      "Construction now builds the Units one after another (it built the Units in parallel). You can switch back any time.",
+    );
+    expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Construction Execution**: serial");
+    const rows = policySetRows(p);
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Person Reply")).toBe(offered[0]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("the same answer typed to the agent's question switches the build the same way, with their words", () => {
+    const p = fixture({ execution: "swarm" });
+    expect(policyCli(p, "log", ["decision", "--stage", "functional-design", "--decision", "Build one unit at a time instead?", "--options", "Build one unit at a time,Stop here for now"]).status).toBe(0);
+    policyHuman(p, "yes, one at a time please");
+    expect(policyCli(p, "log", ["answer", "--stage", "functional-design", "--details", "Build one unit at a time"]).status).toBe(0);
+    const changed = policyCli(p, "state", ["set-construction-execution", "serial"]);
+    expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
+    expect(auditBlockField(policySetRows(p)[0].block, "Person Reply")).toBe("yes, one at a time please");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a lifecycle gate answer does not consent to an earlier policy proposal", () => {

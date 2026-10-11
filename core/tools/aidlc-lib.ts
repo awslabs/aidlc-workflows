@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TextDecoder } from "node:util";
 import { inflateSync } from "node:zlib";
@@ -45,6 +45,7 @@ import {
   type GuardFence,
   type SwitchableGuardFence,
   isSwitchableGuardFence,
+  guardFenceFromConfigKey,
 } from "./aidlc-guard-fences.ts";
 export {
   GUARD_FENCES,
@@ -1092,9 +1093,17 @@ export function isBareContinuationPhrase(text: string): boolean {
 // One rule for the Copilot adapter claim gate and isTerminalUtilityNext, mirroring
 // parseNextFlags/routeNext's terminal early returns and engine-marker exclusion.
 export function isReadOnlyNextArgv(argv: readonly string[]): boolean {
-  const args = withoutEntryWord(argv);
+  const args = splitFlagShapedArguments(withoutEntryWord(argv));
+  // A line the engine would hand to the agent is never acted on here: a seam
+  // that runs before any agent reads the line must stand back from it, which is
+  // what readNextLine answers for both of us. Only an exact line is this
+  // engine's own command.
   if (isRetiredOnlyNextArgv(args)) return true;
+  // A modifier whose value this engine refuses is its own terminal refusal, and
+  // stays one when the refusal becomes a reading step: either way the turn
+  // carries no workflow work (Full Suite 36549553601).
   if (isRefusedModifierNextArgv(args)) return true;
+  if (readNextLine(args).kind !== "exact") return false;
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) return true;
   const verb = leadingOrchestratorVerb(args);
   if (verb === "team-board") return true;
@@ -1752,7 +1761,12 @@ function terminalCommandFromWorkspaceCommand(
 // `sessionId` names the chat whose selection decides the space (a hook knows
 // its payload's chat; the invoking session is used otherwise).
 export function classifyTerminalCommand(argv: string[], projectDir?: string, sessionId?: string): TerminalCommand | null {
-  const args = withoutEntryWord(argv);
+  const args = splitFlagShapedArguments(withoutEntryWord(argv));
+  // A line the engine would hand to the agent is never acted on here: a seam
+  // that runs before any agent reads the line must stand back from it, which is
+  // what readNextLine answers for both of us. Only an exact line is this
+  // engine's own command.
+  if (readNextLine(args).kind !== "exact") return null;
   // A SOLE bare `help` / `-h` token is a help REQUEST (terminal, read-only);
   // mirrors parseNextFlags in the engine. Without this the token reads as
   // freeform intent text and the funnel offers to create an intent named
@@ -2451,8 +2465,13 @@ export function isEngineToolCall(
 
 // Current legacy-shape engagement rules. Kept as a helper so the exported
 // classifier can preserve every old-shape result while adding the new grammar.
+// The stem of a legacy engine tool as a command word: `aidlc-state`, `aidlc-state.ts`,
+// `aidlc-state.t[sx]`, `aidlc-state>out`. A file that carries the stem with another
+// plain extension (`aidlc-state.md`, the record) is not the tool.
+const ENGINE_TOOL_STEM = /aidlc-(?:orchestrate|state|jump|bolt|swarm|unit)\b(?!\.(?!ts\b)[a-z]+(?![[\]*?a-z]))/;
+
 function legacyEngineEngagementSegment(seg: string): boolean {
-  if (!/aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg)) return false;
+  if (!ENGINE_TOOL_STEM.test(seg)) return false;
   // A PURE read-only query: a read-only flag present AND no mutating/advancing
   // verb in the SAME segment. `next --status` is read-only; `report --status`
   // (nonsensical, but) still has `report` so is engagement.
@@ -2843,7 +2862,7 @@ export function isEngineEngagementSegment(
     return /\baidlc\s/.test(seg) ||
       /\baidlc-(?:orchestrate|state|jump|bolt|swarm|unit)(?:\.ts)?["']?(?=\s|[<>;&|()])/.test(seg) ||
       (invocation === "uncertain" && (
-        /aidlc-(?:orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg) ||
+        ENGINE_TOOL_STEM.test(seg) ||
         /\baidlc\.ts\b/.test(seg)
       ));
   }
@@ -2857,7 +2876,7 @@ export function isEngineEngagementSegment(
     seg = `${invocation.command} ${invocation.args.join(" ")}`;
   }
   if (
-    /aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg) &&
+    ENGINE_TOOL_STEM.test(seg) &&
     legacyEngineEngagementSegment(seg)
   ) {
     return true;
@@ -3503,6 +3522,12 @@ export function parseReScope(body: string): ReScopeParse {
   return { ok: true, scope };
 }
 
+// A git alternate-store entry: C-quoted, so git reads the path whole where an
+// unquoted one is split at the PATH delimiter (":" on Unix, ";" on Windows).
+export function gitAlternateEntry(path: string): string {
+  return `"${path.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
 // Content fingerprint of the WORKING TREE restricted to the scope's analyzed
 // paths: `git write-tree` over a temporary index populated by `git add -A --
 // <paths>`. Hashes what is actually on disk (uncommitted edits included), so
@@ -3587,8 +3612,30 @@ export function codekbScopeFingerprint(
       }
     }
   }
-  const indexFile = join(tmpdir(), `.aidlc-scope-index-${randomUUID()}`);
-  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  // The scratch index and a scratch object store, both under the OS temp
+  // dir. The repository's own store is read through the alternate and never
+  // written: under a harness sandbox (Codex workspace-write keeps .git
+  // read-only) one write there fails the whole add, and outside one it
+  // leaves unreferenced objects behind. The tree hash is content-addressed,
+  // so the value is the same either way. The person's own alternates stay
+  // in front of ours.
+  const objects = spawnSync("git", ["rev-parse", "--git-path", "objects"], { cwd: repoDir, encoding: "utf-8" });
+  if (objects.status !== 0) return null;
+  const scratch = randomUUID();
+  const indexFile = join(tmpdir(), `.aidlc-scope-index-${scratch}`);
+  const objectDir = join(tmpdir(), `.aidlc-scope-objects-${scratch}`);
+  // git refuses repository discovery while GIT_OBJECT_DIRECTORY names a
+  // missing directory, so it exists before the first call that carries it.
+  mkdirSync(objectDir, { recursive: true });
+  const env = {
+    ...process.env,
+    GIT_INDEX_FILE: indexFile,
+    GIT_OBJECT_DIRECTORY: objectDir,
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: [
+      process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES,
+      gitAlternateEntry(resolvePath(repoDir, objects.stdout.trim())),
+    ].filter(Boolean).join(delimiter),
+  };
   try {
     const add = spawnSync(
       "git",
@@ -3620,6 +3667,11 @@ export function codekbScopeFingerprint(
       unlinkSync(indexFile);
     } catch {
       // best-effort cleanup - a leaked temp index is inert
+    }
+    try {
+      rmSync(objectDir, { recursive: true, force: true });
+    } catch {
+      // best-effort cleanup - a leaked scratch store is inert (Windows EBUSY)
     }
   }
 }
@@ -6200,14 +6252,28 @@ function sessionSelectionNoticePath(projectDir: string, sessionId: string): stri
   return recordPath ? `${recordPath}.selection-notice` : "";
 }
 
-export function writeSessionSelectionNotice(projectDir: string, sessionId: string, line: string): void {
+// The kind of a notice the engine can take back when it asks the same thing
+// another way: the follow question a switch made somewhere else leaves behind.
+export const SELECTION_NOTICE_FOLLOW = "follow";
+
+export function writeSessionSelectionNotice(
+  projectDir: string,
+  sessionId: string,
+  line: string,
+  kind?: string,
+): void {
   const path = sessionSelectionNoticePath(projectDir, sessionId);
   if (!path || !line) return;
   // The line is true only while this chat stays on the work it is on now.
   const binding = readSessionBinding(projectDir, sessionId);
   try {
     mkdirSync(sessionsDir(projectDir), { recursive: true });
-    writeFileSync(path, `${JSON.stringify({ line, space: binding?.space ?? null, intent: binding?.intent ?? null })}\n`, "utf-8");
+    writeFileSync(path, `${JSON.stringify({
+      line,
+      space: binding?.space ?? null,
+      intent: binding?.intent ?? null,
+      ...(kind ? { kind } : {}),
+    })}\n`, "utf-8");
   } catch {
     /* per-user runtime state; best-effort */
   }
@@ -6222,6 +6288,20 @@ export function promptMovesSelection(prompt: string): boolean {
   if (head === null) return false;
   const kind = parseWorkspaceCommand(splitKiroCommandArgs(text.slice(head[0].length).trim())).kind;
   return kind === "switch" || kind === "create" || kind === "create-intent";
+}
+
+// A notice of this kind goes when the engine asks the person about the same
+// thing in its own words on the same turn, so they are asked once. Only that
+// kind is taken: another line waiting here is not this one's to remove.
+export function dropSessionSelectionNotice(projectDir: string, sessionId: string, kind: string): void {
+  const path = sessionSelectionNoticePath(projectDir, sessionId);
+  if (!path) return;
+  try {
+    const saved = JSON.parse(readFileSync(path, "utf-8")) as { kind?: unknown };
+    if (saved.kind === kind) unlinkSync(path);
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
 }
 
 export function takeSessionSelectionNotice(projectDir: string, sessionId: string): string | null {
@@ -6877,28 +6957,167 @@ export interface WorkflowSelectionOptions {
   sessionId?: string;
 }
 
+// THE ONE DOOR. Every id a host hands the engine (a hook payload's session_id,
+// the shell's own chat variable, a helper's thread id) passes here before any
+// chat or work record is read: the raw id maps to its root chat through the
+// helper-of fact the adapter wrote (the one fact the engine cannot know), that
+// chat's binding is read, and a chat with no binding is bound at first contact
+// by the rule a new chat follows at SessionStart: silently, to the work the
+// shared cursor names if this machine has joined it, else to no record. From
+// then on the chat stays on that work; the cursor moving later (another window
+// switched) does not move it. A process with no id at all (the person's own
+// terminal) never comes here and keeps following the cursor.
+export interface ResolvedChat {
+  chatId: string;
+  binding: SessionBinding | null;
+}
+
+// First contact settles a chat's work only when this process IS that chat: its
+// identity came from its own environment or process ancestry. A caller that
+// NAMES a session is asking about a chat, not acting as one: a hook reading its
+// payload, a command carrying --session, an engine child a hook handed its
+// identity to. Those resolve read-only, so a host-injected prompt (a Kiro IDE
+// workflow step's brief, a background notification) never gets work of its own
+// and never leaves a non-person actor sitting on the person's record.
+export function resolveChat(
+  projectDir: string,
+  rawId: string | null | undefined,
+  options: { bind?: boolean } = {},
+): ResolvedChat | null {
+  const id = validSessionId(rawId ?? undefined);
+  if (!id) return null;
+  const chatId = helperSessionRoot(projectDir, id) ?? id;
+  const existing = readSessionBinding(projectDir, chatId);
+  const bind = options.bind ?? false;
+  if (existing) return { chatId, binding: rejoinedByThisMachine(projectDir, chatId, existing, bind) ?? existing };
+  // Read-only: the chat keeps whatever the shared selection names, as before.
+  if (!bind) return { chatId, binding: null };
+  // A worker's own worktree already names the work it was prepared for, and
+  // that record governs every resolution there, so first contact binds nothing:
+  // the worktree is the identity, not this chat.
+  let delegated: ReturnType<typeof delegatedWorktreeIntent> = null;
+  try {
+    delegated = delegatedWorktreeIntent(projectDir);
+  } catch {
+    delegated = null;
+  }
+  if (delegated) {
+    return {
+      chatId,
+      binding: { space: delegated.space, intent: delegated.intent, boundAt: isoTimestamp(), source: "worktree" },
+    };
+  }
+  const space = activeSpace(projectDir);
+  const resolved: WorkflowSelection = { space, intent: activeIntent(projectDir, space), sessionId: chatId, binding: null };
+  const contact = classifyFirstContact(projectDir, resolved);
+  writeSessionBinding(projectDir, chatId, contact.selection.space, contact.selection.intent, contact.source);
+  // A record the binding cannot carry, or a write that failed, still answers
+  // what the chat is on for this process.
+  const binding = readSessionBinding(projectDir, chatId) ??
+    { space: contact.selection.space, intent: contact.selection.intent, boundAt: isoTimestamp(), source: contact.source };
+  return { chatId, binding };
+}
+
+// A binding to no record whose source is "unjoined" is provisional: when the chat
+// first met the workspace, the only record here was found by the lone-record
+// rule and this machine had not chosen it (a teammate's record in a fresh
+// clone). A choice made here since (the per-user cursor, written only by
+// create and switch on this machine) is the very evidence a new chat joins by,
+// so the binding is read again against it at every entry and the chat joins
+// exactly as first contact would have, silently. With no choice made it stays
+// out, as before. The binding is rewritten only when the caller may bind; a
+// hook (read-only) sees the same answer and the chat's own next command writes it.
+function rejoinedByThisMachine(
+  projectDir: string,
+  chatId: string,
+  existing: SessionBinding,
+  bind: boolean,
+): SessionBinding | null {
+  if (existing.intent !== null || existing.source !== "unjoined") return null;
+  if (readActiveIntentCursor(projectDir, existing.space) === null) return null;
+  const resolved: WorkflowSelection = {
+    space: existing.space, intent: activeIntent(projectDir, existing.space), sessionId: chatId, binding: null,
+  };
+  const contact = classifyFirstContact(projectDir, resolved);
+  if (!contact.joined) return null;
+  if (bind) writeSessionBinding(projectDir, chatId, contact.selection.space, contact.selection.intent, contact.source);
+  // What the chat is on for this process is the join just found, whether or not
+  // the write landed; the binding is read in resolveChat alone.
+  return { space: contact.selection.space, intent: contact.selection.intent, boundAt: isoTimestamp(), source: contact.source };
+}
+
+// The rule a new chat follows when it first meets a workflow: resolving a record
+// is not joining it. Joined (participation by the cursor, this checkout's
+// worktree record or a Unit claim) keeps the record and names the evidence as
+// the binding's source; not joined binds to no record ("unjoined" when a record
+// was found, "none" when there was nothing). SessionStart adds its own stamp and
+// pre-existing-binding branches on top; resolveChat uses the rule as it is.
+export function classifyFirstContact(
+  projectDir: string,
+  resolved: WorkflowSelection,
+): { joined: boolean; selection: WorkflowSelection; source: SessionBindingSource } {
+  const joined = workflowParticipation(projectDir, resolved) === "participant";
+  const selection = joined ? resolved : { ...resolved, intent: null, binding: null };
+  if (!joined) return { joined, selection, source: resolved.intent === null ? "none" : "unjoined" };
+  if (readActiveIntentCursor(projectDir, selection.space) === selection.intent) return { joined, selection, source: "cursor" };
+  const unitScope = readUnitScopeStamp(projectDir);
+  const source: SessionBindingSource =
+    unitScope?.space === selection.space && unitScope.intent_uuid === intentUuidForSelection(projectDir, selection)
+      ? "unit-claim"
+      : "worktree";
+  return { joined, selection, source };
+}
+
 // The session of the conversation that invoked this process, when the caller
 // named none: the hook-injected override first, then the process ancestry.
 // Throws SessionResolutionConflictError when the two disagree and the override
 // did not come from a validated hook payload.
+// The chat the host names in the agent's own shell. Each host that names one
+// does it its own way, and the engine needs no override written into the
+// command: Codex gives every command CODEX_THREAD_ID, Claude Code gives
+// CLAUDE_CODE_SESSION_ID beside the pid of the process running that chat, and
+// Kiro CLI gives KIRO_SESSION_ID (measured: its shell carries no pid).
+//
+// A variable is only as good as the chat it names. A shell the person started
+// from inside a chat keeps the variable after that chat is gone, so Claude
+// Code's id counts only while the process it names is alive; a dead or absent
+// pid leaves the id unread and the process ancestry decides, as before. Kiro
+// CLI has no pid in the shell to check, so its id stands on its own, as Codex's
+// does. Every other harness names no chat in the shell.
+function hostNamedChat(projectDir: string): string | null {
+  switch (runtimeHarnessDir(projectDir)) {
+    case ".codex":
+      return validSessionId(process.env.CODEX_THREAD_ID);
+    case ".claude": {
+      const pid = Number.parseInt(process.env.CLAUDE_PID ?? "", 10);
+      return Number.isSafeInteger(pid) && processIsAlive(pid)
+        ? validSessionId(process.env.CLAUDE_CODE_SESSION_ID)
+        : null;
+    }
+    case ".kiro":
+      return validSessionId(process.env.KIRO_SESSION_ID);
+    default:
+      return null;
+  }
+}
+
 export function resolveInvokingSessionId(projectDir: string): string | null {
   const overrideSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
-  // Codex gives every command it runs CODEX_THREAD_ID, the session id its
-  // hooks carry, so a Codex tool needs no override written into the command.
   // A spawned helper agent's shell carries the helper's own thread id; that
   // thread resolves to the chat that spawned it (noteHelperSession).
-  const codexThread = overrideSession === null && runtimeHarnessDir(projectDir) === ".codex"
-    ? validSessionId(process.env.CODEX_THREAD_ID)
-    : null;
-  const codexSession = codexThread === null ? null : helperSessionRoot(projectDir, codexThread) ?? codexThread;
-  const envSession = overrideSession ?? codexSession;
+  const hostThread = overrideSession === null ? hostNamedChat(projectDir) : null;
+  const hostSession = hostThread === null ? null : helperSessionRoot(projectDir, hostThread) ?? hostThread;
+  const envSession = overrideSession ?? hostSession;
   // This refusal is a footgun guard against stale exported overrides, not a
   // security boundary. The SOURCE marker is an internal hookChildEnv contract.
   // Deliberately setting both variables is an intentional same-user act
   // equivalent to a sanctioned session switch; no privilege boundary exists
   // between callers that could authenticate it.
+  // The host's own word for the chat this shell runs in is not a stale export:
+  // process ancestry is the engine's reconstruction of the same fact, and a
+  // second chat starting is enough to make the two differ.
   const payloadOverride =
-    codexSession !== null ||
+    hostSession !== null ||
     (overrideSession !== null && process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload");
   const ancestrySession = resolveSessionIdFromAncestry(projectDir);
   if (
@@ -6940,9 +7159,17 @@ export function resolveWorkflowSelection(
     }
     return { space: delegated.space, intent: delegated.intent, sessionId: null, binding: null };
   }
-  const sessionId =
-    validSessionId(options.sessionId) ?? resolveInvokingSessionId(projectDir);
-  const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
+  const named = validSessionId(options.sessionId);
+  const rawSession = named ?? resolveInvokingSessionId(projectDir);
+  // Only this process's own identity settles a chat at first contact; a named
+  // session, or identity a hook handed us, is read-only.
+  const chat = rawSession
+    ? resolveChat(projectDir, rawSession, {
+        bind: named === null && process.env.AIDLC_SESSION_OVERRIDE_SOURCE !== "payload",
+      })
+    : null;
+  const sessionId = chat?.chatId ?? null;
+  const binding = chat?.binding ?? null;
   const space = options.space ?? binding?.space ?? activeSpace(projectDir);
   let intent: string | null;
   if (options.intent !== undefined) {
@@ -7027,23 +7254,30 @@ export function workflowParticipation(
   return "outsider";
 }
 
-// The workflow a hook acts on. A payload session that has a binding is pinned as
-// the session override while the hook runs, so the default path helpers resolve
-// the same record the hook classified (process ancestry or the shared cursor can
-// name another conversation). An id without a binding — a worker-scoped id — is
-// not pinned. Callers run `restore()` when the hook returns or throws.
+// The workflow a hook acts on. The payload id passes through resolveChat, so a
+// helper's own id names the chat that spawned it; that chat is pinned as the
+// session override while the hook runs, so the default path helpers resolve the
+// same record the hook classified (process ancestry or the shared cursor can
+// name another conversation). An id the engine cannot place, with no binding and
+// no chat an adapter named for it, is not pinned: a per-call or worker-scoped id
+// must not take the shared cursor's work while the caller's own ancestry names a
+// chat. A hook never settles a chat's work either: the event is the host's, not
+// the chat's own command. Callers run `restore()` when the hook returns or throws.
 export function enterHookWorkflow(
   projectDir: string,
   payloadSessionId: unknown,
 ): { selection: WorkflowSelection | null; participation: WorkflowParticipation; restore: () => void } {
-  const sessionId = typeof payloadSessionId === "string" ? validSessionId(payloadSessionId) : null;
+  const raw = typeof payloadSessionId === "string" ? validSessionId(payloadSessionId) : null;
+  const chat = raw === null ? null : resolveChat(projectDir, raw, { bind: false });
+  // Placed: this chat has a binding, or the id belongs to a chat an adapter named.
+  const placed = chat !== null && (chat.binding !== null || chat.chatId !== raw);
   let restore = () => {};
-  if (sessionId && readSessionBinding(projectDir, sessionId) !== null) {
+  if (chat && placed) {
     const previous = {
       AIDLC_SESSION_OVERRIDE: process.env.AIDLC_SESSION_OVERRIDE,
       AIDLC_SESSION_OVERRIDE_SOURCE: process.env.AIDLC_SESSION_OVERRIDE_SOURCE,
     };
-    process.env.AIDLC_SESSION_OVERRIDE = sessionId;
+    process.env.AIDLC_SESSION_OVERRIDE = chat.chatId;
     process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
     restore = () => {
       for (const [key, value] of Object.entries(previous)) {
@@ -9609,21 +9843,38 @@ export function keepPlanApprovalAskOverStateWrite(
       : { marker, result: false, preserve: true });
 }
 
-// Running Construction on its own changes how later approvals are taken, not
-// the step already issued: the plan question, or the build of the plan the
-// person approved, stays the open step, so nothing they answered is asked
-// again. Only its state digest follows the write; a step mid-claim is left as
-// it is.
-export function keepActiveDirectiveOverAutonomyWrite(
+// A setting the person typed over the step in hand (a review level, depth, a
+// test strategy, a Guard Policy or fence word, a ceremony switch) changes how
+// the step runs, not which step it is: the step already issued stays the open
+// step, and only its state digest follows the write. A live run typed "turn the
+// specialist reviewers off" while Code Generation planned; the setting's write
+// retired the step, and the guard refused the plan write twice as having no
+// current step until a fresh `next`. The plan question keeps its old rule (it
+// is kept even mid-claim); any other step mid-claim is left as it is.
+export function keepActiveDirectiveOverSettingWrite(
   projectDir: string,
   previousStateContent: string,
   nextStateContent: string,
 ): boolean {
   return transactActiveDirective(projectDir, (marker) =>
-    marker?.version === 2 && marker.active_attempt?.status !== "pending" &&
+    marker?.version === 2 &&
+      (marker.active_attempt?.status !== "pending" ||
+        (marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE)) &&
       marker.state_sha256 === stateDigest(previousStateContent)
       ? { marker: { ...marker, state_sha256: stateDigest(nextStateContent) }, result: true }
       : { marker, result: false, preserve: true });
+}
+
+// Running Construction on its own changes how later approvals are taken, not
+// the step already issued: the plan question, or the build of the plan the
+// person approved, stays the open step, so nothing they answered is asked
+// again. The same keep as a setting's.
+export function keepActiveDirectiveOverAutonomyWrite(
+  projectDir: string,
+  previousStateContent: string,
+  nextStateContent: string,
+): boolean {
+  return keepActiveDirectiveOverSettingWrite(projectDir, previousStateContent, nextStateContent);
 }
 
 export function refreshActiveDirectiveMarker(
@@ -11780,7 +12031,9 @@ export function commandTurnHint(projectDir: string): string {
 // The person's latest message still stands for what it asks for, though
 // decisions were recorded after it: each was the approval they gave in that
 // same message ("approve, and turn plan approval off"; one plan question
-// counts once however many Units it approves), or the run's own approval,
+// counts once however many Units it approves), the answer they gave the
+// agent's own question in it (the option they picked in its question box, or
+// typed; the agent then runs the setter that pick asks for), or the run's own approval,
 // which records no choice of theirs (no User Input, or Autonomous: true;
 // they said "stop" while it ran on its own). Any other decision after it, a
 // second approval, or an approval after a message that was no reply (so not
@@ -11810,6 +12063,20 @@ function requestOutlivesItsApproval(projectDir: string, intent?: string, space?:
       } else if (row.event === "PLAN_APPROVAL_RECORDED") {
         theirs.add("plan");
       } else if (
+        row.event === "QUESTION_ANSWERED" && isReplyTurn(turn) && auditBlockField(row.block, "Checkpoint") === null
+      ) {
+        // The answer they gave the agent's own question in that same message.
+        // The answer handler admitted it on this reply (one reply answers every
+        // question open when it arrived, a question box one per pick), or it
+        // names an earlier message, or it is the choice they left to the agent,
+        // or the run's own under autonomy: none is a second request of theirs,
+        // so it leaves the rest of the message standing, as the approval given
+        // in it does. An answer to one of the engine's own questions (a
+        // Checkpoint row: the code plan, a Construction policy proposal, the
+        // verification command, the summary) decides that step and uses the
+        // message up, as it always did.
+        continue;
+      } else if (
         GATE_RESOLUTION_EVENTS.has(row.event) || row.event === "QUESTION_UNANSWERED" ||
         (row.event === "AUTONOMY_MODE_SET" && auditBlockField(row.block, "Mode") === "autonomous")
       ) {
@@ -11829,8 +12096,9 @@ function requestOutlivesItsApproval(projectDir: string, intent?: string, space?:
 // `requests`, anything but a question about a switch. With `intent` and
 // `space`, the turn must be on that work's record. With `outlivesApproval`,
 // for what the message asks for (a setter, a stop, the grant of autonomy), the
-// approval given in it and the run's own approvals do not use it up
-// (requestOutlivesItsApproval); with `replies` too, that message is a reply.
+// approval given in it, the answer it gave the agent's own question, and the
+// run's own approvals do not use it up (requestOutlivesItsApproval); with
+// `replies` too, that message is a reply.
 // An approval or an answer never reads it that way: each needs a reply of its own.
 export function personSpokeSinceGate(
   projectDir: string,
@@ -16233,7 +16501,11 @@ export function reviewArtifactFingerprint(
  * issued one), with no later rendered H1 or H2. `appendix` is the terminal
  * `## Review` section of a legacy embedded review and must open with that
  * heading; a review record body (`standalone`) is the same section with the
- * heading optional, because it is the whole document.
+ * heading optional, because it is the whole document. A valid review also
+ * carries the reviewer's own `**Verdict Dictated:**` answer, read the same way
+ * (`verdictDictated`): `yes` or `no` when the section renders exactly one such
+ * value, else null. The line is the reviewer's statement, never authority: a
+ * missing, doubled or unreadable one refuses nothing.
  */
 export function validateReviewAppendix(
   appendix: Buffer,
@@ -16244,7 +16516,7 @@ export function validateReviewAppendix(
     reviewChallenge: string | null;
     standalone?: boolean;
   },
-): { valid: true } | { valid: false; reason: string; heading?: true } {
+): { valid: true; verdictDictated: ReviewVerdictDictated | null } | { valid: false; reason: string; heading?: true } {
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(appendix);
@@ -16339,7 +16611,14 @@ export function validateReviewAppendix(
           : "the reviewer appendix must contain exactly one Request Challenge line matching the request",
     };
   }
-  return { valid: true };
+  // The reviewer's own answer, as written: one rendered value that is `yes` or
+  // `no` (repeated word for word is one line, as above); anything else is no
+  // answer. Structure only: what the brief meant is the reviewer's reading.
+  const dictated = distinct(authority.verdictDictated);
+  const verdictDictated = dictated.length === 1 && (dictated[0] === "yes" || dictated[0] === "no")
+    ? (dictated[0] as ReviewVerdictDictated)
+    : null;
+  return { valid: true, verdictDictated };
 }
 
 type RenderedReviewAuthority = {
@@ -16351,6 +16630,7 @@ type RenderedReviewAuthority = {
   reviewers: string[];
   iterations: string[];
   requestChallenges: string[];
+  verdictDictated: string[];
 };
 
 const REVIEW_MARK_OPEN = "\u0001";
@@ -16440,6 +16720,7 @@ function renderReviewMarkdownAuthority(
     reviewers: renderedReviewFields(rendered, "Reviewer"),
     iterations: renderedReviewFields(rendered, "Iteration"),
     requestChallenges: renderedReviewFields(rendered, "Request Challenge"),
+    verdictDictated: renderedReviewFields(rendered, "Verdict Dictated"),
   };
 }
 
@@ -17477,26 +17758,6 @@ export function reviewerCompletionAfter(
   return latestReviewerRowAfter(events, "SUBAGENT_COMPLETED", reviewer, after);
 }
 
-/** The row the plan-approval guard writes when a reviewer dispatch's brief already carries a rendered verdict line. */
-export const REVIEW_VERDICT_DICTATED_EVENT = "REVIEW_VERDICT_DICTATED";
-
-/**
- * Whether a REVIEW_VERDICT_DICTATED row of `reviewer`, written after this
- * request's row and naming its id, carried `verdict`: the verdict being recorded
- * is the one the dispatch dictated. A row naming another request, an earlier
- * row, or the other verdict is not.
- */
-export function dispatchDictatedVerdict(
-  events: ReadonlyArray<AuditShardEvent>,
-  reviewer: string,
-  request: OpenReviewRequest,
-  verdict: ReviewVerdict,
-): boolean {
-  const row = latestReviewerRowAfter(events, REVIEW_VERDICT_DICTATED_EVENT, reviewer, request.row, (candidate) =>
-    (auditBlockField(candidate.block, "Request Id") ?? "").split(",").map((id) => id.trim()).includes(request.requestId));
-  return row !== null && auditBlockField(row.block, "Verdict") === verdict;
-}
-
 /** The SUBAGENT_COMPLETED field carrying `<review file>=<sha256 | absent>` per open request. */
 export const REVIEW_FILE_DIGEST_FIELD = "Review File Digest";
 /** The digest value of a review file the reviewer left unwritten. */
@@ -17851,10 +18112,15 @@ export function editedReviewNotice(stageName: string, unit?: string | null): str
   return `The review file for ${stageName}${unit ? ` (${unit})` : ""} was edited after the reviewer finished.`;
 }
 
-/** The REVIEW_COMPLETED field the logger writes, as `yes`, when the verdict it
- *  records is the one the reviewer's dispatch already carried (a
- *  REVIEW_VERDICT_DICTATED row for this request with that verdict): the verdict
- *  is on record as the dispatch's, not as the reviewer's own judgement. */
+/** The reviewer's own answer to whether its brief told it what to conclude:
+ *  the value of its review file's `**Verdict Dictated:**` line. */
+export type ReviewVerdictDictated = "yes" | "no";
+
+/** The REVIEW_COMPLETED field the logger writes with the reviewer's own
+ *  `**Verdict Dictated:**` answer as written (`yes` or `no`). `yes` puts the
+ *  verdict on record as one the brief named, not the reviewer's own judgement
+ *  alone; the person hears that once. No line, or one that does not read as a
+ *  single `yes` or `no`, writes no field. */
 export const REVIEW_DICTATED_FIELD = "Review Verdict Dictated";
 
 /** Whether a REVIEW_COMPLETED row records a verdict its dispatch dictated. Read
@@ -25193,6 +25459,68 @@ function sourcePathIsRegistered(
   return false;
 }
 
+// A path Git ignores is source evidence a Unit may claim only when it is
+// registered in .aidlc-source-paths.json, or when the claim names a file HEAD
+// already tracks.
+function ignoredPathClaimable(
+  sourceRepoDir: string,
+  literalPath: string,
+  trackedFileClaim: boolean,
+  carriesWorkspaceShell: boolean,
+): boolean {
+  return trackedFileClaim ||
+    sourcePathIsRegistered(sourceRepoDir, carriesWorkspaceShell, literalPath);
+}
+
+/**
+ * The source keys (`<repo>\0<path>`) among `keys` that no Unit can claim
+ * because Git ignores them: the paths a source manifest refuses as review
+ * evidence (`ignoredSourceClaimReason`). A path whose ignore rule or HEAD
+ * membership cannot be read is not returned.
+ */
+export function unclaimableIgnoredSourceKeys(
+  projectDir: string,
+  keys: readonly string[],
+): Set<string> {
+  const unclaimable = new Set<string>();
+  if (keys.length === 0) return unclaimable;
+  let recordedRepos: string[];
+  try {
+    recordedRepos = intentRepos(projectDir);
+  } catch {
+    return unclaimable;
+  }
+  const carriesWorkspaceShell = recordedRepos.length === 0;
+  const sourceClaimValidation: GitSourceClaimValidationCache = new Map();
+  const candidates: { key: string; sourceRepoDir: string; path: string }[] = [];
+  for (const key of keys) {
+    const parsed = splitSourcePathKey(key);
+    if (parsed === null) continue;
+    const sourceRepoDir = parsed.repo === "" ? projectDir : repoDir(projectDir, parsed.repo);
+    if (!isGitRepoDir(sourceRepoDir)) continue;
+    seedGitSourceClaimIgnorePath(sourceRepoDir, parsed.path, sourceClaimValidation);
+    candidates.push({ key, sourceRepoDir, path: parsed.path });
+  }
+  for (const { key, sourceRepoDir, path } of candidates) {
+    const ignored = gitSourceClaimIgnored(sourceRepoDir, `./${path}`, sourceClaimValidation);
+    if (!ignored.ok || !ignored.ignored) continue;
+    const { treeModes } = gitSourceClaimHeadAndTree(sourceRepoDir, sourceClaimValidation);
+    if (treeModes === null) continue;
+    const headMode = treeModes.get(path);
+    let currentIsDirectory = false;
+    try {
+      currentIsDirectory = lstatSync(join(sourceRepoDir, path)).isDirectory();
+    } catch {
+      // A deleted path is checked against HEAD alone.
+    }
+    const trackedFile = headMode !== undefined && headMode !== "040000" && !currentIsDirectory;
+    if (!ignoredPathClaimable(sourceRepoDir, path, trackedFile, carriesWorkspaceShell)) {
+      unclaimable.add(key);
+    }
+  }
+  return unclaimable;
+}
+
 function ignoredSourceClaimReason(
   sourceRepoDir: string,
   path: string,
@@ -25251,15 +25579,15 @@ function ignoredSourceClaimReason(
   }
   if (ignored.ignored) {
     if (
-      sourcePathIsRegistered(
+      ignoredPathClaimable(
         sourceRepoDir,
-        carriesWorkspaceShell,
         literalPath,
+        !prefix && headTracked && !currentIsDirectory,
+        carriesWorkspaceShell,
       )
     ) {
       return null;
     }
-    if (!prefix && headTracked && !currentIsDirectory) return null;
     return `${JSON.stringify(path)} is ignored by Git and cannot be source-review evidence`;
   }
   if (!prefix && currentIsDirectory) {
@@ -27655,16 +27983,18 @@ export function pickerAnswerNote(projectDir: string, details: string): string | 
 }
 
 // The person's latest chat turn in this clone's ledger for the selected work:
-// when it was, and the words its chat kept right after it (null when the hook
-// kept none: a slash command, a picked option, an over-long message). Null when
-// no turn is on record. It only words a notice, so it never throws.
+// when it was, and its words: the ones its chat kept right after it, or, when
+// the hook kept none, the labels it picked in a question box (the row's
+// `Picked` field, in the order shown). Null words for a slash command or an
+// over-long message. Null when no turn is on record. It only words a notice,
+// so it never throws.
 export function latestPersonTurn(projectDir: string): { at: string; words: string | null } | null {
   try {
     const shardPath = auditFilePath(projectDir);
     const content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
     const separator = /\r?\n---\r?\n/g;
     let start = 0;
-    let turn: { at: string; session: string | null; from: number; to: number } | null = null;
+    let turn: { at: string; session: string | null; picked: string | null; from: number; to: number } | null = null;
     for (;;) {
       const match = separator.exec(content);
       const end = match ? match.index : content.length;
@@ -27673,6 +28003,7 @@ export function latestPersonTurn(projectDir: string): { at: string; words: strin
         turn = {
           at: auditBlockField(block, "Timestamp") ?? "",
           session: auditBlockField(block, "Session"),
+          picked: auditBlockField(block, "Picked"),
           from: Buffer.byteLength(content.slice(0, start), "utf-8"),
           to: Buffer.byteLength(content.slice(0, match ? match.index + match[0].length : end), "utf-8"),
         };
@@ -27681,16 +28012,30 @@ export function latestPersonTurn(projectDir: string): { at: string; words: strin
       start = match.index + match[0].length;
     }
     if (turn === null) return null;
-    const { at, session, from, to } = turn;
+    const { at, session, picked, from, to } = turn;
     const record = session ? readGateWords(projectDir, session) : null;
     // The hook keeps a turn's words at the shard's size right after its row.
     const kept = record?.shard === projectRelativePath(projectDir, shardPath)
       ? record.messages.find((message) => message.offset > from && message.offset <= to)
       : undefined;
-    return { at, words: kept?.text ?? null };
+    return { at, words: kept?.text ?? pickedLabels(picked) };
   } catch {
     return null;
   }
+}
+
+// The labels a HUMAN_TURN row's `Picked` field carries, as one line, or null.
+function pickedLabels(raw: string | null): string | null {
+  if (raw === null) return null;
+  let picked: unknown;
+  try {
+    picked = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(picked)) return null;
+  const labels = picked.filter((label): label is string => typeof label === "string" && label.trim().length > 0);
+  return labels.length > 0 ? labels.map((label) => label.trim()).join(", ") : null;
 }
 
 // The option the person's latest message at a stage gate picked exactly ("2",
@@ -27733,6 +28078,54 @@ export function personsGateWords(
   if (!session) return null;
   const words = (gateWordsSincePresentation(projectDir, session, gate) ?? []).filter((text) => !isNonAnswer(text));
   return words.length > 0 ? words.join("\n") : null;
+}
+
+// Where the person's words are, when the engine cannot tell which chat said
+// them. Their words are kept per chat (personsGateWords above), so a command
+// the engine cannot tie to a chat records a gate with nothing of theirs on it,
+// which reads as though they never answered. This is the pointer that row
+// carries instead: the message the human-turn hook kept for their latest reply
+// after this gate was shown, never a copy of the words themselves. Null when
+// more than one chat has replied since, because which of them answered is not
+// the engine's to guess, and null when no reply was kept.
+export function personsGateMessagePointer(
+  projectDir: string,
+  gate: { stage: string; unit?: string },
+): string | null {
+  try {
+    // This machine's own shard only, as the kept-words reader above does.
+    // Shards are per clone and committed, and a concatenated read lists them
+    // in filename order, which is not causal order (see AuditShardEvent): a
+    // teammate's shard can sort either side of ours and carry its own showing
+    // of this same gate. The showing this approval answers happened here and
+    // the hook kept their reply here, so one shard is both necessary and
+    // enough; a gate shown on another machine leaves no pointer rather than
+    // the wrong one.
+    const mine = projectRelativePath(projectDir, auditFilePath(projectDir));
+    const rows = readAuditShardEvents(projectDir)
+      .filter((row) => projectRelativePath(projectDir, row.shard) === mine);
+    let shown = -1;
+    rows.forEach((row, at) => {
+      if (
+        row.event === "STAGE_AWAITING_APPROVAL" &&
+        auditBlockField(row.block, "Stage") === gate.stage &&
+        (gate.unit === undefined || auditBlockField(row.block, "Unit") === gate.unit) &&
+        auditBlockField(row.block, "Recovered") !== "true"
+      ) {
+        shown = at;
+      }
+    });
+    if (shown < 0) return null;
+    const replies = rows.slice(shown + 1).filter((row) => isReplyTurn(row));
+    if (new Set(replies.map((row) => auditBlockField(row.block, "Session") ?? "")).size > 1) return null;
+    for (let at = replies.length - 1; at >= 0; at -= 1) {
+      const id = auditBlockField(replies[at].block, "Message Id");
+      if (id) return id;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 // What the person asked to change at a stage gate, in their own words: every
@@ -34339,7 +34732,8 @@ export function pipelineLinks(
  * one switch owner. Fails open to the declared list if the state cannot be read,
  * so a resolution hiccup never strands a legitimately-run stage. An isolated
  * (`--single`) run reads the scope its attempt recorded and no state, as its
- * directive does: it never borrows the main workflow's settings.
+ * directive does: it never borrows the main workflow's settings. An open gate
+ * holds the stage to the switch it opened under (supportAgentsAtOpenGate).
  */
 export function effectiveSupportAgentsForProject(
   projectDir: string,
@@ -34359,7 +34753,69 @@ export function effectiveSupportAgentsForProject(
     return declared;
   }
   const scope = getField(stateContent, "Scope")?.trim() ?? null;
-  return effectiveSupportAgents(stage, scope, stateContent, env);
+  return supportAgentsAtOpenGate(projectDir, stage, scope, stateContent, env);
+}
+
+/**
+ * The collaborators a stage's open gate holds it to. While a stage waits at its
+ * gate, "Approve, and bring the specialists in" flips the switch for the next
+ * stage; the finished stage is never re-checked against a setting it did not run
+ * under (the rule unitFinishedBeforeSummaryOn applies to summary confirmation).
+ * The anchor is the stage's LAST organic STAGE_AWAITING_APPROVAL row in the
+ * current attempt (a relaxed Guard Policy keeps the floor after a GATE_REJECTED,
+ * so a gate shown again has a later row) that no GATE_APPROVED, GATE_REJECTED or
+ * STAGE_COMPLETED for the stage has closed. The FIRST CEREMONY_SET collaborators
+ * row after that anchor carries, in Old, the setting the gate opened under. The
+ * current setting applies under the AIDLC_DISABLE_COLLABORATORS kill switch, when
+ * there is no organic gate row (a gate synthesized as Recovered is written after
+ * the check), no flip after it, an Old that does not parse, or a cross-shard
+ * timestamp tie.
+ */
+export function supportAgentsAtOpenGate(
+  projectDir: string,
+  stage: Pick<StageEntry, "slug" | "support_agents">,
+  scope: string | null | undefined,
+  stateContent: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const declared = stage.support_agents ?? [];
+  const current = effectiveSupportAgents(stage, scope, stateContent, env);
+  // The kill switch forces the lead alone for the whole run; a flip recorded while
+  // it is set carries the saved value as Old, never the lead-only run it made.
+  if (declared.length === 0 || resolveProjectFlag(CEREMONY_ENV.collaborators, env, projectDir) === "1") return current;
+  let events: OrderedPipelineEvidenceEvent[];
+  try {
+    events = orderedPipelineEvidenceEvents(projectDir);
+  } catch {
+    return current;
+  }
+  const floor = pipelineAttemptFloor(events, stage.slug, false, guardPolicyAcceptsChanges(projectDir));
+  let gate: OrderedPipelineEvidenceEvent | null = null;
+  for (const entry of events) {
+    if (!pipelineEventAfterFloor(entry, floor)) continue;
+    if (auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")) continue;
+    if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
+    if (entry.event === "STAGE_AWAITING_APPROVAL") {
+      if (!auditBlockField(entry.block, "Recovered")) gate = entry;
+    } else if (
+      entry.event === "GATE_APPROVED" ||
+      entry.event === "GATE_REJECTED" ||
+      entry.event === "STAGE_COMPLETED"
+    ) {
+      gate = null;
+    }
+  }
+  if (gate === null) return current;
+  const opened: PipelineAttemptFloor = { timestamp: gate.timestamp, rows: [gate] };
+  const flip = events.find((entry) =>
+    entry.event === "CEREMONY_SET" &&
+    auditBlockField(entry.block, "Key") === "collaborators" &&
+    pipelineEventAfterFloor(entry, opened)
+  );
+  if (flip === undefined) return current;
+  const before = parseCeremonySetting(auditBlockField(flip.block, "Old"));
+  if (before === null) return current;
+  return before === "off" ? [] : declared;
 }
 
 type OrderedPipelineEvidenceEvent = AuditShardEvent;
@@ -36976,6 +37432,16 @@ export function aidlcAgentClaim(path: string): string | null {
   return key ? `it declares \`${key}:\`` : null;
 }
 
+// The Kiro conductor's own agent file. Shipped as agents/aidlc-aidlc.md (it
+// sorts before the aidlc-*-agent.md helpers, so Kiro's `/` menu and picker put
+// `aidlc` first); agents/aidlc.md is the name releases up to 2.11.0 shipped and
+// a project updated from one may still hold it, so both are the conductor's.
+export const KIRO_CONDUCTOR_AGENT_FILE = "aidlc-aidlc.md";
+export const KIRO_CONDUCTOR_AGENT_FILES: readonly string[] = [KIRO_CONDUCTOR_AGENT_FILE, "aidlc.md"];
+export function isKiroConductorAgentFile(name: string): boolean {
+  return KIRO_CONDUCTOR_AGENT_FILES.includes(basename(name));
+}
+
 export function isAidlcAgentFile(path: string): boolean {
   return aidlcAgentClaim(path) !== null;
 }
@@ -36983,7 +37449,7 @@ export function isAidlcAgentFile(path: string): boolean {
 export function foreignAgentFiles(dir: string = agentsDir()): string[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.name.endsWith(".md") && entry.name !== "aidlc.md" && !entry.isDirectory())
+    .filter((entry) => entry.name.endsWith(".md") && !isKiroConductorAgentFile(entry.name) && !entry.isDirectory())
     .map((entry) => join(dir, entry.name))
     .sort()
     .filter((path) => !isAidlcAgentFile(path));
@@ -36995,7 +37461,7 @@ export function loadAgents(): AgentMetadata[] {
     const slugToFile = new Map<string, string>();
     const agents: AgentMetadata[] = [];
     const files = readdirSync(dir)
-      .filter((f) => f.endsWith(".md") && f !== "aidlc.md")
+      .filter((f) => f.endsWith(".md") && !isKiroConductorAgentFile(f))
       .sort();
     for (const f of files) {
       const filePath = join(dir, f);
@@ -38995,6 +39461,281 @@ export function formatGuardPolicy(value: GuardPolicy, source: string): string {
 /** Retired alias of formatGuardPolicy. */
 export const formatChangeControl = formatGuardPolicy;
 
+/**
+ * What `next` does with the token after each flag it takes: `none` takes no
+ * value, `free` takes any word, `words` only the words listed. `needsFollowing`
+ * marks the four whose branch reads `a === "--x" && i + 1 < args.length`, so
+ * with nothing after them this engine does not take them at all.
+ */
+export interface NextFlagShape {
+  value: "none" | "free" | "words";
+  words?: readonly string[];
+  needsFollowing?: true;
+}
+
+// Written out rather than imported from aidlc-guard-switch.ts, which imports
+// this module: t-next-flag-table pins them equal to VALID_DEPTHS and
+// VALID_TEST_STRATEGIES there.
+const DEPTH_VALUES = ["minimal", "standard", "comprehensive"] as const;
+
+/**
+ * Every flag `next`'s flag loop takes, in one table.
+ *
+ * The loop in parseNextFlags reads it (nextTokenKind below) to decide whether a
+ * flag-shaped token is one this engine takes, so a flag missing from the table
+ * can never be taken and the two cannot drift. A harness seam that has to read
+ * a line before any agent sees it reads the same table, instead of mirroring
+ * the loop's branches by hand.
+ *
+ * Absent on purpose, because they are not the flag loop's: the read-only flags
+ * (READ_ONLY_FLAGS, taken earlier and only when the line carries no words of
+ * the person's own), `--doctor`'s own `--export`/`--output`/`--verbose`,
+ * `--config` and `--project-dir` (read before the loop), and `--pick` (a
+ * leading command). The ceremony flags and the per-check `--guard.<fence>`
+ * family come from their own tables, in nextFlagShape.
+ */
+export const NEXT_FLAGS: ReadonlyMap<string, NextFlagShape> = new Map<string, NextFlagShape>([
+  ["--resume", { value: "none" }],
+  ["--single", { value: "none" }],
+  ["--new-intent", { value: "none" }],
+  ["--new-scope", { value: "none" }],
+  ["--continue", { value: "none" }],
+  ["--change", { value: "none" }],
+  ["--every-unit", { value: "none" }],
+  // Retired, still taken so the token never becomes task text.
+  ["--init", { value: "none" }],
+  ["--force", { value: "none" }],
+  ["--scope", { value: "free", needsFollowing: true }],
+  ["--stage", { value: "free", needsFollowing: true }],
+  ["--phase", { value: "free", needsFollowing: true }],
+  ["--report", { value: "free", needsFollowing: true }],
+  // Valued: a missing or `--`-prefixed value is this engine's own refusal, with
+  // the flag named, not a token it does not take.
+  ["--request", { value: "free" }],
+  ["--record", { value: "free" }],
+  ["--unit", { value: "free" }],
+  ["--plan-name", { value: "free" }],
+  ["--skip", { value: "free" }],
+  ["--add", { value: "free" }],
+  ["--claim", { value: "free" }],
+  ["--release", { value: "free" }],
+  ["--team", { value: "free" }],
+  ["--rhythm", { value: "free" }],
+  ["--depth", { value: "words", words: DEPTH_VALUES }],
+  ["--test-strategy", { value: "words", words: DEPTH_VALUES }],
+  ["--review", { value: "words", words: ["adversarial", "advisory", "none"] }],
+  ["--guard-policy", { value: "words", words: GUARD_POLICY_VALUES }],
+  ["--change-control", { value: "words", words: GUARD_POLICY_VALUES }],
+  ["--project-type", { value: "words", words: ["greenfield", "brownfield"] }],
+]);
+
+/** The shape of a flag `next` takes, or null when it takes no such flag. */
+export function nextFlagShape(token: string): NextFlagShape | null {
+  const listed = NEXT_FLAGS.get(token);
+  if (listed !== undefined) return listed;
+  if (CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === token)) {
+    return { value: "words", words: CEREMONY_SETTINGS };
+  }
+  if (token.startsWith("--") && guardFenceFromConfigKey(token.slice(2)) !== null) {
+    return { value: "words", words: CEREMONY_SETTINGS };
+  }
+  return null;
+}
+
+/**
+ * Whether one argument is flags and their values and nothing else. One quoted
+ * argument can hold the whole request, as Kiro IDE's PowerShell hands it over,
+ * so a bare word inside it that is not a flag's value makes it the person's
+ * sentence: "--help flag for the reverser" is what they asked for, while
+ * "--choice=Approve Plan" is one flag and its value. Only the second kind is a
+ * token `next` can refuse to take without dropping a word of a request.
+ */
+export function argumentIsFlagShaped(arg: string): boolean {
+  const tokens = arg.split(/\s+/).filter((token) => token.length > 0);
+  if (tokens.length === 0) return false;
+  for (let index = 0; index < tokens.length; index++) {
+    if (!tokens[index].startsWith("--")) return false;
+    const next = tokens[index + 1];
+    if (next !== undefined && !next.startsWith("-")) index++;
+  }
+  return true;
+}
+
+/**
+ * Which of the three kinds one token on a `next` line is: a flag this engine
+ * takes, a flag-shaped token it does not take (the agent's own argument, a name
+ * the person misspelt, or a flag they are asking to have built), or a word of
+ * the person's own.
+ *
+ * `following` is the token after it, which is what settles the four flags this
+ * engine takes only when something follows them.
+ */
+export function nextTokenKind(token: string, following: string | undefined): "flag" | "untaken" | "words" {
+  const shape = nextFlagShape(token);
+  if (shape !== null && (shape.needsFollowing !== true || following !== undefined)) return "flag";
+  return argumentIsFlagShaped(token) ? "untaken" : "words";
+}
+
+/**
+ * Which of the three ways the engine reads what the person typed after
+ * `/aidlc`.
+ *
+ * `exact`: every token was read under the grammar, and any free words are
+ * marked as theirs (the `--` delimiter, or a plan named with a colon). It acts.
+ * `words`: nothing on the line was read, so it is a request. Anything else is a
+ * reading step: the line has two readings and only the agent, which has their
+ * chat, can tell which they meant, so the engine takes nothing from it and says
+ * what it could not read. Nothing is created, switched, jumped, dropped or
+ * refused first.
+ *
+ * One function, so the parser and the prompt-time seams that read a line before
+ * any agent sees it cannot disagree about it. The seams split each argument on
+ * whitespace before calling this, because a harness can hand the whole line
+ * over as one quoted argument.
+ */
+export type NextLineReading =
+  | { kind: "exact" }
+  | { kind: "words" }
+  | { kind: "untaken-flag"; token: string; value?: string }
+  | { kind: "value"; flag: string; value: string; valid: readonly string[] }
+  | { kind: "plan-word"; scope: string }
+  | { kind: "noun"; noun: string };
+
+/**
+ * One argument that is nothing but flags and their values is that command,
+ * however the harness quoted it (`"--doctor --export"` from Kiro IDE's
+ * PowerShell), so it reads as the tokens it holds. One that holds a bare word
+ * is the person's sentence and stays whole, which is what keeps every word of
+ * "--help flag for the reverser" theirs.
+ */
+export function splitFlagShapedArguments(argv: readonly string[]): string[] {
+  return argv.flatMap((arg) =>
+    /\s/.test(arg) && argumentIsFlagShaped(arg) ? arg.split(/\s+/).filter((token) => token.length > 0) : [arg]
+  ).filter((token) => token.length > 0);
+}
+
+export function readNextLine(argv: readonly string[]): NextLineReading {
+  const args = splitFlagShapedArguments(argv);
+  if (args.length === 0) return { kind: "exact" };
+  // Words behind the delimiter are theirs and marked, so what is in front of it
+  // decides and their words never make a reading step.
+  const mark = args.indexOf("--");
+  const head = mark >= 0 ? args.slice(0, mark) : args;
+  if (head.length === 0) return mark + 1 < args.length ? { kind: "words" } : { kind: "exact" };
+
+  // A leading noun owns its argv, and that noun's own parser says whether it can
+  // read the rest as its command. One word after the noun is a verb or a name,
+  // however it is spelt, so the engine's own refusal naming its verbs is the
+  // answer. Two or more words of theirs cannot be either, so the noun may be
+  // their own first word (`intent is to build a notes app`) and only the agent
+  // can tell; this engine must not run that as a command first.
+  const theirSentenceAfter = head.length > 2 && !head[1].startsWith("-");
+  const plugin = parsePluginCommand(head);
+  if (plugin.kind !== "not-plugin") {
+    return plugin.kind === "error" && theirSentenceAfter ? { kind: "noun", noun: head[0] } : { kind: "exact" };
+  }
+  const knowledge = parseKnowledgeCommand(head);
+  if (knowledge.kind !== "not-knowledge") {
+    return knowledge.kind === "error" && theirSentenceAfter ? { kind: "noun", noun: head[0] } : { kind: "exact" };
+  }
+  const workspace = parseWorkspaceCommand(head);
+  if (workspace.kind !== "not-workspace") {
+    const theirs = workspace.kind === "switch" && !workspace.explicit && workspace.words !== undefined;
+    return theirs ? { kind: "noun", noun: workspace.noun } : { kind: "exact" };
+  }
+  // The rest of the engine's own leading forms own their argv as they are.
+  if (leadingOrchestratorVerb(head) !== null) return { kind: "exact" };
+  if (head[0] === "config" || head[0] === "compose" || head[0] === "--pick") return { kind: "exact" };
+  if (head.includes("--config")) return { kind: "exact" };
+  if (head.length === 1 && (head[0] === "help" || head[0] === "-h")) return { kind: "exact" };
+
+  const requestWords = nextArgsCarryRequestWords(args);
+  const words: string[] = [];
+  let took = false;
+  let readOnly: string | undefined;
+  for (let i = 0; i < head.length; i++) {
+    const token = head[i];
+    const following = head[i + 1];
+    // A utility flag among their own words is one of their words; alone, or
+    // among other flags, it is the utility.
+    if (READ_ONLY_FLAGS.has(token) && !requestWords) {
+      readOnly = token;
+      took = true;
+      continue;
+    }
+    if (readOnly === "--doctor" && (token === "--export" || token === "--verbose")) {
+      took = true;
+      continue;
+    }
+    if (readOnly === "--doctor" && token === "--output") {
+      took = true;
+      if (following !== undefined && !following.startsWith("--")) i++;
+      continue;
+    }
+    const kind = nextTokenKind(token, following);
+    if (kind === "words") {
+      words.push(token);
+      continue;
+    }
+    if (kind === "untaken") {
+      return { kind: "untaken-flag", token, ...(following !== undefined && !following.startsWith("--") ? { value: following } : {}) };
+    }
+    took = true;
+    const shape = nextFlagShape(token);
+    if (shape === null || shape.value === "none") continue;
+    if (following === undefined || following.startsWith("--")) continue; // the engine's own refusal, by name
+    i++;
+    // A flag this engine takes, with a value its own table does not hold: the
+    // person meant one of the words it does hold, and the agent re-runs it.
+    if (shape.value === "words" && shape.words !== undefined &&
+      !shape.words.includes(following.toLowerCase())) {
+      return { kind: "value", flag: token, value: following, valid: shape.words };
+    }
+  }
+  if (!took && words.length === 0) return { kind: "exact" };
+  if (!took) {
+    // Nothing on the line was read: a request, unless it opens with the name of
+    // a plan, which is ambiguous with their own first word.
+    const plan = words[0];
+    const colon = plan.match(/^([A-Za-z][\w-]*):(?:\s+([\s\S]*))?$/);
+    // The plan names come from the stage graph. A tree without it (a seam
+    // reading a line before the engine is installed, a bare checkout) reads
+    // their words as words, which is the reading that acts on nothing.
+    let plans: ReadonlySet<string>;
+    try {
+      plans = validScopes();
+    } catch {
+      return { kind: "words" };
+    }
+    if (colon && plans.has(colon[1].toLowerCase())) return { kind: "exact" };
+    // Three shapes a plan's name can lead in, and only one of them is a reading
+    // already made: the name in its OWN argument with the rest of the request
+    // in one more, or in none, which is what the orchestrator skill asks the
+    // agent for (`next classic 'Build a notes app'`), and what the mark says
+    // too (`bugfix -- --enable`). The engine acts on that one.
+    // The other two are the person's own sentence as a harness hands it over,
+    // opening with a word that is also a plan's name: loose words after it
+    // (`bugfix Fix duplicate todos`), or the whole line in one argument, as
+    // Kiro IDE's PowerShell hands it over (`classic car rental website`).
+    // Both read the same way, because they are the same line, and only the
+    // agent can tell whether that first word is their plan or their own word.
+    const opening = plan.split(/\s+/)[0];
+    if (plans.has(opening)) {
+      // The plan named in its own argument with the rest of the request in one
+      // more: the agent packaged it that way, which is the reading made.
+      const namedByArgument = words.length === 2 && !/\s/.test(words[0]);
+      // And a line of two words is the plan and a one-word description however
+      // it arrives, so the two forms of one line never disagree.
+      const tokens = words.flatMap((word) => word.split(/\s+/)).filter((token) => token.length > 0);
+      return namedByArgument || tokens.length <= 2
+        ? { kind: "exact" }
+        : { kind: "plan-word", scope: opening };
+    }
+    return { kind: "words" };
+  }
+  return { kind: "exact" };
+}
+
 // Scope-owned ceremonies: env kill switch, then intent, then scope, then on.
 export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation", "plan_approval", "collaborators"] as const;
 export type CeremonyKey = (typeof CEREMONY_KEYS)[number];
@@ -39022,6 +39763,7 @@ export const CEREMONY_FLAGS: Record<CeremonyKey, string> = {
   plan_approval: "--plan-approval",
   collaborators: "--collaborators",
 };
+
 export type CeremonyPolicy = Record<CeremonyKey, CeremonySetting>;
 export interface CeremonyResolution {
   key: CeremonyKey;

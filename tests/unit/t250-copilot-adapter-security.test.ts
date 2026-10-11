@@ -151,6 +151,7 @@ export function claimCopilotCommand(): { allowed: true; attemptId: string } {
   return { allowed: true, attemptId: "00000000-0000-4000-8000-000000000001" };
 }
 export function settleCopilotCommand(): string { return "settled"; }
+export function noteHelperSession(): void {}
 export function settleCopilotIntentBoundary(): boolean { return false; }
 export function recordCopilotHumanSequence(): boolean { return true; }
 export function workflowParticipation(): "participant" { return "participant"; }

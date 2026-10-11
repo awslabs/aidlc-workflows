@@ -218,6 +218,30 @@ describe("t223 naming enforcement", () => {
     });
   });
 
+  test("loadAgents skips the IDE conductor aidlc-aidlc.md (the shipped name) as it skips aidlc.md", () => {
+    const dir = tempDir("aidlc-t223-agent-conductor-shipped-");
+    writeAgent(dir, "fixture-agent.md", "fixture-agent");
+    writeFileSync(
+      join(dir, "aidlc-aidlc.md"),
+      [
+        "---",
+        "name: aidlc",
+        "description: IDE conductor without persona metadata",
+        'tools: ["read", "write", "shell", "subagent"]',
+        "---",
+        "",
+        "Conductor body.",
+        "",
+      ].join("\n"),
+    );
+
+    withEnvAndFreshCaches({ AIDLC_AGENTS_DIR: dir }, () => {
+      expect(loadAgents()).toEqual([
+        { slug: "fixture-agent", display_name: "fixture-agent", examples: [] },
+      ]);
+    });
+  });
+
   test("doctor reports a scope filename/name stem mismatch as advisory", () => {
     const project = createTestProject();
     projects.push(project);
@@ -445,6 +469,38 @@ describe("t223 naming enforcement", () => {
       const out = `${res.stdout ?? ""}${res.stderr ?? ""}`;
       expect(out).toContain("Agent filename/name consistency: 1 mismatch(es) (advisory)");
       expect(out).toContain('stem "aidlc"');
+      expect(out).not.toContain('stem "foo-agent"');
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    const doctorBesideConductor = (frontmatter: string): string => {
+      const project = createTestProject();
+      projects.push(project);
+      const dir = agentsWith({ "foo-agent.md": HOST_AGENT, "aidlc-aidlc.md": frontmatter }, "shipped");
+      const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_AGENTS_DIR: dir,
+          AIDLC_STAGE_GRAPH: join(DIST_DATA, "stage-graph.json"),
+          AIDLC_SCOPE_GRID: join(DIST_DATA, "scope-grid.json"),
+          AIDLC_HARNESS_DIR: ".claude",
+        },
+      });
+      return `${res.stdout ?? ""}${res.stderr ?? ""}`;
+    };
+    const SHIPPED_CONDUCTOR = "---\nname: aidlc\ndescription: IDE conductor\ndisplay_name: aidlc\n---\n";
+
+    test("doctor takes the shipped conductor aidlc-aidlc.md declaring name aidlc as it ships", () => {
+      const out = doctorBesideConductor(SHIPPED_CONDUCTOR);
+      expect(out).toContain("ok    Agent filename/name consistency: all agent files match declared names");
+      expect(out).not.toContain("Rename the file");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("doctor still flags the conductor aidlc-aidlc.md when its name is not aidlc", () => {
+      const out = doctorBesideConductor(SHIPPED_CONDUCTOR.replace("name: aidlc\n", "name: aidlc-conductor\n"));
+      expect(out).toContain("Agent filename/name consistency: 1 mismatch(es) (advisory)");
+      expect(out).toContain('stem "aidlc-aidlc" declares name "aidlc-conductor"');
       expect(out).not.toContain('stem "foo-agent"');
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

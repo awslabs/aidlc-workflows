@@ -1,4 +1,4 @@
-// covers: function:parseReScope, function:codekbScopeFingerprint, function:scopePathCovered, function:codekbFingerprintExcludes, function:aidlcRootIntegrations, subcommand:aidlc-utility:codekb-scope-diff
+// covers: function:parseReScope, function:codekbScopeFingerprint, function:gitAlternateEntry, function:scopePathCovered, function:codekbFingerprintExcludes, function:aidlcRootIntegrations, subcommand:aidlc-utility:codekb-scope-diff
 //
 // t248 — codekb scope guard (deterministic, no-LLM). Pins the reverse-
 // engineering rerun guard at two layers:
@@ -30,8 +30,8 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, delimiter, dirname, join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
@@ -45,6 +45,7 @@ import {
   codekbFingerprintExcludes,
   codekbScopeFingerprint,
   codekbStoreIsCurrent,
+  gitAlternateEntry,
   parseReScope,
   scopePathCovered,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -73,6 +74,37 @@ function gitInit(dir: string): void {
   const r = spawnSync("git", ["init", "-q", dir], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   expect(r.status).toBe(0);
 }
+
+function git(dir: string, ...args: string[]): string {
+  const r = spawnSync("git", ["-C", dir, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+  expect(r.status, r.stderr).toBe(0);
+  return r.stdout;
+}
+
+// The loose objects in the repository's own store, as "xx/rest" names.
+function looseObjects(dir: string): string[] {
+  const objects = join(dir, ".git", "objects");
+  return readdirSync(objects)
+    .filter((fan) => /^[0-9a-f]{2}$/.test(fan))
+    .flatMap((fan) => readdirSync(join(objects, fan)).map((name) => `${fan}/${name}`));
+}
+
+// Take write access away from the repository's own store (the folder and
+// its fan-out dirs), as a harness sandbox does, run fn, and give it back.
+function withReadOnlyStore<T>(dir: string, fn: () => T): T {
+  const objects = join(dir, ".git", "objects");
+  const dirs = [objects, ...readdirSync(objects).map((entry) => join(objects, entry))];
+  for (const d of dirs) chmodSync(d, 0o555);
+  try {
+    return fn();
+  } finally {
+    for (const d of dirs) chmodSync(d, 0o755);
+  }
+}
+
+// A read-only bit on a folder does not stop file creation on Windows, and
+// root ignores it everywhere.
+const STORE_CAN_BE_READ_ONLY = process.platform !== "win32" && (process.getuid?.() ?? 1) !== 0;
 
 const childEnv = (): NodeJS.ProcessEnv => {
   const e = { ...process.env };
@@ -341,6 +373,51 @@ describe("t248 codekbScopeFingerprint — scoped write-tree", () => {
     writeFileSync(join(proj, "src", "a.ts"), "a\n");
     expect(codekbScopeFingerprint(proj, ["missing/"])).toBeNull();
     expect(codekbScopeFingerprint(proj, ["src/", "missing/"])).toBeNull();
+  });
+
+  test("a mint leaves no object in the repository's own store", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "a.ts"), "uncommitted\n");
+    expect(codekbScopeFingerprint(proj, ["src/"])).not.toBeNull();
+    expect(looseObjects(proj)).toEqual([]);
+  });
+
+  test.skipIf(!STORE_CAN_BE_READ_ONLY)("a store the mint cannot write to still gives the fingerprint, the same one a writable store gives", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "a.ts"), "fresh edit\n");
+    // Read-only first: nothing of this edit is in the store yet.
+    const readOnly = withReadOnlyStore(proj, () => codekbScopeFingerprint(proj, ["src/"]));
+    expect(readOnly).not.toBeNull();
+    expect(codekbScopeFingerprint(proj, ["src/"])).toBe(readOnly);
+  });
+
+  test("the repository's store is read whole through the alternate when its path holds the PATH delimiter", () => {
+    const parent = freshProject();
+    const proj = join(parent, `a${delimiter}b`);
+    mkdirSync(proj);
+    gitInit(proj);
+    writeFileSync(join(proj, "a.ts"), "committed\n");
+    git(proj, "add", "a.ts");
+    git(proj, "-c", "user.name=t248", "-c", "user.email=t248@example.invalid", "commit", "-q", "-m", "a");
+    const blob = git(proj, "rev-parse", "HEAD:a.ts").trim();
+    const store = join(proj, ".git", "objects");
+    const scratch = join(parent, "scratch-objects");
+    mkdirSync(scratch);
+    // With a scratch store in front, the blob is reachable only through the alternate.
+    const found = (entry: string) =>
+      spawnSync("git", ["-C", proj, "cat-file", "-e", blob], {
+        env: { ...process.env, GIT_OBJECT_DIRECTORY: scratch, GIT_ALTERNATE_OBJECT_DIRECTORIES: entry },
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+      }).status === 0;
+    expect(gitAlternateEntry(store)).toBe(`"${store.replaceAll("\\", "\\\\")}"`);
+    expect(found(gitAlternateEntry(store))).toBe(true);
+    expect(found(store)).toBe(false);
+    expect(codekbScopeFingerprint(proj, ["./"])).not.toBeNull();
   });
 });
 

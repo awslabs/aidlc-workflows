@@ -1,11 +1,17 @@
 // covers: file:knowledge/aidlc-product-lead-agent/reviewing.md, file:knowledge/aidlc-architecture-reviewer-agent/reviewing.md
 //
 // t200 - reviewer Date-sourcing pin. The `## Review` template's **Date:**
-// field is model-authored prose with no engine-side timestamp fill, so the
-// template must carry the procedure (run the engine's clock, `engine now`,
-// and paste what it prints), not just the format. A bare `[ISO timestamp]` placeholder lets
+// field is model-authored prose, so the template must carry where the time
+// comes from, not just the format. A bare `[ISO timestamp]` placeholder lets
 // the reviewer guess the date, and guessed dates drift from the timestamps
 // the CLI tools record for the same stage.
+//
+// The source is now the dispatch brief: the review request the conductor runs
+// before every dispatch returns `reviewed_at` from the engine's own clock, and
+// the brief carries it as `Date for this review:`. The reviewer runs no command
+// of its own, because on Claude Code it spelled the engine by absolute path,
+// which no Bash allow rule covers, and the person was asked to approve an
+// AI-DLC internal step in the middle of their review.
 //
 // Mechanism: none. Pure content check over the shipped knowledge bytes
 // (AIDLC_SRC = dist/claude/.claude; the other trees are byte-guarded by
@@ -23,16 +29,19 @@ const FILES = [
 
 describe("t200 reviewer Date field carries a sourcing instruction", () => {
   for (const [agent, rel] of FILES) {
-    test(`${agent}: template names the engine's clock and forbids guessing`, () => {
+    test(`${agent}: template names where the time comes from and forbids guessing`, () => {
       const body = readFileSync(join(AIDLC_SRC, rel), "utf-8");
       const dateLines = body.split("\n").filter((l) => l.startsWith("**Date:**"));
       // Exactly one Date line (the template), and it is no longer the bare
       // format-only placeholder.
       expect(dateLines.length).toBe(1);
       expect(dateLines[0]).not.toBe("**Date:** [ISO timestamp]");
-      // The sourcing instruction: the engine's clock, which prints UTC on
-      // every shell, and an explicit prohibition on guessing.
-      expect(body).toContain("run `bun .claude/tools/aidlc.ts engine now`");
+      // The sourcing instruction: the engine's clock, handed over in the
+      // dispatch brief, with no command of the reviewer's own and an explicit
+      // prohibition on guessing.
+      expect(body).toContain("the UTC time the dispatch brief names on its `Date for this review:` line");
+      expect(body).toContain("run no command for it");
+      expect(body).not.toContain("engine now");
       expect(body).not.toContain("date -u");
       expect(body.toLowerCase()).toContain("guess");
     });

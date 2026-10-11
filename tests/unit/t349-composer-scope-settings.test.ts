@@ -655,6 +655,26 @@ describe("t349 (9) a review level set for the work replaces its scope's ceiling"
     expect(override()).toBe("");
   });
 
+  // Two live runs: "turn the specialist reviewers off" printed "Review override
+  // changed: none -> none" when no override had been set yet, so the line said
+  // nothing had changed. The level replaced is the scope's own.
+  test("the first override names the scope level it replaces, not none", () => {
+    const proj = project();
+    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    const env = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+    const run = (args: string[]) => {
+      const res = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], { encoding: "utf-8", env });
+      expect(res.status, `${args.join(" ")}: ${res.stdout}${res.stderr}`).toBe(0);
+      return `${res.stdout}`;
+    };
+    run(["scope-change", "--scope", "bugfix"]);
+    const first = run(["config-change", "--review", "none"]);
+    expect(first).toContain("Review override changed: advisory (scope default) -> none");
+    expect(first).not.toContain("none -> none");
+    // Set again: the stored override is the old value.
+    expect(run(["config-change", "--review", "adversarial"])).toContain("Review override changed: none -> adversarial");
+  });
+
   test("the creation preview follows a review level set at creation", () => {
     const preview = (args: string[]) => {
       const proj = createTestProject();
@@ -670,7 +690,7 @@ describe("t349 (9) a review level set for the work replaces its scope's ceiling"
     expect(preview(["--scope", "feature", "--review", "none"])).toMatch(/no reviewers/);
   });
 
-  test("next refuses any settings value outside the allowed words, so no command text rides along", () => {
+  test("next takes no settings value outside the allowed words, and no command text rides along", () => {
     const proj = project();
     seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
     const hostile = ["off;touch /tmp/t349-pwn", "$(touch /tmp/t349-pwn)", "off --scope express", "on`id`"];
@@ -679,8 +699,22 @@ describe("t349 (9) a review level set for the work replaces its scope's ceiling"
         const res = runOrchestrateNext(ORCH, proj, [flag, value], { cwd: proj, env: process.env });
         const line = res.out.split("\n").find((entry) => entry.trim().startsWith("{"));
         const directive = JSON.parse(line ?? "{}") as { kind?: unknown; message?: unknown };
-        expect(directive.kind, `${flag} ${value}`).toBe("error");
-        expect(String(directive.message)).toBe(`${flag} requires ${words}; received ${JSON.stringify(value)}.`);
+        // A value this engine's own table does not hold is a reading step now
+        // (t-three-ways-to-read-a-line): the words it does hold are named, and
+        // the value is shown as a quoted string. The security contract this
+        // case exists for is unchanged and checked below: nothing of theirs is
+        // a command, and an unheld value never runs.
+        expect(directive.kind, `${flag} ${value}`).toBe("print");
+        const message = String(directive.message);
+        expect(message, `${flag} ${value}`).toContain(words.replace(/[<>]/g, ""));
+        expect(message, `${flag} ${value}`).toContain(JSON.stringify(value));
+        // In every directive of this engine a backticked span is a command to
+        // run: no span may hold their value, and the one command that carries
+        // their line has it as a single quoted argument.
+        for (const span of [...message.matchAll(/`([^`]*)`/g)].map((m) => m[1])) {
+          const quoted = span.includes(`'${flag} ${value}'`);
+          expect(quoted || !span.includes(value), `${flag} ${value}: ${span}`).toBe(true);
+        }
       }
     }
     expect(existsSync("/tmp/t349-pwn")).toBe(false);

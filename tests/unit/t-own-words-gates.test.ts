@@ -19,13 +19,14 @@ import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remai
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
   resetAidlcEnv,
+  seededAuditShard,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
@@ -100,18 +101,18 @@ function report(proj: string, args: string[]): { kind: string; message?: string 
 }
 
 // What the person types, through the real UserPromptSubmit route every harness uses.
-function says(proj: string, prompt: string): void {
+function says(proj: string, prompt: string, session = SESSION): void {
   const env: Record<string, string | undefined> = {
     ...process.env,
     CLAUDE_PROJECT_DIR: proj,
     AIDLC_PROJECT_DIR: proj,
     AIDLC_UNATTENDED: "0",
-    AIDLC_SESSION_OVERRIDE: SESSION,
+    AIDLC_SESSION_OVERRIDE: session,
   };
   delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
   const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj,
-    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
     env,
     encoding: "utf-8",
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -146,14 +147,23 @@ function picks(proj: string, label: string, options = ["Approve", "Request Chang
 describe("an exact pick is syntax, and only syntax", () => {
   const PLAN = ["Approve Plan", "Request Changes", "I'll edit the files"];
   test.each([
-    ["1", 0], ["2", 1], ["3", 2], ["(2)", 1], ["option 2", 1], ["b", 1], ["B.", 1],
+    ["1", 0], ["2", 1], ["3", 2], ["(2)", 1], ["option 2", 1],
     ["approve plan", 0], ["Approve Plan (Recommended)", 0], ["**Request Changes**", 1],
     ["\"I'll edit the files\"", 2], ["1. Approve Plan", 0], ["Approve Plan.", 0],
-    // A lettered pick, where the question offers lettered options.
-    ["A", 0], ["A)", 0], ["a)", 0], ["(b)", 1], ["A) Approve Plan", 0], ["b) Request Changes", 1],
-    ["C. I'll edit the files", 2],
+    // A letter before the label is a prefix: the label is the pick.
+    ["A) Approve Plan", 0], ["b) Request Changes", 1], ["C. I'll edit the files", 2],
   ] as const)("%s picks option %i", (reply, index) => {
     expect(exactOptionPick(reply, PLAN)).toBe(index);
+  });
+
+  // A lone letter is a pick only where the question showed letters: the
+  // questions file's own answer line. Chat shows a picker or numbers, so there
+  // it is the person's words, and the agent reads them.
+  test.each([
+    ["b", 1], ["B.", 1], ["A", 0], ["A)", 0], ["a)", 0], ["(b)", 1], ["option c", 2],
+  ] as const)("%s picks option %i on the lettered file line, and nothing in chat", (reply, index) => {
+    expect(exactOptionPick(reply, PLAN, true)).toBe(index);
+    expect(exactOptionPick(reply, PLAN)).toBeNull();
   });
 
   test.each([
@@ -161,6 +171,7 @@ describe("an exact pick is syntax, and only syntax", () => {
     "approve plan, but rename the handler", "", "   ",
   ])("%s is not an exact pick: the agent reads it", (reply) => {
     expect(exactOptionPick(reply, PLAN)).toBeNull();
+    expect(exactOptionPick(reply, PLAN, true)).toBeNull();
   });
 
   test("the primitives it owns keep their contracts", () => {
@@ -294,7 +305,9 @@ describe("the stage gate records the choice the agent read, with the person's wo
   // read as the gate's answer first, never asked about as new work.
   test("/aidlc approve at an open gate is its answer, with no new-work question", () => {
     says(proj, "/aidlc approve");
-    const r = run(ORCHESTRATE, ["next", "approve", "--project-dir", proj]);
+    // This engine's own option rides ahead of their words, as every caller
+    // builds it: after their words it is a word of their request.
+    const r = run(ORCHESTRATE, ["next", "--project-dir", proj, "approve"]);
     const line = r.out.split("\n").find((entry) => entry.startsWith("{"));
     expect(line, r.out).toBeDefined();
     const read = JSON.parse(line as string) as { kind: string; message?: string; ask_type?: string };
@@ -367,11 +380,33 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(events(proj, "WORKFLOW_PARKED")).toHaveLength(1);
   });
 
-  test.each(["2", "B", "b) Request Changes"])("an exact Request Changes (%s) is the person's pick: an approval is refused", (pick) => {
+  test.each(["2", "b) Request Changes"])("an exact Request Changes (%s) is the person's pick: an approval is refused", (pick) => {
     says(proj, pick);
     const refused = theirChoice(() => report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]));
     expect(refused.message).toContain("picked Request Changes");
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+  });
+
+  // The gate is shown as a picker or as numbered options, never with letters:
+  // a lone letter typed there is the person's words. The agent reads them (it
+  // may well read "B" as the second option); no tool takes the letter as a
+  // pick by position and holds it against the agent's reading.
+  test("a lone letter at the gate is their words, not a pick: the approval the agent read stands", () => {
+    says(proj, "B");
+    const done = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    expect(JSON.stringify(done)).not.toContain("picked Request Changes");
+    const approved = events(proj, "GATE_APPROVED");
+    expect(approved).toHaveLength(1);
+    expect(auditBlockField(approved[0].block, "Person Reply")).toBe("B");
+  });
+
+  test("a lone letter at the gate is their words, not a pick: the rejection the agent read stands", () => {
+    says(proj, "a");
+    const revised = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "x"]);
+    expect(revised.kind, JSON.stringify(revised)).toBe("print");
+    expect(JSON.stringify(revised)).not.toContain("picked Approve");
+    expect(events(proj, "GATE_REJECTED")).toHaveLength(1);
   });
 
   test("a Request Changes picked in the picker is the person's pick: an approval is refused", () => {
@@ -662,9 +697,7 @@ describe("a recovery question: exact picks are recorded, everything else is the 
 
   test.each([
     ["1", "reconfirm-summary"],
-    ["a", "reconfirm-summary"],
     ["Present the current summary again", "reconfirm-summary"],
-    ["b.", "request-changes"],
     ["2", "request-changes"],
   ])("%s is the person's exact pick of %s", (reply, op) => {
     ask();
@@ -672,7 +705,9 @@ describe("a recovery question: exact picks are recorded, everything else is the 
     expect(response()).toMatchObject({ selected_op: op, picked_by: "person" });
   });
 
-  test.each(["the first one", "Presnt the current summary again", "go with 2", "split the flow into two steps"])(
+  // The remedies are shown by number and name, never with letters: a lone
+  // letter is the person's words, read by the agent.
+  test.each(["the first one", "Presnt the current summary again", "go with 2", "split the flow into two steps", "a", "b."])(
     "%s waits for the agent's reading",
     (reply) => {
       ask();
@@ -873,5 +908,90 @@ describe("an ordinary question keeps the person's own words", () => {
     expect(codex(JSON.stringify({ answers: {} })).status).toBe(0);
     expect(events(proj, "QUESTION_REPLIED")).toHaveLength(2);
     expect(events(proj, "QUESTION_UNANSWERED")).toHaveLength(1);
+  });
+});
+
+// A gate row carries the person's words only when the engine can tell which
+// chat ran the agent's command: the words are kept per chat. When it cannot
+// (an opencode or Copilot agent shell, or an ancestry walk that runs out of its
+// 50 ms on a loaded machine), the row says nothing at all about the person,
+// which reads as though they never answered. These cases measure what happens
+// on that path today.
+describe("when the engine cannot tell which chat answered", () => {
+  let proj: string;
+  let slug: string;
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedStateFile(proj, "state-mid-ideation.md");
+    slug = state(proj, ["get", "Current Stage"]).out.trim();
+    state(proj, ["checkbox", `${slug}=in-progress`]);
+    state(proj, ["gate-start", slug]);
+    says(proj, "looks good");
+  });
+  afterEach(() => cleanupTestProject(proj));
+
+  const keptMessageId = (): string | null =>
+    auditBlockField(
+      events(proj, "HUMAN_TURN").filter((row) => auditBlockField(row.block, "Session") === SESSION).at(-1)?.block ?? "",
+      "Message Id",
+    );
+
+  // A teammate's committed shard, named so it sorts after this machine's, with
+  // its own earlier showing of this same gate and its own reply.
+  function teammateShard(): void {
+    const mine = seededAuditShard(proj);
+    writeFileSync(join(dirname(mine), `zz-teammate-${basename(mine)}`), [
+      "## STAGE_AWAITING_APPROVAL", "**Timestamp**: 2026-01-01T00:00:00Z",
+      "**Event**: STAGE_AWAITING_APPROVAL", `**Stage**: ${slug}`, "", "---", "",
+      "## HUMAN_TURN", "**Timestamp**: 2026-01-01T00:00:01Z", "**Event**: HUMAN_TURN",
+      "**Session**: 01995000-7a11-7000-8000-0000000000aa", "**Origin**: person",
+      "**Source**: typed", "**Message Id**: aaaaaaaa", "", "---", "",
+    ].join("\n"));
+  }
+
+  const approves = (extra: Record<string, string> = {}) => run(
+    ORCHESTRATE,
+    ["report", "--stage", slug, "--result", "approved", "--user-input", "Approve", "--project-dir", proj],
+    extra,
+  );
+
+  test("the row names the kept message instead of saying nothing", () => {
+    const approved = approves({ AIDLC_SESSION_OVERRIDE: "" });
+    expect(approved.rc, approved.out).toBe(0);
+    const block = events(proj, "GATE_APPROVED").at(-1)?.block ?? "";
+    expect(block, approved.out).not.toBe("");
+    // Never a copy of their words on a row the engine cannot tie to them.
+    expect(auditBlockField(block, "Person Reply")).toBeNull();
+    expect(keptMessageId()).not.toBeNull();
+    expect(auditBlockField(block, "Message Id")).toBe(keptMessageId());
+  });
+
+  test("with the chat known, their own words still land on the row", () => {
+    const approved = approves();
+    expect(approved.rc, approved.out).toBe(0);
+    const block = events(proj, "GATE_APPROVED").at(-1)?.block ?? "";
+    expect(auditBlockField(block, "Person Reply")).toBe("looks good");
+  });
+  // Two chats have replied since the gate was shown, so which of them answered
+  // is not the engine's to guess: it points at neither, as before.
+  test("with two chats replying since the gate, the row points at neither", () => {
+    says(proj, "yes do that", "01995000-7a11-7000-8000-00000000beef");
+    const approved = approves({ AIDLC_SESSION_OVERRIDE: "" });
+    expect(approved.rc, approved.out).toBe(0);
+    const block = events(proj, "GATE_APPROVED").at(-1)?.block ?? "";
+    expect(auditBlockField(block, "Person Reply")).toBeNull();
+    expect(auditBlockField(block, "Message Id")).toBeNull();
+  });
+  // Shards are per clone and committed, and a concatenated read lists them in
+  // filename order, which is not causal order. A teammate's shard must not
+  // supply the pointer for an approval recorded here.
+  test("a teammate's shard sorting after this machine's does not supply the pointer", () => {
+    teammateShard();
+    const approved = approves({ AIDLC_SESSION_OVERRIDE: "" });
+    expect(approved.rc, approved.out).toBe(0);
+    const block = events(proj, "GATE_APPROVED").at(-1)?.block ?? "";
+    expect(auditBlockField(block, "Message Id")).not.toBe("aaaaaaaa");
+    expect(auditBlockField(block, "Message Id")).toBe(keptMessageId());
   });
 });

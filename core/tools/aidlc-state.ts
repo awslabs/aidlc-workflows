@@ -97,6 +97,7 @@ import {
   selectedGuardRecoveryRemedyAction,
   normalizeGuardRecoveryText,
   personsGateFeedback,
+  personsGateMessagePointer,
   personsGateWords,
   personsLatestGatePick,
   resolveInvokingSessionId,
@@ -196,6 +197,7 @@ import {
   stageGateApproval,
   swarmConvergedUnits,
   teamUnitGateStatus,
+  unclaimableIgnoredSourceKeys,
   unitCompletedReceipts,
   unitGateStatus,
   unitMajorConstructionStageSlugs,
@@ -329,10 +331,19 @@ function revisionCountOf(content: string): number {
 // since it was shown, kept verbatim by the human-turn hook. The conductor read
 // them and reported the choice; the receipt carries both.
 const PERSONS_WORDS_FIELD = "Person Reply";
+// The same field the log tool pairs with their words on a decision row.
+const PERSONS_MESSAGE_FIELD = "Message Id";
 function personsWordsFields(pd: string, slug: string, unit?: string): Record<string, string> {
   try {
-    const words = personsGateWords(pd, resolveInvokingSessionId(pd), { stage: slug, ...(unit ? { unit } : {}) });
-    return words ? { [PERSONS_WORDS_FIELD]: words } : {};
+    const gate = { stage: slug, ...(unit ? { unit } : {}) };
+    const words = personsGateWords(pd, resolveInvokingSessionId(pd), gate);
+    if (words) return { [PERSONS_WORDS_FIELD]: words };
+    // No words means the engine could not tell which chat answered (their
+    // words are kept per chat), so the row points at the message the hook
+    // kept for them rather than saying nothing about the person at all. The
+    // pointer is the record's own; the agent never types their words here.
+    const pointer = personsGateMessagePointer(pd, gate);
+    return pointer ? { [PERSONS_MESSAGE_FIELD]: pointer } : {};
   } catch {
     return {};
   }
@@ -1051,7 +1062,26 @@ export function main(argv: string[]): void {
 }
 
 if (import.meta.main) {
-  main(process.argv.slice(2));
+  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
+  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
+  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // in Kiro's terminal, so the dispatcher's front gate and the lean projections
+  // keep their import graph.
+  if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {
+    import("./aidlc-kiro-ide-terminal.ts")
+      .then(async (m) => {
+        if (await m.commandPromptReplyTee()) return;
+        m.noteSlowReplyAtExit();
+        run(m.rejoinCommandPromptQuotes(process.argv.slice(2)));
+      })
+      .catch(() => run(process.argv.slice(2)));
+  } else {
+    run(process.argv.slice(2));
+  }
+}
+
+function run(args: string[]): void {
+  main(args);
 }
 
 // --- Subcommand handlers ---
@@ -4569,12 +4599,15 @@ function verifyReviewerPrecondition(
     }
     const claimModels = [...receipts.freshUnitClaims.values()];
     // AI-DLC's own files (its .gitignore block, AGENTS.md, a second tool's
-    // install) are no Unit's to claim.
+    // install) are no Unit's to claim, and neither is a path Git ignores that
+    // a source manifest refuses to claim (build output, a test run's record).
     const aidlcOwned = aidlcOwnedSourceKey(pd);
-    baselineUnclaimed = [...baselineChanged]
-      .filter((pathKey) =>
-        !aidlcOwned(pathKey) && !claimModels.some((claims) => sourceClaimCovers(pathKey, claims))
-      )
+    const outsideClaims = [...baselineChanged].filter((pathKey) =>
+      !aidlcOwned(pathKey) && !claimModels.some((claims) => sourceClaimCovers(pathKey, claims))
+    );
+    const unclaimable = unclaimableIgnoredSourceKeys(pd, outsideClaims);
+    baselineUnclaimed = outsideClaims
+      .filter((pathKey) => !unclaimable.has(pathKey))
       .sort();
   }
   const resolutionForReconciliation = perUnit ? resolveBoltDag(pd) : null;
@@ -6170,8 +6203,8 @@ function sensorStateAtGate(pd: string, stage: GateStage): string {
 
 // What the person hears when a gate opens, or is shown again, while a check
 // still fails on a declared output (#2201): one line per failing check, in
-// plain words, with the detail file the agent corrects from (stage protocol
-// section 14), at most three lines and then a count. The orchestrator carries
+// plain words (the agent corrects from the detail file the stage protocol's
+// section 14 names), at most three lines and then a count. The orchestrator carries
 // them in the gate reply's `narration`, beside what the stage produced, which
 // every harness's agent says to the person with the approval question. Nothing
 // is re-fired; a check that passed later, or never ran, says nothing, and an
@@ -6192,10 +6225,10 @@ export function failedCheckNotices(pd: string, stage: GateStage, unit: string | 
   } catch {
     return [];
   }
-  const lines = failed.slice(0, FAILED_CHECK_LINES).map(({ id, rel, findings, detail }) => {
+  const lines = failed.slice(0, FAILED_CHECK_LINES).map(({ id, rel, findings }) => {
     const check = id.endsWith("check") ? id : `${id} check`;
     const count = /^\d+$/.test(findings) ? `${findings} finding${findings === "1" ? "" : "s"}` : "findings";
-    return `The ${check} reports ${count} in ${basename(rel)}${detail ? ` (details: ${detail})` : ""}.`;
+    return `The ${check} reports ${count} in ${basename(rel)}.`;
   });
   const more = failed.length - lines.length;
   if (more > 0) lines.push(`${more} more check${more === 1 ? " reports" : "s report"} findings on this stage's outputs.`);

@@ -212,6 +212,12 @@ export function readBoundedRegularFile(path: string, maxBytes: number): string |
 // the cap are omitted (the orchestrator warns) and never sent to the agent.
 export const INLINE_CONTEXT_PATHS_MAX_BYTES = 8 * 1024;
 
+// The one line the person reads when optional persona or knowledge files did
+// not fit the list: about their work, with no field name and no byte cap.
+export function omittedContextWarning(_omitted: number): string {
+  return "Some of this step's optional reference files were left out to fit; the work goes on without them.";
+}
+
 export function capInlineContextPaths(allPaths: readonly string[]): { paths: string[]; omitted: number } {
   const paths: string[] = [];
   for (const path of allPaths) {

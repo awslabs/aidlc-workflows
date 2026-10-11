@@ -275,6 +275,7 @@ import {
   parseStageFrontmatter,
   parseStateStageSuffixes,
   asReviewClass,
+  changeControlSourceLabel,
   scopeSettingsOffList,
   removeField,
   PLAN_FIELD,
@@ -296,6 +297,9 @@ import {
   readUnitScopeStamp,
   recordHookDrop,
   readCurrentSessionId,
+  resolveChat,
+  SELECTION_NOTICE_FOLLOW,
+  writeSessionSelectionNotice,
   relativeRecordDir,
   resolveAuditWorktreePath,
   resolveBoltIdentity,
@@ -307,6 +311,7 @@ import {
   selectIntentForSession,
   resolveWorkflowSelection,
   readStateFile,
+  keepActiveDirectiveOverSettingWrite,
   keepPlanApprovalAskOverStateWrite,
   refreshActiveDirectiveMarker,
   resolveIntentRepoSet,
@@ -396,6 +401,8 @@ import {
   toPosix,
   UTILITY_COMMANDS,
   carryPendingPersonLines,
+  isKiroConductorAgentFile,
+  KIRO_CONDUCTOR_AGENT_FILE,
 } from "./aidlc-lib.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
@@ -1973,6 +1980,20 @@ To get started:
   } catch (error) {
     guardPolicyDisplay = `unavailable (${errorMessage(error)})`;
   }
+  // The review ceiling, the one setting the list left out. Only the config
+  // setter writes `Review Override` (on the person's request, or from an
+  // approved plan), so a stored value is this piece of work's own; with none,
+  // the scope's own ceiling applies, or the stages' own reviews (adversarial).
+  const scopeKey = scope.trim().toLowerCase();
+  const reviewOverride = asReviewClass(getField(content, "Review Override"));
+  const reviewCap = loadScopeMetadata()[scopeKey]?.reviewCap;
+  const reviewLevel = reviewOverride ?? reviewCap ?? "adversarial";
+  const reviewSource = reviewOverride !== null
+    ? "set for this piece of work"
+    : reviewCap === undefined
+    ? "default"
+    : changeControlSourceLabel(shownSource(`scope ${scopeKey}`));
+  const reviewersLine = `Reviewers: ${reviewLevel === "none" ? "off" : reviewLevel} (${reviewSource})`;
   const ceremonyDisplay = CEREMONY_KEYS.map((key) => {
     if (key === "plan_approval") {
       const setting = resolvePlanApprovalSetting(projectDir, content);
@@ -1980,7 +2001,7 @@ To get started:
     }
     const resolution = resolveCeremony(key, scope, content);
     return `${CEREMONY_FIELDS[key]}: ${formatCeremony(resolution.value, shownSource(resolution.source))}`;
-  }).join("\n");
+  }).concat(reviewersLine).join("\n");
 
   // Find current stage number
   const currentEntry = graph.find((s) => s.slug === currentStage);
@@ -1997,7 +2018,29 @@ To get started:
   const checkboxesAll = parseCheckboxes(content);
   const currentCheckbox = checkboxesAll.find((c) => c.slug === currentStage);
   let statusLine = status;
-  if (currentCheckbox?.state === "awaiting-approval") {
+  // Paused work is not running. A park (the person's "approve, and stop here",
+  // or the engine's own) stands where the cursor stands, whatever the checkbox
+  // says, so it is read first; a park the work has since moved past is stale
+  // and holds nothing, the same rule the router uses (parkedWhereItStands in
+  // aidlc-orchestrate.ts). The line carries the way back, in the harness's own
+  // entry word. A live run read "Status: Running" over paused work and the
+  // agent had to correct it.
+  const parkedAt = (getField(content, "Parked At Stage") ?? "").trim();
+  const parked = (getField(content, "Parked") ?? "").trim().length > 0 &&
+    parkedAt.length > 0 && parkedAt === currentStage &&
+    status !== "Completed" && status !== "Archived";
+  if (parked) {
+    const stopped = (getField(content, "Parked By") ?? "").trim() === "person" ? " (you stopped it)" : "";
+    // Under a Unit-by-Unit Construction the cursor stays on the block's first
+    // stage while a Unit works through the later ones; the Unit's own stage
+    // (the fields unit start writes) names where the work stands.
+    const activeUnit = (getField(content, "Active Unit") ?? "").trim();
+    const unitStage = findStageBySlug((getField(content, "Unit Stage") ?? "").trim());
+    const at = activeUnit !== "" && unitStage !== undefined && unitStage.slug !== currentStage
+      ? `${stageLabel(unitStage, unitStage.slug) ?? unitStage.slug} for ${activeUnit}`
+      : currentName;
+    statusLine = `Paused at ${at}${stopped}; pick it back up with ${entrySkillInvocation()} --resume`;
+  } else if (currentCheckbox?.state === "awaiting-approval") {
     const displayName = currentName;
     statusLine = `Awaiting your approval on ${displayName}`;
     try {
@@ -2028,6 +2071,10 @@ To get started:
     // the user honestly rather than showing "Running" on a completed stage.
     const displayName = currentName;
     statusLine = `${displayName} approved - ready to advance`;
+  } else if (currentCheckbox?.state === "skipped") {
+    // The person skipped the stage the cursor still points at (the last one,
+    // when the work is Completed): say so, or the stage reads as if it ran.
+    statusLine = `${statusLine} (${currentName} skipped)`;
   }
 
   // Checkbox counts - filter to the EFFECTIVE plan when scope is known: the
@@ -2046,10 +2093,13 @@ To get started:
     scope !== "Unknown" && inScopeSlugs.size > 0
       ? checkboxes.filter((c) => inScopeSlugs.has(c.slug))
       : checkboxes;
-  const total = scopedCheckboxes.length;
+  // A stage the person skipped is not work left to do: it is counted out of
+  // the total and named, the way a stage a plan change dropped already is.
   const completed = scopedCheckboxes.filter((c) => c.state === "completed").length;
-  const skipped = scopedCheckboxes.filter((c) => c.state === "skipped").length;
+  const skippedSlugs = scopedCheckboxes.filter((c) => c.state === "skipped").map((c) => c.slug);
+  const total = scopedCheckboxes.length - skippedSlugs.length;
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const skippedNote = skippedSlugs.length > 0 ? `, skipped: ${stageNames(skippedSlugs)}` : "";
 
   // Build phase progress bars
   const phaseLabels: Record<string, string> = {
@@ -2095,7 +2145,12 @@ To get started:
     const units = p === "construction"
       ? unitProgress(dirname(sp), getField(content, "Construction Iteration") ?? "")
       : null;
-    const count = units ? `Unit ${units.current} of ${units.total}` : `${done}/${phaseCheckboxes.length}`;
+    const phaseSkipped = phaseCheckboxes.filter((c) => c.state === "skipped").length;
+    const count = units
+      ? `Unit ${units.current} of ${units.total}`
+      : phaseSkipped === phaseCheckboxes.length
+      ? "skipped"
+      : `${done}/${phaseCheckboxes.length - phaseSkipped}`;
     phaseProgress += `  ${(phaseLabels[p] || p).padEnd(16)} ${bar} ${count}\n`;
   }
 
@@ -2194,7 +2249,7 @@ Current Stage:  ${stageDisplay}
 ${currentStep}Status:         ${statusLine}
 ${agentLine}Guard Policy:   ${guardPolicyDisplay}
 ${fencesOffLine}${ceremonyDisplay}
-Completion:     ${completed}/${total} stages (${pct}%)${skipped > 0 ? ` - ${skipped} skipped` : ""}
+Completion:     ${completed}/${total} stages (${pct}%)${skippedNote}
 
 Phase Progress:
 ${phaseProgress}
@@ -2368,7 +2423,7 @@ function namingMismatches(
   const mismatches: NamingMismatch[] = [];
   for (const f of readdirSync(dir).filter((name) => name.endsWith(".md")).sort()) {
     const filePath = join(dir, f);
-    if (kind === "Agent" && f !== "aidlc.md" && !isAidlcAgentFile(filePath)) continue;
+    if (kind === "Agent" && !isKiroConductorAgentFile(f) && !isAidlcAgentFile(filePath)) continue;
     if (!statSync(filePath).isFile()) continue;
     const { name, plugin } = frontmatterFields(filePath, kind);
     const stem = basename(f, ".md");
@@ -3301,7 +3356,7 @@ function defaultGlobalExcludesId(env: NodeJS.ProcessEnv): string {
 // byte cap), plus stage-protocol.md and its stage-protocol-<name>.md modules
 // (contributor-only protocol files such as stage-definition.md are not loaded)
 // and the files the skills name beside SKILL.md. SKILL.md files, the
-// IDE conductor agent (agents/aidlc.md), and aidlc-common/conductor.md are loaded
+// IDE conductor agent (agents/aidlc-aidlc.md), and aidlc-common/conductor.md are loaded
 // by the IDE or the engine, not through fs_read. Without a readable graph, every
 // stage file, persona, and knowledge file stands in for the stage roster; without
 // an installed tree, one read of each kind does.
@@ -3335,7 +3390,7 @@ function kiroIdeFrameworkReads(projectDir: string, harness: string): string[] {
   const inactiveRunners = new Set<string>();
   if (graph === null) {
     for (const path of markdownUnder("aidlc-common/stages")) reads.add(path);
-    for (const path of markdownUnder("agents")) if (path !== toPosix(join(harness, "agents", "aidlc.md"))) reads.add(path);
+    for (const path of markdownUnder("agents")) if (!isKiroConductorAgentFile(path)) reads.add(path);
     for (const path of markdownUnder("knowledge")) reads.add(path);
   } else {
     for (const node of graph) {
@@ -3944,7 +3999,7 @@ export async function collectDoctorReport(
         for (const name of readdirSync(agentsDir).filter((n) => n.endsWith(".md"))) {
           try {
             const allows = markdownShellAllows(readFileSync(join(agentsDir, name), "utf-8"));
-            (name === "aidlc.md" ? commands : personaCommands).push(...allows);
+            (isKiroConductorAgentFile(name) ? commands : personaCommands).push(...allows);
           } catch {
             // Existing structure checks report unreadable agent files.
           }
@@ -4540,16 +4595,16 @@ export async function collectDoctorReport(
 
   // 4. Harness wiring config present. Claude Code: settings.json (hooks +
   // permissions live there). Kiro CLI: agents/aidlc.json plus
-  // settings/cli.json; Kiro IDE: agents/aidlc.md. Codex CLI: config.toml +
+  // settings/cli.json; Kiro IDE: agents/aidlc-aidlc.md. Codex CLI: config.toml +
   // hooks.json (the hook wiring) + rules/default.rules (permissions).
   if (harness === ".kiro") {
     const jsonAgentPath = join(projectDir, harness, "agents", "aidlc.json");
-    const markdownAgentPath = join(projectDir, harness, "agents", "aidlc.md");
+    const markdownAgentPath = join(projectDir, harness, "agents", KIRO_CONDUCTOR_AGENT_FILE);
     const hasJsonAgent = existsSync(jsonAgentPath);
     results.push({
-      pass: hasJsonAgent || existsSync(markdownAgentPath),
-      label: "agents/aidlc.{json,md} present (conductor wiring)",
-      fix: `${projectedFileRepair("kiro", ".kiro/agents/aidlc.json")} (Kiro CLI) or ${projectedFileRepair("kiro-ide", ".kiro/agents/aidlc.md")} (Kiro IDE)`,
+      pass: hasJsonAgent || existsSync(markdownAgentPath) || existsSync(join(projectDir, harness, "agents", "aidlc.md")),
+      label: "agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)",
+      fix: `${projectedFileRepair("kiro", ".kiro/agents/aidlc.json")} (Kiro CLI) or ${projectedFileRepair("kiro-ide", ".kiro/agents/aidlc-aidlc.md")} (Kiro IDE)`,
     });
     results.push(...kiroDisabledHookChecks(projectDir, harness));
     if (hasJsonAgent) {
@@ -5089,11 +5144,14 @@ export async function collectDoctorReport(
   // 5a. Naming consistency for agent/scope files. Duplicate declared names are
   // loader corruption and fail through loadAgents()/validScopes(); stem/name
   // drift is recoverable authoring drift, so it is advisory and names the file.
+  // The Kiro IDE conductor ships as aidlc-aidlc.md and declares name aidlc (the
+  // stem makes /aidlc sort first in Kiro's menu), so its check is the name alone.
   try {
     pushNamingAdvisory(
       results,
       "Agent",
-      namingMismatches(agentsDir(), "Agent", (stem, name) => stem === name),
+      namingMismatches(agentsDir(), "Agent", (stem, name) =>
+        isKiroConductorAgentFile(`${stem}.md`) ? name === "aidlc" : stem === name),
     );
   } catch (e) {
     results.push({
@@ -8971,9 +9029,10 @@ function handleIntent(
   // session → its stamp moves, not ours → a genuine resume of our session still
   // offers the rebind. writeSessionIntentUuid no-ops on a blank uuid, so an
   // orphan (registry-less) record is fail-safe. Best-effort throughout.
-  const sid =
-    selection.sessionId ??
-    readCurrentSessionId(projectDir);
+  // Only the chat this command runs in moves. One typed somewhere else moves
+  // the shared selection and asks the open chat once (askTheOpenChatToFollow).
+  const sid = selection.sessionId;
+  if (!sid) askTheOpenChatToFollow(projectDir, space, match.dirName, `\`${intentDisplayLabel(match)}\``);
   if (sid) {
     writeSessionBinding(projectDir, sid, space, match.dirName, "switch");
     clearSessionRebindOffer(projectDir, sid);
@@ -8995,7 +9054,68 @@ function handleIntent(
   // What the person sees after picking or switching: the work they are on now,
   // by the name they know it by.
   const where = space === DEFAULT_SPACE ? "" : ` in space \`${space}\``;
-  process.stdout.write(`Now working on \`${intentDisplayLabel(match)}\`${where}.\n`);
+  // The way back, when this chat was on another record: by the name they know
+  // it by, or its record dir when two records share the slug.
+  const prior = selection.intent && selection.intent !== match.dirName
+    ? intents.find((i) => i.dirName === selection.intent)
+    : undefined;
+  const priorName = prior === undefined
+    ? null
+    : intents.filter((i) => i.slug === prior.slug && i.dirName !== null).length > 1 ? prior.dirName : intentDisplayLabel(prior);
+  const back = priorName === null ? "" : ` You were on \`${priorName}\`: \`${entrySkillInvocation()} intent ${priorName}\` goes back.`;
+  process.stdout.write(`Now working on \`${intentDisplayLabel(match)}\`${where}.${back}\n`);
+}
+
+// A switch this command cannot tie to a chat was typed somewhere else: another
+// window, or a terminal of the person's own. The shared selection moves, which
+// is that place's own, and the chat the project last saw is left ONE question
+// instead of being moved behind the person's back. The engine delivers it on
+// that chat's next step and takes it away as it goes, so it is asked once and
+// never again for the same switch.
+function askTheOpenChatToFollow(
+  projectDir: string,
+  destinationSpace: string,
+  destinationRecord: string | null,
+  destination: string,
+): void {
+  try {
+    // Through the one door, so a helper's own id names the chat it belongs to
+    // and nothing here settles a chat's work: the question is read-only.
+    const chat = resolveChat(projectDir, readCurrentSessionId(projectDir), { bind: false });
+    const binding = chat?.binding;
+    if (!chat || !binding) return;
+    if (binding.space === destinationSpace && binding.intent === destinationRecord) return;
+    const here = binding.intent === null
+      ? `space \`${binding.space}\``
+      : `\`${intentDisplayLabel(
+          listIntents(projectDir, binding.space).find((entry) => entry.dirName === binding.intent) ??
+            { dirName: binding.intent },
+        )}\``;
+    // The command the AGENT runs, in this install's own spelling, so a yes is
+    // one step on every harness: a slash form is the person's, and no agent can
+    // run one everywhere. A record name selects itself only inside the space
+    // the chat is in, so from any other space the step is the space switch,
+    // which lands on that space's own selection: this record, in one step. A
+    // record name that is not safe for a model to read stays out of the
+    // command for the same reason the rejoin offer leaves it out; the space
+    // switch carries it.
+    if (!SPACE_NAME_REGEX.test(destinationSpace)) return;
+    const follow =
+      binding.space === destinationSpace && destinationRecord !== null &&
+        isSafeIntentRecordName(destinationRecord)
+        ? `${aidlcToolInvocation("utility")} intent ${destinationRecord}`
+        : `${aidlcToolInvocation("utility")} space ${destinationSpace}`;
+    writeSessionSelectionNotice(
+      projectDir,
+      chat.chatId,
+      `Another window switched to ${destination}. This chat is still on ${here}. ` +
+        `Do you want this chat on ${destination} too? Ask them exactly that and act on their answer: ` +
+        `on yes run \`${follow}\` in this chat, on no carry on with the work this chat is on. Ask once.`,
+      SELECTION_NOTICE_FOLLOW,
+    );
+  } catch {
+    /* per-user runtime state; the chat keeps the work it is on either way */
+  }
 }
 
 // A human's free-text `--reason` becomes one audit field value: one physical
@@ -9335,7 +9455,15 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   // handleIntent.
   const selected = activeIntent(projectDir, target);
   if (selected !== null) markSelectedWork(projectDir, selected, target);
-  const sessionId = selection.sessionId ?? readCurrentSessionId(projectDir);
+  const sessionId = selection.sessionId;
+  if (!sessionId) {
+    const found = activeIntent(projectDir, target);
+    const record = found !== null && isBindableIntentRecordName(found) ? found : null;
+    const label = record === null
+      ? `space \`${target}\``
+      : `\`${intentDisplayLabel(listIntents(projectDir, target).find((entry) => entry.dirName === record) ?? { dirName: record })}\``;
+    askTheOpenChatToFollow(projectDir, target, record, label);
+  }
   const priorUuid = sessionId ? readSessionIntentUuid(projectDir, sessionId) : null;
   let spaceHasNoIntent = false;
   let loneIntent: string | null = null;
@@ -12255,9 +12383,10 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
       if (update.audit.length > 0) appendAuditEntries(update.audit, projectDir, intent, space);
       const written = setField(update.content, "Last Updated", isoTimestamp());
       writeStateFile(projectDir, written, intent, space);
-      // Asked for while the code plan's question waits, it stays the open step.
+      // The step in hand stays the open step (the code plan's question, or the
+      // stage the agent is on): a setting changes how it runs, not which step it is.
       try {
-        keepPlanApprovalAskOverStateWrite(projectDir, content, written);
+        keepActiveDirectiveOverSettingWrite(projectDir, content, written);
       } catch (e) {
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
       }
@@ -13062,7 +13191,26 @@ export async function main(argv: string[]): Promise<void> {
 }
 
 if (import.meta.main) {
-  void main(process.argv.slice(2)).catch((error) => {
+  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
+  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
+  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // in Kiro's terminal, so the dispatcher's front gate and the lean projections
+  // keep their import graph.
+  if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {
+    import("./aidlc-kiro-ide-terminal.ts")
+      .then(async (m) => {
+        if (await m.commandPromptReplyTee()) return;
+        m.noteSlowReplyAtExit();
+        run(m.rejoinCommandPromptQuotes(process.argv.slice(2)));
+      })
+      .catch(() => run(process.argv.slice(2)));
+  } else {
+    run(process.argv.slice(2));
+  }
+}
+
+function run(args: string[]): void {
+  void main(args).catch((error) => {
     die(errorMessage(error));
   });
 }

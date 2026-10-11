@@ -1486,7 +1486,8 @@ export function saidDone(words: string): boolean {
 /**
  * The hook's second part while the engine's Plan Approval question is open: the
  * person wrote their answer on the questions file's `[Answer]:` line, as the
- * file invites, and said done. An exact choice there is recorded now, through
+ * file invites, and said done. An exact choice there (its label, its number,
+ * or its letter: the file shows the options lettered) is recorded now, through
  * the same path an exact pick typed in chat takes; anything else they wrote is
  * the agent's to read, and the line says where it is. Null when there is
  * nothing to say. Call after the turn's HUMAN_TURN and kept reply are on
@@ -1514,7 +1515,7 @@ export function notePlanApprovalFileAnswer(
     if (written.length === 0) return null;
     const where = written.map((target) => toPosix(relative(projectDir, target.path))).join(", ");
     const answers = [...new Set(written.map((target) => target.answer))];
-    const pick = answers.length === 1 ? exactOptionPick(answers[0], record.choices) : null;
+    const pick = answers.length === 1 ? exactOptionPick(answers[0], record.choices, true) : null;
     const choice: PlanApprovalAnswerChoice | null = pick === 0 ? "approve"
       : pick === 1 && record.targets.length === 1 ? "request-changes"
       : pick === 2 ? "edit"

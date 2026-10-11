@@ -433,6 +433,13 @@ interactive wizard.
 | `--quiet` | Emit one summary or remediation line |
 | `--no-color` | Disable color output |
 
+`--project-dir`, `--json`, `--quiet`, `--no-color`, `--yes`, `--offline` and
+`--verbose` are AI-DLC's own options: put them with the command you are running,
+as `aidlc config --project-dir /work/shop` or `aidlc doctor --json`. A word of
+your own that happens to look like one of them is still your word, so
+`/aidlc add a --project-dir flag to the CLI` asks for that work with every word
+you typed kept.
+
 ### Model Policy
 
 `aidlc config models` records model policy in the selected settings layer
@@ -787,9 +794,11 @@ again. See [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feat
 
 On Windows, Kiro IDE runs its agent's commands in your default terminal profile
 (`terminal.integrated.defaultProfile.windows` in Kiro's user settings). While
-it is Command Prompt and you have not answered on this computer, setup asks
-once whether to set it to PowerShell, `aidlc config --yes` sets it, and
-`--kiro-terminal powershell` sets it on its own; each changes that one key and
+it is Command Prompt (where Kiro shows a command's reply only when it finishes
+within a second, so most AI-DLC replies come back empty) and you have not
+answered on this computer, setup asks once whether to set it to PowerShell,
+`aidlc config --yes` sets it, and `--kiro-terminal powershell` sets it on its
+own (and says so when it already is PowerShell); each changes that one key and
 keeps every other byte of the file, and your answer is kept in
 `kiro-ide-terminal` in the AI-DLC install folder. See
 [Command Prompt as Kiro's terminal](harnesses/kiro-ide.md#command-prompt-as-kiros-terminal-on-windows).
@@ -802,7 +811,7 @@ complete seed. Until then zero Codex hooks fire.
 a second seed set produces invalid TOML.
 
 For the `kiro-ide` distribution, trust ships in the conductor's `permissions`
-(`.kiro/agents/aidlc.md`), so the check adds nothing there; Kiro IDE 1.x no
+(`.kiro/agents/aidlc-aidlc.md`), so the check adds nothing there; Kiro IDE 1.x no
 longer reads `.vscode/settings.json` `kiroAgent.trustedCommands`. `--show` lists
 the selected harness's trust and allowlist files.
 

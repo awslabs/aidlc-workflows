@@ -3249,7 +3249,7 @@ function runtimeIdentityMatches(
 
 export const PLAN_APPROVAL_BATCH_FALLBACK =
   "Use decision/answer --stage code-generation --checkpoint plan-approval " +
-  "--unit <unit> --questions-file <path> --session <id> separately for each unit.";
+  "--unit <unit> --questions-file <path> separately for each unit.";
 
 interface PlanApprovalBatchSelection {
   batch: string;
@@ -4954,9 +4954,13 @@ export function evaluateCodeGenerationApproval(
     }
     if (!empty.approved) {
       // An answered section under the wrong heading reads as unanswered; say so.
+      // Otherwise the step is `next`, whatever it does with the plan: it asks the
+      // person, or with plan approval off for this work it builds without asking.
+      // The refusal that prints this reason says which; the reason itself stays
+      // true under both, so it never tells the agent the person will be asked.
       empty.reason = artifacts.questions.trim() && !latestPlanApproval(artifacts.questions).found
         ? missingPlanApprovalFingerprintReason(artifacts.questions)
-        : "the plan is not approved yet; run next to ask the person to approve it";
+        : "the plan is not approved yet; run next";
       return empty;
     }
     empty.fingerprintValid =

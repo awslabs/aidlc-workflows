@@ -101,7 +101,8 @@ interface RunResult {
 }
 
 function runNext(proj: string, args: string[], env: Record<string, string> = {}): RunResult {
-  const res = spawnSync(BUN, [ORCH, "next", ...args, "--project-dir", proj], {
+  // Ahead of the person's words, as every caller of `next` builds it.
+  const res = spawnSync(BUN, [ORCH, "next", "--project-dir", proj, ...args], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,

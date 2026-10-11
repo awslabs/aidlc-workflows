@@ -22,7 +22,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     prereq_bullets_tail: "",
 
-    agents_note: `On Kiro the \`/aidlc\` command loads \`skills/aidlc/SKILL.md\` as the conductor, and \`agents/aidlc.md\` exposes that conductor in the agent selector (and is Kiro CLI's default agent). The full 14-role roster supplies the four delegated stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests through Markdown personas with \`tools:\` grants and \`permissions.rules\`. This distribution ships no agent-v1 JSON files.`,
+    agents_note: `On Kiro the \`/aidlc\` command loads \`skills/aidlc/SKILL.md\` as the conductor, and \`agents/aidlc-aidlc.md\` exposes that conductor in the agent selector (and is Kiro CLI's default agent). The full 14-role roster supplies the four delegated stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests through Markdown personas with \`tools:\` grants and \`permissions.rules\`. This distribution ships no agent-v1 JSON files.`,
 
     structure_extra: "",
 

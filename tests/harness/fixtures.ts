@@ -377,7 +377,7 @@ export function seedBoltDagBatches(proj: string, batches: string[][]): void {
  * aidlc-state.md until a seeder writes one (a bare createTestProject leaves an
  * empty record, matching the old empty aidlc-docs/).
  */
-function seedWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
+export function seedWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
   const intentsDir = intentsDirOf(proj, space);
   mkdirSync(join(proj, "aidlc", "spaces", space, "memory"), { recursive: true });
   mkdirSync(seededRecordDir(proj, space), { recursive: true });

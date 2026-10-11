@@ -21,7 +21,9 @@
 //
 // The reason is ONE PLAIN LINE naming where the work carries on ("AI-DLC is
 // carrying on with Requirements Analysis."). Hosts show it to the person
-// (Claude Code prints it under its own hook label), so it carries no command,
+// (Claude Code prints it under its own hook label: "Stop hook feedback" from
+// 2.1.163, where the line goes as additionalContext, "Stop hook error" before
+// that and for a problem, see blockStop), so it carries no command,
 // slug or receipt; the conductor's steps for it live in the orchestrator skill
 // and in the session-start context, which is sent again after a compaction.
 // It is never an override-shaped instruction. That is the security property:
@@ -158,7 +160,7 @@
 
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readdirSync, readSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import {
   hookStandsOutside,
@@ -220,6 +222,7 @@ import {
   withAuditLock,
   writeEngineFileNoFollow,
 } from "../tools/aidlc-lib.ts";
+import { compareVersions } from "../tools/aidlc-channel.ts";
 import { aidlcEngineCommand, hidesStopNote, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import {
   foldTranscriptIntoLedger,
@@ -296,9 +299,61 @@ function allowStop(): number {
 // Block the stop and inject the pending work back into the session. The reason
 // is an on-task continuation (the work still owed), NOT an override-shaped
 // instruction — that phrasing is the security property (see header).
-function blockStop(reason: string): number {
-  console.log(JSON.stringify({ decision: "block", reason }));
+//
+// Claude Code draws a blocking Stop under "Stop hook error" and a Stop
+// `additionalContext` under "Stop hook feedback"; both keep the turn going,
+// under `stop_hook_active` and its own cap (its changelog, 2.1.163). Carrying
+// on is no error, so there the carry-on goes as feedback (carryOnShape). A
+// problem keeps the block, which that label fits; so does every other tool,
+// whose adapter reads the block.
+type StopShape = "block" | "feedback";
+function blockStop(reason: string, shape: StopShape = "block"): number {
+  console.log(JSON.stringify(
+    shape === "feedback"
+      ? { hookSpecificOutput: { hookEventName: "Stop", additionalContext: reason } }
+      : { decision: "block", reason },
+  ));
   return 0;
+}
+
+// Feedback on Claude Code 2.1.163 or later, read from the version Claude Code
+// stamps on every transcript entry; the block everywhere else, and wherever the
+// version cannot be read, since an older Claude Code ends the turn on feedback.
+const FEEDBACK_FLOOR = "2.1.163";
+function carryOnShape(projectDir: string, transcriptPath: string | null): StopShape {
+  try {
+    if (runtimeHarnessName(projectDir) !== "claude") return "block";
+    const version = claudeCodeVersion(transcriptPath);
+    return version !== null && compareVersions(version, FEEDBACK_FLOOR) >= 0 ? "feedback" : "block";
+  } catch {
+    return "block";
+  }
+}
+
+// The last version stamped in the transcript's tail: a chat resumed on another
+// build gets that build's entries at its end. The tail is enough and keeps a
+// long chat's transcript from being read whole at every stop.
+function claudeCodeVersion(transcriptPath: string | null): string | null {
+  if (!transcriptPath) return null;
+  try {
+    const fd = openSync(transcriptPath, "r");
+    try {
+      const size = fstatSync(fd).size;
+      const length = Math.min(size, 65_536);
+      const tail = Buffer.alloc(length);
+      readSync(fd, tail, 0, length, size - length);
+      const lines = tail.toString("utf-8").split("\n");
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const stamped = /"version":"(\d+\.\d+\.\d+)"/.exec(lines[i] as string);
+        if (stamped) return stamped[1] as string;
+      }
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    // An unreadable transcript names no version.
+  }
+  return null;
 }
 
 // --- Recursion guard: a durable no-progress counter ---------------------------
@@ -1583,7 +1638,8 @@ function retainedUnitWorkRecorded(
 }
 
 // Build the line injected when blocking: where the work carries on, in one
-// plain line. Claude Code shows it to the person ("Stop hook error: ..."), so
+// plain line. Claude Code shows it to the person ("Stop hook feedback: ...", or
+// "Stop hook error: ..." before 2.1.163), so
 // it names the stage the way status does and carries no command, slug,
 // receipt or note to the agent. The agent's steps for it live in every
 // conductor SKILL ("When AI-DLC carries on by itself") and the session-start
@@ -2205,7 +2261,8 @@ if (!shouldBlock) {
   return allowStop();
 }
 
-// Within budget — block the stop and re-feed the pending work.
+// Within budget — block the stop and re-feed the pending work (as feedback on
+// Claude Code 2.1.163 or later, which draws no error for it).
 return blockStop(reasonForTheTool(
   continuationReason(
     kind,
@@ -2222,7 +2279,7 @@ return blockStop(reasonForTheTool(
     activeUnit,
   ),
   projectDir,
-));
+), carryOnShape(projectDir, transcriptPath));
 }
 
 if (import.meta.main) {

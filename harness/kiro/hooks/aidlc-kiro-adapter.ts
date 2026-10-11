@@ -49,9 +49,12 @@ import {
   hookOutsideGate,
   hookStandsOutside,
   enterHookWorkflow,
+  noteHelperSession,
+  validSessionId,
   activeSpace,
   agentsDir,
   classifyTerminalCommand,
+  readNextLine,
   decodeHarnessPlainText,
   fenceCommandOutput,
   relayAsTextBlock,
@@ -162,14 +165,9 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
       const prompt = [
         firstNonBlank([toolInput.task]),
         firstNonBlank([toolInput.prompt]),
-        // Each stage's brief is its prompt_template (the crew schema the skill
-        // mandates). The developer's is always forwarded; a one-stage crew
-        // forwards its one brief whatever the role, so a reviewer's verdict
-        // written there reaches the plan-approval guard's record.
         ...stages
           .filter((stage) =>
-            stages.length === 1 ||
-            (typeof stage.role === "string" && stage.role.trim() === "aidlc-developer-agent")
+            typeof stage.role === "string" && stage.role.trim() === "aidlc-developer-agent"
           )
           .map((stage) => firstNonBlank([stage.prompt_template])),
       ].filter((part) => part.length > 0).join("\n");
@@ -295,6 +293,17 @@ const projectDirRaw =
 const projectDir = isAbsolute(projectDirRaw)
   ? projectDirRaw
   : resolve(process.cwd(), projectDirRaw);
+// Kiro names the chat in the hook's environment (KIRO_SESSION_ID) and the
+// payload names the session the event belongs to. A delegation (subagent) has
+// a session of its own, so when the two differ the pair is the fact the engine
+// cannot learn by itself: note it once, and every record the delegate's hooks
+// write lands on the chat that delegated. A helper picked with /agent holds the
+// chat's own id, so nothing is noted for it.
+{
+  const chat = validSessionId(process.env.KIRO_SESSION_ID?.trim());
+  const own = validSessionId(kiro.session_id?.trim());
+  if (chat && own && chat !== own) noteHelperSession(projectDir, chat, own);
+}
 const projectEnv = process.env.AIDLC_PROJECT_DIR
   ? {
       ...process.env,
@@ -536,7 +545,41 @@ const PRE_DISPATCH_FLAGS = new Set([
   "--report",
 ]);
 
+// The words of a pre-dispatched step that are the person's to hear, in the
+// order the agent says them: the step's line, then its notices, then a
+// question's numbered rendering (the engine's, with its Other line) or an
+// error's message. The warning said once per chat is left to the agent's rule,
+// and a question that is the agent's own work is no question for the person.
+function personLead(step: unknown): string | null {
+  if (step === null || typeof step !== "object" || Array.isArray(step)) return null;
+  const d = step as Record<string, unknown>;
+  const lines: string[] = [];
+  const push = (value: unknown): void => {
+    if (typeof value === "string" && value.trim().length > 0) lines.push(value.trim());
+  };
+  push(d.narration);
+  if (Array.isArray(d.change_notices)) for (const notice of d.change_notices) push(notice);
+  if (d.kind === "ask" && d.agent_work !== true) {
+    push(typeof d.numbered_prose_question === "string" ? d.numbered_prose_question : d.question);
+    if (lines.length === 0) return null;
+    return "Say this to the person word for word, then end your turn (the step below is for when they reply):\n\n" +
+      lines.join("\n\n");
+  }
+  if (d.kind === "error") {
+    push(d.message);
+    return lines.length === 0 ? null : `Say this to the person word for word, then stop:\n\n${lines.join("\n\n")}`;
+  }
+  if (lines.length === 0) return null;
+  return `Say this to the person first, word for word, with nothing in front of it:\n\n${lines.join("\n\n")}`;
+}
+
 function shouldPreDispatchNext(args: string[], cwd: string): boolean {
+  // Only a line the engine reads exactly is run from here. Anything it would
+  // hand to the agent (a flag it does not take, a value its table does not
+  // hold, a plan word at the start of their sentence, one of its nouns with
+  // their sentence after it) goes to the agent untouched, so no seam acts on
+  // the person's words before anyone has read them.
+  if (readNextLine(args).kind !== "exact") return false;
   // A single-stage next owns its issuance/audit boundary. Let the conductor's
   // exact first tool call issue it once, rather than issuing inside this hook.
   if (args.includes("--single")) return false;
@@ -641,12 +684,17 @@ if (target === "verb-intercept") {
         ).trim();
         if (run.exitCode === 0 && directive.length > 0) {
           const parsed: unknown = JSON.parse(directive);
+          // What the person reads opens the packet, the way a terminal
+          // command's output is handed over below: the turn then opens with
+          // it, and the agent needs no row to find it. The step follows, for
+          // the agent. Exact asks and notices only; a stage's work, a gate
+          // summary and a status answer stay the agent's own words.
+          const lead = personLead(parsed);
           const packet =
-            "SYSTEM (deterministic engine pre-dispatch): The harness has ALREADY " +
-              "run the exact first `aidlc-orchestrate.ts next` invocation with " +
-              "every user argument preserved. Treat the JSON below as the " +
-              "authoritative directive and act on it now. Do NOT call `next` " +
-              "again for this invocation.\n\n" +
+            (lead === null ? "" : `${lead}\n\n`) +
+              "The first `next` for this message has already run, with every " +
+              "argument kept. Act on its reply below now; do not call `next` " +
+              "again for this message.\n\n" +
               `--- DIRECTIVE ---\n${directive}\n--- END DIRECTIVE ---\n`;
           // Never move the token ahead of rules to make it survive truncation.
           // Fall through without publishing either when the full packet cannot
@@ -703,8 +751,8 @@ if (target === "verb-intercept") {
       } catch { /* forwarding backstop best-effort */ }
       process.stdout.write(
         preface +
-        "SYSTEM (deterministic argument forwarding): Your immediate first tool call " +
-          "must be exactly the engine call below. Preserve every argument; do not run a bare `next`.\n\n" +
+        "Your first tool call is exactly the call below, every argument kept; " +
+          "do not run a bare `next`.\n\n" +
           `{{INVOKE}} engine orchestrate next ${forwarded}\n`,
       );
     } else if (preface) {
@@ -766,7 +814,7 @@ if (target === "verb-intercept") {
     : (cmd.display ?? [cmd.subcommand, ...forwarded].join(" "));
   process.stdout.write(
     preface +
-    `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness: it is a terminal utility that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user ${relayAsTextBlock(out)}, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n` +
+    `The command \`/aidlc ${typed}\` has already run; it carries no workflow work. Its output is below. Your only action this turn: relay that output to the user ${relayAsTextBlock(out)}, then stop. Do not run \`aidlc-orchestrate.ts next\`. Do not advance, resume, or run any workflow stage.\n\n` +
       fenceCommandOutput(out),
   );
   return 0;
@@ -978,19 +1026,12 @@ if (target === "plan-approval-guard") {
   const ti = kiro.tool_input ?? {};
   const canonical = canonicalTool(tool, ti);
   let payload: Record<string, unknown>;
-  if (dispatch !== null && dispatch.agents.length > 0) {
-    // Every named dispatch goes to the core guard, which judges only the
-    // developer's and records a reviewer brief that already carries its
-    // verdict. A crew with the developer is the developer's dispatch; a crew of
-    // several others names no one agent.
-    const agent = dispatch.agents.includes("aidlc-developer-agent")
-      ? "aidlc-developer-agent"
-      : dispatch.agents.length === 1 ? dispatch.agents[0] : "";
+  if (dispatch?.agents.includes("aidlc-developer-agent")) {
     payload = {
       hook_event_name: "PreToolUse",
       tool_name: "Task",
       tool_input: {
-        subagent_type: agent,
+        subagent_type: "aidlc-developer-agent",
         prompt: dispatch.prompt,
       },
     };
