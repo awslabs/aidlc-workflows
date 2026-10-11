@@ -7003,8 +7003,9 @@ function rejoinedByThisMachine(
   const contact = classifyFirstContact(projectDir, resolved);
   if (!contact.joined) return null;
   if (bind) writeSessionBinding(projectDir, chatId, contact.selection.space, contact.selection.intent, contact.source);
-  return (bind ? readSessionBinding(projectDir, chatId) : null) ??
-    { space: contact.selection.space, intent: contact.selection.intent, boundAt: isoTimestamp(), source: contact.source };
+  // What the chat is on for this process is the join just found, whether or not
+  // the write landed; the binding is read in resolveChat alone.
+  return { space: contact.selection.space, intent: contact.selection.intent, boundAt: isoTimestamp(), source: contact.source };
 }
 
 // The rule a new chat follows when it first meets a workflow: resolving a record
