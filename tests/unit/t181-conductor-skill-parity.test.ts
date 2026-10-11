@@ -1378,12 +1378,14 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "Print it as given and END THE TURN",
         "`**Other** \u2014 describe what you want instead`",
         "Every such render is invalid",
-        '**"What would you like me to do instead?"**',
-        '`next "<human alternative>"`',
         "never use `report` for a question's answer",
       ]) {
         if (!annex.includes(token)) missing.push(`${annexRel}  missing: ${token}`);
       }
+      // The Other-then-words forwarding through bare `next "<words>"` is the new-work routing question's route and
+      // lives in the skill's typed paragraph, scoped to that ask; the annex's section on every question never carries
+      // it, so an Other answer at a paused Unit or the project-type question is read for what it means, not forwarded.
+      if (annex.includes('`next "<human alternative>"`')) missing.push(`${annexRel}  carries the routing-only forwarding`);
     }
     expect(missing).toEqual([]);
   });

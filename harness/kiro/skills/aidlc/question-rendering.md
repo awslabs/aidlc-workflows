@@ -121,16 +121,11 @@ Every such render is invalid until its final displayed option is the next
 number followed by `**Other** — describe what you want instead`. A trailing sentence such as "or tell
 me" is not the Other option and must not replace it.
 
-If the answer is only the Other number or `Other`, ask exactly
-**"What would you like me to do instead?"** and END THE TURN without calling a
-tool. Forward the human's subsequent substantive alternative unchanged through
-`next "<human alternative>"`; never use `report` for a question's answer.
-
 A reply that picks a choice runs that choice's command, as the step says; a
 continue or reshape answer that needs the piece of work named first gets only
 the pieces listed, as a numbered list with Other, and the turn ends. A redo,
 jump, or start-fresh request on re-entry alone uses the non-stage
-`report --result resumed --choice <redo|jump|fresh>`.
+`report --result resumed --choice <redo|jump|fresh>`; never use `report` for a question's answer.
 
 ## Mandatory consolidated-summary checkpoint
 
