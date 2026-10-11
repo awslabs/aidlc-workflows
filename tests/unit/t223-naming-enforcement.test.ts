@@ -472,6 +472,38 @@ describe("t223 naming enforcement", () => {
       expect(out).not.toContain('stem "foo-agent"');
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+    const doctorBesideConductor = (frontmatter: string): string => {
+      const project = createTestProject();
+      projects.push(project);
+      const dir = agentsWith({ "foo-agent.md": HOST_AGENT, "aidlc-aidlc.md": frontmatter }, "shipped");
+      const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_AGENTS_DIR: dir,
+          AIDLC_STAGE_GRAPH: join(DIST_DATA, "stage-graph.json"),
+          AIDLC_SCOPE_GRID: join(DIST_DATA, "scope-grid.json"),
+          AIDLC_HARNESS_DIR: ".claude",
+        },
+      });
+      return `${res.stdout ?? ""}${res.stderr ?? ""}`;
+    };
+    const SHIPPED_CONDUCTOR = "---\nname: aidlc\ndescription: IDE conductor\ndisplay_name: aidlc\n---\n";
+
+    test("doctor takes the shipped conductor aidlc-aidlc.md declaring name aidlc as it ships", () => {
+      const out = doctorBesideConductor(SHIPPED_CONDUCTOR);
+      expect(out).toContain("ok    Agent filename/name consistency: all agent files match declared names");
+      expect(out).not.toContain("Rename the file");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("doctor still flags the conductor aidlc-aidlc.md when its name is not aidlc", () => {
+      const out = doctorBesideConductor(SHIPPED_CONDUCTOR.replace("name: aidlc\n", "name: aidlc-conductor\n"));
+      expect(out).toContain("Agent filename/name consistency: 1 mismatch(es) (advisory)");
+      expect(out).toContain('stem "aidlc-aidlc" declares name "aidlc-conductor"');
+      expect(out).not.toContain('stem "foo-agent"');
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
     test("a dispatch to a host agent keeps its own brief while a persona's is rewritten", () => {
       const project = setupIntegrationProject({ noAidlcDocs: true });
       projects.push(project);
