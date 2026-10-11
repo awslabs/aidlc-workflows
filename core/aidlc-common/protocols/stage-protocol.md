@@ -510,51 +510,38 @@ Stage files list **topic areas and example questions** — they are guidance, no
 - **Give each question one line of context** — why it is being asked or what depends on the answer — when the reason is not obvious from the prompt itself. "We found two conflicting retention values in the requirements (30 days vs 90 days); which governs?" beats "What is the retention period?".
 - **Prefer a concrete phrasing over an abstract one.** Ask about the actual decision in the user's domain terms, not the framework's internal vocabulary. If you would need to explain the question when asked to rephrase it, phrase it that clear way the first time.
 
-**Step 2: Use the person's earlier answer mode, or ask for it.**
+**Step 2: How the person answers.**
 
 The person picks how to answer once per piece of work, at the first stage with
-questions; later stages reuse that choice. The run-stage directive's
-`answer_mode` carries it:
-
-- `answer_mode.ask === false`: do not ask the mode question. Say
-  `answer_mode.notice` as one line, then go straight to the step for
-  `answer_mode.mode` (`guide` is Step 3a, `file` is Step 3b, `chat` is Step 3c).
-  Log nothing for the mode: the stage's `STAGE_STARTED` row already records it.
-- `answer_mode.ask === true` (or no `answer_mode` field): offer the choice
-  below. After the person answers, say `answer_mode.notice` as one line.
-
-Record the mode the person chose as its option label (`Guide me`, `I'll edit
-the file`, or `Chat`): the one they picked, or the one you understood when they
-answered in their own words. The engine reuses only a recorded label and hands
-back an answer that names none, so the person is never asked again because of
-how they worded it. If their reply
-leaves the mode unclear, ask one short follow-up instead of guessing.
-
-When the person asks for a different way at any stage ("let me just edit the
-file"), switch for this stage (see "Users can switch modes mid-stage" below) and
-record the new choice as below, with `--on-instruction '<their words>'`, so the
-later stages use it too.
-
-Offer the user a choice of interaction mode:
-```question
-prompt: "I've created [N] questions at `[file path]`. How would you like to answer them?"
-header: Questions
-multiSelect: false
-options:
-  - label: Guide me
-    description: Walk through each question interactively here
-  - label: I'll edit the file
-    description: I'll fill in the answers in the file directly
-  - label: Chat
-    description: Discuss freely — I'll extract decisions from our conversation
-```
+questions; later stages reuse that choice. The step says which this stage is:
+ask them once, or say the way they chose earlier and use it. Do what it says,
+word for word where it gives you words, and record what it names; then go to the
+step for the way chosen (`Guide me` is Step 3a, `I'll edit the file` is Step 3b,
+`Chat` is Step 3c). Render the mode question through the question-rendering
+annex like any structured question.
 
 On a numbered-prose harness, this interaction-mode question has four visible
 numbered lines: `1. Guide me`, `2. I'll edit the file`, `3. Chat`, and the final
 `4. Other`. Mentioning Other in a nearby tip or sentence does not satisfy the
 structured-question contract.
 
-Record the mode question and the user's mode choice through the log tool, the same pair every non-gate question uses (section 2 checklist item 2): `{{INVOKE}} engine log decision --stage <slug> --decision "How would you like to answer the questions?" --options "Guide me,I'll edit the file,Chat"` before presenting it, then `{{INVOKE}} engine log answer --stage <slug> --details '<the option label>'` after the response. When their request already said how they want to answer ("guide me through it"), do not ask it again: log the question as usual, record that choice with `--on-instruction '<their words>'` (in single quotes, as **Their words on a command line** above says), and say **SAY:** "You asked to be guided, so I'll ask the questions here. Say if you'd rather edit the file or chat." The tool stamps the row. Never write the audit shard yourself.
+Record the mode the person chose as its option label (`Guide me`, `I'll edit
+the file`, or `Chat`): the one they picked, or the one you understood when they
+answered in their own words. The engine reuses only a recorded label and hands
+back an answer that names none, so the person is never asked again because of
+how they worded it. If their reply leaves the mode unclear, ask one short
+follow-up instead of guessing. When their request already said how they want to
+answer ("guide me through it"), do not ask it again: record the question as the
+step names it, then their choice with `--on-instruction '<their words>'` (in
+single quotes, as **Their words on a command line** above says), and say
+**SAY:** "You asked to be guided, so I'll ask the questions here. Say if you'd
+rather edit the file or chat." The tool stamps the row.
+Never write the audit shard yourself.
+
+When the person asks for a different way at any stage ("let me just edit the
+file"), switch for this stage (see "Users can switch modes mid-stage" below) and
+record the new choice the same way, with `--on-instruction '<their words>'`, so
+the later stages use it too.
 
 **Step 3a: If "Guide me" (interactive mode):**
 - Present questions as structured questions in batches (batching limits are harness-specific — see the question-rendering annex)
@@ -565,7 +552,7 @@ Record the mode question and the user's mode choice through the log tool, the sa
 - After each batch of answers, IMMEDIATELY write the answers back to the questions file (update each `[Answer]:` tag)
 - Continue until all questions are answered
 - When the `run-stage` directive carries `kept_replies`, the person already replied to these questions in a chat that ended before their answers were written down: do what its `note` says, recording each answer they gave before asking anything, and never ask them again what they already answered
-- **Consolidated summary before generation**: The checkpoint below applies only when `directive.ceremony.summary_confirmation === "on"`. When it is `"off"`, generate directly from the answers with no confirmation prompt, confirmation entry, or receipt. With it on, after all questions have been
+- **Consolidated summary before generation**: The checkpoint below applies only when the step asks for the summary confirmation. When it does not, generate directly from the answers with no confirmation prompt, confirmation entry, or receipt. With it on, after all questions have been
   answered, present a consolidated summary of all answers as unordered bullets (never a numbered list). The person confirms what they can read: the bullets sit in the question itself, or right above it in the same message, as the question-rendering annex shows; never only in a tool's output or a file. Then run
   `bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts summary --stage "<directive.stage>" --questions-file "<questions-path>"`;
   add `--unit "<directive.unit>"` on a per-unit stage. Print its compact
@@ -646,7 +633,7 @@ Record the mode question and the user's mode choice through the log tool, the sa
 - Do NOT read the file or proceed until the user sends a completion signal
 - After the completion signal, read the answers, present their consolidated
   summary, and run the same persisted **Looks correct / Request changes**
-  checkpoint from Step 3a only when `directive.ceremony.summary_confirmation === "on"`. Editing the source file does not waive an enabled checkpoint; when it is `"off"`, generate directly with no checkpoint or receipt.
+  checkpoint from Step 3a only when the step asks for the summary confirmation. Editing the source file does not waive an enabled checkpoint; when the step does not ask for it, generate directly with no checkpoint or receipt.
 
 **Step 3c: If "Chat" (freeform mode):**
 - Engage in open-ended conversation about the stage's topic
@@ -654,7 +641,7 @@ Record the mode question and the user's mode choice through the log tool, the sa
 - Extract decisions and answers from the conversation as they emerge
 - To end the conversation, tell the user: "When you're ready to proceed, say **done** and I'll summarize our decisions."
 - After the conversation reaches natural resolution, write all extracted answers back to the questions file (update each `[Answer]:` tag with the decided value, timestamp, and `**Mode:** chat`)
-- Present a summary of extracted decisions, then, only when `directive.ceremony.summary_confirmation === "on"`, persist and use the same **Looks correct / Request changes** structured confirmation from Step 3a before proceeding; when it is `"off"`, generate directly with no checkpoint or receipt
+- Present a summary of extracted decisions, then, only when the step asks for the summary confirmation, persist and use the same **Looks correct / Request changes** structured confirmation from Step 3a before proceeding; when it does not, generate directly with no checkpoint or receipt
 - Best for: exploratory stages, brainstorming, when questions need discussion before answering
 
 Users can switch modes mid-stage. For example, start with "Guide Me" for the first few questions, then say "let me just chat about the rest."

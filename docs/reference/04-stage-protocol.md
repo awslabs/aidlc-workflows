@@ -384,39 +384,28 @@ the stage's next step), never creating it again, writing new questions over it,
 or asking an answered question again (#1873). A redo the person asked for
 (`artifact_reuse`, which drops the field, or Redo from scratch) starts afresh.
 
-**Step 2: Use the directive's answer mode, or present the mode choice.** The
-run-stage directive carries `answer_mode` (`mode`, `ask`, `reused_from`,
-`notice`). The first stage with questions in a piece of work asks; the engine
-then reuses the latest recorded answer to the mode question
+**Step 2: How the person answers.** The run-stage directive carries
+`answer_mode` (`mode`, `ask`, `reused_from`, `notice`) and, beside it, the
+instruction the conductor follows, `answer_mode_note` (`answerModeNote` in
+`aidlc-directive.ts`). The first stage with questions in a piece of work asks;
+the engine then reuses the latest recorded answer to the mode question
 (`latestRecordedAnswerMode`, the same DECISION_RECORDED / QUESTION_ANSWERED
-pairing the Stop hook reads). When `ask` is false the conductor says `notice`
-as one line and goes straight to `mode` (Guide me, I'll edit the file, or Chat)
-without asking or logging a mode question, and the stage's `STAGE_STARTED` row
-records the reused mode in its `Answer Mode` field. When `ask` is true it
-presents the choice below. The conductor records the chosen mode as its option
-label, read from the person's reply in whatever words they used, and the engine
-reads only that label or its number. The person changes the mode by saying so;
-the new choice is recorded the same way. A reused mode opens no decision, so
-`hasPendingDecision` and the gate-answer pairing are unchanged.
-
-```
-AskUserQuestion({
-  questions: [{
-    question: "I've created [N] questions at `[file path]`. How would you like to answer them?",
-    header: "Questions",
-    multiSelect: false,
-    options: [
-      { label: "Guide me", description: "Walk through each question interactively here" },
-      { label: "I'll edit the file", description: "I'll fill in the answers in the file directly" },
-      { label: "Chat", description: "Discuss freely -- I'll extract decisions from our conversation" }
-    ]
-  }]
-})
-```
-
-Record the mode question and choice through `aidlc engine log decision` /
-`aidlc engine log answer`, like every non-gate question. Users can switch
-modes mid-stage.
+pairing the Stop hook reads). The note makes the branch the protocol used to
+make on the field: with `ask: true` it carries the question ("I've created [N]
+questions at [the questions file]. How would you like to answer them?"), the
+three choices with their descriptions (Guide me, I'll edit the file, Chat), the
+exact `log decision` and `log answer` commands for this stage, and the notice to
+say afterwards; with `ask: false` it says the notice to say and the way to take
+the questions, with no mode question and nothing recorded for the mode (the
+stage's `STAGE_STARTED` row records the reused mode in its `Answer Mode`
+field). The conductor renders the question through its harness's
+question-rendering annex, records the chosen mode as its option label (read
+from the person's reply in whatever words they used; the engine reads only that
+label or its number), and the person changes the mode by saying so. A reused
+mode opens no decision, so `hasPendingDecision` and the gate-answer pairing are
+unchanged. The protocol's Step 2 keeps only what is the conductor's reading: a
+request that already said how to answer is recorded with `--on-instruction`,
+and an unclear reply gets one short follow-up.
 
 #### Guide Me (Interactive Mode)
 

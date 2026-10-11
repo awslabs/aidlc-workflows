@@ -43,9 +43,9 @@ const STAGE_VALIDITY_SAY =
 const CHANGE_NOTICES_NOTE =
   "Say each change_notices line to the person once, word for word, as your own sentence with nothing in front of " +
   "it, and add nothing about why.";
-const QUESTION_NOTE =
-  "This question is for the person, not for you: show it to them with its choices as given, end your turn, and " +
-  "act only on their reply.";
+// The question note names the install's own `next` for a pick whose command returns no step.
+const questionNote = (directiveModule as unknown as { questionNote: (invocation: string) => string }).questionNote;
+const QUESTION_NOTE = questionNote("bun .claude/tools/aidlc-orchestrate.ts");
 
 type Json = Record<string, unknown>;
 type WithAgentNotes = (directive: Json, invocation: string) => Json;
@@ -270,7 +270,7 @@ describe("t-rules-travel-with-steps: the notes and their checks", () => {
     // The agent's own recovery work is not a question for the person.
     const own = add({ kind: "ask", ask_type: "guard-recovery", question: "q", agent_work: true }, "bun x.ts");
     expect(own.question_note).toBeUndefined();
-    expect(add({ kind: "ask", ask_type: "scope-confirm", question: "q" }, "bun x.ts").question_note).toBe(QUESTION_NOTE);
+    expect(add({ kind: "ask", ask_type: "scope-confirm", question: "q" }, "bun x.ts").question_note).toBe(questionNote("bun x.ts"));
     // AIDA #2094 F1: with no skill the plan question's answer had no recording
     // step, so "looks good, build it" got the same question again.
     const plan = String(
@@ -278,7 +278,7 @@ describe("t-rules-travel-with-steps: the notes and their checks", () => {
         { kind: "ask", ask_type: "plan-approval", question: "q" }, "bun x/aidlc-orchestrate.ts", "bun x/aidlc-log.ts",
       ).question_note,
     );
-    expect(plan.startsWith(QUESTION_NOTE.replace(/\.$/, ""))).toBe(true);
+    expect(plan.startsWith(questionNote("bun x/aidlc-orchestrate.ts").replace(/\.$/, ""))).toBe(true);
     expect(plan).toContain(
       "record the choice they made with `bun x/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval " +
         "--details '<their choice>'`, then run `bun x/aidlc-orchestrate.ts next`",

@@ -130,6 +130,8 @@ import {
   type RunStageWaveEntry,
   type ScopeCommandRow,
   type StageValidityAdvisory,
+  numberedOptionLine,
+  numberedProseQuestion,
   validateDirective,
   withAgentNotes,
 } from "./aidlc-directive.ts";
@@ -432,10 +434,10 @@ import {
 // and utility never imports this module - no cycle).
 import {
   capInlineContextPaths,
-  INLINE_CONTEXT_PATHS_MAX_BYTES,
   type InlineContextEntry,
   inlineAgentsFor,
   markdownFilesUnder,
+  omittedContextWarning,
   readBoundedRegularFile,
   shippedInlineContextEntries,
 } from "./aidlc-inline-context.ts";
@@ -2722,7 +2724,7 @@ function newWorkRoutingOptionLine(
   options: readonly RoutingOption[] = NEW_WORK_ROUTING_OPTIONS,
 ): string {
   const option = options[index];
-  return `${index + 1}. **${option.label}** — ${option.detail(scope)}`;
+  return numberedOptionLine(index, option.label, option.detail(scope));
 }
 
 // A reply that is only one of the routing ask's options: its number (`1`,
@@ -3085,7 +3087,9 @@ function routingSelectCommands(
 
 function newWorkRoutingAskDirective(
   question: string,
-  numberedProseQuestion: string,
+  // The prose rendering: its prompt, and the options in the order a numbered
+  // reply is read against (routingOptionReply reads the same list).
+  routing: { prompt: string; options: readonly RoutingOption[] },
   description: string,
   proposedScope: string,
   projectDir: string,
@@ -3110,22 +3114,39 @@ function newWorkRoutingAskDirective(
     routingSettings(carried), approvedRequest,
   );
   const tool = aidlcToolInvocation("orchestrate");
+  const newIntentCommand =
+    `${tool} next --new-intent --scope ${scopeArg(proposedScope)} --request ${stored.id}${carried.newWork}${carried.planChanges}`;
+  // Beside active work this reshapes it; with records to pick it composes
+  // the new work, like a plan offer's compose answer.
+  const composeCommand =
+    `${tool} next compose --request ${stored.id}${availableIntents ? carried.creation : carried.existingWork}`;
+  const continueCommand = `${tool} next --continue --request ${stored.id}${carried.existingWork}` +
+    (carried.continueScope ? ` --scope ${scopeArg(carried.continueScope)}` : "");
+  // Each choice's command, in the rendering's order. With records to pick, the
+  // continue and reshape answers need the piece named first (their commands are
+  // per record), so those two carry none.
+  const routeCommand: Record<NewWorkRoute, string | undefined> = {
+    continue: availableIntents ? undefined : continueCommand,
+    separate: newIntentCommand,
+    reshape: availableIntents ? undefined : composeCommand,
+  };
+  const options = routing.options.map((option) => ({ label: option.label, detail: option.detail(proposedScope) }));
   return {
     kind: "ask",
     ask_type: "new-work-routing",
     response_route: "next",
     question,
-    numbered_prose_question: numberedProseQuestion,
+    numbered_prose_question: numberedProseQuestion(routing.prompt, options),
+    choices: options.map((option, index) => {
+      const command = routeCommand[routing.options[index].route];
+      return command === undefined ? option : { ...option, command };
+    }),
     new_work_description: authoritativeRequest(description),
     proposed_scope: proposedScope,
-    new_intent_command:
-      `${tool} next --new-intent --scope ${scopeArg(proposedScope)} --request ${stored.id}${carried.newWork}${carried.planChanges}`,
+    new_intent_command: newIntentCommand,
     scope_commands: scopeCommands(`${tool} next --new-intent`, stored.id, carried.newWork, projectDir).map((entry) =>
       entry.scope === proposedScope ? { ...entry, command: `${entry.command}${carried.planChanges}` } : entry),
-    // Beside active work this reshapes it; with records to pick it composes
-    // the new work, like a plan offer's compose answer.
-    compose_command:
-      `${tool} next compose --request ${stored.id}${availableIntents ? carried.creation : carried.existingWork}`,
+    compose_command: composeCommand,
     // With a record to pick, the human continues it through its select command
     // and reshapes it through its reshape command; otherwise the question named
     // the active workflow.
@@ -3138,10 +3159,7 @@ function newWorkRoutingAskDirective(
           command: routingReshapeCommand(stored.id, selector, carried.existingWork),
         })),
       }
-      : {
-        continue_command: `${tool} next --continue --request ${stored.id}${carried.existingWork}` +
-          (carried.continueScope ? ` --scope ${scopeArg(carried.continueScope)}` : ""),
-      }),
+      : { continue_command: continueCommand }),
   };
 }
 
@@ -5067,13 +5085,11 @@ function intentPickPromptIfRecordsExist(
         `(2) a separate new piece of work - Yes, set it up alongside the existing work as ` +
         `"${pendingWork.proposedScope}" work without changing it; or (3) a change to an ` +
         "existing remaining plan - select its record, then reshape it?",
-      `This project already has ${inProgress}, ` +
-        `and none is currently selected: ${list}${unlisted}. You said: "${requestPreview(pendingWork.description)}".${documentSplitSentence(pendingWork.description)} What should I do?\n\n` +
-        `${newWorkRoutingOptionLine(0, pendingWork.proposedScope, EXISTING_WORK_ROUTING_OPTIONS)}\n` +
-        `${newWorkRoutingOptionLine(1, pendingWork.proposedScope, EXISTING_WORK_ROUTING_OPTIONS)}\n` +
-        `${newWorkRoutingOptionLine(2, pendingWork.proposedScope, EXISTING_WORK_ROUTING_OPTIONS)}\n` +
-        "4. **Other** — describe what you want instead\n\n" +
-        "Reply with a number (or just tell me).",
+      {
+        prompt: `This project already has ${inProgress}, ` +
+          `and none is currently selected: ${list}${unlisted}. You said: "${requestPreview(pendingWork.description)}".${documentSplitSentence(pendingWork.description)} What should I do?`,
+        options: EXISTING_WORK_ROUTING_OPTIONS,
+      },
       pendingWork.description,
       pendingWork.proposedScope,
       projectDir,
@@ -6137,13 +6153,9 @@ function inlineContextRoster(
   const warnings: string[] = [];
   const allPaths = inlineContextEntries(node, codekbCtx, warnings, depth).map((e) => e.rel);
   const { paths, omitted } = capInlineContextPaths(allPaths);
-  if (omitted > 0) {
-    warnings.push(
-      `Warning: ${omitted} optional persona/knowledge path(s) were omitted because there was ` +
-        `no room to pass them all (inline_context_paths is capped at ${INLINE_CONTEXT_PATHS_MAX_BYTES} bytes). ` +
-        "Configure fewer knowledge files if this matters; the stage runs without the omitted optional context.",
-    );
-  }
+  // The person reads this line (the skill shows context warnings as written),
+  // so it is about their work: no field name, no byte cap.
+  if (omitted > 0) warnings.push(omittedContextWarning(omitted));
   return { paths, warnings: boundedContextWarnings(warnings) };
 }
 
@@ -8944,12 +8956,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
           : "Is this (1) part of that work - continue it; (2) a separate new piece of work - " +
             `Yes, set it up alongside the current one as "${inferred.scope}" work without changing it; `) +
         "or (3) a change to how the remaining plan is shaped?",
-      `Work is already in progress on: "${activeLabel}". You said: "${requestPreview(flags.intent)}".${documentSplitSentence(flags.intent)} What should I do?\n\n` +
-        `${newWorkRoutingOptionLine(0, inferred.scope, options)}\n` +
-        `${newWorkRoutingOptionLine(1, inferred.scope, options)}\n` +
-        `${newWorkRoutingOptionLine(2, inferred.scope, options)}\n` +
-        "4. **Other** — describe what you want instead\n\n" +
-        "Reply with a number (or just tell me).",
+      {
+        prompt: `Work is already in progress on: "${activeLabel}". You said: "${requestPreview(flags.intent)}".${documentSplitSentence(flags.intent)} What should I do?`,
+        options,
+      },
       flags.intent,
       inferred.scope,
       pd,
