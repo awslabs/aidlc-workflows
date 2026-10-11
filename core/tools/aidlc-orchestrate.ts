@@ -1766,6 +1766,13 @@ const PARKED_REPLY_NOTE =
   "The person said this when they stopped the work here, in an earlier chat. Read it for what it means for this " +
   "stage and the ones after it before doing anything else, and never ask them again what they already said.";
 
+// One kept message is at most this long (the human-turn hook's own cap): a
+// longer reply rides as far as that, and the note says where the rest is. The
+// record keeps every word; a step that cannot be sent would end the resume.
+const PARKED_REPLY_MAX_CHARS = 8000;
+const PARKED_REPLY_CUT_NOTE =
+  " Only the first part of it is here; the whole message is on the park row of the audit record.";
+
 // Rows that say the stage has moved since the park: the words were read then.
 const PARKED_REPLY_SPENT_BY: ReadonlySet<string> = new Set([
   "DECISION_RECORDED",
@@ -1799,15 +1806,29 @@ function wordsAtPark(projectDir: string, stage: string): string | null {
   return spent ? null : words;
 }
 
+// A Unit's own step carries none: in a solo unit-major walk the park row names
+// the block's first stage (Current Stage stays there while each Unit works
+// through the later ones), so a later Unit reaching that stage would be handed
+// words said about another Unit's step.
 function withParkedReply(directive: Directive): Directive {
-  if (isRouteCheckProbe() || directive.kind !== "run-stage" || directive.gate_only || directive.build_settled) {
+  if (
+    isRouteCheckProbe() || directive.kind !== "run-stage" || directive.gate_only || directive.build_settled ||
+    directive.unit
+  ) {
     return directive;
   }
   const projectDir = emissionProjectDir(directive);
   if (!projectDir) return directive;
   try {
     const words = wordsAtPark(projectDir, directive.stage);
-    if (words !== null) directive.parked_reply = { words, note: PARKED_REPLY_NOTE };
+    if (words === null) return directive;
+    const cut = words.length > PARKED_REPLY_MAX_CHARS;
+    directive.parked_reply = {
+      words: cut ? words.slice(0, PARKED_REPLY_MAX_CHARS) : words,
+      note: cut ? `${PARKED_REPLY_NOTE}${PARKED_REPLY_CUT_NOTE}` : PARKED_REPLY_NOTE,
+    };
+    // A step that still cannot be sent alone goes without it; the record keeps the words.
+    if (Buffer.byteLength(JSON.stringify(directive), "utf-8") > directiveMaxBytes()) delete directive.parked_reply;
   } catch (e) {
     recordHookDrop(projectDir, "parked-reply", errorMessage(e));
   }

@@ -22,8 +22,11 @@ import {
   cleanupTestProject,
   createOrchestrationTestProject,
   FIXTURES_DIR,
+  createTestProject,
   resetAidlcEnv,
   runOrchestrateNext,
+  seedAidlcMemory,
+  seedBoltDag,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
@@ -279,5 +282,103 @@ describe("the step that resumes where the work was parked carries them", () => {
     expect(result.valid ? "" : result.errors.join("\n")).toContain("parked_reply unknown key: extra");
     const wrong = { ...directive, parked_reply: { words: 7, note: NOTE } };
     expect(validateDirective(wrong).valid).toBe(false);
+  });
+});
+
+// A Unit's own step is not where the person stopped: in a solo unit-major walk
+// the park row names the block's first stage (Current Stage stays there while
+// each Unit works through the later ones), so a later Unit reaching that stage
+// would be handed words said about another Unit's step. A step that carries a
+// Unit gets none; the live beat gets what it got before: nothing.
+describe("a Unit's step never carries them", () => {
+  const SEP = "\u2014";
+  let proj: string;
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    writeFileSync(seededStateFile(proj), `# AI-DLC State Tracking
+
+## Project Information
+- **Project**: a park in a unit-major walk
+- **Project Type**: Greenfield
+- **Scope**: feature
+- **State Version**: 8
+- **Skeleton Stance**: on
+
+## Scope Configuration
+- **Stages to Execute**: all
+- **Stages to Skip**: none
+- **Depth**: Standard
+- **Test Strategy**: Standard
+- **Summary Confirmation**: off (set by you)
+
+## Runtime State
+- **Construction Checkpoints**: enabled
+- **Construction Iteration**: unit-major
+- **Construction Execution**: serial
+
+## Stage Progress
+
+### CONSTRUCTION PHASE
+- [-] functional-design ${SEP} EXECUTE
+- [ ] nfr-requirements ${SEP} EXECUTE
+- [ ] nfr-design ${SEP} EXECUTE
+- [ ] infrastructure-design ${SEP} EXECUTE
+- [ ] code-generation ${SEP} EXECUTE
+- [ ] build-and-test ${SEP} EXECUTE
+
+## Current Status
+- **Lifecycle Phase**: CONSTRUCTION
+- **Current Stage**: functional-design
+- **Status**: Running
+`);
+    seedBoltDag(proj, ["alpha", "beta"]);
+  });
+  afterEach(() => cleanupTestProject(proj));
+
+  test("the park row keeps the words, and the resumed Unit step carries none", () => {
+    says(proj, "let's stop here for today");
+    expect(state(proj, ["park"]).rc).toBe(0);
+    expect(parkedWords(proj)).toBe("let's stop here for today");
+    unpark(proj);
+    const directive = resumed(proj, []);
+    expect(directive.stage).toBe("functional-design");
+    expect(directive.unit).toBe("alpha");
+    expect(directive.parked_reply).toBeUndefined();
+  });
+});
+
+// The record keeps the whole message; the step carries what fits. A gate's
+// recorded reply can run to several long messages, and a step that cannot be
+// sent would stop the resume for good (an error writes no row of the stage).
+describe("a long reply is carried only as far as the step can take it", () => {
+  let proj: string;
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createOrchestrationTestProject();
+    seedStage(proj);
+  });
+  afterEach(() => cleanupTestProject(proj));
+
+  test("the step carries the first part and says the whole message is on the record", () => {
+    const long = "approve, and stop here. ".repeat(1400); // about 33,000 characters, past any host's step limit
+    appendAuditEntry("WORKFLOW_PARKED", { Stage: STAGE, "Person Reply": long }, proj);
+    const directive = resumed(proj, []);
+    expect(directive.stage).toBe(STAGE);
+    const reply = directive.parked_reply as ParkedReply;
+    expect(reply?.words.length).toBeLessThanOrEqual(8000);
+    expect(long.startsWith(reply?.words ?? "x")).toBe(true);
+    expect(reply?.note).toContain(NOTE);
+    expect(reply?.note).toContain("whole message");
+    expect(validateDirective(directive).valid).toBe(true);
+  });
+
+  test("a reply that fits is carried whole, with the plain note", () => {
+    const words = "approve, and stop here. ".repeat(100).trim(); // about 2,400 characters
+    appendAuditEntry("WORKFLOW_PARKED", { Stage: STAGE, "Person Reply": words }, proj);
+    const reply = resumed(proj, []).parked_reply as ParkedReply;
+    expect(reply?.words).toBe(words);
+    expect(reply?.note).toBe(NOTE);
   });
 });
