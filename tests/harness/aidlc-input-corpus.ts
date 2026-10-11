@@ -31,7 +31,7 @@ export type State =
   | "fresh" | "work-open" | "plan-question-open" | "gate-open" | "two-similar-records"
   | "plan-offer-open" | "routing-question-open" | "stage-question-asked" | "parked" | "finished" | "archived"
   | "second-chat" | "kiro-pick" | "hooks-off" | "unattended";
-export type Harness = "claude" | "codex" | "kiro" | "kiro-ide";
+export type Harness = "claude" | "codex" | "kiro" | "kiro-ide" | "copilot";
 export type ArgvVariant = "posix" | "kiro-cli" | "kiro-ide-pwsh";
 
 export interface EngineExpectation {
@@ -372,6 +372,15 @@ export async function say(proj: string, prompt: string, harness: Harness, opts: 
     return exec([process.execPath, DISPATCHER, "engine", "hook", "record-human-turn"],
       { cwd: proj, env: env(proj, opts), input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, cwd: proj, prompt }) });
   }
+  if (harness === "copilot") {
+    installCopilot(proj);
+    return exec([process.execPath, join(proj, ".aidlc", "hooks", "aidlc-copilot-adapter.ts"), "record-human-turn"], {
+      cwd: proj,
+      env: { ...env(proj, opts), CLAUDE_PROJECT_DIR: undefined, AIDLC_UNATTENDED: opts.env?.AIDLC_UNATTENDED, USER_PROMPT: undefined },
+      // Copilot CLI's own payload (live-captured on 1.0.95): the chat's id, the prompt, a timestamp and the folder.
+      input: JSON.stringify({ sessionId: session, prompt, timestamp: Date.now(), cwd: proj }),
+    });
+  }
   const tree = harness === "codex" ? ".codex" : ".kiro";
   if (!existsSync(join(proj, tree))) cpSync(join(REPO_ROOT, "dist", harness, tree), join(proj, tree), { recursive: true });
   const unset = { ...env(proj, opts), CLAUDE_PROJECT_DIR: undefined, AIDLC_UNATTENDED: opts.env?.AIDLC_UNATTENDED, USER_PROMPT: undefined };
@@ -388,6 +397,26 @@ export async function say(proj: string, prompt: string, harness: Harness, opts: 
     env: unset,
     input: JSON.stringify({ hook_event_name: harness === "kiro" ? "userPromptSubmit" : "UserPromptSubmit", session_id: session, cwd: proj, prompt }),
   });
+}
+
+/** The Copilot install as the copy channel lays it out: the engine tree and the skills Copilot discovers in .github/. */
+export function installCopilot(proj: string): void {
+  if (!existsSync(join(proj, ".aidlc"))) cpSync(join(REPO_ROOT, "dist", "copilot", ".aidlc"), join(proj, ".aidlc"), { recursive: true });
+  if (!existsSync(join(proj, ".github"))) cpSync(join(REPO_ROOT, "dist", "copilot", ".github"), join(proj, ".github"), { recursive: true });
+}
+
+// A skill the person invoked by its slash name, as Copilot CLI hands it to the UserPromptSubmit hook (live-captured on
+// 1.0.83 and 1.0.95): Copilot's sentence, then a skill-context block with the installed SKILL.md body (frontmatter gone,
+// leading blank line gone, every `$ARGUMENTS` replaced by the typed words verbatim) and the closing tag. The typed line
+// is in no field. `body` stands in for the file when the host's copy differs from what is on disk.
+export function copilotSkillPrompt(proj: string, args: string, skill = "aidlc", body?: string): string {
+  installCopilot(proj);
+  const dir = join(proj, ".github", "skills", skill);
+  const text = (body ?? readFileSync(join(dir, "SKILL.md"), "utf-8")).replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trim();
+  const related = readdirSync(dir).filter((name) => name !== "SKILL.md").sort().map((name) => `  - ${join(dir, name)}\n`).join("");
+  return `The user explicitly invoked the "/${skill}" skill. Follow its instructions now.\n\n` +
+    `<skill-context name="${skill}">\nBase directory for this skill: ${dir}\n\nRelated files (use view tool to read):\n${related}\n` +
+    `${text.split("$ARGUMENTS").join(args)}\n\n</skill-context>`;
 }
 
 export interface StoredRecord { text: string; words: string | null; settings: Array<{ key: string; value: string }>; applied: string[] }

@@ -6,7 +6,7 @@
 // text as the host delivered it, the flags the engine's own parser finds in a
 // typed `/aidlc` line, the switch lines the hook applied). Only `next` on a
 // fresh workspace reads the record (t-next-takes-the-persons-line); this file pins
-// its shape on the four host hook paths.
+// its shape on the five host hook paths.
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -27,6 +27,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
+import { copilotSkillPrompt } from "../harness/aidlc-input-corpus.ts";
 import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   auditBlockField,
@@ -40,8 +41,8 @@ const BUN = process.execPath;
 const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
 const SESSION = "01995000-7a11-7000-8000-00000000c001";
 
-type Harness = "claude" | "codex" | "kiro" | "kiro-ide";
-const HARNESSES: Harness[] = ["claude", "codex", "kiro", "kiro-ide"];
+type Harness = "claude" | "codex" | "kiro" | "kiro-ide" | "copilot";
+const HARNESSES: Harness[] = ["claude", "codex", "kiro", "kiro-ide", "copilot"];
 
 interface StoredMessage {
   id: string;
@@ -98,8 +99,10 @@ function run(proj: string, args: string[], input: string, extraEnv: NodeJS.Proce
 }
 
 function hostTree(proj: string, harness: Exclude<Harness, "claude">): string {
-  const tree = harness === "codex" ? ".codex" : ".kiro";
+  const tree = harness === "codex" ? ".codex" : harness === "copilot" ? ".aidlc" : ".kiro";
   if (!existsSync(join(proj, tree))) cpSync(join(REPO_ROOT, "dist", harness, tree), join(proj, tree), { recursive: true });
+  // The Copilot adapter reads the skills Copilot discovers in .github/ beside the engine tree.
+  if (harness === "copilot" && !existsSync(join(proj, ".github"))) cpSync(join(REPO_ROOT, "dist", "copilot", ".github"), join(proj, ".github"), { recursive: true });
   return tree;
 }
 
@@ -113,6 +116,12 @@ function say(proj: string, prompt: string, harness: Harness = "claude", extraEnv
     return;
   }
   const tree = hostTree(proj, harness);
+  if (harness === "copilot") {
+    // Copilot CLI's own payload (live-captured on 1.0.95): the chat's id, the prompt, a timestamp and the folder.
+    run(proj, [join(proj, tree, "hooks", "aidlc-copilot-adapter.ts"), "record-human-turn"],
+      JSON.stringify({ sessionId: SESSION, prompt, timestamp: Date.now(), cwd: proj }), { ...UNSET, ...extraEnv });
+    return;
+  }
   if (harness === "codex") {
     writeSessionPidEntry(proj, process.pid, SESSION);
     run(proj, [join(proj, tree, "hooks", "aidlc-codex-adapter.ts"), "record-human-turn"],
@@ -251,6 +260,24 @@ describe("the human-turn hook keeps one record of each message", () => {
       if (harness === "claude") expect(auditBlockField(turn.block, "Picked")).toContain("In the API handler");
     });
   }
+
+  // Copilot hands a skill the person invoked by its slash name over as the skill's own text with the typed words filled
+  // in (tests/unit/t-copilot-skill-line pins every shape); the record keeps the line rebuilt from it.
+  test("copilot: a skill the person invoked by its slash name is recorded as the rebuilt /aidlc line", () => {
+    const proj = withWork();
+    hostTree(proj, "copilot");
+    say(proj, copilotSkillPrompt(proj, "bugfix --depth minimal fix the parser"), "copilot");
+    const all = records(proj);
+    expect(all).toHaveLength(1);
+    const [record] = all;
+    expect(record.text).toBe("/aidlc bugfix --depth minimal fix the parser");
+    expect(record.words).toBe("fix the parser");
+    expect(record.route.scope).toBe("bugfix");
+    expect(record.settings).toEqual([{ key: "depth", value: "minimal" }]);
+    expect(record.cut).toBeUndefined();
+    const [turn] = humanTurns(proj);
+    expect(auditBlockField(turn.block, "Message Id")).toBe(record.id);
+  });
 
   test("before any workflow exists, the record is written and no HUMAN_TURN row is", () => {
     const proj = noWork();

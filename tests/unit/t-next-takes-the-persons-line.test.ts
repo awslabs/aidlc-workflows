@@ -21,6 +21,7 @@ import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, createOrchestrationTestProject } from "../harness/fixtures.ts";
 import {
+  copilotSkillPrompt,
   type Directive,
   env,
   exec,
@@ -67,7 +68,9 @@ async function next(
   args: string[],
   opts: RunOptions & { noSession?: true } = {},
 ): Promise<{ directive: Directive; out: string }> {
-  const tool = harness === "claude" ? ORCHESTRATE : join(proj, ".kiro", "tools", "aidlc-orchestrate.ts");
+  const tool = harness === "claude"
+    ? ORCHESTRATE
+    : join(proj, harness === "copilot" ? ".aidlc" : ".kiro", "tools", "aidlc-orchestrate.ts");
   const runEnv = env(proj, opts);
   if (opts.noSession) delete runEnv.AIDLC_SESSION_OVERRIDE;
   const res = await exec([process.execPath, tool, "next", "--project-dir", proj, ...args], { cwd: proj, env: runEnv });
@@ -204,6 +207,29 @@ describe("next takes the person's own /aidlc line when the agent's command carri
     expect(directive.kind, out).toBe("error");
     expect(directive.message ?? "").toContain(NO_STATE);
     expect(questionFiles(proj)).toHaveLength(0);
+  });
+
+  // Copilot CLI hands `/aidlc <words>` to the hook as the skill's own text with the words filled in; the adapter records the
+  // line rebuilt from it (tests/unit/t-copilot-skill-line), and the agent's bare `next` (measured 5 of 5 on 1.0.95) reads it.
+  test("copilot: the slash line arrives as the host's skill wrapper, and a bare next asks the plan question for the words", async () => {
+    const proj = fresh();
+    const said = await say(proj, copilotSkillPrompt(proj, WORDS), "copilot");
+    expect(said.status, `${said.stdout}${said.stderr}`).toBe(0);
+    const { directive, out } = await next(proj, "copilot", []);
+    expect(directive.kind, out).toBe("ask");
+    expect(directive.ask_type).toBe("scope-confirm");
+    expect(directive.question ?? "").toContain(WORDS);
+    expect(directive.proposed_scope).toBe("bugfix");
+    expect(questionFiles(proj)).toHaveLength(1);
+  });
+
+  test("copilot: a wrapper that is not our skill file byte for byte is recorded as delivered, and leaves today's error", async () => {
+    const proj = fresh();
+    const said = await say(proj, copilotSkillPrompt(proj, WORDS).replace("## Welcome", "## Welcome!"), "copilot");
+    expect(said.status, `${said.stdout}${said.stderr}`).toBe(0);
+    const { directive, out } = await next(proj, "copilot", []);
+    expect(directive.kind, out).toBe("error");
+    expect(directive.message ?? "").toContain(NO_STATE);
   });
 
   test("claude: with no chat identity no record is read", async () => {
