@@ -4,8 +4,9 @@
 // The record proves two things and reads no meaning: that a real person said
 // this in this chat (the row the hook mints), and exactly what they said (the
 // text as the host delivered it, the flags the engine's own parser finds in a
-// typed `/aidlc` line, the switch lines the hook applied). Nothing reads the
-// record yet; this file pins its shape on the four host hook paths.
+// typed `/aidlc` line, the switch lines the hook applied). Only `next` on a
+// fresh workspace reads the record (t-next-takes-the-persons-line); this file pins
+// its shape on the four host hook paths.
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
