@@ -2411,6 +2411,79 @@ export function copilotConfigPath(
   return join(env.COPILOT_HOME || join(home, ".copilot"), "config.json");
 }
 
+// The global opencode config files that merge before a project opencode.json,
+// in opencode's own order (v1.18.18 config/config.ts:258-260 and :401-403):
+// config.json, opencode.json and opencode.jsonc under its config directory,
+// then the file OPENCODE_CONFIG names. The directory is xdg-basedir's
+// (XDG_CONFIG_HOME, else os.homedir()/.config, on every platform; the home is
+// USERPROFILE on Windows, never APPDATA) plus "opencode" (core/global.ts:13).
+export function openCodeGlobalConfigFiles(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = hostPlatform(),
+): string[] {
+  const home = (platform === "win32" ? env.USERPROFILE : env.HOME) || homedir();
+  const dir = join(env.XDG_CONFIG_HOME || join(home, ".config"), "opencode");
+  return [
+    join(dir, "config.json"),
+    join(dir, "opencode.json"),
+    join(dir, "opencode.jsonc"),
+    ...(env.OPENCODE_CONFIG ? [env.OPENCODE_CONFIG] : []),
+  ];
+}
+
+// opencode deep-merges those files (remeda mergeDeep): plain objects merge key
+// by key, anything else is replaced by the later file's value.
+function mergeLikeOpenCode(base: unknown, next: unknown): unknown {
+  if (!isRecord(base) || !isRecord(next)) return next;
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(next)) merged[key] = mergeLikeOpenCode(merged[key], value);
+  return merged;
+}
+
+// A project opencode.json replaces a global short form ("bash": "ask") with
+// the bash or edit map AI-DLC writes, so the person's ask or deny for every
+// shell command or file edit is gone in that project. One line says so and
+// names the file; null when the folded value is a map, "allow" (opencode's
+// own default) or absent. Reads only; a file it cannot read or parse is skipped.
+export function openCodeGlobalShortFormNote(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = hostPlatform(),
+): string | null {
+  const home = (platform === "win32" ? env.USERPROFILE : env.HOME) || homedir();
+  let permission: unknown;
+  const setBy: Partial<Record<"bash" | "edit", string>> = {};
+  for (const file of openCodeGlobalConfigFiles(env, platform)) {
+    let value: unknown;
+    try {
+      value = Bun.JSONC.parse(readFileSync(file, "utf-8").replace(/^\uFEFF/, ""));
+    } catch {
+      continue;
+    }
+    if (!isRecord(value) || !isRecord(value.permission)) continue;
+    for (const key of ["bash", "edit"] as const) {
+      if (value.permission[key] !== undefined) setBy[key] = file;
+    }
+    permission = mergeLikeOpenCode(permission, value.permission);
+  }
+  if (!isRecord(permission)) return null;
+  const found: Array<{ key: "bash" | "edit"; value: "ask" | "deny"; what: string }> = [];
+  for (const [key, what] of [["bash", "shell command"], ["edit", "file edit"]] as const) {
+    const value = permission[key];
+    if (value === "ask" || value === "deny") found.push({ key, value, what });
+  }
+  if (found.length === 0) return null;
+  const shown = (file: string) =>
+    platform !== "win32" && file.startsWith(`${home}/`) ? `~${file.slice(home.length)}` : file;
+  const where = [...new Set(found.map((entry) => shown(setBy[entry.key] ?? "")))].join(" and ");
+  const rewrites = found.map((entry) => `"${entry.key}": {"*": "${entry.value}"}`);
+  if (found.length === 1) {
+    const [{ value, what }] = found;
+    return `Your opencode setting ${value === "ask" ? "asks before" : "refuses"} every ${what}; in this project AI-DLC's permission rules replace that short form. To keep ${value === "ask" ? "asking" : "refusing"}, write it as ${rewrites[0]} in ${where}.`;
+  }
+  const parts = found.map((entry) => `${entry.value === "ask" ? "ask before" : "refuse"} every ${entry.what}`);
+  return `Your opencode settings ${parts.join(" and ")}; in this project AI-DLC's permission rules replace those short forms. To keep them, write them as ${rewrites.join(" and ")} in ${where}.`;
+}
+
 // True when a trustedFolders entry covers the project the way the CLI judges
 // it: the folder itself or any folder above it, after resolving links and
 // dropping trailing separators. On Windows the CLI also ignores case and

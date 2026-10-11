@@ -85,7 +85,8 @@ your own rules after them decide. In your global opencode config, write a
 shell rule as a map (`"bash": {"*": "ask"}`): opencode replaces a global
 short form `"bash": "ask"` with any project map, this file included. A
 global `"git *": "allow"` still meets AI-DLC's `git push` ask once; "Allow
-always" ends it. Start opencode in the project and
+always" ends it. `aidlc config` and `aidlc doctor` say so in one line when
+they find the short form in your global config. Start opencode in the project and
 run `/aidlc --doctor`, then `/aidlc` followed by what you want to build.
 
 ### Versioned manual-copy alternative

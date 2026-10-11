@@ -261,6 +261,7 @@ import {
   managedBlockMarkers,
   normalizeProvidersRecord,
   openCodeFileProvider,
+  openCodeGlobalShortFormNote,
   openCodeProviderEntryIds,
   withRecordedMcpRegion,
   normalizeProjectChoicesRecord,
@@ -12456,7 +12457,11 @@ export async function main(
     // Quiet output is one line when clean. Like the outstanding-actions line,
     // each record-hiding rule and each switch warning adds one Warning line, on
     // dry run and apply.
-    const quietWarnings = [...hiddenRecords, ...switchWarnings];
+    // opencode replaces a global short-form permission rule with the bash or
+    // edit map AI-DLC writes into this project; the person hears it once here.
+    const shortForm = stamp.distribution === "opencode" ? openCodeGlobalShortFormNote() : null;
+    if (shortForm) prepared.notes.push(shortForm);
+    const quietWarnings = [...hiddenRecords, ...switchWarnings, ...(shortForm ? [shortForm] : [])];
     const withQuietWarnings = (message: string): string =>
       options.mode === "quiet" && quietWarnings.length > 0
         ? `${message}${quietWarnings.map((warning) => `\nWarning: ${warning}`).join("")}`

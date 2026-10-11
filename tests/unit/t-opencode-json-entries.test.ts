@@ -45,7 +45,12 @@ function temp(prefix: string): string {
   return path;
 }
 
-function run(args: string[], cwd: string, tool = INIT): { status: number; stdout: string; stderr: string } {
+function run(
+  args: string[],
+  cwd: string,
+  tool = INIT,
+  extraEnv: NodeJS.ProcessEnv = {},
+): { status: number; stdout: string; stderr: string } {
   // Keep the host's active runtime out of fixture source selection.
   const machine = temp("aidlc-t-ocje-machine-");
   const result = spawnSync(BUN, [tool, ...args], {
@@ -54,6 +59,7 @@ function run(args: string[], cwd: string, tool = INIT): { status: number; stdout
       ...process.env,
       AIDLC_INSTALL_ROOT: join(machine, "share", "aidlc"),
       AIDLC_BIN_DIR: join(machine, "bin"),
+      ...extraEnv,
     },
     encoding: "utf-8",
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -69,10 +75,15 @@ function project(teamFile?: string): string {
   return dir;
 }
 
-function configure(dir: string, source = OPENCODE_RELEASE): { status: number; stdout: string; stderr: string } {
+function configure(
+  dir: string,
+  source = OPENCODE_RELEASE,
+  extraEnv: NodeJS.ProcessEnv = {},
+  flags: string[] = [],
+): { status: number; stdout: string; stderr: string } {
   return run([
-    "config", "--project-dir", dir, "--from", source, "--harness", "opencode", "--mcp", "none", "--yes",
-  ], dir);
+    "config", "--project-dir", dir, "--from", source, "--harness", "opencode", "--mcp", "none", "--yes", ...flags,
+  ], dir, INIT, extraEnv);
 }
 
 function configured(dir: string, source = OPENCODE_RELEASE): string {
@@ -501,6 +512,58 @@ describe("an explicit provider choice reaches the team's opencode.json", () => {
     expect(openCodeFileProvider(project(PROFILE_FILE))).toEqual({ region: "eu-west-1", profile: "team-ops" });
     expect(openCodeFileProvider(project(TEAM_FILE))).toEqual({ region: "eu-west-1" });
     expect(openCodeFileProvider(project())).toEqual({});
+  });
+});
+
+// opencode replaces a global short-form permission rule ("bash": "ask") with
+// the bash map AI-DLC writes into the project. Setup says so once, in one
+// line that names the file, and writes nothing there.
+describe("setup says once when the person's global opencode config holds a short-form permission rule", () => {
+  const LINE = 'Your opencode setting asks before every shell command; in this project AI-DLC\x27s permission rules replace that short form. To keep asking, write it as "bash": {"*": "ask"} in ~/.config/opencode/opencode.jsonc.';
+  function globalHome(text: string): { home: string; env: NodeJS.ProcessEnv; file: string } {
+    const home = temp("aidlc-t-ocje-home-");
+    const file = join(home, ".config", "opencode", "opencode.jsonc");
+    mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+    writeFileSync(file, text);
+    return { home, env: { HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, ".config") }, file };
+  }
+
+  test("one Note line at setup naming the file, a Warning line in quiet mode, the line in --json, the file untouched", () => {
+    const text = '{\n  // the person\x27s own file\n  "permission": { "bash": "ask" },\n}\n';
+    const { env, file } = globalHome(text);
+    const dir = project();
+    const result = configure(dir, OPENCODE_RELEASE, env);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout.split(`Note: ${LINE}`).length - 1).toBe(1);
+    expect(readFileSync(file, "utf-8")).toBe(text);
+    const quiet = configure(dir, OPENCODE_RELEASE, env, ["--quiet"]);
+    expect(quiet.status, quiet.stdout + quiet.stderr).toBe(0);
+    expect(quiet.stdout.split(`Warning: ${LINE}`).length - 1).toBe(1);
+    const json = configure(dir, OPENCODE_RELEASE, env, ["--json"]);
+    expect(json.status, json.stdout + json.stderr).toBe(0);
+    expect(json.stdout).toContain(JSON.stringify(LINE));
+    expect(readFileSync(file, "utf-8")).toBe(text);
+  });
+
+  test("nothing when the form is an object or absent, and nothing on another harness", () => {
+    const object = globalHome('{ "permission": { "bash": { "*": "ask" } } }');
+    const quietObject = configure(project(), OPENCODE_RELEASE, object.env);
+    expect(quietObject.status, quietObject.stdout + quietObject.stderr).toBe(0);
+    expect(quietObject.stdout).not.toContain("Your opencode setting");
+    const absent = temp("aidlc-t-ocje-home-");
+    const noFile = configure(project(), OPENCODE_RELEASE, { HOME: absent, USERPROFILE: absent, XDG_CONFIG_HOME: join(absent, ".config") });
+    expect(noFile.status, noFile.stdout + noFile.stderr).toBe(0);
+    expect(noFile.stdout).not.toContain("Your opencode setting");
+    const short = globalHome('{ "permission": { "bash": "ask" } }');
+    const dir = project();
+    const claude = run(
+      ["config", "--project-dir", dir, "--from", join(REPO_ROOT, "dist-release", "claude"), "--harness", "claude", "--mcp", "none", "--yes"],
+      dir,
+      INIT,
+      short.env,
+    );
+    expect(claude.status, claude.stdout + claude.stderr).toBe(0);
+    expect(claude.stdout).not.toContain("Your opencode setting");
   });
 });
 

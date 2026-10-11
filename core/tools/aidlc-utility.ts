@@ -124,6 +124,7 @@ import {
   copilotCliTrust,
   insideGitRepository,
   instructionFileDoctorCheck,
+  openCodeGlobalShortFormNote,
   runtimeDoctorChecks,
   workspaceShellRefreshCommand,
 } from "./aidlc-config-diagnostics.ts";
@@ -4762,6 +4763,10 @@ export async function collectDoctorReport(
       label: ".opencode/command/aidlc.md present (/aidlc entry point)",
       fix: projectedFileRepair("opencode", ".opencode/command/aidlc.md"),
     });
+    // opencode replaces a global short-form permission rule with the project's
+    // bash or edit map; the person's ask or deny is gone here, said once.
+    const shortForm = openCodeGlobalShortFormNote();
+    if (shortForm) results.push({ pass: true, severity: "warn", label: shortForm });
   } else {
     const settingsPath = join(projectDir, harness, "settings.json");
     results.push({

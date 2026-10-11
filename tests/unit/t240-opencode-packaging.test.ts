@@ -39,6 +39,7 @@ import {
   rmdirSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -291,6 +292,39 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       expect(decide(command), command).toBeUndefined();
     }
     expect(decide("bun .aidlc/tools/aidlc.ts engine orchestrate next")).toBe("allow");
+  });
+
+  test("10b: doctor says once, as a warning, when the person's global opencode config holds a short-form permission rule", () => {
+    const root = mkdtempSync(join(tmpdir(), "t240-opencode-global-"));
+    try {
+      const project = join(root, "project");
+      cpSync(OPENCODE_ROOT, project, { recursive: true });
+      const home = join(root, "home");
+      const file = join(home, ".config", "opencode", "opencode.jsonc");
+      mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+      const doctor = () => spawnSync(
+        "bun",
+        [join(project, ".aidlc", "tools", "aidlc-utility.ts"), "doctor", "--verbose", "--project-dir", project],
+        {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          cwd: project,
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_HARNESS_DIR: ".aidlc", HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, ".config") },
+        },
+      );
+      const text = '{\n  // the person\x27s own file\n  "permission": { "bash": "ask" },\n}\n';
+      writeFileSync(file, text);
+      const seen = doctor();
+      const line = 'Your opencode setting asks before every shell command; in this project AI-DLC\x27s permission rules replace that short form. To keep asking, write it as "bash": {"*": "ask"} in ~/.config/opencode/opencode.jsonc.';
+      expect(seen.stdout.split(line).length - 1, seen.stdout).toBe(1);
+      const row = seen.stdout.split(/\r?\n/).find((candidate) => candidate.includes(line));
+      expect(row ?? "").toMatch(/^\s*warn\s/);
+      expect(readFileSync(file, "utf-8")).toBe(text);
+      writeFileSync(file, '{ "permission": { "bash": { "*": "ask" } } }');
+      expect(doctor().stdout).not.toContain("Your opencode setting");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   // Each allowed bash call continues through two real core-hook subprocesses.
