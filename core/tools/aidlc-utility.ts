@@ -311,6 +311,7 @@ import {
   selectIntentForSession,
   resolveWorkflowSelection,
   readStateFile,
+  keepActiveDirectiveOverSettingWrite,
   keepPlanApprovalAskOverStateWrite,
   refreshActiveDirectiveMarker,
   resolveIntentRepoSet,
@@ -12355,9 +12356,10 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
       if (update.audit.length > 0) appendAuditEntries(update.audit, projectDir, intent, space);
       const written = setField(update.content, "Last Updated", isoTimestamp());
       writeStateFile(projectDir, written, intent, space);
-      // Asked for while the code plan's question waits, it stays the open step.
+      // The step in hand stays the open step (the code plan's question, or the
+      // stage the agent is on): a setting changes how it runs, not which step it is.
       try {
-        keepPlanApprovalAskOverStateWrite(projectDir, content, written);
+        keepActiveDirectiveOverSettingWrite(projectDir, content, written);
       } catch (e) {
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
       }

@@ -9843,21 +9843,38 @@ export function keepPlanApprovalAskOverStateWrite(
       : { marker, result: false, preserve: true });
 }
 
-// Running Construction on its own changes how later approvals are taken, not
-// the step already issued: the plan question, or the build of the plan the
-// person approved, stays the open step, so nothing they answered is asked
-// again. Only its state digest follows the write; a step mid-claim is left as
-// it is.
-export function keepActiveDirectiveOverAutonomyWrite(
+// A setting the person typed over the step in hand (a review level, depth, a
+// test strategy, a Guard Policy or fence word, a ceremony switch) changes how
+// the step runs, not which step it is: the step already issued stays the open
+// step, and only its state digest follows the write. A live run typed "turn the
+// specialist reviewers off" while Code Generation planned; the setting's write
+// retired the step, and the guard refused the plan write twice as having no
+// current step until a fresh `next`. The plan question keeps its old rule (it
+// is kept even mid-claim); any other step mid-claim is left as it is.
+export function keepActiveDirectiveOverSettingWrite(
   projectDir: string,
   previousStateContent: string,
   nextStateContent: string,
 ): boolean {
   return transactActiveDirective(projectDir, (marker) =>
-    marker?.version === 2 && marker.active_attempt?.status !== "pending" &&
+    marker?.version === 2 &&
+      (marker.active_attempt?.status !== "pending" ||
+        (marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE)) &&
       marker.state_sha256 === stateDigest(previousStateContent)
       ? { marker: { ...marker, state_sha256: stateDigest(nextStateContent) }, result: true }
       : { marker, result: false, preserve: true });
+}
+
+// Running Construction on its own changes how later approvals are taken, not
+// the step already issued: the plan question, or the build of the plan the
+// person approved, stays the open step, so nothing they answered is asked
+// again. The same keep as a setting's.
+export function keepActiveDirectiveOverAutonomyWrite(
+  projectDir: string,
+  previousStateContent: string,
+  nextStateContent: string,
+): boolean {
+  return keepActiveDirectiveOverSettingWrite(projectDir, previousStateContent, nextStateContent);
 }
 
 export function refreshActiveDirectiveMarker(

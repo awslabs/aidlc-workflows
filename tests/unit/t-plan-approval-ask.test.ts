@@ -82,6 +82,7 @@ import {
   planApprovalAskIsOpen,
   mintProtectedQuestion,
   planApprovalRuntimeFile,
+  readActiveDirectiveMarker,
   readProtectedResponse,
   stateDigest,
   workspaceSourceFingerprint,
@@ -2958,5 +2959,85 @@ describe("the zero-Unit Code Generation lockout reported in #1172", () => {
     const current = nextThroughParts(proj).directive;
     expect(current.kind, JSON.stringify(current)).toBe("run-stage");
     expect(current.stage).toBe("functional-design");
+  });
+});
+
+// A setting typed over the step in hand. A live run (Claude Code, 2026-10-11)
+// typed "turn the specialist reviewers off for the rest of this work" while
+// Code Generation was planning; the setting's state write retired the issued
+// step (its state digest no longer matched), so the guard refused the plan
+// write twice with "no matching v2 code-generation active directive" until a
+// fresh `next`. The step stays current over the write, as it does over
+// set-autonomy: a setting changes how the step runs, not which step it is.
+describe("a setting typed over the step in hand keeps that step current", () => {
+  // The setter `config set <key> <value>` runs (the dispatcher routes it here).
+  const configSet = (proj: string, key: string, value: string): string => {
+    const result = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-utility.ts"), "config-change", `--${key}`, value, "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    return result.stdout ?? "";
+  };
+  const stateOf = (proj: string): string => readFileSync(seededStateFile(proj), "utf-8");
+  const planFile = (proj: string): string => {
+    mkdirSync(stageDir(proj), { recursive: true });
+    return join(stageDir(proj), "code-generation-plan.md");
+  };
+
+  test("while the plan is written: the plan write still goes through after the setting", () => {
+    const proj = project();
+    expect(next(proj).plan_approval).toEqual({ status: "plan" });
+    expect(readActiveDirectiveMarker(proj, stateOf(proj))?.kind).toBe("run-stage");
+    expect(guardWrite(proj, planFile(proj)).code).toBe(0);
+    configSet(proj, "review", "none");
+    expect(stateOf(proj)).toContain("- **Review Override**: none");
+    const kept = readActiveDirectiveMarker(proj, stateOf(proj));
+    expect(kept?.kind).toBe("run-stage");
+    expect(kept?.stage).toBe("code-generation");
+    const write = guardWrite(proj, planFile(proj));
+    expect(write.code, write.stderr).toBe(0);
+    expect(write.stderr).not.toContain("no matching v2 code-generation active directive");
+  });
+
+  test("after approval, with the build issued: a source write goes through, and the review the setting turned off is refused", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "yes");
+    expect(answer(proj, "Approve Plan").code).toBe(0);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    const source = join(proj, "src", "slugify.ts");
+    expect(guardWrite(proj, source).code).toBe(0);
+    configSet(proj, "review", "none");
+    const write = guardWrite(proj, source);
+    expect(write.code, write.stderr).toBe(0);
+    // The step in hand was issued with a reviewer; the tool, not the directive,
+    // decides a review: under none its budget is 0.
+    const review = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-log.ts"), "review", "--stage", "code-generation",
+      "--reviewer", "aidlc-architecture-reviewer-agent", "--iteration", "1", "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(review.status).not.toBe(0);
+    expect(`${review.stdout}${review.stderr}`).toContain("REVIEW_BUDGET_EXHAUSTED");
+  });
+
+  test("the typed Guard Policy switch keeps the step too, with no plan question open", () => {
+    const proj = project("strict");
+    expect(next(proj).plan_approval).toEqual({ status: "plan" });
+    expect(planApprovalAskIsOpen(proj)).toBe(false);
+    reply(proj, "/aidlc --guard-policy relaxed");
+    expect(stateOf(proj)).toContain("- **Guard Policy**: relaxed");
+    const kept = readActiveDirectiveMarker(proj, stateOf(proj));
+    expect(kept?.kind).toBe("run-stage");
+    expect(guardWrite(proj, planFile(proj)).code).toBe(0);
   });
 });

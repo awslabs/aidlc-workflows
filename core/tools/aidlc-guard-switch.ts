@@ -67,6 +67,7 @@ import {
   withAuditLock,
   writePlanApprovalRuntimeRecord,
   writeStateFile,
+  keepActiveDirectiveOverSettingWrite,
   parseGuardPolicyStateLine,
   commandAtPersonsTerminal,
 } from "./aidlc-lib.ts";
@@ -943,7 +944,11 @@ function applyReadTypedGuardSwitches(
       if (update.content !== content) {
         if (update.audit.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
         if (update.audit.length > 0) appendAuditEntries(update.audit, projectDir, intent, space);
-        writeStateFile(projectDir, setField(update.content, "Last Updated", isoTimestamp()), intent, space);
+        const written = setField(update.content, "Last Updated", isoTimestamp());
+        writeStateFile(projectDir, written, intent, space);
+        // The step in hand stays the open step: a setting changes how it runs,
+        // not which step it is.
+        keepActiveDirectiveOverSettingWrite(projectDir, content, written);
       }
       return { applied: true, lines: update.lines };
     }, intent, space);
