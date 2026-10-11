@@ -808,7 +808,7 @@ complete seed. Until then zero Codex hooks fire.
 a second seed set produces invalid TOML.
 
 For the `kiro-ide` distribution, trust ships in the conductor's `permissions`
-(`.kiro/agents/aidlc.md`), so the check adds nothing there; Kiro IDE 1.x no
+(`.kiro/agents/aidlc-aidlc.md`), so the check adds nothing there; Kiro IDE 1.x no
 longer reads `.vscode/settings.json` `kiroAgent.trustedCommands`. `--show` lists
 the selected harness's trust and allowlist files.
 

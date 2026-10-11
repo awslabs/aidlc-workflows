@@ -37381,6 +37381,16 @@ export function aidlcAgentClaim(path: string): string | null {
   return key ? `it declares \`${key}:\`` : null;
 }
 
+// The Kiro conductor's own agent file. Shipped as agents/aidlc-aidlc.md (it
+// sorts before the aidlc-*-agent.md helpers, so Kiro's `/` menu and picker put
+// `aidlc` first); agents/aidlc.md is the name releases up to 2.11.0 shipped and
+// a project updated from one may still hold it, so both are the conductor's.
+export const KIRO_CONDUCTOR_AGENT_FILE = "aidlc-aidlc.md";
+export const KIRO_CONDUCTOR_AGENT_FILES: readonly string[] = [KIRO_CONDUCTOR_AGENT_FILE, "aidlc.md"];
+export function isKiroConductorAgentFile(name: string): boolean {
+  return KIRO_CONDUCTOR_AGENT_FILES.includes(basename(name));
+}
+
 export function isAidlcAgentFile(path: string): boolean {
   return aidlcAgentClaim(path) !== null;
 }
@@ -37388,7 +37398,7 @@ export function isAidlcAgentFile(path: string): boolean {
 export function foreignAgentFiles(dir: string = agentsDir()): string[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.name.endsWith(".md") && entry.name !== "aidlc.md" && !entry.isDirectory())
+    .filter((entry) => entry.name.endsWith(".md") && !isKiroConductorAgentFile(entry.name) && !entry.isDirectory())
     .map((entry) => join(dir, entry.name))
     .sort()
     .filter((path) => !isAidlcAgentFile(path));
@@ -37400,7 +37410,7 @@ export function loadAgents(): AgentMetadata[] {
     const slugToFile = new Map<string, string>();
     const agents: AgentMetadata[] = [];
     const files = readdirSync(dir)
-      .filter((f) => f.endsWith(".md") && f !== "aidlc.md")
+      .filter((f) => f.endsWith(".md") && !isKiroConductorAgentFile(f))
       .sort();
     for (const f of files) {
       const filePath = join(dir, f);

@@ -2128,6 +2128,10 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
     expect(kiroTreeLayout(tree)).toBeNull();
     writeFileSync(join(tree, "agents", "aidlc.json"), "{}\n");
     expect(kiroTreeLayout(tree)).toBe("agent-v1");
+    writeFileSync(join(tree, "agents", "aidlc-aidlc.md"), "---\nname: aidlc\n---\n");
+    expect(kiroTreeLayout(tree)).toBe("kas");
+    // A project installed before the conductor file was renamed still reads as the same tree.
+    rmSync(join(tree, "agents", "aidlc-aidlc.md"));
     writeFileSync(join(tree, "agents", "aidlc.md"), "---\nname: aidlc\n---\n");
     expect(kiroTreeLayout(tree)).toBe("kas");
     mkdirSync(join(tree, "tools", "data"), { recursive: true });

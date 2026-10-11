@@ -353,7 +353,7 @@ describe("what the agent reads", () => {
   });
 
   test("both Kiro agent prompts say never to send an AI-DLC command's reply to a file", () => {
-    const ide = readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "agents", "aidlc.md"), "utf-8");
+    const ide = readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "agents", "aidlc-aidlc.md"), "utf-8");
     const cli = (JSON.parse(readFileSync(join(REPO_ROOT, "dist", "kiro", ".kiro", "agents", "aidlc.json"), "utf-8")) as { prompt: string }).prompt;
     for (const prompt of [ide, cli]) {
       expect(prompt).toContain("(5) run AI-DLC's commands as written and read their reply from the command's result: never send it to a file.");

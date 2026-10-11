@@ -75,7 +75,7 @@ For an air-gapped package, use
 `aidlc config` projects the Kiro shell before the project is opened. The native
 `aidlc engine *` trust grant, and the exact read-only and turn-back-on commands
 listed for a copied project below, ship inside the permissions of the conductor
-(`.kiro/agents/aidlc.md`); every agent it hands work to is denied those
+(`.kiro/agents/aidlc-aidlc.md`); every agent it hands work to is denied those
 commands. Some commands are
 held back from it: `aidlc engine config set *` changes a setting of your piece
 of work, `aidlc engine adapter *` is the entry the IDE's own hooks run, and an AI-DLC
@@ -178,8 +178,10 @@ The install ships:
   agent has them, with `question-rendering.md` and `composer.md` beside them,
   from the first line of every chat, so it reads no file before acting on your
   request.
-- `.kiro/agents/aidlc.md` — the same conductor exposed in the workspace agent
-  selector. It delegates through `invoke_sub_agent` (Kiro IDE) or
+- `.kiro/agents/aidlc-aidlc.md` — the same conductor exposed in the workspace agent
+  selector (named so it sorts before the `aidlc-*-agent.md` specialists: Kiro
+  lists agents in file-name order, so `aidlc` comes first in the picker and in
+  the `/` menu). It delegates through `invoke_sub_agent` (Kiro IDE) or
   `orchestrate_subagent` (Kiro CLI), the dispatch tools that run each persona
   under its own tools and deny rules.
 - `.kiro/agents/aidlc-*-agent.md` — all 14 delegation personas, carrying
@@ -270,16 +272,16 @@ The `"chat.defaultAgent": "aidlc"` line in `.kiro/settings/cli.json` is a Kiro
 CLI setting: it makes `aidlc` the default agent for `kiro-cli` sessions only,
 and Kiro IDE does not read that file. So in each new Kiro IDE chat:
 
-1. Open the agent picker in the chat panel and choose **aidlc** (its
-   description starts "AI-DLC. Choose this agent in the agent picker"). This
+1. Open the agent picker in the chat panel and choose **aidlc** (the first of
+   AI-DLC's agents there; its description starts "AI-DLC. Choose this agent in
+   the agent picker"). This
    agent lets AI-DLC's commands run without asking you, and lets AI-DLC bring
    in its specialist agents, and it already holds AI-DLC's instructions when
    a chat starts, so it reads no file before acting on your first line.
 2. Type the whole request, then press Enter: for example `/aidlc --doctor` or
-   `/aidlc build a to-do app`. A bare `/aidlc` works too. While the `/` menu
-   is open, Enter puts its first entry in the chat, a specialist such as
-   `aidlc-architect-agent`, and the next Enter sends it. AI-DLC reads that as
-   `/aidlc` and carries on.
+   `/aidlc build a to-do app`. A bare `/aidlc` works too: while the `/` menu
+   is open, Enter completes the line to its first entry, which is `/aidlc`
+   itself, and the next Enter sends it.
 3. Picking `aidlc` from the `/` menu does not change which agent the chat
    uses. If the chat is still on **Default**, AI-DLC's first move on your
    first request is its own command, which Kiro asks you to approve, and then
@@ -584,13 +586,13 @@ temporary roots and byte-compares the results as the CI determinism guard. The
 authored
 Kiro IDE surfaces live in `harness/kiro-ide/`: the orchestrator skill
 (`skills/aidlc/`), always-included active-memory steering (`steering/`),
-the conductor Markdown (`agents/aidlc.md`), the hook adapter and v2 hook JSON
+the conductor Markdown (`agents/aidlc-aidlc.md`), the hook adapter and v2 hook JSON
 files (`hooks/`), the personas' delegate shell deny (`delegate-shell-deny.ts`),
 and onboarding fills — edit those
 (or `core/`), never hand-edit the generated `dist/kiro-ide`.
 
 This harness differs from the `kiro` CLI harness (`harness/kiro/`) in four ways:
-the `/aidlc` skill and the Markdown `agents/aidlc.md` are its conductor surfaces
+the `/aidlc` skill and the Markdown `agents/aidlc-aidlc.md` are its conductor surfaces
 (`settings/cli.json` also makes that agent Kiro CLI's default); it ships v2 hook
 JSON files (the `kiro` harness relies on the agent-JSON `hooks` block); it preloads standing rules through
 always-included steering rather than CLI agent resources; the shared Kiro

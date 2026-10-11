@@ -386,7 +386,7 @@ undo a global `.kiro/` rule, even when `git check-ignore` reports the path as no
 ignored. A `permissions.yaml` `fs_read` allow does **not** clear the denial:
 [Kiro applies deny-overrides across scopes](https://kiro.dev/docs/permissions/).
 
-Run `/aidlc --doctor`. For an IDE install (`.kiro/agents/aidlc.md` present), it
+Run `/aidlc --doctor`. For an IDE install (`.kiro/agents/aidlc-aidlc.md` present), it
 reports the offending source as:
 
 ```text
@@ -400,7 +400,7 @@ holds inline (at Standard and Minimal depth, within the directive's 8 KiB
 `inline_context_paths` cap), plus `stage-protocol.md` and its
 `stage-protocol-<name>.md` modules and the files beside each skill's `SKILL.md`.
 Plugins count however they were composed. Contributor-only protocol files such as
-`stage-definition.md` are not loaded. `SKILL.md` files, the IDE conductor agent (`agents/aidlc.md`),
+`stage-definition.md` are not loaded. `SKILL.md` files, the IDE conductor agent (`agents/aidlc-aidlc.md`),
 `aidlc-common/conductor.md`, and `tools/`, `sensors/`, `hooks/`, `scopes/`, and
 `steering/` are loaded by the IDE or the engine, not through `fs_read`, and are
 not counted. A rule that hides only some of them is
