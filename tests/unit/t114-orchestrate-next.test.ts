@@ -1800,6 +1800,53 @@ describe("t114 retired flags are consumed, not description text", () => {
     expect(pendingDescription(proj, out)).toBe("a dashboard with --dark-mode");
   });
 
+  // `--project-dir` is how every caller tells this engine which project to work
+  // in, and it rides ahead of their words. Among their words the same token is
+  // a word of their request: taking it there cut their line in half and made a
+  // folder in their project named after the word that followed it.
+  test("a request naming --project-dir keeps every word and makes no folder", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["add", "a", "--project-dir", "flag", "to", "the", "CLI"]).out;
+    // No word of theirs is read as a folder to work in, and none is made.
+    expect(existsSync(join(proj, "flag"))).toBe(false);
+    // Their line comes back whole, as the step for a flag this engine does not
+    // take among their words, and no work is started on a cut-down sentence.
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("does not take `--project-dir flag`");
+    expect(out).not.toContain("intent create");
+    // Marked as theirs, every token reaches creation.
+    const marked = runNext(proj, [
+      "--new-intent",
+      "--scope",
+      "poc",
+      "--",
+      "add a --project-dir flag to the CLI",
+    ]).out;
+    expect(pendingDescription(proj, marked)).toBe("add a --project-dir flag to the CLI");
+  });
+
+  // The same with a value that does name a folder of theirs: the word they
+  // typed must not move the engine into it, or their work lands somewhere they
+  // never named and the record of their request goes with it.
+  test("a request naming a folder of theirs does not move the engine into it", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    mkdirSync(join(proj, "docs"), { recursive: true });
+    const out = runNext(proj, ["support", "--project-dir", "docs", "in", "the", "CLI"]).out;
+    expect(existsSync(join(proj, "docs", "aidlc"))).toBe(false);
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("does not take `--project-dir docs`");
+    expect(out).not.toContain("intent create");
+  });
+
+  test("--project-dir ahead of their words is still this engine's own", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["--project-dir", proj, "add", "a", "flag"]).out;
+    expect(pendingDescription(proj, out)).toBe("add a flag");
+  });
+
   test("the -- delimiter still passes a literal --init through as text", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);

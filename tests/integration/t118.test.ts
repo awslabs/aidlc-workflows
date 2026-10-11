@@ -700,14 +700,15 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     // question is stored, and no state is written.
     const p = cleanProj();
     const r = run(ORCHESTRATE, [
+      // Ahead of their words, as every caller builds it.
       "next",
+      "--project-dir",
+      p,
       "bugfix",
       "Fix",
       "duplicate",
       "todo",
       "persistence",
-      "--project-dir",
-      p,
     ]);
     const d = directive(r);
     expect(d.kind).toBe("print");

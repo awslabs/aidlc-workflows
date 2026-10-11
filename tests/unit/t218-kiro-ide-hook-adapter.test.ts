@@ -7968,3 +7968,88 @@ describe("t218 a shell call on a turn whose terminal command already ran is refu
     },
   );
 });
+
+// On Kiro IDE a new chat opens on Kiro's Default agent, which loads the aidlc
+// skill on its own judgement only (measured 2026-10-11: 6 of 17 fresh chats);
+// the rest answer `/aidlc <words>` as a plain coding request. The prompt hook
+// runs before the agent's first word on every typed line and Kiro adds its
+// stdout to the agent's context, so on an `/aidlc` line that is not a utility
+// the hook runs itself, the person-message card names the one first step: the
+// engine's `next`, which holds the person's recorded line (takePersonsOwnLine)
+// while no work is selected; with work on record the words stay the agent's.
+describe("t218 the person-message card names the first engine step on an /aidlc line", () => {
+  const FIRST_STEP = "engine orchestrate next` now and do only what it prints.";
+  const card = (dir: string, prompt: string, sessionId = "sess_first_step") =>
+    runIdeStdin(dir, "person-message", JSON.stringify({
+      session_id: sessionId,
+      hook_event_name: "UserPromptSubmit",
+      cwd: dir,
+      prompt,
+    }));
+
+  test("an /aidlc line with words, on a workspace with no work yet, names next", () => {
+    const dir = scratchProject(false);
+    try {
+      const r = card(dir, "/aidlc fix the greeter: it prints hello instead of greeting the person by name");
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toContain("AI-DLC: this message is an AI-DLC request");
+      expect(r.stdout).toContain(FIRST_STEP);
+      // One line, once: the three members print nothing else for this line.
+      expect(r.stdout.split(FIRST_STEP).length).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a bare /aidlc names next on any path; a reply in words after the entry names it only before work exists", () => {
+    const fresh = scratchProject(false);
+    try {
+      const reply = card(fresh, "/aidlc approve the plan", "sess_first_step_reply");
+      expect(reply.code, reply.stderr).toBe(0);
+      expect(reply.stdout).toContain(FIRST_STEP);
+    } finally {
+      rmSync(fresh, { recursive: true, force: true });
+    }
+    const dir = scratchProject(true);
+    try {
+      const bare = card(dir, "/aidlc");
+      expect(bare.code, bare.stderr).toBe(0);
+      expect(bare.stdout).toContain(FIRST_STEP);
+      // With this chat's workflow on record, a bare `next` is the work's own
+      // continuation and the engine reads no recorded line, so the words are
+      // the agent's to pass (the aidlc agent's skill does): no line.
+      for (const [prompt, session] of [
+        ["/aidlc approve the plan", "sess_first_step_reply_active"],
+        ["/aidlc take me back to requirements analysis", "sess_first_step_reentry"],
+      ]) {
+        const r = card(dir, prompt, session);
+        expect(r.code, r.stderr).toBe(0);
+        expect(r.stdout, prompt).not.toContain("do only what it prints");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a utility the card runs itself, a line with flags, plain words and a /aidlc-<name> entry get no first-step line", () => {
+    const dir = scratchProject(true);
+    try {
+      const help = card(dir, "/aidlc --help");
+      expect(help.code, help.stderr).toBe(0);
+      expect(help.stdout).toContain("has already run");
+      expect(help.stdout).not.toContain("do only what it prints");
+      const flags = card(dir, "/aidlc --scope bugfix build a notes app", "sess_first_step_flags");
+      expect(flags.code, flags.stderr).toBe(0);
+      expect(flags.stdout).not.toContain("do only what it prints");
+      const words = card(dir, "fix the greeter: it prints hello instead of greeting the person by name", "sess_first_step_words");
+      expect(words.code, words.stderr).toBe(0);
+      expect(words.stdout).not.toContain("do only what it prints");
+      // A `/aidlc-<name>` entry is its own skill's or agent's line, never read as `/aidlc`.
+      const runner = card(dir, "/aidlc-architect-agent", "sess_first_step_runner");
+      expect(runner.code, runner.stderr).toBe(0);
+      expect(runner.stdout).not.toContain("do only what it prints");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

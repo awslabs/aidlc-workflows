@@ -8,7 +8,7 @@
 // and never touches any other byte of their settings file.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupTestProject, REPO_ROOT } from "../harness/fixtures.ts";
@@ -22,10 +22,12 @@ import {
   readKiroIdeTerminal,
   readKiroTerminalShell,
   recordKiroTerminalShell,
+  rejoinCommandPromptQuotes,
   readKiroTerminalAnswer,
   recordKiroTerminalAnswer,
   setKiroIdeTerminalPowerShell,
 } from "../../core/tools/aidlc-kiro-ide-terminal.ts";
+import * as terminal from "../../core/tools/aidlc-kiro-ide-terminal.ts";
 import {
   kiroIdeTerminalDoctorCheck,
   postApplyOutstandingActions,
@@ -298,9 +300,11 @@ describe("what the agent reads", () => {
   test("Command Prompt's constant exit code -1 is not read as an untrusted folder", () => {
     const skill = readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
     expect(skill).toContain(
-      "**When a command comes back with no output and exit code -1**, Kiro has not been allowed to run commands in this " +
-        "folder yet. (When Kiro says your shell is cmd, every command reports exit code -1, so there go by what it printed.)",
+      "**When a result shows nothing the command printed, not its reply and not an `AI-DLC reply:` line, and ends with " +
+        "exit code -1**, Kiro has not been allowed to run commands in this folder yet.",
     );
+    expect(skill).not.toContain("When a command comes back with no output and exit code -1");
+    expect(skill).not.toContain("When Kiro says your shell is cmd");
   });
 
   // A live run (#2199): a helper's build and probe commands came back -1 after the person declined
@@ -309,8 +313,8 @@ describe("what the agent reads", () => {
   test("a -1 on a project command after AI-DLC's own commands ran is a declined or unanswered approval, not an untrusted folder", () => {
     const skill = readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
     expect(skill).toContain(
-      "After AI-DLC's own commands have run in this chat, a -1 on one of the project's commands (a build, a test, a probe) " +
-        "means Kiro did not run that command: the person declined it, or has not answered Kiro's prompt to allow it yet. " +
+      "After AI-DLC's own commands have run in this chat, such a result on one of the project's commands (a build, a test, " +
+        "a probe) means Kiro did not run that command: the person declined it, or has not answered Kiro's prompt to allow it yet. " +
         "It is not a timeout and not this folder's trust: do not retry it and do not give the trust step below; tell the " +
         "person, in one line, that Kiro did not run the command and that they can allow it in Kiro or tell you how to go on, " +
         "then end your turn.",
@@ -322,26 +326,30 @@ describe("what the agent reads", () => {
   // planned to delete AI-DLC's lock files. Measured on Kiro IDE 1.2.4: the
   // terminal answers the very next short command at once, so that is the step;
   // no window reload or new chat is named.
-  test("after a timed-out command the next step is one short read-only command, never the same command again; a lock file goes only when doctor names it", () => {
+  // Live under Command Prompt (the kiro-cmd investigation): the agent read the
+  // one sentence naming lock files as advice and went looking for them, and the
+  // `next` exception fed a retry spiral on replies the terminal had dropped.
+  test("after a timed-out command the next step is one short read-only command, never the same command again; no lock file and no rerun is named", () => {
     const skill = readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
     expect(skill).toContain(
       "**When a command comes back with `Command timed out`**, run one short read-only command next (`bun --version` is one) " +
         "to see whether the terminal answers. Never run the timed-out command again to find out: its outcome is unknown, " +
-        "so check the state it was meant to change, or tell the person in one line. The exception is AI-DLC's own `next`, " +
-        "which changes nothing: run it again.",
+        "so check the state it was meant to change, or tell the person in one line.",
     );
-    // The rerun is not offered, not even for a command that should be quick: a
-    // migration or a deploy may already have happened. AI-DLC's own `next`
-    // changes nothing, so it is the one command run again.
     const paragraph = skill.split("\n").find((line) => line.startsWith("**When a command comes back with `Command timed out`**")) ?? "";
     expect(paragraph).not.toMatch(/same command again|again and again|should finish in seconds/);
-    expect(paragraph).toContain("The exception is AI-DLC's own `next`, which changes nothing: run it again.");
-    expect(skill).toContain(
-      "Do not delete AI-DLC's lock files (`.aidlc-audit-*.lock*` in the temp folder) to fix a timeout: " +
-        "they do not slow a command down. Remove one only when `/aidlc --doctor` names it.",
-    );
-    expect(skill).not.toContain("never delete AI-DLC's lock files");
+    expect(paragraph).not.toContain("The exception is AI-DLC's own `next`");
+    expect(skill).not.toContain("lock files");
+    expect(skill).not.toContain(".aidlc-audit-");
     expect(skill).not.toMatch(/Command timed out[^\n]*Reload Window/);
+  });
+
+  test("a result that ends at an `AI-DLC reply:` line is read from that file, and the command is not run again", () => {
+    const skill = readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
+    expect(skill).toContain(
+      "**When a result ends at an `AI-DLC reply:` line**, the command is still running in Command Prompt: read the file " +
+        "that line names; its content is the reply. Do not run the command again.",
+    );
   });
 
   test("both Kiro agent prompts say never to send an AI-DLC command's reply to a file", () => {
@@ -587,5 +595,193 @@ describe("the setter when there is nothing to set", () => {
     expect(kept.out).toContain("Kiro's terminal is already PowerShell.");
     expect(kept.out).not.toContain("[Y/n]");
     expect(existsSync(absent.settingsPath)).toBe(false);
+  });
+});
+
+// Kiro's Command Prompt terminal hands the agent whatever a command printed
+// within one second and drops the rest (measured on Kiro IDE 1.2.37). A tool
+// that runs in that terminal prints one pointer line first, runs itself as a
+// child, relays the child's reply and writes it to a file the pointer names,
+// so the agent reads a reply the terminal dropped instead of running the
+// command again. Nowhere else does the tool behave differently.
+describe("the reply file and its pointer under Command Prompt", () => {
+  const TOOL = join(REPO_ROOT, "core", "tools", "aidlc-utility.ts");
+  const POINTER = /^AI-DLC reply: (aidlc\/\.aidlc-sessions\/replies\/[a-z0-9-]+\.txt) \(Command Prompt shows a reply only when it is ready within a second; when this result ends here, the command is still running: read that file, which appears when it finishes\)$/m;
+  function project(): string {
+    const dir = temp("aidlc-t-kiro-terminal-tee-");
+    mkdirSync(join(dir, "aidlc"), { recursive: true });
+    return dir;
+  }
+  // The agent's own commands: Kiro's terminal (TERM_PROGRAM), no user-data env, the shell as the hook recorded it.
+  function inTerminal(m: ReturnType<typeof machine>, shell: "cmd" | "powershell" | null): Record<string, string> {
+    if (shell !== null) {
+      mkdirSync(m.env.AIDLC_INSTALL_ROOT, { recursive: true });
+      writeFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-ide-terminal-shell"), `${shell}\n`);
+    }
+    return childEnv({ ...m.env, TERM_PROGRAM: "kiro" });
+  }
+  function run(args: string[], cwd: string, env: Record<string, string>) {
+    const r = spawnSync(process.execPath, [TOOL, ...args], { cwd, env, encoding: "utf-8" });
+    return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  }
+
+  test("the pointer comes first, the reply follows and lands in the file the pointer names, once", () => {
+    const m = machine(CMD_WITH_COMMENTS);
+    const dir = project();
+    const r = run(["version"], dir, inTerminal(m, "cmd"));
+    expect(r.status, r.stderr).toBe(0);
+    const lines = r.stdout.split("\n").filter((line) => line !== "");
+    expect(lines[0]).toMatch(POINTER);
+    expect(lines[1]).toMatch(/^aidlc \d/);
+    expect(lines.filter((line) => line.startsWith("AI-DLC reply:")).length).toBe(1);
+    const file = POINTER.exec(r.stdout)![1];
+    const text = readFileSync(join(dir, file), "utf-8");
+    expect(text.split("\n")[0]).toMatch(/^# .*aidlc-utility\.ts version$/);
+    expect(text).toContain(lines[1]);
+    expect(text).not.toContain("AI-DLC reply:");
+  });
+
+  // The child's output is held past Kiro's one-second read, then relayed as it
+  // is produced, never kept until exit: the agent's result keeps its shape, and
+  // a question a command asks on the terminal shows while it waits for the
+  // answer (a person at Kiro's own terminal panel can give it).
+  test("the child's output reaches the terminal while the child still runs, after the hold", async () => {
+    const dir = temp("aidlc-t-kiro-terminal-relay-");
+    const driver = join(dir, "driver.ts");
+    writeFileSync(
+      driver,
+      `import { relayCommandPromptChild } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-kiro-ide-terminal.ts"))};\n` +
+        `const child = Bun.spawn([process.execPath, "-e", "console.log('early'); await Bun.sleep(3500); console.log('late'); process.exit(3)"], { stdin: "inherit", stdout: "pipe", stderr: "pipe" });\n` +
+        `const r = await relayCommandPromptChild(child);\n` +
+        `process.stderr.write(JSON.stringify(r));\n`,
+    );
+    const startedAt = Date.now();
+    const proc = Bun.spawn([process.execPath, driver], { cwd: dir, env: childEnv({}), stdout: "pipe", stderr: "pipe" });
+    const reader = proc.stdout.getReader();
+    const first = await reader.read();
+    const firstAt = Date.now();
+    expect(new TextDecoder().decode(first.value)).toContain("early");
+    expect(firstAt - startedAt).toBeGreaterThanOrEqual(1500);
+    const code = await proc.exited;
+    expect(Date.now() - firstAt).toBeGreaterThan(1000);
+    expect(code).toBe(0);
+    const rest = await new Response(proc.stderr).text();
+    expect(JSON.parse(rest)).toEqual({ code: 3, stdout: "early\nlate\n", stderr: "" });
+  });
+
+  // A compiled binary's argv is ["bun", "/$bunfs/root/<entry>", ...args], so
+  // the respawn drops the embedded entry there and keeps the script path only
+  // when bun runs the source (measured with `bun build --compile`, bun 1.3.14).
+  test("the child command is the same tool again: the script under bun, the binary's own arguments when compiled", () => {
+    expect(terminal.commandPromptChildCommand(["/usr/bin/bun", "/p/.kiro/tools/aidlc-utility.ts", "version"], "/usr/bin/bun", false))
+      .toEqual(["/usr/bin/bun", "/p/.kiro/tools/aidlc-utility.ts", "version"]);
+    expect(terminal.commandPromptChildCommand(["bun", "/$bunfs/root/aidlc", "engine", "orchestrate", "next"], "C:\\aidlc\\bin\\aidlc.exe", true))
+      .toEqual(["C:\\aidlc\\bin\\aidlc.exe", "engine", "orchestrate", "next"]);
+  });
+
+  test("the child's exit code and stderr come through", () => {
+    const m = machine(CMD_WITH_COMMENTS);
+    const dir = project();
+    const r = run(["no-such-subcommand-for-the-tee-test"], dir, inTerminal(m, "cmd"));
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toMatch(POINTER);
+    expect(`${r.stdout}${r.stderr}`.toLowerCase()).toContain("no-such-subcommand-for-the-tee-test");
+  });
+
+  test("no pointer and no file in PowerShell, outside Kiro's terminal, without a shell record on a PowerShell machine, or where no aidlc/ folder is", () => {
+    const ps = machine(CMD_WITH_COMMENTS);
+    const d1 = project();
+    const inPs = run(["version"], d1, inTerminal(ps, "powershell"));
+    expect(`${inPs.stdout}${inPs.stderr}`).not.toContain("AI-DLC reply:");
+    const own = machine(CMD_WITH_COMMENTS);
+    writeFileSync(join(mkdirSync(own.env.AIDLC_INSTALL_ROOT, { recursive: true }) ?? own.env.AIDLC_INSTALL_ROOT, "kiro-ide-terminal-shell"), "cmd\n");
+    const outside = run(["version"], project(), childEnv(own.env));
+    expect(`${outside.stdout}${outside.stderr}`).not.toContain("AI-DLC reply:");
+    const unrecorded = machine(POWERSHELL_SET);
+    const noRecord = run(["version"], project(), inTerminal(unrecorded, null));
+    expect(`${noRecord.stdout}${noRecord.stderr}`).not.toContain("AI-DLC reply:");
+    const bare = temp("aidlc-t-kiro-terminal-tee-bare-");
+    const noFolder = run(["version"], bare, inTerminal(machine(CMD_WITH_COMMENTS), "cmd"));
+    expect(`${noFolder.stdout}${noFolder.stderr}`).not.toContain("AI-DLC reply:");
+    expect(existsSync(join(bare, "aidlc"))).toBe(false);
+  });
+
+  test("a recorded Command Prompt without a settings file still tees, and the newest twenty replies are kept", () => {
+    const m = machine();
+    const dir = project();
+    const replies = join(dir, "aidlc", ".aidlc-sessions", "replies");
+    mkdirSync(replies, { recursive: true });
+    for (let i = 10; i < 35; i++) writeFileSync(join(replies, `0000000${i}-1.txt`), "old\n");
+    const r = run(["version"], dir, inTerminal(m, "cmd"));
+    expect(r.stdout).toMatch(POINTER);
+    const kept = readdirSync(replies).sort();
+    expect(kept.length).toBe(20);
+    expect(kept[0]).toBe("000000016-1.txt");
+    expect(readFileSync(join(dir, POINTER.exec(r.stdout)![1]), "utf-8")).toMatch(/aidlc \d/);
+  });
+});
+
+// cmd.exe passes single quotes on as characters, so a value the agent wrote
+// for PowerShell (`'fix the greeter'`) arrives as several arguments with the
+// quotes attached to the first and the last. The pair a shell should have
+// eaten is structure, not meaning: under Command Prompt the tool joins the
+// group back into one argument and drops that one pair; nothing else changes.
+describe("the quote pair Command Prompt left on the words", () => {
+  const cmd = (m: ReturnType<typeof machine>) => {
+    mkdirSync(m.env.AIDLC_INSTALL_ROOT, { recursive: true });
+    writeFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-ide-terminal-shell"), "cmd\n");
+    return { ...m.env, TERM_PROGRAM: "kiro" };
+  };
+
+  test("one group per pair, joined with spaces and stripped of the pair; a quote of the person's own inside stays", () => {
+    const m = machine(CMD_WITH_COMMENTS);
+    withEnv(cmd(m), () => {
+      expect(rejoinCommandPromptQuotes(["next", "--plan-approval", "off", "'fix", "the", "greeter:", "hello'"], process.env))
+        .toEqual(["next", "--plan-approval", "off", "fix the greeter: hello"]);
+      expect(rejoinCommandPromptQuotes(["decision", "--stage", "feasibility", "--decision", "'Chose", "Option", "A'"], process.env))
+        .toEqual(["decision", "--stage", "feasibility", "--decision", "Chose Option A"]);
+      expect(rejoinCommandPromptQuotes(["--details", "''tis", "the", "season'"], process.env)).toEqual(["--details", "'tis the season"]);
+      expect(rejoinCommandPromptQuotes(["--details", "'one'", "--reason", "'two", "words'"], process.env))
+        .toEqual(["--details", "one", "--reason", "two words"]);
+      expect(rejoinCommandPromptQuotes(["--details", "'tis", "the", "season"], process.env)).toEqual(["--details", "'tis", "the", "season"]);
+      expect(rejoinCommandPromptQuotes(["--details", "Rename", "\"Tasks\""], process.env)).toEqual(["--details", "Rename", "\"Tasks\""]);
+    });
+  });
+
+  test("nothing changes outside Kiro's Command Prompt terminal", () => {
+    const args = ["next", "'fix", "the", "greeter'"];
+    const ps = machine(CMD_WITH_COMMENTS);
+    mkdirSync(ps.env.AIDLC_INSTALL_ROOT, { recursive: true });
+    writeFileSync(join(ps.env.AIDLC_INSTALL_ROOT, "kiro-ide-terminal-shell"), "powershell\n");
+    withEnv({ ...ps.env, TERM_PROGRAM: "kiro" }, () => expect(rejoinCommandPromptQuotes(args, process.env)).toEqual(args));
+    const own = machine(CMD_WITH_COMMENTS);
+    withEnv(cmd(own), () => {
+      delete process.env.TERM_PROGRAM;
+      expect(rejoinCommandPromptQuotes(args, process.env)).toEqual(args);
+    });
+  });
+
+  test("the request after next and a log value arrive whole in the record", () => {
+    const m = machine(CMD_WITH_COMMENTS);
+    const { project } = installKiroIde({ ...m.env, AIDLC_TEST_KIRO_IDE_SETTINGS: join(m.root, "none.json") });
+    mkdirSync(m.env.AIDLC_INSTALL_ROOT, { recursive: true });
+    writeFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-ide-terminal-shell"), "cmd\n");
+    // A chat message came first, as in any Kiro IDE chat: the adapter leaves the heartbeat that tells the engine Kiro runs the hooks.
+    const hello = spawnSync(process.execPath, [join(project, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "verb-intercept"], {
+      cwd: project,
+      input: "",
+      encoding: "utf-8",
+      env: childEnv({ ...m.env, CLAUDE_PROJECT_DIR: project, VSCODE_IPC_HOOK: `test-ipc:${project}`, VSCODE_PID: "1", USER_PROMPT: "hello" }),
+    });
+    expect(hello.status, hello.stderr).toBe(0);
+    const env = childEnv({ ...m.env, TERM_PROGRAM: "kiro", AIDLC_CMD_REPLY_TEE: "1" });
+    const next = spawnSync(process.execPath, [join(project, ".kiro", "tools", "aidlc-orchestrate.ts"), "next", "'fix", "the", "greeter:", "it", "prints", "hello'"], {
+      cwd: project,
+      env,
+      encoding: "utf-8",
+    });
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.stdout).toContain("fix the greeter: it prints hello");
+    expect(next.stdout).not.toContain("'fix the greeter");
   });
 });

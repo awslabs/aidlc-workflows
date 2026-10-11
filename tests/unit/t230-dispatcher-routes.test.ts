@@ -1455,6 +1455,143 @@ describe("t230 version-aware startup", () => {
 });
 
 describe("t230 dispatcher global flag translation", () => {
+  // The dispatcher's own flags are its own only while it is still reading the
+  // route and the subcommand's verb. Once a word of the person's has appeared,
+  // every token is the subcommand's argv, so a flag that looks like one of ours
+  // among their words stays exactly where they typed it: nothing of theirs is
+  // taken, resolved into a path, or moved to the end of their sentence.
+  test("a flag of ours among the person's own words stays where they typed it", () => {
+    const words = ["next", "add", "a", "--project-dir", "flag", "to", "the", "CLI"];
+    expect(resolveAction(["engine", "orchestrate", ...words])).toEqual({
+      type: "delegate",
+      tool: "aidlc-orchestrate.ts",
+      args: words,
+    });
+    const global = ["next", "add", "a", "--json", "flag", "to", "the", "CLI"];
+    expect(resolveAction(["engine", "orchestrate", ...global])).toEqual({
+      type: "delegate",
+      tool: "aidlc-orchestrate.ts",
+      args: global,
+    });
+    // A sentence of theirs that opens with a workspace noun is still theirs:
+    // only that command's own shape makes the line the command.
+    const noun = ["next", "space", "is", "what", "i", "want", "--project-dir", "x"];
+    expect(resolveAction(["engine", "orchestrate", ...noun])).toEqual({
+      type: "delegate",
+      tool: "aidlc-orchestrate.ts",
+      args: noun,
+    });
+  });
+
+  // What is wrong with one of our own options is the person's to act on only
+  // where our options are read. Among their own words the same token is a word
+  // of theirs, so the line keeps the request they typed instead of answering
+  // them about an option they never used.
+  test("a mistake in one of our options is still their word among their words", () => {
+    for (const words of [
+      ["next", "add", "a", "--project-dir=/x", "flag", "to", "the", "CLI"],
+      ["next", "drop", "the", "--project-dir"],
+      ["next", "rename", "--project-dir", "/x", "and", "--project-dir", "/y"],
+    ]) {
+      expect(resolveAction(["engine", "orchestrate", ...words])).toEqual({
+        type: "delegate",
+        tool: "aidlc-orchestrate.ts",
+        args: words,
+      });
+    }
+    // Where our options are read, each one is still answered as before.
+    const said = (argv: string[]): string => {
+      const action = resolveAction(argv);
+      return action.type === "error" ? action.message : `resolved as ${action.type}`;
+    };
+    expect(said(["--project-dir=/x", "doctor"]))
+      .toBe("aidlc: --project-dir takes a separate path value; use --project-dir <path>\n");
+    expect(said(["doctor", "--project-dir"])).toBe("aidlc: --project-dir requires a path value\n");
+    expect(said(["--project-dir", "/x", "--project-dir", "/y", "doctor"]))
+      .toBe("aidlc: --project-dir may be specified only once\n");
+  });
+
+  // Every reader of the line takes the same boundary, not just the resolver:
+  // the project policy and the delegate's environment read it too, and before
+  // this they resolved the person's own word as the folder to work in. Then an
+  // ordinary request came back refused as if the project were not installed,
+  // and the run wrote a folder named after their word. This drives the real
+  // dispatcher, because a resolver-level check cannot see either reader.
+  test("a request naming one of our options is not refused as a bad project", () => {
+    const project = makeProject();
+    const words = ["next", "add", "a", "--project-dir", "flag", "to", "the", "CLI"];
+    const run = viaDispatcher(words, project);
+    const output = `${run.stdout}${run.stderr}`;
+    expect(output).not.toContain("requires an installed project harness");
+    expect(output).not.toContain("recognized project directory");
+    expect(existsSync(join(project, "flag"))).toBe(false);
+    // The same line with no option-shaped word of theirs is the control.
+    const control = viaDispatcher(["next", "add", "a", "flag", "to", "the", "CLI"], project);
+    expect(run.exitCode).toBe(control.exitCode);
+  });
+
+  /** The delegate's own argv, or a loud failure when the route resolved elsewhere. */
+  const delegateArgs = (argv: string[]): string[] => {
+    const action = resolveAction(argv);
+    if (action.type !== "delegate") throw new Error(`${argv.join(" ")} resolved as ${action.type}`);
+    return action.args;
+  };
+  const projectDirOf = (argv: string[]): string | undefined => {
+    const action = resolveAction(argv);
+    return "projectDir" in action ? action.projectDir : undefined;
+  };
+
+  test("the orderings every caller uses keep working", () => {
+    // Ours before the route.
+    expect(delegateArgs(["--project-dir", "/tmp/example", "engine", "orchestrate", "next"]))
+      .toEqual(["next", "--project-dir", "/tmp/example"]);
+    // Ours inside the route, before the verb.
+    expect(delegateArgs(["engine", "config", "--project-dir", "/tmp/example", "set", "depth", "minimal"]))
+      .toEqual(["config-change", "--depth", "minimal", "--project-dir", "/tmp/example"]);
+    // Ours straight after the subcommand's verb.
+    expect(delegateArgs(["engine", "bolt", "start", "--project-dir", "relative/project"]))
+      .toEqual(["start", "--project-dir", resolve(process.cwd(), "relative/project")]);
+    // A top-level command's own flag, which follows a route word, not a word of theirs.
+    expect(delegateArgs(["doctor", "--json"])).toEqual(["doctor", "--json"]);
+    // A workspace command on the request route, whole: it is that command, so
+    // our option is ours wherever it sits and a relative path still resolves.
+    // Its own option goes right after `next`, which is where the delegate
+    // reads it: ahead of anything that could be a word of theirs.
+    expect(delegateArgs([
+      "engine", "orchestrate", "next", "space", "--project-dir", "relative/project", "create", "teamB",
+    ])).toEqual([
+      "next", "--project-dir", resolve(process.cwd(), "relative/project"), "space", "create", "teamB",
+    ]);
+    expect(delegateArgs(["next", "intent", "--project-dir", "relative/project"]))
+      .toEqual(["next", "--project-dir", resolve(process.cwd(), "relative/project"), "intent"]);
+    // A command of the engine's own in a fixed shape: no word of theirs rides
+    // on it, and its own grammar refuses an extra token, so our option is ours
+    // wherever it sits. t229 drives these two through the real dispatcher.
+    expect(delegateArgs(["engine", "intent", "switch", "archive", "--project-dir", "/tmp/example"]))
+      .toEqual(["intent", "switch", "archive", "--project-dir", "/tmp/example"]);
+    expect(delegateArgs(["engine", "space", "switch", "teamB", "--project-dir", "relative/project"]))
+      .toEqual(["space", "switch", "teamB", "--project-dir", resolve(process.cwd(), "relative/project")]);
+    // One route word that stands for two: still a route word, so the flag after
+    // it is ours and a relative path still resolves against where they are.
+    expect(delegateArgs(["compose", "--project-dir", "relative/project"]))
+      .toEqual(["next", "--project-dir", resolve(process.cwd(), "relative/project"), "compose"]);
+    // A name the person gave, with our flag after it: the delegated tool reads
+    // the flag itself, so the path reaches it whole either way.
+    expect(delegateArgs(["engine", "intent", "add-repo", "app-b", "--project-dir", "/elsewhere"]))
+      .toEqual(["intent", "add-repo", "app-b", "--project-dir", "/elsewhere"]);
+    expect(delegateArgs(["config", "models", "--agent", "developer", "--effort", "high", "--project", "--yes"]))
+      .toEqual(["config", "models", "--agent", "developer", "--effort", "high", "--project", "--yes"]);
+    // The hooks, adapters and the statusline: their argv is this engine's own.
+    expect(projectDirOf(["engine", "hook", "record-human-turn", "--project-dir", "/tmp/example"]))
+      .toBe("/tmp/example");
+    expect(projectDirOf(["engine", "adapter", "kiro-ide", "record-human-turn", "--project-dir", "/tmp/example"]))
+      .toBe("/tmp/example");
+    // `--json` on a read-only command of ours still reaches the dispatcher.
+    const version = resolveAction(["version", "--json"]) as { type: string; json?: boolean };
+    expect(version.type).toBe("version");
+    expect(version.json).toBe(true);
+  });
+
   test("extracts --project-dir before noun/verb parsing and restores it for delegation", () => {
     expect(resolveAction(["engine", "space", "--project-dir", "/tmp/example", "create", "teamB"])).toEqual({
       type: "delegate",
@@ -2140,11 +2277,13 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
     const projectDir = makeUnselectedKiroProject();
     const compiled = viaImportedCompiledMain(
       [
+        // Ahead of the person's words, as the release build gate and every
+        // other caller of this engine build it.
         "next",
-        "poc",
-        "Create a tiny TypeScript command-line program that prints Hello World.",
         "--project-dir",
         projectDir,
+        "poc",
+        "Create a tiny TypeScript command-line program that prints Hello World.",
       ],
       projectDir,
     );

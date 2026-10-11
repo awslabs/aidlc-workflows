@@ -281,11 +281,11 @@ and Kiro IDE does not read that file. So in each new Kiro IDE chat:
    `aidlc-architect-agent`, and the next Enter sends it. AI-DLC reads that as
    `/aidlc` and carries on.
 3. Picking `aidlc` from the `/` menu does not change which agent the chat
-   uses. If the chat is still on **Default**, Kiro asks you to approve
-   loading AI-DLC and then each command it runs. To avoid that, choose
-   **aidlc** in the agent picker first (step 1). The `aidlc-...-agent`
-   entries in the `/` menu are the specialists AI-DLC brings in during a
-   workflow; you do not start them yourself.
+   uses. If the chat is still on **Default**, AI-DLC's first move on your
+   first request is its own command, which Kiro asks you to approve, and then
+   each command it runs asks. To avoid that, choose **aidlc** in the agent picker first (step 1).
+   The `aidlc-...-agent` entries in the `/` menu are the specialists AI-DLC
+   brings in during a workflow; you do not start them yourself.
 
 With the `aidlc` agent selected you can also ask in plain words, for example
 "start an AI-DLC workflow for a to-do app" or "continue my AI-DLC workflow".
@@ -501,10 +501,15 @@ Kiro IDE runs its agent's commands in your default terminal profile. When that
 is **Command Prompt**, Kiro hands AI-DLC a command's reply only when the
 command finishes within a second (Command Prompt has no shell integration, so
 Kiro reads the result one second after sending the command and shows exit code
--1 for every run). Most AI-DLC steps take longer, so their replies come back
-empty while the step itself has run, and the agent needs extra turns to catch
-up; AI-DLC's commands, written for PowerShell, can also split your words at
-their quotes. Kiro itself recommends PowerShell.
+-1 for every run). Most AI-DLC steps take longer. So in Command Prompt every
+AI-DLC command prints one line first, `AI-DLC reply: aidlc/.aidlc-sessions/replies/<id>.txt`,
+and writes its reply to that file as well as to the terminal; when Kiro cuts
+the result off at that line, the agent reads the reply from the file instead
+of running the command again (the newest twenty replies are kept, in a folder
+git ignores). A value the agent wrote in single quotes, the PowerShell way,
+arrives from Command Prompt as several words with the quotes still on them;
+AI-DLC joins them back into the one value. Steps still take extra turns, so
+Kiro itself recommends PowerShell.
 
 When Kiro's terminal is Command Prompt and you have not answered before on this
 computer, AI-DLC asks you once whether to set it to PowerShell: during

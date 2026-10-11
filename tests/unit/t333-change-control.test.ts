@@ -1289,7 +1289,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
   // a stuck question was spent by the answer the agent recorded, and the
   // agent's `config set guard-policy relaxed` was then refused as a lowering.
   // Relaxed is stricter than off: raising the checks needs no one's word.
-  test("off to relaxed raises the checks: the setter runs with no person turn left to spend", () => {
+  test("off to relaxed raises the checks without waiting; back to off is the person's call: their message stands for it, another decision uses it up", () => {
     const { proj, state } = project("classic");
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (from scope classic)");
     recordHumanPrompt(proj, "carry on");
@@ -1299,10 +1299,19 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(raised.status, raised.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");
     expect(guardPolicyRows(proj).map((row) => auditBlockField(row.block, "New Value"))).toEqual(["relaxed"]);
-    // Going back down to off is a lowering, and still waits for their word.
+    // Going back down to off is a lowering: the person's message since the last
+    // decision stands for it; the answer the agent recorded from it is not a
+    // second decision, so the agent carries out what it read in their words.
     const lowered = run(dispatcher, ["engine", "config", "set", "guard-policy", "off"], proj, FENCE_ENV_CLEAR);
-    expect(lowered.status).not.toBe(0);
-    expect(refusalError(lowered.stderr)).toContain("Setting Guard Policy off lowers fences, which is the person's call.");
+    expect(lowered.status, lowered.stderr).toBe(0);
+    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (set by you)");
+    // Once another decision has used their message up, a lowering waits for their word.
+    const raisedAgain = run(dispatcher, ["engine", "config", "set", "guard-policy", "relaxed"], proj, FENCE_ENV_CLEAR);
+    expect(raisedAgain.status, raisedAgain.stderr).toBe(0);
+    appendAuditEntry("GATE_REJECTED", { Stage: "requirements-analysis" }, proj);
+    const refused = run(dispatcher, ["engine", "config", "set", "guard-policy", "off"], proj, FENCE_ENV_CLEAR);
+    expect(refused.status).not.toBe(0);
+    expect(refusalError(refused.stderr)).toContain("Setting Guard Policy off lowers fences, which is the person's call.");
     recordHumanPrompt(proj, "put the guards back off");
     const asked = run(dispatcher, ["engine", "config", "set", "guard-policy", "off"], proj, FENCE_ENV_CLEAR);
     expect(asked.status, asked.stderr).toBe(0);

@@ -1248,7 +1248,13 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
     const root = freshInstalledProject();
     const engine = (session: string, ...args: string[]) => {
       const run = Bun.spawnSync({
-        cmd: [process.execPath, join(root, ".aidlc", "tools", "aidlc.ts"), "engine", ...args, "--project-dir", root],
+        // This engine's own option rides ahead of the person's words, which is
+        // where every caller of it puts it: among their words it is a word of
+        // their request.
+        cmd: [
+          process.execPath, join(root, ".aidlc", "tools", "aidlc.ts"),
+          "--project-dir", root, "engine", ...args,
+        ],
         cwd: root,
         env: { ...process.env, AIDLC_SESSION_OVERRIDE: session, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" },
         stdout: "pipe",

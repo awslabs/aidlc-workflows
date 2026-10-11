@@ -182,6 +182,7 @@ import {
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcEntryWords } from "../tools/aidlc-reply-reader.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 import { forgetRulesDelivered, kiroIdeTurnOpen, noteKiroIdeTurn } from "../tools/aidlc-rules-held.ts";
 import {
@@ -2244,6 +2245,55 @@ function writeTerminalLatch(
   }
 }
 
+// Kiro IDE opens every new chat on Kiro's Default agent, which loads the aidlc
+// skill on its own judgement only (6 of 17 fresh chats, measured 2026-10-11);
+// the rest answer `/aidlc <words>` as a plain coding request. This member runs
+// on every typed line before the agent's first word and Kiro adds its stdout
+// to the agent's context, so when the line is AI-DLC's and no utility ran it
+// here, the agent hears the one first step: the engine's `next`, which reads
+// the recorded line (takePersonsOwnLine) and owns what follows. The entry word,
+// the words and the flags are the engine's own parse (nextArgsAreOnlyWords):
+// a line with a flag or verb stays the agent's, as today, and so does any
+// other line (`/aidlc-<runner>`, plain words). The engine reads the recorded
+// line only while no work is selected (a bare `next` with work under way is
+// the work's own continuation), so words typed while this chat's workflow
+// has a record are left to the agent as today: the aidlc agent's skill
+// passes them to `next` itself. A bare `/aidlc` is the resume gesture on
+// any path. On the aidlc agent the line repeats what its skill already says.
+async function firstStepLine(prompt: string, pd: string, sessionId: string): Promise<string> {
+  const text = prompt.trim();
+  const run = `Run \`${aidlcInvocation()} engine orchestrate next\` now and do only what it prints.`;
+  const words = aidlcEntryWords(text);
+  if (words === null) return "";
+  if (words !== "") {
+    if (workflowRecordSelected(pd, sessionId)) return "";
+    try {
+      const { nextArgsAreOnlyWords } = await import("../tools/aidlc-orchestrate.ts");
+      if (!nextArgsAreOnlyWords(splitKiroCommandArgs(words))) return "";
+    } catch {
+      return "";
+    }
+  }
+  return `AI-DLC: this message is an AI-DLC request and AI-DLC has it on record. ${run}`;
+}
+
+// Whether the workflow this chat selects already has its record (the state
+// file the engine's bare `next` would read), judged the way the gate floor
+// judges it (enterHookWorkflow). Unreadable state counts as selected: the
+// line is then withheld rather than said where it may be wrong.
+function workflowRecordSelected(pd: string, sessionId: string): boolean {
+  try {
+    const workflow = enterHookWorkflow(pd, sessionId);
+    try {
+      return existsSync(stateFilePath(pd));
+    } finally {
+      workflow.restore();
+    }
+  } catch {
+    return true;
+  }
+}
+
 function terminalContext(result: TerminalResult): string {
   return (
     `The command \`/aidlc ${result.typed}\` has already run. ` +
@@ -2419,7 +2469,11 @@ if (target === "verb-intercept") {
   notePromptCapability(sessionId);
   const invocation = promptTerminalInvocation(ide.prompt ?? "");
   const command = classifyTerminalCommand(invocation.args, projectDir, ide.sessionId?.trim() || undefined);
-  if (command === null) return 0;
+  if (command === null) {
+    const step = await firstStepLine(ide.prompt ?? "", projectDir, ide.sessionId?.trim() || sessionId);
+    if (step !== "") process.stdout.write(`${step}\n`);
+    return 0;
+  }
   const result = runTerminalCommand(command);
   if (result === null) return 0;
   writeTerminalLatch(sessionId, turn, invocation, result);

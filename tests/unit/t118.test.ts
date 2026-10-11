@@ -331,7 +331,9 @@ function emitNextNoState(...args: string[]): EmitResult {
   // requires a GENUINELY empty workspace (zero intents), else the engine asks to
   // SELECT the existing intent instead of creating. Strip the seeded record.
   removeWorkspaceRecord(proj);
-  const res = spawnSync(BUN, [TOOL, "next", ...args, "--project-dir", proj], {
+  // This engine's own option rides ahead of the person's words, which is
+  // where every caller of `next` puts it.
+  const res = spawnSync(BUN, [TOOL, "next", "--project-dir", proj, ...args], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: cleanEnv(),

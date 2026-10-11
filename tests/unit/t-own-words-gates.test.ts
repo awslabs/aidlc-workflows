@@ -305,7 +305,9 @@ describe("the stage gate records the choice the agent read, with the person's wo
   // read as the gate's answer first, never asked about as new work.
   test("/aidlc approve at an open gate is its answer, with no new-work question", () => {
     says(proj, "/aidlc approve");
-    const r = run(ORCHESTRATE, ["next", "approve", "--project-dir", proj]);
+    // This engine's own option rides ahead of their words, as every caller
+    // builds it: after their words it is a word of their request.
+    const r = run(ORCHESTRATE, ["next", "--project-dir", proj, "approve"]);
     const line = r.out.split("\n").find((entry) => entry.startsWith("{"));
     expect(line, r.out).toBeDefined();
     const read = JSON.parse(line as string) as { kind: string; message?: string; ask_type?: string };

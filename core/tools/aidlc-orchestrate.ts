@@ -292,6 +292,8 @@ import {
   parseWorkspaceCommand,
   isWorkspaceNoun,
   nextArgsCarryRequestWords,
+  ORCHESTRATOR_VERBS,
+  WORKSPACE_VERBS,
   type NextLineReading,
   nextTokenKind,
   readNextLine,
@@ -16456,10 +16458,47 @@ function nextArgsWithRequestFile(
 
 // --- CLI entry point ---
 
+/**
+ * The words that make a `next` line this engine's own command in a fixed shape
+ * rather than a request of the person's: the workspace commands, this
+ * orchestrator's own verbs, its configuration verb and its help. A line that
+ * opens with one of these carries no word of theirs, so its options are its own
+ * wherever they sit.
+ */
+const NEXT_OWN_COMMAND_WORDS: ReadonlySet<string> = new Set([
+  ...WORKSPACE_VERBS,
+  ...ORCHESTRATOR_VERBS,
+  "config",
+  "help",
+]);
+
+/**
+ * Where a request of the person's own begins on a `next` line: at its first
+ * bare word. This engine's own `--project-dir` rides ahead of that word, which
+ * is where every caller puts it, so among their words the same token is a word
+ * of their request and nothing of theirs is read as a folder to work in. The
+ * `--` mark already separates their words itself.
+ */
+function requestWordsBeginAt(rawArgs: readonly string[]): number {
+  if (rawArgs[0] !== "next") return Number.POSITIVE_INFINITY;
+  for (let i = 1; i < rawArgs.length; i++) {
+    const token = rawArgs[i];
+    if (token === "--") return Number.POSITIVE_INFINITY;
+    if (token.startsWith("-")) {
+      // A token after a flag is that flag's value, never a word of theirs.
+      if (rawArgs[i + 1] !== undefined && !rawArgs[i + 1].startsWith("-")) i++;
+      continue;
+    }
+    return NEXT_OWN_COMMAND_WORDS.has(token) ? Number.POSITIVE_INFINITY : i;
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
 export function main(argv: string[]): void {
   const rawArgs = argv;
 
   // Extract --project-dir (mirrors aidlc-jump.ts / aidlc-state.ts).
+  const requestFrom = requestWordsBeginAt(rawArgs);
   let projectDir: string | undefined;
   let attemptId: string | undefined;
   let conflictingAttemptId = false;
@@ -16469,7 +16508,9 @@ export function main(argv: string[]): void {
     if (rawArgs[i] === "--") {
       literalArgs = true;
       filteredArgs.push(rawArgs[i]);
-    } else if (!literalArgs && rawArgs[i] === "--project-dir" && i + 1 < rawArgs.length) {
+    } else if (
+      !literalArgs && i < requestFrom && rawArgs[i] === "--project-dir" && i + 1 < rawArgs.length
+    ) {
       projectDir = rawArgs[i + 1];
       i++;
     } else if (!literalArgs && rawArgs[i] === "--aidlc-attempt-id" && i + 1 < rawArgs.length) {
@@ -16607,14 +16648,27 @@ export function main(argv: string[]): void {
 }
 
 if (import.meta.main) {
-  // Kiro IDE's Command Prompt terminal, Windows only: note at exit a reply Kiro
-  // dropped. Loaded only there, so the dispatcher's front gate and the lean
-  // projections keep their import graph.
-  if (process.env.TERM_PROGRAM === "kiro" && process.platform === "win32") {
-    void import("./aidlc-kiro-ide-terminal.ts").then((m) => m.noteSlowReplyAtExit()).catch(() => {});
+  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
+  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
+  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // in Kiro's terminal, so the dispatcher's front gate and the lean projections
+  // keep their import graph.
+  if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {
+    import("./aidlc-kiro-ide-terminal.ts")
+      .then(async (m) => {
+        if (await m.commandPromptReplyTee()) return;
+        m.noteSlowReplyAtExit();
+        run(m.rejoinCommandPromptQuotes(process.argv.slice(2)));
+      })
+      .catch(() => run(process.argv.slice(2)));
+  } else {
+    run(process.argv.slice(2));
   }
+}
+
+function run(args: string[]): void {
   try {
-    main(process.argv.slice(2));
+    main(args);
   } catch (e) {
     // Any uncaught read error (missing graph, malformed state) surfaces as a
     // non-zero exit with JSON on stderr — never a half-emitted directive on

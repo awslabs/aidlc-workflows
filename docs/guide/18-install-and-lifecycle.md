@@ -433,6 +433,13 @@ interactive wizard.
 | `--quiet` | Emit one summary or remediation line |
 | `--no-color` | Disable color output |
 
+`--project-dir`, `--json`, `--quiet`, `--no-color`, `--yes`, `--offline` and
+`--verbose` are AI-DLC's own options: put them with the command you are running,
+as `aidlc config --project-dir /work/shop` or `aidlc doctor --json`. A word of
+your own that happens to look like one of them is still your word, so
+`/aidlc add a --project-dir flag to the CLI` asks for that work with every word
+you typed kept.
+
 ### Model Policy
 
 `aidlc config models` records model policy in the selected settings layer

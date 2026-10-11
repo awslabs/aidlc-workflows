@@ -506,7 +506,12 @@ default terminal profile (`terminal.integrated.defaultProfile.windows`): in
 Command Prompt the agent's AI-DLC commands split the person's words and every
 command reports exit code -1, so `core/tools/aidlc-kiro-ide-terminal.ts` sets
 it to PowerShell on the same kinds of answer (`--kiro-terminal powershell`) and
-keeps it in the `kiro-ide-terminal` marker.
+keeps it in the `kiro-ide-terminal` marker. In that terminal (TERM_PROGRAM=kiro
+and the shell the chat's hook recorded) each tool entry also runs the tool as a
+child behind an `AI-DLC reply:` pointer line and keeps the reply under
+`aidlc/.aidlc-sessions/replies/`, and rejoins the single-quote pair cmd.exe left
+on the arguments, since the engine writes its reply straight to fd 1 and Kiro
+reads the terminal one second after sending the command.
 
 Every successful non-dry-run config transaction then runs a cheap post-apply
 sweep against the installed bytes. The runtime leg resolves only the binary

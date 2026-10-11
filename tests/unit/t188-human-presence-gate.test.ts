@@ -66,6 +66,7 @@ import {
   checkSummaryConfirmationEvidence,
   findStageBySlug,
   hooksHealthDir,
+  latestPersonTurn,
   readAllAuditShards,
   readAuditShardEvents,
   writeSessionPidEntry,
@@ -2277,7 +2278,7 @@ describe("t188: what the person's message asks for outlives the approval given i
     expect(autonomyMode()).toBe("autonomous");
   });
 
-  test("the grant after an approval from an earlier message, or a second grant, waits for the person to say it again", () => {
+  test("the message that answered a question still asks for the grant; a second grant waits for the person to say it again", () => {
     const slug = openGate();
     recordHumanTurn(proj);
     expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
@@ -2285,13 +2286,11 @@ describe("t188: what the person's message asks for outlives the approval given i
     expect(guardedLog(proj, ["decision", "--stage", next, "--decision", "Which name?", "--options", "A,B"]).rc).toBe(0);
     recordHumanTurn(proj);
     expect(guardedLog(proj, ["answer", "--stage", next, "--details", "A"]).rc).toBe(0);
-    const refused = autonomy("autonomous");
-    expect(refused.rc).not.toBe(0);
-    expect(refused.out).toContain("no reply from the person is on record");
-    expect(autonomyMode()).not.toBe("autonomous");
-    // The step the refusal names: they choose it, and the grant runs once.
-    recordHumanTurn(proj);
-    expect(autonomy("autonomous").rc).toBe(0);
+    // The answer they gave in that message is not a second decision: the rest
+    // of the message, read by the agent as the grant, still stands, once.
+    const granted = autonomy("autonomous");
+    expect(granted.rc, granted.out).toBe(0);
+    expect(autonomyMode()).toBe("autonomous");
     expect(autonomy("gated").rc).toBe(0);
     expect(autonomy("autonomous").rc).not.toBe(0);
     expect(autonomyMode()).toBe("gated");
@@ -2318,23 +2317,17 @@ describe("t188: what the person's message asks for outlives the approval given i
     expect(planApproval()).toBe("off");
   });
 
-  test("the same request after an approval from an earlier message waits for the person to say it again", () => {
+  test("the message that answered a question still asks for the switch: the answer recorded from it is not a second decision", () => {
     const slug = openGate();
     recordHumanTurn(proj);
     expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
-    // Their next message answered a question: it is spent, and the approval was not from it.
     const next = field(proj, "Current Stage");
     expect(guardedLog(proj, ["decision", "--stage", next, "--decision", "Which name?", "--options", "A,B"]).rc).toBe(0);
     recordHumanTurn(proj);
     expect(guardedLog(proj, ["answer", "--stage", next, "--details", "A"]).rc).toBe(0);
-    const refused = setter(["config-change", "--plan-approval", "off"]);
-    expect(refused.rc).not.toBe(0);
-    expect(refused.out).toContain("No reply from the person has arrived since the last decision");
-    expect(planApproval()).not.toBe("off");
-    // The step the refusal names: they ask, and the setter runs.
-    recordHumanTurn(proj);
     const off = setter(["config-change", "--plan-approval", "off"]);
     expect(off.rc, off.out).toBe(0);
+    expect(planApproval()).toBe("off");
   });
 
   test("an approval after a message that was only a command to AIDLC came from the reply before it, so the command carries nothing more", () => {
@@ -2373,7 +2366,7 @@ describe("t188: what the person's message asks for outlives the approval given i
     expect(JSON.parse(next.stdout).kind, `${next.stdout}${next.stderr}`).toBe("parked");
   });
 
-  test("a stop the autonomy grant or an answer used up waits for the person to say it again", () => {
+  test("a stop the autonomy grant used up waits for the person to say it again; an answer after their message leaves the stop standing", () => {
     setAutonomous(proj);
     recordHumanTurn(proj);
     appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, proj);
@@ -2381,13 +2374,82 @@ describe("t188: what the person's message asks for outlives the approval given i
     const granted = guarded(proj, ["park"]);
     expect(granted.rc).not.toBe(0);
     expect(granted.out).toContain("no reply from the person is on record");
+    // The step it names: when the person asks to stop, park then. An answer
+    // recorded after their message is the run's own, as its approvals are.
     recordHumanTurn(proj);
     appendAuditEntry("QUESTION_ANSWERED", { Stage: field(proj, "Current Stage"), Details: "chosen by the agent" }, proj);
-    expect(guarded(proj, ["park"]).rc).not.toBe(0);
-    expect(readFileSync(seededStateFile(proj), "utf-8")).not.toContain("- **Parked**:");
-    // The step it names: when the person asks to stop, park then.
-    recordHumanTurn(proj);
     const parked = guarded(proj, ["park"]);
     expect(parked.rc, parked.out).toBe(0);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Parked By**: person");
+  });
+
+  // The person picks in the question box the agent showed, as the human-turn
+  // hook records it on Claude Code (PostToolUse of AskUserQuestion): one entry
+  // per question the box asked.
+  function pickInBox(questions: Array<{ question: string; options: string[]; choice: string }>): void {
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete env.AIDLC_UNATTENDED;
+    const r = spawnSync(BUN, [MINT_HOOK, "engine", "hook", "record-human-turn"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8", cwd: proj, env,
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: "t188-box", cwd: proj,
+        tool_input: { questions: questions.map(({ question, options }) => ({ question, options: options.map((label) => ({ label })) })) },
+        tool_response: { answers: Object.fromEntries(questions.map(({ question, choice }) => [question, choice])) },
+      }),
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+  }
+
+  const OFFER = "Build each code plan without asking first?";
+  const OFFERED = ["Turn plan approval off", "Keep asking"];
+
+  test("the option the agent offered, picked in its question box, is the request in that message: the answer recorded from it leaves the setter standing", () => {
+    const stage = field(proj, "Current Stage");
+    expect(guardedLog(proj, ["decision", "--stage", stage, "--decision", OFFER, "--options", OFFERED.join(",")]).rc).toBe(0);
+    pickInBox([{ question: OFFER, options: OFFERED, choice: OFFERED[0] }]);
+    // The pick is their words: the record quotes it where a typed turn is quoted.
+    expect(latestPersonTurn(proj)?.words).toBe(OFFERED[0]);
+    const answered = guardedLog(proj, ["answer", "--stage", stage, "--details", OFFERED[0]]);
+    expect(answered.rc, answered.out).toBe(0);
+    const off = setter(["config-change", "--plan-approval", "off"]);
+    expect(off.rc, off.out).toBe(0);
+    expect(off.out).toContain("Each code plan is now built without asking you first.");
+    expect(planApproval()).toBe("off");
+  });
+
+  test("the same request typed as the answer to the agent's question stands the same way", () => {
+    const stage = field(proj, "Current Stage");
+    expect(guardedLog(proj, ["decision", "--stage", stage, "--decision", OFFER, "--options", OFFERED.join(",")]).rc).toBe(0);
+    recordTypedReply(proj, "yes please");
+    expect(guardedLog(proj, ["answer", "--stage", stage, "--details", OFFERED[0]]).rc).toBe(0);
+    const off = setter(["config-change", "--plan-approval", "off"]);
+    expect(off.rc, off.out).toBe(0);
+    expect(planApproval()).toBe("off");
+  });
+
+  test("a pick another decision used up, or an answer logged after a command-only turn, still waits for the person", () => {
+    const stage = field(proj, "Current Stage");
+    expect(guardedLog(proj, ["decision", "--stage", stage, "--decision", OFFER, "--options", OFFERED.join(",")]).rc).toBe(0);
+    pickInBox([{ question: OFFER, options: OFFERED, choice: OFFERED[0] }]);
+    expect(guardedLog(proj, ["answer", "--stage", stage, "--details", OFFERED[0]]).rc).toBe(0);
+    // A rejection recorded after the pick is another decision: it uses the message up.
+    appendAuditEntry("GATE_REJECTED", { Stage: stage }, proj);
+    expect(setter(["config-change", "--plan-approval", "off"]).rc).not.toBe(0);
+    expect(planApproval()).not.toBe("off");
+    // A turn that was only a command to AIDLC carries no request behind an answer logged after it.
+    appendAuditEntry("HUMAN_TURN", { Reply: "command" }, proj);
+    appendAuditEntry("QUESTION_ANSWERED", { Stage: stage, Details: OFFERED[1] }, proj);
+    expect(setter(["config-change", "--plan-approval", "off"]).rc).not.toBe(0);
+    expect(planApproval()).not.toBe("off");
+  });
+
+  test("a question box with several questions keeps every pick as the turn's words, in the order shown", () => {
+    pickInBox([
+      { question: "Which name?", options: ["A", "B"], choice: "A" },
+      { question: "Which colour?", options: ["Red", "Blue"], choice: "Blue" },
+    ]);
+    expect(latestPersonTurn(proj)?.words).toBe("A, Blue");
   });
 });
