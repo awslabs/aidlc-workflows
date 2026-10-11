@@ -398,7 +398,11 @@ exact `log decision` and `log answer` commands for this stage, and the notice to
 say afterwards; with `ask: false` it says the notice to say and the way to take
 the questions, with no mode question and nothing recorded for the mode (the
 stage's `STAGE_STARTED` row records the reused mode in its `Answer Mode`
-field). The conductor renders the question through its harness's
+field). Both variants open with the condition: only if this stage puts
+questions to the person, right before the first of them; a stage with none to
+ask (Code Generation, Build and Test, the deployment stages) gets no mode line.
+Whether a stage asks is the agent's call, so the condition rides with the
+instruction rather than in the engine. The conductor renders the question through its harness's
 question-rendering annex, records the chosen mode as its option label (read
 from the person's reply in whatever words they used; the engine reads only that
 label or its number), and the person changes the mode by saying so. A reused

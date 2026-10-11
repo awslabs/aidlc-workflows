@@ -370,11 +370,19 @@ describe("a stage step carries its instructions, not the fields to branch on", (
     );
     expect(note).toContain(`\`${LOG} answer --stage requirements-analysis --details '<the option label>'\``);
     expect(note.endsWith(ASK_MODE.notice)).toBe(true);
+    // The mode question belongs to the stage's questions: a stage with none to ask asks nothing about how to answer.
+    expect(note.startsWith("Only if this stage puts questions to the person")).toBe(true);
+    expect(note).toContain("with none to ask, say nothing about how to answer");
   });
 
   test("the answer mode reused: say the notice, take the questions their way, record nothing for the mode", () => {
     const note = str(notes(runStage({ answer_mode: REUSED_MODE })).answer_mode_note);
-    expect(note.startsWith(`Say to the person: ${REUSED_MODE.notice}`)).toBe(true);
+    // The reused line is said right before the stage's first question, never at the top of a stage, and not at all
+    // on a stage that puts no questions to the person (Code Generation, Build and Test, the deployment stages).
+    expect(note.startsWith("Only if this stage puts questions to the person")).toBe(true);
+    expect(note).toContain(`right before the first of them, say: ${REUSED_MODE.notice}`);
+    expect(note).toContain("with none to ask, say nothing about how to answer");
+    expect(note.startsWith("Say to the person")).toBe(false);
     expect(note).toContain("fill in the answers in the questions file");
     expect(note).toContain("no mode question and nothing recorded for the mode");
     expect(note).not.toContain("decision --stage");

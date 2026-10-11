@@ -1185,9 +1185,15 @@ const ANSWER_MODE_WAYS: Record<"guide" | "file" | "chat", string> = {
   file: "letting them fill in the answers in the questions file (I'll edit the file)",
   chat: "discussing them freely and extracting the decisions (Chat)",
 };
+// Both variants belong to the stage's questions: the line comes right before
+// the first of them, and a stage that puts none to the person (Code Generation,
+// Build and Test, the deployment stages) gets no mode line at all. Whether a
+// stage asks is the agent's call, so the condition rides with the instruction.
+const ONLY_WITH_QUESTIONS = "Only if this stage puts questions to the person (with none to ask, say nothing about " +
+  "how to answer), and right before the first of them";
 export function answerModeNote(mode: StageAnswerMode, stage: string, logInvocation: string): string {
   if (mode.ask || mode.mode === null) {
-    return "Before this stage's questions, ask the person once how they want to answer them, as one structured " +
+    return `${ONLY_WITH_QUESTIONS}, ask the person once how they want to answer them, as one structured ` +
       `question: "${ANSWER_MODE_QUESTION}" with the choices Guide me (walk through each question interactively ` +
       "here), I'll edit the file (they fill in the answers in the file directly) and Chat (discuss freely; you " +
       `extract the decisions from the conversation). Record it with \`${logInvocation} decision --stage ${stage} ` +
@@ -1195,7 +1201,7 @@ export function answerModeNote(mode: StageAnswerMode, stage: string, logInvocati
       `before showing it, and their choice with \`${logInvocation} answer --stage ${stage} --details '<the option ` +
       "label>'` after (the one they picked, or the one you understood from their words). Then say: " + mode.notice;
   }
-  return `Say to the person: ${mode.notice} Then take this stage's questions the way they chose earlier, ` +
+  return `${ONLY_WITH_QUESTIONS}, say: ${mode.notice} Then take them the way they chose earlier, ` +
     `${ANSWER_MODE_WAYS[mode.mode]}, with no mode question and nothing recorded for the mode.`;
 }
 
