@@ -2156,12 +2156,9 @@ function writeTerminalLatch(
 // here, the agent hears the one first step: the engine's `next`, which reads
 // the recorded line (takePersonsOwnLine) and owns what follows. The entry word,
 // the words and the flags are the engine's own parse (nextArgsAreOnlyWords):
-// a line with a flag or verb stays the agent's, as today. Kiro's `/` menu
-// completes a bare `/aidlc` to its first matching entry, a shipped helper
-// agent (agents before skills, file-name order), so that exact bare line is
-// the person's `/aidlc` too; with words after it, or for a runner skill's
-// entry, nothing is said. On the aidlc agent the line repeats what its skill
-// already says.
+// a line with a flag or verb stays the agent's, as today, and so does any
+// other line (`/aidlc-<runner>`, plain words). On the aidlc agent the line
+// repeats what its skill already says.
 async function firstStepLine(prompt: string): Promise<string> {
   const text = prompt.trim();
   const run = `Run \`${aidlcInvocation()} engine orchestrate next\` now and do only what it prints.`;
@@ -2177,12 +2174,7 @@ async function firstStepLine(prompt: string): Promise<string> {
     }
     return `AI-DLC: this message is an AI-DLC request and AI-DLC has it on record. ${run}`;
   }
-  const completed = /^\/aidlc-([a-z0-9][a-z0-9-]*)$/i.exec(text);
-  if (completed === null) return "";
-  const agentFile = join(HOOKS_DIR, "..", "agents", `aidlc-${completed[1].toLowerCase()}.md`);
-  if (!existsSync(agentFile)) return "";
-  return `AI-DLC: \`${text}\` alone is the person's \`/aidlc\` (Kiro's menu completes a bare /aidlc to that entry; ` +
-    `the person does not start that agent). ${run}`;
+  return "";
 }
 
 function terminalContext(result: TerminalResult): string {
