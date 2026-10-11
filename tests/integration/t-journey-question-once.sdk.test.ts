@@ -90,7 +90,7 @@ const FEASIBILITY_IN_PROGRESS = /^- \[-\] feasibility\b/m;
 // The option for separate new work, as the agent worded it: a label leading
 // with "Yes" (the skill's own offer), the engine's "Separate new piece of work"
 // in the label, or, when the agent reworded the label ("Set up alongside",
-// "Start it alongside", Full Suite 10-08 and 10-10), the same words in the
+// "Start it alongside", Full Suite 10-08 and 10-10), the route named in the
 // description it kept for that option. The meaning is the agent's to word; the
 // test checks the right option was offered and picks it by the picker's number.
 function separateWorkReply(menu: CapturedAskUserQuestion | undefined): string {
@@ -98,8 +98,12 @@ function separateWorkReply(menu: CapturedAskUserQuestion | undefined): string {
   let at = options.findIndex((o) => /^yes\b/i.test(o.label));
   if (at < 0) at = options.findIndex((o) => /separate/i.test(o.label));
   if (at < 0) {
+    // The description names the route ("a separate new piece of work", "a new,
+    // separate piece of work") and does not negate it ("not a separate piece
+    // of work" on another option; "do not change the active work" beside the
+    // route is still the route).
     at = options.findIndex((o) =>
-      /separate new piece of work/i.test(o.description ?? "") && !/\bnot\b/i.test(o.description ?? ""));
+      /\bseparate\b/i.test(o.description ?? "") && !/\bnot (?:a |the )?separate\b/i.test(o.description ?? ""));
   }
   return at < 0 ? SEPARATE : `${at + 1}, ${SEPARATE}`;
 }
@@ -109,6 +113,34 @@ function countRows(events: string[] | undefined): Map<string, number> {
   for (const event of events ?? []) counts.set(event, (counts.get(event) ?? 0) + 1);
   return counts;
 }
+
+// The option for separate new work in the pickers recorded on 10-08 and
+// 10-10 (the label in the agent's words, the route in the description), and
+// the two edges: a description that says "do not change the current work"
+// beside the route, and one that negates the route on another option.
+// Deterministic; the live journey below drives the real picker.
+test("the separate option is found by its label or its description, never by a negated route", () => {
+  const menu = (options: Array<{ label: string; description?: string }>): CapturedAskUserQuestion =>
+    ({ questions: [{ question: "How should I handle it?", options }], answers: {} });
+  expect(separateWorkReply(menu([{ label: "Yes - start a second intent" }, { label: "No, keep going" }]))).toBe(`1, ${SEPARATE}`);
+  expect(separateWorkReply(menu([{ label: "Part of the active work" }, { label: "Separate new piece of work" }]))).toBe(`2, ${SEPARATE}`);
+  for (const description of [
+    "Set up the NOAA weather CLI as a new, separate piece of work (classic plan, 14 stages) without touching the current widget work.",
+    "Start the NOAA CLI as a separate new piece of work (sized as \"classic\", ~14 stages) without changing the current widget work.",
+    "Start the NOAA weather CLI as a separate new piece of work (classic plan, ~14 stages), leaving the current widget-feature work untouched.",
+    "Create a separate new piece of work; do not change the active work.",
+  ]) {
+    expect(separateWorkReply(menu([
+      { label: "Start it alongside", description },
+      { label: "Part of current work", description: "Treat this as a continuation of the active widget-feature workflow." },
+      { label: "Reshape current plan", description: "Interpret this as a request to change how the remaining widget-feature plan is shaped." },
+    ])), description).toBe(`1, ${SEPARATE}`);
+  }
+  expect(separateWorkReply(menu([
+    { label: "Fold it in", description: "Not a separate new piece of work: part of the current one." },
+    { label: "Start it alongside", description: "Set it up as a separate piece of work beside the current one." },
+  ]))).toBe(`2, ${SEPARATE}`);
+});
 
 describe("t-journey-question-once (sdk): a question still open at the end of a turn is asked once", () => {
   test(

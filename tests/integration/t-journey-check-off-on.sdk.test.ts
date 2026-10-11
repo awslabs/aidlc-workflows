@@ -45,7 +45,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, seededStateFile, setupIntegrationProject } from "../harness/fixtures.ts";
-import { type AnswerScript, type DriveResult, driveAidlc } from "../harness/sdk-drive.ts";
+import { type AnswerScript, type AskUserQuestionItem, type DriveResult, driveAidlc } from "../harness/sdk-drive.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
 const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
@@ -84,18 +84,17 @@ function engineSaid(result: DriveResult, line: string): number {
   return result.toolResults.filter((t) => t.toolName === "Bash" && t.resultText.includes(line)).length;
 }
 
-// The person declines whatever is offered: the option that says No, else the
-// one that does not say Yes (never a Yes, which would set the switch for the
+// The person declines whatever is offered: the option that says No, else
+// their own word typed into the picker, so no option is ever picked for them
+// (one worded without Yes or No could be the one that sets the switch for the
 // whole machine this test runs on).
-const DECLINE: AnswerScript = {
+const DECLINE = {
   kind: "pick",
-  pick: (question) => {
-    const options = question.options;
-    const no = options.findIndex((o) => /^no\b/i.test(o.label));
-    const at = no >= 0 ? no : options.findIndex((o) => !/^yes\b/i.test(o.label));
-    return at >= 0 ? { optionIndex: at } : undefined;
+  pick: (question: AskUserQuestionItem) => {
+    const no = question.options.findIndex((o) => /^no\b/i.test(o.label));
+    return no >= 0 ? { optionIndex: no } : { text: "No" };
   },
-};
+} satisfies AnswerScript;
 
 // After the switch is done, the skill allows one plain question: the offer of
 // the wider place (this machine, after a project switch), which the person
@@ -110,6 +109,20 @@ function atMostTheWideningQuestion(result: DriveResult, chat: string): void {
     expect(Object.values(menu.answers).join(" "), `${chat}: the person did not say no`).toMatch(/^no\b/i);
   }
 }
+
+// The person's answer to a widening picker, as the script resolves it: the
+// option that says No, else their own word typed in, never an option picked
+// for them (one worded without Yes or No could be the one that widens the
+// switch). Deterministic; the live journey below drives the real picker.
+test("the person declines the widening picker: the No option, or their own No typed in", () => {
+  const menu = (labels: string[]): AskUserQuestionItem => ({
+    question: "Do you want me to set the review freeze check off for this whole machine instead?",
+    options: labels.map((label) => ({ label })),
+  });
+  expect(DECLINE.pick(menu(["No, just this project", "Yes, this machine"]))).toEqual({ optionIndex: 0 });
+  expect(DECLINE.pick(menu(["Yes, this machine", "No, keep it to this project"]))).toEqual({ optionIndex: 1 });
+  expect(DECLINE.pick(menu(["Apply machine-wide", "Keep project only"]))).toEqual({ text: "No" });
+});
 
 describe("t-journey-check-off-on (sdk): a check turned off and on from the chat is done at once and said plainly", () => {
   test(
