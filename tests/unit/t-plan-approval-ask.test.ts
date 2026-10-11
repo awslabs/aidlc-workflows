@@ -439,6 +439,12 @@ describe("the engine asks for Plan Approval", () => {
     expect(guardWrite(proj, join(seededRecordDir(proj), ".aidlc-engine", "answer.txt")).code).toBe(2);
     expect(guardWrite(proj, join(answerText, "..", "..", "construction", "code-generation", "code-generation-plan.md")).code)
       .toBe(2);
+    // So does a person's request for `next --request-file`, directly inside the
+    // project's request-text folder, the only place the engine reads it.
+    const requestText = join(proj, "aidlc", ".aidlc-request-text");
+    expect(guardWrite(proj, join(requestText, "request.txt")).code).toBe(0);
+    expect(guardWrite(proj, join(requestText, "nested", "request.txt")).code).toBe(2);
+    expect(guardWrite(proj, join(requestText, "..", "aidlc-state.md")).code).toBe(2);
   });
 
   // Only the build waits for the plan (K6c): a write to a file the waiting plan
@@ -3049,5 +3055,43 @@ describe("a setting typed over the step in hand keeps that step current", () => 
     const kept = readActiveDirectiveMarker(proj, stateOf(proj));
     expect(kept?.kind).toBe("run-stage");
     expect(guardWrite(proj, planFile(proj)).code).toBe(0);
+  });
+});
+
+// The governance protocol writes a phase-boundary verification report
+// (<record>/verification/<boundary>-verification.md) as the next phase begins.
+// A Codex run wrote the Inception->Construction one while Code Generation was
+// planning and the guard refused it as a workspace path ("Blocked by hook" on
+// the person's screen). It is AI-DLC's own record of a check, not source and
+// not a plan-bound file: admitted while the Code Generation step is current,
+// under the stage diary's fences. Source still waits for the approval.
+describe("the phase-boundary verification report is written while the plan is", () => {
+  const report = (proj: string, drive: "same" | "flipped" = "same"): string => {
+    const target = join(seededRecordDir(proj), "verification", "inception-construction-verification.md");
+    if (drive === "same") return target;
+    return target.replace(/^([A-Za-z]):/, (_m, letter: string) =>
+      `${letter === letter.toLowerCase() ? letter.toUpperCase() : letter.toLowerCase()}:`);
+  };
+
+  test("a Write under <record>/verification/ goes through at the planning step; a source write still waits", () => {
+    const proj = project();
+    expect(next(proj).plan_approval).toEqual({ status: "plan" });
+    const write = guardWrite(proj, report(proj));
+    expect(write.code, write.stderr).toBe(0);
+    const source = guardWrite(proj, join(proj, "src", "other.ts"));
+    expect(source.code).toBe(2);
+    expect(source.stderr).toContain("Code generation cannot modify workspace paths for the zero-Unit stage-level implementation");
+    expect(source.stderr).toContain("Writes inside the selected code-generation record directory remain available for planning.");
+    // The state and the engine's control files are not a report.
+    expect(guardWrite(proj, join(seededRecordDir(proj), "verification", "..", "aidlc-state.md")).code).toBe(2);
+  });
+
+  // VS Code hosts report c:\ where the project dir carries C:; the drive letter
+  // is folded, as the stage diary's is, so the same folder is the same folder.
+  test.skipIf(process.platform !== "win32")("on Windows the report spelled with the other drive-letter case is the same folder", () => {
+    const proj = project();
+    expect(next(proj).plan_approval).toEqual({ status: "plan" });
+    const write = guardWrite(proj, report(proj, "flipped"));
+    expect(write.code, write.stderr).toBe(0);
   });
 });

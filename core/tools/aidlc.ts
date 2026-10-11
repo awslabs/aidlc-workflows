@@ -329,6 +329,20 @@ export const ROUTES: readonly Route[] = [
     all: ["now"],
   },
   {
+    // The installed orchestrator skill, whole. A host command template prints
+    // it into itself where the host cuts the skill tool's output (opencode).
+    id: "top-skill-text",
+    group: "top",
+    kind: "top-passthrough",
+    classification: "passthrough",
+    verbs: ["skill-text"],
+    tool: TOOLS.utility,
+    ...HIDDEN_ENGINE,
+    namespace: "engine",
+    mutationScope: "none",
+    all: ["skill-text [--harness-dir <dir>]"],
+  },
+  {
     id: "top-doctor",
     namespace: "public",
     group: "top",

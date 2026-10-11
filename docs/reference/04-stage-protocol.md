@@ -428,6 +428,13 @@ and an unclear reply gets one short follow-up.
   `kept_replies` on its `run-stage`: what the person replied that no answer
   holds yet, in order, after the stage's answers already on record. Record
   those answers first; never ask them again
+- A stage resumed where the work was parked carries `parked_reply` on its
+  `run-stage`: what the person said when they stopped the work there (the
+  `WORKFLOW_PARKED` row keeps their words), with one note. Read it before
+  doing anything else; never ask them again what they already said. It ends
+  at the first row of that stage after the park. A Unit's own step carries
+  none, and a reply longer than one kept message (8,000 characters) rides as
+  far as that, the note saying the whole message is on the park row
 - Log each batch with fresh ISO timestamp
 - Only when `directive.ceremony.summary_confirmation === "on"`, present a consolidated answer summary where the person reads it (in the confirmation question itself, or right above it in the same message), then print
   `aidlc-review-brief.ts summary --stage <slug> --questions-file <path>` before

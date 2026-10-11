@@ -6861,7 +6861,7 @@
     "category": "audit-form",
     "input": "proceed",
     "state": "work-open",
-    "meaning": "the person means: carry on with the open work (a word the carry-on list does not know)",
+    "meaning": "the person means: carry on with the open work (said in their own words)",
     "expected": {
       "engine": {
         "kinds": [
@@ -7714,10 +7714,7 @@
         ],
         "words": "continue",
         "settings": [],
-        "no_ask": true,
-        "names": [
-          "unpark"
-        ]
+        "no_ask": true
       },
       "end": {
         "asks": 0,
@@ -11003,7 +11000,7 @@
     "category": "audit-form",
     "input": "proceed",
     "state": "work-open",
-    "meaning": "the person means: carry on with the open work (a word the carry-on list does not know) (said in plain chat, no /aidlc)",
+    "meaning": "the person means: carry on with the open work (said in their own words) (said in plain chat, no /aidlc)",
     "expected": {
       "engine": {
         "kinds": [
@@ -12637,14 +12634,15 @@
     "state": "work-open",
     "meaning": "the person means: carry on with the open work",
     "source": "docs/guide/03-spaces-and-intents.md:154",
-    "documented": "\"Saying only that the work should go on (`/aidlc carry on`, \"continue\", \"keep going\", \"go on\" or \"resume\", with or without \"please\") asks nothing: AI-DLC carries on with the active work. With work in the project but none selected yet, it asks which piece to pick up.\"",
+    "documented": "\"Saying only that the work should go on (`/aidlc carry on`, \"proceed\", \"keep going\", in your own words) asks nothing: AI-DLC reads your words and carries on with the active work. With work in the project but none selected yet, it asks which piece to pick up.\"",
     "expected": {
       "engine": {
         "kinds": [
-          "run-stage"
+          "print"
         ],
         "words": "carry on",
-        "settings": []
+        "settings": [],
+        "no_ask": true
       },
       "end": {
         "asks": 1,

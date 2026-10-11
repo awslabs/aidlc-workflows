@@ -204,7 +204,10 @@ Describe what you want to build and the engine auto-detects the appropriate scop
 **A request no shell can carry.** On Windows, cmd.exe ends a command at a line
 break and replaces a `%NAME%` or `!NAME!` pair even inside quotes, and the aidlc
 launcher is read by cmd.exe again. A request holding one of those reaches the
-engine through a file instead of the command line: the agent writes it to
+engine through a file instead of the command line (on Kiro IDE the agent also
+sends a request holding a double quote, a typographic one such as `“` or `’`,
+one of `&`, `|`, `<`, `>`, `^`, or a trailing backslash this way, since Windows
+PowerShell or cmd.exe can change them): the agent writes it to
 `aidlc/.aidlc-request-text/request.txt` and runs `aidlc engine orchestrate next
 --request-file aidlc/.aidlc-request-text/request.txt` with any other flags. The
 engine reads only a plain file directly inside `aidlc/.aidlc-request-text/`,

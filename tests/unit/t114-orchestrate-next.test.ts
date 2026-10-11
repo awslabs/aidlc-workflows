@@ -517,11 +517,21 @@ describe("t114 in-session config alias", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     const before = readFileSync(seededStateFile(proj), "utf-8");
-    for (const args of [["--depth", "extreme"], ["--review", "loud"], ["--guard-policy", "loose"]]) {
+    const rows: Array<[string[], string, string]> = [
+      [["--depth", "extreme"], "--depth", "extreme"],
+      [["--review", "loud"], "--review", "loud"],
+      [["--guard-policy", "loose"], "--guard-policy", "loose"],
+      // Full Suite 38087105892: the agent sent the person's typed value beside
+      // its own `--resume`. next answers the same reading step and takes
+      // nothing else from the line, so the marker stays untouched here too.
+      [["--resume", "--depth", "extreme"], "--depth", "extreme"],
+      [["--depth", "extreme", "--resume"], "--depth", "extreme"],
+    ];
+    for (const [args, flag, value] of rows) {
       const out = runNext(proj, args).out;
       expect(out, args.join(" ")).toContain('"kind":"print"');
-      expect(out, args.join(" ")).toContain(`takes \`${args[0]}\` with`);
-      expect(out, args.join(" ")).toContain(`does not take ${JSON.stringify(JSON.stringify(args[1])).slice(1, -1)}`);
+      expect(out, args.join(" ")).toContain(`takes \`${flag}\` with`);
+      expect(out, args.join(" ")).toContain(`does not take ${JSON.stringify(JSON.stringify(value)).slice(1, -1)}`);
       expect(existsSync(engineTouchMarkerPath(proj)), args.join(" ")).toBe(false);
     }
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);

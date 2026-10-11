@@ -71,6 +71,7 @@ import {
   parseGuardPolicyStateLine,
   commandAtPersonsTerminal,
 } from "./aidlc-lib.ts";
+import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { quoted } from "./aidlc-recorded-switches.ts";
 import { settingPurpose } from "./aidlc-settings.ts";
 
@@ -568,13 +569,21 @@ export function applyIntentSettings(
         },
       });
     }
-    // With no override set, the level in force was the scope's own: the line
-    // names it (a first "none" printed "none -> none" in two live runs).
-    const display = update.storedReview === "" ? `${scopeReviewLevel(target)} (scope default)` : update.storedReview;
-    const previous = update.oldReview || `${scopeReviewLevel(target)} (scope default)`;
-    lines.push(update.changed
-      ? `Review override changed: ${previous} -> ${display}`
-      : `Review override is already ${display}`);
+    // The person's line: what the reviews are now, what they were, and the way
+    // back, in the harness's own entry word. With no override set, the level in
+    // force was the scope's own (a first "none" printed "none -> none" in two
+    // live runs; three more printed "Review override changed: advisory (scope
+    // default) -> none" to the person as it stood). An empty stored override is
+    // the scope's own level again.
+    const level = update.storedReview === "" ? scopeReviewLevel(target) : (update.storedReview ?? review);
+    const was = update.oldReview || scopeReviewLevel(target);
+    const word = (value: string): string => (value === "none" ? "off" : value);
+    const back = `say so or type ${entrySkillInvocation()} --review ${was}`;
+    lines.push(!update.changed
+      ? `Specialist reviews are already ${word(level)} for this work.`
+      : level === "none"
+        ? `Specialist reviews are off for the rest of this work. To turn them back on, ${back}.`
+        : `Specialist reviews are ${level} for the rest of this work (they were ${word(was)}). To change it back, ${back}.`);
   }
   // Persist scope-owned updates even while memory controls the effective value.
   // Explicit strict is also recordable; explicit relaxed was refused above.

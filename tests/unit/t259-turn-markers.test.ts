@@ -391,8 +391,24 @@ describe("t259 the engine's last word ended the turn", () => {
     expect(midStage.kind).toBe("print");
     expect(midStage.message).toContain("to update the configuration, then print its output verbatim and re-run next to carry on");
     expect(midStage.message).not.toContain("and stop");
+    // Nothing paused, so no "picks up" line is said with the setting.
+    expect(midStage.narration).toBeUndefined();
     expect(existsSync(turnEndMarkerPath(proj))).toBe(false);
     expect(stop().stdout).toContain('"decision":"block"');
+    // The way back the setter's line names is a typed /aidlc flag: the engine
+    // routes it to the same setter, and the setting goes back.
+    const off = run(["engine", "config", "set", "review", "none"]).stdout;
+    expect(off).toContain("Specialist reviews are off for the rest of this work. To turn them back on, say so or type /aidlc --review ");
+    const named = /type \/aidlc --review (\w+)\./.exec(off)?.[1];
+    expect(named, off).toBeDefined();
+    markHumanTurn(proj);
+    await Bun.sleep(20);
+    const back = JSON.parse(run(["engine", "orchestrate", "next", "--review", named as string]).stdout);
+    expect(back.kind).toBe("print");
+    expect(back.message).toContain(`config set review ${named}`);
+    const restored = run(["engine", "config", "set", "review", named as string]).stdout;
+    expect(restored).toContain(`Specialist reviews are ${named} for the rest of this work (they were off).`);
+    expect(readFileSync(stateFilePath(proj), "utf-8")).not.toMatch(/^- \*\*Review Override\*\*:[ \t]*none[ \t]*$/m);
     // At the stage's open gate the person must answer next, so the same
     // setting ends the turn as before.
     const statePath = stateFilePath(proj);
@@ -402,6 +418,8 @@ describe("t259 the engine's last word ended the turn", () => {
     const atGate = JSON.parse(run(["engine", "orchestrate", "next", "--depth", "minimal"]).stdout);
     expect(atGate.kind).toBe("print");
     expect(atGate.message).toContain("to update the configuration, then print its output verbatim and stop");
+    // The person acts next, so the agent is told where the work picks up.
+    expect(atGate.narration).toMatch(/^The work picks up at /);
     expect(existsSync(turnEndMarkerPath(proj))).toBe(true);
     const gateEnd = stop();
     expect(gateEnd.status, gateEnd.stderr).toBe(0);

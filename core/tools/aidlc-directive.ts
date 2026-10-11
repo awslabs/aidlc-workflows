@@ -271,6 +271,10 @@ export interface RunStageDirective {
   // the agent does with it. Present only while the stage's questions file
   // still has a blank answer.
   kept_replies?: { answered: Array<{ question: string; answer: string }>; replies: string[]; note: string };
+  // What the person said when they stopped the work at this stage (the park
+  // row keeps their words), and what the agent does with it. Present on the
+  // step that resumes there, until a row of the stage says the agent acted.
+  parked_reply?: { words: string; note: string };
   // gate is a boolean for every deterministic case; the string sentinel
   // GATE_UNRESOLVED ("unresolved") appears ONLY for the first Construction Bolt's
   // walking-skeleton gate, which the conductor resolves via report (the
@@ -892,6 +896,7 @@ const RUN_STAGE_FIELDS = [
   "inline_context_paths",
   "context_warnings",
   "kept_replies",
+  "parked_reply",
   "gate",
   "gate_note",
   "protocol_note",
@@ -1907,6 +1912,7 @@ function checkRunStageShared(
   checkStringArray(o, "inline_context_paths", kind, errors);
   checkOptionalStringArray(o, "context_warnings", kind, errors);
   checkOptionalKeptReplies(o, kind, errors);
+  checkOptionalParkedReply(o, kind, errors);
   checkGate(o, "gate", kind, errors);
   checkString(o, "memory_path", kind, errors);
   checkStringArray(o, "consumes", kind, errors);
@@ -2564,6 +2570,24 @@ function checkOptionalKeptReplies(
     errors.push(`${kind}: kept_replies.answered must be an array of { question, answer } strings`);
   }
   checkStringArray(value, "replies", kind, errors);
+  checkString(value, "note", kind, errors);
+}
+
+function checkOptionalParkedReply(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("parked_reply" in o)) return;
+  const value = o.parked_reply;
+  if (!isPlainObject(value)) {
+    errors.push(`${kind}: parked_reply must be object, got ${describe(value)}`);
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== "words" && key !== "note") errors.push(`${kind}: parked_reply unknown key: ${key}`);
+  }
+  checkString(value, "words", kind, errors);
   checkString(value, "note", kind, errors);
 }
 

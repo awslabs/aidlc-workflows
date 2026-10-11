@@ -714,6 +714,8 @@ describe("t148 dist/kiro file structure", () => {
     }
     expect(fm).not.toContain("toolsSettings");
     expect(fm).toContain(`        - "aidlc/.aidlc-compose-pending"`);
+    // The request file a request after `next` goes through on Windows (next --request-file).
+    expect(fm).toContain(`        - "aidlc/.aidlc-request-text/**"`);
   });
 
   // Kiro's documented shell matching (kiro.dev/docs/permissions): a command

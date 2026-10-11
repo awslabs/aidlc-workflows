@@ -59,6 +59,7 @@ import {
   composerProposalPath,
   docsRoot,
   memoryFilePath,
+  REQUEST_TEXT_DIR,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -3434,7 +3435,8 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
   });
 
   // A record write the shared guard admits while a Unit's plan waits (the
-  // stage's learnings diary, the composer's proposal, a person's answer text)
+  // stage's learnings diary, the composer's proposal, a person's answer text or
+  // request)
   // reaches PostToolUse with no arguments on Kiro IDE, so the adapter judges it
   // from the result prose alone. None of them is a planning authority file: the
   // write poisons nothing, and the person's approval builds.
@@ -3442,6 +3444,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     ["the stage learnings diary", (dir: string) => memoryFilePath(dir, "construction", "code-generation")],
     ["the composer's proposal", (dir: string) => composerProposalPath(dir)],
     ["a person's answer text", (dir: string) => join(docsRoot(dir), ANSWER_TEXT_DIR, "answer.md")],
+    ["a person's request", (dir: string) => join(dir, REQUEST_TEXT_DIR, "request.txt")],
   ])("a write of %s during a Unit's plan wait does not poison Approve Plan", (_label, target) => {
     const dir = scratchProject(true);
     try {
@@ -6899,6 +6902,114 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
         expect(r.stdout, label).toBe("");
         expect(r.stderr, label).toBe(variableRefusal(subject));
         expect(r.stderr, label).not.toContain("AIDLC_TEST_SENTINEL");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The person's request after `next` is never told to change to pass the
+  // shell (K6: the guidance to drop the percent signs changed what they asked
+  // for). Text after `next` that PowerShell or cmd.exe would change, other than
+  // a flag's value in double quotes, gets one refusal naming the request file,
+  // which the agent writes with its file tool for `next --request-file`; which
+  // of those words is the request is the agent's to know.
+  test("sends text after next that the shell would change through the request file", () => {
+    const nextTextRefusal =
+      "AIDLC stopped this command before it ran. Text after next holds characters that PowerShell or cmd.exe " +
+      "(the aidlc command runs through aidlc.cmd) can change before AI-DLC sees it. Write the person's request, " +
+      "exactly as they typed it, with your file tool to aidlc/.aidlc-request-text/request.txt in this project, and " +
+      "run the same command with --request-file aidlc/.aidlc-request-text/request.txt in place of their words (and " +
+      "the -- before them, if any), everything else on the line as it was. AI-DLC reads the file and removes it. " +
+      "A flag's value cannot go through the file: the value of a next flag that takes any word (such as --report), " +
+      "written before the request among the other flags, passes as one word holding & | < > ^ and no %, double or " +
+      "typographic quote, or trailing backslash, in double quotes inside the single quotes ('\"R&D\"'); leave other " +
+      "such characters out of a value you wrote, and ask the person how to write one they gave.\n";
+    const next = "aidlc engine orchestrate next";
+    const cases: Array<[label: string, command: string]> = [
+      ["a bare double quote (K6)", `${next} 'add a "Save" button to the settings form'`],
+      ["a %NAME% pair (K6)", `${next} 'save the app settings under %AIDLC_TEST_SENTINEL%\\todo-app'`],
+      ["a metacharacter between inner quotes", `${next} 'Use "R & D" team'`],
+      ["a %NAME% pair in a bare word", `${next} fix %AIDLC_TEST_SENTINEL%`],
+      ["a double quote a backslash keeps", `${next} 'add a \\"Save\\" button'`],
+      ["a double quote after two backslashes", `${next} 'path \\\\"name'`],
+      ["a typographic apostrophe", `${next} 'fix the login page, it\u2019s broken'`],
+      ["a typographic left double quote", `${next} 'add a \u201cSave button'`],
+      ["a typographic right double quote", `${next} 'add a Save\u201d button'`],
+      ["a low double quote", `${next} 'add a \u201eSave button'`],
+      ["a typographic left single quote", `${next} 'add a \u2018Save button'`],
+      ["a low single quote", `${next} 'add a \u201aSave button'`],
+      ["a reversed single quote", `${next} 'add a \u201bSave button'`],
+      ["a line break", `${next} 'first line\nsecond line'`],
+      ["a trailing backslash in a value with a space", `${next} 'clean C:\\temp\\'`],
+      ["after a plan name", `${next} bugfix 'fix the "Save" button'`],
+      ["after a flag and its value", `${next} --scope bugfix 'fix the "Save" button'`],
+      ["after a flag that takes no value", `${next} --new-intent 'add a "Save" button'`],
+      ["after a question id and --", `${next} --scope bugfix --request a1b2c3d4 -- 'fix the "Save" button'`],
+      ["after compose", `${next} compose 'drop the "Save" step'`],
+      // The same reason for a flag's value other than one word in double
+      // quotes, which says what to do with one.
+      ["a metacharacter in a flag's value", `${next} compose --report 'scan&review.json'`],
+      ["a quoted value with a space", `${next} --report 'a "b c" d' 'add a page'`],
+      ["an unclosed quote in a flag's value", `${next} --unit '"R&D' 'add a page'`],
+      ["a backslash before the closing quote", `${next} --report '"C:\\reports\\"' 'add a page'`],
+      ["a trailing backslash in a flag value with a space", `${next} --report 'C:\\my reports\\' 'add a page'`],
+      ["a line break in a flag's value", `${next} --report 'scan.json\nwhoami' 'add a page'`],
+      ["a %NAME% pair in a quoted value", `${next} --report '"%AIDLC_TEST_SENTINEL%\\scan.json"'`],
+      ["a % in a quoted value and one in the request", `${next} --report '"50%"' 'make it 10% faster'`],
+      // A flag's name after `--` is the request's, so is the word after a flag
+      // that takes no value, and so is all that follows a value starting with -.
+      ["a flag's name after --", `${next} --scope bugfix -- --report '"R&D"'`],
+      ["a one-word value after a flag that takes none", `${next} --new-intent '"R&D"'`],
+      ["after a value that starts with -", `${next} --unit -- --report '"R&D"' add`],
+      ["after a quoted value that starts with -", `${next} --unit '"--"' --report '"R&D"' add`],
+      ["after an empty value PowerShell drops", `${next} --report '' --scope '"R&D"'`],
+      ["after one argument holding several flags", `${next} '--new-intent --report' --scope '"R&D"'`],
+      ["the value of a flag that takes listed words", `${next} --review '"Q&A"'`],
+      ["after a leading noun", `${next} intent auth --report '"R&D"'`],
+      ["after a value the flag does not list", `${next} --depth bogus --report '"R&D"'`],
+      ["after an empty value in double quotes", `${next} --report '""' --scope '"R&D"'`],
+      ["after a variable", `${next} --new-intent $x --report '"R&D"'`],
+      ["after the request", `${next} 'add a page' --report '"R&D"'`],
+      ["in the request after a quoted flag value", `${next} --report '"R&D"' 'add a "Save" button'`],
+      ["after --", `${next} --scope bugfix -- 'fix %AIDLC_TEST_SENTINEL% handling'`],
+      ["inside a grouping", `(${next} 'add a "Save" button')`],
+      ["through the call operator and aidlc.cmd", `& aidlc.cmd engine orchestrate next 'add a "Save" button'`],
+    ];
+    const allowed: Array<[label: string, command: string]> = [
+      ["a plain request", `${next} 'add a settings page'`],
+      ["a metacharacter cmd.exe keeps inside its quotes", `${next} 'add a Q&A page'`],
+      ["a percent sign", `${next} 'make it 50% faster'`],
+      ["a plain apostrophe written twice", `${next} 'fix the page, it''s broken'`],
+      ["an en dash", `${next} 'fix the page \u2013 now'`],
+      ["a mark PowerShell does not read as a quote", `${next} 'add a \u201fSave button'`],
+      ["a backslash inside a value", `${next} 'save under C:\\temp\\todo'`],
+      ["flags only", `${next} --scope bugfix`],
+      // One word in double quotes is a flag's value the skill's rule carries
+      // whole, so it stays on the line.
+      ["a one-word flag value in double quotes", `${next} compose --report '"scan&review.json"'`],
+      ["a quoted flag value before the request", `${next} --report '"scan&review.json"' 'add a settings page'`],
+      ["a quoted flag value after a listed word", `${next} --review none --report '"scan&review.json"'`],
+      ["a quoted flag value after a listed word in capitals", `${next} --review NONE --report '"scan&review.json"'`],
+      ["a quoted flag value after a value with one dash", `${next} --unit -x --report '"scan&review.json"'`],
+      [
+        "a quoted flag value after the request file",
+        `${next} --request-file aidlc/.aidlc-request-text/request.txt --report '"scan&review.json"'`,
+      ],
+    ];
+    const dir = scratchProject(false);
+    try {
+      for (const [label, command] of cases) {
+        const r = pwshCommand(dir, command);
+        expect(r.code, label).toBe(2);
+        expect(r.stdout, label).toBe("");
+        expect(r.stderr, label).toBe(nextTextRefusal);
+        expect(r.stderr, label).not.toContain("AIDLC_TEST_SENTINEL");
+      }
+      for (const [label, command] of allowed) {
+        const r = pwshCommand(dir, command);
+        expect(r.code, label).toBe(0);
+        expect(r.stderr, label).toBe("");
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });

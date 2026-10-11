@@ -65,9 +65,13 @@ function materializedAdapterPath(
   const sourceFile = join(REPO_ROOT, "harness", harnessName, "hooks", fileName);
   const destFile = join(hooksDir, fileName);
   if (!existsSync(destFile)) cpSync(sourceFile, destFile);
-  // The kiro-ide adapter imports its tool-name table from beside itself.
+  // The kiro-ide adapter imports its tool-name table and the PowerShell quote
+  // reading (review-freeze-command.ts) from beside itself.
   const toolNames = join(REPO_ROOT, "harness", harnessName, "hooks", "aidlc-kiro-tool-names.ts");
   if (existsSync(toolNames)) cpSync(toolNames, join(hooksDir, "aidlc-kiro-tool-names.ts"));
+  if (harnessName === "kiro-ide") {
+    cpSync(join(REPO_ROOT, "core", "hooks", "review-freeze-command.ts"), join(hooksDir, "review-freeze-command.ts"));
+  }
   return destFile;
 }
 

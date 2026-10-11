@@ -14,7 +14,7 @@
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -615,4 +615,142 @@ describe("a host's human-turn hook keeps the same reading of the line", () => {
 
 afterAll(() => {
   process.stdout.write(`\nt-next-flags-fuzz: seed=${SEED} cases=${CASES} routed=${ROUTED} hooked=${HOOKED}\n`);
+});
+
+// Words that only ask for the work to go on are words like any other: no list in
+// the engine knows them (the five it listed, "carry on", "continue", "keep
+// going", "go on" and "resume", left with WO5), so however the person says it,
+// with "please" before or after, in any case, with a closing mark, split into
+// tokens or quoted whole, the line reads as their words, the seams stand back,
+// and over work in progress it gets the one reading print, which names the bare
+// `next` the agent then runs. Its own seeded stream, so the sweep above keeps
+// its exact lines.
+describe("ways of saying go on over a seeded sweep", () => {
+  const GO_ON_PHRASES = [
+    "carry on", "continue", "keep going", "go on", "resume", "proceed", "ok go", "go ahead", "let's continue",
+    "keep at it", "onwards", "next step please",
+  ];
+  const BEFORE = ["", "please ", "Please, ", "ok ", "yes, "];
+  const AFTER = ["", " please", ", please", ".", "!", " now"];
+  const GO_ON_CASES = 120;
+  const GO_ON_ROUTED = 6;
+  const GO_ON_CLONE = 3;
+
+  interface GoOnCase { argv: string[]; line: string }
+  function buildGoOn(next: () => number): GoOnCase {
+    const pick = <T,>(pool: readonly T[]): T => pool[Math.floor(next() * pool.length)];
+    let line = `${pick(BEFORE)}${pick(GO_ON_PHRASES)}${pick(AFTER)}`;
+    const shape = next();
+    if (shape < 0.2) line = line.toUpperCase();
+    else if (shape < 0.4) line = line.replace(/ /g, "  ");
+    else if (shape < 0.5) line = `${line}\r\n`;
+    // Split into tokens as a shell hands them over, or one quoted argument as
+    // a host that quotes the whole turn does.
+    const argv = next() < 0.5 ? line.trim().split(/\s+/) : [line];
+    return { argv, line: line.replace(/\s+/g, " ").trim() };
+  }
+  const goOnCases: GoOnCase[] = (() => {
+    const next = rng(SEED + 1);
+    return Array.from({ length: GO_ON_CASES }, () => buildGoOn(next));
+  })();
+  const whereGoOn = (c: GoOnCase): string => `seed=${SEED + 1} argv=${JSON.stringify(c.argv)}`;
+
+  test(`reads ${GO_ON_CASES} go-on lines as the person's words, whole, with the seams standing back`, () => {
+    for (const c of goOnCases) {
+      const note = whereGoOn(c);
+      const parsed = parseNextFlags(c.argv);
+      expect(parsed.parseError, note).toBeUndefined();
+      expect(parsed.untakenFlag, note).toBeUndefined();
+      // Their words, whole and in order, with nothing read off them.
+      expect((parsed.intent ?? "").replace(/\s+/g, " ").trim(), note).toBe(c.line);
+      expect(nextArgsAreOnlyWords(c.argv), note).toBe(true);
+      expect(readNextLine(c.argv).kind, note).toBe("words");
+      expect(classifyTerminalCommand([...c.argv]), note).toBeNull();
+      expect(isReadOnlyNextArgv(c.argv), note).toBe(false);
+    }
+  });
+
+  const slice = (count: number, offset: number): GoOnCase[] =>
+    Array.from({ length: count }, (_unused, index) => goOnCases[(offset + Math.floor((index * goOnCases.length) / count)) % goOnCases.length]);
+
+  function production(proj: string): NodeJS.ProcessEnv {
+    return {
+      ...testGuardEnvironment(process.env, "production"),
+      CLAUDE_PROJECT_DIR: proj,
+      AIDLC_PROJECT_DIR: proj,
+      AIDLC_UNATTENDED: "0",
+      AIDLC_SESSION_OVERRIDE: SESSION,
+    };
+  }
+
+  function withHookMarker(proj: string): string {
+    const health = hooksHealthDir(proj);
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "record-human-turn.last"), new Date().toISOString());
+    return proj;
+  }
+
+  test(`routes ${GO_ON_ROUTED} of them over work in progress: the one reading print, then the bare next is the stage step`, () => {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8"), "utf-8");
+    withHookMarker(proj);
+    const env = production(proj);
+    const before = readAuditShardEvents(proj).length;
+    const bare = runOrchestrateNext(ORCHESTRATE, proj, [], { env }).directive as Record<string, unknown>;
+    expect(bare.kind).toBe("run-stage");
+    let reading: string | null = null;
+    for (const c of slice(GO_ON_ROUTED, 0)) {
+      const note = whereGoOn(c);
+      const result = runOrchestrateNext(ORCHESTRATE, proj, c.argv, { env });
+      const directive = result.directive as Record<string, unknown>;
+      expect(directive, `${note} out=${result.out.slice(0, 400)}`).not.toBeNull();
+      // One reading for every words-only line: the same print, up to the id.
+      expect(directive.kind, `${note} directive=${JSON.stringify(directive).slice(0, 300)}`).toBe("print");
+      expect(directive.ask_type, note).toBeUndefined();
+      expect(String(directive.message), note).toMatch(/next` with nothing after it/);
+      const shape = JSON.stringify(directive).replace(/[0-9a-f]{8}/g, "<id>");
+      if (reading === null) reading = shape;
+      expect(shape, note).toBe(reading);
+      // The step the print names is the stage step, never this print again.
+      const after = runOrchestrateNext(ORCHESTRATE, proj, [], { env }).directive as Record<string, unknown>;
+      expect(after.kind, `${note} after=${JSON.stringify(after).slice(0, 300)}`).toBe("run-stage");
+      expect(after.stage, note).toBe(bare.stage);
+      // `next` reads; it records nothing.
+      expect(readAuditShardEvents(proj).length, note).toBe(before);
+    }
+  });
+
+  test(`routes ${GO_ON_CLONE} of them where work is here but none is selected: the reading print, then the pick`, () => {
+    const proj = createTestProject();
+    created.push(proj);
+    removeWorkspaceRecord(proj);
+    for (const scope of ["poc", "feature"]) {
+      const made = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc-utility.ts"), "intent-create", "--scope", scope, "--project-dir", proj], {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env },
+      });
+      expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+    }
+    rmSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), { force: true });
+    withHookMarker(proj);
+    const env = production(proj);
+    const pick = runOrchestrateNext(ORCHESTRATE, proj, [], { env }).directive as Record<string, unknown>;
+    expect(pick.ask_type, JSON.stringify(pick).slice(0, 300)).toBe("intent-pick");
+    for (const c of slice(GO_ON_CLONE, 7)) {
+      const note = whereGoOn(c);
+      const directive = runOrchestrateNext(ORCHESTRATE, proj, c.argv, { env }).directive as Record<string, unknown>;
+      expect(directive.kind, `${note} directive=${JSON.stringify(directive).slice(0, 300)}`).toBe("print");
+      expect(String(directive.message), note).toMatch(/next` with nothing after it/);
+      expect(String(directive.message), note).toContain("intent switch <name>");
+      // Words that name one piece and ask for it to go on get the one-step pick.
+      expect(String(directive.message), note).toContain("next --pick <name>");
+      // Never offered as new work: the words stay out of the print and in the kept question.
+      expect(JSON.stringify(directive), note).not.toContain(c.line);
+      const after = runOrchestrateNext(ORCHESTRATE, proj, [], { env }).directive as Record<string, unknown>;
+      expect(after.ask_type, `${note} after=${JSON.stringify(after).slice(0, 300)}`).toBe("intent-pick");
+      expect(after.question, note).toBe(pick.question);
+    }
+  });
 });

@@ -50,7 +50,7 @@ shorter than what was said:
 |-------|------|-----------------|---------|
 | ✓ `WORKFLOW_STARTED` | Scope determined, workflow begins | Timestamp, Scope, Request; optional Source Baseline (`sha256:<listing-hash>` or `unbindable`); for a plan composed for this piece of work, Plan, Stages skipped, Stages added | `tools/aidlc-utility.ts intent-create` |
 | ✓ `WORKFLOW_COMPLETED` | All in-scope stages done | Timestamp, Scope, Details | `tools/aidlc-state.ts complete-workflow` |
-| ✓ `WORKFLOW_PARKED` | Workflow parked mid-flow for a later session (no stage advanced) | Timestamp, Stage | `tools/aidlc-state.ts park` |
+| ✓ `WORKFLOW_PARKED` | Workflow parked mid-flow for a later session (no stage advanced) | Timestamp, Stage; optional Person Reply (what the person said when they stopped, when the hook kept it) | `tools/aidlc-state.ts park` |
 | ✓ `WORKFLOW_UNPARKED` | Park marker cleared on explicit `--resume` re-entry | Timestamp | `tools/aidlc-state.ts unpark` |
 | ✓ `WORKFLOW_ARCHIVED` | In-flight or completed intent retired by a human (`Status: Archived`, registry `archived`); record and audit shards preserved | Timestamp, Stage; optional Reason | `tools/aidlc-utility.ts intent archive` |
 | ✓ `WORKFLOW_UNARCHIVED` | Archived intent returned to `Running` / `in-flight`, or `Completed` / `complete` when it was archived complete | Timestamp, Stage | `tools/aidlc-utility.ts intent unarchive` |

@@ -282,8 +282,9 @@ cards doing the work, and the guard notes nothing for them.
   `[Planned Source]` (the legacy channel cannot run the fingerprint command, so
   the adapter owns both tags; `unbindable` when the workspace has no source
   fingerprint), and invokes the reserved decision or answer tool itself. A
-  write of the stage's learnings diary, the composer's proposal, or a person's
-  answer text (the record files the shared guard admits while the plan waits)
+  write of the stage's learnings diary, the composer's proposal, a person's
+  answer text, or a person's request directly in `aidlc/.aidlc-request-text/`
+  (the record files the shared guard admits while the plan waits)
   is not a planning write: the adapter clears its write window and records no
   violation. Kiro discards PostToolUse stdout, so a successful write hook remains silent; when
   the decision or answer step is refused, the hook exits 2 with the refusal on
@@ -415,7 +416,25 @@ cards doing the work, and the guard notes nothing for them.
   and so does a pair whose name would start or end with a space, such as the
   one in `10% and 20%`). The reason is a fixed sentence that names the flag
   whose value is at fault (or "A value") and the character or "a %NAME% pair",
-  and never repeats the value, so text in a value cannot add lines to it. It
+  and never repeats the value, so text in a value cannot add lines to it.
+  Text after `orchestrate next` is never told to change: when it holds such a
+  character, a `%NAME%` pair, a double or typographic quote, a line break, or
+  a trailing backslash in a value with a space, the reason names the request
+  file instead, which the agent writes with its file tool for `next
+  --request-file`, and says that a flag's value cannot go through the file
+  (the agent writes a one-word value holding a metacharacter in double quotes
+  inside the single quotes, leaves other characters out of a value it wrote,
+  and asks the person about one they gave). That one form passes: one word in
+  double quotes with no `%`, double or typographic quote, or trailing backslash
+  (`--report '"scan&review.json"'`) after a flag `next` takes with any value
+  (`nextTokenKind`), while the words the engine gets after `next` (or a leading
+  `compose`) are flags and their values; the `--` mark, a word, a leading noun,
+  a flag the engine does not take, a variable, or a value the engine would not
+  take as the flag's (empty, starting with `--`, or not one the flag lists)
+  ends that; `--request-file`, `--project-dir` and `--aidlc-attempt-id`, which
+  the engine takes off the line first, are passed over with their value.
+  Which of the other words is the request is the agent's to know;
+  the hook does not read it. It
   simulates PowerShell 5.1's argument passing (an empty argument dropped, a
   value with a space or tab wrapped in double quotes) and cmd.exe's quote
   toggling, reading past a `#` comment and a closed `<# ... #>` block comment,

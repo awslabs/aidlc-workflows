@@ -74,6 +74,7 @@ import {
   composerProposalPath,
   docsRoot,
   ANSWER_TEXT_DIR,
+  REQUEST_TEXT_DIR,
   errorMessage,
   getField,
   GUARD_RECOVERY_ASK_TYPE,
@@ -1154,9 +1155,44 @@ function isAnswerTextTarget(projectDir: string, target: string): boolean {
   }
 }
 
+// The project folder where the agent writes a person's request for `next
+// --request-file` (REQUEST_TEXT_DIR): a plain file directly inside it, the only
+// place the engine reads it, reached through no link. Writing it changes
+// nothing and builds nothing; the engine reads the file and removes it.
+function isRequestTextTarget(projectDir: string, target: string): boolean {
+  try {
+    const folder = join(projectDir, REQUEST_TEXT_DIR);
+    if (normalizeDriveLetter(dirname(resolve(target))) !== normalizeDriveLetter(resolve(folder))) return false;
+    if (!isTrustedRecordTarget(projectDir, target, folder)) return false;
+    const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
+    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+  } catch {
+    return false;
+  }
+}
+
 // The Code Generation stage's learnings diary (`<record>/construction/code-generation/memory.md`),
 // exactly, as a plain file inside AI-DLC's records: reached through no symlink
 // and not hard-linked to another file (isStageRecordOutput).
+// A phase-boundary verification report: `<record>/verification/<boundary>-verification.md`
+// (the governance protocol, written as the next phase begins) or
+// `phase-check-<phase>.md` (the phase's last stage). A Codex run wrote the
+// Inception->Construction one while Code Generation was planning, and the guard
+// read it as a workspace path. It is AI-DLC's own record of a check, not source
+// and not a plan-bound file, so the folder is admitted while the Code Generation
+// step is current, under the stage diary's fences (inside aidlc/spaces, not the
+// state, the intents index, an engine control or audit file, reached through no
+// symlink, not hard-linked). The drive letter is folded as for the diary, so a
+// VS Code host's `c:\` spelling is the same folder on Windows.
+function isPhaseVerificationTarget(projectDir: string, target: string): boolean {
+  try {
+    const folder = normalizeDriveLetter(resolve(join(docsRoot(projectDir), "verification")));
+    return isWithinDir(normalizeDriveLetter(resolve(target)), folder) && isStageRecordOutput(projectDir, target);
+  } catch {
+    return false;
+  }
+}
+
 function isStageDiaryTarget(projectDir: string, target: string): boolean {
   try {
     const diary = normalizeDriveLetter(resolve(memoryFilePath(projectDir, "construction", GUARDED_STAGE)));
@@ -2579,12 +2615,15 @@ async function evaluate(
       return 0;
     }
     // A file-tool write of a person's answer text, for the log to read with no
-    // shell on the way, passes in every Plan Approval state too.
+    // shell on the way, passes in every Plan Approval state too, and so does
+    // one of a person's request, for `next --request-file`.
     if (
       WRITE_TOOLS.has(toolName) &&
       !mutation.opaqueShell &&
       mutation.targets.length > 0 &&
-      mutation.targets.every((candidate) => isAnswerTextTarget(projectDir, candidate))
+      mutation.targets.every((candidate) =>
+        isAnswerTextTarget(projectDir, candidate) || isRequestTextTarget(projectDir, candidate)
+      )
     ) {
       return 0;
     }
@@ -2763,7 +2802,8 @@ async function evaluate(
         const approvalDir = resolve(codeGenerationRecordDir(projectDir, unit));
         const outsideRecord = mutation.targets.find(
           (candidate) =>
-            !isTrustedRecordTarget(projectDir, candidate, approvalDir),
+            !isTrustedRecordTarget(projectDir, candidate, approvalDir) &&
+            !isPhaseVerificationTarget(projectDir, candidate),
         );
         if (!outsideRecord && !mutation.opaqueShell) return 0;
         const approval = evaluateCodeGenerationApproval(projectDir, target);

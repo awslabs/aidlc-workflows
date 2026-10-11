@@ -6,9 +6,12 @@ description: >
   space verbs. Or describe what you want to build and the scope will be
   auto-detected.
 ---
-Invoke the `aidlc` skill now and follow it exactly. It defines the AI-DLC
-forwarding loop: you run `{{INVOKE}} engine orchestrate next`
-with the arguments below passed through verbatim, act on the one directive it
-returns, report the outcome, and repeat until the engine says done.
+Follow the AI-DLC skill below exactly; it is here whole, so there is nothing
+more to load for it. It defines the AI-DLC forwarding loop: you run
+`{{INVOKE}} engine orchestrate next` with the arguments below passed through
+verbatim, act on the one directive it returns, report the outcome, and repeat
+until the engine says done.
 
 $ARGUMENTS
+
+!`{{INVOKE}} engine skill-text --harness-dir {{HARNESS_DIR}}`

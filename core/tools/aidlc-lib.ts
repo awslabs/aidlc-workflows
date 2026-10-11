@@ -1038,10 +1038,20 @@ export function isRetiredOnlyNextArgv(args: readonly string[]): boolean {
 // (a depth, test-strategy, review, Guard Policy or ceremony word it does not
 // accept, or a missing value), returns that refusal before naming any command.
 // It is terminal, not workflow engagement (t-tui-t27, Full Suite 36549553601).
+// A flag that takes no value beside them (`--resume`, which the agent adds on a
+// re-entry, `--single`, `--new-intent`, ...: the `none` shapes in NEXT_FLAGS)
+// changes nothing about that answer, because parseNextFlags reads the refused
+// value first and takes nothing else from the line; so it is skipped here, and
+// the Stop hook lets the turn end where the engine already did nothing instead
+// of carrying on with a stage nobody asked for (Full Suite 38087105892).
 export function isRefusedModifierNextArgv(args: readonly string[]): boolean {
   let refused = false;
   for (let i = 0; i < args.length;) {
     const flag = args[i];
+    if (nextFlagShape(flag)?.value === "none") {
+      i += 1;
+      continue;
+    }
     const ceremony = CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === flag);
     const guard = flag === "--guard-policy" || flag === "--change-control";
     const words = flag === "--review"
@@ -1074,20 +1084,6 @@ export function isRefusedModifierNextArgv(args: readonly string[]): boolean {
 const ENTRY_WORD_ARG = /^[/$]aidlc$/i;
 export function withoutEntryWord(args: readonly string[]): string[] {
   return args.length > 0 && ENTRY_WORD_ARG.test(args[0]) ? args.slice(1) : [...args];
-}
-
-// The words that, said on their own, only ask for the work in progress to go
-// on. The one list the engine reads, so every tool agrees on it.
-export const CONTINUATION_PHRASES = ["carry on", "continue", "keep going", "go on", "resume"] as const;
-
-// True only when the text is one of those phrases and nothing more, with or
-// without "please" before or after it. Case, spacing, a comma beside "please"
-// and a closing "." or "!" do not matter; any other word makes it a request
-// of its own.
-export function isBareContinuationPhrase(text: string): boolean {
-  const words = text.toLowerCase().replace(/\s+/g, " ").trim().replace(/[.!]+$/, "").trim();
-  const phrase = words.replace(/^please,? /, "").replace(/,? please$/, "");
-  return (CONTINUATION_PHRASES as readonly string[]).includes(phrase);
 }
 
 // One rule for the Copilot adapter claim gate and isTerminalUtilityNext, mirroring
@@ -1157,7 +1153,7 @@ export const UTILITY_COMMANDS = [
   "document-input", "codekb-scope-diff", "detect", "reclassify", "select-plugins", "plugin-list",
   "plugin-sync", "plugin-validate", "plugin-build", "recompose", "scope-change", "scope-save",
   "config-change", "config-get", "config-list", "set-status", "detect-scope",
-  "resolve-env-scope", "scope-table", "stage-table", "upgrade",
+  "resolve-env-scope", "scope-table", "stage-table", "skill-text", "upgrade",
 ] as const;
 
 export const INTENT_VERBS: ReadonlySet<string> = new Set([
@@ -2725,6 +2721,35 @@ function isTerminalConfigurationDispatch(
   } catch {
     return false;
   }
+}
+
+// --- The step's byte order: the person's words first, the agent's notes last ---
+//
+// Codex, Kiro CLI and opencode print the first lines of a command's output in
+// their tool panel (3, 5 and about 12 lines of it). A step that opened with its
+// fields showed the person the engine's machinery, and closed with the notes
+// meant for the agent, instead of their own question. The step stays one
+// canonical JSON line with the same keys and values; only the order changes:
+// the text written for the person, then `kind` and the rest as built, then
+// every note for the agent (a key ending in `_note`). Both emission sites run
+// it, and so does anything that builds a line to compare with the engine's
+// bytes (copilotGuardRestartPrintHashes).
+const PERSON_TEXT_FIELDS = ["question", "narration", "message", "change_notices", "stage_validity"];
+
+export function withPersonsWordsFirst<T extends object>(step: T): T {
+  const source = step as Record<string, unknown>;
+  const keys = Object.keys(source);
+  const lead = PERSON_TEXT_FIELDS.filter((key) => keys.includes(key));
+  const notes = keys.filter((key) => key.endsWith("_note"));
+  const rest = keys.filter((key) => !lead.includes(key) && !notes.includes(key));
+  const ordered: Record<string, unknown> = {};
+  for (const key of [...lead, ...rest, ...notes]) ordered[key] = source[key];
+  // The advisory's one line for the person leads the advisory too.
+  if (isPlainObject(ordered.stage_validity) && "warning" in ordered.stage_validity) {
+    const { warning, ...others } = ordered.stage_validity;
+    ordered.stage_validity = { warning, ...others };
+  }
+  return ordered as T;
 }
 
 // --- Engine error relay (the rebuild-stage-graph PostToolUse seam) ---
@@ -11025,10 +11050,10 @@ function copilotGuardRestartPrintHashes(
     ) return [];
     const direction = targetIndex === currentIndex ? "redo" : "backward";
     return ["aidlc engine jump", `bun ${runtimeHarnessDir()}/tools/aidlc-jump.ts`].map(
-      (invocation) => contentSha256(JSON.stringify({
+      (invocation) => contentSha256(JSON.stringify(withPersonsWordsFirst({
         kind: "print",
         message: `Run \`${invocation} execute --target ${operation.stage} --direction ${direction} --scope ${scopeArg(scope)}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
-      })),
+      }))),
     );
   } catch {
     // Unresolvable plan evidence cannot authorize retaining a recovery choice.
@@ -12636,6 +12661,11 @@ export function readVerificationCommandFile(projectDir: string, file: string): V
  *  without passing through any shell (bash, PowerShell, or cmd.exe). */
 export const ANSWER_TEXT_DIR = ".aidlc-engine/answer-text";
 const ANSWER_TEXT_MAX_BYTES = 64 * 1024;
+
+/** The project folder where a person's request for `next --request-file` is
+ *  written, so the words reach the engine without passing through any shell.
+ *  The engine reads only a plain file directly inside it. */
+export const REQUEST_TEXT_DIR = "aidlc/.aidlc-request-text";
 
 /**
  * Read one answer text file the agent wrote, then remove it. The path is
@@ -38551,7 +38581,7 @@ export function approvesTogetherStages(stateContent: string, slug: string): stri
 }
 
 const APPROVES_TOGETHER_FIELD = "Approves Together";
-const APPROVED_TOGETHER_WITH_FIELD = "Approved Together With";
+export const APPROVED_TOGETHER_WITH_FIELD = "Approved Together With";
 
 export function approvesTogetherField(block: string): string[] {
   return (auditBlockField(block, APPROVES_TOGETHER_FIELD) ?? "")

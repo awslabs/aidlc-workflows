@@ -11,11 +11,15 @@
 // The journey: a piece of work in progress, Guard Policy strict.
 //   chat 1: the person types "turn the review freeze check off for this
 //           project". It is off at once, recorded as the person's own chat
-//           request, with no question first.
+//           request, with no question first. Once it is done, the agent may
+//           ask the one plain question the skill allows, offering the wider
+//           place ("Do you want me to set it off for this whole machine
+//           instead?"); the person says no, and nothing else is asked.
 //   chat 2: a new chat. The session start says the check is off and that the
 //           person asked for it. The person types "turn the review freeze
 //           check back on for this project". It is on again at once, with no
-//           question first.
+//           question first; the same one widening question may follow, and
+//           the person says no again.
 //
 // Pass/fail reads only what the engine recorded and printed: the setting
 // (`engine config get guard.review-freeze`), the recorded switch, the engine's
@@ -41,7 +45,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, seededStateFile, setupIntegrationProject } from "../harness/fixtures.ts";
-import { type DriveResult, driveAidlc } from "../harness/sdk-drive.ts";
+import { type AnswerScript, type AskUserQuestionItem, type DriveResult, driveAidlc } from "../harness/sdk-drive.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
 const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
@@ -80,6 +84,46 @@ function engineSaid(result: DriveResult, line: string): number {
   return result.toolResults.filter((t) => t.toolName === "Bash" && t.resultText.includes(line)).length;
 }
 
+// The person declines whatever is offered: the option that says No, else
+// their own word typed into the picker, so no option is ever picked for them
+// (one worded without Yes or No could be the one that sets the switch for the
+// whole machine this test runs on).
+const DECLINE = {
+  kind: "pick",
+  pick: (question: AskUserQuestionItem) => {
+    const no = question.options.findIndex((o) => /^no\b/i.test(o.label));
+    return no >= 0 ? { optionIndex: no } : { text: "No" };
+  },
+} satisfies AnswerScript;
+
+// After the switch is done, the skill allows one plain question: the offer of
+// the wider place (this machine, after a project switch), which the person
+// declines (#2161, Arden 2026-10-08). Anything else, or a second question, is a
+// question put to the person around their own request.
+const WIDER_PLACE = /machine/i;
+function atMostTheWideningQuestion(result: DriveResult, chat: string): void {
+  expect(result.askedQuestions.length, `${chat}: more than the one widening question was asked`).toBeLessThanOrEqual(1);
+  for (const menu of result.askedQuestions) {
+    expect(menu.questions.length, `${chat}: ${JSON.stringify(menu)}`).toBe(1);
+    expect(menu.questions[0].question, `${chat}: a question that does not offer the wider place`).toMatch(WIDER_PLACE);
+    expect(Object.values(menu.answers).join(" "), `${chat}: the person did not say no`).toMatch(/^no\b/i);
+  }
+}
+
+// The person's answer to a widening picker, as the script resolves it: the
+// option that says No, else their own word typed in, never an option picked
+// for them (one worded without Yes or No could be the one that widens the
+// switch). Deterministic; the live journey below drives the real picker.
+test("the person declines the widening picker: the No option, or their own No typed in", () => {
+  const menu = (labels: string[]): AskUserQuestionItem => ({
+    question: "Do you want me to set the review freeze check off for this whole machine instead?",
+    options: labels.map((label) => ({ label })),
+  });
+  expect(DECLINE.pick(menu(["No, just this project", "Yes, this machine"]))).toEqual({ optionIndex: 0 });
+  expect(DECLINE.pick(menu(["Yes, this machine", "No, keep it to this project"]))).toEqual({ optionIndex: 1 });
+  expect(DECLINE.pick(menu(["Apply machine-wide", "Keep project only"]))).toEqual({ text: "No" });
+});
+
 describe("t-journey-check-off-on (sdk): a check turned off and on from the chat is done at once and said plainly", () => {
   test(
     "off from the chat, the new chat says so, back on from the chat",
@@ -96,22 +140,48 @@ describe("t-journey-check-off-on (sdk): a check turned off and on from the chat 
           .replace("- **Scope**: feature", "- **Scope**: feature\n- **Guard Policy**: strict (set by you)"));
         expect(reviewFreeze(proj)).toBe("on (default)");
 
-        // Chat 1: off, at once, as the person's own request.
-        const off = await driveAidlc(TURN_OFF, { projectDir: proj, persistSession: true, timeoutMs: budget() });
+        // Chat 1: off, at once, as the person's own request. The widening
+        // question, when it comes, comes after the switch is done (read on
+        // disk the moment the question is shown).
+        let offWhenAsked: boolean | undefined;
+        const off = await driveAidlc(TURN_OFF, {
+          projectDir: proj,
+          persistSession: true,
+          timeoutMs: budget(),
+          answerScript: DECLINE,
+          onAskUserQuestion: () => {
+            offWhenAsked ??= switchesOff(proj).some((item) => item.name === SWITCH);
+          },
+        });
         expect(off.timedOut).toBe(false);
-        expect(off.askedQuestions, "a question came before the person's own request was done").toEqual([]);
+        atMostTheWideningQuestion(off, "chat 1");
+        if (off.askedQuestions.length > 0) {
+          expect(offWhenAsked, "chat 1: the question came before the person's own request was done").toBe(true);
+        }
         expect(reviewFreeze(proj)).toBe(`off (${SWITCH} in aidlc.settings.local.json)`);
         const recorded = switchesOff(proj).find((item) => item.name === SWITCH);
         expect(recorded?.entry?.how, "the switch was not recorded as the person's chat request").toBe("chat");
         expect(engineSaid(off, OFF_LINE), "the done line was not handed out once").toBe(1);
 
         // Chat 2: the new chat says it is off, then back on at once.
-        const on = await driveAidlc(TURN_ON, { projectDir: proj, persistSession: true, timeoutMs: budget() });
+        let onWhenAsked: boolean | undefined;
+        const on = await driveAidlc(TURN_ON, {
+          projectDir: proj,
+          persistSession: true,
+          timeoutMs: budget(),
+          answerScript: DECLINE,
+          onAskUserQuestion: () => {
+            onWhenAsked ??= !switchesOff(proj).some((item) => item.name === SWITCH);
+          },
+        });
         expect(on.timedOut).toBe(false);
         const started = (on.sessionStarts ?? []).join("\n");
         expect(started, "the new chat did not say the check is off").toContain(OFF_LINE);
         expect(started).toContain("because you said:");
-        expect(on.askedQuestions, "a question came before the person's own request was done").toEqual([]);
+        atMostTheWideningQuestion(on, "chat 2");
+        if (on.askedQuestions.length > 0) {
+          expect(onWhenAsked, "chat 2: the question came before the person's own request was done").toBe(true);
+        }
         expect(reviewFreeze(proj)).toBe("on (default)");
         expect(switchesOff(proj).some((item) => item.name === SWITCH), "the switch is still recorded off").toBe(false);
         expect(engineSaid(on, ON_LINE), "the on-again line was not handed out once").toBe(1);
