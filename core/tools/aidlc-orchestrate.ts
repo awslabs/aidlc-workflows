@@ -12639,11 +12639,13 @@ function planChangeDirective(
   const lead = before === null ? run : `Run \`${before}\` and print its output verbatim, ${run}`;
   // The way back: a plan flip is undone by the opposite flip while the work
   // runs; a stage skipped where it stood is run on its own, the route
-  // recompose itself names for a skipped stage.
+  // recompose itself names for a skipped stage. A way back after the person's
+  // own action is a plain fact that names the command, never a line telling
+  // them to type it (t-offers-are-plain-questions).
+  const onItsOwn = `${entrySkillInvocation()} --stage <stage> --single`;
   const wayBack = started === null
     ? "You can undo that any time."
-    : `To run ${skip.length === 1 ? "it" : "one"} after all, type \`${entrySkillInvocation()} --stage ${started} --single\`` +
-      `${planSkip.length > 0 ? ` (or ${planSkip.join(", ")})` : ""}.`;
+    : `${skip.length === 1 ? "It" : "Either one"} can still be run on its own with \`${onItsOwn}\`.`;
   const line = `"${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ${wayBack}${noted ? ` ${noted}` : ""}${parkedTail}"`;
   const undo = `If they later ask to undo it, run \`${aidlcDispatcherInvocation("recompose")} ${flips(add, planSkip)}\`.`;
   const message =
@@ -12652,7 +12654,12 @@ function planChangeDirective(
     "instead, then stop. " +
     `Otherwise tell the person in one line: ${line}`;
   if (started !== null) {
-    return kept(printDirective(`${message} Then re-run \`next\` to carry on with the work.${resume}`));
+    // Parked work stays parked: the line already says so and asks whether to
+    // pick it back up, so the turn ends on that question instead of carrying
+    // on with the work the person paused.
+    return kept(stillParked === null
+      ? printDirective(`${message} Then re-run \`next\` to carry on with the work.`)
+      : turnEndingPrint(`${message}${end}${resume}`));
   }
   if (gateOpen !== null) {
     return kept(turnEndingPrint(

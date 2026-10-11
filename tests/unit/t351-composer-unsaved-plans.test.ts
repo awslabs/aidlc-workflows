@@ -574,7 +574,10 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     const report = commands.find((c) => c.includes("report --stage deployment-pipeline --result skipped")) ?? "";
     expect(report, d.message).toContain("--reason 'the person asked to skip it'");
     expect(d.message).toContain('"Skipped Deployment Pipeline and Deployment Execution.');
-    expect(d.message).toContain("--stage deployment-pipeline --single");
+    // The way back is a plain fact naming the command, never "type this"
+    // (tests/unit/t-offers-are-plain-questions.test.ts).
+    expect(d.message).toContain("Either one can still be run on its own with `/aidlc --stage <stage> --single`.");
+    expect(d.message).not.toMatch(/[Tt]ype `\/aidlc/);
     expect(d.message).toMatch(/re-run `next`/);
     expect(d.message).not.toContain("Then stop.");
     expect(d.message).not.toContain("jump");
@@ -618,6 +621,24 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(d.message).toContain("re-run `next`");
     expect(d.message).toContain("otherwise stop");
     expect(d.message).not.toContain("Then stop.");
+  });
+
+  // Work the person paused stays paused: the line already asks whether to pick
+  // it back up, so skipping the stage it stands on must not also tell the agent
+  // to carry on with the work they stopped.
+  test("a skip over parked work says it is still paused and does not carry on", () => {
+    const proj = setupIntegrationProject({ withState: "state-operation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    writeFileSync(statePath, `${readFileSync(statePath, "utf-8")}- **Parked**: 2026-10-11T00:00:00Z\n- **Parked At Stage**: deployment-pipeline\n`);
+    const d = nextDirective(proj, ["--skip", "deployment-pipeline,deployment-execution"]);
+    expect(d.kind).toBe("print");
+    expect(d.message).toContain("Your work is still paused. Do you want to pick it back up now?");
+    expect(d.message).not.toContain("re-run `next` to carry on with the work");
+    // The way back to the work is the person's yes, which the agent is told to
+    // wait for; the report that skips the started stage is still named.
+    expect(d.message).toContain("report --stage deployment-pipeline --result skipped");
+    expect(d.message).toContain("next --resume");
   });
 });
 
