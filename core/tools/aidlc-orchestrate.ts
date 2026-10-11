@@ -8693,16 +8693,21 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       stillParked !== null || settingEndsTurn(pd, currentStateScope, stateContent)
         ? turnEndingPrint(saidThenStop)
         : printDirective(saidThenCarryOn);
+    // Where the work picks up is said only where the turn ends (the person acts
+    // next); the work the agent carries on with in the same turn paused nowhere,
+    // and a Codex run printed "The work picks up at Code Generation." to the
+    // person while nothing had moved.
+    const pickedUpIfTurnEnds = (print: PrintDirective): PrintDirective =>
+      turnEndingPrints.has(print) ? withWorkPicksUpLine(print, pd, currentStateScope, stateContent) : print;
     if (modifiers.length > 0 && !describedWork) {
       const command = configSetCommand(modifiers);
       withdrawSettingWords(pd);
       emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd), stillParked) : keptWhilePlanWaits(
-        withWorkPicksUpLine(
+        pickedUpIfTurnEnds(
           settingPrint(
             `Run \`${command}\` to update the configuration, then ${verbatimThenStop}`,
             `Run \`${command}\` to update the configuration, then print its output verbatim and re-run next to carry on with the work.`,
           ),
-          pd, currentStateScope, stateContent,
         ),
         planApprovalAskIsOpen(pd),
       ));
@@ -8718,14 +8723,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     if (!describedWork && !flags.resume && typedSettingModifiers(flags).length > 0) {
       withdrawSettingWords(pd);
       emit(keptWhilePlanWaits(
-        withWorkPicksUpLine(
+        pickedUpIfTurnEnds(
           settingPrint(
             stillParked === null
               ? "The setting the person typed is already applied: say the line it printed, then stop."
               : `The setting the person typed is already applied: say the line it printed followed by "${stillParked}", then stop.${resumeOnYes()}`,
             "The setting the person typed is already applied: say the line it printed, then re-run next to carry on with the work.",
           ),
-          pd, currentStateScope, stateContent,
         ),
         planApprovalAskIsOpen(pd),
       ));

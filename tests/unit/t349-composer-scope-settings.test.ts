@@ -643,7 +643,9 @@ describe("t349 (9) a review level set for the work replaces its scope's ceiling"
     run(["scope-change", "--scope", "bugfix", "--review", "none"]);
     expect(override()).toBe("none");
     // bugfix's own level is advisory: asking for it means back to normal.
-    expect(run(["config-change", "--review", "advisory"])).toContain("Review override changed: none -> advisory (scope default)");
+    expect(run(["config-change", "--review", "advisory"])).toContain(
+      "Specialist reviews are advisory for the rest of this work (they were off). To change it back, say so or type /aidlc --review none.",
+    );
     expect(override()).toBe("");
     run(["scope-change", "--scope", "feature"]);
     withEnvAndFreshCaches(POLICY_ENV, () => {
@@ -657,7 +659,9 @@ describe("t349 (9) a review level set for the work replaces its scope's ceiling"
 
   // Two live runs: "turn the specialist reviewers off" printed "Review override
   // changed: none -> none" when no override had been set yet, so the line said
-  // nothing had changed. The level replaced is the scope's own.
+  // nothing had changed. The level replaced is the scope's own. Three later
+  // runs printed "Review override changed: advisory (scope default) -> none"
+  // to the person as it stood: the line is theirs now, with the way back.
   test("the first override names the scope level it replaces, not none", () => {
     const proj = project();
     seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
@@ -669,10 +673,17 @@ describe("t349 (9) a review level set for the work replaces its scope's ceiling"
     };
     run(["scope-change", "--scope", "bugfix"]);
     const first = run(["config-change", "--review", "none"]);
-    expect(first).toContain("Review override changed: advisory (scope default) -> none");
+    expect(first).toContain(
+      "Specialist reviews are off for the rest of this work. To turn them back on, say so or type /aidlc --review advisory.",
+    );
     expect(first).not.toContain("none -> none");
+    expect(first).not.toContain("Review override");
+    // Said again: nothing changes, and the line says so in the same words.
+    expect(run(["config-change", "--review", "none"])).toContain("Specialist reviews are already off for this work.");
     // Set again: the stored override is the old value.
-    expect(run(["config-change", "--review", "adversarial"])).toContain("Review override changed: none -> adversarial");
+    expect(run(["config-change", "--review", "adversarial"])).toContain(
+      "Specialist reviews are adversarial for the rest of this work (they were off). To change it back, say so or type /aidlc --review none.",
+    );
   });
 
   test("the creation preview follows a review level set at creation", () => {
