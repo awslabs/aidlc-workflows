@@ -275,6 +275,7 @@ import {
   parseStageFrontmatter,
   parseStateStageSuffixes,
   asReviewClass,
+  changeControlSourceLabel,
   scopeSettingsOffList,
   removeField,
   PLAN_FIELD,
@@ -1976,6 +1977,20 @@ To get started:
   } catch (error) {
     guardPolicyDisplay = `unavailable (${errorMessage(error)})`;
   }
+  // The review ceiling, the one setting the list left out. Only the config
+  // setter writes `Review Override` (on the person's request, or from an
+  // approved plan), so a stored value is this piece of work's own; with none,
+  // the scope's own ceiling applies, or the stages' own reviews (adversarial).
+  const scopeKey = scope.trim().toLowerCase();
+  const reviewOverride = asReviewClass(getField(content, "Review Override"));
+  const reviewCap = loadScopeMetadata()[scopeKey]?.reviewCap;
+  const reviewLevel = reviewOverride ?? reviewCap ?? "adversarial";
+  const reviewSource = reviewOverride !== null
+    ? "set for this piece of work"
+    : reviewCap === undefined
+    ? "default"
+    : changeControlSourceLabel(shownSource(`scope ${scopeKey}`));
+  const reviewersLine = `Reviewers: ${reviewLevel === "none" ? "off" : reviewLevel} (${reviewSource})`;
   const ceremonyDisplay = CEREMONY_KEYS.map((key) => {
     if (key === "plan_approval") {
       const setting = resolvePlanApprovalSetting(projectDir, content);
@@ -1983,7 +1998,7 @@ To get started:
     }
     const resolution = resolveCeremony(key, scope, content);
     return `${CEREMONY_FIELDS[key]}: ${formatCeremony(resolution.value, shownSource(resolution.source))}`;
-  }).join("\n");
+  }).concat(reviewersLine).join("\n");
 
   // Find current stage number
   const currentEntry = graph.find((s) => s.slug === currentStage);
@@ -2031,6 +2046,10 @@ To get started:
     // the user honestly rather than showing "Running" on a completed stage.
     const displayName = currentName;
     statusLine = `${displayName} approved - ready to advance`;
+  } else if (currentCheckbox?.state === "skipped") {
+    // The person skipped the stage the cursor still points at (the last one,
+    // when the work is Completed): say so, or the stage reads as if it ran.
+    statusLine = `${statusLine} (${currentName} skipped)`;
   }
 
   // Checkbox counts - filter to the EFFECTIVE plan when scope is known: the
@@ -2049,10 +2068,13 @@ To get started:
     scope !== "Unknown" && inScopeSlugs.size > 0
       ? checkboxes.filter((c) => inScopeSlugs.has(c.slug))
       : checkboxes;
-  const total = scopedCheckboxes.length;
+  // A stage the person skipped is not work left to do: it is counted out of
+  // the total and named, the way a stage a plan change dropped already is.
   const completed = scopedCheckboxes.filter((c) => c.state === "completed").length;
-  const skipped = scopedCheckboxes.filter((c) => c.state === "skipped").length;
+  const skippedSlugs = scopedCheckboxes.filter((c) => c.state === "skipped").map((c) => c.slug);
+  const total = scopedCheckboxes.length - skippedSlugs.length;
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const skippedNote = skippedSlugs.length > 0 ? `, skipped: ${stageNames(skippedSlugs)}` : "";
 
   // Build phase progress bars
   const phaseLabels: Record<string, string> = {
@@ -2098,7 +2120,12 @@ To get started:
     const units = p === "construction"
       ? unitProgress(dirname(sp), getField(content, "Construction Iteration") ?? "")
       : null;
-    const count = units ? `Unit ${units.current} of ${units.total}` : `${done}/${phaseCheckboxes.length}`;
+    const phaseSkipped = phaseCheckboxes.filter((c) => c.state === "skipped").length;
+    const count = units
+      ? `Unit ${units.current} of ${units.total}`
+      : phaseSkipped === phaseCheckboxes.length
+      ? "skipped"
+      : `${done}/${phaseCheckboxes.length - phaseSkipped}`;
     phaseProgress += `  ${(phaseLabels[p] || p).padEnd(16)} ${bar} ${count}\n`;
   }
 
@@ -2197,7 +2224,7 @@ Current Stage:  ${stageDisplay}
 ${currentStep}Status:         ${statusLine}
 ${agentLine}Guard Policy:   ${guardPolicyDisplay}
 ${fencesOffLine}${ceremonyDisplay}
-Completion:     ${completed}/${total} stages (${pct}%)${skipped > 0 ? ` - ${skipped} skipped` : ""}
+Completion:     ${completed}/${total} stages (${pct}%)${skippedNote}
 
 Phase Progress:
 ${phaseProgress}
