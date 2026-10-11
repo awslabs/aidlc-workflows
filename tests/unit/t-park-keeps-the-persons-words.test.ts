@@ -31,7 +31,13 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
-import { auditBlockField, humanTurnState, personSpokeSinceGate, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  auditBlockField,
+  humanTurnState,
+  personSpokeSinceGate,
+  readAuditShardEvents,
+  SUMMARY_CONFIRMATION_CHECKPOINT,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 
@@ -202,14 +208,28 @@ describe("the park row keeps the words that stopped the work", () => {
     expect(parkedWords(proj)).toBeNull();
   });
 
-  // Stale words: a reply a decision already used stands behind nothing later.
-  test("an older reply, a decision after it, then a park: the row carries no words", () => {
+  // Stale words: a reply one of the engine's own questions already used up
+  // (here the summary confirmation) stands behind nothing later.
+  test("an older reply the summary checkpoint used, then a park: the row carries no words", () => {
     state(proj, ["gate-start", STAGE]);
-    says(proj, "approve, and rename the handler");
-    appendAuditEntry("QUESTION_ANSWERED", { Stage: STAGE, Details: "Approve" }, proj);
+    says(proj, "looks correct, and rename the handler");
+    appendAuditEntry("QUESTION_ANSWERED", {
+      Stage: STAGE, Checkpoint: SUMMARY_CONFIRMATION_CHECKPOINT, Details: "Looks correct",
+    }, proj);
     const r = state(proj, ["park"]);
     expect(r.rc, r.out).toBe(0);
     expect(parkedWords(proj), rowOrder(proj)).toBeNull();
+  });
+
+  // The answer they gave the agent's own question in that same message leaves
+  // the rest of it standing: "B, and stop here for today" is the answer and the
+  // stop, and the park row keeps the words.
+  test("a reply that answered the agent's question and asked to stop keeps its words", () => {
+    says(proj, "B, and let's stop here for today");
+    appendAuditEntry("QUESTION_ANSWERED", { Stage: STAGE, Details: "B" }, proj);
+    const r = state(proj, ["park"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(parkedWords(proj), rowOrder(proj)).toBe("B, and let's stop here for today");
   });
 });
 
