@@ -227,7 +227,7 @@ Explicit `/aidlc --resume` takes the same route: the dispatcher calls `next --re
 
 ### Session Resume Flow
 
-Bare session re-entry on an active intent and explicit resume take the same route: the first call is `next --resume`, so a parked workflow is unparked and the work carries on, with no resume menu. The conductor says where the work picked up and that the person can ask to redo, jump to a stage, or start fresh instead; such a request goes to `report --result resumed --choice <redo|jump|fresh>`, which returns the exact follow-up move.
+Bare session re-entry on an active intent and explicit resume take the same route: the first call is `next --resume`, so a parked workflow is unparked and the work carries on, with no resume menu. The conductor says where the work picked up and that the person can ask to redo, jump to a stage, or start fresh instead; such a request goes to `report --result resumed --choice <redo|jump|fresh>`, which returns the exact follow-up move. The first step at the stage the work was parked at carries what the person said when they stopped it (`parked_reply`, from the `WORKFLOW_PARKED` row's Person Reply), until a row of that stage says the agent acted there.
 
 ```mermaid
 flowchart TD

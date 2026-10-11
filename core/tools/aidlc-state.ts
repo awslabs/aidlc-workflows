@@ -33,6 +33,7 @@ import {
   activeIntentUuid,
   activeSpace,
   approvedTogetherCover,
+  APPROVED_TOGETHER_WITH_FIELD,
   approvedTogetherWithField,
   approvesTogetherFields,
   approvesTogetherStages,
@@ -158,6 +159,7 @@ import {
   readAllAuditShards,
   readApplicableTeamUnitScopeStamp,
   readAuditShardEvents,
+  sortAttemptEvents,
   readStateFile,
   ROUTE_CHECK_ENV,
   readUnitMergeTransaction,
@@ -2244,6 +2246,40 @@ function handlePark(_args: string[]): void {
     : result));
 }
 
+// The person's words that stop the work here, kept on the park row as the
+// approval row keeps them: their latest turn's kept words when a reply of
+// theirs stands behind this park (the reading handlePark uses), else the
+// Person Reply of the approval that same reply gave (GATE_APPROVED spends the
+// chat's kept words, so after "approve, and stop here" the row is where they
+// are). Null when the hook kept none (a slash line, a picker pick, a no-text
+// turn), when they are a non-answer, or when no reply of theirs is behind the
+// park. Nothing here reads meaning into them: the step that resumes at the
+// parked stage hands them to the agent, who does.
+function parkedWords(pd: string): string | null {
+  try {
+    if (!personSpokeSinceGate(pd, { replies: true, outlivesApproval: true })) return null;
+    const typed = latestPersonTurn(pd)?.words ?? null;
+    if (typed && !isNonAnswer(typed)) return typed;
+    const rows = sortAttemptEvents(readAuditShardEvents(pd));
+    let turnAt = -1;
+    for (let i = 0; i < rows.length; i++) if (rows[i].event === "HUMAN_TURN") turnAt = i;
+    if (turnAt === -1) return null;
+    for (let i = rows.length - 1; i > turnAt; i--) {
+      const row = rows[i];
+      const theirApproval = row.event === "PLAN_APPROVAL_RECORDED" ||
+        (row.event === "GATE_APPROVED" && auditBlockField(row.block, "User Input") !== null &&
+          auditBlockField(row.block, "Autonomous") !== "true" &&
+          auditBlockField(row.block, APPROVED_TOGETHER_WITH_FIELD) === null);
+      if (!theirApproval) continue;
+      const words = auditBlockField(row.block, PERSONS_WORDS_FIELD);
+      return words && !isNonAnswer(words) ? words : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): ParkResult {
   const initialContent = readStateFile(pd);
   const autonomous = getField(initialContent, "Construction Autonomy Mode")?.trim() === "autonomous";
@@ -2298,8 +2334,10 @@ export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): Par
       error("State file has no Current Stage - cannot park.");
     }
     const timestamp = isoTimestamp();
+    const words = parkedWords(pd);
     emitAudit(pd, "WORKFLOW_PARKED", {
       Stage: currentSlug,
+      ...(words ? { [PERSONS_WORDS_FIELD]: words } : {}),
     });
     content = setOrInsertField(content, "## Runtime State", "Parked", timestamp);
     content = setOrInsertField(content, "## Runtime State", "Parked At Stage", currentSlug);

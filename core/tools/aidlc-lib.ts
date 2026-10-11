@@ -38534,7 +38534,7 @@ export function approvesTogetherStages(stateContent: string, slug: string): stri
 }
 
 const APPROVES_TOGETHER_FIELD = "Approves Together";
-const APPROVED_TOGETHER_WITH_FIELD = "Approved Together With";
+export const APPROVED_TOGETHER_WITH_FIELD = "Approved Together With";
 
 export function approvesTogetherField(block: string): string[] {
   return (auditBlockField(block, APPROVES_TOGETHER_FIELD) ?? "")
