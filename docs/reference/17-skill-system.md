@@ -67,6 +67,8 @@ Every directive is validated against the frozen contract in `aidlc-directive.ts`
 | `dispatch-subagent` | No (engine-future placeholder) | *Would* run the named stage via a `Task` call rather than inline. Not emitted today; do not implement speculatively. |
 | `present-gate` | No (engine-future placeholder) | *Would* run the gate ritual as its own directive; today the gate decision is folded into `run-stage`'s `gate` field. |
 
+The conductor skills' rows under "Acting on a step" say only what the agent does with each kind; the fields in this table are the JSON's, for a reader of it, and the branches the agent used to make on them ride in the step as agent notes (below).
+
 **Agent notes.** A host can run the agent with no AI-DLC skill or protocol loaded. This was seen live on Kiro IDE for a whole journey: the person's own edit was called stray, the agent answered their redo question for them, and it stalled at Construction's first step. So the fields the agent must pass on, and the steps it got stuck on, carry one sentence for the agent beside them. `withAgentNotes` in `aidlc-directive.ts` adds them at emit. The sentence is for the agent and is never said. The same seam carries every branch the skill rows used to make on a field (the answer mode, what to read first, a missing input, a gate shown again, a Code Generation plan's status, a dispatched brief, the summary confirmation): the live input-corpus runs showed the agent reading those conditions aloud to the person ("answer_mode.ask is true, so I offer the interaction-mode choice"), so the engine makes the branch and hands over the instruction, and no note names a JSON field (a note that does is read back too).
 
 | Note | Beside | It says |

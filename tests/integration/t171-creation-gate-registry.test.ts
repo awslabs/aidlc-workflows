@@ -328,6 +328,11 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(text).not.toContain(elsewhere);
       }
       expect(routing.available_intents).toEqual([here]);
+      // One piece listed: the continue and reshape choices carry that piece's own commands, so the person is
+      // never asked which of one; the separate-work choice carries the new-intent command as always.
+      expect(routing.choices.map((c: { command?: string }) => c.command)).toEqual([
+        routing.select_commands[0].command, routing.new_intent_command, routing.reshape_commands[0].command,
+      ]);
       expect(recordDirs(proj)).toEqual([here]); // read-only
     });
 

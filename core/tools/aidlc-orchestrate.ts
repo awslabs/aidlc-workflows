@@ -3170,12 +3170,18 @@ function newWorkRoutingAskDirective(
   const continueCommand = `${tool} next --continue --request ${stored.id}${carried.existingWork}` +
     (carried.continueScope ? ` --scope ${scopeArg(carried.continueScope)}` : "");
   // Each choice's command, in the rendering's order. With records to pick, the
-  // continue and reshape answers need the piece named first (their commands are
-  // per record), so those two carry none.
+  // continue and reshape answers act on the piece the person names, so with
+  // several listed those two carry none (the agent asks which); with one listed
+  // that piece is meant, and its own command rides the choice (the person is
+  // never asked which of one).
+  const selectCommands = availableIntents ? routingSelectCommands(stored.id, availableIntents, carried.existingWork) : [];
+  const sole = availableIntents?.length === 1 ? availableIntents[0] : null;
   const routeCommand: Record<NewWorkRoute, string | undefined> = {
-    continue: availableIntents ? undefined : continueCommand,
+    continue: availableIntents ? (sole === null ? undefined : selectCommands[0]?.command) : continueCommand,
     separate: newIntentCommand,
-    reshape: availableIntents ? undefined : composeCommand,
+    reshape: availableIntents
+      ? (sole === null ? undefined : routingReshapeCommand(stored.id, sole, carried.existingWork))
+      : composeCommand,
   };
   const options = routing.options.map((option) => ({ label: option.label, detail: option.detail(proposedScope) }));
   return {
@@ -3200,7 +3206,7 @@ function newWorkRoutingAskDirective(
     ...(availableIntents
       ? {
         available_intents: availableIntents,
-        select_commands: routingSelectCommands(stored.id, availableIntents, carried.existingWork),
+        select_commands: selectCommands,
         reshape_commands: availableIntents.map((selector) => ({
           selector,
           command: routingReshapeCommand(stored.id, selector, carried.existingWork),
