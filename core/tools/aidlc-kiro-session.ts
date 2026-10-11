@@ -570,7 +570,7 @@ async function applyPlan(
     const wanted = KIRO_PRESET_EFFORT[plan.preset];
     if (savedEffort !== wanted) {
       lines.push(
-        `Kept your ${KIRO_EFFORT_LABEL[savedEffort]} effort for ${model}, from your personal Kiro settings. Run \`${plan.modelsCommand} --session-model ${model}\` to use the ${plan.preset} preset's ${KIRO_EFFORT_LABEL[wanted]} instead.`,
+        `Kept your ${KIRO_EFFORT_LABEL[savedEffort]} effort for ${model}, from your personal Kiro settings. Run \`${plan.modelsCommand} --session-model ${model}\` to use the ${plan.preset} preset's effort instead.`,
       );
     }
   } else if (plan.preset) {

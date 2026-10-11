@@ -8069,11 +8069,9 @@ async function applyFirstRunKiroSession(choices: FirstRunChoices): Promise<KiroS
     cli: kiro.cli,
     session: kiro.session,
     ...(kiro.setModel ? { setModel: kiro.setModel.id } : {}),
-    // Kiro IDE's row saves only the model: its preset changes nothing in Kiro IDE.
-    preset: distribution !== "kiro" || choices.preset === "unchanged" ? null : choices.preset,
+    ...kiroSessionRowPlan(distribution, choices.preset === "unchanged" ? null : choices.preset),
     fetchLevels: true,
     ...(kiro.fillEffortOnly ? { fillEffortOnly: true } : {}),
-    ...(distribution === "kiro-ide" ? { kiroCliOnly: true } : {}),
     modelsCommand: kiroSessionModelsCommand(distribution),
     retryCommand: kiroSessionRetryCommand(distribution, kiro.setModel?.id),
     doctorCommand: `${aidlcInvocation()} doctor`,
@@ -8217,6 +8215,16 @@ function renderFirstRunEnding(
 // rows: the old row runs only in Kiro CLI, Kiro IDE's row in Kiro CLI too.
 function kiroSessionRow(distribution: string): boolean {
   return distribution === "kiro" || distribution === "kiro-ide";
+}
+
+// Kiro IDE's row saves only Kiro CLI's model: its preset changes nothing in
+// Kiro IDE, so no effort is written, and its lines name Kiro CLI.
+function kiroSessionRowPlan(
+  distribution: string,
+  preset: KiroPreset | null,
+): { preset: KiroPreset | null; kiroCliOnly?: true } {
+  if (distribution === "kiro") return { preset };
+  return distribution === "kiro-ide" ? { preset: null, kiroCliOnly: true } : { preset: null };
 }
 
 // The command that chooses the session model later. `config models` asks for it
@@ -10093,7 +10101,7 @@ function kiroModelsPlan(input: {
     }
     return {
       plan: null,
-      ...(input.preset && input.distribution === "kiro"
+      ...(kiroSessionRowPlan(input.distribution, input.preset).preset
         ? {
           note: `Kiro CLI settings could not be read, so the ${input.preset} preset's session effort was not saved. Run \`${
             configCommand("models")
@@ -10127,11 +10135,9 @@ function kiroModelsPlan(input: {
       cli: kiro.cli,
       session: kiro.session,
       ...(input.setModel ? { setModel: input.setModel } : {}),
-      // Kiro IDE's row saves only the model: its preset changes nothing in Kiro IDE.
-      preset: input.distribution === "kiro" ? input.preset : null,
+      ...kiroSessionRowPlan(input.distribution, input.preset),
       fetchLevels: input.fetchLevels,
       keepExistingEffort: input.keepExistingEffort,
-      ...(input.distribution === "kiro-ide" ? { kiroCliOnly: true } : {}),
       modelsCommand: kiroSessionModelsCommand(input.distribution),
       retryCommand: kiroSessionRetryCommand(input.distribution, input.setModel),
       doctorCommand: `${aidlcInvocation()} doctor`,

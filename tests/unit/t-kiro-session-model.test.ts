@@ -311,7 +311,7 @@ describe("applying a session plan", () => {
     const kept = await applyKiroSessionPlan(plan(env, { fillEffortOnly: true }), env);
     expect(kept.effort).toBe("xhigh");
     expect(kept.lines).toEqual([
-      "Kept your extra-high effort for claude-opus-5, from your personal Kiro settings. Run `aidlc config models --session-model claude-opus-5` to use the balanced preset's medium instead.",
+      "Kept your extra-high effort for claude-opus-5, from your personal Kiro settings. Run `aidlc config models --session-model claude-opus-5` to use the balanced preset's effort instead.",
     ]);
     expect(writes(log)).toEqual([]);
 
