@@ -315,4 +315,41 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // The /aidlc command carries the skill whole. opencode cuts any tool output
+  // over 50 KiB (its skill tool included) and saves the rest in its own data
+  // folder, so a skill loaded through that tool lost its last 180 lines in
+  // every chat. A command template's text is not cut, and opencode runs a
+  // !`...` line in it at command time, so the command prints the installed
+  // skill into itself through the engine's own read-only verb.
+  test("11: the /aidlc command prints the installed skill into itself, whole", () => {
+    const command = readFileSync(join(SHELL, "command", "aidlc.md"), "utf-8");
+    expect(command).toContain("!`bun .aidlc/tools/aidlc.ts engine skill-text`");
+    expect(command).toContain("$ARGUMENTS");
+    expect(command).not.toContain("Invoke the `aidlc` skill");
+    // The native channel spells the same line with the installed launcher.
+    const release = readFileSync(
+      join(REPO_ROOT, "dist-release", "opencode", ".opencode", "command", "aidlc.md"),
+      "utf-8",
+    );
+    expect(release).toContain("!`aidlc engine skill-text`");
+    expect(release).not.toContain("{{INVOKE}}");
+    // What the line prints, run the way opencode runs it (from the project
+    // folder, no --project-dir): the shipped skill, byte for byte, and longer
+    // than opencode's 50 KiB tool-output cut.
+    const r = spawnSync(
+      process.execPath,
+      [join(ENGINE, "tools", "aidlc.ts"), "engine", "skill-text"],
+      {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: OPENCODE_ROOT,
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_HARNESS_DIR: ".aidlc" },
+      },
+    );
+    expect(r.status, r.stderr).toBe(0);
+    const skill = readFileSync(join(ENGINE, "skills", "aidlc", "SKILL.md"), "utf-8");
+    expect(r.stdout).toBe(skill.endsWith("\n") ? skill : `${skill}\n`);
+    expect(Buffer.byteLength(r.stdout, "utf-8")).toBeGreaterThan(50 * 1024);
+  });
 });

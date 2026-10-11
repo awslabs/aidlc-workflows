@@ -12665,12 +12665,13 @@ export function canonicalScopeTableRegion(table: string): string {
   return `${SCOPE_TABLE_BEGIN}\n\n${table}\n\n${SCOPE_TABLE_END}`;
 }
 
-function skillMdPath(): string {
+function skillMdPath(projectDir?: string): string {
   if (process.env.AIDLC_SKILL_MD_PATH) return process.env.AIDLC_SKILL_MD_PATH;
-  const harnessSkill = resolveSkillsPath(["aidlc", "SKILL.md"]);
+  const location = projectDir === undefined ? {} : { projectDir };
+  const harnessSkill = resolveSkillsPath(["aidlc", "SKILL.md"], location);
   if (existsSync(harnessSkill)) return harnessSkill;
   const agentsSkill = join(
-    dirname(resolveHarnessPath([])),
+    dirname(resolveHarnessPath([], location)),
     ".agents",
     "skills",
     "aidlc",
@@ -12678,6 +12679,27 @@ function skillMdPath(): string {
   );
   if (existsSync(agentsSkill)) return agentsSkill;
   return harnessSkill;
+}
+
+// ---------------------------------------------------------------------------
+// skill-text - the installed orchestrator skill, whole
+//
+// For a host whose command template carries the skill (opencode: its skill
+// tool's output is cut at 50 KiB and the rest saved outside the project, while
+// a !`...` line in a command template is run at command time and its output
+// put in the chat as written). The /aidlc command on that host prints the
+// skill into itself with `aidlc engine skill-text`. Read-only; no event.
+// ---------------------------------------------------------------------------
+
+function handleSkillText(projectDir: string): void {
+  const skillPath = skillMdPath(projectDir);
+  let text: string;
+  try {
+    text = readFileSync(skillPath, "utf-8");
+  } catch (err) {
+    die(`SKILL.md not readable at ${skillPath}: ${errorMessage(err)}`);
+  }
+  process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
 }
 
 function checkGeneratedTableRegion(
@@ -13148,6 +13170,9 @@ export async function main(argv: string[]): Promise<void> {
       break;
     case "stage-table":
       handleStageTable(projectDir, flags, rawArgs);
+      break;
+    case "skill-text":
+      handleSkillText(projectDir);
       break;
     default:
       // `intent-birth` was renamed to `intent-create`; point the old name at

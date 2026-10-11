@@ -2144,6 +2144,7 @@ path for a framework command.
 | `resolve-env-scope` | Validate `AWS_AIDLC_DEFAULT_SCOPE` env var and emit its value to stdout | — |
 | `scope-table` | Render or drift-check the compiled scope table in the orchestrator skill. | — |
 | `stage-table` | Render or drift-check the compiled stage table in the orchestrator skill. | — |
+| `skill-text` | Print the installed orchestrator skill whole (behind `aidlc engine skill-text`). The opencode `/aidlc` command prints it into itself at command time, because opencode cuts a skill loaded through its skill tool at 50 KiB. | none |
 
 The user-facing `intent`, `space`, and `space-create` forms are covered in
 [CLI Commands](../guide/12-cli-commands.md) and

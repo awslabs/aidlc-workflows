@@ -1157,7 +1157,7 @@ export const UTILITY_COMMANDS = [
   "document-input", "codekb-scope-diff", "detect", "reclassify", "select-plugins", "plugin-list",
   "plugin-sync", "plugin-validate", "plugin-build", "recompose", "scope-change", "scope-save",
   "config-change", "config-get", "config-list", "set-status", "detect-scope",
-  "resolve-env-scope", "scope-table", "stage-table", "upgrade",
+  "resolve-env-scope", "scope-table", "stage-table", "skill-text", "upgrade",
 ] as const;
 
 export const INTENT_VERBS: ReadonlySet<string> = new Set([
