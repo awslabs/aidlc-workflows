@@ -2028,7 +2028,15 @@ To get started:
     status !== "Completed" && status !== "Archived";
   if (parked) {
     const stopped = (getField(content, "Parked By") ?? "").trim() === "person" ? " (you stopped it)" : "";
-    statusLine = `Paused at ${currentName}${stopped}; pick it back up with ${entrySkillInvocation()} --resume`;
+    // Under a Unit-by-Unit Construction the cursor stays on the block's first
+    // stage while a Unit works through the later ones; the Unit's own stage
+    // (the fields unit start writes) names where the work stands.
+    const activeUnit = (getField(content, "Active Unit") ?? "").trim();
+    const unitStage = findStageBySlug((getField(content, "Unit Stage") ?? "").trim());
+    const at = activeUnit !== "" && unitStage !== undefined && unitStage.slug !== currentStage
+      ? `${stageLabel(unitStage, unitStage.slug) ?? unitStage.slug} for ${activeUnit}`
+      : currentName;
+    statusLine = `Paused at ${at}${stopped}; pick it back up with ${entrySkillInvocation()} --resume`;
   } else if (currentCheckbox?.state === "awaiting-approval") {
     const displayName = currentName;
     statusLine = `Awaiting your approval on ${displayName}`;

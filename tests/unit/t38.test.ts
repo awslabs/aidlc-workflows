@@ -708,4 +708,25 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     sedState(p, /^- \*\*Status\*\*: .*$/m, "- **Status**: Completed");
     expect(status(p).out).toContain("Status:         Completed\n");
   });
+
+  // Under a Unit-by-Unit Construction the cursor stays on the block's first
+  // stage while a Unit works through the later ones; the state's Active Unit
+  // and Unit Stage (written as a Unit starts a stage) say where the work is.
+  test("12: paused Unit-by-Unit work names the Unit's own stage", () => {
+    const p = createTestProject();
+    tempDirs.push(p);
+    seedStateFile(p, join(REPO_ROOT, "tests", "fixtures", "state-construction.md"));
+    sedState(
+      p,
+      /^- \*\*Revision Count\*\*: 0$/m,
+      "- **Revision Count**: 0\n- **Parked**: 2026-10-11T08:27:33Z\n- **Parked At Stage**: functional-design\n- **Parked By**: person" +
+        "\n- **Active Unit**: alpha\n- **Unit Stage**: code-generation",
+    );
+    expect(status(p).out).toContain(
+      "Status:         Paused at Code Generation for alpha (you stopped it); pick it back up with /aidlc --resume\n",
+    );
+    // The Unit's stage is the cursor's own: no Unit clause.
+    sedState(p, /^- \*\*Unit Stage\*\*: .*$/m, "- **Unit Stage**: functional-design");
+    expect(status(p).out).toContain("Status:         Paused at Functional Design (you stopped it); pick it back up with /aidlc --resume\n");
+  });
 });
