@@ -31,7 +31,7 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
-import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditBlockField, humanTurnState, personSpokeSinceGate, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 
@@ -104,6 +104,17 @@ function parkedWords(proj: string): string | null {
   const rows = events(proj, "WORKFLOW_PARKED");
   expect(rows).toHaveLength(1);
   return auditBlockField(rows[0].block, "Person Reply");
+}
+
+// Every row in order, with its second and its place in its shard: what a
+// failure needs to say about the order the engine read.
+function rowOrder(proj: string): string {
+  const rows = readAuditShardEvents(proj)
+    .map((row) => `${row.event} ${row.timestamp} ${row.shard.split("/").pop()}:${row.pos}` +
+      (row.event === "HUMAN_TURN" ? ` Reply=${auditBlockField(row.block, "Reply") ?? "-"}` : ""));
+  const read = `humanTurnState=${humanTurnState(proj, { replies: true })} ` +
+    `personSpokeSinceGate=${personSpokeSinceGate(proj, { replies: true, outlivesApproval: true })}`;
+  return [read, ...rows].join("\n");
 }
 
 // The first step of the next chat, where the work was parked.
@@ -198,7 +209,7 @@ describe("the park row keeps the words that stopped the work", () => {
     appendAuditEntry("QUESTION_ANSWERED", { Stage: STAGE, Details: "Approve" }, proj);
     const r = state(proj, ["park"]);
     expect(r.rc, r.out).toBe(0);
-    expect(parkedWords(proj)).toBeNull();
+    expect(parkedWords(proj), rowOrder(proj)).toBeNull();
   });
 });
 
