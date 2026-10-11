@@ -67,7 +67,6 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -254,8 +253,12 @@ const projectEnv = {
 // stop_hook_active / tool_use_id change). First delivery takes the slot via
 // atomic mkdir (the audit-lock idiom), runs, and persists its response;
 // the duplicate waits briefly for that response and replays it byte-for-byte.
-// Entries are pruned after 30 minutes. Failure anywhere → fail open (run or
-// allow), never trap the turn.
+// The cache lives in the project's own gitignored scratch folder
+// (aidlc/.aidlc-sessions/codex-dedupe), never in the OS temp folder, and every
+// delivery prunes it: a slot is kept for 5 minutes at most (the duplicate waits
+// 2 seconds; the bound outlasts any hook's run) and at most 64 slots stay, so a
+// long session never piles up folders. Failure anywhere fails open (run or
+// allow), never trapping the turn.
 //
 // Compact-source SessionStart is EXEMPT: Codex SessionStart input carries no
 // turn_id, so two DISTINCT compactions in one session produce byte-identical
@@ -264,27 +267,38 @@ const projectEnv = {
 // re-running a true duplicate is harmless while replaying a stale one is not.
 const bypassReplay = target === "session-start" && codex.source === "compact";
 
-const DEDUPE_ROOT = join(
-  tmpdir(),
-  `aidlc-codex-dedupe-${createHash("sha256").update(projectDir).digest("hex").slice(0, 16)}`,
-);
+const DEDUPE_ROOT = join(sessionsDir(projectDir), "codex-dedupe");
 const dedupeKey = createHash("sha256").update(`${target}\n${rawInput}`).digest("hex").slice(0, 32);
 const slotDir = join(DEDUPE_ROOT, dedupeKey);
 const responseFile = join(slotDir, "response.json");
+const SLOT_MAX_AGE_MS = 5 * 60 * 1000;
+const SLOT_MAX_COUNT = 64;
 
 function pruneStale(): void {
   try {
-    const cutoff = Date.now() - 30 * 60 * 1000;
+    const cutoff = Date.now() - SLOT_MAX_AGE_MS;
+    const slots: { full: string; mtime: number }[] = [];
     for (const entry of readdirSync(DEDUPE_ROOT)) {
       const full = join(DEDUPE_ROOT, entry);
       try {
-        if (statSync(full).mtimeMs < cutoff) rmSync(full, { recursive: true, force: true });
+        slots.push({ full, mtime: statSync(full).mtimeMs });
       } catch {
-        // racing prune — ignore
+        // racing prune - ignore
       }
     }
+    // Newest first: a slot past the age bound goes, and so does any beyond the
+    // newest SLOT_MAX_COUNT.
+    slots.sort((a, b) => b.mtime - a.mtime);
+    slots.forEach(({ full, mtime }, index) => {
+      if (mtime >= cutoff && index < SLOT_MAX_COUNT) return;
+      try {
+        rmSync(full, { recursive: true, force: true });
+      } catch {
+        // racing prune - ignore
+      }
+    });
   } catch {
-    // no dedupe root yet — nothing to prune
+    // no dedupe root yet - nothing to prune
   }
 }
 
