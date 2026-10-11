@@ -12014,7 +12014,9 @@ export function commandTurnHint(projectDir: string): string {
 // The person's latest message still stands for what it asks for, though
 // decisions were recorded after it: each was the approval they gave in that
 // same message ("approve, and turn plan approval off"; one plan question
-// counts once however many Units it approves), or the run's own approval,
+// counts once however many Units it approves), the answer they gave the
+// agent's own question in it (the option they picked in its question box, or
+// typed; the agent then runs the setter that pick asks for), or the run's own approval,
 // which records no choice of theirs (no User Input, or Autonomous: true;
 // they said "stop" while it ran on its own). Any other decision after it, a
 // second approval, or an approval after a message that was no reply (so not
@@ -12044,6 +12046,20 @@ function requestOutlivesItsApproval(projectDir: string, intent?: string, space?:
       } else if (row.event === "PLAN_APPROVAL_RECORDED") {
         theirs.add("plan");
       } else if (
+        row.event === "QUESTION_ANSWERED" && isReplyTurn(turn) && auditBlockField(row.block, "Checkpoint") === null
+      ) {
+        // The answer they gave the agent's own question in that same message.
+        // The answer handler admitted it on this reply (one reply answers every
+        // question open when it arrived, a question box one per pick), or it
+        // names an earlier message, or it is the choice they left to the agent,
+        // or the run's own under autonomy: none is a second request of theirs,
+        // so it leaves the rest of the message standing, as the approval given
+        // in it does. An answer to one of the engine's own questions (a
+        // Checkpoint row: the code plan, a Construction policy proposal, the
+        // verification command, the summary) decides that step and uses the
+        // message up, as it always did.
+        continue;
+      } else if (
         GATE_RESOLUTION_EVENTS.has(row.event) || row.event === "QUESTION_UNANSWERED" ||
         (row.event === "AUTONOMY_MODE_SET" && auditBlockField(row.block, "Mode") === "autonomous")
       ) {
@@ -12063,8 +12079,9 @@ function requestOutlivesItsApproval(projectDir: string, intent?: string, space?:
 // `requests`, anything but a question about a switch. With `intent` and
 // `space`, the turn must be on that work's record. With `outlivesApproval`,
 // for what the message asks for (a setter, a stop, the grant of autonomy), the
-// approval given in it and the run's own approvals do not use it up
-// (requestOutlivesItsApproval); with `replies` too, that message is a reply.
+// approval given in it, the answer it gave the agent's own question, and the
+// run's own approvals do not use it up (requestOutlivesItsApproval); with
+// `replies` too, that message is a reply.
 // An approval or an answer never reads it that way: each needs a reply of its own.
 export function personSpokeSinceGate(
   projectDir: string,
@@ -27949,16 +27966,18 @@ export function pickerAnswerNote(projectDir: string, details: string): string | 
 }
 
 // The person's latest chat turn in this clone's ledger for the selected work:
-// when it was, and the words its chat kept right after it (null when the hook
-// kept none: a slash command, a picked option, an over-long message). Null when
-// no turn is on record. It only words a notice, so it never throws.
+// when it was, and its words: the ones its chat kept right after it, or, when
+// the hook kept none, the labels it picked in a question box (the row's
+// `Picked` field, in the order shown). Null words for a slash command or an
+// over-long message. Null when no turn is on record. It only words a notice,
+// so it never throws.
 export function latestPersonTurn(projectDir: string): { at: string; words: string | null } | null {
   try {
     const shardPath = auditFilePath(projectDir);
     const content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
     const separator = /\r?\n---\r?\n/g;
     let start = 0;
-    let turn: { at: string; session: string | null; from: number; to: number } | null = null;
+    let turn: { at: string; session: string | null; picked: string | null; from: number; to: number } | null = null;
     for (;;) {
       const match = separator.exec(content);
       const end = match ? match.index : content.length;
@@ -27967,6 +27986,7 @@ export function latestPersonTurn(projectDir: string): { at: string; words: strin
         turn = {
           at: auditBlockField(block, "Timestamp") ?? "",
           session: auditBlockField(block, "Session"),
+          picked: auditBlockField(block, "Picked"),
           from: Buffer.byteLength(content.slice(0, start), "utf-8"),
           to: Buffer.byteLength(content.slice(0, match ? match.index + match[0].length : end), "utf-8"),
         };
@@ -27975,16 +27995,30 @@ export function latestPersonTurn(projectDir: string): { at: string; words: strin
       start = match.index + match[0].length;
     }
     if (turn === null) return null;
-    const { at, session, from, to } = turn;
+    const { at, session, picked, from, to } = turn;
     const record = session ? readGateWords(projectDir, session) : null;
     // The hook keeps a turn's words at the shard's size right after its row.
     const kept = record?.shard === projectRelativePath(projectDir, shardPath)
       ? record.messages.find((message) => message.offset > from && message.offset <= to)
       : undefined;
-    return { at, words: kept?.text ?? null };
+    return { at, words: kept?.text ?? pickedLabels(picked) };
   } catch {
     return null;
   }
+}
+
+// The labels a HUMAN_TURN row's `Picked` field carries, as one line, or null.
+function pickedLabels(raw: string | null): string | null {
+  if (raw === null) return null;
+  let picked: unknown;
+  try {
+    picked = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(picked)) return null;
+  const labels = picked.filter((label): label is string => typeof label === "string" && label.trim().length > 0);
+  return labels.length > 0 ? labels.map((label) => label.trim()).join(", ") : null;
 }
 
 // The option the person's latest message at a stage gate picked exactly ("2",

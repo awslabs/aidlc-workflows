@@ -1800,7 +1800,7 @@ aidlc engine bolt set-autonomy --mode gated
 Both update `Construction Autonomy Mode` and emit `AUTONOMY_MODE_SET`. Granting
 autonomy requires a message from the person since the last decision; an approval
 in that same message ("approve the plan, and run Construction on its own from
-here") leaves it standing. Revocation needs no message. New checkpoint
+here"), or the answer they gave the agent's own question in it, leaves it standing. Revocation needs no message. New checkpoint
 workflows offer the choice at Construction entry with skeleton-off, or after
 the first working integrated Unit has passed its skeleton checkpoint with
 skeleton-on. A known choice is not asked again; on-demand changes remain valid.
@@ -1843,7 +1843,8 @@ line with what changed and that you can switch back, for example "Construction
 checkpoints (a stop after each Unit for you to check and approve it) are off for
 this work now (they were on). You can switch back any time." The change is recorded as `CONSTRUCTION_POLICY_SET` with your words.
 The setter makes the change only when a message from you since the last decision
-is on record, so the agent cannot change these on its own, and an unattended run
+is on record (an option you picked when the agent offered the change counts, in the
+same turn), so the agent cannot change these on its own, and an unattended run
 never changes them. A change that needs another first (parallel Units need
 stage-major and checkpoints on) makes both, and says both.
 
