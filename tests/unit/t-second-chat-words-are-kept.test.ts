@@ -222,4 +222,27 @@ describe("a fresh clone with no choice made on this machine stays as today", () 
     expect(logged.status, `${logged.stdout}${logged.stderr}`).not.toBe(0);
     expect(`${logged.stdout}${logged.stderr}`).toContain("more than one chat has sent messages");
   });
+
+  test("words typed in a chat before the work was chosen here do not make the work's chat ambiguous afterwards", () => {
+    // Chat B spoke while it was on nothing (no cursor yet). Then the record is chosen here, and chat A, on the work,
+    // approves. B's old words were never a turn on this work, so they do not count against A's approval now.
+    const proj = freshClone();
+    said(proj, "hello there");
+    expect(humanTurns(proj)).toHaveLength(0);
+    writeFileSync(join(intentsDirOf(proj, "default"), "active-intent"), `${DEFAULT_RECORD_DIR}\n`, "utf-8");
+    writeSessionBinding(proj, FIRST, "default", DEFAULT_RECORD_DIR, "switch");
+    said(proj, "approve", FIRST);
+    expect(humanTurns(proj)).toHaveLength(1);
+    const id = readdirSync(join(proj, "aidlc", ".aidlc-sessions", "messages")).filter((name) => name.endsWith(".json"))
+      .map((name) => JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", "messages", name), "utf-8")) as { id: string; session: string | null })
+      .find((message) => message.session === FIRST)!.id;
+    const logged = spawnSync(BUN, [LOG, "decision", "--stage", "requirements-analysis", "--decision", "Approve the draft", "--message", id, "--project-dir", proj], {
+      cwd: proj,
+      env: { ...process.env, ...CLEAR, AIDLC_SESSION_OVERRIDE: undefined, AIDLC_SESSION_OVERRIDE_SOURCE: undefined, CODEX_THREAD_ID: undefined, CLAUDE_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(logged.status, `${logged.stdout}${logged.stderr}`).toBe(0);
+    expect(`${logged.stdout}${logged.stderr}`).not.toContain("more than one chat has sent messages");
+  });
 });

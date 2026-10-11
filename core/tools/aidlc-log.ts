@@ -155,7 +155,6 @@ import {
   resolveProjectDir,
   resolveProjectFlag,
   sameWorkspaceSource,
-  resolveChat,
   resolveWorkflowSelection,
   resolveReviewClass,
   selfAttributedDecisionMarker,
@@ -957,23 +956,21 @@ function messageIsReply(rows: AuditShardEvent[], message: StoredMessage): boolea
   return true;
 }
 
-// The chats that have sent messages since the last spending row. A chat on no
-// record (it met this workspace before the work was chosen here, or a cold
-// workspace) keeps its words but is not a chat on this work, so it does not make
-// the one chat that has spoken here ambiguous. Which record a chat is on is read
-// the way every door reads it (resolveChat, read-only): a chat that joined the
-// work through its turn alone, before its own next command wrote the binding,
-// counts as the chat on this work that it is.
-function chatsSince(pd: string, spentAt: string | null): Set<string> {
-  const onNoRecord = (session: string): boolean => {
-    try {
-      return resolveChat(pd, session, { bind: false })?.binding?.intent === null;
-    } catch {
-      return false;
-    }
-  };
+// The chats that have spoken on this work since the last spending row. A message
+// counts when a HUMAN_TURN row of this record names it: the hook wrote that row
+// only while the chat was on the work, so a chat that joined through its turn
+// alone counts from that turn, and words a chat typed while it was on nothing
+// (before the work was chosen here, or a cold workspace) never count, however
+// the chat stands now. A message no hook minted a row for (none exists today
+// besides those) is read as before.
+function chatsSince(rows: AuditShardEvent[], pd: string, spentAt: string | null): Set<string> {
+  const named = new Set<string>();
+  for (const row of rows) {
+    const id = row.event === "HUMAN_TURN" ? auditBlockField(row.block, "Message Id") : null;
+    if (id !== null) named.add(id);
+  }
   return new Set(listMessages(pd)
-    .filter((m) => (spentAt === null || m.at >= spentAt) && (m.session === null || !onNoRecord(m.session)))
+    .filter((m) => (spentAt === null || m.at >= spentAt) && (m.session === null || named.has(m.id)))
     .map((m) => m.session ?? "terminal"));
 }
 
@@ -1010,7 +1007,7 @@ function proveMessage(pd: string, id: string, what: "answer" | "decision"): { me
     }
     return { message };
   }
-  const chats = chatsSince(pd, spentAt);
+  const chats = chatsSince(rows, pd, spentAt);
   if (chats.size > 1) {
     return {
       refusal: `Cannot record this ${what}: the engine cannot tell which chat this command serves, and more than ` +
@@ -1050,7 +1047,7 @@ function messagesBeforeQuestion(pd: string, stage: string, unit: string | undefi
   const spentAt = latestSpendingTimestamp(rows);
   const chat = invokingChat(pd);
   // With no chat the engine can name, the hint follows the proof's one-chat rule.
-  if (chat === null && chatsSince(pd, spentAt).size > 1) return [];
+  if (chat === null && chatsSince(rows, pd, spentAt).size > 1) return [];
   const turnOf = new Map<string, AuditShardEvent>();
   for (const row of rows) {
     if (row.event !== "HUMAN_TURN") continue;
