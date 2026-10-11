@@ -253,6 +253,7 @@ import {
   resolveReviewClass,
   loadScopeMapping,
   nextInScopeStage,
+  openPendingDecision,
   parseCheckboxes,
   parseGuardPolicy,
   resolveGuardPolicy,
@@ -3673,6 +3674,35 @@ function withWorkPicksUpLine<T extends Directive>(directive: T, pd: string, scop
           : "";
   if (at) (directive as { narration?: string }).narration = `The work picks up at ${at}.`;
   return directive;
+}
+
+// Whether a setting typed in chat ends the turn. It does when the person must
+// act next: the current stage waits at its gate or in revision, the engine's
+// plan question is open, a question the stage logged or wrote has no answer, or
+// a Unit walk stands at a summary, a checkpoint or a pause; a `next` there would
+// show them their question again. While the stage is simply running, the
+// setting is said and the agent goes back to `next` for the work: a live run
+// stopped after "turn the specialist reviewers off" and the person had to type
+// "ok, carry on". Anything unreadable ends the turn, as every setting did before.
+function settingEndsTurn(pd: string, scope: string, stateContent: string): boolean {
+  const slug = (getField(stateContent, "Current Stage") ?? "").trim();
+  if (slug.length === 0) return true;
+  if (parseCheckboxes(stateContent).find((c) => c.slug === slug)?.state !== "in-progress") return true;
+  if (planApprovalAskIsOpen(pd)) return true;
+  try {
+    if (openPendingDecision(pd, slug) !== null) return true;
+    const walk = scope ? unitMajorWalkBeat(pd, scope, stateContent, slug) : null;
+    if (walk !== null && walk.step.kind !== "work") return true;
+    const phase = (getField(stateContent, "Lifecycle Phase") ?? "").trim().toLowerCase();
+    if (phase.length === 0) return true;
+    const dirs = [stageDir(pd, phase, slug)];
+    if (walk !== null && walk.step.kind === "work") dirs.push(join(docsRoot(pd), phase, walk.step.unit, walk.step.stage.slug));
+    return dirs.some((dir) => existsSync(dir) && readdirSync(dir)
+      .filter((file) => file.endsWith("-questions.md"))
+      .some((file) => /\[Answer\]:[ \t]*_*[ \t]*$/m.test(readFileSync(join(dir, file), "utf-8"))));
+  } catch {
+    return true;
+  }
 }
 
 // For the agent, after the still-paused line: what a yes to it runs.
@@ -8540,11 +8570,20 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     const describedWork = Boolean(flags.intent) && !planChanges && !flags.resume;
     // Every setting belongs to one atomic config-change, including a
     // same-as-current --scope: no sibling modifier may be silently discarded.
+    // A setting over running work with nothing waiting on the person is said
+    // and the work goes on; otherwise the turn ends (see settingEndsTurn).
+    const settingPrint = (saidThenStop: string, saidThenCarryOn: string): PrintDirective =>
+      stillParked !== null || settingEndsTurn(pd, currentStateScope, stateContent)
+        ? turnEndingPrint(saidThenStop)
+        : printDirective(saidThenCarryOn);
     if (modifiers.length > 0 && !describedWork) {
       const command = configSetCommand(modifiers);
       emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd), stillParked) : keptWhilePlanWaits(
         withWorkPicksUpLine(
-          turnEndingPrint(`Run \`${command}\` to update the configuration, then ${verbatimThenStop}`),
+          settingPrint(
+            `Run \`${command}\` to update the configuration, then ${verbatimThenStop}`,
+            `Run \`${command}\` to update the configuration, then print its output verbatim and re-run next to carry on with the work.`,
+          ),
           pd, currentStateScope, stateContent,
         ),
         planApprovalAskIsOpen(pd),
@@ -8560,9 +8599,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     if (!describedWork && !flags.resume && typedSettingModifiers(flags).length > 0) {
       emit(keptWhilePlanWaits(
         withWorkPicksUpLine(
-          turnEndingPrint(stillParked === null
-            ? "The setting the person typed is already applied: say the line it printed, then stop."
-            : `The setting the person typed is already applied: say the line it printed followed by "${stillParked}", then stop.${resumeOnYes()}`),
+          settingPrint(
+            stillParked === null
+              ? "The setting the person typed is already applied: say the line it printed, then stop."
+              : `The setting the person typed is already applied: say the line it printed followed by "${stillParked}", then stop.${resumeOnYes()}`,
+            "The setting the person typed is already applied: say the line it printed, then re-run next to carry on with the work.",
+          ),
           pd, currentStateScope, stateContent,
         ),
         planApprovalAskIsOpen(pd),

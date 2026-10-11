@@ -655,6 +655,26 @@ describe("t349 (9) a review level set for the work replaces its scope's ceiling"
     expect(override()).toBe("");
   });
 
+  // Two live runs: "turn the specialist reviewers off" printed "Review override
+  // changed: none -> none" when no override had been set yet, so the line said
+  // nothing had changed. The level replaced is the scope's own.
+  test("the first override names the scope level it replaces, not none", () => {
+    const proj = project();
+    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    const env = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+    const run = (args: string[]) => {
+      const res = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], { encoding: "utf-8", env });
+      expect(res.status, `${args.join(" ")}: ${res.stdout}${res.stderr}`).toBe(0);
+      return `${res.stdout}`;
+    };
+    run(["scope-change", "--scope", "bugfix"]);
+    const first = run(["config-change", "--review", "none"]);
+    expect(first).toContain("Review override changed: advisory (scope default) -> none");
+    expect(first).not.toContain("none -> none");
+    // Set again: the stored override is the old value.
+    expect(run(["config-change", "--review", "adversarial"])).toContain("Review override changed: none -> adversarial");
+  });
+
   test("the creation preview follows a review level set at creation", () => {
     const preview = (args: string[]) => {
       const proj = createTestProject();

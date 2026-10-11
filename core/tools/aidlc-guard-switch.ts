@@ -567,9 +567,12 @@ export function applyIntentSettings(
         },
       });
     }
+    // With no override set, the level in force was the scope's own: the line
+    // names it (a first "none" printed "none -> none" in two live runs).
     const display = update.storedReview === "" ? `${scopeReviewLevel(target)} (scope default)` : update.storedReview;
+    const previous = update.oldReview || `${scopeReviewLevel(target)} (scope default)`;
     lines.push(update.changed
-      ? `Review override changed: ${update.oldReview || "none"} -> ${display}`
+      ? `Review override changed: ${previous} -> ${display}`
       : `Review override is already ${display}`);
   }
   // Persist scope-owned updates even while memory controls the effective value.

@@ -348,7 +348,6 @@ describe("t259 the engine's last word ended the turn", () => {
       for (const [args, said] of [
         [["--status"], "print its output verbatim, then stop"],
         [["--scope", "mvp"], "to change scope, then print its output verbatim and stop"],
-        [["--depth", "minimal"], "to update the configuration, then print its output verbatim and stop"],
       ] as const) {
         markHumanTurn(proj);
         await Bun.sleep(20);
@@ -369,6 +368,43 @@ describe("t259 the engine's last word ended the turn", () => {
       if (!copilot) expect(stop().stdout).toContain('"decision":"block"');
     });
   }
+
+  // A live run: "turn the specialist reviewers off for the rest of this work"
+  // typed while Code Generation was running printed the setting's line and the
+  // turn ended; nothing happened until the person typed "ok, carry on". A
+  // setting over running work, with nothing waiting on the person, hands the
+  // agent back to `next`; at the stage's open gate it still ends the turn.
+  test("a setting typed while the stage runs hands the agent back to next; at a gate it ends the turn", async () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+    delete env[STOP_HOOK_PROBE_ENV];
+    const run = (args: string[], input?: string) =>
+      spawnSync(process.execPath, [".claude/tools/aidlc.ts", ...args], { cwd: proj, input, encoding: "utf-8", env });
+    const stop = () =>
+      run(["engine", "hook", "continue-workflow"], JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-stop" }));
+    markHumanTurn(proj);
+    await Bun.sleep(20);
+    const midStage = JSON.parse(run(["engine", "orchestrate", "next", "--depth", "minimal"]).stdout);
+    expect(midStage.kind).toBe("print");
+    expect(midStage.message).toContain("to update the configuration, then print its output verbatim and re-run next to carry on");
+    expect(midStage.message).not.toContain("and stop");
+    expect(existsSync(turnEndMarkerPath(proj))).toBe(false);
+    expect(stop().stdout).toContain('"decision":"block"');
+    // At the stage's open gate the person must answer next, so the same
+    // setting ends the turn as before.
+    const statePath = stateFilePath(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace("- [-] feasibility", "- [?] feasibility"));
+    markHumanTurn(proj);
+    await Bun.sleep(20);
+    const atGate = JSON.parse(run(["engine", "orchestrate", "next", "--depth", "minimal"]).stdout);
+    expect(atGate.kind).toBe("print");
+    expect(atGate.message).toContain("to update the configuration, then print its output verbatim and stop");
+    expect(existsSync(turnEndMarkerPath(proj))).toBe(true);
+    const gateEnd = stop();
+    expect(gateEnd.status, gateEnd.stderr).toBe(0);
+    expect(gateEnd.stdout).not.toContain('"decision":"block"');
+  });
 });
 
 // Live runs on the transcript-free hosts (Kiro CLI, Kiro IDE, opencode): after
