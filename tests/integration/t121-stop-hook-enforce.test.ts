@@ -3198,6 +3198,26 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(r.out).toBe(""); // allowed (the turn was conversational)
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("(f) Claude chat transcript whose turn only named the record file in a redirected Bash call allows the stop (a file is not the state tool)", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // The person asks what was finished; the agent lists the record and finds
+    // the state file by name, with a redirect, then answers in text. The file
+    // name carries the state tool's stem, but no engine ran: still a chat turn.
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "what did we finish last time?" },
+      { kind: "bash", command: `ls ${proj}/aidlc/spaces/default/intents/ 2>/dev/null; echo "==="; find ${proj}/aidlc/spaces/default/intents -name aidlc-state.md 2>/dev/null` },
+      { kind: "text" },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe(""); // allowed: the record file is not the state tool
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("(f) Claude transcript with an aidlc-orchestrate Bash call after the prompt still BLOCKS (engine was engaged)", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
