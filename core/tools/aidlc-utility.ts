@@ -5121,11 +5121,14 @@ export async function collectDoctorReport(
   // 5a. Naming consistency for agent/scope files. Duplicate declared names are
   // loader corruption and fail through loadAgents()/validScopes(); stem/name
   // drift is recoverable authoring drift, so it is advisory and names the file.
+  // The Kiro IDE conductor ships as aidlc-aidlc.md and declares name aidlc (the
+  // stem makes /aidlc sort first in Kiro's menu), so its check is the name alone.
   try {
     pushNamingAdvisory(
       results,
       "Agent",
-      namingMismatches(agentsDir(), "Agent", (stem, name) => stem === name),
+      namingMismatches(agentsDir(), "Agent", (stem, name) =>
+        isKiroConductorAgentFile(`${stem}.md`) ? name === "aidlc" : stem === name),
     );
   } catch (e) {
     results.push({

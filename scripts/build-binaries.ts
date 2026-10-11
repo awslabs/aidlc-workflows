@@ -2486,7 +2486,7 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(harnessProbeGate(
       actual.artifact,
       "kiro",
-      "agents/aidlc.{json,md} present (conductor wiring)",
+      "agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)",
     ));
     result.gates.push(harnessProbeGate(
       actual.artifact,
