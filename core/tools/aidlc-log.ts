@@ -495,9 +495,11 @@ const DECISION_OPTIONS: ReadonlySet<string> = new Set([
 // --units, --reason and --park: the engine's Plan Approval question, recorded as
 // the person chose (which Units, what to change, and whether to stop for now).
 // --on-instruction: a stage question the person left to the agent.
+// --basis: what the agent's proposed choices rest on (the document, line, or
+// earlier answer behind each), kept on the record beside the answer.
 const ANSWER_OPTIONS: ReadonlySet<string> = new Set([
   ...LOG_INTERACTION_OPTIONS, "--details", "--units", "--reason", "--park", "--on-instruction",
-  "--details-file", "--on-instruction-file",
+  "--details-file", "--on-instruction-file", "--basis", "--basis-file",
 ]);
 
 // The person has said something in this piece of work: a turn that can carry a
@@ -1855,7 +1857,9 @@ function handleAnswer(args: string[]): void {
   if (!flags.stage) error("Missing --stage <slug>");
   // Text that holds shell characters arrives in a file the agent wrote, so no
   // shell (bash, PowerShell, or cmd.exe through aidlc.cmd) reads it on the way.
-  for (const [text, file] of [["details", "details-file"], ["on-instruction", "on-instruction-file"]] as const) {
+  for (const [text, file] of [
+    ["details", "details-file"], ["on-instruction", "on-instruction-file"], ["basis", "basis-file"],
+  ] as const) {
     if (flags[file] === undefined) continue;
     if (flags[text] !== undefined) error(`Pass either --${text} or --${file}, not both.`);
     try {
@@ -1865,6 +1869,15 @@ function handleAnswer(args: string[]): void {
     }
   }
   if (!flags.details) error("Missing --details <text> (or --details-file <file>)");
+  // What a proposed choice rests on. Context for the person reading the record;
+  // it never decides anything, so nothing is refused for lacking it.
+  const basis = flags.basis?.replace(/\s+/g, " ").trim();
+  if (flags.basis !== undefined && !basis) {
+    error("--basis needs what the choice rests on (the document, line, or earlier answer), or the word assumption.");
+  }
+  if (basis !== undefined && flags.checkpoint !== undefined) {
+    error(`--basis is for a stage question's proposed choices; --checkpoint ${flags.checkpoint} is the person's own to answer.`);
+  }
   // A stage question the person left to the agent. Checkpoints and approvals
   // stay the person's own each time, and an unattended run has nobody to hand
   // anything over.
@@ -2562,6 +2575,7 @@ function handleAnswer(args: string[]): void {
           + unattendedHumanPresenceHint(pd),
       );
     }
+    if (basis !== undefined) fields.Basis = basis;
     // Where the person replied in a picker, an answer none of their picks
     // carried is still recorded, with a note saying what they picked.
     if (instruction === undefined && !autonomousDecision) {

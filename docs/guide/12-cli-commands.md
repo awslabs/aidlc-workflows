@@ -1861,9 +1861,11 @@ An answer whose text holds a character a shell acts on (`$`, a backtick, a quote
 a file instead of the command line: the agent writes it to
 `<record>/.aidlc-engine/answer-text/answer.txt` and passes `--details-file
 .aidlc-engine/answer-text/answer.txt` (`--on-instruction-file` for the words that
-left a choice to the agent). The same file named from the project folder, or by
+left a choice to the agent, `--basis-file` for what the proposed choices rest on). The same file named from the project folder, or by
 its full path, is read too. The engine reads only that folder, through no link,
 up to 64 KiB, and removes the file once read.
+
+`log answer --basis '<what each choice rests on>'` keeps the document and line, code, or earlier answer behind a choice the agent proposed (or `assumption`) on the record. It is context for the person reading the record; nothing is refused for lacking it, and it cannot be given with `--checkpoint`.
 
 A plain `log answer` needs a reply the person sent after the question was logged
 (or a question box pick of their latest reply still unspent); a reply sent
