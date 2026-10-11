@@ -24,8 +24,9 @@
 //           question and end its turn without asking it again or going back to
 //           Feasibility.
 //   turn 2: the person answers in their own message: the number of the
-//           option shown for separate new work, and those words. The drive
-//           stops when that work is created.
+//           option shown for separate new work (found by its label, or by the
+//           description when the agent worded the label its own way), and
+//           those words. The drive stops when that work is created.
 //
 // Pass/fail reads only what the engine recorded, the pickers the person was
 // shown, and the Stop hook's own verdicts, NEVER the agent's prose:
@@ -86,10 +87,20 @@ const ANSWER_ROWS = [
 
 const FEASIBILITY_IN_PROGRESS = /^- \[-\] feasibility\b/m;
 
+// The option for separate new work, as the agent worded it: a label leading
+// with "Yes" (the skill's own offer), the engine's "Separate new piece of work"
+// in the label, or, when the agent reworded the label ("Set up alongside",
+// "Start it alongside", Full Suite 10-08 and 10-10), the same words in the
+// description it kept for that option. The meaning is the agent's to word; the
+// test checks the right option was offered and picks it by the picker's number.
 function separateWorkReply(menu: CapturedAskUserQuestion | undefined): string {
   const options = menu?.questions[0]?.options ?? [];
   let at = options.findIndex((o) => /^yes\b/i.test(o.label));
   if (at < 0) at = options.findIndex((o) => /separate/i.test(o.label));
+  if (at < 0) {
+    at = options.findIndex((o) =>
+      /separate new piece of work/i.test(o.description ?? "") && !/\bnot\b/i.test(o.description ?? ""));
+  }
   return at < 0 ? SEPARATE : `${at + 1}, ${SEPARATE}`;
 }
 
