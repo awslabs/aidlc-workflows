@@ -92,7 +92,10 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    returns `recordVerdict`, the exact command step 3 runs to close this request
    (the same request command with `--verdict <READY|NOT-READY>` added): a
    request left open refuses the stage completion later, for a reason that does
-   not name it.
+   not name it. It also returns `reviewed_at`, the UTC time this review is
+   dated: put it in the dispatch brief as `Date for this review: <reviewed_at>`,
+   so the reviewer writes its `**Date:**` line from the brief and runs no
+   command of its own for the time.
 
    `directive.review_artifact` names the one required Markdown output the
    review is about: the record is keyed to it, the gate names it as the

@@ -3876,6 +3876,12 @@ function handleReview(args: string[]): void {
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
+      // The UTC time the reviewer's own `**Date:**` line carries. The
+      // reviewer used to run `engine now` for it, which on Claude Code is an
+      // absolute-path call to the engine from a subagent, so the person was
+      // asked to allow an AI-DLC internal step (two live runs). The request
+      // the conductor already runs hands the time over instead.
+      reviewed_at: isoTimestamp(),
       agent_note: reviewRequestNote(flags.reviewer, reviewFile ?? "the review file this request opened", recordVerdict),
       ...(retried ? { retry: "pending-request" } : {}),
       ...(upgraded ? { upgrade: "legacy-request" } : {}),

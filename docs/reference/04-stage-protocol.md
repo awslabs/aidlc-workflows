@@ -1152,7 +1152,10 @@ change. See
    the same iteration is removed). It also returns `recordVerdict`, the exact
    command that closes the request - the same command with `--verdict
    <READY|NOT-READY>` added - because an unmatched request surfaces much later
-   as a refused completion. The directive's `review_artifact` field
+   as a refused completion. It returns `reviewed_at` too, the UTC time this
+   review is dated: the dispatch brief carries it as `Date for this review:`
+   and the reviewer writes its `**Date:**` line from the brief, so no reviewer
+   runs a command of its own for the time. The directive's `review_artifact` field
    names the required Markdown output the review is about: the record is
    keyed to it, the gate names it, and finding selectors address it; output
    ordering and plugin additions cannot change it, and nothing writes to it

@@ -87,7 +87,7 @@ Use this exact format:
 
 **Verdict:** READY | NOT-READY
 **Reviewer:** aidlc-architecture-reviewer-agent
-**Date:** [the UTC time `{{INVOKE}} engine now` prints]
+**Date:** [the UTC time the dispatch brief names on its `Date for this review:` line]
 **Iteration:** [1, 2, etc.]
 **Verdict Dictated:** yes | no
 
@@ -118,7 +118,7 @@ Use this exact format:
 [1-2 sentences: what's the main architectural concern, or why it's ready.]
 ```
 
-For the `Date` field, run `{{INVOKE}} engine now` and paste the time it prints. Never guess or infer the date.
+For the `Date` field, use the UTC time the dispatch brief names on its `Date for this review:` line. Never guess or infer the date, and run no command for it.
 
 For the `Verdict Dictated` field, write `yes` when the brief you were given named the verdict to write or to prefer, and `no` otherwise. Read your brief for what it asked, in any words; the engine records your answer as written and, on `yes`, tells the person once that the reviewer was told what to conclude before it looked. Your verdict stays your own judgement either way.
 
