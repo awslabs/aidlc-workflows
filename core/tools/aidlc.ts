@@ -3728,8 +3728,8 @@ if (import.meta.main) {
   // keep their import graph.
   if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {
     import("./aidlc-kiro-ide-terminal.ts")
-      .then((m) => {
-        if (m.commandPromptReplyTee()) return;
+      .then(async (m) => {
+        if (await m.commandPromptReplyTee()) return;
         m.noteSlowReplyAtExit();
         run(m.rejoinCommandPromptQuotes(process.argv.slice(2)));
       })

@@ -13,6 +13,7 @@ import { installRoot } from "./aidlc-install-paths.ts";
 import { setByDotenvFile } from "./aidlc-kiro-session.ts";
 import { insideKiroIde, kiroIdeUserSettingsPath } from "./aidlc-kiro-ide-workflows.ts";
 import { writeFileAtomic } from "./aidlc-lib.ts";
+import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
 
 export const KIRO_TERMINAL_SETTING = "terminal.integrated.defaultProfile.windows";
 const KIRO_TERMINAL_PROFILES = "terminal.integrated.profiles.windows";
@@ -333,55 +334,111 @@ export const KIRO_REPLY_DIR = join("aidlc", ".aidlc-sessions", "replies");
 const KIRO_REPLIES_KEPT = 20;
 
 /**
+ * The same command again, as a child. Under bun the script path is argv[1] and
+ * stays; in the compiled binary argv is ["bun", "/$bunfs/root/<entry>", ...args]
+ * (measured with `bun build --compile`), so the embedded entry is dropped and the
+ * binary gets its own arguments back.
+ */
+export function commandPromptChildCommand(
+  argv: readonly string[] = process.argv,
+  execPath: string = process.execPath,
+  compiled: boolean = isCompiledExecutable(),
+): string[] {
+  return [execPath, ...argv.slice(compiled ? 2 : 1)];
+}
+
+// Kiro reads the terminal one second after sending the command. The child's
+// output is held for a little longer than that, then relayed as it comes: the
+// agent's result keeps the shape the live run proved (the pointer alone, or the
+// pointer and the whole reply when the command finished within the second),
+// while a question a command asks on the terminal shows a moment later instead
+// of never, and a person at Kiro's own terminal panel can answer it.
+const KIRO_RELAY_HOLD_MS = 1500;
+
+/**
+ * Relay the child's stdout and stderr to this process's (held for the first
+ * KIRO_RELAY_HOLD_MS, flushed at once when the child exits sooner), keeping a
+ * copy of both streams for the reply file.
+ */
+export async function relayCommandPromptChild(
+  child: ReturnType<typeof Bun.spawn>,
+  holdMs: number = KIRO_RELAY_HOLD_MS,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  let holding = true;
+  const held: Array<[number, Uint8Array]> = [];
+  const release = (): void => {
+    holding = false;
+    for (const [fd, chunk] of held.splice(0)) writeSync(fd, chunk);
+  };
+  const timer = setTimeout(release, holdMs);
+  const relay = async (stream: ReadableStream<Uint8Array>, fd: number): Promise<string> => {
+    const parts: Uint8Array[] = [];
+    for await (const chunk of stream) {
+      if (holding) held.push([fd, chunk]);
+      else writeSync(fd, chunk);
+      parts.push(chunk);
+    }
+    return Buffer.concat(parts).toString();
+  };
+  const [stdout, stderr] = await Promise.all([
+    relay(child.stdout as ReadableStream<Uint8Array>, 1),
+    relay(child.stderr as ReadableStream<Uint8Array>, 2),
+  ]);
+  clearTimeout(timer);
+  release();
+  return { code: await child.exited, stdout, stderr };
+}
+
+/**
  * Kiro's Command Prompt terminal hands the agent what a command printed within
  * a second and drops the rest. So in that terminal, in a project with an
  * `aidlc/` folder, a tool prints one pointer line first, runs itself as a child
  * process (the engine writes its reply straight to fd 1, so nothing in-process
- * can copy it), relays the child's reply and writes it to the file the pointer
+ * can copy it), relays the child's output and writes it to the file the pointer
  * names under `aidlc/.aidlc-sessions/` (gitignored, per-user scratch, the newest
- * twenty kept). The agent reads the file when its result ends at the pointer,
- * instead of running the command again. Returns false, having done nothing,
- * everywhere else and in the child; otherwise it exits with the child's code.
+ * twenty kept) when the child exits. The agent reads the file when its result
+ * ends at the pointer, instead of running the command again. Resolves false,
+ * having done nothing, everywhere else and in the child; otherwise it exits
+ * with the child's code.
  */
-export function commandPromptReplyTee(
+export async function commandPromptReplyTee(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
-): boolean {
+): Promise<boolean> {
   if (env[KIRO_REPLY_TEE_ENV] === "1" || !inCommandPromptTerminal(env, platform)) return false;
   const project = process.cwd();
   if (!existsSync(join(project, "aidlc"))) return false;
   const replies = resolve(project, KIRO_REPLY_DIR);
   const file = join(KIRO_REPLY_DIR, `${Date.now().toString(36)}-${process.pid}.txt`).replace(/\\/g, "/");
+  const command = commandPromptChildCommand();
+  let child: ReturnType<typeof Bun.spawn>;
   try {
     mkdirSync(replies, { recursive: true });
     for (const old of readdirSync(replies).sort().slice(0, -(KIRO_REPLIES_KEPT - 1))) rmSync(join(replies, old), { force: true });
+    child = Bun.spawn(command, {
+      cwd: project,
+      env: { ...env, [KIRO_REPLY_TEE_ENV]: "1" },
+      stdin: "inherit",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
   } catch {
     return false;
   }
   writeSync(
     1,
     `AI-DLC reply: ${file} (Command Prompt shows a reply only when it is ready within a second; when this result ends here, ` +
-      "read that file)\n",
+      "the command is still running: read that file, which appears when it finishes)\n",
   );
   const started = performance.now();
-  const child = Bun.spawnSync([process.execPath, ...process.argv.slice(1)], {
-    cwd: project,
-    env: { ...env, [KIRO_REPLY_TEE_ENV]: "1" },
-    stdin: "inherit",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const stdout = child.stdout.toString();
-  const stderr = child.stderr.toString();
-  if (stdout !== "") writeSync(1, stdout);
-  if (stderr !== "") writeSync(2, stderr);
+  const result = await relayCommandPromptChild(child);
   try {
-    writeFileAtomic(resolve(project, file), `# ${process.argv.slice(1).join(" ")}\n${stdout}${stderr}`);
+    writeFileAtomic(resolve(project, file), `# ${command.slice(1).join(" ")}\n${result.stdout}${result.stderr}`);
   } catch {
     // The reply reached the terminal; the file is the copy.
   }
   noteSlowReply(performance.now() - started, env, platform);
-  process.exit(child.exitCode ?? 1);
+  process.exit(result.code);
 }
 
 /** Called once as a tool starts: at exit it notes a run Kiro's Command Prompt terminal dropped. Nothing outside Kiro's terminal on Windows. */

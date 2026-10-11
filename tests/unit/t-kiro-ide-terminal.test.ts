@@ -27,6 +27,7 @@ import {
   recordKiroTerminalAnswer,
   setKiroIdeTerminalPowerShell,
 } from "../../core/tools/aidlc-kiro-ide-terminal.ts";
+import * as terminal from "../../core/tools/aidlc-kiro-ide-terminal.ts";
 import {
   kiroIdeTerminalDoctorCheck,
   postApplyOutstandingActions,
@@ -605,7 +606,7 @@ describe("the setter when there is nothing to set", () => {
 // command again. Nowhere else does the tool behave differently.
 describe("the reply file and its pointer under Command Prompt", () => {
   const TOOL = join(REPO_ROOT, "core", "tools", "aidlc-utility.ts");
-  const POINTER = /^AI-DLC reply: (aidlc\/\.aidlc-sessions\/replies\/[a-z0-9-]+\.txt) \(Command Prompt shows a reply only when it is ready within a second; when this result ends here, read that file\)$/m;
+  const POINTER = /^AI-DLC reply: (aidlc\/\.aidlc-sessions\/replies\/[a-z0-9-]+\.txt) \(Command Prompt shows a reply only when it is ready within a second; when this result ends here, the command is still running: read that file, which appears when it finishes\)$/m;
   function project(): string {
     const dir = temp("aidlc-t-kiro-terminal-tee-");
     mkdirSync(join(dir, "aidlc"), { recursive: true });
@@ -640,6 +641,44 @@ describe("the reply file and its pointer under Command Prompt", () => {
     expect(text).not.toContain("AI-DLC reply:");
   });
 
+  // The child's output is held past Kiro's one-second read, then relayed as it
+  // is produced, never kept until exit: the agent's result keeps its shape, and
+  // a question a command asks on the terminal shows while it waits for the
+  // answer (a person at Kiro's own terminal panel can give it).
+  test("the child's output reaches the terminal while the child still runs, after the hold", async () => {
+    const dir = temp("aidlc-t-kiro-terminal-relay-");
+    const driver = join(dir, "driver.ts");
+    writeFileSync(
+      driver,
+      `import { relayCommandPromptChild } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-kiro-ide-terminal.ts"))};\n` +
+        `const child = Bun.spawn([process.execPath, "-e", "console.log('early'); await Bun.sleep(3500); console.log('late'); process.exit(3)"], { stdin: "inherit", stdout: "pipe", stderr: "pipe" });\n` +
+        `const r = await relayCommandPromptChild(child);\n` +
+        `process.stderr.write(JSON.stringify(r));\n`,
+    );
+    const startedAt = Date.now();
+    const proc = Bun.spawn([process.execPath, driver], { cwd: dir, env: childEnv({}), stdout: "pipe", stderr: "pipe" });
+    const reader = proc.stdout.getReader();
+    const first = await reader.read();
+    const firstAt = Date.now();
+    expect(new TextDecoder().decode(first.value)).toContain("early");
+    expect(firstAt - startedAt).toBeGreaterThanOrEqual(1500);
+    const code = await proc.exited;
+    expect(Date.now() - firstAt).toBeGreaterThan(1000);
+    expect(code).toBe(0);
+    const rest = await new Response(proc.stderr).text();
+    expect(JSON.parse(rest)).toEqual({ code: 3, stdout: "early\nlate\n", stderr: "" });
+  });
+
+  // A compiled binary's argv is ["bun", "/$bunfs/root/<entry>", ...args], so
+  // the respawn drops the embedded entry there and keeps the script path only
+  // when bun runs the source (measured with `bun build --compile`, bun 1.3.14).
+  test("the child command is the same tool again: the script under bun, the binary's own arguments when compiled", () => {
+    expect(terminal.commandPromptChildCommand(["/usr/bin/bun", "/p/.kiro/tools/aidlc-utility.ts", "version"], "/usr/bin/bun", false))
+      .toEqual(["/usr/bin/bun", "/p/.kiro/tools/aidlc-utility.ts", "version"]);
+    expect(terminal.commandPromptChildCommand(["bun", "/$bunfs/root/aidlc", "engine", "orchestrate", "next"], "C:\\aidlc\\bin\\aidlc.exe", true))
+      .toEqual(["C:\\aidlc\\bin\\aidlc.exe", "engine", "orchestrate", "next"]);
+  });
+
   test("the child's exit code and stderr come through", () => {
     const m = machine(CMD_WITH_COMMENTS);
     const dir = project();
@@ -652,14 +691,18 @@ describe("the reply file and its pointer under Command Prompt", () => {
   test("no pointer and no file in PowerShell, outside Kiro's terminal, without a shell record on a PowerShell machine, or where no aidlc/ folder is", () => {
     const ps = machine(CMD_WITH_COMMENTS);
     const d1 = project();
-    expect(run(["version"], d1, inTerminal(ps, "powershell")).stdout).not.toContain("AI-DLC reply:");
+    const inPs = run(["version"], d1, inTerminal(ps, "powershell"));
+    expect(`${inPs.stdout}${inPs.stderr}`).not.toContain("AI-DLC reply:");
     const own = machine(CMD_WITH_COMMENTS);
     writeFileSync(join(mkdirSync(own.env.AIDLC_INSTALL_ROOT, { recursive: true }) ?? own.env.AIDLC_INSTALL_ROOT, "kiro-ide-terminal-shell"), "cmd\n");
-    expect(run(["version"], project(), childEnv(own.env)).stdout).not.toContain("AI-DLC reply:");
+    const outside = run(["version"], project(), childEnv(own.env));
+    expect(`${outside.stdout}${outside.stderr}`).not.toContain("AI-DLC reply:");
     const unrecorded = machine(POWERSHELL_SET);
-    expect(run(["version"], project(), inTerminal(unrecorded, null)).stdout).not.toContain("AI-DLC reply:");
+    const noRecord = run(["version"], project(), inTerminal(unrecorded, null));
+    expect(`${noRecord.stdout}${noRecord.stderr}`).not.toContain("AI-DLC reply:");
     const bare = temp("aidlc-t-kiro-terminal-tee-bare-");
-    expect(run(["version"], bare, inTerminal(machine(CMD_WITH_COMMENTS), "cmd")).stdout).not.toContain("AI-DLC reply:");
+    const noFolder = run(["version"], bare, inTerminal(machine(CMD_WITH_COMMENTS), "cmd"));
+    expect(`${noFolder.stdout}${noFolder.stderr}`).not.toContain("AI-DLC reply:");
     expect(existsSync(join(bare, "aidlc"))).toBe(false);
   });
 
