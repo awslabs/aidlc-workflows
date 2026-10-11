@@ -6950,8 +6950,8 @@ export function resolveChat(
   if (!id) return null;
   const chatId = helperSessionRoot(projectDir, id) ?? id;
   const existing = readSessionBinding(projectDir, chatId);
-  if (existing) return { chatId, binding: existing };
   const bind = options.bind ?? false;
+  if (existing) return { chatId, binding: rejoinedByThisMachine(projectDir, chatId, existing, bind) ?? existing };
   // Read-only: the chat keeps whatever the shared selection names, as before.
   if (!bind) return { chatId, binding: null };
   // A worker's own worktree already names the work it was prepared for, and
@@ -6978,6 +6978,33 @@ export function resolveChat(
   const binding = readSessionBinding(projectDir, chatId) ??
     { space: contact.selection.space, intent: contact.selection.intent, boundAt: isoTimestamp(), source: contact.source };
   return { chatId, binding };
+}
+
+// A binding to no record whose source is "unjoined" is provisional: when the chat
+// first met the workspace, the only record here was found by the lone-record
+// rule and this machine had not chosen it (a teammate's record in a fresh
+// clone). A choice made here since (the per-user cursor, written only by
+// create and switch on this machine) is the very evidence a new chat joins by,
+// so the binding is read again against it at every entry and the chat joins
+// exactly as first contact would have, silently. With no choice made it stays
+// out, as before. The binding is rewritten only when the caller may bind; a
+// hook (read-only) sees the same answer and the chat's own next command writes it.
+function rejoinedByThisMachine(
+  projectDir: string,
+  chatId: string,
+  existing: SessionBinding,
+  bind: boolean,
+): SessionBinding | null {
+  if (existing.intent !== null || existing.source !== "unjoined") return null;
+  if (readActiveIntentCursor(projectDir, existing.space) === null) return null;
+  const resolved: WorkflowSelection = {
+    space: existing.space, intent: activeIntent(projectDir, existing.space), sessionId: chatId, binding: null,
+  };
+  const contact = classifyFirstContact(projectDir, resolved);
+  if (!contact.joined) return null;
+  if (bind) writeSessionBinding(projectDir, chatId, contact.selection.space, contact.selection.intent, contact.source);
+  return (bind ? readSessionBinding(projectDir, chatId) : null) ??
+    { space: contact.selection.space, intent: contact.selection.intent, boundAt: isoTimestamp(), source: contact.source };
 }
 
 // The rule a new chat follows when it first meets a workflow: resolving a record

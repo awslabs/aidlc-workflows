@@ -155,6 +155,7 @@ import {
   resolveProjectDir,
   resolveProjectFlag,
   sameWorkspaceSource,
+  readSessionBinding,
   resolveWorkflowSelection,
   resolveReviewClass,
   selfAttributedDecisionMarker,
@@ -956,9 +957,21 @@ function messageIsReply(rows: AuditShardEvent[], message: StoredMessage): boolea
   return true;
 }
 
-// The chats that have sent messages since the last spending row.
+// The chats that have sent messages since the last spending row. A chat bound to
+// no record (it met this workspace before the work was chosen here, or a cold
+// workspace) keeps its words but is not a chat on this work, so it does not make
+// the one chat that has spoken here ambiguous.
 function chatsSince(pd: string, spentAt: string | null): Set<string> {
-  return new Set(listMessages(pd).filter((m) => spentAt === null || m.at >= spentAt).map((m) => m.session ?? "terminal"));
+  const onNoRecord = (session: string): boolean => {
+    try {
+      return readSessionBinding(pd, session)?.intent === null;
+    } catch {
+      return false;
+    }
+  };
+  return new Set(listMessages(pd)
+    .filter((m) => (spentAt === null || m.at >= spentAt) && (m.session === null || !onNoRecord(m.session)))
+    .map((m) => m.session ?? "terminal"));
 }
 
 function proveMessage(pd: string, id: string, what: "answer" | "decision"): { message: StoredMessage } | { refusal: string } {

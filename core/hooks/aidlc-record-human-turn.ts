@@ -604,15 +604,73 @@ try {
   }
   // A conversation that has not joined the selected workflow is not a human at
   // its gates: it mints nothing there and its typed switches do not reach it.
+  // What the person said in it is still theirs: its message record (the chat's
+  // own proof, kept beside the question store and outside every record) is.
   const workflow = enterHookWorkflow(projectDir, sessionId);
-  if (hookStandsOutside(workflow)) {
+  const outside = hookStandsOutside(workflow);
+  if (outside && typedPrompt && isTypedGuardSwitchPrompt(typedPrompt) && workflow.selection?.intent) {
     // The record name is repository text, so the notice does not repeat it.
-    if (typedPrompt && isTypedGuardSwitchPrompt(typedPrompt) && workflow.selection?.intent) {
-      notes.push(
-        "AIDLC Guard Policy: the typed switch was not applied because this conversation has not joined the selected workflow; " +
-          "select its intent with the intent command first.",
-      );
+    notes.push(
+      "AIDLC Guard Policy: the typed switch was not applied because this conversation has not joined the selected workflow; " +
+        "select its intent with the intent command first.",
+    );
+  }
+  const mintAllowed = humanTurnMintAllowed();
+  // A swarm worker's worktree is the copy the engine made for a worker, and a
+  // prompt that arrives there (a `codex exec` worker's brief, on Codex its own
+  // session) is the conductor's, never a person's turn. No authority row lands
+  // in that record (finalize merges it back, and the merge refuses every
+  // authority row), no words are kept, no switch is applied, and nothing is
+  // said about it: there is no person there to read a line. The heartbeat and
+  // the conversational marker still land, as under AIDLC_UNATTENDED=1.
+  const workerWorktree = swarmWorkerWorktreeMeta(projectDir) !== null;
+  const personHere = mintAllowed && !workerWorktree;
+  // The message record: proof that a person said this in this chat, and
+  // exactly what they said (aidlc-message-store.ts). Written before the
+  // state-file gate so a message before any work exists is kept, and for a
+  // chat that has not joined the work here, under no lock (one atomic file).
+  // It names no question: which question a message answers is the conductor's
+  // call when it records a decision. Keyed on the EVENT, never on the text: a
+  // prompt-submit whose prompt the host left empty is a prompt whose words are
+  // unknown, not a picker reply. Fail-open: a store failure never blocks the
+  // turn, and the row below still records it.
+  const keepMessage = async (applied: string[]): Promise<string | null> => {
+    if (!personHere || pickerUnanswered || !(promptSubmitted || pickerQuestion !== undefined)) return null;
+    try {
+      const noWords: Pick<StoredMessage, "words" | "settings" | "route"> = {
+        words: null, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+      };
+      const parsed = promptSubmitted
+        ? (typedPrompt ? await messageParse(typedPrompt) : noWords)
+        : { ...noWords, words: humanResponseText.trim() || null };
+      const full = promptSubmitted ? typedPrompt : humanResponseText;
+      // Every stored string is cut (AIDA F5 on #2107: uncut words once put a record past the reader's cap).
+      const picker = promptSubmitted ? null : pickerReplies(input, MESSAGE_PICKER_MAX_CHARS);
+      const words = parsed.words !== null && parsed.words.length > MESSAGE_TEXT_MAX_CHARS
+        ? parsed.words.slice(0, MESSAGE_TEXT_MAX_CHARS)
+        : parsed.words;
+      const cut = full.length > MESSAGE_TEXT_MAX_CHARS || words !== parsed.words || picker?.cut === true;
+      return saveMessage(projectDir, {
+        session: sessionId || null,
+        at: isoTimestamp(),
+        source: promptSubmitted ? "prompt" : "picker",
+        text: full.slice(0, MESSAGE_TEXT_MAX_CHARS),
+        ...(cut ? { cut: true as const } : {}),
+        picker: picker === null ? null : picker.entries,
+        ...parsed,
+        words,
+        applied,
+      }).id;
+    } catch {
+      // The record is a convenience here; the turn and its row stand without it.
+      return null;
     }
+  };
+  if (outside) {
+    // A turn the host made (its notice or brief) is nobody's words here either:
+    // kept, it would read as the person's prompt where their message is the
+    // proof before any work exists (intent creation).
+    if (turnOrigin.kind !== "host") await keepMessage([]);
     return 0;
   }
   // A field-only rename preserves the stored and effective value, so it carries
@@ -635,21 +693,11 @@ try {
   // where doctor and `next` look then, so a tool that runs no hooks is known
   // from the person's first message, before any work.
   recordPreWorkflowHeartbeat(projectDir, "record-human-turn");
-  const mintAllowed = humanTurnMintAllowed();
   if (!mintAllowed && typedPrompt && isTypedGuardSwitchPrompt(typedPrompt)) {
     notes.push(
       "AIDLC Guard Policy: the typed switch was not applied because AIDLC_UNATTENDED=1 withholds human authority on this driver; run it from an attended session.",
     );
   }
-  // A swarm worker's worktree is the copy the engine made for a worker, and a
-  // prompt that arrives there (a `codex exec` worker's brief, on Codex its own
-  // session) is the conductor's, never a person's turn. No authority row lands
-  // in that record (finalize merges it back, and the merge refuses every
-  // authority row), no words are kept, no switch is applied, and nothing is
-  // said about it: there is no person there to read a line. The heartbeat and
-  // the conversational marker still land, as under AIDLC_UNATTENDED=1.
-  const workerWorktree = swarmWorkerWorktreeMeta(projectDir) !== null;
-  const personHere = mintAllowed && !workerWorktree;
   // A turn the host made (its notice or brief, not the person's words): none of
   // the person's authority rides on it. No turn, no kept words, no reply, no
   // switch, no conversational marker. The record keeps that it happened and why,
@@ -713,45 +761,8 @@ try {
       // A switch failure must never block the human's turn.
     }
   }
-  // The message record: proof that a person said this in this chat, and
-  // exactly what they said (aidlc-message-store.ts). Written before the
-  // state-file gate so a message before any work exists is kept, under no
-  // lock (one atomic file). It names no question: which question a message
-  // answers is the conductor's call when it records a decision. Keyed on the
-  // EVENT, never on the text: a prompt-submit whose prompt the host left empty
-  // is a prompt whose words are unknown, not a picker reply. Fail-open: a
-  // store failure never blocks the turn, and the row below still records it.
-  let messageId: string | null = null;
-  if (personHere && !pickerUnanswered && (promptSubmitted || pickerQuestion !== undefined)) {
-    try {
-      const noWords: Pick<StoredMessage, "words" | "settings" | "route"> = {
-        words: null, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
-      };
-      const parsed = promptSubmitted
-        ? (typedPrompt ? await messageParse(typedPrompt) : noWords)
-        : { ...noWords, words: humanResponseText.trim() || null };
-      const full = promptSubmitted ? typedPrompt : humanResponseText;
-      // Every stored string is cut (AIDA F5 on #2107: uncut words once put a record past the reader's cap).
-      const picker = promptSubmitted ? null : pickerReplies(input, MESSAGE_PICKER_MAX_CHARS);
-      const words = parsed.words !== null && parsed.words.length > MESSAGE_TEXT_MAX_CHARS
-        ? parsed.words.slice(0, MESSAGE_TEXT_MAX_CHARS)
-        : parsed.words;
-      const cut = full.length > MESSAGE_TEXT_MAX_CHARS || words !== parsed.words || picker?.cut === true;
-      messageId = saveMessage(projectDir, {
-        session: sessionId || null,
-        at: isoTimestamp(),
-        source: promptSubmitted ? "prompt" : "picker",
-        text: full.slice(0, MESSAGE_TEXT_MAX_CHARS),
-        ...(cut ? { cut: true as const } : {}),
-        picker: picker === null ? null : picker.entries,
-        ...parsed,
-        words,
-        applied,
-      }).id;
-    } catch {
-      // The record is a convenience here; the turn and its row stand without it.
-    }
-  }
+  // The message record (keepMessage above), with the switch lines this turn applied.
+  const messageId = await keepMessage(applied);
   if (existsSync(stateFilePath(projectDir))) {
     // Inside a workflow it lands in the record, before the mint branch and
     // apart from it, so a hook that ran but withheld its mint (AIDLC_UNATTENDED=1,

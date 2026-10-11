@@ -210,7 +210,11 @@ as joining it: in a fresh clone, where a teammate's intent record is committed b
 your `active-intent` cursor is not, the lone record resolves but no session has
 joined it. The first `/aidlc` asks which intent to work on, and AI-DLC's hooks leave
 that record alone until the session runs `/aidlc intent <slug>` (or creates its own
-intent). A session bound by an earlier version keeps working its intent when your
+intent), or until this machine chooses that record (your `active-intent` cursor
+names it, from another chat or your terminal): then the chat joins it on its next
+turn, silently, as a chat opened after the choice would. What you type in a chat
+that has not joined is still kept, on that chat's own message record outside the
+intent record. A session bound by an earlier version keeps working its intent when your
 cursor names the same record; otherwise it is offered a rebind to that intent. A
 session an earlier version stamped but never bound follows its stamp when it
 resumes, so a chat left open across an upgrade continues its own intent.
@@ -244,8 +248,10 @@ SessionStart for it, or hooks installed after the chat opened) is bound at first
 contact by the same rule SessionStart applies to a new chat: to the work the
 shared cursor names when this machine has joined it, else to no record, silently.
 From then on the chat stays on that work; a switch typed in another window moves
-the cursor, not the chat. A command with no session identity at all (your own
-terminal) keeps following the cursor.
+the cursor, not the chat. A chat bound to no record only because the lone record
+here had not been chosen yet is read again at every entry: once the cursor names
+a record, it joins that work the same way, silently. A command with no session
+identity at all (your own terminal) keeps following the cursor.
 
 Once identity is known, an explicit space or intent selector wins, followed by
 that session's binding, then the shared `active-space` and `active-intent`

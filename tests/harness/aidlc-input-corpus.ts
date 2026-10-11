@@ -94,8 +94,8 @@ export const SESSION = "01995000-7a11-7000-8000-00000000d001";
 export const SECOND_SESSION = "01995000-7a11-7000-8000-00000000d002";
 const REVIEWER = "aidlc-product-lead-agent";
 
-// The source each `after` waits for, read where the change lands. `pending` and `chat-identity` wait for a work order
-// nobody has yet (an owner to be named; the chat-identity tab's plan).
+// The source each `after` waits for, read where the change lands. `pending` waits for a work order nobody has yet (an
+// owner to be named); `chat-identity` is the one door reading an unjoined chat again against this machine's choice.
 const coreTool = (name: string) => readFileSync(join(REPO_ROOT, "core", "tools", name), "utf-8");
 export const LANDED: Record<string, () => boolean> = {
   "#2276": () => !coreTool("aidlc-command.ts").includes("DISPATCHER_RESERVED_FUTURE"),
@@ -104,7 +104,7 @@ export const LANDED: Record<string, () => boolean> = {
   WO5: () => !coreTool("aidlc-lib.ts").includes("CONTINUATION_PHRASES"),
   WO6: () => !coreTool("aidlc-orchestrate.ts").includes("This looks like"),
   pending: () => false,
-  "chat-identity": () => false,
+  "chat-identity": () => coreTool("aidlc-lib.ts").includes("rejoinedByThisMachine"),
 };
 const landed = new Map<string, boolean>();
 /** The change an item still waits for, or null when its EXPECTED holds on this source. */
