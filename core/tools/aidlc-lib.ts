@@ -7746,7 +7746,12 @@ export function activeIntentUuid(projectDir: string, space?: string): string | n
   return match?.uuid ? match.uuid : null;
 }
 
-/** A sibling-only swarm worker inherits identity from its attested parent record, not a local registry. */
+/**
+ * A swarm worker without a registry row of its own inherits identity from its
+ * attested parent record: a multi-repo sibling, or a single-repository child
+ * whose checkout carries no row for the intent (the records were not committed
+ * when it was made, or an earlier intent's registry is what the base commit has).
+ */
 export function delegatedWorktreeIntent(projectDir: string): {
   parent: string; space: string; intent: string; intentRecord: string; intentUuid: string;
 } | null {
@@ -7756,11 +7761,11 @@ export function delegatedWorktreeIntent(projectDir: string): {
   assertNoSymlinkInChainOrThrow(projectDir, ".aidlc/worktree-meta.json");
   const meta = JSON.parse(readRegularFileNoFollowOrThrow(metaPath, "worktree intent provenance").toString("utf-8"));
   // Workspace-shell worktrees and non-swarm work retain their existing resolution.
-  if (meta?.repoSelector === null || meta?.swarmUnit === undefined) return null;
+  if (meta?.swarmUnit === undefined) return null;
   const record = typeof meta?.intentRecord === "string"
     ? /^aidlc\/spaces\/([a-z][a-z0-9-]*)\/intents\/([^/]+)$/.exec(meta.intentRecord) : null;
   if (meta?.version !== 1 || !record || record[2] === "." || record[2] === ".." ||
-    typeof meta.repoSelector !== "string" || !meta.repoSelector ||
+    (meta.repoSelector !== null && (typeof meta.repoSelector !== "string" || !meta.repoSelector)) ||
     typeof meta.swarmUnit !== "string" || meta.boltSlug !== boltSlugForUnit(meta.swarmUnit)) {
     throw new Error("Invalid delegated worktree intent provenance");
   }
@@ -7791,7 +7796,7 @@ export function delegatedWorktreeIntent(projectDir: string): {
   if (!intentUuid || unreadable.length || !creation || !path ||
     canonicalPathKey(resolveAuditWorktreePath(parent, path)) !== child ||
     auditBlockField(creation.block, "Intent record") !== meta.intentRecord ||
-    auditBlockField(creation.block, "Repo") !== meta.repoSelector ||
+    auditBlockField(creation.block, "Repo") !== (meta.repoSelector ?? "-") ||
     auditBlockField(creation.block, "Swarm Unit") !== meta.swarmUnit) {
     throw new Error("Delegated worktree intent has no matching immutable creation authority");
   }
