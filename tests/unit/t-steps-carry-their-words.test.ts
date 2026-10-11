@@ -24,6 +24,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  fixedLabelArg,
   knownDirectiveFieldNames,
   numberedProseQuestion,
   questionNote,
@@ -283,11 +284,20 @@ describe("the engine renders every question it asks", () => {
       ["Yes, it is existing code to work on", `${INVOCATION} next --project-type brownfield`],
       ["No, it is a new project", `${INVOCATION} next --project-type greenfield`],
     ]);
+    // A fixed label on a command line is quoted the way bash, zsh, PowerShell and cmd.exe all read as one argument:
+    // the POSIX apostrophe splice ('"'"') reaches the program as three arguments through PowerShell (measured on
+    // Windows PowerShell), so a Kiro IDE person on Windows who picks "I'll edit the files" had a command that could
+    // not record their pick.
     expect(by("plan-approval")).toEqual([
-      ["Approve Plan", `${LOG} answer --stage code-generation --checkpoint plan-approval --details 'Approve Plan'`],
-      ["Request Changes", `${LOG} answer --stage code-generation --checkpoint plan-approval --details 'Request Changes'`],
-      ["I'll edit the files", `${LOG} answer --stage code-generation --checkpoint plan-approval --details ${shellArg("I'll edit the files")}`],
+      ["Approve Plan", `${LOG} answer --stage code-generation --checkpoint plan-approval --details "Approve Plan"`],
+      ["Request Changes", `${LOG} answer --stage code-generation --checkpoint plan-approval --details "Request Changes"`],
+      ["I'll edit the files", `${LOG} answer --stage code-generation --checkpoint plan-approval --details "I'll edit the files"`],
     ]);
+    expect(fixedLabelArg("I'll edit the files")).toBe('"I\'ll edit the files"');
+    expect(fixedLabelArg("Approve all")).toBe('"Approve all"');
+    for (const unsafe of ['say "hi"', "a $HOME here", "tick `x`", "back\\slash", "100% sure", "a | b"]) {
+      expect(fixedLabelArg(unsafe), unsafe).toBe(shellArg(unsafe));
+    }
     expect(by("guard-recovery")).toEqual([
       ["Ask for changes", `${LOG} answer --stage domain-design --checkpoint guard-recovery --details request-changes`],
       ["Review it again", `${LOG} answer --stage domain-design --checkpoint guard-recovery --details request-review`],

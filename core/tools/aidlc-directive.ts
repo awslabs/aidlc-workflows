@@ -1285,6 +1285,15 @@ export function numberedProseQuestion(prompt: string, options: readonly Pick<Ask
   return `${prompt}\n\n${[...lines, `${options.length + 1}. ${OTHER_OPTION_LINE}`].join("\n")}\n\n${NUMBERED_REPLY_HINT}`;
 }
 
+// A fixed label the engine puts on a command line (a plan question's choice):
+// double-quoted when the label holds nothing a shell reads inside double quotes,
+// which bash, zsh, PowerShell and cmd.exe all group the same way; POSIX
+// single quotes otherwise. The POSIX splice for an apostrophe ('"'"') reaches a
+// program as three arguments through PowerShell, and "I'll edit the files" has one.
+export function fixedLabelArg(label: string): string {
+  return /^[^"$`\\%!^&|<>\r\n]+$/.test(label) ? `"${label}"` : shellArg(label);
+}
+
 // The choices of an engine question, from the routes it already carries. The
 // routing question's come from its emit site, which knows its option order.
 function askChoices(d: Record<string, unknown>, invocation: string, logInvocation: string): AskChoice[] | null {
@@ -1319,7 +1328,7 @@ function askChoices(d: Record<string, unknown>, invocation: string, logInvocatio
       const plan = isPlainObject(d.plan_approval) ? d.plan_approval : {};
       return (Array.isArray(plan.choices) ? plan.choices : []).filter((c): c is string => typeof c === "string").map((label) => ({
         label,
-        command: `${logInvocation} answer --stage code-generation --checkpoint plan-approval --details ${shellArg(label)}`,
+        command: `${logInvocation} answer --stage code-generation --checkpoint plan-approval --details ${fixedLabelArg(label)}`,
       }));
     }
     case "guard-recovery":
