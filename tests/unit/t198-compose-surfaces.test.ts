@@ -615,9 +615,17 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(created.message)).toContain("--depth comprehensive");
   });
 
-  test("plain prose in an unselected workspace still asks which work it is (unchanged)", () => {
+  test("plain prose in an unselected workspace still asks which work it is, after the agent has read the words", () => {
     seedTwoRecordsNoneSelected();
-    const ask = directiveOf(runNext(proj, ["Fix the login crash when the session expires"]).out);
+    // Words alone where work is here but none is selected first reach the agent
+    // (t-carry-on-continues-the-work pins that print); its "new work" reading
+    // re-runs `next --request <id>`, which is the offer this case is about.
+    const read = directiveOf(runNext(proj, ["Fix the login crash when the session expires"]).out);
+    expect(read.kind).toBe("print");
+    expect(String(read.message)).toContain("none is selected in this chat");
+    const id = /--request ([0-9a-f]{8})/.exec(String(read.message))?.[1];
+    expect(id).toBeDefined();
+    const ask = directiveOf(runNext(proj, ["--request", id!]).out);
     const confirm = String(ask.confirm_command);
     const next = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
     expect(next.kind).toBe("ask");
