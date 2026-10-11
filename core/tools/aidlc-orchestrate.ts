@@ -3730,9 +3730,16 @@ function stillParkedLine(): string {
 // summary confirmation after one, or the Unit's checkpoint. A paused walk is
 // already said to be paused, and a block whose Units are all covered has no
 // step of its own, so neither gets a line. Off a Unit walk, Current Stage is it.
-function withWorkPicksUpLine<T extends Directive>(directive: T, pd: string, scope: string, stateContent: string): T {
+// When the work carries on in the same turn (`onlyOnWalk`), the step in hand is
+// where it goes, so the line is said only where the agent could not read that
+// from Current Stage: a Unit walk's own step. A Codex run printed "The work
+// picks up at Code Generation." to the person while nothing had moved.
+function withWorkPicksUpLine<T extends Directive>(
+  directive: T, pd: string, scope: string, stateContent: string, onlyOnWalk = false,
+): T {
   const current = (getField(stateContent, "Current Stage") ?? "").trim();
   const walk = scope ? unitMajorWalkBeat(pd, scope, stateContent, current) : null;
+  if (onlyOnWalk && walk === null) return directive;
   const at = walk === null
     ? nodeForSlug(current)?.name ?? ""
     : walk.step.kind === "work"
@@ -8693,12 +8700,11 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       stillParked !== null || settingEndsTurn(pd, currentStateScope, stateContent)
         ? turnEndingPrint(saidThenStop)
         : printDirective(saidThenCarryOn);
-    // Where the work picks up is said only where the turn ends (the person acts
-    // next); the work the agent carries on with in the same turn paused nowhere,
-    // and a Codex run printed "The work picks up at Code Generation." to the
-    // person while nothing had moved.
+    // Where the work picks up: always where the turn ends (the person acts
+    // next); where the agent carries on in the same turn, only on a Unit walk,
+    // whose step Current Stage does not show (see withWorkPicksUpLine).
     const pickedUpIfTurnEnds = (print: PrintDirective): PrintDirective =>
-      turnEndingPrints.has(print) ? withWorkPicksUpLine(print, pd, currentStateScope, stateContent) : print;
+      withWorkPicksUpLine(print, pd, currentStateScope, stateContent, !turnEndingPrints.has(print));
     if (modifiers.length > 0 && !describedWork) {
       const command = configSetCommand(modifiers);
       withdrawSettingWords(pd);
