@@ -12603,6 +12603,11 @@ export function readVerificationCommandFile(projectDir: string, file: string): V
 export const ANSWER_TEXT_DIR = ".aidlc-engine/answer-text";
 const ANSWER_TEXT_MAX_BYTES = 64 * 1024;
 
+/** The project folder where a person's request for `next --request-file` is
+ *  written, so the words reach the engine without passing through any shell.
+ *  The engine reads only a plain file directly inside it. */
+export const REQUEST_TEXT_DIR = "aidlc/.aidlc-request-text";
+
 /**
  * Read one answer text file the agent wrote, then remove it. The path is
  * record-relative and must name a plain file inside ANSWER_TEXT_DIR, reached

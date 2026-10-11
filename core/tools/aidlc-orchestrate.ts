@@ -296,6 +296,7 @@ import {
   nextTokenKind,
   readNextLine,
   READ_ONLY_FLAGS,
+  REQUEST_TEXT_DIR,
   readKiroIdeLegacyPlanApprovalHost,
   readAllAuditShards,
   QUESTION_TURN_REPLY,
@@ -16393,11 +16394,10 @@ function engineWorkflowSelection(projectDir: string): WorkflowSelection {
   }
 }
 
-// The folder where the agent writes a person's request for `next
-// --request-file`, so the words reach AI-DLC with no shell on the way: on
+// REQUEST_TEXT_DIR is the folder where the agent writes a person's request for
+// `next --request-file`, so the words reach AI-DLC with no shell on the way: on
 // Windows, cmd.exe ends a command at a line break and replaces a %NAME% pair
 // even inside quotes, and the aidlc launcher is read by cmd.exe again.
-const REQUEST_TEXT_DIR = "aidlc/.aidlc-request-text";
 const REQUEST_TEXT_MAX_BYTES = 64 * 1024;
 
 // The file's words take the flag's place as one argument after `--`, so none
