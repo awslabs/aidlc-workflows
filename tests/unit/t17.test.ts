@@ -273,8 +273,8 @@ describe("t17 get/set/checkbox/count", () => {
   test("4: get errors on missing field", () => {
     proj = createTestProject();
     seedStateFile(proj, INIT_DONE);
-    // .sh: `... || true` then assert_contains "error"
-    expect(runState(proj, ["get", "Nonexistent Field"]).combined).toContain("error");
+    // A field the work does not set exits 1 with one plain line (#2264).
+    expect(runState(proj, ["get", "Nonexistent Field"])).toMatchObject({ rc: 1, stderr: '"Nonexistent Field" is not set in this work.\n' });
   });
 
   test("5: set updates a single field", () => {

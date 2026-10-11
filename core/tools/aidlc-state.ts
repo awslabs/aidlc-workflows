@@ -1095,7 +1095,11 @@ function handleGet(args: string[]): void {
   const content = readStateFile(pd);
   const value = getField(content, field);
   if (value === null) {
-    error(`Field not found: ${field}`);
+    // A line this work does not set is an answer, not a failed command, so it
+    // leaves no ERROR_LOGGED row (#2264). The exit stays non-zero so a
+    // misspelt field name still fails visibly.
+    console.error(`"${field}" is not set in this work.`);
+    process.exit(1);
   }
   console.log(value);
 }

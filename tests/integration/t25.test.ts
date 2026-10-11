@@ -75,10 +75,10 @@
 // askedQuestions=0 — so this is a §5-A2 LOGIC journey (an sdk port), NOT a
 // rendered-gate journey: answerScript stays "default" (no gate fires).
 //
-// Any BENIGN ERROR_LOGGED probes the run emits (e.g. aidlc-state get
-// "Initial Intent" -> Field not found) are routine optional-field reads;
-// the run still succeeds. This test does NOT assert against ERROR_LOGGED
-// presence/absence — it is noise, not a failure.
+// An optional-field read the run makes (e.g. aidlc-state get "Initial
+// Intent" on a work that does not set it) exits 1 with one plain line and
+// writes no ERROR_LOGGED row (#2264); the run still succeeds. This test does
+// NOT assert against ERROR_LOGGED presence/absence.
 //
 // It SPENDS TOKENS — driveAidlc drives the real /aidlc on Opus/Bedrock.
 
