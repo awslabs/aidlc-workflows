@@ -29,7 +29,6 @@ import {
   type RunOptions,
   say,
   SECOND_SESSION,
-  SESSION,
 } from "../harness/aidlc-input-corpus.ts";
 import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { sessionPidMapDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -150,6 +149,8 @@ describe("next takes the person's own /aidlc line when the agent's command carri
     expect(asked.directive.kind, asked.out).toBe("ask");
     const id = requestId(String(asked.directive.confirm_command ?? ""));
     expect(id).toBeDefined();
+    // The record keeps a message's time to the second; the reply lands in a later one, as a typed reply does.
+    await Bun.sleep(1100);
     await say(proj, "/aidlc go ahead", "kiro-ide");
     const { directive, out } = await next(proj, "kiro-ide", []);
     expect(directive.kind, out).toBe("print");
