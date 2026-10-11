@@ -377,11 +377,16 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(d.proposed_scope).toBe("bugfix");
     expect(String(d.question)).toContain('I\'d run the "bugfix" plan for:');
     expect(String(d.question)).toContain("Do you want me to go ahead with it");
-    // The answers a host shows as options, worded for the person.
+    // The answers a host shows as options, worded for the person, in the order the question names them: go ahead,
+    // use a different plan, or tailor one. The middle one carries no command (the pick needs the plan named; the
+    // step's note has the agent show the plans the step lists and run the one named), so the option the question
+    // names is on the menu and the first question stays three choices plus Other.
     expect(d.choices).toEqual([
       { label: 'Go ahead with the "bugfix" plan', command: d.confirm_command },
+      { label: "Use a different plan" },
       { label: "Tailor a plan to this task", command: d.compose_command },
     ]);
+    expect((d.scope_commands as unknown[]).length).toBeGreaterThan(1);
   });
 
   test("depth and test strategy typed with the description survive the plan offer", () => {

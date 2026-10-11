@@ -2606,6 +2606,7 @@ function scopeConfirmAskDirective(
   const stored = saveQuestion(projectDir, intentText, proposedScope, "front", undefined, newWork, derivedFrom, undefined, settings);
   const confirmCommand = `${tool} next --scope ${scopeArg(proposedScope)} --request ${stored.id}${carried}`;
   const composeCommand = `${tool} next compose --request ${stored.id}${carried}`;
+  const scopes = scopeCommands(`${tool} next`, stored.id, carried, projectDir, declaredType);
   return {
     kind: "ask",
     ask_type: "scope-confirm",
@@ -2614,11 +2615,16 @@ function scopeConfirmAskDirective(
     proposed_scope: proposedScope,
     confirm_command: confirmCommand,
     compose_command: composeCommand,
-    scope_commands: scopeCommands(`${tool} next`, stored.id, carried, projectDir, declaredType),
+    scope_commands: scopes,
     // The answers the question offers, worded for the person, so a host that
-    // shows options shows these instead of ones the agent makes up.
+    // shows options shows these instead of ones the agent makes up, in the order
+    // the question names them. "Use a different plan" carries no command: the
+    // pick needs the plan named, and the step's note has the agent show the
+    // plans this step lists (scope_commands, each with its length) and run the
+    // one they name, as the menu did before the step carried its choices.
     choices: [
       { label: `Go ahead with the "${proposedScope}" plan`, command: confirmCommand },
+      { label: "Use a different plan" },
       { label: "Tailor a plan to this task", command: composeCommand },
     ],
   };

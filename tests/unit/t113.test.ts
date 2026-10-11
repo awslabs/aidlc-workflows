@@ -169,6 +169,7 @@ function ask(): Record<string, unknown> {
         label: "Go ahead with the \"bugfix\" plan",
         command: "bun .claude/tools/aidlc-orchestrate.ts next --scope bugfix --request a1b2c3d4",
       },
+      { label: "Use a different plan" },
       {
         label: "Tailor a plan to this task",
         command: "bun .claude/tools/aidlc-orchestrate.ts next compose --request a1b2c3d4",
@@ -636,17 +637,21 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     }
   });
 
-  test("every ask may carry its choices, each a label with an optional detail and command; the scope offer requires its two commands", () => {
+  test("every ask may carry its choices, each a label with an optional detail and command; the scope offer always carries them", () => {
     // The engine adds the choices to every question it asks (withAgentNotes); a hand-built one may carry them too.
     expect(validateDirective({ ...composeOfferAsk(), choices: (ask() as { choices: unknown }).choices }).valid).toBe(true);
     expect(validateDirective({ ...composeOfferAsk(), choices: [{ label: "Tailor a plan", detail: "with you" }] }).valid).toBe(true);
     for (const entry of [{ command: "x" }, { label: 1, command: "x" }, { label: "Go", command: "x", extra: 1 }, { label: "Go", command: 2 }]) {
       expect(validateDirective({ ...composeOfferAsk(), choices: [entry] }).valid).toBe(false);
     }
-    // The scope offer's answers are its two commands: each choice carries one.
-    for (const entry of [{ label: "Go ahead" }, { command: "x" }, { label: 1, command: "x" }, { label: "Go", command: "x", extra: 1 }]) {
+    // The scope offer always carries its choices; a choice may omit its command when the pick needs one more answer
+    // ("Use a different plan" needs the plan named).
+    expect(validateDirective({ ...ask(), choices: [{ label: "Use a different plan" }] }).valid).toBe(true);
+    for (const entry of [{ command: "x" }, { label: 1, command: "x" }, { label: "Go", command: "x", extra: 1 }, { label: "Go", command: 2 }]) {
       expect(validateDirective({ ...ask(), choices: [entry] }).valid).toBe(false);
     }
+    const { choices: _choices, ...withoutChoices } = ask() as Record<string, unknown>;
+    expect(validateDirective(withoutChoices).valid).toBe(false);
   });
 
   test("intent-pick rejects malformed selector-command entries", () => {
