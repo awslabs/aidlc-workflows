@@ -364,6 +364,7 @@ import {
   harnessDir,
   hookActivation,
   hookChildEnv,
+  HOOK_HEARTBEAT_STALE_SLACK_MS,
   hookLiveness,
   hooksOffAgentStep,
   OWN_TERMINAL_PRESENCE_STEP,
@@ -813,7 +814,20 @@ function hooksOffStop(projectDir: string, selection: WorkflowSelection, nextArgs
       return step;
     }
     const workflow = { intent: selection.intent, space: selection.space };
-    if (!hookLiveness(projectDir, undefined, workflow).neverFired) return null;
+    const liveness = hookLiveness(projectDir, undefined, workflow);
+    if (!liveness.neverFired) return null;
+    // The stop asks the agent to edit a settings file, so it waits for the
+    // same staleness slack `stale` already uses before concluding "no
+    // heartbeat yet" means "never fired": on the first turn of a fresh
+    // project, `intent-create` writes this workflow's newest stage event in
+    // the same breath that creates the record, before this harness's own hook
+    // on the agent's shell command -- the thing that is supposed to beat the
+    // engine to the heartbeat -- has had a turn to run for the command that
+    // follows it. Treating that as proof the hooks are off is a false
+    // positive (#2263). `hookHealthNotice`'s advisory line and `doctor`'s
+    // diagnostic read the same liveness without this grace: only the hard
+    // stop that interrupts the agent's turn waits it out.
+    if (Date.now() - liveness.newestStageOrGateEvent!.timestampMs <= HOOK_HEARTBEAT_STALE_SLACK_MS) return null;
     if (hookStatusPathLinked(projectDir, workflow.intent, workflow.space)) return null;
   } catch {
     // An unreadable record proves nothing about the hooks.

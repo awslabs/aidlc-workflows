@@ -9,7 +9,12 @@
 // workflow with stage progress, and no heartbeat at all in that record. There
 // is no stop when the run is unattended, when the person switched the presence
 // check off, when the conversation has not joined the record, or when a link
-// on the way to the status files keeps any heartbeat from being written.
+// on the way to the status files keeps any heartbeat from being written. A
+// record whose newest stage or gate event is still within the heartbeat
+// staleness slack is "no evidence yet", not hooks-off: on the first turn of a
+// fresh project, `intent-create` writes the whole init phase before the
+// harness's own hook on the agent's shell command has had a turn to run for
+// the `next` that immediately follows it (#2263).
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -159,6 +164,26 @@ function run(proj: string, argv: string[], env: NodeJS.ProcessEnv, input = "") {
   return { code: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
+// Backdates every audit event's `**Timestamp**:` line so the workflow's
+// newest stage or gate event is older than the hook-liveness slack
+// `hooksOffStop` now waits out before concluding a never-fired record is
+// hooks-off (#2263): on a real first turn, `intent-create` writes its whole
+// init phase in the same breath that creates the record, before this
+// harness's own hook on the agent's shell command has had a turn to run for
+// the `next` that follows it. These tests assert what happens once that
+// chance has passed and still nothing fired, so they age the record instead
+// of waiting out the slack for real.
+function age(proj: string): void {
+  const intentsRoot = join(proj, "aidlc", "spaces", "default", "intents");
+  const old = new Date(Date.now() - 10 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  for (const shard of readdirSync(intentsRoot, { recursive: true }).map(String)) {
+    if (!shard.replace(/\\/g, "/").match(/\/audit\/[^/]+\.md$/)) continue;
+    const path = join(intentsRoot, shard);
+    const text = readFileSync(path, "utf-8");
+    writeFileSync(path, text.replace(/^\*\*Timestamp\*\*: .*/gm, `**Timestamp**: ${old}`), "utf-8");
+  }
+}
+
 function intentCreate(proj: string, h: Harness): void {
   const r = run(proj, [
     join(proj, h.dir, "tools", "aidlc-utility.ts"),
@@ -171,6 +196,10 @@ function intentCreate(proj: string, h: Harness): void {
     "fix the flag parser",
   ], attendedEnv());
   expect(r.code, r.stderr).toBe(0);
+  // The stop waits for the slack to pass before reading a never-fired record
+  // as hooks-off; age the just-written stage events past it so these tests
+  // exercise that state instead of the fresh "no evidence yet" one.
+  age(proj);
 }
 
 type Printed = { kind: string; message?: string };
@@ -205,6 +234,32 @@ describe("next stops with the agent's step when the engine knows the hooks never
       expect(message).not.toMatch(/<(entry|next|folder)>/);
       expect(message).not.toMatch(/AIDLC_SKIP_|--bypass|guard\.[a-z-]+ off/);
       beat(proj, "reviewer-scope");
+      expect(isStop(next(proj, h))).toBe(false);
+    });
+  }
+
+  // #2263: the first `next` right after `intent-create`, both run as separate
+  // processes with no heartbeat yet, is not read as hooks-off. On a real
+  // first turn this harness's own hook on the agent's shell command has not
+  // had a turn to run for the `next` call yet either; the record's newest
+  // stage event is still within the staleness slack, so this is "no evidence
+  // yet", not "never fired".
+  for (const h of HARNESSES) {
+    test(`${h.name}: a fresh first turn is not read as hooks-off before the slack has passed`, () => {
+      const proj = installed(h);
+      const r = run(proj, [
+        join(proj, h.dir, "tools", "aidlc-utility.ts"),
+        "intent-create",
+        "--scope",
+        "bugfix",
+        "--label",
+        "hooks off",
+        "--arguments",
+        "fix the flag parser",
+      ], attendedEnv());
+      expect(r.code, r.stderr).toBe(0);
+      // No age(): the stage events `intent-create` just wrote are as fresh as
+      // they are on a real first turn.
       expect(isStop(next(proj, h))).toBe(false);
     });
   }
