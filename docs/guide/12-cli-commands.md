@@ -339,6 +339,9 @@ space; add `--json` for structured output (every row, archived included) and
 `--all` to show archived intents in the human listing. `/aidlc intent <name>`
 switches the per-user active-intent cursor to an existing intent by unambiguous
 slug or full record-dir name. It never creates an intent or advances a workflow.
+A name typed alone after `/aidlc` (`/aidlc auth`) selects that intent the same
+way when it is exactly one intent's name here, and the switch line names the
+intent you were on and the command that goes back.
 A word after `intent` that is neither a verb nor an existing intent's exact name
 (a typo, or something intents cannot do) is handed to the agent with the verbs
 and the recent intent names, to read what you meant or ask you once; anything

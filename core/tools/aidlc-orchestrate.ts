@@ -3025,8 +3025,18 @@ function approvedPlanUndoReading(projectDir: string, stateContent: string): stri
 // change to this work: the conductor reads which, the same split as
 // openGateReplyDirective. The person's words never travel in the re-entry
 // report; the engine kept them for the other reading.
-function reentryReplyDirective(requestId: string, undo = ""): PrintDirective {
+function reentryReplyDirective(requestId: string, undo = "", work: string[] = []): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
+  // The pieces of work here by exact name, the one in progress marked: the
+  // agent reads whether the words name exactly one ("the auth one" with auth
+  // and auth-fix fits two) and asks once when they could name more. A switch
+  // ends the turn, as the switch step does (live, the agent ran `next` after
+  // it and started the other work's stage unasked).
+  const named = work.length < 2 ? "" :
+    ` The pieces of work here are: ${work.join(", ")}. If their words name exactly one of them, run ` +
+    `\`${aidlcDispatcherInvocation("intent")} switch <name>\`, say the line it prints, then stop: no \`next\`, no stage, ` +
+    "no offer to resume. If their words fit more than one (a word several names share, such as a name that is part " +
+    "of another), ask them once in plain words which they meant, then stop.";
   return printDirective(
     `${undo}Work is in progress, and the person's words may ask to redo, jump to a stage, or start fresh. Read them. If ` +
       `they do, run \`${orchestrate} report --result resumed --choice <redo|jump|fresh>\` with the choice you read ` +
@@ -3034,8 +3044,15 @@ function reentryReplyDirective(requestId: string, undo = ""): PrintDirective {
       "when they named a Unit or said every Unit), then follow the print it returns. If they are about something " +
       `else, such as new work or a change to this work, or you cannot tell which, run \`${orchestrate} next ` +
       `--request ${requestId}\` and follow what it returns: the engine kept their words and asks the person where ` +
-      "that work belongs, and a redo or jump they say there is read the same way.",
+      `that work belongs, and a redo or jump they say there is read the same way.${named}`,
   );
+}
+
+// The pieces of work in the space, newest first, the selected one marked: exact
+// names, for the agent to read the person's words against.
+function workNamesHere(pd: string, selection: { space: string; intent: string | null }): string[] {
+  const current = listIntents(pd, selection.space, selection.intent).find((i) => i.active)?.slug;
+  return recentWorkspaceRecordNames(pd, "intent").names.map((name) => (name === current ? `${name} (in progress)` : name));
 }
 
 // Whether the person has spoken since the workflow was parked: a turn of
@@ -7731,6 +7748,18 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
+  // A name typed alone (`/aidlc auth`) that is exactly one piece of work here,
+  // by slug or record dir, selects it, as `intent auth` does: an exact name is
+  // structure the tool owns, and no other word of theirs is read here. Any
+  // other words alone stay the agent's to read (Branch 9c).
+  if (
+    flags.workspaceCommand === undefined && typeof flags.intent === "string" && args.length === 1 &&
+    !bareContinuation && nextArgsAreOnlyWords(args) &&
+    workspaceRecordExists(resolveProjectDir(projectDir), "intent", args[0])
+  ) {
+    flags.workspaceCommand = { kind: "switch", noun: "intent", name: args[0], explicit: false };
+  }
+
   // Branch 1b — workspace commands (space/space-create/intent) dispatch
   // BEFORE any state inspection, mirroring Branch 1. This MUST precede
   // resolveProjectDir/loadState: a switch works whether or not a workflow is
@@ -8904,7 +8933,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
-      emit(reentryReplyDirective(words.id, undo));
+      emit(reentryReplyDirective(words.id, undo, workNamesHere(pd, selection)));
       return;
     }
   }

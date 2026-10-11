@@ -8999,7 +8999,16 @@ function handleIntent(
   // What the person sees after picking or switching: the work they are on now,
   // by the name they know it by.
   const where = space === DEFAULT_SPACE ? "" : ` in space \`${space}\``;
-  process.stdout.write(`Now working on \`${intentDisplayLabel(match)}\`${where}.\n`);
+  // The way back, when this chat was on another record: by the name they know
+  // it by, or its record dir when two records share the slug.
+  const prior = selection.intent && selection.intent !== match.dirName
+    ? intents.find((i) => i.dirName === selection.intent)
+    : undefined;
+  const priorName = prior === undefined
+    ? null
+    : intents.filter((i) => i.slug === prior.slug && i.dirName !== null).length > 1 ? prior.dirName : intentDisplayLabel(prior);
+  const back = priorName === null ? "" : ` You were on \`${priorName}\`: \`${entrySkillInvocation()} intent ${priorName}\` goes back.`;
+  process.stdout.write(`Now working on \`${intentDisplayLabel(match)}\`${where}.${back}\n`);
 }
 
 // A switch this command cannot tie to a chat was typed somewhere else: another

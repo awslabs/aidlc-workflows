@@ -72,7 +72,7 @@ function endReached(item: CorpusItem, proj: string, start: Snapshot): boolean {
     if (end.plan === "approved") return events.includes("PLAN_APPROVAL_RECORDED");
     const after = snapshot(proj);
     if (end.set?.length) return end.set.every(([field, value]) => (getField(after.stateFile, field) ?? "").includes(value));
-    if (end.active) return (after.active ?? "").includes(end.active);
+    if (end.active) return after.active === end.active;
     if (typeof end.work === "object") return after.records > start.records;
   } catch {
     /* an unreadable record is not the end */
@@ -121,7 +121,7 @@ function judge(item: CorpusItem, proj: string, prompt: string, start: Snapshot, 
       }
     }
   }
-  if (end.active && !paused && !(after.active ?? "").includes(end.active)) failures.push(`active record ${after.active ?? "-"}, expected ${end.active}`);
+  if (end.active && !paused && after.active !== end.active) failures.push(`active record ${after.active ?? "-"}, expected ${end.active}`);
   for (const [field, value] of paused ? [] : end.set ?? []) {
     const got = getField(after.stateFile, field) ?? "";
     if (!got.includes(value)) failures.push(`${field}: ${JSON.stringify(got)}, expected to contain ${JSON.stringify(value)}`);

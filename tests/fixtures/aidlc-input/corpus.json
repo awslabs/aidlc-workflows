@@ -367,7 +367,8 @@
         "settings": [],
         "no_ask": true,
         "never": [
-          "auth-fix"
+          "engine intent auth-fix",
+          "intent switch auth-fix`"
         ]
       },
       "end": {
@@ -4259,21 +4260,28 @@
     "category": "ambiguous",
     "input": "auth",
     "state": "two-similar-records",
-    "meaning": "the person means: switch to auth or auth-fix; which one is unclear, the agent asks once",
+    "meaning": "the person means: switch to the piece of work named auth, its exact name; auth-fix is another record, not a reason to ask",
     "expected": {
       "engine": {
         "kinds": [
           "print"
         ],
         "words": "auth",
-        "settings": []
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "engine intent auth`"
+        ],
+        "never": [
+          "--request",
+          "intent auth-fix"
+        ]
       },
       "end": {
-        "work": "same",
-        "asks": 1
+        "active": "auth",
+        "asks": 0
       }
-    },
-    "ambiguous": true
+    }
   },
   {
     "id": "am06-w",
@@ -4375,7 +4383,10 @@
           "print"
         ],
         "words": "the auth one please",
-        "settings": []
+        "settings": [],
+        "names": [
+          "The pieces of work here are: auth-fix (in progress), auth, fixture."
+        ]
       },
       "end": {
         "asks": 1,
