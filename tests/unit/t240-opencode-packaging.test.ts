@@ -254,6 +254,43 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     expect(cfg.permission?.bash?.["bun .aidlc/tools/*"]).toBe("allow");
     expect(cfg.permission?.edit?.[".aidlc/tools/**"]).toBe("ask");
     expect(cfg.permission?.edit?.[".aidlc/hooks/**"]).toBe("ask");
+    // AI-DLC ships no "*" rule: the person's own opencode settings decide their
+    // commands and edits; only a recursive delete and a push ask.
+    expect(cfg.permission?.bash?.["*"]).toBeUndefined();
+    expect(cfg.permission?.edit?.["*"]).toBeUndefined();
+    expect(cfg.permission?.bash?.["rm -r*"]).toBe("ask");
+    expect(cfg.permission?.bash?.["git push *"]).toBe("ask");
+  });
+
+  // opencode v1.18.18 packages/opencode/src/util/wildcard.ts match() (the same
+  // in v1.18.34 packages/core): `*` is anything, anchored at both ends, and a
+  // pattern ending in " *" also matches the command alone; the last matching
+  // rule decides (permission/index.ts evaluate), none means opencode's own default.
+  function opencodeMatch(command: string, pattern: string): boolean {
+    let escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+    if (escaped.endsWith(" .*")) escaped = `${escaped.slice(0, -3)}( .*)?`;
+    return new RegExp(`^${escaped}$`, "s").test(command);
+  }
+
+  test("8b: the shipped asks catch a recursive delete and a push, nothing else, and never AI-DLC's own command", () => {
+    const cfg = JSON.parse(readFileSync(join(OPENCODE_ROOT, "opencode.json"), "utf-8")) as {
+      permission: { bash: Record<string, string> };
+    };
+    const rules = Object.entries(cfg.permission.bash);
+    const decide = (command: string) => rules.filter(([pattern]) => opencodeMatch(command, pattern)).at(-1)?.[1];
+    for (const command of [
+      "rm -rf dist", "rm -rf", "rm -r dist", "rm -rfv dist", "rm -rf dist 2>/dev/null",
+      "git push", "git push origin main", "git push --force-with-lease",
+    ]) {
+      expect(decide(command), command).toBe("ask");
+    }
+    for (const command of [
+      "rm file.txt", "rm -f file.txt", "rm -- -rfile", "rmdir dist",
+      "git pushx", "git log --oneline", "bun test", "bun src/app.js", "ls -la",
+    ]) {
+      expect(decide(command), command).toBeUndefined();
+    }
+    expect(decide("bun .aidlc/tools/aidlc.ts engine orchestrate next")).toBe("allow");
   });
 
   // Each allowed bash call continues through two real core-hook subprocesses.
