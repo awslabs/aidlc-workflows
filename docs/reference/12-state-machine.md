@@ -827,11 +827,11 @@ person typed the switch and `<value> (set by a command)` otherwise.
 A same-value source change still counts as a change; `review adversarial`
 clears `Review Override` to an empty string.
 
-The human-turn hook applies a typed fence or Guard Policy switch when the
-prompt arrives, before its ledger state-file gate, through
-`applyTypedGuardSwitchPrompt(projectDir, sessionId, prompt)`.
-The accepted lowering forms include `/aidlc --guard-policy relaxed|off`,
-`guard policy relaxed|off`, and `/aidlc config set guard.<fence> off`.
+A typed fence or Guard Policy switch is applied by the setter the agent runs
+from its first `next` (`config set`), under the person-turn rule; the human-turn
+hook records the message and applies nothing.
+The accepted lowering forms include `/aidlc --guard-policy relaxed|off` and
+`/aidlc config set guard.<fence> off`.
 Codex uses `$aidlc` instead of `/aidlc`, including in refusals.
 Both config and flags-first forms accept companion intent settings plus
 `--intent <name>` and `--space <name>`; omitted selectors use the hook payload
@@ -941,7 +941,7 @@ and do not enforce that scope comparison.
 | `SESSION_RESUMED` | `hooks/aidlc-session-start.ts` | `source=resume` |
 | `SESSION_COMPACTED` | `hooks/aidlc-validate-state.ts` | Emitted at PreCompact (not at next SessionStart) to avoid duplication |
 | `SESSION_ENDED` | `hooks/aidlc-session-end.ts` | Includes `Reason` field from Claude Code |
-| `HUMAN_TURN` | `hooks/aidlc-record-human-turn.ts` (+ per-harness prompt-submit adapters) | One per observed prompt-submit or answered-widget seam unless the driver declares `AIDLC_UNATTENDED=1` or the prompt arrives in a swarm worker's worktree (a worker's brief is the conductor's, not a person's turn, and the worktree record merges back into a main record whose merge refuses every authority row); the approval/interview gate requires one since the last gate resolution, and a stage gate one sent after the gate was shown. A turn that was only a command to AIDLC (an AIDLC command (`/aidlc ...`, `/aidlc-<runner> ...`, `$aidlc ...` with a flag, scope, verb or noun that `next` reads; words alone after `/aidlc` or `$aidlc`, such as `/aidlc approve the code plan`, are a reply kept without the entry, and so is other text that starts with a slash), a typed switch, or the break-glass phrase) carries `Reply: command`, and a question about a switch ("skip plan approval?") carries `Reply: question`, which also lowers no check: it is presence for what the command asks for, but a decision on an open question (a stage gate, an answer, a Plan Approval correction, a recovery ask) does not count it as a reply, and the refusal tells the conductor to carry out the command and leave the question open. This is presence/freshness evidence, not an authenticated transcript or proof that later caller-supplied decision text was authored by the human. The row's optional `Message Id:` names the message record the hook wrote for the turn (`aidlc/.aidlc-sessions/messages/<id>.json`: the words as delivered and the typed settings); rows without it are read as before. |
+| `HUMAN_TURN` | `hooks/aidlc-record-human-turn.ts` (+ per-harness prompt-submit adapters) | One per observed prompt-submit or answered-widget seam unless the driver declares `AIDLC_UNATTENDED=1` or the prompt arrives in a swarm worker's worktree (a worker's brief is the conductor's, not a person's turn, and the worktree record merges back into a main record whose merge refuses every authority row); the approval/interview gate requires one since the last gate resolution, and a stage gate one sent after the gate was shown. A turn that was only a command to AIDLC (an AIDLC command (`/aidlc ...`, `/aidlc-<runner> ...`, `$aidlc ...` with a flag, scope, verb or noun that `next` reads; words alone after `/aidlc` or `$aidlc`, such as `/aidlc approve the code plan`, are a reply kept without the entry, and so is other text that starts with a slash), a typed switch, or the break-glass phrase) carries `Reply: command`: it is presence for what the command asks for, but a decision on an open question (a stage gate, an answer, a Plan Approval correction, a recovery ask) does not count it as a reply, and the refusal tells the conductor to carry out the command and leave the question open. A question about a switch ("skip plan approval?") is the agent's to answer and carries no mark; an older record's `Reply: question` for one is read the same way as a command turn. This is presence/freshness evidence, not an authenticated transcript or proof that later caller-supplied decision text was authored by the human. The row's optional `Message Id:` names the message record the hook wrote for the turn (`aidlc/.aidlc-sessions/messages/<id>.json`: the words as delivered and the typed settings); rows without it are read as before. |
 | `HOST_TURN` | `hooks/aidlc-record-human-turn.ts` (the Kiro CLI and Kiro IDE adapters decide for their hosts) | Advisory, never a human turn: a prompt the host made for the agent (a Kiro Workflows brief or finish notice, a Kiro sub-agent synthesis prompt, a Claude Code background-task notification) reached the prompt-submit seam and was not counted as the person's turn. Told apart by the host's own record or by the whole host sentence; anything unknown is a person's turn. Fields: optional Session, `Origin: host`, Reason, Source (`record`, `template`); never the prompt text, and no message record is written for it. `HUMAN_TURN` rows carry `Origin: person` and `Source: typed` or `picker` |
 | `SUBAGENT_COMPLETED` | `hooks/aidlc-log-subagent.ts` | Records subagent completion via SubagentStop hook. For a reviewer with open review requests, `Review File Digest` carries `<review file>=<sha256 or absent>` per request: what the reviewer left when it finished. `log review --verdict` compares it with the bytes it records; a difference marks the verdict row `Review Edited After Reviewer: yes` (the verdict stands as the file reads) and the approval gate tells the person in one line that the review file was edited after the reviewer finished (under relaxed or off, as an accepted change said once with the verdict) |
 | `SUBAGENT_PROMPT_UNMATCHED` | `tools/aidlc-audit.ts` | Advisory, never a human turn: the Copilot adapter's `record-human-turn` saw a prompt within seconds of a subagent start in the same chat that matched no recorded subagent brief. The prompt is not counted as the person's turn (`Counted: no`); the Reason says whether no brief matched or the brief record could not be read |
@@ -1473,8 +1473,8 @@ they throw away every Unit's finished work and that each Unit then redoes it and
 needs its approvals again. A `skipped` stage, which the walk never routes,
 stage-major, and team walks keep their remedies.
 
-The human-turn hook applies the person's typed switch at prompt time to the
-piece of work selected by the message or the hook payload session.
+The setter the agent runs applies the person's typed switch to the piece of
+work selected by the message or the chat's session.
 A picked `lower-fence` choice is carried out by the conductor running the
 setter, which the person's reply on record authorizes.
 Memory-held strict refuses first (and withholds the remedy), and unattended

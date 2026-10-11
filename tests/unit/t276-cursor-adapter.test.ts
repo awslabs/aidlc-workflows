@@ -1433,7 +1433,7 @@ describe("t276 cursor adapter payload conversion", () => {
     rmSync(ledgerDirFor(proj));
   });
 
-  test("19g: a person's typed summary-confirmation off in a foreground chat applies as theirs", () => {
+  test("19g: a person's typed summary-confirmation off in a foreground chat is recorded, and the setter applies it as theirs", () => {
     const proj = installedProject();
     seedAidlcMemory(proj);
     const env = {
@@ -1473,10 +1473,15 @@ describe("t276 cursor adapter payload conversion", () => {
     );
     expect(typed.code, typed.stderr).toBe(0);
     expect(typed.stdout.trim()).toBe("");
-    const content = readFileSync(state, "utf-8");
-    expect(getField(content, "Summary Confirmation")).toBe("off (set by you)");
     const ceremonyRows = () =>
       readAuditShardEvents(proj).filter((entry) => entry.event === "CEREMONY_SET");
+    // The hook records their line and applies nothing; the agent runs the setter.
+    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("on (from scope feature)");
+    expect(ceremonyRows()).toHaveLength(0);
+    const applied = runTool("aidlc.ts", ["engine", "config", "set", "summary-confirmation", "off"]);
+    expect(applied.status, applied.stderr).toBe(0);
+    const content = readFileSync(state, "utf-8");
+    expect(getField(content, "Summary Confirmation")).toBe("off (set by you)");
     const audit = ceremonyRows();
     expect(audit).toHaveLength(1);
     expect(auditBlockField(audit[0].block, "New")).toBe("off");

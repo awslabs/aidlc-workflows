@@ -72,6 +72,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
+import { listMessages } from "../../core/tools/aidlc-message-store.ts";
 import { resolveAction } from "../../core/tools/aidlc.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -327,11 +328,13 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("typed summary confirmation off applies as the person's own switch", () => {
+  test("typed summary confirmation off is recorded by the hook and lowered by the setter the agent runs", () => {
     // The prompt a person types in Kiro CLI chat rides the userPromptSubmit
     // registration into verb-intercept, which forwards it to the core
-    // record-human-turn hook. No resolved session and no presence bypass, so
-    // only the typed turn can lower it; a later command repeat is a no-op.
+    // record-human-turn hook. The hook records the line and applies nothing;
+    // the agent reads it and runs the setter. No resolved session and no
+    // presence bypass, so only the typed turn lets the setter lower it; a
+    // later repeat is a no-op.
     const dir = scratchProject(true);
     const sessionless = {
       AIDLC_SESSION_OVERRIDE: undefined,
@@ -349,15 +352,9 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         prompt: "/aidlc config set summary-confirmation off",
       }, [], sessionless);
       expect(r.code, r.stderr).toBe(0);
-      const content = readFileSync(seededStateFile(dir), "utf-8");
-      expect(content).toContain("- **Summary Confirmation**: off (set by you)");
-      expect(getField(content, "Summary Confirmation")).toBe("off (set by you)");
-      const audit = ceremonyRows();
-      expect(audit).toHaveLength(1);
-      expect(auditBlockField(audit[0].block, "New")).toBe("off");
-      expect(auditBlockField(audit[0].block, "Source")).toBe("you");
-
-      const repeated = spawnSync(
+      expect(getField(readFileSync(seededStateFile(dir), "utf-8"), "Summary Confirmation")).not.toBe("off (set by you)");
+      expect(ceremonyRows()).toHaveLength(0);
+      const setter = () => spawnSync(
         process.execPath,
         [
           join(dir, ".kiro", "tools", "aidlc.ts"),
@@ -371,6 +368,17 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
+      const lowered = setter();
+      expect(lowered.status, lowered.stderr).toBe(0);
+      const content = readFileSync(seededStateFile(dir), "utf-8");
+      expect(content).toContain("- **Summary Confirmation**: off (set by you)");
+      expect(getField(content, "Summary Confirmation")).toBe("off (set by you)");
+      const audit = ceremonyRows();
+      expect(audit).toHaveLength(1);
+      expect(auditBlockField(audit[0].block, "New")).toBe("off");
+      expect(auditBlockField(audit[0].block, "Source")).toBe("you");
+
+      const repeated = setter();
       expect(repeated.status, repeated.stderr).toBe(0);
       expect(repeated.stdout).toContain("Summary Confirmation is already off (set by you)");
       expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(content);
@@ -384,8 +392,8 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     // Kiro Crew drives kiro-cli over ACP and delivers its context blocks and
     // the person's turn as one prompt (captured 2026-10-04 off the Crew
     // dashboard: a 34 KB prompt ending in the request header and "Approve
-    // Plan"). Both the typed switch and the forwarded human turn must see only
-    // the text after the last request header.
+    // Plan"). The forwarded human turn, and the record it keeps for the setter
+    // the agent runs, must hold only the text after the last request header.
     const dir = scratchProject(true);
     const sessionless = {
       AIDLC_SESSION_OVERRIDE: undefined,
@@ -407,9 +415,25 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         prompt: envelope("/aidlc config set summary-confirmation off"),
       }, [], sessionless);
       expect(r.code, r.stderr).toBe(0);
+      expect(readAudit(dir)).toContain("HUMAN_TURN");
+      const [record] = listMessages(dir);
+      // Only the text after the last request header is the person's turn, and
+      // their line is a command to AI-DLC, so it carries no words of their own.
+      expect(record.text).toBe("/aidlc config set summary-confirmation off");
+      expect(record.words).toBeNull();
+      const lowered = spawnSync(
+        process.execPath,
+        [join(dir, ".kiro", "tools", "aidlc.ts"), "engine", "config", "set", "summary-confirmation", "off", "--project-dir", dir],
+        {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_UNATTENDED: undefined, ...sessionless } as NodeJS.ProcessEnv,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        },
+      );
+      expect(lowered.status, lowered.stderr).toBe(0);
       expect(getField(readFileSync(seededStateFile(dir), "utf-8"), "Summary Confirmation"))
         .toBe("off (set by you)");
-      expect(readAudit(dir)).toContain("HUMAN_TURN");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2741,7 +2765,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
     expect(SKILL.indexOf("next --stage <slug>`")).toBeLessThan(anchor);
   });
 
-  test("`/aidlc --guard-policy off` sets Guard Policy off and the line reaches the conversation", () => {
+  test("`/aidlc --guard-policy off` is recorded whole, applies nothing, and the agent's first next carries it", () => {
     const dir = scratchProject(false);
     try {
       const created = spawnSync("bun", [
@@ -2754,10 +2778,14 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       expect(getField(readFileSync(state, "utf-8"), "Guard Policy")).toStartWith("strict");
       const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded("--guard-policy off") }, [], env);
       expect(r.code, r.stderr).toBe(0);
-      expect(getField(readFileSync(state, "utf-8"), "Guard Policy")).toBe("off (set by you)");
+      // The hook records the line and applies nothing: the agent runs the setter
+      // its first `next` names.
+      expect(getField(readFileSync(state, "utf-8"), "Guard Policy")).toStartWith("strict");
       const shards = join(dirname(state), "audit");
-      expect(readdirSync(shards).map((name) => readFileSync(join(shards, name), "utf-8")).join("\n")).toContain("GUARD_POLICY_SET");
-      expect(r.stdout).toContain("AIDLC Guard Policy:");
+      const audit = readdirSync(shards).map((name) => readFileSync(join(shards, name), "utf-8")).join("\n");
+      expect(audit).not.toContain("GUARD_POLICY_SET");
+      expect(audit).toContain("HUMAN_TURN");
+      expect(r.stdout).not.toContain("AIDLC Guard Policy:");
       // The person's own dispatch, never a prose example.
       expect(r.stdout).toContain("engine orchestrate next --guard-policy off");
       expect(r.stdout).not.toContain("<slug>");

@@ -1,4 +1,4 @@
-// covers: function:fencesOffCreationGranted, function:applyTypedGuardSwitchPrompt, function:applyIntentSettings, function:switchOffLine
+// covers: function:fencesOffCreationGranted, function:keepSettingsForNextWork, function:applyIntentSettings, function:switchOffLine
 //
 // Where a switch the person set came from, and where it lands:
 //   - a check typed off with a request reaches the work that request became,
@@ -51,7 +51,6 @@ const CLEAR = {
   AIDLC_UNATTENDED: "0",
 };
 const TYPED = "/aidlc --guard.review-freeze off fix the parser";
-const FOR_THE_REQUEST = "The review freeze check (it stops edits to work you already approved) is off for the work you are asking for (set by you).";
 const FOR_NEW_WORK = "The review freeze check (it stops edits to work you already approved) is off for the new work (set by you).";
 const FOR_WORK_STARTING_NOW = "The review freeze check (it stops edits to work you already approved) is off for the piece of work you start now (set by you).";
 const STARTS_ON = "not off as you typed with the request";
@@ -184,11 +183,15 @@ function createFromPrint(proj: string, step: { directive: Record<string, unknown
 } {
   const message = String(step.directive?.message);
   const scope = /--scope ([a-z][a-z-]*)/.exec(message)?.[1];
+  // Every lowering flag the print names rides to creation, as the agent passes it.
+  const flags = [...message.matchAll(/--(guard-policy|guard\.[a-z-]+) (strict|relaxed|on|off)/g)]
+    .flatMap((match) => [`--${match[1]}`, match[2]]);
   return utility(proj, [
     "intent-create",
     "--request",
     requestIn(message, step.out),
     ...(scope === undefined ? [] : ["--scope", scope]),
+    ...flags,
   ]);
 }
 
@@ -246,7 +249,7 @@ describe("a check typed off with a request, routed through a second question", (
     const openBefore = readFileSync(join(intents(proj), open, "aidlc-state.md"), "utf-8");
     // The person types the switch with the request while the open work waits at
     // its gate, so the engine keeps their words as that gate's possible answer.
-    expect(reply(proj, TYPED)).toContain(FOR_THE_REQUEST);
+    reply(proj, TYPED);
     const first = next(proj, ["--guard.review-freeze", "off", "--", "fix the parser"]);
     const q1 = requestIn(first.directive?.message, first.out);
     // The engine asks where the request belongs: a second question.
@@ -299,7 +302,7 @@ describe("a check typed off with a request, routed through a second question", (
   test("the line survives a question the agent asked in between, and the engine's own question says it", () => {
     const { proj } = oneOpenRecord();
     holdAtGate(proj);
-    expect(reply(proj, TYPED)).toContain(FOR_THE_REQUEST);
+    reply(proj, TYPED);
     // The engine hands the words on, with no line of its own to speak yet.
     const handedOn = next(proj, ["--guard.review-freeze", "off", "--", "fix the parser"]);
     const request = requestIn(handedOn.directive?.message, handedOn.out);
@@ -307,35 +310,35 @@ describe("a check typed off with a request, routed through a second question", (
     // what used to drop the line before any step could say it.
     reply(proj, "it's a separate new piece of work");
     const routing = next(proj, ["--request", request]);
-    expect((routing.directive as { ask_type?: string } | null)?.ask_type, routing.out).toBe("new-work-routing");
-    expect(heard(proj, routing), routing.out).toContain(FOR_THE_REQUEST);
+    const ask = routing.directive as { ask_type?: string; new_intent_command?: string } | null;
+    expect(ask?.ask_type, routing.out).toBe("new-work-routing");
+    expect(String(ask?.new_intent_command)).toContain("--guard.review-freeze off");
   });
 
-  test("the note tells the agent to say the line, never that it need not", () => {
+  test("the hook says nothing about the check: the flag rides the routing question's answers", () => {
     const { proj } = oneOpenRecord();
-    const note = reply(proj, TYPED);
-    expect(note).toContain(FOR_THE_REQUEST);
-    expect(note).toContain("Say that line to the person in your reply");
-    expect(note).toContain("never run a setter for it");
-    expect(note).not.toContain("need not repeat");
-  });
-
-  test("the person hears the line with the question the engine asks about it", () => {
-    const { proj } = oneOpenRecord();
-    reply(proj, TYPED);
+    expect(reply(proj, TYPED)).not.toContain("AIDLC Guard Policy");
     const routing = next(proj, ["--guard.review-freeze", "off", "--", "fix the parser"]);
-    expect(heard(proj, routing), routing.out).toContain(FOR_THE_REQUEST);
+    const ask = routing.directive as { new_intent_command?: string; continue_command?: string } | null;
+    expect(String(ask?.new_intent_command), routing.out).toContain("--guard.review-freeze off");
+    expect(String(ask?.continue_command), routing.out).toContain("--guard.review-freeze off");
   });
 });
 
 describe("a check typed off before any work exists", () => {
-  test("the person hears it on the step that follows, in every tool", () => {
+  test("next names the setter, the setter keeps it and says so, and the step after says it is kept", () => {
     const proj = emptyProject();
-    expect(reply(proj, "/aidlc --guard.review-freeze off")).toContain(FOR_WORK_STARTING_NOW);
-    // The agent runs `next`, as its skill says; the line must reach the person
-    // from the engine, not only from a host that shows hook output.
+    expect(reply(proj, "/aidlc --guard.review-freeze off")).not.toContain("AIDLC Guard Policy");
+    // The agent runs `next`, as its skill says; it names the setter, whose line
+    // the agent says, so the person hears it from the engine on every host.
     const step = next(proj, ["--guard.review-freeze", "off"]);
-    expect(heard(proj, step), step.out).toContain(FOR_WORK_STARTING_NOW);
+    expect(step.directive?.kind, step.out).toBe("print");
+    expect(String(step.directive?.message)).toContain("config set guard.review-freeze off");
+    const kept = configSet(proj, ["guard.review-freeze", "off"], SESSION);
+    expect(kept.status, kept.out).toBe(0);
+    expect(kept.out).toContain(FOR_WORK_STARTING_NOW);
+    const after = next(proj, []);
+    expect(String(after.directive?.message), after.out).toContain("is kept for it");
   });
 
   // The live symptom was a switch "spent at creation without applying": the work
@@ -344,7 +347,8 @@ describe("a check typed off before any work exists", () => {
   // quietly turned it back on.
   test("the work it creates records it as theirs even when that plan already lowers the check", () => {
     const proj = emptyProject();
-    expect(reply(proj, "/aidlc --guard.review-freeze off")).toContain(FOR_WORK_STARTING_NOW);
+    reply(proj, "/aidlc --guard.review-freeze off");
+    expect(configSet(proj, ["guard.review-freeze", "off"], SESSION).out).toContain(FOR_WORK_STARTING_NOW);
     const printed = next(proj, ["--scope", "poc", "--", "build the export"]);
     const made = createFromPrint(proj, printed);
     expect(made.status, made.stderr).toBe(0);
@@ -478,52 +482,6 @@ describe("a command the person typed, with no turn of theirs on record", () => {
   });
 });
 
-// Finding 2 from the live runs: a flag-shaped word in the request threw the
-// whole prompt away, so the switch was lost and nothing was said.
-describe("a flag-shaped word inside the request", () => {
-  test("is part of what they described, and the switch they typed still applies", () => {
-    const proj = emptyProject();
-    const note = reply(proj, "/aidlc --guard.review-freeze off add a --help flag to the reverser");
-    expect(note).toContain(FOR_THE_REQUEST);
-    const printed = next(proj, ["--scope", "poc", "--", "add a --help flag to the reverser"]);
-    const made = createFromPrint(proj, printed);
-    expect(made.status, made.stderr).toBe(0);
-    expect(guardsOff(activeState(proj))).toContain("review-freeze");
-  });
-
-  // Their switch is readable, so it is carried out: only the part that was not
-  // read is named back, and they are never told to retype what worked.
-  test("before any words, what was read is still carried out and only the rest is named", () => {
-    const proj = emptyProject();
-    const note = reply(proj, "/aidlc --guard.review-freeze off --nonsense 1");
-    expect(note).toContain(FOR_WORK_STARTING_NOW);
-    expect(note).toContain('I could not read "--nonsense". Was that a setting you wanted?');
-    expect(note).not.toContain("Nothing changed");
-    // Two sentences, not one run together: the line before it ends in a stop.
-    expect(note).not.toMatch(/[a-z)] I could not read/);
-    // And it really did apply: the work they start next has the check off.
-    const printed = next(proj, ["--scope", "poc", "--", "build the export"]);
-    const made = createFromPrint(proj, printed);
-    expect(made.status, made.stderr).toBe(0);
-    expect(guardsOff(activeState(proj))).toContain("review-freeze");
-  });
-
-  test("the same setting typed twice with two values is put back to them once", () => {
-    const proj = emptyProject();
-    const note = reply(proj, "/aidlc --guard-policy relaxed --change-control off");
-    expect(note).toContain("Nothing changed: you typed Guard Policy twice in that command, as relaxed and off.");
-    expect(note).toContain("Which did you mean?");
-  });
-
-  test("a setting with no value after it asks which value they meant", () => {
-    const proj = emptyProject();
-    const note = reply(proj, "/aidlc --guard.review-freeze off --depth");
-    expect(note).toContain('Nothing changed: "--depth" came with no value. Which value did you mean for it?');
-    // AI-DLC could not read it, so it asks: it never tells them what to type.
-    expect(note).not.toContain("Type it again");
-  });
-});
-
 // A switch typed while the engine's own question waits was kept for that
 // question, and the step that followed asked the person to describe the work
 // again: a retype, and then the work started with the check still on, because
@@ -537,8 +495,9 @@ describe("a switch typed while the engine's question is open, before any work ex
     const question = String(asked.directive?.question ?? "");
     expect(question).toContain("reverses a string");
 
-    // They turn a check off while that question waits.
-    expect(reply(proj, "/aidlc --guard.review-freeze off")).toContain(FOR_WORK_STARTING_NOW);
+    // They turn a check off while that question waits: the agent runs the setter.
+    reply(proj, "/aidlc --guard.review-freeze off");
+    expect(configSet(proj, ["guard.review-freeze", "off"], SESSION).out).toContain(FOR_WORK_STARTING_NOW);
 
     // The step puts their own question back, rather than asking them to say
     // what to build when they already have.
@@ -559,7 +518,8 @@ describe("a switch typed while the engine's question is open, before any work ex
 
   test("with nothing of theirs waiting, the step still asks what to build", () => {
     const proj = emptyProject();
-    expect(reply(proj, "/aidlc --guard.review-freeze off")).toContain(FOR_WORK_STARTING_NOW);
+    reply(proj, "/aidlc --guard.review-freeze off");
+    expect(configSet(proj, ["guard.review-freeze", "off"], SESSION).out).toContain(FOR_WORK_STARTING_NOW);
     const step = next(proj, []);
     expect(String(step.directive?.narration ?? ""), step.out).toContain("Tell me what to build");
   });
@@ -600,13 +560,15 @@ describe("a setting the engine cannot read, typed on its own", () => {
     expect(step.out).not.toContain("could not read");
   });
 
-  test("the hook says it once for a readable switch beside it, and the step adds nothing", () => {
+  test("a token beside a readable switch: nothing is said to the person, and the agent gets the token", () => {
     const proj = emptyProject();
     const note = reply(proj, "/aidlc --guard.review-freeze off --nonsense 1");
-    expect(note).toContain('I could not read "--nonsense". Was that a setting you wanted?');
-    const step = next(proj, ["--nonsense", "1"]);
+    expect(note).not.toContain("could not read");
+    expect(note).not.toContain("AIDLC Guard Policy");
+    const step = next(proj, ["--guard.review-freeze", "off", "--nonsense", "1"]);
     expect(step.directive?.narration, step.out).toBeUndefined();
     expect(step.out).not.toContain("could not read");
+    expect(String(step.directive?.message), step.out).toContain("--nonsense");
   });
 });
 
@@ -617,7 +579,8 @@ describe("a setting the engine cannot read, typed on its own", () => {
 describe("a request made only of a flag-shaped token the engine could not read", () => {
   test.each(["poc", "enterprise"])("starts no work, and the switch waits for the work they describe (%s)", (scope) => {
     const proj = emptyProject();
-    expect(reply(proj, "/aidlc --guard.review-freeze off --nonsense 1")).toContain(FOR_WORK_STARTING_NOW);
+    reply(proj, "/aidlc --guard.review-freeze off --nonsense 1");
+    expect(configSet(proj, ["guard.review-freeze", "off"], SESSION).out).toContain(FOR_WORK_STARTING_NOW);
     // The agent passes on the words it has left, as it does for any request.
     const step = next(proj, ["--nonsense", "1"]);
     expect(step.directive?.kind, step.out).not.toBe("ask");
@@ -651,6 +614,7 @@ describe("a ceremony the person typed before any work exists", () => {
   ])("$flag off reaches the work they start next, as theirs ($scope)", ({ flag, field, scope }) => {
     const proj = emptyProject();
     reply(proj, `/aidlc ${flag} off`);
+    expect(configSet(proj, [flag.slice(2), "off"], SESSION).status).toBe(0);
     // The engine's step says what they set is kept for the work they start next.
     expect(String(next(proj, []).directive?.message)).toContain("is kept for it");
     const printed = next(proj, ["--scope", scope, "--", "build the export"]);
@@ -664,6 +628,7 @@ describe("a ceremony the person typed before any work exists", () => {
   test("typed, then the work described in their own words: it is still off, and theirs", () => {
     const proj = emptyProject();
     reply(proj, "/aidlc --learnings off");
+    expect(configSet(proj, ["learnings", "off"], SESSION).status).toBe(0);
     const asked = next(proj, ["--", "a tiny tool that reverses a string"]);
     expect(asked.directive?.kind, asked.out).toBe("ask");
     const route = asked.directive as {
@@ -680,6 +645,7 @@ describe("a ceremony the person typed before any work exists", () => {
   test("a flag the agent passes at creation still wins, and is recorded as the command's", () => {
     const proj = emptyProject();
     reply(proj, "/aidlc --sensors off");
+    expect(configSet(proj, ["sensors", "off"], SESSION).status).toBe(0);
     const printed = next(proj, ["--scope", "poc", "--", "build the export"]);
     const message = String(printed.directive?.message);
     const made = utility(proj, [
@@ -698,6 +664,7 @@ describe("a ceremony the person typed before any work exists", () => {
   test("the work after it starts at its scope default: the words are spent, not standing", () => {
     const proj = emptyProject();
     reply(proj, "/aidlc --sensors off");
+    expect(configSet(proj, ["sensors", "off"], SESSION).status).toBe(0);
     const first = next(proj, ["--scope", "poc", "--", "build the export"]);
     expect(createFromPrint(proj, first).status).toBe(0);
     expect(getField(activeState(proj), "Sensors")).toBe("off (set by you)");

@@ -29,8 +29,10 @@ import {
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 import {
   argumentIsFlagShaped,
+  auditBlockField,
   classifyTerminalCommand,
   hooksHealthDir,
+  planApprovalRuntimeFile,
   isReadOnlyNextArgv,
   isRefusedModifierNextArgv,
   isRetiredOnlyNextArgv,
@@ -41,6 +43,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { nextArgsAreOnlyWords, parseNextFlags, typedSettingModifiers } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
 import { listMessages } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
+import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -636,8 +639,300 @@ describe("a host's human-turn hook keeps the same reading of the line", () => {
       expect(records[0].words, `${note} record=${JSON.stringify(records[0])}`).toBe(expected);
       // Either way the whole line is on record, as the host delivered it.
       expect(records[0].text, note).toBe(prompt);
+      // The hook applies nothing and says nothing about a setting: no note for
+      // the agent, no row, no record kept for the next work, no `applied` field.
+      expect(fired.stdout, note).not.toContain("AIDLC Guard Policy");
+      expect(readAuditShardEvents(proj), note).toEqual([]);
+      for (const kept of KEPT_RECORDS) expect(existsSync(planApprovalRuntimeFile(proj, kept)), `${note} ${kept}`).toBe(false);
+      expect("applied" in records[0], note).toBe(false);
       cleanupTestProject(created.pop());
     }
+  });
+});
+
+const KEPT_RECORDS = [
+  `plan-approval-off-at-creation-${SESSION}.json`,
+  `guard-policy-at-creation-${SESSION}.json`,
+  `fences-off-at-creation-${SESSION}.json`,
+  `ceremonies-at-creation-${SESSION}.json`,
+];
+
+// The setter the agent runs for a flags-only line before any work: `next`
+// names it (never "No workflow state found"), it keeps exactly the record's
+// settings for the piece of work the chat starts next, and the same key typed
+// on or strict withdraws what it kept.
+describe("a flags-only lowering line before any work is kept by the setter the agent runs", () => {
+  const lowering = cases.filter((testCase) =>
+    (testCase.shape === "fence-flag" || testCase.shape === "ceremony-flag") &&
+    (testCase.tail === null || testCase.tail.length === 0) &&
+    !testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token)) &&
+    typedSettingModifiers(parseNextFlags(testCase.argv)).some((modifier) => / off$/.test(modifier) || / (relaxed)$/.test(modifier)));
+  const slice = Array.from({ length: Math.min(6, lowering.length) }, (_unused, index) =>
+    lowering[Math.floor((index * lowering.length) / Math.min(6, lowering.length))]);
+
+  function env(proj: string): NodeJS.ProcessEnv {
+    return {
+      ...testGuardEnvironment(process.env, "production"),
+      CLAUDE_PROJECT_DIR: proj,
+      AIDLC_PROJECT_DIR: proj,
+      AIDLC_UNATTENDED: "0",
+      AIDLC_SESSION_OVERRIDE: SESSION,
+    };
+  }
+
+  function configSet(proj: string, modifiers: readonly string[]): { status: number; out: string } {
+    const [first, ...rest] = modifiers;
+    const args = [...first.split(" "), ...rest.flatMap((modifier) => [`--${modifier.split(" ")[0]}`, modifier.split(" ")[1]])];
+    const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", ...args, "--project-dir", proj], {
+      cwd: proj,
+      env: env(proj),
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  }
+
+  test(`keeps ${slice.length} such lines and withdraws them on the word back`, () => {
+    for (const testCase of slice) {
+      const note = where(testCase);
+      const proj = createTestProject();
+      created.push(proj);
+      removeWorkspaceRecord(proj);
+      const health = hooksHealthDir(proj);
+      mkdirSync(health, { recursive: true });
+      writeFileSync(join(health, "record-human-turn.last"), new Date().toISOString());
+      const prompt = `/aidlc ${testCase.argv.join(" ")}`;
+      const fired = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+        cwd: proj,
+        input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, cwd: proj, prompt }),
+        env: env(proj),
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(fired.status, `${note} ${fired.stderr}`).toBe(0);
+      const [record] = listMessages(proj);
+      const modifiers = typedSettingModifiers(parseNextFlags(testCase.argv));
+      expect(record.settings.map((setting) => `${setting.key} ${setting.value}`), note).toEqual(modifiers);
+      // `next` names the setter; it never answers a setting with the no-state error.
+      const step = runOrchestrateNext(ORCHESTRATE, proj, testCase.argv, { env: env(proj) });
+      expect(step.directive?.kind, `${note} out=${step.out.slice(0, 300)}`).toBe("print");
+      expect(step.out, note).not.toContain("No workflow state found");
+      expect(String((step.directive as { message?: unknown }).message), note).toContain("config set");
+      // The setter keeps exactly the record's settings, said once, and creates nothing.
+      const kept = configSet(proj, record.settings.map((setting) => `${setting.key} ${setting.value}`));
+      expect(kept.status, `${note} ${kept.out}`).toBe(0);
+      expect(kept.out, note).toContain("for the piece of work you start now (set by you)");
+      expect(existsSync(planApprovalRuntimeFile(proj, KEPT_RECORDS[3])), note).toBe(true);
+      expect(readAuditShardEvents(proj), note).toEqual([]);
+      // The word back withdraws it: the dedicated record for that key goes.
+      const back = modifiers.map((modifier) => {
+        const [key, value] = modifier.split(" ");
+        return `${key} ${key === "guard-policy" ? "strict" : value === "off" ? "on" : value}`;
+      });
+      expect(configSet(proj, back).status, note).toBe(0);
+      for (const kept of KEPT_RECORDS.slice(0, 3)) {
+        expect(existsSync(planApprovalRuntimeFile(proj, kept)), `${note} ${kept} still kept after ${back.join(", ")}`).toBe(false);
+      }
+      cleanupTestProject(created.pop());
+    }
+  });
+});
+
+// No chain the agent is told to follow can loop. Over the generated
+// settings-only lines, from the Copilot CLI shape (a bare `next`, no arguments
+// at all): the engine names one command, the agent runs it, and the next bare
+// `next` must move on. Three engine calls at most, no print said twice, and no
+// setting applied twice.
+describe("the chain from a bare next ends, and sets each thing once", () => {
+  const settingsOnly = cases.filter((testCase) =>
+    (testCase.shape === "fence-flag" || testCase.shape === "ceremony-flag" || testCase.shape === "valued-flag") &&
+    (testCase.tail === null || testCase.tail.length === 0) &&
+    !testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token) || token.includes("=")) &&
+    parseNextFlags(testCase.argv).parseError === undefined &&
+    parseNextFlags(testCase.argv).untakenFlag === undefined &&
+    typedSettingModifiers(parseNextFlags(testCase.argv)).length > 0);
+  const slice = Array.from({ length: Math.min(5, settingsOnly.length) }, (_unused, index) =>
+    settingsOnly[Math.floor((index * settingsOnly.length) / Math.min(5, settingsOnly.length))]);
+
+  function env(proj: string): NodeJS.ProcessEnv {
+    return {
+      ...testGuardEnvironment(process.env, "production"),
+      CLAUDE_PROJECT_DIR: proj,
+      AIDLC_PROJECT_DIR: proj,
+      AIDLC_UNATTENDED: "0",
+      AIDLC_SESSION_OVERRIDE: SESSION,
+    };
+  }
+
+  test(`${slice.length} generated settings-only lines each end within three steps`, () => {
+    for (const testCase of slice) {
+      const note = where(testCase);
+      const proj = createTestProject();
+      created.push(proj);
+      removeWorkspaceRecord(proj);
+      const health = hooksHealthDir(proj);
+      mkdirSync(health, { recursive: true });
+      writeFileSync(join(health, "record-human-turn.last"), new Date().toISOString());
+      const fired = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+        cwd: proj,
+        input: JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: SESSION,
+          cwd: proj,
+          prompt: `/aidlc ${testCase.argv.join(" ")}`,
+        }),
+        env: env(proj),
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(fired.status, `${note} ${fired.stderr}`).toBe(0);
+      const prints: string[] = [];
+      const ran: string[] = [];
+      let ended = "unresolved";
+      for (let call = 0; call < 3; call += 1) {
+        const step = runOrchestrateNext(ORCHESTRATE, proj, [], { env: env(proj) });
+        const directive = step.directive as { kind?: string; message?: unknown } | null;
+        if (directive?.kind !== "print") {
+          ended = directive?.kind ?? "none";
+          break;
+        }
+        const message = String(directive.message ?? "");
+        prints.push(message);
+        const command = /Run `([^`]+)`/.exec(message)?.[1];
+        if (command === undefined) {
+          ended = "said";
+          break;
+        }
+        const argv = command.split(/\s+/).map((token) =>
+          /^\.[\\/]?[a-z-]*[\\/]tools[\\/]aidlc[a-z-]*\.ts$/.test(token)
+            ? join(AIDLC_SRC, "tools", token.split(/[\\/]/).pop() as string)
+            : token);
+        const result = spawnSync(argv[0] === "bun" ? BUN : argv[0], argv.slice(1), {
+          cwd: proj,
+          env: env(proj),
+          encoding: "utf-8",
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        expect(result.status, `${note} ${command}: ${result.stdout}${result.stderr}`).toBe(0);
+        ran.push(command);
+      }
+      expect(["ask", "run-stage", "said"], `${note}: ended ${ended} after ${JSON.stringify(prints.map((line) => line.slice(0, 50)))}`)
+        .toContain(ended);
+      expect(new Set(prints).size, `${note}: a print came back twice`).toBe(prints.length);
+      expect(ran.length, `${note}: ran ${JSON.stringify(ran)}`).toBeLessThanOrEqual(1);
+      expect(readAuditShardEvents(proj), note).toEqual([]);
+      cleanupTestProject(created.pop());
+    }
+  });
+});
+
+// A line of settings followed by words while the engine's code plan question
+// is open: the hook keeps it as a reply and applies nothing, `next` records no
+// answer, and only the agent's own `log answer` marks the question answered.
+// Words behind `--` are a command, and `log answer` is refused for want of a reply.
+describe("a line of settings and words at the open code plan question", () => {
+  const replies = cases.filter((testCase) =>
+    (testCase.shape === "fence-flag" || testCase.shape === "ceremony-flag" || testCase.shape === "valued-flag") &&
+    testCase.tail !== null && testCase.tail.length > 0 &&
+    !testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token) || token.startsWith("--") && token.includes("=")) &&
+    parseNextFlags(testCase.argv).parseError === undefined && parseNextFlags(testCase.argv).untakenFlag === undefined &&
+    !["--scope", "--request", "--plan-name"].some((flag) => testCase.argv.includes(flag)));
+  const slice = Array.from({ length: Math.min(4, replies.length) }, (_unused, index) =>
+    replies[Math.floor((index * replies.length) / Math.min(4, replies.length))]);
+  const delimited = cases.find((testCase) => testCase.shape === "after-delimiter" &&
+    !testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token)));
+
+  function env(proj: string): NodeJS.ProcessEnv {
+    return {
+      ...testGuardEnvironment(process.env, "production"),
+      CLAUDE_PROJECT_DIR: proj,
+      AIDLC_PROJECT_DIR: proj,
+      AIDLC_UNATTENDED: "0",
+      AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0",
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+      AIDLC_SESSION_OVERRIDE: SESSION,
+    };
+  }
+
+  /** A poc workflow at code generation with its plan question open. */
+  function planQuestionOpen(): string {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    const state = readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8")
+      .replace("- **Scope**: feature", "- **Scope**: poc")
+      .replace("- **Change Control**: strict (from scope feature)", "- **Guard Policy**: relaxed (set by you)\n- **Plan Approval**: on (set by you)")
+      .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation");
+    writeFileSync(seededStateFile(proj), state, "utf-8");
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "base.ts"), "export const base = true;\n", "utf-8");
+    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(join(sessions, ".current-session"), `${SESSION}\n`, "utf-8");
+    const stage = join(proj, "aidlc", "spaces", "default", "intents");
+    const record = readFileSync(join(stage, "active-intent"), "utf-8").trim();
+    const dir = join(stage, record, "construction", "code-generation");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "code-generation-plan.md"),
+      "# Code Generation Plan\n\n## Summary\n\n- Builds: slugify for titles\n- Touches: src/slugify.ts\n- Tests: 3 unit tests\n\n## Steps\n\n- [ ] Step 1: write slugify\n\n" +
+        renderTestingContract(resolveTestingPosture(proj)), "utf-8");
+    writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test`.\n", "utf-8");
+    const asked = runOrchestrateNext(ORCHESTRATE, proj, [], { env: env(proj) });
+    expect((asked.directive as { ask_type?: string } | null)?.ask_type, asked.out).toBe("plan-approval");
+    return proj;
+  }
+
+  function hook(proj: string, argv: readonly string[]): void {
+    const fired = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, cwd: proj, prompt: `/aidlc ${argv.join(" ")}` }),
+      env: env(proj),
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(fired.status, fired.stderr).toBe(0);
+    expect(fired.stdout).not.toContain("AIDLC Guard Policy");
+  }
+
+  function answer(proj: string): number {
+    const result = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+      "--details", "Approve Plan", "--project-dir", proj,
+    ], { cwd: proj, env: env(proj), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    return result.status ?? -1;
+  }
+
+  const answered = (proj: string): number =>
+    readAuditShardEvents(proj).filter((row) => row.event === "QUESTION_ANSWERED" || row.event === "PLAN_APPROVAL_RECORDED").length;
+  const lastTurnMark = (proj: string): string | null => {
+    const turns = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN");
+    return auditBlockField(turns[turns.length - 1].block, "Reply");
+  };
+
+  test(`${slice.length} such lines are the person's reply: nothing answers the question but the agent`, () => {
+    for (const testCase of slice) {
+      const note = where(testCase);
+      const proj = planQuestionOpen();
+      const before = readFileSync(seededStateFile(proj), "utf-8");
+      hook(proj, testCase.argv);
+      expect(lastTurnMark(proj), note).toBeNull();
+      expect(readFileSync(seededStateFile(proj), "utf-8"), note).toBe(before);
+      expect(answered(proj), note).toBe(0);
+      const step = runOrchestrateNext(ORCHESTRATE, proj, testCase.argv, { env: env(proj) });
+      expect(step.directive, `${note} out=${step.out.slice(0, 300)}`).not.toBeNull();
+      expect(answered(proj), note).toBe(0);
+      expect(answer(proj), note).toBe(0);
+      expect(answered(proj), note).toBeGreaterThan(0);
+      cleanupTestProject(created.pop());
+    }
+  });
+
+  test("words behind -- are a command: the turn is marked, and no answer is taken from it", () => {
+    if (delimited === undefined) return;
+    const proj = planQuestionOpen();
+    hook(proj, delimited.argv);
+    expect(lastTurnMark(proj), where(delimited)).toBe("command");
+    expect(answer(proj), where(delimited)).not.toBe(0);
+    expect(answered(proj), where(delimited)).toBe(0);
   });
 });
 

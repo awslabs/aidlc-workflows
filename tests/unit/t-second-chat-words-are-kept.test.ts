@@ -86,6 +86,17 @@ function said(proj: string, prompt: string, session = SECOND, extra: Record<stri
   expect(result.status, result.stderr).toBe(0);
 }
 
+/** The setter as the agent runs it in the second chat. */
+function configSet(proj: string, args: string[]): { status: number; out: string } {
+  const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", ...args, "--project-dir", proj], {
+    cwd: proj,
+    env: { ...process.env, ...CLEAR, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+}
+
 function next(proj: string, args: string[]): { directive: Record<string, unknown> | null; out: string } {
   const result = runOrchestrateNext(ORCHESTRATE, proj, args, { env: { ...process.env, ...CLEAR } });
   return { directive: result.directive as Record<string, unknown> | null, out: result.out };
@@ -143,9 +154,12 @@ describe("a second chat bound to nothing while this machine chose the work", () 
     expect(readSessionBinding(proj, SECOND)).toMatchObject({ space: "default", intent: record, source: "cursor" });
   });
 
-  test("a switch typed there reaches the open work, set by them", () => {
+  test("a switch typed there is recorded, and the setter the agent runs in that chat applies it, set by them", () => {
     const proj = openWork();
     said(proj, "/aidlc --plan-approval off");
+    expect(getField(readFileSync(seededStateFile(proj), "utf-8"), "Plan Approval") ?? "").not.toContain("off (set by you)");
+    const lowered = configSet(proj, ["plan-approval", "off"]);
+    expect(lowered.status, lowered.out).toBe(0);
     expect(getField(readFileSync(seededStateFile(proj), "utf-8"), "Plan Approval")).toBe("off (set by you)");
   });
 });

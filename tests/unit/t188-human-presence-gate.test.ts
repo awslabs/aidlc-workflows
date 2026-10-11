@@ -163,7 +163,7 @@ function recordHumanTurn(proj: string): void {
 function recordTypedReply(proj: string, words: string): string {
   const stored = saveMessage(proj, {
     session: null, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text: words, picker: null,
-    words, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null }, applied: [],
+    words, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
   });
   appendAuditEntry("HUMAN_TURN", { "Message Id": stored.id }, proj);
   return stored.id;
@@ -1991,7 +1991,7 @@ describe("t188: a late-logged question takes the message that answered it", () =
   function reply(words: string, session: string = CHAT, secondsAgo = 0): string {
     const stored = saveMessage(proj, {
       session, at: new Date(Date.now() - secondsAgo * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text: words, picker: null,
-      words, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null }, applied: [],
+      words, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
     });
     appendAuditEntry("HUMAN_TURN", { Session: session, "Message Id": stored.id }, proj);
     return stored.id;
@@ -2106,7 +2106,7 @@ describe("t188: a late-logged question takes the message that answered it", () =
     const slug = field(proj, "Current Stage");
     const command = saveMessage(proj, {
       session: CHAT, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text: "/aidlc --status", picker: null,
-      words: null, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null }, applied: [],
+      words: null, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
     }).id;
     appendAuditEntry("HUMAN_TURN", { Session: CHAT, Reply: "command", "Message Id": command }, proj);
     expect(log(["decision", "--stage", slug, "--decision", "Q?", "--options", "A,B"], inChat).rc).toBe(0);

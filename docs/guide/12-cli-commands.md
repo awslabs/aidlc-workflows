@@ -70,7 +70,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --collaborators <on\|off>` | Set whether stages bring in their support agents or run with the lead agent only, for this intent |
 | `/aidlc --statusline <on\|off>` | Show AI-DLC's progress in the status line, or give yours back (Claude Code: for you only; Codex: for everyone in the project) |
 | `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `plan-approval`, `collaborators`, `guard.<fence>`) |
-| `/aidlc config set <key> <value> [--key value ...]` | Change intent settings through the shared setter; typed lowering switches apply at prompt time |
+| `/aidlc config set <key> <value> [--key value ...]` | Change intent settings through the shared setter; the agent runs it for a setting typed as a flag or asked for in plain words |
 | `/aidlc config set guard.<fence> <on\|off>` | Turn one fence off for this piece of work, or back on above the policy word (review-freeze, state-transition, reviewer-scope; `guard.plan-approval` is another name for `plan-approval`) |
 | `/aidlc config list` | List all thirteen active workflow settings (`--json` for structured output) |
 | `/aidlc plugin select [names]` | Show or set the enabled plugin list for this install |
@@ -1122,8 +1122,8 @@ request at the next ordinal.
 All eleven intent settings share one CLI setter, `config-change`.
 Flags from different settings can be combined in one atomic CLI command; do not
 split companion settings into successive setters.
-For a typed lowering command, the human-turn hook validates and applies the
-switch and its companion intent settings in one transaction at prompt time.
+For a typed lowering command, the agent runs this setter with the switch and
+its companion intent settings in one transaction; the hook only records the message.
 This is active-intent configuration, distinct from native project configuration
 through `aidlc config flags`.
 
@@ -1153,8 +1153,8 @@ regardless of their order; the first occurrence of the chosen flag is used.
 Either flag overrides the scope object, where a string `guardPolicy` takes
 precedence over a string `changeControl`.
 
-Each line below combines settings. When the command lowers a guard, the
-human-turn hook applies all listed intent settings together at prompt time:
+Each line below combines settings. The setter the agent runs applies all
+listed intent settings together, lowering included:
 
 ```
 /aidlc --depth minimal --review none --guard-policy relaxed --sensors off
@@ -1182,8 +1182,8 @@ route), not `config-change --scope`, when also changing the scope.
 
 For a typed lowering switch, both
 `/aidlc config set guard-policy relaxed --intent <name> --space <name>` and
-`/aidlc --guard-policy relaxed --intent <name> --space <name> ...` make the
-human-turn hook apply it at prompt time to the named piece of work.
+`/aidlc --guard-policy relaxed --intent <name> --space <name> ...` name the
+piece of work the agent's setter applies it to.
 The trailing `...` in the flags form stands for an optional task description.
 Omitted selectors use the session's workflow selection; a nonexistent named
 intent is refused, and a selection without a state file must be created before
@@ -1255,11 +1255,10 @@ plus `state-transition` and `reviewer-scope`. `human-presence` is never lowered
 by the policy word.
 
 Setting `guard-policy relaxed` or `guard-policy off` from chat is the person's
-move. When they type `/aidlc --guard-policy relaxed` or the confirmation words
-`guard policy relaxed` (use `off` for that value), the human-turn hook applies
-the switch when the prompt arrives, writes the state line and audit row, and
-reports `AIDLC Guard Policy: ...` as hook context on harnesses that inject it;
-the conductor runs `next` and relays the stand-aside line or harness note.
+move. When they type `/aidlc --guard-policy relaxed` (use `off` for that value),
+the conductor's first `next` names the setter and the conductor runs it in the
+same turn: it writes the state line and audit row and says what changed, as
+asked in the chat; the hook only records the message.
 When they ask in plain words, the conductor runs
 `config-change --guard-policy <strict|relaxed|off>` with the value they asked
 for, which lowers when a reply from them is on record since the last decision,
@@ -1378,8 +1377,8 @@ same setter repairs an invalid line and records the old text. A plain-chat
 request for a policy, such as "stop asking me to re-approve when files change",
 is carried out by the conductor: it runs the setter with the value you asked
 for, which lowers when a reply from you is on record since the last decision.
-The typed switch (`/aidlc --guard-policy relaxed`, say) remains a shortcut the
-human-turn hook applies before the conductor runs `next`.
+The typed switch (`/aidlc --guard-policy relaxed`, say) is the same setter, run
+by the conductor from its first `next`.
 For configuration and scope changes, the row's `Old Value` is the previously
 saved intent value (raw text if invalid; `strict` when no line existed), not
 the memory-effective value. Governed-checkpoint observations still record
@@ -1444,8 +1443,8 @@ so the policy word and this switch are its only controls.
 
 To set `guard.<fence> off` from chat, the person types
 `/aidlc config set guard.<fence> off` or `/aidlc --guard.<fence> off`, and the
-human-turn hook applies it at prompt time, records the audit row, and reports
-`AIDLC Guard Policy: ...` as hook context on harnesses that inject it.
+agent runs that setter in the same turn; it records the audit row and says
+what changed.
 Asking in your own words, or picking a guard's `lower-fence` choice, works too:
 the agent runs the setter for that fence and says in one line what changed.
 Both forms accept `--intent <name>` and `--space <name>`; omitted selectors use
@@ -1572,11 +1571,9 @@ reviewer used when you explicitly choose autonomous construction.
 Turning summary confirmation off removes the person's `Looks correct`
 checkpoint, so it follows the fence rule: the person types
 `/aidlc config set summary-confirmation off` or `/aidlc --summary-confirmation
-off`, and the human-turn hook applies it at prompt time. The message must carry
-settings alone: beside a description (`/aidlc --summary-confirmation off build
-the export`) or in a question about the flag, the hook applies nothing, so the
-work already under way keeps its checkpoint and new work gets the flag only
-when it is created. When the person asks in their own words, the agent runs the setter (`config
+off`, and the agent runs that setter. Beside a description (`/aidlc
+--summary-confirmation off build the export`) the flag is the new work's and
+rides its creation, so the work already under way keeps its checkpoint. When the person asks in their own words, the agent runs the setter (`config
 set`, `config-change`, or `scope-change`); run when no reply from the person has
 arrived since the last decision, it refuses with:
 
@@ -1701,7 +1698,7 @@ session started with it, or `Plan Approval: off (from AIDLC_DISABLE_PLAN_APPROVA
 when `config flags --bypass` recorded it.
 
 It is the person's call: they type `/aidlc --plan-approval off` or
-`/aidlc config set plan-approval off` (the human-turn hook applies it), or say
+`/aidlc config set plan-approval off` (the agent runs the setter), or say
 so in their own words ("skip plan approval for this work") and the agent runs
 the setter. A setter run when no reply from the person has arrived since the
 last decision refuses with:

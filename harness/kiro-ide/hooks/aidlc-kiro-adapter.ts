@@ -67,8 +67,8 @@
 //   - guard-switch capability: an empty-prompt turn notes the limitation once
 //     per session and refuses lowering (summary confirmation off included)
 //     before a shell command runs. Non-empty
-//     prompts need no special shell path: the core human-turn hook applied the
-//     person's typed switch when the prompt arrived.
+//     prompts need no special shell path: the core human-turn hook records the
+//     person's line whole, and the agent runs the setter `next` names.
 //   - plan-approval-guard: populated inputs use exact target enforcement.
 //     Legacy argument-less inputs permit only single-file planning writes,
 //     hard-stop opaque shell/append/mutators, mediate Testing Contract +

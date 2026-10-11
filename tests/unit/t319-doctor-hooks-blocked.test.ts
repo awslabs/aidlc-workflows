@@ -363,7 +363,7 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     saveMessage(project, {
       session: "fresh-session", at: new Date().toISOString(), source: "prompt",
       text: "/aidlc build a small tool", picker: null, words: "build a small tool", settings: [],
-      route: { scope: null, newIntent: false, skip: [], add: [], projectType: null }, applied: [],
+      route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
     });
     const run = runUtility(project, ["doctor", "--verbose"]);
     expect(output(run)).not.toContain("Your replies are not being recorded");

@@ -4,7 +4,7 @@
 // The record proves two things and reads no meaning: that a real person said
 // this in this chat (the row the hook mints), and exactly what they said (the
 // text as the host delivered it, the flags the engine's own parser finds in a
-// typed `/aidlc` line, the switch lines the hook applied). Only `next` on a
+// typed `/aidlc` line, and the words after them; the hook applies nothing). Only `next` on a
 // fresh workspace reads the record (t-next-takes-the-persons-line); this file pins
 // its shape on the five host hook paths.
 import {
@@ -54,7 +54,6 @@ interface StoredMessage {
   words: string | null;
   settings: Array<{ key: string; value: string }>;
   route: { scope: string | null; newIntent: boolean; skip: string[]; add: string[]; projectType: string | null };
-  applied: string[];
   cut?: true;
 }
 
@@ -196,7 +195,7 @@ describe("the human-turn hook keeps one record of each message", () => {
       expect(record.words).toBe("add a test for an empty title");
       expect(record.settings).toEqual([]);
       expect(record.route).toEqual(NO_ROUTE);
-      expect(record.applied).toEqual([]);
+      expect("applied" in record).toBe(false);
       expect(record.picker).toBeNull();
       expect(record.cut).toBeUndefined();
       expect(record.id).toMatch(/^[0-9a-f]{8}$/);
@@ -214,9 +213,9 @@ describe("the human-turn hook keeps one record of each message", () => {
       expect(record.settings).toEqual([{ key: "guard.review-freeze", value: "off" }]);
       expect(record.words).toBe("add a --help flag to the reverser");
       expect(record.route.scope).toBeNull();
-      // The switch is for the work the words describe, so the open work keeps
-      // its check; what the hook applied or kept is on the record either way.
-      expect(record.applied.length).toBeGreaterThan(0);
+      // The switch is for the work the words describe: the hook applies nothing
+      // and keeps nothing, and the record carries no account of an application.
+      expect("applied" in record).toBe(false);
     });
 
     test(`${harness}: a command with no words records no words`, () => {
@@ -331,7 +330,7 @@ describe("the human-turn hook keeps one record of each message", () => {
     const seed = (id: string, at: string): void => {
       writeFileSync(join(dir, `${id}.json`), `${JSON.stringify({
         id, session: SESSION, at, source: "prompt", text: `seed ${id}`, picker: null, words: `seed ${id}`,
-        settings: [], route: NO_ROUTE, applied: [],
+        settings: [], route: NO_ROUTE,
       })}\n`, "utf-8");
     };
     const recent = Date.now() - 60 * 60 * 1000;

@@ -114,7 +114,7 @@
         }
       }
     },
-    "after": "WO3"
+    "after": "pending"
   },
   {
     "id": "tf04-w",
@@ -12184,7 +12184,7 @@
         "work": "none"
       }
     },
-    "after": "WO3",
+    "after": "pending",
     "documented_differs": "error: `--init` and `--force` are retired and no longer initialize or restart a workflow. Start work by invoking the AI-DLC skill with a description of what to build, "
   },
   {
@@ -15988,7 +15988,7 @@
         "work": "none"
       }
     },
-    "after": "WO3",
+    "after": "pending",
     "documented_differs": "error: No workflow state found (no active intent). Start one by describing what to build (/aidlc \"build the auth service\") or by naming a scope (/aidlc --scope <scope>"
   },
   {
@@ -16901,7 +16901,7 @@
           ]
         ],
         "names": [
-          "engine config set guard.state-transition off"
+          "engine config set guard-policy off --guard.state-transition off"
         ],
         "no_ask": true
       },

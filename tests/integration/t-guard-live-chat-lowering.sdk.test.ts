@@ -108,10 +108,10 @@ describe.skipIf(
       expect(guardEvents("GUARD_POLICY_SET")).toHaveLength(0);
       expect(guardEvents("GUARD_DISABLED")).toHaveLength(0);
 
-      // The hook applies a typed switch when the prompt arrives, so `next` only
-      // ends the turn for the agent to say the hook's line. Stop at that
+      // The hook records the line; `next` names the setter and the agent runs
+      // it, and the setter's own line says what changed. Stop at that
       // deterministic step, before any stage work.
-      const APPLIED = "The setting the person typed is already applied";
+      const APPLIED = "is relaxed for this piece of work, as you asked in the chat";
       const relaxed = await drive("/aidlc --guard-policy relaxed", 240_000, {
         toolName: "Bash",
         resultIncludes: APPLIED,

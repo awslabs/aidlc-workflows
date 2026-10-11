@@ -39,7 +39,7 @@ type Record = Parameters<typeof saveMessage>[1];
 function recordOf(session: string): Record {
   return {
     session, at: new Date().toISOString(), source: "prompt", text: LINE, picker: null, words: WORDS,
-    settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null }, applied: [],
+    settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
   };
 }
 

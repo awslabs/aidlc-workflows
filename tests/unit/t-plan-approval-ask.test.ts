@@ -215,6 +215,17 @@ function answer(
   };
 }
 
+// The setter the agent runs after reading a switch in the person's line.
+function lower(proj: string, key: string, value: string): { code: number; out: string } {
+  const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", key, value, "--project-dir", proj], {
+    cwd: proj,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return { code: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+}
+
 function guardWrite(proj: string, path: string): { code: number; stderr: string } {
   const result = spawnSync(BUN, [GUARD], {
     cwd: proj,
@@ -801,22 +812,33 @@ describe("the engine asks for Plan Approval", () => {
     expect(again.plan_approval?.editing).toBe(true);
   });
 
-  // Both halves of one message are done: the switch lands on this work, and
-  // the choice typed after it answers the plan question.
-  test("a switch typed before a plan choice applies to this work, and the choice is recorded", () => {
+  // Both halves of one message are done by the agent, which reads the line:
+  // the hook keeps it as a reply, the setter lands the switch on this work,
+  // and the choice typed after the flag answers the plan question.
+  test("a switch typed before a plan choice: the agent lowers this work and records the choice from the one reply", () => {
     const proj = project("strict");
     askFor(proj);
+    const before = readFileSync(seededStateFile(proj), "utf-8");
     reply(proj, "/aidlc --guard-policy relaxed Approve Plan");
+    // The hook applied nothing: the work is exactly as it was.
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+    const lowered = lower(proj, "guard-policy", "relaxed");
+    expect(lowered.code, lowered.out).toBe(0);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Guard Policy**: relaxed (set by you)");
+    const recorded = answer(proj, "Approve Plan");
+    expect(recorded.code, recorded.message).toBe(0);
     expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
-  test("Guard Policy off typed before a plan choice lands on this work, which then builds", () => {
+  test("Guard Policy off typed before a plan choice lands on this work through the setter, which then builds", () => {
     const proj = project("strict");
     askFor(proj);
     reply(proj, "/aidlc --guard-policy off Approve Plan");
+    const lowered = lower(proj, "guard-policy", "off");
+    expect(lowered.code, lowered.out).toBe(0);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Guard Policy**: off (set by you)");
+    expect(answer(proj, "Approve Plan").code).toBe(0);
     const build = next(proj);
     expect(build.kind, JSON.stringify(build)).toBe("run-stage");
   });
@@ -1540,14 +1562,16 @@ describe("when the stage rules arrive in parts", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
-  // AIDA F34: a question about the switch is kept as words but is no reply, so
-  // the plan's files stay closed.
-  test("\"skip plan approval?\" leaves the plan files closed to edits", () => {
+  // AIDA F34, after the hook stopped reading the words: a question about the
+  // switch is kept whole as the person's words, no tool reads it, so nothing is
+  // recorded or applied and the plan question stays open for the agent to answer.
+  test("\"skip plan approval?\" records nothing and leaves the plan question open", () => {
     const proj = project();
     askFor(proj);
     reply(proj, "skip plan approval?");
-    expect(guardWrite(proj, join(stageDir(proj), "code-generation-plan.md")).code).toBe(2);
-    expect(guardWrite(proj, join(stageDir(proj), "unit-test-instructions.md")).code).toBe(2);
+    expect(auditText(proj)).not.toContain("**Event**: QUESTION_ANSWERED");
+    expect(auditText(proj)).not.toContain("**Event**: CEREMONY_SET");
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
   });
 
   test("'review the plan first' said while the rules are arriving asks again before anything is built", () => {
@@ -2711,21 +2735,19 @@ describe("stopping for now at Code Generation", () => {
 });
 
 // From a live run under production guards: at the plan question the person
-// asked "skip plan approval?", a question about the switch the hook marks as a
-// command turn, and nothing else. The agent recorded "Approve Plan" from it and
-// built the code. A question or a command is no answer: the choice is refused,
-// the question stays open, and the refusal names the real switch.
+// asked "skip plan approval?" and the agent recorded "Approve Plan" from it and
+// built the code. No tool reads the question: the hook keeps it whole, marks
+// nothing, applies nothing and answers nothing, so the plan question stays open
+// for the agent to answer it and offer; the choice, when they make it, is
+// recorded from their words.
 describe("a question about the switch is no answer to the plan question", () => {
-  test.each(["off", "relaxed", "strict"] as const)("under Guard Policy %s, \"Approve Plan\" after only \"skip plan approval?\" is refused", (policy) => {
+  test.each(["off", "relaxed", "strict"] as const)("under Guard Policy %s, \"skip plan approval?\" records nothing, and the plan question stays open", (policy) => {
     const proj = project(policy);
     askFor(proj);
     reply(proj, "skip plan approval?");
-    const result = answer(proj, "Approve Plan");
-    expect(result.code, result.message).not.toBe(0);
-    expect(result.recorded).toBeUndefined();
-    expect(result.message).toContain("not an answer");
-    expect(result.message).toContain("engine config set guard.plan-approval off");
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    expect(auditText(proj)).not.toContain("**Event**: QUESTION_ANSWERED");
+    expect(auditText(proj)).not.toContain("**Event**: CEREMONY_SET");
     const ask = next(proj);
     expect(ask.kind, JSON.stringify(ask)).toBe("ask");
     expect(ask.ask_type).toBe("plan-approval");
@@ -2739,8 +2761,8 @@ describe("a question about the switch is no answer to the plan question", () => 
 
 // The conductor's call on #1677's asked form, from the same live run: a
 // question about the check turns nothing off, the agent answers it and offers,
-// and a yes is the ask. A request, plain or phrased as a question, turns it off
-// at once. No tool reads more than that one asked form.
+// and a yes is the ask. A request, plain or phrased as a question, is done at
+// once by the setter the agent runs, with their words. No tool reads the words.
 describe("a question about plan approval turns nothing off; a request does", () => {
   // The setter as the agent runs it under production guards: no presence bypass.
   function setter(proj: string): { code: number; out: string } {
@@ -2756,15 +2778,10 @@ describe("a question about plan approval turns nothing off; a request does", () 
   }
   const offRows = (proj: string) => (auditText(proj).match(/\*\*Event\*\*: (GUARD_DISABLED|CEREMONY_SET)/g) ?? []).length;
 
-  test.each(["off", "relaxed", "strict"] as const)("under Guard Policy %s, \"skip plan approval?\" lowers nothing; a yes to the offer does, with their words", (policy) => {
+  test.each(["off", "relaxed", "strict"] as const)("under Guard Policy %s, \"skip plan approval?\" lowers nothing by itself; a yes to the offer does, with their words", (policy) => {
     const proj = project(policy);
     askFor(proj);
     reply(proj, "skip plan approval?");
-    const refused = setter(proj);
-    expect(refused.code, refused.out).not.toBe(0);
-    expect(refused.out).toContain("asked a question about this check");
-    expect(refused.out).toContain("offer to turn it off");
-    expect(refused.out).not.toContain("They can also type");
     expect(offRows(proj)).toBe(0);
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     reply(proj, "yes");
@@ -2785,11 +2802,15 @@ describe("a question about plan approval turns nothing off; a request does", () 
     }
   });
 
-  test.each(["off", "relaxed", "strict"] as const)("under Guard Policy %s, \"skip plan approval for this work\" lowers it at once", (policy) => {
+  test.each(["off", "relaxed", "strict"] as const)("under Guard Policy %s, \"skip plan approval for this work\" is done at once by the setter, with their words", (policy) => {
     const proj = project(policy);
     askFor(proj);
     reply(proj, "skip plan approval for this work");
+    expect(offRows(proj)).toBe(0);
+    const lowered = setter(proj);
+    expect(lowered.code, lowered.out).toBe(0);
     expect(offRows(proj)).toBeGreaterThan(0);
+    expect(auditText(proj)).toContain("**Person Reply**: skip plan approval for this work");
     const after = next(proj);
     expect(after.kind === "ask" && after.ask_type === "plan-approval", JSON.stringify(after)).toBe(false);
   });
@@ -2797,23 +2818,25 @@ describe("a question about plan approval turns nothing off; a request does", () 
   // From a live run: the chat opened with `/aidlc`, the plan question came,
   // and "skip plan approval?" turned the check off, because the opening
   // command still read as a request. The person's latest word was a question.
-  test("after the chat's opening /aidlc, \"skip plan approval?\" still lowers nothing", () => {
+  test("after the chat's opening /aidlc, \"skip plan approval?\" is the person's words and nothing is applied or recorded", () => {
     const proj = project("off");
     reply(proj, "/aidlc");
     askFor(proj);
     reply(proj, "skip plan approval?");
-    const refused = setter(proj);
-    expect(refused.code, refused.out).not.toBe(0);
-    expect(refused.out).toContain("asked a question about this check");
+    // A question is the agent's to answer and offer on: the hook marks nothing,
+    // nothing is recorded, and the plan question is still open.
     expect(offRows(proj)).toBe(0);
+    expect(auditText(proj)).not.toContain("**Event**: QUESTION_ANSWERED");
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
   });
 
-  test("after the chat's opening /aidlc, a request to skip plan approval is still done at once", () => {
+  test("after the chat's opening /aidlc, a request to skip plan approval is still done at once by the setter", () => {
     const proj = project("off");
     reply(proj, "/aidlc");
     askFor(proj);
     reply(proj, "skip plan approval for this work");
+    const lowered = setter(proj);
+    expect(lowered.code, lowered.out).toBe(0);
     expect(offRows(proj)).toBeGreaterThan(0);
   });
 });
@@ -3068,12 +3091,16 @@ describe("a setting typed over the step in hand keeps that step current", () => 
     expect(`${review.stdout}${review.stderr}`).toContain("REVIEW_BUDGET_EXHAUSTED");
   });
 
-  test("the typed Guard Policy switch keeps the step too, with no plan question open", () => {
+  test("the Guard Policy the person typed keeps the step too, with no plan question open", () => {
     const proj = project("strict");
     expect(next(proj).plan_approval).toEqual({ status: "plan" });
     expect(planApprovalAskIsOpen(proj)).toBe(false);
+    // Their line changes nothing by itself; the setter the agent runs for it
+    // does, and the step in hand is still the step after it.
     reply(proj, "/aidlc --guard-policy relaxed");
-    expect(stateOf(proj)).toContain("- **Guard Policy**: relaxed");
+    expect(stateOf(proj)).toContain("- **Guard Policy**: strict");
+    configSet(proj, "guard-policy", "relaxed");
+    expect(stateOf(proj)).toContain("- **Guard Policy**: relaxed (set by you)");
     const kept = readActiveDirectiveMarker(proj, stateOf(proj));
     expect(kept?.kind).toBe("run-stage");
     expect(guardWrite(proj, planFile(proj)).code).toBe(0);

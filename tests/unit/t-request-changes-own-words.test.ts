@@ -51,7 +51,6 @@ import {
   stateDigest,
   writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { isTypedGuardSwitchPrompt } from "../../dist/claude/.claude/tools/aidlc-guard-switch.ts";
 
 setDefaultTimeout(120_000);
 
@@ -239,10 +238,9 @@ describe("Request Changes records the person's own words", () => {
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(PARAPHRASE);
   });
 
-  test("slash commands and typed guard switches are not feedback, nor a reply to the gate", () => {
-    expect(isTypedGuardSwitchPrompt("guard policy relaxed")).toBe(true);
+  test("slash commands are not feedback, nor a reply to the gate", () => {
     says(proj, "/aidlc --status");
-    says(proj, "guard policy relaxed");
+    says(proj, "/aidlc --guard-policy relaxed");
     const refused = rejectWith(proj, slug, ["--reason", PARAPHRASE]);
     // The agent's next step, with the gate still theirs to answer.
     expect(refused.kind, JSON.stringify(refused)).toBe("print");
@@ -259,7 +257,7 @@ describe("Request Changes records the person's own words", () => {
   test("a slash command beside the feedback leaves only the feedback", () => {
     says(proj, "/aidlc --status");
     says(proj, TYPED);
-    says(proj, "guard policy relaxed");
+    says(proj, "/aidlc --guard-policy relaxed");
     rejectWith(proj, slug, ["--reason", PARAPHRASE]);
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(TYPED);
   });

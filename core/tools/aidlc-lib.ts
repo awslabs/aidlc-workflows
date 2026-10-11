@@ -11818,14 +11818,17 @@ const DOCUMENT_AUDIT_EVENTS = new Set([
 // were logged); "consumed" when some other resolution used it or the
 // order cannot be proven; "none" when no turn is on record or a listed audit
 // shard could not be read. With `replies`, a turn that was only a command to
-// AIDLC or a question about a switch (its HUMAN_TURN row says `Reply: command`
-// or `Reply: question`) is not a reply to the question, so it is left out.
-// With `requests`, a question about a switch ("skip plan approval?") asks for
-// nothing, and it ends the reach of the turns before it.
+// AIDLC (its HUMAN_TURN row says `Reply: command`; an older record's
+// `Reply: question`, a question about a switch, reads the same) is not a reply
+// to the question, so it is left out. With `requests`, an older record's
+// question about a switch asks for nothing, and it ends the reach of the turns
+// before it; nothing writes that mark now.
 export type HumanTurnState = "acted" | "answered" | "consumed" | "none";
 
-// The HUMAN_TURN marks for a turn that was only a command to AIDLC, and for a
-// turn that only asked about a switch ("skip plan approval?").
+// The HUMAN_TURN mark for a turn that was only a command to AIDLC, and the
+// older mark for a turn that only asked about a switch ("skip plan approval?"),
+// read for records already written and never written now: the agent reads a
+// question and answers it.
 export const COMMAND_TURN_REPLY = "command";
 export const QUESTION_TURN_REPLY = "question";
 
@@ -11834,16 +11837,16 @@ export const QUESTION_TURN_REPLY = "question";
 // the words that handed it over (log answer --on-instruction).
 export const ANSWER_SOURCE_ON_INSTRUCTION = "chosen by the agent as the person asked";
 
-// A human turn that replied: more than a command to AIDLC or a question about
-// a switch.
+// A human turn that replied: more than a command to AIDLC (or, on an older
+// record, a question about a switch).
 export function isReplyTurn(row: { event: string; block: string }): boolean {
   if (row.event !== "HUMAN_TURN") return false;
   const mark = auditBlockField(row.block, "Reply");
   return mark !== COMMAND_TURN_REPLY && mark !== QUESTION_TURN_REPLY;
 }
 
-// A human turn that can carry a request (a command or a reply): anything but a
-// question about a switch.
+// A human turn that can carry a request (a command or a reply): anything but an
+// older record's question about a switch.
 export function isRequestTurn(row: { event: string; block: string }): boolean {
   return row.event === "HUMAN_TURN" && auditBlockField(row.block, "Reply") !== QUESTION_TURN_REPLY;
 }
@@ -40430,335 +40433,8 @@ export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[
   return [];
 }
 
-// The human-turn hook applies these switches at prompt time, as the host's
-// channel for what the person typed. No request waits for a later setter.
-// Accept /aidlc, $aidlc, or bare aidlc followed by a complete slash command or
-// config set <key> <value>. Parse the whole command before exposing any switch:
-// descriptions may precede or follow flags, while unknown, incompatible,
-// missing-value, or conflicting flags invalidate the transaction. Both forms
-// may combine intent settings and include optional --intent and --space
-// selectors, each at most once; slash commands may also name one --scope after
-// it has been validated by the caller. The whole prompt may instead be the
-// confirmation words guard policy relaxed (also hyphenated, change control, or
-// off).
-// Strip trailing prompt punctuation and match case-insensitively. strict and
-// on never switch; human presence has no switch. summary-confirmation off
-// switches because it removes the person's checkpoint, but only from a command
-// that carries settings alone. Last value wins per key.
-const TYPED_INTENT_SETTING_KEYS = new Set([
-  "depth",
-  "test-strategy",
-  "review",
-  "guard-policy",
-  "sensors",
-  "learnings",
-  "summary-confirmation",
-  "plan-approval",
-  "guard.plan-approval",
-  "guard.review-freeze",
-  "guard.state-transition",
-  "guard.reviewer-scope",
-]);
-
-// The request's own flags, which carry no switch: the switches typed beside
-// them still count ("/aidlc --project-type brownfield --plan-approval off add
-// the export").
-const TYPED_REQUEST_FLAGS = new Set(["skip", "add", "project-type", "collaborators"]);
-
-// "skip plan approval", "turn off plan approval for this work", "no more plan
-// approvals", "plan approval off": an instruction, never a question.
-const PLAN_APPROVAL_OFF_WORDS_RE = new RegExp(
-  "^(?:please\\s+)?(?:" +
-    "(?:skip|stop|drop|disable|turn off|switch off|no more|no)\\s+(?:the\\s+)?plan[- ]approvals?" +
-    "|(?:turn|switch)\\s+(?:the\\s+)?plan[- ]approvals?\\s+off" +
-    "|plan[- ]approvals?\\s+off" +
-    "|(?:don'?t|do not|stop)\\s+ask(?:ing)?\\s+(?:me\\s+)?to\\s+approve\\s+(?:the\\s+|each\\s+|every\\s+)?(?:code\\s+)?plans?" +
-    ")(?:\\s+(?:for|on)\\s+(?:this|the rest of this)(?:\\s+piece of)?\\s+(?:work|intent|feature|project|task))?(?:,?\\s+please)?$",
-  "i",
-);
-
-const GUARD_POLICY_WORDS_RE = /^(?:guard[- ]policy|change[- ]control)\s+(relaxed|off)$/i;
-
-// With `wordsAnswer`, the words after the flags answer the question that is
-// open, so the flags are for the work open now rather than for new work.
-export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAnswer?: boolean } = {}): {
-  switches: GuardSwitch[];
-  settings: Array<{ key: string; value: string }>;
-  space: string | null;
-  intent: string | null;
-  scope: string | null;
-  error: string | null;
-  /** `--plan-approval off` typed as a flag of the new work the message describes. */
-  newWorkPlanApprovalOff?: true;
-  /** `--guard-policy relaxed|off` typed as a flag of the new work the message describes. */
-  newWorkGuardPolicy?: "relaxed" | "off";
-  /** Sensors, learnings or summary confirmation typed as flags of the new work the message describes. */
-  newWorkCeremonies?: Record<string, "on" | "off">;
-  /** `--guard.<fence> off` typed as flags of the new work the message describes. */
-  newWorkFencesOff?: SwitchableGuardFence[];
-  /** The plain-words switch asked as a question ("skip plan approval?"). */
-  asked?: true;
-  /** The words typed after the flags, when there are any. */
-  words?: string;
-  /**
-   * A flag-shaped token before the person's words that this parser cannot read.
-   * What it could read is carried out, and this is named back to them after.
-   */
-  unread?: string;
-} {
-  const trimmed = prompt.trim();
-  const trailing = trimmed.match(/[.,;:!?]+$/)?.[0] ?? "";
-  const text = trimmed.slice(0, trimmed.length - trailing.length);
-  const command = text.match(/^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/i);
-  if (command === null) {
-    // The person's own words for "no plan stops on this piece of work". A
-    // question ("skip plan approval?"), a remark, or anything longer is not a
-    // switch: the agent answers it.
-    if (trailing.includes("?")) {
-      // Asked about, the switch words are neither the switch nor an answer to
-      // an open question, so the human-turn hook leaves both alone.
-      const asked = PLAN_APPROVAL_OFF_WORDS_RE.test(text) || GUARD_POLICY_WORDS_RE.test(text);
-      return { switches: [], settings: [], space: null, intent: null, scope: null, error: null, ...(asked ? { asked: true as const } : {}) };
-    }
-    if (PLAN_APPROVAL_OFF_WORDS_RE.test(text)) {
-      return {
-        switches: [{ key: "plan-approval", value: "off" }],
-        settings: [{ key: "plan-approval", value: "off" }],
-        space: null,
-        intent: null,
-        scope: null,
-        error: null,
-      };
-    }
-    const confirmation = text.toLowerCase().match(GUARD_POLICY_WORDS_RE);
-    const value = confirmation?.[1] as GuardSwitch["value"] | undefined;
-    return {
-      switches: value === undefined ? [] : [{ key: "guard-policy", value }],
-      settings: value === undefined ? [] : [{ key: "guard-policy", value }],
-      space: null,
-      intent: null,
-      scope: null,
-      error: null,
-    };
-  }
-  const tokens = splitKiroCommandArgs(text.slice(command[0].length).trim());
-  // `guard.plan-approval` is another spelling of `plan-approval`, and
-  // `change-control` of `guard-policy`.
-  const settingName = (key: string): string =>
-    key === "change-control" ? "guard-policy" : key === "guard.plan-approval" ? "plan-approval" : key;
-  // A flag name this parser knows: a setting, one of the request's own flags, or
-  // where the work is.
-  const knownFlag = (key: string): boolean =>
-    key === "space" || key === "intent" || key === "scope" ||
-    TYPED_REQUEST_FLAGS.has(key) || TYPED_INTENT_SETTING_KEYS.has(settingName(key));
-  // Workspace commands own the whole invocation. In particular, never apply
-  // a trailing lowering flag to the currently active selection before a
-  // switch/create command resolves its destination.
-  if (parseWorkspaceCommand(tokens).kind !== "not-workspace") {
-    return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
-  }
-  const configForm = tokens[0]?.toLowerCase() === "config" && tokens[1]?.toLowerCase() === "set";
-  const switches = new Map<GuardSwitchKey, GuardSwitch>();
-  const settings = new Map<string, string>();
-  let space: string | null = null;
-  let intent: string | null = null;
-  let scope: string | null = null;
-  const error: string | null = null;
-  let guardPolicySpelling: "guard-policy" | "change-control" | null = null;
-  let described = false;
-  const words: string[] = [];
-  const empty = (): {
-    switches: GuardSwitch[];
-    settings: Array<{ key: string; value: string }>;
-    space: null;
-    intent: null;
-    scope: null;
-    error: string | null;
-  } => ({ switches: [], settings: [], space: null, intent: null, scope: null, error: null });
-  // A switch of theirs never does nothing in silence. Where the message holds a
-  // contradiction, or a setting with no value, nothing is changed and they hear
-  // which part could not be read, as a question they answer in their own words.
-  // A switch they typed readably is never thrown away for the sake of another
-  // token: that case skips the token and says so afterwards (`unread`).
-  const lost = (reason: () => string) => {
-    if (switches.size === 0 && settings.size === 0) return empty();
-    return { ...empty(), error: reason() };
-  };
-  // A flag-shaped token before they described anything that this parser cannot
-  // read: the first one is named back to them once the rest has been carried out.
-  let unread: string | null = null;
-  let index = configForm ? 2 : 0;
-  if (configForm && tokens.length < 4) {
-    return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
-  }
-
-  while (index < tokens.length) {
-    const token = tokens[index++];
-    if (!configForm && token === "--") {
-      described = index < tokens.length;
-      words.push(...tokens.slice(index));
-      break;
-    }
-    const configKey = (
-      configForm && index === 3
-        ? token
-        : token.startsWith("--")
-          ? token.slice(2)
-          : null
-    )?.toLowerCase() ?? null;
-    if (configKey === null) {
-      if (!configForm) {
-        described = true;
-        words.push(token);
-        continue;
-      }
-      return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
-    }
-    // A flag-shaped token this parser does not know. Once they have started
-    // describing the work it is one of their words ("add a --help flag to the
-    // reverser"): it keeps its place in the description, and the token after it
-    // is a word too rather than its value. Before any description, the switches
-    // they typed still stand; the token, and a value-shaped token after it, are
-    // left out and named back to them once those are carried out.
-    if (!configForm && !knownFlag(configKey)) {
-      if (described) {
-        words.push(token);
-        continue;
-      }
-      unread ??= token;
-      if (tokens[index] !== undefined && !tokens[index].startsWith("--")) index++;
-      continue;
-    }
-    const value = tokens[index] !== undefined && !tokens[index].startsWith("--")
-      ? tokens[index++]
-      : undefined;
-    if (value === undefined || value.trim().length === 0) {
-      // A setting of theirs with nothing after it: there is no value to apply, so
-      // nothing changes and they are told which flag is missing one.
-      return TYPED_INTENT_SETTING_KEYS.has(settingName(configKey))
-        ? lost(() => `Nothing changed: "--${configKey}" came with no value. Which value did you mean for it?`)
-        : empty();
-    }
-    if (configKey === "space" || configKey === "intent") {
-      if ((configKey === "space" ? space : intent) !== null) return empty();
-      if (configKey === "space") space = value;
-      else intent = value;
-      continue;
-    }
-    if (!configForm && configKey === "scope") {
-      if (scope !== null) return empty();
-      scope = value;
-      continue;
-    }
-    if (!configForm && TYPED_REQUEST_FLAGS.has(configKey)) continue;
-    // `guard.plan-approval` is another way to say `plan-approval`: one switch,
-    // no plan stops. Whether an edited plan asks again is Guard Policy's call.
-    const currentKey = settingName(configKey);
-    if (!TYPED_INTENT_SETTING_KEYS.has(currentKey)) return empty();
-    const normalizedValue = value.toLowerCase();
-    const previous = settings.get(currentKey);
-    if (
-      currentKey === "guard-policy" &&
-      guardPolicySpelling !== null &&
-      guardPolicySpelling !== configKey &&
-      previous !== undefined &&
-      previous !== normalizedValue
-    ) {
-      // Both names of the same setting, with two different values: there is no
-      // reading of that message, so it is put back to them once, naming both.
-      return lost(() =>
-        `Nothing changed: you typed Guard Policy twice in that command, as ${previous} and ${normalizedValue}. ` +
-        "Which did you mean?");
-    }
-    if (currentKey === "guard-policy") {
-      guardPolicySpelling = configKey as "guard-policy" | "change-control";
-    }
-    settings.set(currentKey, normalizedValue);
-
-    let key: GuardSwitchKey;
-    if (currentKey === "guard-policy") {
-      key = "guard-policy";
-    } else if (currentKey === "summary-confirmation" || currentKey === "plan-approval") {
-      // The last value wins, so a later on drops an earlier off.
-      if (normalizedValue !== "off") {
-        switches.delete(currentKey);
-        continue;
-      }
-      key = currentKey;
-    } else {
-      if (!currentKey.startsWith("guard.")) continue;
-      const fence = currentKey.slice("guard.".length);
-      if (!isSwitchableGuardFence(fence)) continue;
-      // The last value wins here too, so a later on drops an earlier off.
-      if (normalizedValue !== "off") {
-        switches.delete(`guard.${fence}`);
-        continue;
-      }
-      key = `guard.${fence}`;
-    }
-    if (normalizedValue === "relaxed" || normalizedValue === "off") {
-      switches.set(key, { key, value: normalizedValue });
-    }
-  }
-  // Beside a description, summary confirmation off could land on the active
-  // piece of work before the new-work offer, or the message may be a question
-  // about the flag. Either way it is not the person's switch at prompt time.
-  // Plan approval off typed for the new work is still the person's: creation
-  // honors it for the piece of work this chat creates next.
-  const forNewWork = described && options.wordsAnswer !== true;
-  const newWorkPlanApprovalOff = forNewWork && settings.get("plan-approval") === "off";
-  // The ceremonies typed for the new work are the person's, for its labels.
-  const newWorkCeremonies: Record<string, "on" | "off"> = {};
-  for (const key of ["sensors", "learnings", "summary-confirmation"]) {
-    const value = settings.get(key);
-    if (forNewWork && (value === "on" || value === "off")) newWorkCeremonies[key] = value;
-  }
-  for (const ceremony of ["summary-confirmation", "plan-approval"] as const) {
-    if (forNewWork && settings.get(ceremony) === "off") {
-      switches.delete(ceremony);
-      settings.delete(ceremony);
-    }
-  }
-  // Guard Policy typed with the new work is for that work, never for the work
-  // open now: creation honors it for the piece of work this chat creates next.
-  const typedPolicy = settings.get("guard-policy");
-  const newWorkGuardPolicy = forNewWork && (typedPolicy === "relaxed" || typedPolicy === "off") ? typedPolicy : undefined;
-  if (newWorkGuardPolicy !== undefined) {
-    switches.delete("guard-policy");
-    settings.delete("guard-policy");
-  }
-  // So is a check turned off with it, when off is the last word typed for it.
-  const newWorkFencesOff: SwitchableGuardFence[] = [];
-  for (const fence of SWITCHABLE_GUARD_FENCES) {
-    if (!forNewWork || fence === "plan-approval" || settings.get(`guard.${fence}`) !== "off") continue;
-    newWorkFencesOff.push(fence);
-    switches.delete(`guard.${fence}`);
-    settings.delete(`guard.${fence}`);
-  }
-  return {
-    switches: [...switches.values()],
-    settings: [...settings].map(([key, value]) => ({ key, value })),
-    space,
-    intent,
-    scope,
-    error,
-    ...(newWorkPlanApprovalOff ? { newWorkPlanApprovalOff: true as const } : {}),
-    ...(newWorkGuardPolicy ? { newWorkGuardPolicy } : {}),
-    ...(Object.keys(newWorkCeremonies).length > 0 ? { newWorkCeremonies } : {}),
-    ...(newWorkFencesOff.length > 0 ? { newWorkFencesOff } : {}),
-    ...(words.length > 0 ? { words: words.join(" ") } : {}),
-    ...(unread === null ? {} : { unread }),
-  };
-}
-
-export function parseTypedGuardSwitches(prompt: string): GuardSwitch[] {
-  return parseTypedGuardSwitchRequest(prompt).switches;
-}
-
 export function guardSwitchRefusal(
   wanted: GuardSwitch,
-  // The person only asked about the switch since the last decision.
-  asked = false,
   projectDir?: string,
 ): string {
   // A terminal their own tool runs (Copilot in VS Code, Kiro IDE, Cursor): the
@@ -40785,11 +40461,6 @@ export function guardSwitchRefusal(
   const wait = ownTerminal
     ? ""
     : " No reply from the person has arrived since the last decision: run it when they ask for it.";
-  if (asked) {
-    return "The person asked a question about this check, which turns nothing off. Answer it in one line, offer to " +
-      "turn it off for this piece of work, and show the question you asked them again. When they say yes or ask " +
-      `for it, run the setter.${hint}`;
-  }
   if (wanted.key === "plan-approval") {
     return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call.${wait}${hint}`;
   }

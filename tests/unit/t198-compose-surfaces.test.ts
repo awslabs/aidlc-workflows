@@ -705,14 +705,17 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
       "--review", "none", "--guard-policy", "strict", "Fix the login crash when the session expires",
     ]).out);
     expect(ask.ask_type).toBe("new-work-routing");
-    expect(String(ask.new_intent_command)).toContain("--review none --guard-policy strict");
-    expect(String(ask.continue_command)).toContain("--review none --guard-policy strict");
+    for (const command of [String(ask.new_intent_command), String(ask.continue_command)]) {
+      expect(command).toContain("--review none");
+      expect(command).toContain("--guard-policy strict");
+    }
     const created = createdThrough(runEmitted(String(ask.new_intent_command)));
     const message = String(created.message);
     const create = /Run `([^`]+)` to start the new intent/.exec(message)?.[1] ?? "";
     // One step: nothing is left to apply once the work exists.
     expect(create).toContain("intent create --scope bugfix");
-    expect(create).toContain("--review none --guard-policy strict");
+    expect(create).toContain("--review none");
+    expect(create).toContain("--guard-policy strict");
     expect(message).not.toContain("config set");
     // Run it: the new work has them, the active work keeps its own.
     const before = readFileSync(seededStateFile(proj), "utf-8");

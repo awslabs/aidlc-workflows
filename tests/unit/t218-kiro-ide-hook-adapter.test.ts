@@ -1618,7 +1618,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("8d12: record-human-turn applies a visible typed fence switch at prompt time", () => {
+  test("8d12: record-human-turn records a typed fence switch whole and applies nothing", () => {
     const dir = scratchProject(true);
     try {
       const result = runIdeStdin(dir, "record-human-turn", JSON.stringify({
@@ -1628,12 +1628,10 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         prompt: "/aidlc config set guard.review-freeze off",
       }), GUARD_SWITCH_ENV);
       expect(result.code, result.stderr).toBe(0);
-      expect(result.stdout).toContain("AIDLC Guard Policy:");
-      expect(result.stdout).toContain("The review freeze check is off");
-      expect(readFileSync(seededStateFile(dir), "utf-8")).toContain(
-        "- **Guards Off**: review-freeze (set by you)",
-      );
-      expect(readAudit(dir).match(/GUARD_DISABLED/g)).toHaveLength(1);
+      expect(result.stdout).not.toContain("AIDLC Guard Policy:");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).not.toContain("- **Guards Off**: review-freeze");
+      expect(readAudit(dir)).not.toContain("GUARD_DISABLED");
+      expect(readAudit(dir)).toContain("HUMAN_TURN");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1724,20 +1722,20 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     },
   );
 
-  test("8d14: a shell setter passes through after the typed switch and reports the no-op", () => {
+  test("8d14: the setter the agent runs after the typed line turns the check off, and a repeat reports the no-op", () => {
     const dir = scratchProject(true);
     const session = "sess_prompt_switch_noop";
     try {
       submitGuardSwitchTurn(dir, session, "/aidlc config set guard.review-freeze off");
-      const state = readFileSync(seededStateFile(dir), "utf-8");
-      expect(state).toContain("- **Guards Off**: review-freeze (set by you)");
-      const audit = readAudit(dir);
-      expect(audit.match(/GUARD_DISABLED/g)).toHaveLength(1);
+      // The hook applies nothing. The terminal guard lets the setter the agent
+      // runs for them through, and that setter turns the check off as theirs.
+      expect(readFileSync(seededStateFile(dir), "utf-8")).not.toContain("- **Guards Off**: review-freeze");
+      expect(readAudit(dir)).not.toContain("GUARD_DISABLED");
       const guarded = preGuardSwitchCommand(
         dir, session, "bun .kiro/tools/aidlc-utility.ts config-change --guard.review-freeze off",
       );
       expect(guarded).toEqual({ code: 0, stdout: "", stderr: "" });
-      const setter = spawnSync("bun", [
+      const setterRun = () => spawnSync("bun", [
         join(dir, ".kiro", "tools", "aidlc-utility.ts"),
         "config-change", "--guard.review-freeze", "off",
       ], {
@@ -1751,6 +1749,13 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         },
         timeout: 30_000,
       });
+      const lowered = setterRun();
+      expect(lowered.status, lowered.stderr).toBe(0);
+      const state = readFileSync(seededStateFile(dir), "utf-8");
+      expect(state).toContain("- **Guards Off**: review-freeze (set by you)");
+      const audit = readAudit(dir);
+      expect(audit.match(/GUARD_DISABLED/g)).toHaveLength(1);
+      const setter = setterRun();
       expect(setter.status, setter.stderr).toBe(0);
       expect(setter.stdout).toContain("The review freeze check is already off");
       expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
@@ -1760,7 +1765,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("8d14a: a typed summary confirmation off applies as the person's and a shell repeat is a no-op", () => {
+  test("8d14a: a typed summary confirmation off is recorded, the setter applies it as the person's, and a repeat is a no-op", () => {
     const dir = scratchProject(true);
     const session = "sess_prompt_summary_off";
     try {
@@ -1771,7 +1776,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         prompt: "/aidlc config set summary-confirmation off",
       }), GUARD_SWITCH_ENV);
       expect(typed.code, typed.stderr).toBe(0);
-      expect(typed.stdout).toContain("Summary Confirmation changed:");
+      expect(typed.stdout).not.toContain("Summary Confirmation changed:");
       const intercepted = runIdeStdin(dir, "verb-intercept", JSON.stringify({
         session_id: session,
         hook_event_name: "UserPromptSubmit",
@@ -1779,15 +1784,10 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         prompt: "/aidlc config set summary-confirmation off",
       }), GUARD_SWITCH_ENV);
       expect(intercepted.code, intercepted.stderr).toBe(0);
-      const state = readFileSync(seededStateFile(dir), "utf-8");
-      expect(state).toContain("- **Summary Confirmation**: off (set by you)");
-      const audit = readAudit(dir);
-      const ceremonyRows = audit.split("**Event**: CEREMONY_SET").slice(1);
-      expect(ceremonyRows).toHaveLength(1);
-      expect(ceremonyRows[0]).toContain("**Source**: you");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).not.toContain("- **Summary Confirmation**: off");
       const command = "bun .kiro/tools/aidlc.ts engine config set summary-confirmation off";
       expect(preGuardSwitchCommand(dir, session, command)).toEqual({ code: 0, stdout: "", stderr: "" });
-      const setter = spawnSync("bun", [
+      const setterRun = () => spawnSync("bun", [
         join(dir, ".kiro", "tools", "aidlc.ts"),
         "engine", "config", "set", "summary-confirmation", "off",
       ], {
@@ -1801,6 +1801,15 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         },
         timeout: 30_000,
       });
+      const lowered = setterRun();
+      expect(lowered.status, lowered.stderr).toBe(0);
+      const state = readFileSync(seededStateFile(dir), "utf-8");
+      expect(state).toContain("- **Summary Confirmation**: off (set by you)");
+      const audit = readAudit(dir);
+      const ceremonyRows = audit.split("**Event**: CEREMONY_SET").slice(1);
+      expect(ceremonyRows).toHaveLength(1);
+      expect(ceremonyRows[0]).toContain("**Source**: you");
+      const setter = setterRun();
       expect(setter.status, setter.stderr).toBe(0);
       expect(setter.stdout).toContain("Summary Confirmation is already off (set by you)");
       expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
