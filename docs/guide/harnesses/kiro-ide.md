@@ -281,11 +281,12 @@ and Kiro IDE does not read that file. So in each new Kiro IDE chat:
    `aidlc-architect-agent`, and the next Enter sends it. AI-DLC reads that as
    `/aidlc` and carries on.
 3. Picking `aidlc` from the `/` menu does not change which agent the chat
-   uses. If the chat is still on **Default**, Kiro asks you to approve
-   loading AI-DLC and then each command it runs. To avoid that, choose
-   **aidlc** in the agent picker first (step 1). The `aidlc-...-agent`
-   entries in the `/` menu are the specialists AI-DLC brings in during a
-   workflow; you do not start them yourself.
+   uses. If the chat is still on **Default**, AI-DLC's first move is its own
+   command, which Kiro asks you to approve, and then each command it runs
+   asks. To avoid that, choose **aidlc** in the agent picker first (step 1).
+   The `aidlc-...-agent` entries in the `/` menu are the specialists AI-DLC
+   brings in during a workflow; you do not start them yourself, and one sent
+   alone (the `/` menu's completion of a bare `/aidlc`) is read as `/aidlc`.
 
 With the `aidlc` agent selected you can also ask in plain words, for example
 "start an AI-DLC workflow for a to-do app" or "continue my AI-DLC workflow".
