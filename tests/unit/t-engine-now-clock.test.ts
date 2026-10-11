@@ -82,11 +82,32 @@ describe("no shipped file asks for or pre-approves date -u", () => {
       "aidlc-common/protocols/stage-protocol.md",
       "aidlc-common/protocols/stage-protocol-learnings.md",
       "aidlc-common/stages/initialization/state-init.md",
-      "knowledge/aidlc-product-lead-agent/reviewing.md",
-      "knowledge/aidlc-architecture-reviewer-agent/reviewing.md",
     ]) {
       expect(readFileSync(join(AIDLC_SRC, rel), "utf-8"), rel).toContain("bun .claude/tools/aidlc.ts engine now");
     }
+  });
+
+  // A reviewer is handed the time instead of asking for it: the review request
+  // the conductor runs before every dispatch returns `reviewed_at`, the brief
+  // carries it, and the reviewer writes its Date line from the brief. On Claude
+  // Code the reviewer subagent used to spell the engine by absolute path, which
+  // no allow rule covers, so the person was asked to approve an AI-DLC step
+  // mid-review. The same clock still answers; nobody runs it for a date.
+  test("the reviewer templates take the time from the brief and run nothing for it", () => {
+    for (const rel of [
+      "knowledge/aidlc-product-lead-agent/reviewing.md",
+      "knowledge/aidlc-architecture-reviewer-agent/reviewing.md",
+    ]) {
+      const body = readFileSync(join(AIDLC_SRC, rel), "utf-8");
+      expect(body, rel).toContain("the UTC time the dispatch brief names on its `Date for this review:` line");
+      expect(body, rel).toContain("run no command for it");
+      expect(body, rel).not.toContain("engine now");
+      expect(body, rel).not.toContain("date -u");
+    }
+    // The engine's own side of the hand-off: the request returns the field the
+    // brief carries, and the protocol step tells the conductor to carry it.
+    expect(readFileSync(join(AIDLC_SRC, "aidlc-common", "protocols", "stage-protocol-reviewer.md"), "utf-8"))
+      .toContain("Date for this review: <reviewed_at>");
   });
 
   test("a Kiro IDE reviewer may run it on both channels", () => {
