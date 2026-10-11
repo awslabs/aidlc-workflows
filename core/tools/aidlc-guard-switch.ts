@@ -4,8 +4,11 @@ import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./
 import {
   guardPolicyAtLeast,
   latestPersonTurn,
+  isReplyTurn,
   personSpokeSinceGate,
+  readAuditShardEvents,
   assertChangeControlLedgerWritable,
+  type AuditShardEvent,
   auditBlockField,
   auditFilePath,
   CEREMONY_ENV,
@@ -259,6 +262,30 @@ function guardPolicyTypedThisTurn(projectDir: string, value: string, intent?: st
   return null;
 }
 
+// The person's latest turn is a reply (words of theirs, not a typed switch or a
+// command to AIDLC, which the hook carries out itself) and came after this setting
+// last changed. Their words stand behind a setter run that follows them, not
+// behind the setter's own later reversal (the way back after an off they asked
+// for), which no turn of theirs asked for. Rows in one shard order by position;
+// across shards by second, and an equal second is not read as after.
+function personTurnSinceSetting(projectDir: string, key: CeremonyKey, selection: { intent?: string; space?: string }): boolean {
+  let rows: AuditShardEvent[];
+  try {
+    rows = readAuditShardEvents(projectDir, selection.intent, selection.space);
+  } catch {
+    return false;
+  }
+  const after = (row: AuditShardEvent, other: AuditShardEvent): boolean =>
+    row.timestamp > other.timestamp ||
+    (row.timestamp === other.timestamp && row.shardIndex === other.shardIndex && row.pos > other.pos);
+  const latest = (pick: (row: AuditShardEvent) => boolean): AuditShardEvent | null =>
+    rows.filter(pick).reduce<AuditShardEvent | null>((last, row) => (last === null || after(row, last) ? row : last), null);
+  const turn = latest((row) => row.event === "HUMAN_TURN");
+  if (turn === null || !isReplyTurn(turn)) return false;
+  const setting = latest((row) => row.event === "CEREMONY_SET" && auditBlockField(row.block, "Key") === key);
+  return setting === null || after(turn, setting);
+}
+
 export function applyIntentSettings(
   projectDir: string,
   content: string,
@@ -447,7 +474,15 @@ export function applyIntentSettings(
   // so is one run in a terminal a host opened for its agent (Copilot in VS Code,
   // Kiro IDE, Cursor), where the line says which chat to ask in.
   // `commandAtPersonsTerminal` owns that test for the refusal and the record alike.
-  const atTheirTerminal = lowering.length > 0 && !typedByPerson && commandAtPersonsTerminal();
+  // The person's own settings here are the checks this command lowers and every
+  // other setting requested as theirs: a ceremony the agent sets from their
+  // words (collaborators, sensors, learnings) or turns back on. Whose it is
+  // follows the one rule below, so none of them is left to read "set by a
+  // command" when the person asked for it.
+  const theirCeremonies = CEREMONY_KEYS.filter((key) =>
+    ceremonies[key] !== undefined && requested[CEREMONY_FLAGS[key].slice(2) as ConfigKey]?.source === "you");
+  const personsRequest = lowering.length > 0 || theirCeremonies.length > 0;
+  const atTheirTerminal = personsRequest && !typedByPerson && commandAtPersonsTerminal();
   if (
     lowering.length > 0 && !typedByPerson && !atTheirTerminal && !fenceKeyBypassed(projectDir, sessionId) &&
     !personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true })
@@ -463,13 +498,13 @@ export function applyIntentSettings(
   // its whole ancestor chain, so a terminal beside it resolves the same session
   // anyway, and the walk that resolves it fails closed under load, which would
   // drop the person's own words from their record for no reason they could see.
-  const turn = lowering.length > 0 && !typedByPerson && !atTheirTerminal
+  const turn = personsRequest && !typedByPerson && !atTheirTerminal
     ? latestPersonTurn(projectDir)
     : null;
   const askedIn = turn?.words ?? null;
   // Asked for in the chat (not typed): each check it turns off is said in one
   // line, in their words, with the way back, instead of the setter's own line.
-  const askedInChat = lowering.length > 0 && !typedByPerson &&
+  const askedInChat = personsRequest && !typedByPerson && process.env.AIDLC_UNATTENDED !== "1" &&
     personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true });
   // Theirs either way: asked for in their chat, or run by them at their terminal.
   // Both get the one line that names the check, where it applies and the way
@@ -478,9 +513,18 @@ export function applyIntentSettings(
   const saidAsAsked = (key: string): boolean =>
     personsOwn && key !== "plan-approval" && lowering.some((item) => item.key === key);
   // A check the person asked in the chat to turn off is theirs, whoever runs the
-  // setter: turning one off needs their turn, so it is on record behind it.
-  const personAsked = (key: string): boolean =>
-    typedByPerson || (personsOwn && lowering.some((item) => item.key === key));
+  // setter: turning one off needs their turn, so it is on record behind it. Any
+  // other setting requested as theirs is theirs at their own terminal, or when
+  // their latest turn stands behind the setter run, newer than the setting's own
+  // last row (so the way back the agent runs after an off they asked for is the
+  // command's, not theirs).
+  const personAsked = (key: string): boolean => {
+    if (typedByPerson) return true;
+    if (lowering.some((item) => item.key === key)) return personsOwn;
+    const ceremony = theirCeremonies.find((candidate) => CEREMONY_FLAGS[candidate].slice(2) === key);
+    if (ceremony === undefined) return false;
+    return atTheirTerminal || (askedInChat && personTurnSinceSetting(projectDir, ceremony, selection));
+  };
 
   const audit: AuditEntryInput[] = [];
   const lines: string[] = [];
@@ -681,7 +725,7 @@ export function applyIntentSettings(
       eventType: "CEREMONY_SET",
       fields: {
         Key: key, Old: oldValue, New: value, Source: source,
-        ...(askedIn && value === "off" ? { "Person Reply": askedIn } : {}),
+        ...(askedIn && value === "off" && source === "you" ? { "Person Reply": askedIn } : {}),
       },
     });
     const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null

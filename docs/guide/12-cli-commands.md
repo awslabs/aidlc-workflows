@@ -1542,9 +1542,12 @@ and do not enforce this scope comparison.
 
 An explicit ceremony setting writes `<value> (set by a command)` to the
 corresponding state line, or `<value> (set by you)` when the human-turn hook
-applies the person's typed switch or the setter turns off a check the person
-asked in the chat to turn off, and adds a `CEREMONY_SET` row to the shared
-audit batch with `Key`, `Old`, `New`, and `Source`.
+applies the person's typed switch or the setter carries out what the person
+asked for in the chat (their turn is on record since the last decision: a
+check they asked to turn off, or any ceremony they asked to switch, such as
+"lead agent only from here"), and adds a `CEREMONY_SET` row to the shared
+audit batch with `Key`, `Old`, `New`, `Source`, and `Person Reply` (their
+words) when they asked for an off.
 `Old` is the previously saved value (raw text if invalid; the scope default
 when no line existed), not a value forced off by an environment kill switch.
 The audit keys are `sensors`, `learnings`, and `summary_confirmation`; a command
