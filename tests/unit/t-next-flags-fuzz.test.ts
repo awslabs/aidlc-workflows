@@ -744,6 +744,8 @@ describe("ways of saying go on over a seeded sweep", () => {
       expect(directive.kind, `${note} directive=${JSON.stringify(directive).slice(0, 300)}`).toBe("print");
       expect(String(directive.message), note).toMatch(/next` with nothing after it/);
       expect(String(directive.message), note).toContain("intent switch <name>");
+      // Words that name one piece and ask for it to go on get the one-step pick.
+      expect(String(directive.message), note).toContain("next --pick <name>");
       // Never offered as new work: the words stay out of the print and in the kept question.
       expect(JSON.stringify(directive), note).not.toContain(c.line);
       const after = runOrchestrateNext(ORCHESTRATE, proj, [], { env }).directive as Record<string, unknown>;

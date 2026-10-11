@@ -10,8 +10,10 @@
 // should I do? 1. Part of the active work ..."). Where work is here but none is
 // selected in this chat (a teammate's clone), the same reading comes first, so
 // "carry on" is never offered as new work, and the bare `next` the print names
-// is not read as that line again (takePersonsOwnLine, wordsAlreadyRead). Team
-// mode (Unit Ownership: team) gets the reading too. Every path also checks the
+// is not read as that line again (takePersonsOwnLine, wordsAlreadyRead), and words
+// that name one piece and ask for it to go on ("continue auth") get the pick
+// question's own one-step answer, `next --pick <name>`, so the person never
+// says it twice. Team mode (Unit Ownership: team) gets the reading too. Every path also checks the
 // chain the agent is told to follow: a stage step or one question within three
 // engine calls, and never the same print twice.
 
@@ -32,6 +34,7 @@ import {
   removeWorkspaceRecord,
   resetAidlcEnv,
   runOrchestrateNext,
+  seedAidlcMemory,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
@@ -70,6 +73,11 @@ const REQUEST = /--request ([0-9a-f]{8})/;
 // The print names the bare `next` as the command for words that only ask to go on.
 const BARE_NEXT = /next` with nothing after it|re-run `next`/;
 const REENTRY = "report --result resumed --choice <redo|jump|fresh>";
+// The pick step's print names the switch it runs before the bare `next`.
+const PICK_STEP = /intent switch (\S+)`, print its output verbatim, then run/;
+// The pieces of work the none-selected reading print lists, by exact name.
+const piecesNamed = (message: string): string[] =>
+  (/^Work is in progress here \(([^)]*)\)/.exec(message)?.[1] ?? "").split(", ").filter(Boolean);
 const ROUTING_QUESTION = "new-work-routing";
 
 function next(tools: string, proj: string, args: string[], env: NodeJS.ProcessEnv = { ...process.env }): Directive {
@@ -88,6 +96,16 @@ function questionTexts(proj: string): string[] {
     .map((name) => (JSON.parse(readFileSync(join(dir, name), "utf-8")) as { text: string }).text);
 }
 
+function switchTool(tools: string, proj: string, name: string): void {
+  const r = spawnSync(process.execPath, [join(tools, "aidlc-utility.ts"), "intent", "switch", name, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    cwd: proj,
+    env: { ...process.env },
+  });
+  expect(r.status, `switch ${name}: ${r.stdout}${r.stderr}`).toBe(0);
+}
+
 function stateTool(proj: string, verb: string): void {
   const r = spawnSync(process.execPath, [join(CLAUDE_TOOLS, "aidlc-state.ts"), verb, "--project-dir", proj], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -102,14 +120,16 @@ function stateTool(proj: string, verb: string): void {
  * The chain the agent is told to follow from a words line, for one reading of
  * the words: "go-on" runs the bare `next` each print names (through the unpark
  * step when a print names it); "request" runs the `next --request <id>` each
- * print names. It must end in a step that is not a print within three engine
- * calls, and no print may come back a second time.
+ * print names; "pick" runs the `next --pick <name>` the print names for the one
+ * piece the words name, then the switch and the bare `next` that step names. It
+ * must end in a step that is not a print within three engine calls, and no
+ * print may come back a second time.
  */
 function follow(
   tools: string,
   proj: string,
   args: string[],
-  reading: "go-on" | "request",
+  reading: "go-on" | "request" | "pick",
   env: NodeJS.ProcessEnv = { ...process.env },
 ): { last: Directive; calls: number } {
   const prints: string[] = [];
@@ -124,6 +144,20 @@ function follow(
       expect(message, "the print names the bare next").toMatch(BARE_NEXT);
       if (/ unpark`/.test(message)) stateTool(proj, "unpark");
       d = next(tools, proj, [], env);
+    } else if (reading === "pick") {
+      const picked = PICK_STEP.exec(message)?.[1];
+      if (picked === undefined) {
+        // The reading print: the piece the words name, from the print's own list.
+        expect(message, "the print names next --pick <name>").toContain("next --pick <name>");
+        const name = piecesNamed(message).find((piece) => piece.includes(args[args.length - 1]));
+        expect(name, `no piece named ${args[args.length - 1]} in: ${message.slice(0, 160)}`).toBeDefined();
+        d = next(tools, proj, ["--pick", name!], env);
+      } else {
+        // The one-step answer: the switch, then the bare next, in the same turn.
+        expect(message).toMatch(/then run `[^`]* next` and follow what it returns/);
+        switchTool(tools, proj, picked);
+        d = next(tools, proj, [], env);
+      }
     } else {
       const id = REQUEST.exec(message)?.[1];
       expect(id, message).toBeDefined();
@@ -151,12 +185,15 @@ function teamProject(): string {
   return proj;
 }
 
-// A teammate's clone: two pieces of work on disk, none selected here.
-function cloneWithWork(tools: string): string {
+// A teammate's clone: two pieces of work on disk, none selected here (or the
+// pieces named by `labels`, a bugfix each).
+function cloneWithWork(tools: string, labels?: readonly string[]): string {
   const proj = createTestProject();
   removeWorkspaceRecord(proj);
-  for (const scope of ["poc", "feature"]) {
-    const r = spawnSync(process.execPath, [join(tools, "aidlc-utility.ts"), "intent-create", "--scope", scope, "--project-dir", proj], {
+  seedAidlcMemory(proj); // the rules a clone carries, which a stage step loads
+  const pieces = labels ? labels.map((label) => ["--scope", "bugfix", "--label", label]) : [["--scope", "poc"], ["--scope", "feature"]];
+  for (const piece of pieces) {
+    const r = spawnSync(process.execPath, [join(tools, "aidlc-utility.ts"), "intent-create", ...piece, "--project-dir", proj], {
       cwd: proj,
       encoding: "utf-8",
       env: { ...process.env },
@@ -375,6 +412,34 @@ describe("t-carry-on-continues-the-work: work here but none selected in this cha
         const reread = next(engine, proj, [], env);
         expect(reread.kind, JSON.stringify(reread).slice(0, 300)).toBe("print");
         expect(String(reread.message)).toMatch(BARE_NEXT);
+      });
+    }
+  }
+});
+
+// Words that name one piece and ask for it to go on ("continue auth"): the print
+// names `next --pick <name>`, the pick question's own one-step answer, so the
+// agent selects that piece and carries on in the same turn and the person never
+// says it twice; words that only name a piece keep the switch and its stop.
+describe("t-carry-on-continues-the-work: words that name one piece and ask for it to go on", () => {
+  for (const [harness, tools] of [["claude", CLAUDE_TOOLS], ["kiro", KIRO_TOOLS]] as const) {
+    for (const labels of [["auth", "billing"], ["auth"]] as const) {
+      test(`${harness}: "continue auth" over ${labels.length} piece(s), none selected: the pick, the switch and the stage step in one chain`, () => {
+        proj = cloneWithWork(tools, labels);
+        const d = next(tools, proj, ["continue", "auth"]);
+        const note = JSON.stringify(d).slice(0, 400);
+        expect(d.kind, note).toBe("print");
+        expect(String(d.message), note).toContain("next --pick <name>");
+        expect(String(d.message), note).toContain("intent switch <name>");
+        expect(String(d.message), note).toMatch(BARE_NEXT);
+        expect(piecesNamed(String(d.message)).length, note).toBe(labels.length);
+        // The chain: the print, the pick step, then the stage step; no pick question, no stop.
+        const chain = follow(tools, proj, ["continue", "auth"], "pick");
+        expect(chain.last.kind, JSON.stringify(chain.last).slice(0, 300)).toBe("run-stage");
+        expect(chain.calls).toBe(3);
+        const cursor = join(proj, "aidlc", "spaces", "default", "intents", "active-intent");
+        expect(existsSync(cursor)).toBe(true);
+        expect(readFileSync(cursor, "utf-8")).toContain("auth");
       });
     }
   }

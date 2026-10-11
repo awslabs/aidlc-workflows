@@ -3198,16 +3198,20 @@ function teamWordsReplyDirective(requestId: string): PrintDirective {
 // Words alone where work is in progress but none is selected in this chat (a
 // teammate's clone, a chat that has not joined the work): the agent reads
 // whether they only ask to go on (the bare `next` asks which piece to pick up),
-// name one piece exactly, or describe new work. The engine kept the words.
+// name one piece and ask for it to go on (the pick question's own one-step
+// answer selects it and carries on), only name one piece, or describe new
+// work. The engine kept the words.
 function unselectedWordsReplyDirective(requestId: string, work: string[]): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   return printDirective(
     `Work is in progress here (${work.join(", ")}), and none is selected in this chat. Read the person's words. If ` +
       "they only ask for the work to go on (such as \"carry on\" or \"proceed\"), run " +
       `\`${orchestrate} next\` with nothing after it: it asks them which piece to pick up. If their words name exactly ` +
-      `one of the pieces, run \`${aidlcDispatcherInvocation("intent")} switch <name>\`, say the line it prints, then ` +
-      "stop. Otherwise (new work, or you cannot tell which), run " +
-      `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words.`,
+      `one of the pieces and ask for it to go on, run \`${orchestrate} next --pick <name>\`: it selects that piece and ` +
+      `carries on with it. If their words only name exactly one of the pieces, run ` +
+      `\`${aidlcDispatcherInvocation("intent")} switch <name>\`, say the line it prints, then stop. Otherwise (new work, ` +
+      `or you cannot tell which), run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the ` +
+      "engine kept their words.",
   );
 }
 

@@ -154,7 +154,8 @@ the export endpoint". What should I do?
 Saying only that the work should go on (`/aidlc carry on`, "proceed", "keep
 going", in your own words) asks nothing: AI-DLC reads your words and carries on
 with the active work. With work in the project but none selected yet, it asks
-which piece to pick up.
+which piece to pick up; name the piece with your words (`/aidlc continue auth`)
+and it picks that piece up and carries on with it at once.
 
 Settings you type with the new work go with the work you choose.
 `/aidlc --depth minimal --learnings off Fix the timeout on the export endpoint`
