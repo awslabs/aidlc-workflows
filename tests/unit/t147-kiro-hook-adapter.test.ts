@@ -1140,6 +1140,64 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
+  test("3f: a pre-dispatched step leads with the words for the person, then the step", () => {
+    // What the person reads opens the packet (a question's numbered rendering, a step's line and its notices, an
+    // error's message), so the turn opens with it; the step follows, for the agent. Nothing else of the step is
+    // said (engine-words Option 1, Fable's second caution: exact asks and notices only).
+    const dir = scratchProject(false);
+    try {
+      const prompt = "/aidlc --depth Standard";
+      const handOver = "The first `next` for this message has already run";
+      const question = "Which plan?\n\n1. **Go ahead**\n2. **Other** \u2014 describe what you want instead\n\nReply with a number (or just tell me).";
+      stubNext(dir, JSON.stringify({
+        kind: "ask", ask_type: "scope-confirm", response_route: "next", question: "Which plan?",
+        numbered_prose_question: question, choices: [{ label: "Go ahead", command: "x" }],
+      }));
+      let r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+      expect(r.code, r.stderr).toBe(0);
+      const said = r.stdout.indexOf("Say this to the person word for word, then end your turn");
+      expect(said, r.stdout).toBeGreaterThan(-1);
+      expect(r.stdout.indexOf(question)).toBeGreaterThan(said);
+      expect(r.stdout.indexOf(handOver)).toBeGreaterThan(r.stdout.indexOf(question));
+      expect(r.stdout).toContain("--- DIRECTIVE ---");
+      // A step with a line for the person and a notice: the line, then the notice, then the step.
+      stubNext(dir, JSON.stringify({
+        kind: "print", message: "run the thing", narration: "Picking up where we left off.",
+        change_notices: ["Guard Policy is relaxed for this piece of work."],
+      }));
+      r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+      expect(r.stdout).toContain(
+        "Say this to the person first, word for word, with nothing in front of it:\n\nPicking up where we left off.\n\n" +
+          "Guard Policy is relaxed for this piece of work.\n\n",
+      );
+      expect(r.stdout.indexOf("Picking up")).toBeLessThan(r.stdout.indexOf(handOver));
+      // An error: its message is the person's line, then stop.
+      stubNext(dir, JSON.stringify({ kind: "error", message: "No workflow here yet." }));
+      r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+      expect(r.stdout).toContain("Say this to the person word for word, then stop:\n\nNo workflow here yet.\n\n");
+      // A step with nothing for the person is handed over as before.
+      stubNext(dir, JSON.stringify({ kind: "print", message: "" }));
+      r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+      expect(r.stdout).not.toContain("Say this to the person");
+      expect(r.stdout).toContain(`${handOver}, with every argument kept. Act on its reply below now`);
+      // A question that is the agent's own work is no question for the person.
+      stubNext(dir, JSON.stringify({
+        kind: "ask", ask_type: "guard-recovery", response_route: "execute-remedy", question: "q", stage: "s",
+        reason_codes: [], remedies: [], agent_work: true,
+      }));
+      r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+      expect(r.stdout).not.toContain("Say this to the person");
+      // The warning the agent says once per chat is left to its rule, not repeated by the hand-over.
+      stubNext(dir, JSON.stringify({
+        kind: "print", message: "", stage_validity: { warning: "A document changed.", earliest_affected_stage: "x" },
+      }));
+      r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+      expect(r.stdout).not.toContain("Say this to the person");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("3e: steering of any size and incomplete JSON use exact-argv forwarding under every native shell alias", () => {
     const dir = scratchProject(false);
     try {

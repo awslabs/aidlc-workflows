@@ -545,6 +545,34 @@ const PRE_DISPATCH_FLAGS = new Set([
   "--report",
 ]);
 
+// The words of a pre-dispatched step that are the person's to hear, in the
+// order the agent says them: the step's line, then its notices, then a
+// question's numbered rendering (the engine's, with its Other line) or an
+// error's message. The warning said once per chat is left to the agent's rule,
+// and a question that is the agent's own work is no question for the person.
+function personLead(step: unknown): string | null {
+  if (step === null || typeof step !== "object" || Array.isArray(step)) return null;
+  const d = step as Record<string, unknown>;
+  const lines: string[] = [];
+  const push = (value: unknown): void => {
+    if (typeof value === "string" && value.trim().length > 0) lines.push(value.trim());
+  };
+  push(d.narration);
+  if (Array.isArray(d.change_notices)) for (const notice of d.change_notices) push(notice);
+  if (d.kind === "ask" && d.agent_work !== true) {
+    push(typeof d.numbered_prose_question === "string" ? d.numbered_prose_question : d.question);
+    if (lines.length === 0) return null;
+    return "Say this to the person word for word, then end your turn (the step below is for when they reply):\n\n" +
+      lines.join("\n\n");
+  }
+  if (d.kind === "error") {
+    push(d.message);
+    return lines.length === 0 ? null : `Say this to the person word for word, then stop:\n\n${lines.join("\n\n")}`;
+  }
+  if (lines.length === 0) return null;
+  return `Say this to the person first, word for word, with nothing in front of it:\n\n${lines.join("\n\n")}`;
+}
+
 function shouldPreDispatchNext(args: string[], cwd: string): boolean {
   // Only a line the engine reads exactly is run from here. Anything it would
   // hand to the agent (a flag it does not take, a value its table does not
@@ -656,8 +684,15 @@ if (target === "verb-intercept") {
         ).trim();
         if (run.exitCode === 0 && directive.length > 0) {
           const parsed: unknown = JSON.parse(directive);
+          // What the person reads opens the packet, the way a terminal
+          // command's output is handed over below: the turn then opens with
+          // it, and the agent needs no row to find it. The step follows, for
+          // the agent. Exact asks and notices only; a stage's work, a gate
+          // summary and a status answer stay the agent's own words.
+          const lead = personLead(parsed);
           const packet =
-            "The first `next` for this message has already run, with every " +
+            (lead === null ? "" : `${lead}\n\n`) +
+              "The first `next` for this message has already run, with every " +
               "argument kept. Act on its reply below now; do not call `next` " +
               "again for this message.\n\n" +
               `--- DIRECTIVE ---\n${directive}\n--- END DIRECTIVE ---\n`;
