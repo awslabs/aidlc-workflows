@@ -2727,6 +2727,35 @@ function isTerminalConfigurationDispatch(
   }
 }
 
+// --- The step's byte order: the person's words first, the agent's notes last ---
+//
+// Codex, Kiro CLI and opencode print the first lines of a command's output in
+// their tool panel (3, 5 and about 12 lines of it). A step that opened with its
+// fields showed the person the engine's machinery, and closed with the notes
+// meant for the agent, instead of their own question. The step stays one
+// canonical JSON line with the same keys and values; only the order changes:
+// the text written for the person, then `kind` and the rest as built, then
+// every note for the agent (a key ending in `_note`). Both emission sites run
+// it, and so does anything that builds a line to compare with the engine's
+// bytes (copilotGuardRestartPrintHashes).
+const PERSON_TEXT_FIELDS = ["question", "narration", "message", "change_notices", "stage_validity"];
+
+export function withPersonsWordsFirst<T extends object>(step: T): T {
+  const source = step as Record<string, unknown>;
+  const keys = Object.keys(source);
+  const lead = PERSON_TEXT_FIELDS.filter((key) => keys.includes(key));
+  const notes = keys.filter((key) => key.endsWith("_note"));
+  const rest = keys.filter((key) => !lead.includes(key) && !notes.includes(key));
+  const ordered: Record<string, unknown> = {};
+  for (const key of [...lead, ...rest, ...notes]) ordered[key] = source[key];
+  // The advisory's one line for the person leads the advisory too.
+  if (isPlainObject(ordered.stage_validity) && "warning" in ordered.stage_validity) {
+    const { warning, ...others } = ordered.stage_validity;
+    ordered.stage_validity = { warning, ...others };
+  }
+  return ordered as T;
+}
+
 // --- Engine error relay (the rebuild-stage-graph PostToolUse seam) ---
 //
 // The conductor skill tells the model to print an `error` directive's message
@@ -11008,10 +11037,10 @@ function copilotGuardRestartPrintHashes(
     ) return [];
     const direction = targetIndex === currentIndex ? "redo" : "backward";
     return ["aidlc engine jump", `bun ${runtimeHarnessDir()}/tools/aidlc-jump.ts`].map(
-      (invocation) => contentSha256(JSON.stringify({
+      (invocation) => contentSha256(JSON.stringify(withPersonsWordsFirst({
         kind: "print",
         message: `Run \`${invocation} execute --target ${operation.stage} --direction ${direction} --scope ${scopeArg(scope)}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
-      })),
+      }))),
     );
   } catch {
     // Unresolvable plan evidence cannot authorize retaining a recovery choice.

@@ -414,6 +414,7 @@ import {
   editedReviewNotice,
   dictatedReviewNotice,
   findStageBySlug,
+  withPersonsWordsFirst,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -1139,6 +1140,8 @@ function prepareEmission(directive: Directive): PreparedEmission {
   // Again for what was added after transport (a rebind notice).
   transported = withAgentNotes(transported, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"));
   const personLinesSaid = sayPendingPersonLines(requested, transported);
+  // The bytes the host's tool panel shows first are the person's words.
+  transported = withPersonsWordsFirst(transported);
   const result = validateDirective(transported);
   if (!result.valid) {
     console.error(
@@ -1358,7 +1361,7 @@ function attachLegacyKiroPlanApprovalChoices(
     request_changes: `Request Changes [${nonce}]`,
   };
   directive.legacy_plan_approval_choices = choices;
-  const validated = validateDirective(directive);
+  const validated = validateDirective(withPersonsWordsFirst(directive));
   if (!validated.valid) {
     throw new Error(
       `legacy Plan Approval choices produced an invalid directive: ${validated.errors.join("; ")}`,
