@@ -1048,3 +1048,119 @@ describe("t281 skipped earlier NFR stages", () => {
     expect(out.result.reason).toContain("required upstream NFR design artifacts are missing under");
   });
 });
+
+// When User Stories is skipped the story map carries FR rows (NFR rows are
+// optional) keyed to a Unit, the join Units Generation verifies. A Unit's own
+// stage traces exactly its rows: another Unit's requirements are never asked of
+// it (#2282), a shared row is asked of every Unit on it, and the Unit's own
+// detailed NFRx.y / BRx.y stay required. The requirements-wide set remains only
+// for a run with no Unit or no story map.
+describe("t281 User Stories skipped: a Unit traces its own story-map rows", () => {
+  function seedUnitsWithoutStories(proj: string, nfrRows: boolean): void {
+    write(proj, "inception/requirements-analysis/requirements.md", [
+      "# Requirements",
+      "",
+      "## Functional",
+      "- FR1 Login",
+      "- FR2 Recovery",
+      "- FR3 Profile view",
+      "- FR4 Profile edit",
+      "",
+      "## Non-functional",
+      "- NFR1 Security",
+      "- NFR2 Latency",
+    ].join("\n"));
+    seedUnits(proj);
+    write(proj, "inception/units-generation/unit-of-work-story-map.md", [
+      "# Story Map",
+      "",
+      "| Requirement | Unit ID | Directory |",
+      "|---|---|---|",
+      "| FR1 | U1 | u1-auth |",
+      "| FR2 | U1 | u1-auth |",
+      "| FR3 | U2 | u2-profile |",
+      "| FR4 | U2 | u2-profile |",
+      ...(nfrRows ? ["| NFR1 | U1 | u1-auth |", "| NFR1 | U2 | u2-profile |", "| NFR2 | U2 | u2-profile |"] : []),
+    ].join("\n"));
+    const source = join(proj, "src", "auth.ts");
+    mkdirSync(join(source, ".."), { recursive: true });
+    writeFileSync(source, "export const auth = true;\n");
+  }
+
+  function codeTable(proj: string, unit: string, ids: string[]): string {
+    return trace(proj, `construction/${unit}/code-generation/traceability.json`, {
+      stage: "code-generation",
+      unit,
+      upstream_ids: ids,
+      coverage: ids.map((id) => ({ id, status: "OK", target: "src/auth.ts" })),
+    });
+  }
+
+  test("code-generation asks a Unit for its own FR rows only", () => {
+    const proj = project();
+    seedUnitsWithoutStories(proj, false);
+    let out = run(proj, "code-generation", codeTable(proj, "u1-auth", ["FR1", "FR2"]));
+    expect(out.result.missing_from_upstream_ids).toEqual([]);
+    expect(out.result.pass, out.result.reason).toBe(true);
+
+    out = run(proj, "code-generation", codeTable(proj, "u1-auth", ["FR1"]));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.missing_from_upstream_ids).toEqual(["FR2"]);
+
+    out = run(proj, "code-generation", codeTable(proj, "u2-profile", ["FR3", "FR4"]));
+    expect(out.result.missing_from_upstream_ids).toEqual([]);
+    expect(out.result.pass, out.result.reason).toBe(true);
+  });
+
+  test("code-generation asks every Unit on a shared NFR row, and keeps the Unit's own NFRx.y and BRx.y", () => {
+    const proj = project();
+    seedUnitsWithoutStories(proj, true);
+    let out = run(proj, "code-generation", codeTable(proj, "u1-auth", ["FR1", "FR2"]));
+    expect(out.result.missing_from_upstream_ids).toEqual(["NFR1"]);
+
+    out = run(proj, "code-generation", codeTable(proj, "u1-auth", ["FR1", "FR2", "NFR1"]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+
+    out = run(proj, "code-generation", codeTable(proj, "u2-profile", ["FR3", "FR4", "NFR2"]));
+    expect(out.result.missing_from_upstream_ids).toEqual(["NFR1"]);
+
+    write(proj, "construction/u1-auth/nfr-requirements/security-requirements.md", "# Security\n\n- NFR1.1 Hash passwords\n");
+    write(proj, "construction/u1-auth/functional-design/rules.md", "# Rules\n\n- BR1.1 Lock after five failures\n");
+    out = run(proj, "code-generation", codeTable(proj, "u1-auth", ["FR1", "FR2", "NFR1"]));
+    expect(out.result.missing_from_upstream_ids).toEqual(["BR1.1", "NFR1.1"]);
+    out = run(proj, "code-generation", codeTable(proj, "u1-auth", ["FR1", "FR2", "NFR1", "NFR1.1", "BR1.1"]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+  });
+
+  test("code-generation keeps the requirements-wide set when there is no story map", () => {
+    const proj = project();
+    seedUnitsWithoutStories(proj, true);
+    rmSync(join(seededRecordDir(proj), "inception", "units-generation", "unit-of-work-story-map.md"));
+    const out = run(proj, "code-generation", codeTable(proj, "u1-auth", ["FR1", "FR2"]));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.missing_from_upstream_ids).toEqual(["FR3", "FR4", "NFR1", "NFR2"]);
+  });
+
+  test("functional-design asks a Unit for its own FR rows only", () => {
+    const proj = project();
+    seedUnitsWithoutStories(proj, true);
+    write(proj, "construction/u1-auth/functional-design/rules.md", "# Rules\n\n- BR1.1 Lock after five failures\n- BR1.2 Reset links expire\n");
+    const table = (ids: string[]) => trace(proj, "construction/u1-auth/functional-design/traceability.json", {
+      stage: "functional-design",
+      unit: "u1-auth",
+      upstream_ids: ids,
+      coverage: ids.map((id, index) => ({ id, status: "OK", target: `BR1.${index + 1}` })),
+    });
+    let out = run(proj, "functional-design", table(["FR1", "FR2"]));
+    expect(out.result.missing_from_upstream_ids).toEqual([]);
+    expect(out.result.pass, out.result.reason).toBe(true);
+
+    out = run(proj, "functional-design", table(["FR1"]));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.missing_from_upstream_ids).toEqual(["FR2"]);
+
+    rmSync(join(seededRecordDir(proj), "inception", "units-generation", "unit-of-work-story-map.md"));
+    out = run(proj, "functional-design", table(["FR1", "FR2"]));
+    expect(out.result.missing_from_upstream_ids).toEqual(["FR3", "FR4"]);
+  });
+});
