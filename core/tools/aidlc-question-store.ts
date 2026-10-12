@@ -242,6 +242,33 @@ export function pruneExpiredQuestions(projectDir: string): void {
 }
 
 /**
+ * Whether `next` has already read these words for this chat: a routing question
+ * holding exactly this text, saved at or after `sinceIso` (the time of the
+ * message that carried them). The reading step over work nobody has selected
+ * saves one, so the bare `next` the agent runs after that step is not read as
+ * the same line again.
+ */
+export function wordsAlreadyRead(projectDir: string, text: string, sinceIso: string): boolean {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
+  } catch {
+    return false;
+  }
+  const since = Date.parse(sinceIso);
+  for (const name of names) {
+    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+    if (!QUESTION_ID.test(id)) continue;
+    const question = readStoredQuestion(projectDir, id);
+    if (question === null || question.origin !== "routing" || question.text !== text) continue;
+    const at = Date.parse(question.createdAt);
+    // The question is saved after the message that led to it, never before.
+    if (Number.isNaN(since) || (!Number.isNaN(at) && at >= since)) return true;
+  }
+  return false;
+}
+
+/**
  * The new-work question asked most recently, when it was asked within `withinMs`:
  * the request a reply at the compose gate or the scope confirmation is about.
  * A `compose` entry counts, so a reply at its gate answers that composition.

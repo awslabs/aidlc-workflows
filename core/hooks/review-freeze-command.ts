@@ -1065,9 +1065,9 @@ function invocationMayMutate(commandName: string, args: string[]): boolean {
 export type CommandShell = "posix" | "powershell";
 
 // PowerShell reads the typographic quotes and dashes as ' " and -.
-const isPowerShellSingleQuote = (ch: string | undefined): boolean =>
+export const isPowerShellSingleQuote = (ch: string | undefined): boolean =>
   ch !== undefined && "'‘’‚‛".includes(ch);
-const isPowerShellDoubleQuote = (ch: string | undefined): boolean =>
+export const isPowerShellDoubleQuote = (ch: string | undefined): boolean =>
   ch !== undefined && '"“”„'.includes(ch);
 const POWERSHELL_PARAMETER = /^[-–—―]([A-Za-z_][\w-]*)$/;
 const POWERSHELL_TYPE_NAME = /\[[^\s;|&<>\]]*\]/y;

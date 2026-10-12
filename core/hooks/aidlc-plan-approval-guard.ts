@@ -74,6 +74,7 @@ import {
   composerProposalPath,
   docsRoot,
   ANSWER_TEXT_DIR,
+  REQUEST_TEXT_DIR,
   errorMessage,
   getField,
   GUARD_RECOVERY_ASK_TYPE,
@@ -131,6 +132,7 @@ import {
   evaluateCodeGenerationApproval,
   planReviewAppendix,
   promptTestingContractMarkers,
+  WORKER_BRIEF_SECTIONS,
 } from "../tools/aidlc-testing-posture.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 
@@ -310,10 +312,10 @@ export interface PlanApprovalVerdict {
 
 /**
  * A developer handoff that names no target or several, names one this
- * workflow does not build, or carries the wrong contract line for an
- * approved plan.
+ * workflow does not build, carries the wrong contract line for an approved
+ * plan, or carries the marker lines without the brief they head.
  */
-export type HandoffDefect = "targets" | "unknown-target" | "contract";
+export type HandoffDefect = "targets" | "unknown-target" | "contract" | "brief";
 
 function approvalEvidenceIsCurrent(evidence: UnitEvidence | undefined): boolean {
   return (
@@ -408,15 +410,27 @@ export function evaluatePlanApprovalDispatch(
     target !== undefined && promptCarriesReviewAppendix(promptText, target.reviewAppendix);
   const approved = approvalEvidenceIsCurrent(target);
   const contractMatches = contractMarkers.length === 1 && contractMarkers[0] === target?.contractHash;
+  // The marker lines head the brief; alone they hand the developer none of the
+  // plan or instructions the approval covers. The brief's own sections, as the
+  // brief command prints them, say the brief is there.
+  const briefCarried = promptCarriesBriefSections(promptText);
   const handoff: HandoffDefect | undefined = target === undefined
     ? "unknown-target"
-    : approved && !contractMatches ? "contract" : undefined;
+    : approved && !contractMatches ? "contract" : approved && !briefCarried ? "brief" : undefined;
   return {
-    block: target === undefined || !approved || !contractMatches || appendixInBrief,
+    block: target === undefined || !approved || !contractMatches || appendixInBrief || !briefCarried,
     mentioned,
     ...(appendixInBrief ? { appendixInBrief: true } : {}),
     ...(handoff ? { handoff } : {}),
   };
+}
+
+/** One line of each of the brief's section families, whitespace-folded: the
+ *  plan and instructions headings in their fence-on or fence-off wording. */
+export function promptCarriesBriefSections(promptText: string): boolean {
+  const fold = (text: string): string => text.replace(/\s+/g, " ").trim();
+  const folded = fold(promptText);
+  return WORKER_BRIEF_SECTIONS.every((family) => family.some((heading) => folded.includes(fold(heading))));
 }
 
 /** Whitespace-insensitive containment of a non-trivial appendix in the prompt. */
@@ -481,6 +495,22 @@ export function appendixBlockReason(mentioned: string[]): string {
   );
 }
 
+// The last clause of a refusal that waits on the plan: what `next` does with
+// it. With plan approval on, next asks the person. With it off for this work,
+// next starts the build without asking anyone, so the clause says that and
+// tells the agent not to ask for an approval nobody wants. The agent repeats
+// these words to the person, so the clause names no engine part and no
+// switch: the command it follows is already named once, and "it" is enough.
+function nextAfterPlanClause(planApprovalOff: boolean, handsOver: boolean): string {
+  if (planApprovalOff) {
+    return "plan approval is off for this work, so it starts the build without asking anyone; " +
+      "do not ask the person to approve the plan.";
+  }
+  return handsOver
+    ? "the engine asks the person to approve the plan, and the `next` after their answer hands over the build."
+    : "the engine asks the person to approve it before any code is written.";
+}
+
 // The block reason handed back to the conductor through the harness's
 // PreToolUse error channel. Self-explaining and redirecting: it names the
 // missing evidence and the exact stage steps that produce it, so the
@@ -489,6 +519,7 @@ export function blockReason(
   mentioned: string[],
   detail: string | null = null,
   targets: BriefTargets | null = null,
+  planApprovalOff = false,
 ): string {
   const scope =
     mentioned.length === 1
@@ -501,8 +532,7 @@ export function blockReason(
   return (
     `Code generation cannot start for ${scope} because its plan and test instructions are ` +
     `not approved yet.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""} Finish code-generation-plan.md and ` +
-    `unit-test-instructions.md, then run ${nextOnItsOwn()}: the engine asks the person to ` +
-    `approve the plan, and the \`next\` after their answer hands over the build. Then hand the ` +
+    `unit-test-instructions.md, then run ${nextOnItsOwn()}: ${nextAfterPlanClause(planApprovalOff, true)} Then hand the ` +
     `developer the output of ${briefCommand(mentioned, targets)} first, as printed: it names the one ` +
     "target and its Testing Contract."
   );
@@ -521,7 +551,9 @@ export function handoffBlockReason(
       : "names no target"
     : cause === "unknown-target"
       ? `names ${mentioned[0]}, which is not a Code Generation target of this workflow`
-      : "has an AIDLC-TESTING-CONTRACT line that is missing, repeated, or not the approved plan's";
+      : cause === "brief"
+        ? "carries the marker lines without the brief they head"
+        : "has an AIDLC-TESTING-CONTRACT line that is missing, repeated, or not the approved plan's";
   return (
     `Code generation cannot start: the developer handoff ${what}. Hand the developer the output of ` +
     `${briefCommand(mentioned, targets)} first, exactly as printed: it names the one target and its ` +
@@ -551,6 +583,7 @@ export function mutationBlockReason(
   unit: string | null,
   opaqueShell = false,
   detail: string | null = null,
+  planApprovalOff = false,
 ): string {
   const scope = unit === null ? "the zero-Unit stage-level implementation" : `unit ${unit}`;
   const action = opaqueShell
@@ -560,8 +593,7 @@ export function mutationBlockReason(
     `Code generation cannot ${action} for ${scope} because ` +
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
     `matching approval.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""} Writes inside the selected code-generation record directory remain ` +
-    `available for planning. When the plan is ready, run ${nextOnItsOwn()}: the engine asks ` +
-    `the person to approve it before any code is written.`
+    `available for planning. When the plan is ready, run ${nextOnItsOwn()}: ${nextAfterPlanClause(planApprovalOff, false)}`
   );
 }
 
@@ -1123,9 +1155,44 @@ function isAnswerTextTarget(projectDir: string, target: string): boolean {
   }
 }
 
+// The project folder where the agent writes a person's request for `next
+// --request-file` (REQUEST_TEXT_DIR): a plain file directly inside it, the only
+// place the engine reads it, reached through no link. Writing it changes
+// nothing and builds nothing; the engine reads the file and removes it.
+function isRequestTextTarget(projectDir: string, target: string): boolean {
+  try {
+    const folder = join(projectDir, REQUEST_TEXT_DIR);
+    if (normalizeDriveLetter(dirname(resolve(target))) !== normalizeDriveLetter(resolve(folder))) return false;
+    if (!isTrustedRecordTarget(projectDir, target, folder)) return false;
+    const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
+    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+  } catch {
+    return false;
+  }
+}
+
 // The Code Generation stage's learnings diary (`<record>/construction/code-generation/memory.md`),
 // exactly, as a plain file inside AI-DLC's records: reached through no symlink
 // and not hard-linked to another file (isStageRecordOutput).
+// A phase-boundary verification report: `<record>/verification/<boundary>-verification.md`
+// (the governance protocol, written as the next phase begins) or
+// `phase-check-<phase>.md` (the phase's last stage). A Codex run wrote the
+// Inception->Construction one while Code Generation was planning, and the guard
+// read it as a workspace path. It is AI-DLC's own record of a check, not source
+// and not a plan-bound file, so the folder is admitted while the Code Generation
+// step is current, under the stage diary's fences (inside aidlc/spaces, not the
+// state, the intents index, an engine control or audit file, reached through no
+// symlink, not hard-linked). The drive letter is folded as for the diary, so a
+// VS Code host's `c:\` spelling is the same folder on Windows.
+function isPhaseVerificationTarget(projectDir: string, target: string): boolean {
+  try {
+    const folder = normalizeDriveLetter(resolve(join(docsRoot(projectDir), "verification")));
+    return isWithinDir(normalizeDriveLetter(resolve(target)), folder) && isStageRecordOutput(projectDir, target);
+  } catch {
+    return false;
+  }
+}
+
 function isStageDiaryTarget(projectDir: string, target: string): boolean {
   try {
     const diary = normalizeDriveLetter(resolve(memoryFilePath(projectDir, "construction", GUARDED_STAGE)));
@@ -1735,10 +1802,12 @@ function isPlanApprovalPrerequisite(
   if (noun === "testing-posture" && verb === "begin") return true;
   if (noun !== "log" || (verb !== "decision" && verb !== "answer")) return false;
 
+  // Summary confirmation precedes plan generation. Admission delegates reply,
+  // questions-file and Unit validation to the log owner; it grants no approval.
   const routeArgs = args.slice(3);
   return (
     lastFlagValue(routeArgs, "--stage") === GUARDED_STAGE &&
-    lastFlagValue(routeArgs, "--checkpoint") === "plan-approval"
+    ["plan-approval", "summary-confirmation"].includes(lastFlagValue(routeArgs, "--checkpoint") ?? "")
   );
 }
 
@@ -2546,12 +2615,15 @@ async function evaluate(
       return 0;
     }
     // A file-tool write of a person's answer text, for the log to read with no
-    // shell on the way, passes in every Plan Approval state too.
+    // shell on the way, passes in every Plan Approval state too, and so does
+    // one of a person's request, for `next --request-file`.
     if (
       WRITE_TOOLS.has(toolName) &&
       !mutation.opaqueShell &&
       mutation.targets.length > 0 &&
-      mutation.targets.every((candidate) => isAnswerTextTarget(projectDir, candidate))
+      mutation.targets.every((candidate) =>
+        isAnswerTextTarget(projectDir, candidate) || isRequestTextTarget(projectDir, candidate)
+      )
     ) {
       return 0;
     }
@@ -2730,7 +2802,8 @@ async function evaluate(
         const approvalDir = resolve(codeGenerationRecordDir(projectDir, unit));
         const outsideRecord = mutation.targets.find(
           (candidate) =>
-            !isTrustedRecordTarget(projectDir, candidate, approvalDir),
+            !isTrustedRecordTarget(projectDir, candidate, approvalDir) &&
+            !isPhaseVerificationTarget(projectDir, candidate),
         );
         if (!outsideRecord && !mutation.opaqueShell) return 0;
         const approval = evaluateCodeGenerationApproval(projectDir, target);
@@ -2780,6 +2853,20 @@ async function evaluate(
   // plan is asked about again by `next`, and the reason says so. The same words
   // refuse with the fence on and, where a lowered fence still refuses, with it
   // off; `detail` is then the evaluator's reason for the target it could not start.
+  // The last clause says what `next` does with the plan: with plan approval off
+  // for this work it starts the build without asking anyone, and a refusal that
+  // says the person will be asked is a wrong line the agent repeats to them. The
+  // setting is read only when refusing, off the path every other call takes; a
+  // setting that cannot be read keeps the asking wording, which is the stop's own.
+  let planApprovalOff = false;
+  if (verdict.block && !authorityFailure) {
+    try {
+      const { resolvePlanApprovalSetting } = await import("../tools/aidlc-guard-switch.ts");
+      planApprovalOff = resolvePlanApprovalSetting(projectDir, state).value === "off";
+    } catch {
+      planApprovalOff = false;
+    }
+  }
   const refusalProse = (detail: string | null): string =>
     authorityFailure
       ? authorityBlockReason(authorityFailure, standing, asked)
@@ -2788,12 +2875,13 @@ async function evaluate(
           blockedMutation.unit,
           blockedMutation.opaqueShell,
           detail ?? blockedMutation.detail,
+          planApprovalOff,
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)
       : handoffDefect
       ? handoffBlockReason(verdict.mentioned, handoffDefect, briefTargets)
-      : blockReason(verdict.mentioned, detail ?? receiptDetail(units, verdict.mentioned), briefTargets);
+      : blockReason(verdict.mentioned, detail ?? receiptDetail(units, verdict.mentioned), briefTargets, planApprovalOff);
 
   // The rules still arriving is about the delivery, not the plan, so it holds
   // under every Guard Policy and is said on its own: a lowered fence has

@@ -181,7 +181,8 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     expect(orchestrator).toContain("numbered prose");
     expect(orchestrator).toContain("picker results do not fire");
     expect(orchestrator).toContain("| `load-steering` |");
-    expect(orchestrator).toContain("directive.receipt");
+    // The rules part names the command that fetches the next part; the row says to run it as given.
+    expect(orchestrator).toContain("Run the command the part names (copy it as given)");
     expect(orchestrator).toContain("The orchestration engine emits nine kinds today");
     expect(orchestrator).toContain("stage-protocol-ensemble.md");
     const ensembleProtocol = readFileSync(
@@ -194,7 +195,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
       "utf-8",
     );
     expect(ensembleProtocol).toContain(
-      "rules as the accumulated `load-steering` bundle",
+      'rules per `stage-protocol.md` § "For subagent stages" step 2',
     );
     expect(existsSync(join(ENGINE, "hooks", "aidlc-deliver-stage-rules.ts"))).toBe(true);
     const questionRendering = readFileSync(

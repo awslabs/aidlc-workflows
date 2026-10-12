@@ -238,8 +238,9 @@ The workflow profile chooses the route and defaults. You can independently tune:
 - **Depth** with `--depth minimal|standard|comprehensive`.
 - **Test strategy** with `--test-strategy minimal|standard|comprehensive`.
 - **Review cap** with `--review adversarial|advisory|none`. The effective class
-  is the lowest of the stage declaration, profile cap, and this per-run cap, so
-  it can never raise review intensity.
+  is the stage's own declared class, lowered by this per-run cap when set,
+  otherwise by the profile cap; neither ceiling can raise a stage past what it
+  declares, and a set per-run cap replaces the profile cap.
 
 These overrides do not turn one profile into another; they adjust the selected
 profile. See [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) for the

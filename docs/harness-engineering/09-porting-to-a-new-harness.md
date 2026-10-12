@@ -130,8 +130,9 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   `json-array`, `whole-file`, `jsonc-settings`, or `json-entries`).
   `json-entries` is for a team's own JSON config file (opencode's
   `opencode.json`): config adds AI-DLC's values and array strings at any depth
-  only where absent, adds a map's `"*"` rule only when the map has none, keeps
-  everything else, and follows or retires only entries still holding the value
+  only where absent, adds a permission rule for the team's own commands first
+  in a map so the team's rules after it decide, keeps everything else, and
+  follows or retires only entries still holding the value
   it wrote; its part ships in root-blocks and the copy runtime leaves the file
   out. `jsonc-settings` is for an
   editor's own JSONC settings file (Copilot's `.vscode/settings.json`): config

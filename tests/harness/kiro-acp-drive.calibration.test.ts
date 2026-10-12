@@ -88,7 +88,7 @@ const SKIP_REASON = skipReason();
 const DOCTOR_HEADER = "AI-DLC doctor";
 const DOCTOR_RUNTIME_LABEL = "Runtime hook PATH: bun";
 const DOCTOR_ADAPTER_LABEL = "aidlc-kiro-adapter.ts present";
-const DOCTOR_AGENT_LABEL = "agents/aidlc.{json,md} present (conductor wiring)";
+const DOCTOR_AGENT_LABEL = "agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)";
 
 // `/aidlc --status/--doctor/--version` now runs in userPromptSubmit, before
 // ACP tool calls. Calibrate the tool-output channel by explicitly requesting a

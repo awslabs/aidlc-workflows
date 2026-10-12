@@ -1205,7 +1205,7 @@ function expandKiroToolAllows(treeRoot: string, m: HarnessManifest): void {
   if (expanded === 0) throw new Error("[kiro] no agent names the tools-folder pattern to expand");
 }
 
-// Kiro IDE's authored conductor (agents/aidlc.md) allows AI-DLC's tool
+// Kiro IDE's authored conductor (agents/aidlc-aidlc.md) allows AI-DLC's tool
 // scripts and the dispatcher's engine namespace. Both trees add, after the
 // engine line, each dispatcher command every install pre-approves exactly as
 // AI-DLC runs it (copyChannelDispatcherCommands): through the project's
@@ -1215,11 +1215,11 @@ function expandKiroToolAllows(treeRoot: string, m: HarnessManifest): void {
 // commands (delegate-shell-deny.ts).
 function expandKiroIdeConductorAllows(treeRoot: string, m: HarnessManifest, invoke: string): void {
   if (m.name !== "kiro-ide") return;
-  const conductor = join(treeRoot, "agents", "aidlc.md");
+  const conductor = join(treeRoot, "agents", "aidlc-aidlc.md");
   const engine = `        - "${invoke} engine *"\n`;
   const value = readFileSync(conductor, "utf-8");
   if (value.split(engine).length !== 2) {
-    throw new Error(`[kiro-ide] agents/aidlc.md must allow ${invoke} engine * exactly once`);
+    throw new Error(`[kiro-ide] agents/aidlc-aidlc.md must allow ${invoke} engine * exactly once`);
   }
   const exact = copyChannelDispatcherCommands().map((command) => `        - "${invoke} ${command}"\n`);
   writeFileSync(conductor, value.replace(engine, `${engine}${exact.join("")}`));

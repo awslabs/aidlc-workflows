@@ -377,7 +377,7 @@ export function seedBoltDagBatches(proj: string, batches: string[][]): void {
  * aidlc-state.md until a seeder writes one (a bare createTestProject leaves an
  * empty record, matching the old empty aidlc-docs/).
  */
-function seedWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
+export function seedWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
   const intentsDir = intentsDirOf(proj, space);
   mkdirSync(join(proj, "aidlc", "spaces", space, "memory"), { recursive: true });
   mkdirSync(seededRecordDir(proj, space), { recursive: true });
@@ -504,6 +504,15 @@ export function recordArtifactWriteViaHook(
     );
   }
 }
+
+/**
+ * The `## ` section lines a worker brief carries, as `aidlc-testing-posture.ts brief`
+ * prints them (fence on): the plan-approval guard's handoff check wants one line of
+ * each family, so a fixture that hands the developer the marker lines by hand
+ * appends these. The real brief is dispatched in t265, which catches drift.
+ */
+export const WORKER_BRIEF_SECTIONS_FIXTURE =
+  "\n## Files and commands\n\n## The plan file\n\n## Approved plan\n\n## Approved unit-test instructions\n";
 
 /**
  * Recursively remove a temp project dir. Mirrors cleanup_test_project

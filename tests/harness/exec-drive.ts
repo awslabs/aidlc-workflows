@@ -133,6 +133,8 @@ export function setupCodexProject(opts: { workspaceWrite?: boolean } = {}): Code
       `model_provider = "amazon-bedrock"`,
       `model_context_window = 1000000`,
       `model_reasoning_effort = "low"`,
+      // No update check on start: a live run must not change the tool it measures (a root setting, as below).
+      `check_for_update_on_startup = false`,
       // A root setting: after the first table it would belong to that table.
       ...(opts.workspaceWrite ? [`sandbox_mode = "workspace-write"`] : []),
       ``,
@@ -163,12 +165,20 @@ export function codexHeadlessArgs(...args: string[]): string[] {
   return ["-c", "features.default_mode_request_user_input=false", ...args];
 }
 
-export function execCodex(
-  proj: string,
-  home: string,
-  prompt: string,
-): ExecResult {
-  const argv = codexHeadlessArgs("exec", prompt);
+/** The argv of one headless `codex exec` turn for `prompt`. The "--" ends codex exec's own options, so a line that
+ * is one of its subcommand words (`help`, `resume`) or starts with a dash is still the prompt, never an argument. */
+export function codexExecArgs(prompt: string): string[] {
+  return codexHeadlessArgs("exec", "--", prompt);
+}
+
+/** The argv of a headless `codex exec resume --last` turn: the newest session under CODEX_HOME (a scratch home holds
+ * the one this run opened) continues with `prompt`. codex exec takes the lone positional after --last as the prompt,
+ * and the "--" keeps a dash-led line out of its options, as in `codexExecArgs`. */
+export function codexResumeArgs(prompt: string): string[] {
+  return codexHeadlessArgs("exec", "resume", "--last", "--", prompt);
+}
+
+function runCodex(proj: string, home: string, argv: string[], prompt: string): ExecResult {
   const turn = codexPersonTurn(proj, prompt);
   const result = spawnSync(CODEX_BIN, argv, {
     cwd: proj,
@@ -185,6 +195,19 @@ export function execCodex(
   };
   recordCodexExec("status", proj, [CODEX_BIN, ...argv], captured, turn);
   return captured;
+}
+
+export function execCodex(
+  proj: string,
+  home: string,
+  prompt: string,
+): ExecResult {
+  return runCodex(proj, home, codexExecArgs(prompt), prompt);
+}
+
+/** The person's next turn in the session `execCodex` opened under the same scratch `home`, recorded like the first. */
+export function execCodexResume(proj: string, home: string, prompt: string): ExecResult {
+  return runCodex(proj, home, codexResumeArgs(prompt), prompt);
 }
 
 // A scratch install: dist/copilot copied verbatim (dotfiles included: the

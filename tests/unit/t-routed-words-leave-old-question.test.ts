@@ -32,6 +32,7 @@ import {
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  activeIntentUuid,
   artifactFilename,
   auditBlockField,
   findStageBySlug,
@@ -47,6 +48,7 @@ import {
   renderTestingContract,
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import { readPlanApprovalAsk } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -444,6 +446,40 @@ describe("words sent to separate new work leave the question the work in progres
     const later = next(proj) as Emitted & { kept_replies?: { replies: string[] } };
     expect(later.kind, JSON.stringify(later)).toBe("run-stage");
     expect(later.kept_replies?.replies ?? []).not.toContain(words);
+  });
+
+  // A live run on Codex: "turn the specialist reviewers off for the rest of
+  // this work", typed while the code plan question was open, stayed kept as
+  // the first line of the plan approval's Person Reply, above "looks good, go
+  // ahead". A setting the engine applies is an instruction to it, like words
+  // sent to new work: the question keeps none of it, and the answer recorded
+  // later holds the answer alone.
+  test("a setting typed while the code plan question is open is not kept as its reply", () => {
+    const proj = project("off");
+    expect(next(proj).ask_type).toBe("plan-approval");
+    // The replies the code plan question keeps, as the hook kept them.
+    const kept = (): string[] =>
+      readPlanApprovalAsk(proj, activeIntentUuid(proj) ?? "bare-space")?.replies?.map((reply) => reply.text) ?? [];
+    const setting = "turn the specialist reviewers off for the rest of this work";
+    say(proj, setting);
+    expect(kept()).toEqual([setting]);
+    const applied = next(proj, ["--review", "none"]);
+    expect(applied.kind, JSON.stringify(applied)).toBe("print");
+    expect(applied.message).toContain("config set review none");
+    expect(kept()).toEqual([]);
+    say(proj, "looks good, go ahead");
+    const answered = spawnSync(BUN, [
+      LOG, "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
+      "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...env(proj), AIDLC_SESSION_OVERRIDE: SESSION, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
+    const recorded = readAuditShardEvents(proj).filter((row) => row.event === "PLAN_APPROVAL_RECORDED");
+    expect(recorded.map((row) => auditBlockField(row.block, "Person Reply"))).toEqual(["looks good, go ahead"]);
   });
 });
 

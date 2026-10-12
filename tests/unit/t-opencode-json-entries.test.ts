@@ -3,10 +3,11 @@
 //
 // A team's own opencode.json (their model, provider, instructions and
 // permission rules) keeps everything it has when AI-DLC is set up or
-// refreshed in the project: AI-DLC adds only its own entries, never changes
-// the team's "*" permission rule, and later follows or removes only the
-// entries it wrote that nobody changed. A copy leaves the file out and its
-// setup (or the first session) adds AI-DLC's part.
+// refreshed in the project: AI-DLC adds only its own entries, puts its rules
+// for the team's own commands first so the team's rules after them decide,
+// and later follows or removes only the entries it wrote that nobody
+// changed. A copy leaves the file out and its setup (or the first session)
+// adds AI-DLC's part.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -16,7 +17,7 @@ import {
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { copyChannelOmits, projectionFiles, sha256Bytes } from "../../core/tools/aidlc-distribution.ts";
@@ -29,6 +30,9 @@ const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const DIST = join(REPO_ROOT, "dist");
 const OPENCODE_RELEASE = join(REPO_ROOT, "dist-release", "opencode");
 const AIDLC_RULE = trustedCommand("*");
+// AI-DLC's two asks for the person's own commands: a recursive delete and a push.
+const RM_ASK = "rm -r*";
+const PUSH_ASK = "git push *";
 const temporary: string[] = [];
 
 afterEach(() => {
@@ -41,7 +45,12 @@ function temp(prefix: string): string {
   return path;
 }
 
-function run(args: string[], cwd: string, tool = INIT): { status: number; stdout: string; stderr: string } {
+function run(
+  args: string[],
+  cwd: string,
+  tool = INIT,
+  extraEnv: NodeJS.ProcessEnv = {},
+): { status: number; stdout: string; stderr: string } {
   // Keep the host's active runtime out of fixture source selection.
   const machine = temp("aidlc-t-ocje-machine-");
   const result = spawnSync(BUN, [tool, ...args], {
@@ -50,6 +59,7 @@ function run(args: string[], cwd: string, tool = INIT): { status: number; stdout
       ...process.env,
       AIDLC_INSTALL_ROOT: join(machine, "share", "aidlc"),
       AIDLC_BIN_DIR: join(machine, "bin"),
+      ...extraEnv,
     },
     encoding: "utf-8",
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -65,10 +75,15 @@ function project(teamFile?: string): string {
   return dir;
 }
 
-function configure(dir: string, source = OPENCODE_RELEASE): { status: number; stdout: string; stderr: string } {
+function configure(
+  dir: string,
+  source = OPENCODE_RELEASE,
+  extraEnv: NodeJS.ProcessEnv = {},
+  flags: string[] = [],
+): { status: number; stdout: string; stderr: string } {
   return run([
-    "config", "--project-dir", dir, "--from", source, "--harness", "opencode", "--mcp", "none", "--yes",
-  ], dir);
+    "config", "--project-dir", dir, "--from", source, "--harness", "opencode", "--mcp", "none", "--yes", ...flags,
+  ], dir, INIT, extraEnv);
 }
 
 function configured(dir: string, source = OPENCODE_RELEASE): string {
@@ -138,9 +153,11 @@ describe("a team's opencode.json keeps what the team set", () => {
       "aidlc/active-memory/**/*.md",
     ]);
     expect(value.skills).toEqual({ paths: [".aidlc/skills"] });
-    expect(value.permission.edit).toEqual({ "*": "allow", ".aidlc/tools/**": "ask", ".aidlc/hooks/**": "ask" });
-    // The team's "*" stays theirs; AI-DLC's own rule goes after the team's rules.
+    expect(value.permission.edit).toEqual({ ".aidlc/tools/**": "ask", ".aidlc/hooks/**": "ask" });
+    // The team's "*" and "git push *" stay theirs; AI-DLC's ask for the team's
+    // own commands goes first, its own-command rule after the team's rules.
     expect(Object.entries(value.permission.bash)).toEqual([
+      [RM_ASK, "ask"],
       ["*", "allow"],
       ["git push *", "ask"],
       [AIDLC_RULE, "allow"],
@@ -148,26 +165,43 @@ describe("a team's opencode.json keeps what the team set", () => {
     const record = contribution(dir);
     expect(record.policy).toBe("json-entries");
     expect(record.entries[JSON.stringify({ path: ["permission", "bash", AIDLC_RULE] })]).toBeDefined();
+    expect(record.entries[JSON.stringify({ path: ["permission", "bash", RM_ASK] })]).toBeDefined();
+    expect(record.entries[JSON.stringify({ path: ["permission", "bash", PUSH_ASK] })]).toBeUndefined();
     expect(record.entries[JSON.stringify({ path: ["permission", "bash", "*"] })]).toBeUndefined();
     expect(record.entries[JSON.stringify({ path: ["model"] })]).toBeUndefined();
     // A second run changes nothing.
     expect(configured(dir)).toBe(after);
   });
 
-  test("AI-DLC's \"*\" rule is added only to a map that has none, and first, so the team's rules still decide", () => {
+  test("AI-DLC's asks go first in a team's map, so the team's rules after them still decide", () => {
     const dir = project('{\n  "permission": {\n    "bash": {\n      "git *": "allow"\n    }\n  }\n}\n');
     const value = parse(configured(dir));
+    // opencode takes the last matching rule: this team's "git *" decides a push.
     expect(Object.entries(value.permission.bash)).toEqual([
-      ["*", "ask"],
+      [PUSH_ASK, "ask"],
+      [RM_ASK, "ask"],
       ["git *", "allow"],
       [AIDLC_RULE, "allow"],
     ]);
   });
 
+  test("a team rule under one of AI-DLC's ask keys keeps the team's value and stays theirs", () => {
+    const dir = project('{\n  "permission": {\n    "bash": {\n      "git push *": "allow"\n    }\n  }\n}\n');
+    const value = parse(configured(dir));
+    expect(Object.entries(value.permission.bash)).toEqual([
+      [RM_ASK, "ask"],
+      ["git push *", "allow"],
+      [AIDLC_RULE, "allow"],
+    ]);
+    const record = contribution(dir);
+    expect(record.entries[JSON.stringify({ path: ["permission", "bash", PUSH_ASK] })]).toBeUndefined();
+    expect(record.entries[JSON.stringify({ path: ["permission", "bash", RM_ASK] })]).toBeDefined();
+  });
+
   test("opencode's shorthand rule is kept as the team's \"*\"", () => {
     const dir = project('{\n  "permission": {\n    "bash": "ask"\n  }\n}\n');
     const value = parse(configured(dir));
-    expect(value.permission.bash).toEqual({ "*": "ask", [AIDLC_RULE]: "allow" });
+    expect(value.permission.bash).toEqual({ "*": "ask", [RM_ASK]: "ask", [PUSH_ASK]: "ask", [AIDLC_RULE]: "allow" });
   });
 
   test("a byte order mark and CRLF line ends stay as the team saved them", () => {
@@ -217,7 +251,36 @@ describe("a refresh follows only AI-DLC's unchanged entries", () => {
     expect(value.permission.edit[".aidlc/tools/**"]).toBe("deny");
     expect(value.permission.edit[".aidlc/hooks/**"]).toBe("deny");
     expect(value.model).toBe("amazon-bedrock/team-model");
-    expect(Object.keys(value.permission.bash)).toEqual(["*", "git push *", AIDLC_RULE]);
+    expect(Object.keys(value.permission.bash)).toEqual([RM_ASK, "*", "git push *", AIDLC_RULE]);
+  });
+
+  test("the earlier release's \"*\" rules go on refresh when nobody changed them; a value the team set stays", () => {
+    // The shape 2.11 shipped: ask every shell command, allow every edit.
+    const earlier = releaseCopy((shipped) => {
+      shipped.permission.bash = { "*": "ask", ...shipped.permission.bash };
+      shipped.permission.edit = { "*": "allow", ...shipped.permission.edit };
+    });
+    const dir = project();
+    const first = parse(configured(dir, earlier));
+    expect(first.permission.bash["*"]).toBe("ask");
+    // The team adds its model and nothing else; the refresh from this release follows.
+    writeFileSync(join(dir, "opencode.json"), `${JSON.stringify({ model: "team/model", ...first }, null, 2)}\n`);
+    const value = parse(configured(dir));
+    expect(value.model).toBe("team/model");
+    expect(value.permission.bash["*"]).toBeUndefined();
+    expect(value.permission.edit["*"]).toBeUndefined();
+    expect(value.permission.bash[RM_ASK]).toBe("ask");
+    expect(value.permission.bash[PUSH_ASK]).toBe("ask");
+    expect(value.permission.bash[AIDLC_RULE]).toBe("allow");
+    expect(value.permission.edit).toEqual({ ".aidlc/tools/**": "ask", ".aidlc/hooks/**": "ask" });
+    // The same install where the team had tightened AI-DLC's shell rule to deny.
+    const tightened = project();
+    const text = configured(tightened, earlier);
+    writeFileSync(join(tightened, "opencode.json"), text.replace('"*": "ask"', '"*": "deny"'));
+    const kept = parse(configured(tightened));
+    expect(kept.permission.bash["*"]).toBe("deny");
+    expect(kept.permission.edit["*"]).toBeUndefined();
+    expect(kept.permission.bash[RM_ASK]).toBe("ask");
   });
 
   test("a file AI-DLC wrote whole before is adopted, and the team's later edit is kept", () => {
@@ -377,7 +440,7 @@ describe("the entry merge", () => {
     const merged = mergeJsonEntries('{"permission":{"bash":{"git *":"allow"}}}', shipped, { kind: "none" });
     if ("conflict" in merged) throw new Error(merged.conflict);
     const value = parse(merged.text);
-    expect(Object.entries(value.permission.bash)).toEqual([["*", "ask"], ["git *", "allow"], [AIDLC_RULE, "allow"]]);
+    expect(Object.entries(value.permission.bash)).toEqual([[PUSH_ASK, "ask"], [RM_ASK, "ask"], ["git *", "allow"], [AIDLC_RULE, "allow"]]);
     expect(value.skills).toEqual({ paths: [".aidlc/skills"] });
   });
 
@@ -449,6 +512,64 @@ describe("an explicit provider choice reaches the team's opencode.json", () => {
     expect(openCodeFileProvider(project(PROFILE_FILE))).toEqual({ region: "eu-west-1", profile: "team-ops" });
     expect(openCodeFileProvider(project(TEAM_FILE))).toEqual({ region: "eu-west-1" });
     expect(openCodeFileProvider(project())).toEqual({});
+  });
+});
+
+// opencode replaces a global short-form permission rule ("bash": "ask") with
+// the bash map AI-DLC writes into the project. Setup says so once, in one
+// line that names the file, and writes nothing there.
+describe("setup says once when the person's global opencode config holds a short-form permission rule", () => {
+  // The line names the file as the person sees it: under "~" on Linux and
+  // macOS, the full path on Windows (opencode's home there is USERPROFILE).
+  const noteLine = (home: string, file: string) =>
+    `Your opencode setting asks before every shell command; in this project AI-DLC\x27s permission rules replace that short form. To keep asking, write it as "bash": {"*": "ask"} in ${
+      platform() === "win32" ? file : `~${file.slice(home.length)}`
+    }.`;
+  function globalHome(text: string): { home: string; env: NodeJS.ProcessEnv; file: string } {
+    const home = temp("aidlc-t-ocje-home-");
+    const file = join(home, ".config", "opencode", "opencode.jsonc");
+    mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+    writeFileSync(file, text);
+    return { home, env: { HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, ".config") }, file };
+  }
+
+  test("one Note line at setup naming the file, a Warning line in quiet mode, the line in --json, the file untouched", () => {
+    const text = '{\n  // the person\x27s own file\n  "permission": { "bash": "ask" },\n}\n';
+    const { home, env, file } = globalHome(text);
+    const LINE = noteLine(home, file);
+    const dir = project();
+    const result = configure(dir, OPENCODE_RELEASE, env);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout.split(`Note: ${LINE}`).length - 1, result.stdout).toBe(1);
+    expect(readFileSync(file, "utf-8")).toBe(text);
+    const quiet = configure(dir, OPENCODE_RELEASE, env, ["--quiet"]);
+    expect(quiet.status, quiet.stdout + quiet.stderr).toBe(0);
+    expect(quiet.stdout.split(`Warning: ${LINE}`).length - 1).toBe(1);
+    const json = configure(dir, OPENCODE_RELEASE, env, ["--json"]);
+    expect(json.status, json.stdout + json.stderr).toBe(0);
+    expect(json.stdout).toContain(JSON.stringify(LINE));
+    expect(readFileSync(file, "utf-8")).toBe(text);
+  });
+
+  test("nothing when the form is an object or absent, and nothing on another harness", () => {
+    const object = globalHome('{ "permission": { "bash": { "*": "ask" } } }');
+    const quietObject = configure(project(), OPENCODE_RELEASE, object.env);
+    expect(quietObject.status, quietObject.stdout + quietObject.stderr).toBe(0);
+    expect(quietObject.stdout).not.toContain("Your opencode setting");
+    const absent = temp("aidlc-t-ocje-home-");
+    const noFile = configure(project(), OPENCODE_RELEASE, { HOME: absent, USERPROFILE: absent, XDG_CONFIG_HOME: join(absent, ".config") });
+    expect(noFile.status, noFile.stdout + noFile.stderr).toBe(0);
+    expect(noFile.stdout).not.toContain("Your opencode setting");
+    const short = globalHome('{ "permission": { "bash": "ask" } }');
+    const dir = project();
+    const claude = run(
+      ["config", "--project-dir", dir, "--from", join(REPO_ROOT, "dist-release", "claude"), "--harness", "claude", "--mcp", "none", "--yes"],
+      dir,
+      INIT,
+      short.env,
+    );
+    expect(claude.status, claude.stdout + claude.stderr).toBe(0);
+    expect(claude.stdout).not.toContain("Your opencode setting");
   });
 });
 

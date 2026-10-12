@@ -163,6 +163,14 @@ then use the ignored local `dist/copilot/` output.
   subagent starts in your chat: a message then that AI-DLC cannot match to a
   brief is taken to be that brief and is not counted, and if it was yours you
   are asked to reply again.
+- **Typing `/aidlc` with your request keeps your words.** Copilot hands a
+  skill you invoke by its slash name to AI-DLC as the skill's own text with
+  your words filled in, not as the line you typed. AI-DLC rebuilds that line
+  (`/aidlc` plus your words, taken verbatim from where the skill's text carries
+  them) when the text is exactly the installed skill file with your words in
+  it, so your request is on the record and reaches the work even when the
+  agent's first command carries none of it. Anything that is not exactly that
+  file is recorded as Copilot delivered it.
 - **AI-DLC's agents get the stage rules, and the builder waits for your plan
   approval.** Whether the agent starts one of AI-DLC's agents with VS Code's
   `runSubagent` tool or the CLI's `task` tool, AI-DLC hands it the current

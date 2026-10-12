@@ -595,11 +595,13 @@ function compiledKiroNewWorkRoutingGate(artifact: string): GateResult {
     const routed = run(
       artifact,
       [
+        // This engine's own option rides ahead of the person's words, where
+        // every caller puts it: after their words it is a word of a request.
         "next",
-        "poc",
-        "Create a tiny TypeScript command-line program that prints Hello World.",
         "--project-dir",
         project,
+        "poc",
+        "Create a tiny TypeScript command-line program that prints Hello World.",
       ],
       { cwd: project, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
@@ -2484,7 +2486,7 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(harnessProbeGate(
       actual.artifact,
       "kiro",
-      "agents/aidlc.{json,md} present (conductor wiring)",
+      "agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)",
     ));
     result.gates.push(harnessProbeGate(
       actual.artifact,

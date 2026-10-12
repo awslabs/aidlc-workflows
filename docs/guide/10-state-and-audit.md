@@ -111,7 +111,7 @@ means. The write guard is a guardrail, not a security boundary. See
 [Audit Trail Rules](../reference/04-stage-protocol.md#audit-trail-rules) for
 the owning commands and the read-only query contract.
 
-### 117-event taxonomy
+### 118-event taxonomy
 
 Events are organized into 25 categories:
 
@@ -128,7 +128,7 @@ Events are organized into 25 categories:
 | **Interaction** | 17 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `QUESTION_REPLIED`, `QUESTION_UNANSWERED`, `REQUEST_ROUTED`, `SUMMARY_CONFIRMATION_RECORDED`, `VERIFICATION_COMMAND_RECORDED`, `CONSTRUCTION_POLICY_RECORDED`, `CHECKPOINT_VERIFICATION_RECORDED`, `PLAN_APPROVAL_RECORDED`, `PLAN_APPROVAL_SKIPPED`, `PLAN_APPROVAL_OVERRIDDEN`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED` |
 | **Unit Configuration and Lifecycle** | 9 | `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `CONSTRUCTION_POLICY_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, `UNIT_MERGED` |
 | **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED` (write-audit-log hook), `ARTIFACT_REUSED` |
-| **Subagent** | 2 | `SUBAGENT_COMPLETED` (log-subagent hook), `SUBAGENT_PROMPT_UNMATCHED` (Copilot adapter, advisory) |
+| **Subagent** | 3 | `SUBAGENT_COMPLETED` (log-subagent hook), `SUBAGENT_PROMPT_UNMATCHED` (Copilot adapter, advisory), `REVIEW_VERDICT_DICTATED` (no longer written; earlier releases' plan-approval-guard hook. The reviewer's own `**Verdict Dictated:**` line now rides `REVIEW_COMPLETED`) |
 | **Reviewer Enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED` (reviewer-scope hook), `REVIEW_FREEZE_BLOCKED` (review-freeze hook) |
 | **Plan Approval** | 2 | `PLAN_APPROVAL_BLOCKED`, `GUARD_DISABLED` (plan-approval-guard hook, or a fence you switched off for this piece of work) |
 | **Documents** | 3 | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` — space-level shard even when intent-scoped |
@@ -207,7 +207,10 @@ At completion the engine validates each unit newest-first (a newer reviewed
 claim can own an intentional shared-file integration), then compares the union
 of fresh claims with the stage-entry source baseline. Under Guard Policy
 strict, an uncovered change or a stale unit blocks all four completion routes
-and offers that unit's one bounded stale-receipt recovery. Under relaxed or
+and offers that unit's one bounded stale-receipt recovery. A file Git ignores
+that no unit can claim (neither tracked nor registered in
+`.aidlc-source-paths.json`, such as build output or a test run's record) is not
+an uncovered change. Under relaxed or
 off, an uncovered change is kept: completion records it once as
 `CHANGE_ACCEPTED` and names the files in one line ("These files changed outside
 any unit's work in Code Generation: ... Kept them."), and a stage-entry baseline
