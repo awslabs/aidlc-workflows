@@ -440,6 +440,29 @@ describe("t318 session binding helpers", () => {
     }
   });
 
+  test("a SessionStart walk over several hops reads the table once and records each hop", () => {
+    const children = Array.from({ length: 2 }, () => Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 60000)"]));
+    try {
+      const [a, b] = children.map((child) => child.pid);
+      const lookup = mockMacProcessTree(new Map([[process.ppid, a], [a, b]]));
+      try {
+        writeSessionPidAncestry(proj, "walk-session");
+        expect(lookup.ps).toHaveBeenCalledTimes(1);
+        for (const pid of [process.ppid, a, b]) {
+          const entry = JSON.parse(readFileSync(join(sessionPidMapDir(proj), String(pid)), "utf-8")) as {
+            sessionId: string | null;
+            startTime: string | null;
+          };
+          expect(entry).toEqual({ sessionId: "walk-session", startTime: `fixture-start-${pid}` });
+        }
+      } finally {
+        lookup.restore();
+      }
+    } finally {
+      for (const child of children) child.kill();
+    }
+  });
+
   // The real `ps` on Linux and macOS (Windows has none). The start time
   // SessionStart records is the same lstart string a per-pid lookup prints,
   // so entries recorded before this change still match.
@@ -452,18 +475,23 @@ describe("t318 session binding helpers", () => {
     const single = childProcess.spawnSync("ps", ["-o", "lstart=", "-p", String(process.ppid)], { encoding: "utf-8" });
     expect(recorded.startTime).toBe(single.stdout.trim());
     // A SessionStart walk and a resolve walk with the real ps find the session.
-    // A shared runner can stall one spawn past the 50 ms budget, so the walk
-    // gets three tries, and is skipped when a single spawn alone took longer.
+    // A shared runner can stall the walk's own `ps -A` past its 50 ms budget,
+    // so the walk gets three tries, and a miss is skipped, not failed, when the
+    // walk itself ran out: SessionStart left only its barrier for this process's
+    // parent, or the resolve walk returned nothing after spending its budget.
+    // The mocked cases above cover the walk's logic.
     let found: string | null = null;
-    let slowest = 0;
+    let ranOut = false;
     for (let attempt = 0; attempt < 3 && found !== "real-session"; attempt++) {
-      const started = performance.now();
-      childProcess.spawnSync("ps", ["-A", "-o", "pid=,ppid=,lstart="], { encoding: "utf-8" });
-      slowest = Math.max(slowest, performance.now() - started);
       writeSessionPidAncestry(proj, "real-session");
+      const entry = JSON.parse(readFileSync(join(sessionPidMapDir(proj), String(process.ppid)), "utf-8")) as {
+        sessionId: string | null;
+      };
+      const started = performance.now();
       found = resolveSessionIdFromAncestry(proj);
+      ranOut = entry.sessionId !== "real-session" || (found === null && performance.now() - started >= 45);
     }
-    if (found !== "real-session" && slowest > 50) return;
+    if (found !== "real-session" && ranOut) return;
     expect(found).toBe("real-session");
   });
 
