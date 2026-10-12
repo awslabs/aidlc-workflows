@@ -1713,8 +1713,10 @@ runner filter. Discovery uses each file's own integration/e2e live gate variable
 the derived Claude substrate list, and the unit release-contract opt-in; using a
 generic plugin helper does not claim coverage for every provider it supports.
 Unit gate-fixture tests are deterministic, not live families. `PLATFORM_ONLY`
-declares separately selectable Windows-only files; it never hides a skipped case
-inside a selected file. All live provider legs use `--require-coverage`;
+names the files that run on some platforms only, and, with no platform, the
+on-demand checks that open only with a switch of their own that no live job sets
+(the input and answers corpus checks); it never hides a skipped case inside a
+selected file. All live provider legs use `--require-coverage`;
 release-contract files retain platform-conditional cases and do not use that flag.
 
 Outside the native profile, deterministic and release-contract results are job

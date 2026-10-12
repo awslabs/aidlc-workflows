@@ -105,6 +105,10 @@ export const PLATFORM_ONLY: Record<string, readonly NodeJS.Platform[]> = {
   // The golden journeys run nightly on Linux; stage logic is the same on every OS.
   "tests/integration/t-journey-golden-bugfix.sdk.test.ts": ["linux"],
   "tests/integration/t-journey-golden-poc.sdk.test.ts": ["linux"],
+  // On demand only: these open with their own switch (AIDLC_INPUT_LIVE,
+  // AIDLC_ANSWERS_LIVE), which no live job sets, so no platform runs them.
+  "tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts": [],
+  "tests/e2e/t-live-aidlc-input-corpus.serial.test.ts": [],
 };
 
 const LIVE_RUNNERS = { linux: "ubuntu-latest", darwin: "macos-15", win32: "windows-latest" } as const;
