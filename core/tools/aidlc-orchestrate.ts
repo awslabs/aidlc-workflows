@@ -4727,6 +4727,16 @@ export function nextArgsAreOnlyWords(args: string[]): boolean {
   return typeof parsed.intent === "string" && read.length === 1;
 }
 
+// The plan a line names when it says nothing else ("/aidlc bugfix"), by the
+// same one reading; null for any other line. Unlike a reply, a token typed
+// beside the plan, a flag `next` does not take included, is more than the plan.
+export function nextArgsNameOnlyAPlan(args: string[]): string | null {
+  const parsed = parseNextFlags(args);
+  return Object.keys(parsed).length === 1 && typeof parsed.positionalScope === "string"
+    ? parsed.positionalScope
+    : null;
+}
+
 // Appended to the `done` reason emitted when the ACTIVE intent has no in-scope
 // stage left (a completed workflow). Without this, a scope-runner's forwarding
 // loop ("repeat until done") dead-ends here with no cue that new, unrelated
