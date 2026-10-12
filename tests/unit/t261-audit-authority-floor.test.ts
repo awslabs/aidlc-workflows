@@ -20,11 +20,10 @@
 //      second-precision timestamp with any latest resolution in a DIFFERENT
 //      shard (filename order carries no execution order), while same-shard
 //      same-second sequences keep append order.
-//   4. Cancellation boilerplate is not a decision: `aidlc-log answer` refuses
-//      it as an interview answer (including the issue's named repro:
-//      status=completed with answer "Cancelled"), `approve --user-input` and
-//      `reject --feedback` refuse it at the gate. Substantive answers that
-//      merely CONTAIN a cancellation word pass.
+//   4. An answer with no words in it is not a decision: `aidlc-log answer`
+//      refuses it. A cancellation word ("Cancelled", "Timed out") is what the
+//      person typed (no host writes one into a reply), so it is recorded as
+//      their answer, and `approve --user-input` and `reject --feedback` take it.
 //   5. A conductor-AUTHORED decision is not a human decision either (issue
 //      742). humanActedSinceGate proves PRESENCE, not INTENT, so a deadlocked
 //      conductor can satisfy it while writing the human's decision itself —
@@ -681,7 +680,7 @@ describe("t261 an implied confirmation is nobody's decision", () => {
   });
 });
 
-describe("t261 cancellation boilerplate is not a decision", () => {
+describe("t261 an answer with no words is not a decision; a cancellation word is one", () => {
   function ideationProject(): string {
     const p = createTestProject();
     seedStateFile(p, join(FIXTURES, "state-mid-ideation.md"));

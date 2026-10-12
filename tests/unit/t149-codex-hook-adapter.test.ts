@@ -422,7 +422,7 @@ describe("t149 Codex structured request_user_input presence", () => {
     }
   });
 
-  test("an explicit Abort option is human judgment, not cancellation boilerplate", () => {
+  test("an explicit Abort option the person picked is their pick, and mints", () => {
     const dir = scratchProject(true);
     try {
       const payload = structuredSelectionPayload(

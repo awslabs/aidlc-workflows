@@ -144,8 +144,8 @@ function endReached(item: AnswersItem, proj: string, start: Start): boolean {
   if (end.recorded === "first stage" || end.recorded === "jump") return now.startsWith("jump");
   return now.toLowerCase().includes(end.recorded.toLowerCase().split(" ")[0]) || end.recorded.toLowerCase().includes(now.toLowerCase());
 }
-// How many questions the item allows after the reply. A non-answer (the host's cancellation text, an empty line: the
-// corpus keeps no words for it) leaves the question standing, so showing it again is not asking twice.
+// How many questions the item allows after the reply. A non-answer (an empty line or a dismissed box: the corpus
+// keeps no words for it) leaves the question standing, so showing it again is not asking twice.
 const asksAllowed = (item: AnswersItem): number => item.expected.engine.words === null ? Math.max(item.expected.end.asks, 1) : item.expected.end.asks;
 const SETTING_FIELDS: Record<string, string> = { "plan-approval": "Plan Approval", review: "Review", "guard-policy": "Guard Policy" };
 

@@ -1394,7 +1394,7 @@ function handleAnswers(args: string[]): void {
       const paired = !cycle && candidates.length > 0 && candidates.every((question) =>
         !uncertain.has(question) &&
         attemptEventDefinitelyBefore(question, answer) &&
-        // A tied cancellation carries no answer, so it never competes with one.
+        // A tied answer with no words carries no answer, so it never competes with one.
         ![...pending].some(
           (other) => other !== answer && !isNonAnswer(auditBlockField(other.block, "Details")) &&
             couldOwn(question, other) && !attemptEventDefinitelyBefore(answer, other),
@@ -1954,7 +1954,7 @@ function handleAnswer(args: string[]): void {
   }
   // --details names the choice the person made, which the conductor read from
   // their reply; the engine records it beside their own words and never reads
-  // meaning into them. A dismissed widget keeps its own refusal below.
+  // meaning into them. An answer with no words keeps its own refusal below.
   const reply = flags.details;
   if ((policyCheckpoint || verificationCheckpoint) && !isNonAnswer(reply)) {
     const picked = offeredChoiceLabel(reply, APPROVAL_GATE_CHOICES);

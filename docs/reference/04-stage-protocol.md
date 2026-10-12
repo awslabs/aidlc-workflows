@@ -145,8 +145,9 @@ conductor never guesses the next stage.
 The conductor reads the person's reply and records the choice they made by its
 label: `--user-input "Approve"`, `"Request Changes"`, or `"Accept as-is"` when that
 choice is available. The engine never reads meaning into the reply
-(`core/tools/aidlc-reply-reader.ts` keeps only the exact parts: host cancellation
-text, the `(Recommended)` decoration, and the offered labels). It requires a
+(`core/tools/aidlc-reply-reader.ts` keeps only the exact parts: a reply with no
+words in it, the `(Recommended)` decoration, and the offered labels; a word such as
+"Cancelled" is the person's reply like any other). It requires a
 human turn since the gate was shown and records the person's exact words, kept by
 the human-turn hook for that chat, on `GATE_APPROVED` as `Person Reply` and on
 `GATE_REJECTED` as the feedback. Those words are kept per chat. When the engine

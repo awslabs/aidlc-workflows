@@ -13,7 +13,8 @@
 //  2. a tool records a choice only from an exact pick as the options were shown (a number where numbers were shown,
 //     the label, "(Recommended)" stripped); anything else is left for the agent, with nothing recorded and no question
 //     put to the person by the engine;
-//  3. a non-answer (empty, the host's cancellation text, a dismissed box) records nothing and keeps nothing as a reply;
+//  3. a non-answer (empty, or a dismissed box) records nothing and keeps nothing as a reply; a cancellation word the
+//     person typed ("Cancelled") is their reply like any other, since no host writes one for them;
 //  4. the agent's answer command with the exact choice it read puts the person's own words on the record beside it.
 // An item whose EXPECTED needs a change not merged yet carries `after`: it is skipped, with the reason, until that
 // change is in the source (LANDED in the harness reads for it). The corpus is generated; see
