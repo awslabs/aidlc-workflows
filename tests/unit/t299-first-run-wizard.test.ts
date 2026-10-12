@@ -1153,7 +1153,7 @@ describe("t299 first-run setup wizard", () => {
     expect(result.stdout).toContain(`    6. Kiro IDE${" ".repeat(8)}(detected, default)\n`);
     expect(result.stdout).toContain("Using Kiro IDE.");
     const kiroDir = join(result.project, ".kiro");
-    expect(existsSync(join(kiroDir, "agents", "aidlc.md"))).toBe(true);
+    expect(existsSync(join(kiroDir, "agents", "aidlc-aidlc.md"))).toBe(true);
     expect(existsSync(join(kiroDir, "agents", "aidlc.json"))).toBe(false);
     const cli = JSON.parse(readFileSync(join(kiroDir, "settings", "cli.json"), "utf-8"));
     expect(cli["chat.agentEngine"]).toBe("v3");
