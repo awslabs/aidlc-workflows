@@ -1755,6 +1755,60 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // AI-DLC's status line is a display setting (#1407): showing it or giving the
+  // person's own back lowers no check and builds nothing, so the switch passes
+  // while a plan waits, whoever typed it, on either harness. Only the switch
+  // itself: another flag, another section or another project's folder is not it.
+  test("the status line switch passes while the plan waits; nothing else rides along", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "u1", { plan: true, answer: null });
+      const spellings = (args: string) => [`aidlc ${args}`, `bun .claude/tools/aidlc.ts ${args}`];
+      const expectCode = (command: string, code: number) => {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(code);
+      };
+      for (const value of ["on", "off"]) {
+        for (const harness of ["", " --harness claude", " --harness codex"]) {
+          for (const extra of ["", " --yes", " --json", " --dry-run", " --quiet --no-color --verbose", ` --project-dir '${proj}'`]) {
+            for (const command of spellings(`config --statusline ${value}${harness}${extra}`)) expectCode(command, 0);
+          }
+        }
+      }
+      const otherProject = mkdtempSync(join(tmpdir(), "t265-other-project-"));
+      try {
+        for (const args of [
+          "config --statusline maybe",
+          "config --statusline",
+          "config --statusline off --harness kiro",
+          "config --statusline off --frobnicate",
+          "config --statusline off --mcp none",
+          "config --statusline off extra",
+          "config --statusline on --statusline off",
+          "config --statusline off --harness claude --harness codex",
+          `config --statusline off --project-dir '${otherProject}'`,
+          "config --statusline off --project-dir /elsewhere",
+          "config flags --statusline off",
+          "config project --statusline off",
+          "config --harness claude --statusline off --mcp defaults",
+        ]) {
+          for (const command of spellings(args)) expectCode(command, 2);
+        }
+      } finally {
+        rmSync(otherProject, { recursive: true, force: true });
+      }
+      for (const command of [
+        "aidlc config --statusline off; printf code > src/inline.ts",
+        "env -C other aidlc config --statusline off",
+      ]) {
+        expectCode(command, 2);
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   // Switching a check off for the project, or back on, is the person's call,
   // and the engine then tells them which check is off. While a plan waits,
   // turning one back on always passes; turning one off passes once a person

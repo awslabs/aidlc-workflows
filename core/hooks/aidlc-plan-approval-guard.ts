@@ -1299,6 +1299,34 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
   return changes && (!lowers || personAskedSinceGate(projectDir));
 }
 
+// AI-DLC's status line switched on or off (#1407): a display setting that
+// lowers no check and builds nothing, so it passes while a plan waits, as
+// status and doctor do, whoever typed it. Exactly `config --statusline on|off`
+// with the harness, this project's own folder and output options, and nothing
+// else (the grammar `config --statusline` itself accepts).
+const STATUS_LINE_SWITCH_OPTIONS = new Set(["--dry-run", "--json", "--quiet", "--no-color", "--verbose", "--yes"]);
+
+function statusLineSwitchAdmitted(projectDir: string, args: readonly string[]): boolean {
+  if (args[0] !== "config" || args[1] !== "--statusline" || (args[2] !== "on" && args[2] !== "off")) return false;
+  let harness = false;
+  let folder = false;
+  for (let index = 3; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === "--harness") {
+      const name = args[++index];
+      if (harness || (name !== "claude" && name !== "codex")) return false;
+      harness = true;
+    } else if (arg === "--project-dir") {
+      const dir = args[++index];
+      if (folder || dir === undefined || !sameDirectoryIdentity(resolve(dir), projectDir)) return false;
+      folder = true;
+    } else if (!STATUS_LINE_SWITCH_OPTIONS.has(arg)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // A check for this piece of work turned off or back on with `engine config set`,
 // and nothing else. Turning one on, or raising Guard Policy, only adds a stop,
 // so it never waits. Turning one off is the person's call, so while a plan
@@ -1664,7 +1692,8 @@ function everyHelperMayRun(engineArgs: readonly string[]): boolean {
 
 // Everything admitted while a plan waits, in one place: the prerequisites
 // below, the open question's own answers, read-only diagnostics, a recorded
-// switch, what every helper may run, and what the engine names.
+// switch, the status line switch, what every helper may run, and what the
+// engine names.
 function planWaitAdmits(
   projectDir: string,
   engineArgs: string[],
@@ -1674,6 +1703,7 @@ function planWaitAdmits(
   const personSpoke = () => personSpokeSinceGate(projectDir, { requests: true });
   return isPlanApprovalPrerequisite(engineArgs, gateHeld, personSpoke) ||
     askAdmits(engineArgs) || isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs) ||
+    statusLineSwitchAdmitted(projectDir, engineArgs) ||
     chatSwitchChangeAdmitted(projectDir, engineArgs) || intentRepoChangeAdmitted(engineArgs, personSpoke) ||
     everyHelperMayRun(engineArgs) ||
     engineDirectedWhilePlanWaits(engineArgs, () => personSpoke() && lastStepAdmitsPersonsMoves(projectDir));

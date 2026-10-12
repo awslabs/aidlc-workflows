@@ -400,6 +400,28 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).plan_approval.targets?.[0].summary.at(-1)).toBe("Already changed before you approved: src/stray.ts.");
   });
 
+  // The status line switch is a display setting (#1407): typed while the plan
+  // question is open, the chat route names the config command and ends the
+  // turn, the guard lets that command through, and the plan question is still
+  // the one waiting afterwards.
+  test("/aidlc --statusline off while the plan waits ends the turn, passes the guard, and leaves the plan question open", () => {
+    const proj = project();
+    // The project's own installed tools, as the copy channel has them.
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    askFor(proj);
+    const switched = next(proj, ["--statusline", "off"]);
+    expect(switched.kind, JSON.stringify(switched)).toBe("print");
+    const command = /^Run `([^`]+)`, print its output verbatim, then stop\./.exec(switched.message ?? "")?.[1];
+    expect(command, switched.message).toBe("bun .claude/tools/aidlc.ts config --statusline off --harness claude");
+    expect(switched.message).toContain("do NOT run `next`");
+    const guarded = guardBash(proj, command as string);
+    expect(guarded.code, guarded.stderr).toBe(0);
+    expect(runInstalled(proj, command as string)).toContain("--statusline on brings");
+    const still = next(proj);
+    expect(still.kind, JSON.stringify(still)).toBe("ask");
+    expect(still.ask_type).toBe("plan-approval");
+  });
+
   test("a stage without a plan is planned first; a ready plan is asked for with its summary", () => {
     const proj = project();
     const planning = next(proj);
