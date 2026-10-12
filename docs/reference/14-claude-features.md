@@ -235,6 +235,11 @@ Without this, Claude Code would prompt "Allow this tool?" on each first use, dis
 ```
 
 Runs periodically (not just on tool use) to keep the terminal status current.
+AI-DLC ships this value in `.claude/tools/data/harness.json`, not in
+`.claude/settings.json`: the shared file outranks each person's own status
+line, so the value reaches Claude Code only through the person's own
+`.claude/settings.local.json`, when they choose it at setup or run
+`/aidlc --statusline on` (see [Status line](../guide/13-customization.md#status-line-claude-code-and-codex)).
 
 ### SessionStart and SessionEnd Hook Configuration
 
@@ -372,7 +377,7 @@ When a user runs `/aidlc feature`:
 
 ```
 1.  CLAUDE.md loads              (every conversation)
-1a. statusLine command starts    (settings.json -- runs continuously)
+1a. statusLine command starts    (settings.local.json, when the person chose it -- runs continuously)
 2.  settings.json loads          (every conversation; all hooks register here, project-wide)
 2a. SessionStart hook fires      (settings.json -- if session resume)
 3.  memory/ rules load            (every conversation)

@@ -32,7 +32,6 @@ import {
   relative,
   resolve,
   sep,
-  win32 as winPath,
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { deleteQuestion, QUESTION_UNAVAILABLE, readQuestion } from "./aidlc-question-store.ts";
@@ -74,10 +73,14 @@ import {
   stateShowsCompletion,
 } from "./aidlc-doctor-bundle.ts";
 import {
+  claudeLocalSettingsPath,
+  managedSettingsFiles,
+  resolveManagedSettingsCandidates,
+} from "./aidlc-statusline-choice.ts";
+import {
   AIDLC_HOOK_ENTRY_PREFIX,
   aidlcDispatcherTarget,
   aidlcHookRegistrationHashes,
-  isCustomClaudeStatusLine,
   readJsonFile,
   sha256Bytes,
   TEAM_MEMORY_FILES,
@@ -2311,58 +2314,11 @@ export const PRACTICES_STALENESS_DAYS = 90;
 export const MERGE_DISPATCH_TIMEOUT_SEC = 60;
 export const CLAIM_ACTIVITY_STALE_HOURS = 24;
 
-/**
- * Resolve the ordered list of Claude Code `managed-settings.json` paths to probe
- * for a `disableAllHooks` override, most-authoritative first. Pure and
- * platform/env-injected so every OS can be unit-tested without a host of that OS.
- *
- * Paths per Claude Code's settings docs (code.claude.com/docs/en/settings):
- *   - macOS:       /Library/Application Support/ClaudeCode/managed-settings.json
- *   - Linux / WSL: /etc/claude-code/managed-settings.json
- *   - Windows:     %ProgramFiles%\ClaudeCode\managed-settings.json
- *                  (legacy %PROGRAMDATA%\ClaudeCode\ — unsupported since v2.1.75,
- *                   kept only as a secondary probe)
- *
- * AIDLC_MANAGED_SETTINGS_PATH overrides the list entirely — a custom managed
- * path, and the seam tests use to stay hermetic against the host's real file.
- */
-export function resolveManagedSettingsCandidates(
-  platform: NodeJS.Platform,
-  env: NodeJS.ProcessEnv,
-): string[] {
-  if (env.AIDLC_MANAGED_SETTINGS_PATH) return [env.AIDLC_MANAGED_SETTINGS_PATH];
-  if (platform === "darwin") return ["/Library/Application Support/ClaudeCode/managed-settings.json"];
-  if (platform === "win32") {
-    // Use the win32 joiner explicitly so paths carry backslashes regardless of
-    // the host OS running doctor's tests (native `join` would use the host's).
-    return [
-      winPath.join(env.ProgramFiles || "C:\\Program Files", "ClaudeCode", "managed-settings.json"),
-      winPath.join(env.PROGRAMDATA || "C:\\ProgramData", "ClaudeCode", "managed-settings.json"),
-    ];
-  }
-  return ["/etc/claude-code/managed-settings.json"];
-}
+// The managed-settings paths and fragments live with the status line choice,
+// which reads the organization's statusLine the same way; one owner.
+export { resolveManagedSettingsCandidates } from "./aidlc-statusline-choice.ts";
 
 type ClaudeManagedBooleanKey = "disableAllHooks" | "allowManagedHooksOnly";
-
-function managedSettingsFiles(candidate: string): string[] {
-  const files = [candidate];
-  const fragmentsDir = join(dirname(candidate), "managed-settings.d");
-  try {
-    for (const name of readdirSync(fragmentsDir).sort()) {
-      if (!name.endsWith(".json")) continue;
-      const path = join(fragmentsDir, name);
-      try {
-        if (statSync(path).isFile()) files.push(path);
-      } catch {
-        // A fragment that vanished during enumeration carries no policy.
-      }
-    }
-  } catch {
-    // An absent or unreadable fragment directory carries no policy.
-  }
-  return files;
-}
 
 function resolveManagedBooleanSetting(
   key: ClaudeManagedBooleanKey,
@@ -4277,7 +4233,6 @@ export async function collectDoctorReport(
     let expectedHooks: string[] = [];
     let settingsReadable = true;
     let settingsHooks: unknown;
-    let customStatusLine = false;
     try {
       const raw = readFileSync(settingsForHooks, "utf-8");
       // jq-free: collect every distinct aidlc-*.ts basename referenced anywhere
@@ -4287,10 +4242,6 @@ export async function collectDoctorReport(
       const parsed = JSON.parse(withoutBom(raw)) as unknown;
       const parsedSettings = isPlainObject(parsed) ? parsed : {};
       settingsHooks = parsedSettings.hooks;
-      customStatusLine = isCustomClaudeStatusLine(
-        parsedSettings.statusLine,
-        projectDir,
-      );
       const commands: string[] = [];
       const collectCommands = (value: unknown): void => {
         if (Array.isArray(value)) return void value.forEach(collectCommands);
@@ -4301,6 +4252,17 @@ export async function collectDoctorReport(
         }
       };
       collectCommands(parsed);
+      // AI-DLC's status line lives in the person's own settings.local.json when
+      // they chose it, so the file it runs is checked from there too.
+      try {
+        const local = JSON.parse(withoutBom(readFileSync(claudeLocalSettingsPath(projectDir), "utf-8"))) as unknown;
+        const localStatusLine = isPlainObject(local) ? local.statusLine : undefined;
+        if (isPlainObject(localStatusLine) && typeof localStatusLine.command === "string") {
+          commands.push(localStatusLine.command);
+        }
+      } catch {
+        // No personal file, or one Claude Code itself reports.
+      }
       const refs = new Set<string>();
       for (const command of commands) {
         const target = aidlcDispatcherTarget(command, true, projectDir);
@@ -4363,7 +4325,9 @@ export async function collectDoctorReport(
           for (const file of Object.keys(manifest?.files ?? {})) {
             if (!file.startsWith(hooksPrefix)) continue;
             const basename = file.slice(hooksPrefix.length);
-            if (customStatusLine && basename === "aidlc-statusline.ts") continue;
+            // The status line shows progress and enforces nothing; it is the
+            // person's choice and is wired only when they chose it.
+            if (basename === "aidlc-statusline.ts") continue;
             if (!/^aidlc-[a-z0-9-]+\.ts$/.test(basename) || expectedHooks.includes(basename)) continue;
             results.push({
               pass: false,

@@ -164,11 +164,6 @@ experimental_request_user_input = { enabled = true }
 
 [features]
 default_mode_request_user_input = true
-
-# Statusline (D-6): predefined item IDs only; task-progress is fed by the
-# update_plan tool, which the orchestrator skill keeps current per stage.
-[tui]
-status_line = ["model-with-reasoning", "git-branch", "task-progress", "context-used"]
 `;
 }
 

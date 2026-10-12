@@ -8,7 +8,7 @@ This chapter documents the hook system architecture, all seventeen hook scripts,
 
 ## Hook System Architecture
 
-This implementation uses seventeen TypeScript hook sources in `.claude/hooks/`. A source-generated `dist/` projection invokes them through `bun`; native installs and versioned release runtimes route them through `aidlc engine hook`, `aidlc engine statusline`, or an `aidlc engine adapter` target. All seventeen are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other sixteen via the `hooks` block), they fire regardless of which skill is active when the host permits project hooks. Claude Code managed `allowManagedHooksOnly: true` overrides the project registration and blocks those hooks; `/aidlc --doctor` detects that policy. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block.
+This implementation uses seventeen TypeScript hook sources in `.claude/hooks/`. A source-generated `dist/` projection invokes them through `bun`; native installs and versioned release runtimes route them through `aidlc engine hook`, `aidlc engine statusline`, or an `aidlc engine adapter` target. All seventeen are **project-wide**: the statusline via the top-level `statusLine` key, which reaches each person's own `.claude/settings.local.json` when they choose AI-DLC's status line, and the other sixteen via the `hooks` block of `settings.json`; they fire regardless of which skill is active when the host permits project hooks. Claude Code managed `allowManagedHooksOnly: true` overrides the project registration and blocks those hooks; `/aidlc --doctor` detects that policy. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point (the orchestrator, each packaged scope/stage runner, and any hand-written customer runner) inherits the deterministic spine with no per-runner `hooks:` block.
 
 Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `Stop` hook keeps the forwarding loop running, the deliver-stage-rules hook attaches exact active-stage rules to subagent briefs where the harness supports input rewriting, the plan-approval guard refuses premature code-generation dispatches, the reviewer-scope hook refuses sibling-unit reviewer access, the review-freeze hook refuses a reviewed-output write that would void a fresh terminal review receipt before the gate, and the state-transition guard refuses direct lifecycle calls that bypass `aidlc-orchestrate.ts report`.
 
@@ -30,7 +30,7 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 +-- aidlc-continue-workflow.ts        # Stop (project-wide, settings.json, TypeScript, flow-altering)
 +-- session-start.ts     # SessionStart (project-wide, settings.json, TypeScript)
 +-- session-end.ts       # SessionEnd (project-wide, settings.json, TypeScript)
-+-- aidlc-statusline.ts  # statusLine (project-wide, settings.json, TypeScript)
++-- aidlc-statusline.ts  # statusLine (each person's settings.local.json, on their yes, TypeScript)
 ```
 
 ### Hook Summary
@@ -53,7 +53,7 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 | `aidlc-continue-workflow.ts` | Stop | Project-wide (settings.json) | (empty) | **Flow-altering.** Enforce the forwarding loop on turn-end: run `aidlc-orchestrate next`; allow terminal and human-wait outcomes, block ordinary pending work with an on-task continuation, and deliver each distinct engine `error` diagnostic exactly once with a best-effort `ERROR_LOGGED` row. Unknown directive kinds and all diagnostic-persistence failures allow the stop. Also allows the exact one-shot handoff after `intent-create`, or after `intent <name>` or `space <name>` selects another intent, when the session's original UUID and newly active UUID match the receipt that step wrote. A selected record with no `intents.json` row has no UUID, so its receipt names the space and record instead: the session must select exactly that record and carry no intent stamp (the switch clears the stamp it came from), or the stamp of the registry row the record has gained since. Allows legitimate turn stops when the current stage or active team Unit gate is awaiting approval/revision, or `[-]` in-progress with either an unanswered question in the active directive's canonical or per-unit `<slug>-questions.md` or an unresolved logged `DECISION_RECORDED`; a fresh in-flight compose marker, a fresh background-subagent entry for the current session, a step that still offers the Construction autonomy choice, and conversational turns are also allowed. Foreign-session, stale, and malformed background entries do not authorize a stop. The compose and background carve-outs are suppressed under autonomous Construction; there the logged-decision carve-out allows only a checkpoint question (the verification command, a plan approval, a summary confirmation, a Construction policy change), the conversational carve-out is read the same way as elsewhere (a person who writes mid-run is present; every turn of an unattended run touches the engine; an unattended driver, `AIDLC_UNATTENDED=1`, keeps the old guard), and the pending-file carve-out is suppressed except for unit-major code-generation's mandatory Plan Approval. The autonomy-choice carve-out reads the offer from the run-stage and from each rules part leading to it (`offer_autonomy` on the part), since the probe restarts the rules at part 1; on a rules part it lets the turn end only when the agent's own active-directive marker is at the run-stage (it reached the step that asks), so a quit after an earlier part is still pending work. Ordinary pending work is recursion-bounded (no-progress counter + `stop_hook_active` under `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`; default 2 in an interactive run and 8 under autonomous Construction). No-op outside an AIDLC workflow |
 | `session-start.ts` | SessionStart | Project-wide (settings.json) | (empty) | Inject workflow context on session resume |
 | `session-end.ts` | SessionEnd | Project-wide (settings.json) | (empty) | Emit `SESSION_ENDED` on graceful exit to the intent recorded for that exact session; fail closed instead of using the shared active cursor when a UUID-backed workflow has no session binding |
-| `aidlc-statusline.ts` | statusLine | Project-wide (settings.json) | -- | Show real-time progress in terminal |
+| `aidlc-statusline.ts` | statusLine | Each person's own `.claude/settings.local.json`, once they choose it | -- | Show real-time progress in terminal |
 
 Before a Code Generation plan exists, `engine log decision` and `engine log answer` for `--stage code-generation --checkpoint summary-confirmation` are admitted as planning prerequisites, like the Plan Approval checkpoint. The log owner still validates the questions file, Unit and human reply. Summary confirmation grants no Plan Approval; source changes and developer dispatch remain subject to the plan guard.
 
@@ -441,8 +441,9 @@ All seventeen TypeScript hook sources:
 - Share locking and utility functions from `lib.ts`
 
 Claude's source-generated `.claude/settings.json` invokes hooks with
-`bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook <name>` and uses
-the same anchored dispatcher for `engine statusline`. The quoted entry path
+`bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook <name>`, and the
+status line value in `tools/data/harness.json` uses the same anchored
+dispatcher for `engine statusline`. The quoted entry path
 survives project roots containing spaces and application commands that change
 the working directory. It does not change the hook process's working directory
 or the `cwd` supplied in the JSON payload. Native release settings use
@@ -933,7 +934,7 @@ sequenceDiagram
 
 ## Workflow-Spine Hooks
 
-These six hooks (the audit/sensor/statusline/rebuild-stage-graph/state-validation/subagent spine) are registered project-wide in `settings.json`. They are always on, but each **self-gates**: it early-exits when there is no active workflow (`aidlc-state.md` / the active intent's `audit/` shard absent), so audit logging and state sync never clutter non-AI-DLC sessions. Before v0.6.0 they were declared in `aidlc/SKILL.md` frontmatter (skill-scoped); the move to `settings.json` lets every entry point — the orchestrator and every packaged or hand-written runner — inherit the spine without copying a `hooks:` block.
+These six hooks (the audit/sensor/statusline/rebuild-stage-graph/state-validation/subagent spine) are registered project-wide in `settings.json`, except the statusline, which each person's own `.claude/settings.local.json` wires once they choose it. They are always on, but each **self-gates**: it early-exits when there is no active workflow (`aidlc-state.md` / the active intent's `audit/` shard absent), so audit logging and state sync never clutter non-AI-DLC sessions. Before v0.6.0 they were declared in `aidlc/SKILL.md` frontmatter (skill-scoped); the move to `settings.json` lets every entry point (the orchestrator and every packaged or hand-written runner) inherit the spine without copying a `hooks:` block.
 
 ### PostToolUse: write-audit-log.ts
 
@@ -1912,7 +1913,7 @@ Next Action: resume current stage
 ### Status Line: aidlc-statusline.ts
 
 **Source:** `.claude/hooks/aidlc-statusline.ts`
-**Registration:** `settings.json` under `statusLine`, invoked via `bun`
+**Registration:** `statusLine` in each person's own `.claude/settings.local.json`, written when they choose AI-DLC's status line at setup or with `/aidlc --statusline on` (its value ships in `tools/data/harness.json`); invoked through the engine
 **Purpose:** Real-time workflow progress in the terminal status bar
 
 **Output format:** `[AIDLC] PHASE [▓▓▓▓▓░░░░░] n/m > Display Name -- Agent`

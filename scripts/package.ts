@@ -588,6 +588,8 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
   if (m.kiroLayout) data.kiroLayout = m.kiroLayout;
   // And only a host that cuts a shell result below the engine's cap.
   if (m.directiveMaxBytes) data.directiveMaxBytes = m.directiveMaxBytes;
+  // And only a host where AI-DLC can show its progress in the status line.
+  if (m.statusLine) data.statusLine = m.statusLine;
   const dst = join(treeRoot, HARNESS_DATA);
   mkdirSync(dirname(dst), { recursive: true });
   writeFileSync(dst, `${JSON.stringify(data, null, 2)}\n`);

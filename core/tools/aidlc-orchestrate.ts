@@ -4101,6 +4101,7 @@ export interface ParsedFlags {
   readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
   config?: boolean; // --config [section]: terminal in-session project configuration alias
   configSection?: ConfigSection;
+  statusline?: "on" | "off" | "usage"; // --statusline on|off: AI-DLC's status line, a terminal setting
   resume?: boolean; // --resume: continue an existing workflow directly
   single?: boolean; // --single: run ONE stage under a synthetic workflow id, never touching the main pointer
   newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME creation directive (with the --label seam) the fresh-start path uses, instead of constructing intent-create from SKILL.md prose
@@ -4267,6 +4268,14 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       config: true,
       ...(trailing[0] ? { configSection: trailing[0] as ConfigSection } : {}),
     };
+  }
+  // `--statusline on|off` leads its line and is the whole of it: the person's
+  // own switch for AI-DLC's status line, which the config command applies.
+  if (args[0] === "--statusline") {
+    const value = args[1];
+    return args.length === 2 && (value === "on" || value === "off")
+      ? { statusline: value }
+      : { statusline: "usage", parseError: `Usage: ${entrySkillInvocation()} --statusline on|off.` };
   }
   const pluginCommand = parsePluginCommand(args);
   if (pluginCommand.kind !== "not-plugin") return { pluginCommand };
@@ -7495,6 +7504,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
 function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags(args)): boolean {
   return !flags.readOnly &&
     !flags.config &&
+    !flags.statusline &&
     !flags.retiredOnly &&
     !flags.configCommand &&
     !flags.workspaceCommand &&
@@ -7974,6 +7984,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // terminal and must happen before state inspection so it can never fall into
   // the active stage. The conductor owns the human conversation; deterministic
   // config commands own every read and write.
+  // AI-DLC's status line, switched by the person: one config command applies it
+  // and says the line; nothing of the work moves.
+  if (flags.statusline === "on" || flags.statusline === "off") {
+    const command = `${aidlcInvocation()} config --statusline ${flags.statusline} --harness ${runtimeHarnessName()}`;
+    emit(turnEndingPrint(
+      `Run \`${command}\`, print its output verbatim, then stop. This is a setting, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+    ));
+    return;
+  }
+
   if (flags.config) {
     const invoke = aidlcInvocation();
     const selected = flags.configSection;

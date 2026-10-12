@@ -18,6 +18,13 @@ import onboardingFills from "./onboarding.fills.ts";
 const manifest: HarnessManifest = {
   name: "claude",
   productName: "Claude Code",
+  // AI-DLC's status line. It ships here, not in .claude/settings.json: the
+  // team file outranks the person's own status line, so the engine writes this
+  // into their .claude/settings.local.json only when they choose it (#1407).
+  statusLine: {
+    type: "command",
+    command: 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline',
+  },
   // A Claude Code session open before setup has no /aidlc and runs none of
   // its hooks until it starts again.
   configNextStep:

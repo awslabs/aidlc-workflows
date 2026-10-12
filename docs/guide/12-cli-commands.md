@@ -68,6 +68,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --summary-confirmation <on\|off>` | Set the consolidated-summary confirmation checkpoint for this intent |
 | `/aidlc --plan-approval <on\|off>` | Set whether each code plan is shown for approval before it is built, for this intent (only the person turns it off) |
 | `/aidlc --collaborators <on\|off>` | Set whether stages bring in their support agents or run with the lead agent only, for this intent |
+| `/aidlc --statusline <on\|off>` | Show AI-DLC's progress in the status line, or give yours back (Claude Code: for you only; Codex: for everyone in the project) |
 | `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `plan-approval`, `collaborators`, `guard.<fence>`) |
 | `/aidlc config set <key> <value> [--key value ...]` | Change intent settings through the shared setter; typed lowering switches apply at prompt time |
 | `/aidlc config set guard.<fence> <on\|off>` | Turn one fence off for this piece of work, or back on above the policy word (review-freeze, state-transition, reviewer-scope; `guard.plan-approval` is another name for `plan-approval`) |
@@ -758,7 +759,7 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 | Prerequisites | Self-contained binary, or `bun` on PATH for a copy install |
 | Installed runtime | Active machine version and installed harness distributions, when using the binary channel |
 | Project stamp | Project distribution/version compared with the engine that serves the project: the release `.aidlc-version` pins, or else the running release |
-| Hook presence | Every framework hook wired by `settings.json` exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. A valid custom non-AI-DLC `statusLine` intentionally leaves `aidlc-statusline.ts` unwired and is exempt. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
+| Hook presence | Every framework hook wired by `settings.json` exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. AI-DLC's status line is checked from your own `.claude/settings.local.json` when you turned it on; it only shows progress, so an `aidlc-statusline.ts` nobody wired is never reported as enforcement that is off. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
 | Hooks enabled (Claude Code) | `disableAllHooks: true` is not the resolved value across Claude Code's settings layers (enterprise managed file plus alphabetical `managed-settings.d/` fragments → `.claude/settings.local.json` → `.claude/settings.json` → `~/.claude/settings.json`, highest-precedence definition wins). A resolved `true` silently skips every present hook, so it fails loudly and names the layer |
 | Project structure | `.claude/settings.json` exists (file presence only, no content validation) |
 | Kiro hooks switched off | On the Kiro harness: every AI-DLC hook file in `.kiro/hooks/` (`aidlc-*.json`) that carries `"enabled": false`, which Kiro writes when you switch a hook off under Agent Hooks. The guard hook (`aidlc-guard-tool-call`), the reply recorder (`aidlc-record-human-turn`) and the older guard files a project may still hold fail, each naming what is no longer protected; any other AI-DLC hook switched off is one warning. The fix is to turn the hook back on under Kiro's Agent Hooks |
@@ -1720,6 +1721,36 @@ new scope's default in both directions and keeps a value set for this intent.
 rather than a `Guards Off` entry. Asking to review the plan while it is off
 shows that one plan for approval without changing the setting. See
 [Plan approval](13-customization.md#plan-approval) for the full behavior.
+
+---
+
+### `/aidlc --statusline <on|off>` - AI-DLC's status line
+
+On Claude Code and Codex CLI, show AI-DLC's progress in the status line at the
+bottom of your terminal, or give the status line you set up yourself back. It
+runs `aidlc config --statusline <on|off>`, asks nothing, and prints one line
+saying what changed and how to switch back. Nothing about your work moves.
+
+- **Claude Code:** your own choice. AI-DLC's status line goes into, or comes
+  out of, your own `.claude/settings.local.json` (git ignores it), so
+  teammates are not affected. A status line of yours in that file comes back
+  when you turn AI-DLC's off.
+- **Codex CLI:** the project's choice, because Codex has no per-person
+  settings file in a project. It adds or removes only AI-DLC's `status_line`
+  line in the shared `.codex/config.toml`, for everyone working in the
+  project. Each person can add task progress to their own status line with
+  Codex's `/statusline` instead.
+
+First-run setup asks the same question once; a setup that asks nothing adds no
+status line. See [Status line](13-customization.md#status-line-claude-code-and-codex).
+
+```
+/aidlc --statusline off
+aidlc config --statusline on
+```
+
+On the other harnesses it says that the tool has no status line and that
+`/aidlc --status` shows where the work stands.
 
 ---
 

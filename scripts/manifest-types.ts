@@ -313,6 +313,16 @@ export type HarnessManifest = {
    */
   directiveMaxBytes?: number;
   /**
+   * The host's status line setting that shows AI-DLC's progress, in the host's
+   * own settings shape. Emitted into <harnessDir>/tools/data/harness.json, never
+   * into a settings file the host reads: the engine writes it into the person's
+   * own settings only when they choose it (Claude Code: the project's
+   * .claude/settings.local.json), so the status line they set up stays theirs.
+   * Codex has no per-person project file: its `items` go into the project's
+   * shared .codex/config.toml `[tui] status_line` only when someone chooses it.
+   */
+  statusLine?: { type: "command"; command: string } | { items: string[] };
+  /**
    * Skip the packager's standard runner-gen step (write + scopes into
    * <harnessDir>/skills/). Codex sets this: it ships NO skills inside
    * <harnessDir>/skills/ — the whole skill set (orchestrator, stage/scope

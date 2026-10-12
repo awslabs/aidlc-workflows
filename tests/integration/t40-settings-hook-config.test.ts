@@ -68,6 +68,11 @@ function readSettings(): Settings {
   return JSON.parse(readFileSync(SETTINGS, "utf-8")) as Settings;
 }
 
+/** AI-DLC's status line ships in harness.json, outside any file Claude Code reads (#1407). */
+function readShippedStatusLine(): Settings["statusLine"] {
+  return (JSON.parse(readFileSync(join(AIDLC_SRC, "tools", "data", "harness.json"), "utf-8")) as Settings).statusLine;
+}
+
 describe("t40 settings.json hook/statusline/permissions config (migrated from t40-settings-hook-config.sh, plan 6, mechanism none)", () => {
   test("T1: hooks.SessionStart is a non-empty array [.sh test 1]", () => {
     // .sh: assert_grep SETTINGS '"SessionStart"'. STRONGER: the key parses to an
@@ -86,13 +91,15 @@ describe("t40 settings.json hook/statusline/permissions config (migrated from t4
     expect(commands).toContain(`${SOURCE_INVOKE} engine hook session-start`);
   });
 
-  test("T3: statusLine.type is 'command' [.sh test 3]", () => {
-    // .sh: jq -r '.statusLine.type' == "command".
-    expect(readSettings().statusLine?.type).toBe("command");
+  test("T3: statusLine.type is 'command', and the shared settings carry none [.sh test 3]", () => {
+    // .sh: jq -r '.statusLine.type' == "command". The value now ships in
+    // harness.json and reaches each person's settings.local.json on their yes.
+    expect(readShippedStatusLine()?.type).toBe("command");
+    expect(readSettings().statusLine).toBeUndefined();
   });
 
   test("T4: statusLine.command uses the source-channel statusline route [.sh test 4]", () => {
-    expect(readSettings().statusLine?.command).toBe(`${SOURCE_INVOKE} engine statusline`);
+    expect(readShippedStatusLine()?.command).toBe(`${SOURCE_INVOKE} engine statusline`);
   });
 
   test("T5: permissions.allow has project edits and AI-DLC's own commands one by one [.sh test 5]", () => {

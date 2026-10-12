@@ -222,8 +222,14 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
   any other under-development feature. For numbered prose gates in one
   session, start Codex with
   `codex -c features.default_mode_request_user_input=false`.
-- **No custom statusline** — workflow position rides the `update_plan` tool
-  (the `task-progress` statusline item) and `$aidlc --status`.
+- **Status line, the project's choice**: workflow position rides the
+  `update_plan` tool (the `task-progress` status line item) and
+  `$aidlc --status`. AI-DLC's status line is off until someone chooses it: setup
+  asks once, and `$aidlc --statusline on|off` (or `aidlc config --statusline
+  on|off`) adds or removes AI-DLC's `[tui]` `status_line` line in the shared
+  `.codex/config.toml`, for everyone working in the project. Codex has no
+  per-person settings file in a project, so each person can instead add task
+  progress to their own status line with Codex's `/statusline`.
 - **A question box that runs out**: Codex closes its question box after
   about two minutes with no answer. Nothing is answered for you: when you
   come back, the same question is waiting in the chat.

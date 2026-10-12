@@ -50,7 +50,7 @@ to change, such as where a setting is locked, are still named by path.`,
 This is the same AI-DLC core that ships to every harness, rendered onto Codex CLI. On Codex:
 
 - **Gates** render as structured questions via the \`request_user_input\` tool when the shipped config flags enable it, with a numbered-prose fallback otherwise. Gate semantics live in the engine either way.
-- **No custom statusline and no welcome message**: workflow position rides the \`update_plan\` tool and \`$aidlc --status\`.
+- **No welcome message, and the status line is the project's choice**: workflow position rides the \`update_plan\` tool and \`$aidlc --status\`. Setup asks once whether to show AI-DLC's progress in the status line, and \`$aidlc --statusline on|off\` adds or removes AI-DLC's \`status_line\` line in the shared \`.codex/config.toml\`, for everyone working in the project. Each person can instead add task progress to their own status line with Codex's \`/statusline\`.
 - **Git under the sandbox**: \`workspace-write\` keeps \`.git\` read-only in-sandbox; interactive sessions auto-escalate and \`.codex/rules/default.rules\` pre-allows \`git worktree\`/\`commit\`/\`add\`. Headless runs need \`writable_roots\` (template in the shipped \`config.toml\`).
 - **Swarm floor** is \`codex exec\`-per-unit workers; \`AIDLC_USE_SWARM=1\` has no Workflow tool here and loud-degrades (\`SWARM_DEGRADED\`).
 - **Session lifecycle**: Codex has no SessionEnd event (an unclosed session is reconciled as an inferred \`SESSION_ENDED\` at the next start); after compaction, Codex emits SessionStart with \`source=compact\`, which re-injects the workflow mission before the first post-compaction continuation (the reason Codex >= 0.145.0 is required).

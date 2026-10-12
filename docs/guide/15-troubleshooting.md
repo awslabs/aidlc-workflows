@@ -34,7 +34,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Audit log too large | Leave it where it is: a long project's audit file is large by design, and the engine reads it to know what you approved and finished (see [Audit Log Growing Too Large](#audit-log-growing-too-large)) |
 | Hooks appear to hang | Diagnose lock ownership with `/aidlc --doctor`; see [Lock Files Left Behind](#lock-files-left-behind) |
 | Statusline shows "ready" | Check `aidlc-state.md` has a `**Lifecycle Phase**` field |
-| Statusline not appearing | Run `aidlc doctor`; for a copy install, verify `bun` is on PATH |
+| Statusline not appearing | It shows only once you turn it on: `/aidlc --statusline on` (Claude Code and Codex). Then run `aidlc doctor`; for a copy install, verify `bun` is on PATH |
 | Subagent timed out | Run `/aidlc` to retry or run the stage inline |
 | Workflow stuck or misbehaving, need help | Run `/aidlc --doctor --export` and share the produced `.tar.gz` (redacted; no work product) |
 | A Bolt attempt was set aside | Ask the assistant to invoke the saved abort result's `restore_operation` with its exact argv; hints are display-only. Evidence-only attempts have no saved files to restore. See [getting the files back](#a-bolt-attempt-was-set-aside-getting-the-files-back) |
@@ -333,7 +333,7 @@ On Claude Code, per-stage token usage and cost tracking is on by default: the fo
 
 Hooks are registered project-wide in the harness's native configuration. On
 Claude, verify that `.claude/settings.json` contains the expected `hooks`
-events and `statusLine`. For a native project, complete active workflows,
+events. For a native project, complete active workflows,
 then run `aidlc config --harness claude` to restore the shipped registrations;
 your own hook entries are kept. A copy-channel project instead uses
 `bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude root you copied from>`.
@@ -341,9 +341,9 @@ No `--force` is needed. Notes tell you when registrations were restored.
 Doctor fails when a flow-altering registration changes its event, matcher, or
 command, or when a shipped hook is no longer wired. Drift in other AI-DLC
 registrations produces a warning. Your own additional hooks do not trigger
-drift warnings. An absent `statusLine` is restored too, but a custom non-AI-DLC
-statusline is kept. Delete that key and refresh if you want the shipped one
-again.
+drift warnings. A status line your team set in that file is kept. AI-DLC's own
+status line is not shipped there: each person turns it on for themselves with
+`/aidlc --statusline on`.
 For a manual copy,
 replace the complete harness root from the same versioned
 `runtime/<harness>/` archive (a copy never replaces your `.gitignore` or
@@ -871,9 +871,12 @@ Expected behavior — the statusline updates when the state file is next written
 
 ### Not appearing at all
 
-1. Run `aidlc doctor` and repair the reported native command or host wiring.
-2. On a copy install, verify Bun is on the host process PATH.
-3. On Claude, verify the `.claude/settings.json` `statusLine` entry exists.
+1. AI-DLC's status line shows only when you chose it at setup or turned it on:
+   run `/aidlc --statusline on` (`$aidlc --statusline on` on Codex). On Claude
+   Code it goes into your own `.claude/settings.local.json`; a status line your
+   organization's managed settings choose still wins.
+2. Run `aidlc doctor` and repair the reported native command or host wiring.
+3. On a copy install, verify Bun is on the host process PATH.
 4. With no state file, `[AIDLC] ready` is the expected output.
 
 ---

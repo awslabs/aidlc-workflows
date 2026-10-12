@@ -1100,8 +1100,12 @@ For Claude, refresh restores AI-DLC hook registrations to their shipped
 events, matchers, and commands, then appends your own hook groups. It puts the
 shipped `permissions.allow` entries first and keeps your additional allow
 entries, `deny`, `ask`, and other permission keys. Retired shipped allow
-entries are not removed automatically. A missing or AI-DLC `statusLine` is
-refreshed; your custom non-AI-DLC statusline is kept. `companyAnnouncements`
+entries are not removed automatically. A status line your team set there is
+kept. AI-DLC's own `statusLine` is no longer shipped in this file: a refresh
+takes it out, and each clone that had it keeps it in that person's own
+`.claude/settings.local.json` (said once when it covers their own status line).
+Otherwise it appears only when someone turns it on with `--statusline on`.
+`companyAnnouncements`
 is refreshed when absent or still matching its shipped baseline, otherwise
 your value is kept. Delete either custom key and refresh to take the shipped
 one. Environment and other top-level settings (including `disableAllHooks`)
@@ -1112,7 +1116,9 @@ answers.
 settings key by key: `developer_instructions`, `sandbox_mode`,
 `suppress_unstable_features_warning`, `tool_output_token_limit`, and the keys
 it ships in the `[shell_environment_policy]`, `[sandbox_workspace_write]`, `[agents]`,
-`[features]`, `[tools]`, and `[tui]` tables. A refresh, including those
+`[features]`, and `[tools]` tables. AI-DLC's `[tui]` `status_line` is the
+project's choice (`--statusline on|off`): a refresh never ships, retires or
+changes it. A refresh, including those
 accompanying provider, scope, or model answers, changes only those keys and
 keeps every other byte: your own keys (also inside AI-DLC's tables), your own
 tables (such as `[agents.<role>]` or `[mcp_servers.<name>]`), comments, order,
@@ -1130,7 +1136,7 @@ source instead of the project's copy.
 
 Human output prints `Note:` when AI-DLC entries in `.claude/settings.json` or
 `.codex/config.toml` were restored or added, and when your own value for one of
-them (a custom Claude statusline or announcement, or a Codex key) was kept
+them (a custom Claude announcement, or a Codex key) was kept
 while this release ships a different one; JSON output exposes the same
 messages in `data.notes`. To restore them, use `aidlc config --harness claude`
 or `aidlc config --harness codex`, not the bare interactive setup walk.
@@ -1300,6 +1306,7 @@ Successful config prints the host-specific next step:
 | `aidlc config --channel [stable\|preview]` | Set the machine release channel, or print it when no value is given. |
 | `aidlc config --pin <version>` | Install and validate the exact version when needed, then atomically write `.aidlc-version`, record its machine-local resolved target, and register the project pin without changing the machine-active pointer. |
 | `aidlc config --unpin` | Remove `.aidlc-version`, its machine-local resolved target, and its registry entry. |
+| `aidlc config --statusline <on\|off>` | Show AI-DLC's progress in the status line, or take it out, and say so in one line. Claude Code: your own `.claude/settings.local.json`. Codex: the shared `.codex/config.toml`, for everyone in the project. `--harness <claude\|codex>` picks one when both are installed. |
 | `aidlc config ... --download` | Let any config command fetch the release the project needs when this machine lacks it: the pinned release, otherwise the one its files already have. Natively it installs and registers that release, as `--pin` does; on a copied project it downloads `aidlc-copy-runtime-X.Y.Z.tar.gz`. It verifies the checksum, and the release attestation when `gh` is installed, then finishes the command. `--release-base-url` and `--ca-bundle` choose a mirror. At a terminal config asks instead; scripts need the flag. |
 
 Human lifecycle output states each completed fact. Update reports the

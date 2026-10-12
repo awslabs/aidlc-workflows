@@ -105,6 +105,11 @@ function run(
       ...process.env,
       AIDLC_INSTALL_ROOT: join(machine, "share", "aidlc"),
       AIDLC_BIN_DIR: join(machine, "bin"),
+      // The status line choice reads the person's own Claude Code and Codex
+      // settings (#1407); a fixture's are empty folders, never the host's.
+      CLAUDE_CONFIG_DIR: join(machine, "claude"),
+      CODEX_HOME: join(machine, "codex"),
+      AIDLC_MANAGED_SETTINGS_PATH: join(machine, "managed-settings.json"),
       ...env,
     },
     encoding: "utf-8",
@@ -118,7 +123,7 @@ function run(
   };
 }
 
-function install(harness: string): string {
+function install(harness: string, source = join(DIST_RELEASE, harness)): string {
   const project = temp(`aidlc-t294-${harness}-`);
   mkdirSync(join(project, ".git"));
   const result = run([
@@ -126,7 +131,7 @@ function install(harness: string): string {
     "--project-dir",
     project,
     "--from",
-    join(DIST_RELEASE, harness),
+    source,
     "--harness",
     harness,
     "--mcp",
@@ -135,6 +140,21 @@ function install(harness: string): string {
   ], project);
   expect(result.status, result.stdout + result.stderr).toBe(0);
   return project;
+}
+
+// A Codex release as releases before #1407 shipped it, with AI-DLC's status
+// line in the shared config: the refresh cases below move an AI-DLC array value
+// between releases, and status_line is the one such value.
+const OLD_CODEX_TUI_BLOCK =
+  "\n# Statusline (D-6): predefined item IDs only; task-progress is fed by the\n" +
+  "# update_plan tool, which the orchestrator skill keeps current per stage.\n" +
+  '[tui]\nstatus_line = ["model-with-reasoning", "git-branch", "task-progress", "context-used"]\n';
+function codexTuiRelease(): string {
+  const source = temp("aidlc-t294-codex-tui-release-");
+  cpSync(join(DIST_RELEASE, "codex"), source, { recursive: true });
+  const path = join(source, ".codex", "config.toml");
+  writeFileSync(path, `${readFileSync(path, "utf-8")}${OLD_CODEX_TUI_BLOCK}`);
+  return source;
 }
 
 function runtimeEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
@@ -3494,7 +3514,7 @@ describe("t294 config diagnostics CLI", () => {
   // A release source whose only change is the shipped tui.status_line value.
   function codexStatusRelease(status: string[], edit: (text: string) => string = (text) => text): string {
     const source = temp("aidlc-t294-codex-status-source-");
-    cpSync(join(DIST_RELEASE, "codex"), source, { recursive: true });
+    cpSync(codexTuiRelease(), source, { recursive: true });
     const path = join(source, ".codex", "config.toml");
     writeFileSync(path, edit(readFileSync(path, "utf-8").replace(
       /^status_line\s*=.*$/m,
@@ -3520,7 +3540,7 @@ describe("t294 config diagnostics CLI", () => {
   const RELEASE_STATUS = ["model-with-reasoning", "context-used"];
 
   test("Codex refresh keeps the project's own keys, tables and comments byte for byte", () => {
-    const project = install("codex");
+    const project = install("codex", codexTuiRelease());
     const env = runtimeEnv();
     const configPath = join(project, ".codex", "config.toml");
     const shipped = readFileSync(configPath, "utf-8");
@@ -3545,7 +3565,10 @@ describe("t294 config diagnostics CLI", () => {
     expect(() => parseToml(edited)).not.toThrow();
     writeFileSync(configPath, edited);
 
-    const same = run(["config", "--project-dir", project, "--yes"], project, env);
+    // The same release again (one that ships AI-DLC's status line).
+    const same = run([
+      "config", "--project-dir", project, "--from", codexTuiRelease(), "--harness", "codex", "--yes",
+    ], project, env);
     expect(same.status, same.stdout + same.stderr).toBe(0);
     expect(same.stdout).not.toContain("Note:");
     expect(readFileSync(configPath, "utf-8")).toBe(edited);
@@ -3571,10 +3594,10 @@ describe("t294 config diagnostics CLI", () => {
       `tui = { status_line = ${SHIPPED_STATUS_VALUE}, project_note = "keep-me" }\n\n`,
     ];
     for (const spelling of spellings) {
-      const project = install("codex");
+      const project = install("codex", codexTuiRelease());
       const configPath = join(project, ".codex", "config.toml");
       const shipped = readFileSync(configPath, "utf-8");
-      const withoutTui = shipped.replace(/\[tui\][\s\S]*$/, "");
+      const withoutTui = shipped.replace(/^\[tui\][\s\S]*$/m, "");
       const firstTable = withoutTui.indexOf("[sandbox_workspace_write]");
       const edited = withoutTui.slice(0, firstTable) + spelling + withoutTui.slice(firstTable);
       expect(() => parseToml(edited)).not.toThrow();
@@ -3593,27 +3616,25 @@ describe("t294 config diagnostics CLI", () => {
       });
     }
 
-    // A release that retires [tui] removes the unchanged dotted key and keeps
-    // the person's own key beside it.
-    const retired = temp("aidlc-t294-codex-retired-tui-");
-    cpSync(join(DIST_RELEASE, "codex"), retired, { recursive: true });
-    const retiredPath = join(retired, ".codex", "config.toml");
-    writeFileSync(retiredPath, readFileSync(retiredPath, "utf-8").replace(/\[tui\][\s\S]*$/, ""));
-    const project = install("codex");
+    // This release no longer ships [tui], and a project that has AI-DLC's
+    // status line keeps it (#1407, C1), in its own spelling, with the person's
+    // own key beside it.
+    const project = install("codex", codexTuiRelease());
     const configPath = join(project, ".codex", "config.toml");
-    const withoutTui = readFileSync(configPath, "utf-8").replace(/\[tui\][\s\S]*$/, "");
+    const withoutTui = readFileSync(configPath, "utf-8").replace(/^\[tui\][\s\S]*$/m, "");
     const firstTable = withoutTui.indexOf("[sandbox_workspace_write]");
-    writeFileSync(
-      configPath,
-      withoutTui.slice(0, firstTable) + spellings[0] + withoutTui.slice(firstTable),
-    );
+    const dotted = withoutTui.slice(0, firstTable) + spellings[0] + withoutTui.slice(firstTable);
+    writeFileSync(configPath, dotted);
     const refreshed = run([
-      "config", "--project-dir", project, "--from", retired, "--harness", "codex", "--yes",
+      "config", "--project-dir", project, "--from", join(DIST_RELEASE, "codex"), "--harness", "codex", "--yes",
     ], project, env);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
     const after = readFileSync(configPath, "utf-8");
-    expect(after).not.toContain("tui.status_line");
-    expect(parseToml(after).tui).toEqual({ project_note: "keep-me" });
+    expect(after).toBe(dotted);
+    expect(parseToml(after).tui).toEqual({
+      status_line: parseToml(SHIPPED_STATUS_LINE).status_line,
+      project_note: "keep-me",
+    });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Codex refresh adds a release's new inline member beside the project's own", () => {
@@ -3681,14 +3702,16 @@ describe("t294 config diagnostics CLI", () => {
 
   test("a comment inside a reformatted AI-DLC value stops the refresh instead of going", () => {
     const env = runtimeEnv();
-    const project = install("codex");
+    const project = install("codex", codexTuiRelease());
     const configPath = join(project, ".codex", "config.toml");
     const edited = readFileSync(configPath, "utf-8").replace(
       SHIPPED_STATUS_LINE,
       'status_line = [\n  # team: keep the model first\n  "model-with-reasoning", "git-branch", "task-progress", "context-used",\n]',
     );
     writeFileSync(configPath, edited);
-    const same = run(["config", "--project-dir", project, "--yes"], project, env);
+    const same = run([
+      "config", "--project-dir", project, "--from", codexTuiRelease(), "--harness", "codex", "--yes",
+    ], project, env);
     expect(same.status, same.stdout + same.stderr).toBe(0);
     expect(readFileSync(configPath, "utf-8")).toBe(edited);
     const moved = run([
@@ -3815,7 +3838,7 @@ describe("t294 config diagnostics CLI", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Codex refresh keeps CRLF line ends and a byte order mark", () => {
-    const project = install("codex");
+    const project = install("codex", codexTuiRelease());
     const env = runtimeEnv();
     const configPath = join(project, ".codex", "config.toml");
     const edited = `\uFEFF${readFileSync(configPath, "utf-8")
@@ -3839,8 +3862,8 @@ describe("t294 config diagnostics CLI", () => {
     const project = install("codex");
     const env = runtimeEnv();
     const configPath = join(project, ".codex", "config.toml");
-    // AI-DLC's [tui] written as an array of tables: nothing to merge safely.
-    const edited = readFileSync(configPath, "utf-8").replace(/^\[tui\]$/m, "[[tui]]");
+    // AI-DLC's [agents] written as an array of tables: nothing to merge safely.
+    const edited = readFileSync(configPath, "utf-8").replace(/^\[agents\]$/m, "[[agents]]");
     expect(() => parseToml(edited)).not.toThrow();
     writeFileSync(configPath, edited);
     const refreshed = run(["config", "--project-dir", project, "--yes"], project, env);
@@ -3859,7 +3882,7 @@ describe("t294 config diagnostics CLI", () => {
   }
 
   test("a baseline written before per-key records still takes release values for untouched tables", () => {
-    const project = install("codex");
+    const project = install("codex", codexTuiRelease());
     const env = runtimeEnv();
     const configPath = join(project, ".codex", "config.toml");
     withoutValueRecords(project);
@@ -3887,15 +3910,15 @@ describe("t294 config diagnostics CLI", () => {
     writeFileSync(legacyPath, legacyEdited);
     const retiring = codexRelease((text) => text
       .replace("max_depth = 1", "max_depth = 2")
-      .replace(/\[tui\][\s\S]*$/, ""));
+      .replace("[sandbox_workspace_write]\nnetwork_access = true\n", ""));
     const retired = run([
       "config", "--project-dir", legacy, "--from", retiring, "--harness", "codex", "--yes",
     ], legacy, env);
     expect(retired.status, retired.stdout + retired.stderr).toBe(0);
     expect(retired.stdout).toContain("Note: kept your agents.max_depth in .codex/config.toml");
     const after = readFileSync(legacyPath, "utf-8");
-    expect(after).toBe(legacyEdited.replace(`[tui]\n${SHIPPED_STATUS_LINE}\n`, ""));
-    expect(parseToml(after).tui).toBeUndefined();
+    expect(after).toBe(legacyEdited.replace("[sandbox_workspace_write]\nnetwork_access = true\n", ""));
+    expect(parseToml(after).sandbox_workspace_write).toBeUndefined();
 
     // A root key is read from its real statement, not a lookalike line inside
     // a string that an odd closing quote run hides.
@@ -4222,8 +4245,11 @@ describe("t294 config diagnostics CLI", () => {
       matcher: "Bash",
       hooks: projectCommands.map((command) => ({ type: "command", command })),
     });
-    settings.statusLine.command =
-      'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts"';
+    // An earlier release's AI-DLC status line in the shared file (#1407).
+    settings.statusLine = {
+      type: "command",
+      command: 'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts"',
+    };
     writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
 
     const refreshed = run([
@@ -4241,7 +4267,10 @@ describe("t294 config diagnostics CLI", () => {
     )).toHaveLength(1);
     expect(commands).toEqual(expect.arrayContaining(projectCommands));
     expect(commands).not.toContain(legacyGuardCommand);
-    expect(after.statusLine.command).toBe("aidlc engine statusline");
+    // AI-DLC's status line leaves the shared file; this clone keeps it in its own.
+    expect(after.statusLine).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(project, ".claude", "settings.local.json"), "utf-8")).statusLine.command)
+      .toBe("aidlc engine statusline");
   }, 60_000);
 
   test("Claude refresh recognizes the installed dispatcher by absolute path", () => {
@@ -4267,8 +4296,10 @@ describe("t294 config diagnostics CLI", () => {
       (hook: { command: string }) =>
         hook.command === "aidlc engine hook guard-tool-call",
     ).command = absoluteGuard;
-    settings.statusLine.command =
-      `bun "${absoluteDispatcher}" engine statusline`;
+    settings.statusLine = {
+      type: "command",
+      command: `bun "${absoluteDispatcher}" engine statusline`,
+    };
     writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
 
     const refreshed = run([
@@ -4285,7 +4316,10 @@ describe("t294 config diagnostics CLI", () => {
       command === "aidlc engine hook guard-tool-call"
     )).toHaveLength(1);
     expect(commands).not.toContain(absoluteGuard);
-    expect(after.statusLine.command).toBe("aidlc engine statusline");
+    // AI-DLC's status line leaves the shared file; this clone keeps it in its own.
+    expect(after.statusLine).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(project, ".claude", "settings.local.json"), "utf-8")).statusLine.command)
+      .toBe("aidlc engine statusline");
   }, 60_000);
 
   test("Claude refresh treats an unchanged legacy hook installation as a clean migration", () => {
@@ -4318,8 +4352,11 @@ describe("t294 config diagnostics CLI", () => {
         command: `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-${target}.ts"`,
       }],
     })));
-    settings.statusLine.command =
-      'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts"';
+    // An earlier release's AI-DLC status line in the shared file (#1407).
+    settings.statusLine = {
+      type: "command",
+      command: 'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts"',
+    };
 
     const manifestPath = join(
       project,
@@ -4373,7 +4410,10 @@ describe("t294 config diagnostics CLI", () => {
       (groups) => (groups as Array<{ hooks: Array<{ command: string }> }>)
         .flatMap((group) => group.hooks.map((hook) => hook.command)),
     );
-    expect(after.statusLine.command).toBe("aidlc engine statusline");
+    // AI-DLC's status line leaves the shared file; this clone keeps it in its own.
+    expect(after.statusLine).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(project, ".claude", "settings.local.json"), "utf-8")).statusLine.command)
+      .toBe("aidlc engine statusline");
     expect(commands).toContain(projectCommand);
     expect(commands).toContain(projectLegacyCommand);
     expect(readFileSync(projectLegacyPath, "utf-8")).toBe(
@@ -4550,12 +4590,13 @@ process.exit(0);
     expect(retired.stdout).not.toContain("Note: re-added");
   }, 90_000);
 
-  test("Claude refresh keeps a personal statusLine and restores the shipped one when absent", () => {
+  test("Claude refresh keeps the team's own statusLine and puts none back when it is absent", () => {
     const project = install("claude");
     const env = runtimeEnv();
     const settingsPath = join(project, ".claude", "settings.json");
     const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-    const shippedStatusLine = structuredClone(settings.statusLine);
+    // AI-DLC ships no status line in the shared file (#1407).
+    expect(settings.statusLine).toBeUndefined();
     settings.statusLine = { type: "command", command: "my-status", padding: 2 };
     writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
     const args = [
@@ -4565,7 +4606,6 @@ process.exit(0);
     const refreshed = run(args, project, env);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
     expect(JSON.parse(readFileSync(settingsPath, "utf-8")).statusLine).toEqual(settings.statusLine);
-    // Same release: the personal choice stands without a note.
     expect(refreshed.stdout).not.toContain("Note:");
     const doctor = spawnSync(BUN, [
       join(project, ".claude", "tools", "aidlc.ts"),
@@ -4585,36 +4625,35 @@ process.exit(0);
         check.label.includes("aidlc-statusline.ts shipped but not wired"),
     )).toBe(false);
 
-    // A release that ships a different statusLine says so, but still keeps yours.
+    // A release whose own status line value changed still leaves the team's alone.
     const source = temp("aidlc-t294-statusline-source-");
     cpSync(join(DIST_RELEASE, "claude"), source, { recursive: true });
-    const sourceSettingsPath = join(source, ".claude", "settings.json");
-    const release = JSON.parse(readFileSync(sourceSettingsPath, "utf-8"));
+    const sourceDataPath = join(source, ".claude", "tools", "data", "harness.json");
+    const release = JSON.parse(readFileSync(sourceDataPath, "utf-8"));
     release.statusLine = { ...release.statusLine, padding: 1 };
-    writeFileSync(sourceSettingsPath, `${JSON.stringify(release, null, 2)}\n`);
+    writeFileSync(sourceDataPath, `${JSON.stringify(release, null, 2)}\n`);
     const changedRelease = run([
       "config", "--project-dir", project, "--from", source, "--harness", "claude", "--yes",
     ], project, env);
     expect(changedRelease.status, changedRelease.stdout + changedRelease.stderr).toBe(0);
     expect(JSON.parse(readFileSync(settingsPath, "utf-8")).statusLine).toEqual(settings.statusLine);
-    expect(changedRelease.stdout).toContain("Note: kept your statusLine");
+    expect(changedRelease.stdout).not.toContain("statusLine");
 
     const withoutStatusLine = JSON.parse(readFileSync(settingsPath, "utf-8"));
     delete withoutStatusLine.statusLine;
     writeFileSync(settingsPath, `${JSON.stringify(withoutStatusLine, null, 2)}\n`);
-    const restored = run(args, project, env);
-    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
-    expect(JSON.parse(readFileSync(settingsPath, "utf-8")).statusLine).toEqual(shippedStatusLine);
-    expect(restored.stdout).not.toContain("Note:");
+    const refreshedAgain = run(args, project, env);
+    expect(refreshedAgain.status, refreshedAgain.stdout + refreshedAgain.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8")).statusLine).toBeUndefined();
+    expect(refreshedAgain.stdout).not.toContain("Note:");
   }, 60_000);
 
-  test("Claude refresh replaces malformed statusLine values and repairs doctor", () => {
+  test("Claude refresh drops malformed statusLine values and repairs doctor", () => {
     const env = runtimeEnv();
     for (const malformed of [null, {}, { type: "command" }]) {
       const project = install("claude");
       const settingsPath = join(project, ".claude", "settings.json");
       const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-      const shippedStatusLine = structuredClone(settings.statusLine);
       settings.statusLine = malformed;
       writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
 
@@ -4623,8 +4662,8 @@ process.exit(0);
         "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
       ], project, env);
       expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-      expect(JSON.parse(readFileSync(settingsPath, "utf-8")).statusLine)
-        .toEqual(shippedStatusLine);
+      // Not a status line anyone can run, and not one AI-DLC ships there: it goes.
+      expect(JSON.parse(readFileSync(settingsPath, "utf-8")).statusLine).toBeUndefined();
 
       const doctor = spawnSync(BUN, [
         join(project, ".claude", "tools", "aidlc.ts"),
@@ -4958,7 +4997,6 @@ process.exit(0);
     expect(baseline.entries[".claude/settings.json"]).toEqual(expect.objectContaining({
       companyAnnouncements: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       permissions: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
-      statusLine: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       hooks: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       hooksAidlc: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
     }));
@@ -4975,7 +5013,7 @@ process.exit(0);
 
   test("refresh keeps a person's Codex value and says so once the release ships another", () => {
     const env = runtimeEnv();
-    const project = install("codex");
+    const project = install("codex", codexTuiRelease());
     const configPath = join(project, ".codex", "config.toml");
     const userStatus = ["git-branch", "context-used"];
     const edited = readFileSync(configPath, "utf-8").replace(
@@ -4987,6 +5025,10 @@ process.exit(0);
       "config",
       "--project-dir",
       project,
+      "--from",
+      codexTuiRelease(),
+      "--harness",
+      "codex",
       "--yes",
     ], project, env);
     expect(ordinary.status, ordinary.stdout + ordinary.stderr).toBe(0);
@@ -4994,7 +5036,7 @@ process.exit(0);
     expect(readFileSync(configPath, "utf-8")).toBe(edited);
 
     const source = temp("aidlc-t294-codex-entries-source-");
-    cpSync(join(DIST_RELEASE, "codex"), source, { recursive: true });
+    cpSync(codexTuiRelease(), source, { recursive: true });
     const sourceConfigPath = join(source, ".codex", "config.toml");
     const releaseStatus = ["model-with-reasoning", "context-used"];
     writeFileSync(sourceConfigPath, readFileSync(sourceConfigPath, "utf-8").replace(
@@ -5031,7 +5073,7 @@ process.exit(0);
     expect(parseToml(readFileSync(configPath, "utf-8")).tui)
       .toEqual({ status_line: releaseStatus });
 
-    const pristine = install("codex");
+    const pristine = install("codex", codexTuiRelease());
     const pristineRefresh = fromSource(pristine);
     expect(pristineRefresh.status, pristineRefresh.stdout + pristineRefresh.stderr).toBe(0);
     expect(pristineRefresh.stdout).not.toContain("Note:");
@@ -5207,7 +5249,7 @@ process.exit(0);
     expect(opencodeAfter.mcp).toEqual(opencodeSettings.mcp);
     expect(opencodeAfter.provider["amazon-bedrock"].options.region).toBe("eu-west-1");
 
-    const codex = install("codex");
+    const codex = install("codex", codexTuiRelease());
     const codexPath = join(codex, ".codex", "config.toml");
     const userStatus = ["git-branch"];
     const edited = readFileSync(codexPath, "utf-8").replace(

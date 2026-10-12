@@ -125,6 +125,12 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   (`HOST_LABELS` in `core/tools/aidlc-runtime-paths.ts`), never from the
   project-editable `productName`; add your harness there, or it reads "this
   assistant".
+- `statusLine` (optional) - only for a host with a status line AI-DLC can show
+  its progress in, in that host's own shape (Claude Code: `{ type, command }`;
+  Codex: `{ items }`). It is emitted into `tools/data/harness.json`, never into a
+  settings file the host reads, because a project file would take the place of
+  each person's own status line: the engine writes it only when someone chooses
+  it (`core/tools/aidlc-statusline-choice.ts` owns where, per host).
 - `rootIntegrations` — every project-root file emitted by the normal projection,
   each with an explicit init merge policy (`managed-block`, `json-map`,
   `json-array`, `whole-file`, `jsonc-settings`, or `json-entries`).

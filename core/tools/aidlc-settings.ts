@@ -98,6 +98,12 @@ export type ProjectFlagsRecord = {
   sensorTimeoutMs?: number;
   questionRetentionDays?: number;
   bypasses?: RecordableProjectBypass[];
+  // AI-DLC's status line (Claude Code and Codex, #1407), kept only in this
+  // clone's aidlc.settings.local.json: the person chose "on" or "off", or a
+  // project that already had it "kept" it. statuslineReplaced is their own
+  // project-local Claude Code status line that "on" took the place of, put back by "off".
+  statusline?: "on" | "off" | "kept";
+  statuslineReplaced?: Record<string, unknown>;
 };
 
 export type HarnessModelMap = Partial<Record<ModelHarness, string>>;
@@ -150,6 +156,8 @@ const PROJECT_FLAG_KEYS = new Set([
   "sensorTimeoutMs",
   "questionRetentionDays",
   "bypasses",
+  "statusline",
+  "statuslineReplaced",
 ]);
 const MODEL_KEYS = new Set(["schemaVersion", "preset", "groups", "agents", "profiles"]);
 const MODEL_GROUPS = ["deciding", "reviewing", "writing-up"] as const;
@@ -254,6 +262,16 @@ export function normalizeProjectFlagsRecord(
     out.bypasses = [
       ...new Set(value.bypasses as RecordableProjectBypass[]),
     ].sort();
+  }
+  if (value.statusline !== undefined) {
+    if (value.statusline !== "on" && value.statusline !== "off" && value.statusline !== "kept") {
+      throw new Error(`${where}.statusline must be on, off or kept`);
+    }
+    out.statusline = value.statusline;
+  }
+  if (value.statuslineReplaced !== undefined) {
+    if (!isRecord(value.statuslineReplaced)) throw new Error(`${where}.statuslineReplaced must be an object`);
+    out.statuslineReplaced = value.statuslineReplaced;
   }
   return out;
 }
@@ -837,6 +855,8 @@ export const AIDLC_SETTINGS_SCHEMA = {
           uniqueItems: true,
           items: { enum: [...RECORDABLE_PROJECT_BYPASSES] },
         },
+        statusline: { enum: ["on", "off", "kept"] },
+        statuslineReplaced: { type: "object" },
       },
     },
   },

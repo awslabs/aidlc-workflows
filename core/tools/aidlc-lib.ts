@@ -1108,6 +1108,8 @@ export function isReadOnlyNextArgv(argv: readonly string[]): boolean {
   if (args[0] === "config" && (args[1] === "set" || args[1] === "get" || args[1] === "list")) return true;
   // parseNextFlags returns on --config at any position (config print or usage refusal) before workflow inspection, without honoring the -- delimiter.
   if (args.includes("--config")) return true;
+  // A leading --statusline is the person's status line switch (or its usage line).
+  if (args[0] === "--statusline") return true;
   // Leading plugin/knowledge nouns own the argv and are not in routeNext's marker exclusion, so a trailing read-only spelling is theirs, not a mode switch.
   if (parsePluginCommand(args).kind !== "not-plugin" || parseKnowledgeCommand(args).kind !== "not-knowledge") return false;
   const workspace = parseWorkspaceCommand(args);
@@ -39677,6 +39679,7 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
   if (leadingOrchestratorVerb(head) !== null) return { kind: "exact" };
   if (head[0] === "config" || head[0] === "compose" || head[0] === "--pick") return { kind: "exact" };
   if (head.includes("--config")) return { kind: "exact" };
+  if (head[0] === "--statusline") return { kind: "exact" };
   if (head.length === 1 && (head[0] === "help" || head[0] === "-h")) return { kind: "exact" };
 
   const requestWords = nextArgsCarryRequestWords(args);

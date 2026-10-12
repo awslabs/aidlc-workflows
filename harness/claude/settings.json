@@ -11,10 +11,6 @@
       "WebSearch"
     ]
   },
-  "statusLine": {
-    "type": "command",
-    "command": "bun \"$CLAUDE_PROJECT_DIR/{{HARNESS_DIR}}/tools/aidlc.ts\" engine statusline"
-  },
   "env": {
     "AWS_AIDLC_DEFAULT_SCOPE": "classic"
   },

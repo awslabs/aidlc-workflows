@@ -533,6 +533,16 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
   } else {
     cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
     if (existsSync(CLAUDE_MEMORY_SRC)) cpSync(CLAUDE_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });
+    // AI-DLC's status line is the person's choice (#1407): it ships in
+    // harness.json and reaches Claude Code through their own
+    // .claude/settings.local.json once they say yes, as this fixture's person has.
+    const shipped = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "harness.json"), "utf8")) as {
+      statusLine?: unknown;
+    };
+    writeFileSync(
+      join(proj, ".claude", "settings.local.json"),
+      `${JSON.stringify({ statusLine: shipped.statusLine }, null, 2)}\n`,
+    );
   }
 
   // 2. Seed the per-intent workspace shell (default record + cursors), then write

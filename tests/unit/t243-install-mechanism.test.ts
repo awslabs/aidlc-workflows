@@ -3239,7 +3239,6 @@ describe("t243 project initialization", () => {
     expect(baseline.entries[".claude/settings.json"]).toEqual(expect.objectContaining({
       companyAnnouncements: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       permissions: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
-      statusLine: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       hooks: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       hooksAidlc: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
     }));

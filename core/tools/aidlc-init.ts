@@ -198,6 +198,23 @@ import {
   type KiroWorkflowsAnswer,
 } from "./aidlc-kiro-ide-workflows.ts";
 import {
+  applyStatusLineAnswer,
+  applyStatusLineDefault,
+  CODEX_STATUS_LINE_PATH,
+  CLAUDE_STATUS_LINE_QUESTION,
+  claudeStatusLineAnswers,
+  CODEX_STATUS_LINE_QUESTION,
+  codexStatusLineAnswers,
+  hasOwnStatusLine,
+  isAidlcClaudeStatusLine,
+  noStatusLineLine,
+  readStatusLineChoice,
+  statusLineEntry,
+  statusLineHarness,
+  type StatusLineHarness,
+  switchStatusLine,
+} from "./aidlc-statusline-choice.ts";
+import {
   KIRO_TERMINAL_ISSUE_ID,
   KIRO_TERMINAL_POWERSHELL,
   KIRO_TERMINAL_QUESTION,
@@ -308,6 +325,7 @@ import {
   resolveAidlcSettingsWithOverride,
   serializeAidlcSettings,
   settingsModelsFromHarnessPolicy,
+  localSettingsPath,
   settingsPathForTarget,
   settingsSource,
   updateSettingsSection,
@@ -342,6 +360,10 @@ type Baseline = {
   shippedOnly?: true;
   entries?: Record<string, Record<string, string>>;
   rootContributions: Record<string, RootContribution>;
+  // The project had AI-DLC's status line in its shared .claude/settings.json
+  // before it moved to each person's own settings (#1407): every clone keeps
+  // it (C1) until that person turns it off.
+  statusLineKept?: true;
 };
 
 type PreparedRefreshSource = {
@@ -433,6 +455,7 @@ type SettingsMutation = {
 
 const CONFIG_VALUE_FLAGS = new Set([
   "--agent",
+  "--statusline",
   "--kiro-workflows",
   "--kiro-terminal",
   "--ca-bundle",
@@ -579,6 +602,7 @@ const ROOT_CONFIG_FLAGS = new Set([
   "--project-dir",
   "--quiet",
   "--release-base-url",
+  "--statusline",
   "--unpin",
   "--verbose",
   "--yes",
@@ -921,8 +945,23 @@ function validateRootShowArgs(argv: readonly string[]): string | null {
   return argv.filter((token) => token === "--show").length > 1 ? "--show may be specified only once" : null;
 }
 
+// `config --statusline on|off` switches AI-DLC's status line and nothing else.
+function validateStatusLineSwitchArgs(argv: readonly string[]): string | null {
+  const grammar = validateConfigOptionGrammar(argv, "config --statusline", {
+    values: new Set(["--statusline", "--harness", "--project-dir"]),
+    bare: new Set(["--dry-run", "--help", "--json", "--no-color", "--quiet", "--verbose", "--yes"]),
+    invalidKnownFlags: ROOT_CONFIG_FLAGS,
+    invalidKnownMessage: (flag) => `${flag} is not valid with config --statusline`,
+  });
+  if (grammar) return grammar;
+  const value = valueAfter([...argv], "--statusline");
+  if (value !== "on" && value !== "off") return "--statusline must be on or off";
+  return validateConfigOutputMode(argv);
+}
+
 function validateRootConfigArgs(argv: readonly string[]): string | null {
   if (argv.includes("--show")) return validateRootShowArgs(argv);
+  if (argv.includes("--statusline")) return validateStatusLineSwitchArgs(argv);
   const hasPin = argv.includes("--pin");
   const hasUnpin = argv.includes("--unpin");
   if (hasPin && hasUnpin) return "--pin and --unpin are mutually exclusive";
@@ -2232,6 +2271,55 @@ function diagnosticWizard(
   return answer
     ? { schemaVersion: 1, reviewed: true }
     : records.trust;
+}
+
+// AI-DLC's status line, switched by the person (#1407): `config --statusline
+// on|off`, which `/aidlc --statusline on|off` runs from the chat. It asks
+// nothing (they typed it), applies once to every harness of the project with a
+// status line (or the one --harness names), and says in one line each what
+// changed and the way back. On Claude Code it is this person's own setting; on
+// Codex it is the project's, and the line says it applies to everyone.
+function statusLineSwitch(argv: readonly string[]): CommandResult {
+  const value = valueAfter([...argv], "--statusline");
+  if (value !== "on" && value !== "off") return usage("--statusline must be on or off", configCommand("--help"));
+  const on = value === "on";
+  const projectDir = projectDirFrom(argv);
+  const requested = valueAfter([...argv], "--harness");
+  const installed = discoverProjectHarnesses(projectDir);
+  const named = requested ? installed.filter((harness) => harness.distribution === requested) : installed;
+  if (requested && named.length === 0) {
+    return usage(`this project is not set up for ${requested}`, configCommand(`--harness ${requested}${projectTarget(projectDir)}`));
+  }
+  const targets = [...new Set(
+    named.map((harness) => statusLineHarness(harness.distribution)).filter((harness): harness is StatusLineHarness => harness !== null),
+  )];
+  if (targets.length === 0) {
+    const distribution = named[0]?.distribution;
+    const product = distribution
+      ? HARNESS_PRODUCT_NAMES[distribution as keyof typeof HARNESS_PRODUCT_NAMES] ?? distribution
+      : "This project";
+    return success(noStatusLineLine(product, "/aidlc"), { statusline: [] });
+  }
+  if (argv.includes("--dry-run")) {
+    return success(
+      targets.map((harness) =>
+        `would turn AI-DLC's status line ${value} for ${HARNESS_PRODUCT_NAMES[harness]}${harness === "codex" ? " (for everyone working in this project)" : ""}`
+      ).join("\n"),
+      { statusline: targets.map((harness) => ({ harness, on, changed: false })) },
+    );
+  }
+  const lines: string[] = [];
+  const data: Array<{ harness: StatusLineHarness; on: boolean; changed: boolean }> = [];
+  for (const harness of targets) {
+    try {
+      const result = switchStatusLine(projectDir, harness, on);
+      lines.push(result.line);
+      data.push({ harness, on, changed: result.changed });
+    } catch (error) {
+      return failure(error instanceof Error ? error.message : String(error), EXIT.failure);
+    }
+  }
+  return success(lines.join("\n"), { statusline: data });
 }
 
 // Kiro IDE's Workflows switch is the person's Kiro setting for all their
@@ -4944,6 +5032,7 @@ const HARNESS_IDENTITY_KEYS = new Set([
   "directiveMaxBytes",
   "harnessDir",
   "rulesSubdir",
+  "statusLine",
 ]);
 
 const CLAUDE_SHIPPED_KEYS = [
@@ -4952,6 +5041,18 @@ const CLAUDE_SHIPPED_KEYS = [
   "statusLine",
   "hooks",
 ];
+
+// The project's shared .claude/settings.json carries AI-DLC's status line and
+// the staged release no longer does: this refresh takes it out of there.
+function claudeStatusLineLeavesTeamFile(projectDir: string, stagedRoot: string, harnessDir: string): boolean {
+  try {
+    const current = readJsonFile(join(projectDir, harnessDir, "settings.json")) as Record<string, unknown>;
+    const staged = readJsonFile(join(stagedRoot, harnessDir, "settings.json")) as Record<string, unknown>;
+    return isAidlcClaudeStatusLine(current.statusLine, projectDir) && staged.statusLine === undefined;
+  } catch {
+    return false;
+  }
+}
 
 // Exact Claude dist bytes present in version tags before these direct hooks
 // were retired. A manifestless file is removable only when its hash is here;
@@ -5098,15 +5199,13 @@ function preserveClaudeProviderFields(
   const shippedChanged = (key: string): boolean =>
     priorEntries?.[key] === undefined ||
     sha256Bytes(canonical(staged[key])) !== priorEntries[key];
+  // A status line the team set in the shared file is theirs and stays. AI-DLC's
+  // own is no longer shipped there: it leaves with this refresh, and each
+  // clone keeps it in its own settings.local.json (aidlc-statusline-choice.ts).
   if (
     Object.hasOwn(current, "statusLine") &&
     isCustomClaudeStatusLine(current.statusLine, projectDir)
   ) {
-    if (shippedChanged("statusLine")) {
-      notes.push(
-        "kept your statusLine in .claude/settings.json; this release ships a different one. Delete the key and refresh to take it.",
-      );
-    }
     staged.statusLine = current.statusLine;
   }
   // A value equal to this release's own is AI-DLC's, not the person's: a
@@ -5787,6 +5886,9 @@ function planCodexEntries(
       if (!entry.startsWith(CODEX_VALUE_ENTRY_PREFIX)) continue;
       const path = JSON.parse(entry.slice(CODEX_VALUE_ENTRY_PREFIX.length)) as string[];
       if (shippedLeaves.has(JSON.stringify(path)) || entry === codexValueEntry(CODEX_SPACE_POINTER_PATH)) continue;
+      // AI-DLC's status line, which earlier releases shipped, is now the
+      // project's choice: a project that has it keeps it (C1).
+      if (JSON.stringify(path) === JSON.stringify(CODEX_STATUS_LINE_PATH)) continue;
       const now = tomlPathValue(currentObject, path);
       if (now.found && sha256Bytes(codexValueText(now.value)) === hash) retired.push(path);
     }
@@ -5803,6 +5905,7 @@ function planCodexEntries(
       const inSection = statement.table.length === 0 ? statement.path.length === 1 : statement.table.length === 1;
       if (!inSection || !ownedSection(statement.path[0])) continue;
       if (tomlPathValue(stagedObject, statement.path).found) continue;
+      if (pathStartsWith(statement.path, CODEX_STATUS_LINE_PATH)) continue;
       if (leaves.some((leaf) => pathStartsWith(leaf, statement.path))) continue;
       retired.push(statement.path);
     }
@@ -7371,6 +7474,8 @@ type FirstRunChoices = {
   kiroWorkflowsOff?: boolean;
   // Kiro IDE on Windows only, asked while its terminal is Command Prompt: true sets PowerShell.
   kiroTerminalPowerShell?: boolean;
+  // Claude Code and Codex, asked once: true shows AI-DLC's progress in the status line.
+  statusLineOn?: boolean;
 };
 
 type FirstRunKiroSession = {
@@ -7953,6 +8058,8 @@ function firstRunMutationPaths(
     ),
     join(projectDir, ".gitignore"),
     settingsPathForTarget(projectDir, choices.target),
+    // Where the status line answer is kept.
+    localSettingsPath(projectDir),
   ].map((path) => resolve(path)))];
 }
 
@@ -8738,6 +8845,21 @@ function customizeFirstRun(
   }
 }
 
+// The status line question, asked once at first-run setup on the two hosts
+// that have one; the recommended answer comes first.
+function askStatusLine(projectDir: string, harness: StatusLineHarness): boolean {
+  const hasOwn = hasOwnStatusLine(projectDir, harness);
+  const answers = harness === "claude" ? claudeStatusLineAnswers(hasOwn) : codexStatusLineAnswers(hasOwn);
+  process.stdout.write("\n");
+  writeMenuRow("  ", harness === "claude" ? CLAUDE_STATUS_LINE_QUESTION : CODEX_STATUS_LINE_QUESTION);
+  process.stdout.write("\n");
+  for (const [index, answer] of answers.entries()) {
+    writeMenuRow(`    ${index + 1}. `, `${answer.label}${index === 0 ? "  (recommended)" : ""}`);
+  }
+  process.stdout.write("\n");
+  return answers[promptChoice("  Choice", answers.length, 1) - 1].on;
+}
+
 async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   try {
   // A pinned project is set up from its pinned release, as `config --harness`
@@ -8942,6 +9064,10 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   if (choices.candidate.stamp.distribution === "kiro-ide" && kiroTerminalQuestionDue()) {
     choices.kiroTerminalPowerShell = promptYesDefault(`\n  ${KIRO_TERMINAL_QUESTION}`, true);
   }
+  const statusHarness = statusLineHarness(choices.candidate.stamp.distribution);
+  if (statusHarness && readStatusLineChoice(projectDir) === null) {
+    choices.statusLineOn = askStatusLine(projectDir, statusHarness);
+  }
   const snapshot = snapshotFirstRunMutationPaths(projectDir, choices);
   let preserveSnapshot = false;
   try {
@@ -8958,6 +9084,10 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     if (choices.kiroTerminalPowerShell !== undefined) {
       process.stdout.write("\n");
       writeMenuRow("  ", applyKiroTerminalAnswer(projectDir, choices.kiroTerminalPowerShell));
+    }
+    if (statusHarness && choices.statusLineOn !== undefined) {
+      process.stdout.write("\n");
+      writeMenuRow("  ", applyStatusLineAnswer(projectDir, statusHarness, choices.statusLineOn));
     }
     renderFirstRunEnding(projectDir, choices, kiroResult);
   } catch (error) {
@@ -11803,6 +11933,10 @@ export async function main(
     emitResult(configureChannel(argv), options);
     return;
   }
+  if (argv.includes("--statusline")) {
+    emitResult(statusLineSwitch(argv), options);
+    return;
+  }
   if (argv.includes("--pin") || argv.includes("--unpin")) {
     emitResult(await configureProjectPin(argv, {
       activeWorkflows: activeWorkflowDescriptions,
@@ -12312,6 +12446,11 @@ export async function main(
       diagnosticsContext?.overrides ?? choicesContext?.overrides,
     );
     prepared.notes.unshift(...sourceNotes);
+    // A release that no longer ships AI-DLC's status line in the shared Claude
+    // Code settings takes it out of there; the baseline then says the project
+    // had it, so each clone keeps it in its own settings (C1).
+    const statusLineKept = prior?.statusLineKept === true ||
+      (descriptor.distribution === "claude" && claudeStatusLineLeavesTeamFile(projectDir, prepared.root, descriptor.harnessDir));
     const preparedRoot = prepared.root;
     const preparedRegenerated = prepared.regenerated;
     let recordedProjectMcp: "defaults" | "none" | undefined;
@@ -12608,6 +12747,7 @@ export async function main(
       ...(!selected.projectProjection || prior?.shippedOnly ? { shippedOnly: true as const } : {}),
       entries: prepared.entries,
       rootContributions,
+      ...(statusLineKept ? { statusLineKept: true as const } : {}),
     };
     const baselineRel = join(descriptor.harnessDir, "tools", "data", "aidlc-manifest.json");
     operations.push(writeOperation(
@@ -12960,6 +13100,21 @@ export async function main(
       descriptor.distribution === "kiro-ide" && !argv.includes("--dry-run") && kiroTerminalQuestionDue()
     ) {
       changes.push(applyKiroTerminalAnswer(projectDir, true));
+    }
+    // AI-DLC's status line asks nothing here: a project that already had it
+    // keeps it for this person (said once when it covers their own), and a
+    // project that did not gets none until someone chooses it.
+    const statusHarness = statusLineHarness(descriptor.distribution);
+    if (statusHarness && !recordOnly) {
+      try {
+        const kept = applyStatusLineDefault(projectDir, statusHarness);
+        if (kept?.line) prepared.notes.push(kept.line);
+      } catch (error) {
+        prepared.notes.push(
+          `AI-DLC's status line was not kept for you (${error instanceof Error ? error.message : String(error)}); ` +
+            `${statusLineEntry(statusHarness)} --statusline on puts it back.`,
+        );
+      }
     }
     if (options.mode === "human") writeMenuLines("", changes.map((line) => `  ${line}`));
     // Cursor may skip project hooks in a folder outside any git repository

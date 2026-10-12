@@ -4,9 +4,10 @@ This chapter walks through a complete AI-DLC workflow run, explaining what you s
 
 > **Note**: The transcripts in this chapter show **Claude Code**. On Kiro CLI,
 > Kiro IDE, Codex CLI, and opencode the workflow - stages, agents, gates,
-> artifacts - is identical, but the Claude-only welcome banner and custom
-> AI-DLC statusline do not appear. Use `/aidlc --status` on Kiro and opencode;
-> Codex uses `$aidlc --status` and its built-in `update_plan` progress display.
+> artifacts - is identical, but the Claude-only welcome banner does not appear,
+> and AI-DLC's status line shows only on Claude Code and Codex, once you turn it
+> on. Use `/aidlc --status` on Kiro and opencode; Codex uses `$aidlc --status`
+> and its built-in `update_plan` progress display.
 > Your harness's chapter under
 > [Running on other harnesses](harnesses/README.md) lists every difference.
 
@@ -153,7 +154,7 @@ After Initialization, the workflow enters Ideation. Each stage from here on runs
 
 ### Stage 1.1: Intent Capture (aidlc-product-agent)
 
-On Claude Code, the custom AI-DLC status line at the bottom of your terminal updates (Kiro and opencode use `/aidlc --status`; Codex uses `$aidlc --status` and its built-in `update_plan` progress display):
+On Claude Code, when you chose AI-DLC's status line at setup (or turned it on with `/aidlc --statusline on`), the status line at the bottom of your terminal updates (Kiro and opencode use `/aidlc --status`; Codex uses `$aidlc --status` and its built-in `update_plan` progress display):
 
 ```
 [AIDLC] IDEATION > Intent Capture [▓▓▓▓▓░░░░░] 4/7 -- product
@@ -399,7 +400,7 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/
 
 ## Status Line
 
-Throughout the workflow on Claude Code, the custom AI-DLC status line shows your current position (Kiro and opencode use `/aidlc --status` and the progress line at each gate; Codex uses `$aidlc --status` and its built-in `update_plan` progress display):
+Throughout the workflow on Claude Code, AI-DLC's status line (once you turn it on: setup asks, or `/aidlc --statusline on`) shows your current position (Kiro and opencode use `/aidlc --status` and the progress line at each gate; Codex uses `$aidlc --status` and its built-in `update_plan` progress display):
 
 ```
 [AIDLC] IDEATION > Intent Capture [▓▓▓▓▓░░░░░] 4/7 -- product

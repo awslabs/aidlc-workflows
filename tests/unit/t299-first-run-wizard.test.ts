@@ -392,6 +392,8 @@ function runWizard(
     // More `config` arguments, such as a `--harness ... --yes` setup.
     configArgs?: string[];
     probed?: readonly string[];
+    // The status line question's answer, sent after `input`; null sends none.
+    statusLineAnswer?: string | null;
   } = {},
 ): CliContext & CliResult {
   const project = realpathSync(options.project ?? temp("aidlc-t299-project-"));
@@ -432,7 +434,13 @@ function runWizard(
     delete context.env.NO_COLOR;
     context.env.FORCE_COLOR = "1";
   }
-  return { ...context, ...runCli(context, INIT, ["config", ...(options.configArgs ?? [])], input) };
+  // Claude Code and Codex setup end with the status line question (#1407);
+  // Enter takes its recommended answer, so cases written before it still run
+  // to the end. An empty input stays empty: it answers nothing at all.
+  const answered = input === "" || options.statusLineAnswer === null
+    ? input
+    : `${input}${options.statusLineAnswer ?? "\n"}`;
+  return { ...context, ...runCli(context, INIT, ["config", ...(options.configArgs ?? [])], answered) };
 }
 
 // Recommended first-run defaults keep the harness's current provider; the
@@ -2240,7 +2248,8 @@ describe("t299 first-run setup wizard", () => {
           AIDLC_RUNTIME_ROOT: RUNTIME,
           AIDLC_TEST_CONFIG_DETECTION_JSON: detection(bin),
         },
-        input: "\n",
+        // Enter for the recommended defaults, then for the status line question.
+        input: "\n\n",
         encoding: "utf-8",
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       },

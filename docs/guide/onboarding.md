@@ -256,7 +256,7 @@ designed; the last row is a fault:
 | "It won't just write the code." | Construction needs inputs from earlier phases (rule 1). | Let the earlier stages run, or pick a smaller scope. |
 | "This is way too many steps." | Your scope is larger than the task needs (rule 3). | Restart with `express`, `poc`, or `bugfix`. |
 | "It asks too many questions." | Depth sets how many questions each stage asks; your scope picks a default. | Type `/aidlc --depth minimal` (about 2 to 4 questions per stage). |
-| "Which stage am I on?" | The status line / progress line tells you. | On Claude Code read the status line; elsewhere run `/aidlc --status` (`$aidlc --status` on Codex). |
+| "Which stage am I on?" | The status line / progress line tells you. | On Claude Code read AI-DLC's status line if you turned it on (`/aidlc --statusline on`); elsewhere run `/aidlc --status` (`$aidlc --status` on Codex). |
 | "Where did that decision go?" | It is in the record dir (rule 4). | Open `aidlc/spaces/<space>/intents/<...>/` and its `audit/` shards. |
 | "Every command the agent runs is refused", or the same step keeps repeating. | Something below the workflow failed: a hook is not running, or a check is refusing in error. | Stop the agent, run `aidlc doctor --export` in your own terminal, and follow the [recovery playbook](facilitator-guide.md#recovery-playbook). |
 

@@ -36,7 +36,9 @@
 // Source under test (read fresh, parsed once at module load):
 //   dist/claude/.claude/settings.json
 //     .permissions.allow[]                 — pre-approved tool list
-//     .statusLine.command                  — references aidlc-statusline.ts
+//     .statusLine                          -- ABSENT (AI-DLC's status line is each
+//                                             person's choice, #1407; its value ships
+//                                             in tools/data/harness.json)
 //     .model / .effortLevel                -- ABSENT (session values inherit)
 //     .env provider/model overrides         — absent
 //
@@ -45,7 +47,7 @@
 //   .sh 2-9    permissions.allow contains <8 tools>        -> one test() per entry,
 //                Edit(/**)/Task/WebSearch (3 tests), plus "file entries stay
 //                inside the project" (no bare Read/Edit/Write/Glob/Grep)
-//   .sh 10     statusLine.command -> aidlc-statusline.ts   -> "statusLine.command references aidlc-statusline.ts"
+//   .sh 10     statusLine.command -> aidlc-statusline.ts   -> "the shared settings carry no statusLine; harness.json's routes through the Bun dispatcher"
 //   .sh 11     legacy model pin                            -> "model and effortLevel are absent"
 //   .sh 12-16  provider/model env overrides absent         -> "provider-neutral env block"
 
@@ -379,9 +381,13 @@ describe("permissions.allow on the native release", () => {
 });
 
 describe("statusLine [.sh test 10]", () => {
-  test("statusLine.command routes through the Bun copy-channel dispatcher", () => {
-    const cmd = settings.statusLine?.command ?? "";
-    expect(cmd).toBe('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline');
+  test("the shared settings carry no statusLine; harness.json's routes through the Bun dispatcher", () => {
+    // The person's own status line outranks nothing in a team file (#1407).
+    expect(Object.hasOwn(settings, "statusLine")).toBe(false);
+    const shipped = JSON.parse(readFileSync(join(AIDLC_SRC, "tools", "data", "harness.json"), "utf-8")) as {
+      statusLine?: { command?: string };
+    };
+    expect(shipped.statusLine?.command).toBe('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline');
   });
 });
 

@@ -95,6 +95,7 @@ import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import { recordRulesLoad } from "../tools/aidlc-rules-held.ts";
 import { aidlcInvocation, aidlcToolInvocation, entrySkillInvocation, hidesStopNote, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
+import { applyStatusLineDefault, statusLineHarness } from "../tools/aidlc-statusline-choice.ts";
 
 // While a recorded switch keeps one of the person's checks off, every new chat
 // opens by saying so. Never blocks startup.
@@ -340,6 +341,18 @@ if (sessionId && !rebindCheckOnly) {
     }
   } catch {
     // Asked at a later start.
+  }
+  // AI-DLC's status line asks nothing here: a project that already had it
+  // keeps it for this clone, and the person whose own status line it covers is
+  // told once. Nothing is added anywhere else (#1407).
+  try {
+    const statusHarness = statusLineHarness(runtimeHarnessName(projectDir));
+    const kept = statusHarness ? applyStatusLineDefault(projectDir, statusHarness) : null;
+    if (kept?.line) {
+      asks.push(`TELL ONCE: in your first reply, tell the person this, in their language: "${kept.line}"`);
+    }
+  } catch {
+    // Kept at a later start.
   }
   trackedSteeringAsk = asks.filter(Boolean).join("\n");
 }

@@ -1,6 +1,6 @@
 # Customization
 
-AI-DLC is designed to adapt to your team's needs. This chapter covers settings overrides, scope configuration, stage customization, statusline, and tool permissions.
+AI-DLC is designed to adapt to your team's needs. This chapter covers settings overrides, scope configuration, stage customization, the status line, and tool permissions.
 
 > **Harness-specific config.** The harness-neutral customizations — scope
 > configuration, stage depth, knowledge, and rules — apply on every harness. The
@@ -24,7 +24,7 @@ AI-DLC is designed to adapt to your team's needs. This chapter covers settings o
 
 ## Settings Overrides (`settings.local.json`)
 
-The shared `.claude/settings.json` belongs to the project and is committed to version control. AI-DLC refreshes its own hook registrations and command allow entries while keeping your hooks, deny rules, custom `statusLine`, environment, and other settings. Notes explain what was restored or kept; `--force` is not needed for this file. Retired shipped allow entries are not removed automatically. To override settings for your local environment without affecting the team, create a personal overrides file:
+The shared `.claude/settings.json` belongs to the project and is committed to version control. AI-DLC refreshes its own hook registrations and command allow entries while keeping your hooks, deny rules, custom `statusLine`, environment, and other settings. Notes explain what was restored or kept; `--force` is not needed for this file. Retired shipped allow entries are not removed automatically. To override settings for your local environment without affecting the team, create a personal overrides file (if `.claude/settings.local.json` already exists, for example because AI-DLC's status line is on for you, add your keys to it instead of copying over it):
 
 ```bash
 cp .claude/settings.local.json.example .claude/settings.local.json
@@ -529,9 +529,11 @@ You can override depth at any approval gate by requesting a different level.
 
 ---
 
-## Statusline (Claude Code only)
+## Status line (Claude Code and Codex)
 
-On **Claude Code**, this implementation displays a statusline in the terminal status bar showing workflow progress. The other harnesses have no statusline — they surface workflow position through `/aidlc --status` (Kiro, Cursor, opencode) and the `update_plan` task-progress item plus `$aidlc --status` (Codex):
+On **Claude Code** and **Codex CLI**, AI-DLC can show where the work stands in the status line at the bottom of your terminal. It takes the place of the status line you set up yourself, so it is your choice: first-run setup asks once, and you can switch it any time. The other harnesses have no status line; they show workflow position through `/aidlc --status` and the progress line at each gate.
+
+On Claude Code it looks like this:
 
 ```
 [AIDLC] IDEATION [▓▓▓▓▓░░░░░] 4/7 > Intent Capture -- Product Agent
@@ -541,9 +543,16 @@ This shows, in order: current phase, phase progress (as a bar and a ratio — bo
 
 The `$<usd>` value is a local estimate priced from **public list prices**, not a bill. When Amazon Bedrock is the recorded provider (`CLAUDE_CODE_USE_BEDROCK=1`), what Bedrock actually charges depends on your inference profile, region, service tier, and any negotiated or subscription pricing, so the figure may not match your invoice. Most of the token volume in a long workflow is cache reads — billed, at the reduced cache-read rate — so the counts and the estimate grow steadily; that is real usage, not inflation. To price new usage at your own rates, point `AIDLC_MODEL_RATES` at a rates file (see [Rate table and overrides](../reference/06-hooks-and-tools.md#rate-table-and-overrides)); totals already recorded keep the rates they were priced at. If you'd rather not show the estimate — while presenting, screen-sharing, or recording — set `AIDLC_DISABLE_USAGE_TRACKING=1` (see [Troubleshooting](15-troubleshooting.md#statusline-shows-a-cost-segment-you-dont-want-or-usage-tracking-concerns)).
 
-### Configuration
+### Turning it on or off
 
-The statusline is configured in `.claude/settings.json`:
+- At first-run setup (`aidlc config` in a project with no AI-DLC yet), AI-DLC asks: "Show AI-DLC's progress in your status line? It takes the place of your own while you work in this project." When you already have a status line of your own, the recommended answer is "No, keep mine"; when you have none, it is "Yes".
+- Any time later: `/aidlc --statusline on` or `/aidlc --statusline off` in the chat (`$aidlc --statusline on|off` on Codex), or `aidlc config --statusline on|off` in the terminal. It asks nothing and prints one line: what changed and how to switch back.
+- A setup that asks nothing (`--yes`, CI, a script, the copy channel, a teammate's clone at its first chat) adds no status line.
+- A project that already showed AI-DLC's status line before this release keeps it, with no question. If it covers a status line of your own, the next refresh (or your first chat in a teammate's clone) says so once: "AI-DLC's status line replaces yours here; /aidlc --statusline off gives yours back."
+
+**Claude Code: your own setting.** Your choice lives in your own `.claude/settings.local.json`, which git ignores, so each teammate chooses for themselves and nothing in the shared `.claude/settings.json` changes. Your answer is kept in `aidlc.settings.local.json` (also ignored), so setup never asks again. AI-DLC reads your own `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`) only to recommend an answer, and never writes it. A status line your team set in the shared `.claude/settings.json` stays as it is. When your organization's managed Claude Code settings choose the status line, theirs shows whatever you pick.
+
+AI-DLC's value is:
 
 ```json
 "statusLine": {
@@ -552,17 +561,18 @@ The statusline is configured in `.claude/settings.json`:
 }
 ```
 
+(`aidlc engine statusline` on a native install). It ships in `.claude/tools/data/harness.json` and reaches `.claude/settings.local.json` only when you turn it on.
+
+**Codex CLI: the project's setting.** Codex has no per-person settings file inside a project, so on Codex the choice is the project's: `on` writes AI-DLC's `status_line` line into the `[tui]` table of the shared `.codex/config.toml`, for everyone working in the project, and `off` takes that one line out. Nothing else in the file changes, and your own `~/.codex/config.toml` is read only to recommend an answer, never written. Each person can instead add task progress to their own Codex status line with Codex's `/statusline` (the `task-progress` item is what AI-DLC keeps current). The line AI-DLC writes is:
+
+```toml
+[tui]
+status_line = ["model-with-reasoning", "git-branch", "task-progress", "context-used"]
+```
+
 ### Customizing the format
 
 Edit `.claude/hooks/aidlc-statusline.ts` directly. The output format is defined in the `main()` function near the end of the file. The hook reads phase, stage, and agent from `aidlc-state.md`, maps stage slugs to display names, and builds both the unicode progress bar and the `n/m` ratio from the same phase-local checkbox parse.
-
-### Disabling the statusline
-
-Remove the `statusLine` block from `settings.json`. The terminal status bar
-reverts to Claude Code's default until the next `aidlc config --harness claude`
-release refresh restores the shipped statusline. A custom, non-AI-DLC
-`statusLine` command is kept on refresh; delete the key when you want to take
-the shipped one again. No `--force` is needed.
 
 ---
 
