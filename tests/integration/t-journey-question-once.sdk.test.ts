@@ -51,7 +51,9 @@ import {
 import { describe, expect, test } from "bun:test";
 import { assertToolResultContains } from "../harness/assert.ts";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
-import { type CapturedAskUserQuestion, driveAidlc, readAuditEvents, readStateFile } from "../harness/sdk-drive.ts";
+import {
+  type CapturedAskUserQuestion, driveAidlc, readAuditEvents, readStateFile, separateWorkOptionIndex,
+} from "../harness/sdk-drive.ts";
 import { readIntentRegistry, turnEndIsOpen } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
@@ -87,24 +89,12 @@ const ANSWER_ROWS = [
 
 const FEASIBILITY_IN_PROGRESS = /^- \[-\] feasibility\b/m;
 
-// The option for separate new work, as the agent worded it: a label leading
-// with "Yes" (the skill's own offer), the engine's "Separate new piece of work"
-// in the label, or, when the agent reworded the label ("Set up alongside",
-// "Start it alongside", Full Suite 10-08 and 10-10), the route named in the
-// description it kept for that option. The meaning is the agent's to word; the
-// test checks the right option was offered and picks it by the picker's number.
+// The option for separate new work, as the agent worded it (found by
+// separateWorkOptionIndex, which t176 shares). The meaning is the agent's to
+// word; the test checks the right option was offered and picks it by the
+// picker's number.
 function separateWorkReply(menu: CapturedAskUserQuestion | undefined): string {
-  const options = menu?.questions[0]?.options ?? [];
-  let at = options.findIndex((o) => /^yes\b/i.test(o.label));
-  if (at < 0) at = options.findIndex((o) => /separate/i.test(o.label));
-  if (at < 0) {
-    // The description names the route ("a separate new piece of work", "a new,
-    // separate piece of work") and does not negate it ("not a separate piece
-    // of work" on another option; "do not change the active work" beside the
-    // route is still the route).
-    at = options.findIndex((o) =>
-      /\bseparate\b/i.test(o.description ?? "") && !/\bnot (?:a |the )?separate\b/i.test(o.description ?? ""));
-  }
+  const at = separateWorkOptionIndex(menu?.questions[0]?.options ?? []);
   return at < 0 ? SEPARATE : `${at + 1}, ${SEPARATE}`;
 }
 

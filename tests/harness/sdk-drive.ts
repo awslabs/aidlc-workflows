@@ -291,6 +291,26 @@ export function buildAnswers(
   return answers;
 }
 
+/**
+ * The option for separate new work in a routing menu, as the agent worded it:
+ * a label leading with "Yes" (the skill's own offer), "separate" in the label
+ * (the engine's "Separate new piece of work"), or, when the agent reworded the
+ * label ("Set up alongside", "Start it alongside", Full Suite 10-08 and 10-10),
+ * the route named in the description it kept for that option. A description
+ * that negates the route ("not a separate piece of work" on another option)
+ * does not count; "do not change the active work" beside the route does. The
+ * options may come in any order. -1 when no option is for separate work.
+ */
+export function separateWorkOptionIndex(options: AskUserQuestionItem["options"]): number {
+  let at = options.findIndex((o) => /^yes\b/i.test(o.label));
+  if (at < 0) at = options.findIndex((o) => /separate/i.test(o.label));
+  if (at < 0) {
+    at = options.findIndex((o) =>
+      /\bseparate\b/i.test(o.description ?? "") && !/\bnot (?:a |the )?separate\b/i.test(o.description ?? ""));
+  }
+  return at;
+}
+
 // ---------------------------------------------------------------------------
 // Drive input: the prompt as a user-message stream held open until close().
 // ---------------------------------------------------------------------------
