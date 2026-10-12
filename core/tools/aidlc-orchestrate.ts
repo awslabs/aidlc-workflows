@@ -9131,7 +9131,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       const said = `Run nothing. Tell the person in one line: "${teamKeeps}"`;
       emit(keptWhilePlanWaits(
         pickedUpIfTurnEnds(settingPrint(
-          stillParked === null ? `${said} Then stop.` : `${said} Then say "${stillParked}", and stop.${resumeOnYes()}`,
+          stillParked === null ? `${said} Then stop.` : `${said}, followed by "${stillParked}", and stop.${resumeOnYes()}`,
           `${said} Then re-run next to carry on with the work.`,
         )),
         planApprovalAskIsOpen(pd),
