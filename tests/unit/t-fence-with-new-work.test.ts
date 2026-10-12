@@ -226,8 +226,15 @@ describe("a fence switch typed with a request beside open work", () => {
     reply(proj, TYPED);
     const routing = next(proj, ["--guard.review-freeze", "off", "fix the parser"]);
     const routed = next(proj, answerArgs((routing.directive as { new_intent_command?: string } | null)?.new_intent_command));
+    // With no plan named, the agent proposes one and the person goes ahead with it.
+    const propose = /`([^`]*next --propose <plan> --request [0-9a-f]{8})`/.exec(String(routed.directive?.message))?.[1];
+    expect(propose, routed.out).toBeDefined();
+    const offer = next(proj, answerArgs((propose as string).replace("<plan>", "bugfix")));
+    const confirm = (offer.directive as { confirm_command?: string } | null)?.confirm_command;
+    expect(confirm, offer.out).toContain("--guard.review-freeze off");
+    const creating = next(proj, answerArgs(confirm));
     // The work the person asked for is created, not refused, with the check on.
-    const made = createFromPrint(proj, routed);
+    const made = createFromPrint(proj, creating);
     expect(made.status, made.stderr).toBe(0);
     expect(guardsOff(activeState(proj))).not.toContain("review-freeze");
     // The team's line waits for the next step as plain text, so the path reads

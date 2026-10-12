@@ -371,7 +371,13 @@ describe("creation takes a check typed off, under the person-turn rule", () => {
   test("the plan offer carries the Guard Policy and the check typed with the work, and creation records them as theirs", () => {
     const proj = emptyProject();
     reply(proj, "/aidlc --guard-policy relaxed --guard.review-freeze off fix the parser");
-    const offer = next(proj, ["--guard-policy", "relaxed", "--guard.review-freeze", "off", "fix the parser"]);
+    // The agent proposes the plan it reads in their words (the first step for
+    // new work); the plan question that comes back is the offer.
+    const first = next(proj, ["--guard-policy", "relaxed", "--guard.review-freeze", "off", "fix the parser"]);
+    const propose = /`([^`]*next --propose <plan> --request [0-9a-f]{8})`/.exec(String(first.directive?.message))?.[1];
+    expect(propose, first.out).toBeDefined();
+    const proposal = (propose as string).replace("<plan>", "bugfix");
+    const offer = next(proj, proposal.slice(proposal.indexOf(" next ") + 6).split(" "));
     expect(offer.directive?.kind, offer.out).toBe("ask");
     const commands = [offer.directive?.confirm_command, ...(offer.directive?.scope_commands ?? []).map((row) => row.command)]
       .filter((command): command is string => typeof command === "string");
