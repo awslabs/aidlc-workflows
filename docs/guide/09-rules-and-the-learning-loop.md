@@ -99,31 +99,31 @@ What waits for the next compile is the **selection**: a brand-new rule file ente
 
 ---
 
-## Worked example: the ANZ banking project
+## Worked example: a banking project
 
 A concrete walk-through shows the loop end to end.
 
-Sam runs `/aidlc feature` on the ANZ banking project. The workflow lands on `requirements-analysis`. Sam writes a stakeholder note saying "the transaction shouldn't duplicate on retry" — meaning a banking transaction, the payment being processed. The product agent reads "transaction" as a database transaction and interprets the note as an ACID-semantics requirement. Sam corrects it. The agent updates the artifact and continues.
+Sam runs `/aidlc feature` on a banking project. The workflow lands on `requirements-analysis`. Sam writes a stakeholder note saying "the transaction shouldn't duplicate on retry" — meaning a banking transaction, the payment being processed. The product agent reads "transaction" as a database transaction and interprets the note as an ACID-semantics requirement. Sam corrects it. The agent updates the artifact and continues.
 
-Nothing in the framework predicted this. There's no rule about ANZ-specific terminology and no sensor catching generic-versus-domain term clashes. The agent simply hit an ambiguity.
+Nothing in the framework predicted this. There's no rule about the bank's own terminology and no sensor catching generic-versus-domain term clashes. The agent simply hit an ambiguity.
 
 **1. The diary records it.** The framework appends an entry under `## Interpretations` in `<record>/inception/requirements-analysis/memory.md`:
 
 ```
 - 2026-05-21T09:14:32Z — Stakeholder note used "transaction"; interpreted as
   database-transaction. Sam corrected to mean banking-transaction (the payment
-  being processed, not the DB write). Worth flagging for ANZ project context.
+  being processed, not the DB write). Worth flagging for this project's context.
 ```
 
 No rule is installed yet — this is just the agent's diary.
 
-**2. The gate surfaces it.** The stage finishes. Before the approval gate, the learning gate reads `memory.md` and shows the interpretation line as a candidate. It also asks "Anything to add for next time?" Sam ticks the transaction-terminology candidate (Interpretation → lands in `memory/project.md`) and adds a free-text note: "the agent kept defaulting to AWS account terminology — should always say 'ANZ customer' for the banking customer entity." Sam picks the Deviation heading for that addition, which routes it to the same `memory/project.md` file.
+**2. The gate surfaces it.** The stage finishes. Before the approval gate, the learning gate reads `memory.md` and shows the interpretation line as a candidate. It also asks "Anything to add for next time?" Sam ticks the transaction-terminology candidate (Interpretation → lands in `memory/project.md`) and adds a free-text note: "the agent kept defaulting to AWS account terminology — should always say 'bank customer' for the banking customer entity." Sam picks the Deviation heading for that addition, which routes it to the same `memory/project.md` file.
 
-**3. The conflict check runs.** The orchestrator compares both entries against the org practices (`memory/org.md`) as a section-level LLM check. Neither "ANZ transaction" nor "ANZ customer" terminology is covered by an org rule, so both pass. The deterministic tool then writes both lines into `memory/project.md` with provenance, and the audit log records a `RULE_LEARNED` event for each.
+**3. The conflict check runs.** The orchestrator compares both entries against the org practices (`memory/org.md`) as a section-level LLM check. Neither the "transaction" nor the "bank customer" terminology is covered by an org rule, so both pass. The deterministic tool then writes both lines into `memory/project.md` with provenance, and the audit log records a `RULE_LEARNED` event for each.
 
 **4. The current workflow carries them forward.** The stage approves and the workflow advances to `user-stories`. `memory/project.md` was already in this workflow's compiled selection, and the engine re-reads its text before each stage delivery — so from `user-stories` onward, the new lines are in the agent's context for the rest of this run.
 
-**5. Later workflows receive them too.** Later that day Sam runs `/aidlc bugfix`. `memory/project.md` is in every stage's selection (the org, team, and project files attach to every stage), so from stage one of the bugfix workflow, the agent knows "transaction" means a payment and the customer entity is the "ANZ customer."
+**5. Later workflows receive them too.** Later that day Sam runs `/aidlc bugfix`. `memory/project.md` is in every stage's selection (the org, team, and project files attach to every stage), so from stage one of the bugfix workflow, the agent knows "transaction" means a payment and the customer entity is the "bank customer."
 
 The cost was paid once — one gate confirmation, one file write — and it pays back on every future workflow for the price of one more file in the directory walk.
 

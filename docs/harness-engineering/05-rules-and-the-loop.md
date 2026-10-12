@@ -6,7 +6,7 @@ run. As a harness engineer you author them in two ways: by editing a rule file
 directly, or by letting the **learning loop** promote an in-workflow correction
 into a durable rule for you. This chapter is the authoring-side companion to the
 [Rules and the Learning Loop](../guide/09-rules-and-the-learning-loop.md) chapter
-in the User Guide, which covers the loop conceptually and walks the ANZ banking
+in the User Guide, which covers the loop conceptually and walks the banking
 example end to end. Here the focus is operational: which file you edit for what,
 how the strict-additive model behaves when you stack a rule, and how to run the
 loop so a one-time fix becomes a standing rule.
