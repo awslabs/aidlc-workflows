@@ -21,6 +21,7 @@ import {
   createTestProject,
   removeWorkspaceRecord,
   runOrchestrateNext,
+  seedStateFile,
 } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -73,6 +74,21 @@ function answerWith(message: unknown, words: string): string[] {
   return args;
 }
 
+/** Runs the creation a print names and returns the request the work keeps. */
+function requestKept(proj: string, creation: Directive, plan: string): string {
+  expect(creation.kind, JSON.stringify(creation).slice(0, 400)).toBe("print");
+  const id = new RegExp(`intent create --scope ${plan} --request ([0-9a-f]{8})`).exec(String(creation.message))?.[1];
+  expect(id, String(creation.message)).toBeDefined();
+  const tool = (args: string[]) => spawnSync(process.execPath, [join(TOOLS, "aidlc-utility.ts"), ...args, "--project-dir", proj], {
+    cwd: proj,
+    encoding: "utf-8",
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+  });
+  const made = tool(["intent-create", "--scope", plan, "--request", id!, "--label", "login-fix"]);
+  expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+  return tool(["project-description"]).stdout;
+}
+
 describe("#2355: a plan typed alone on a fresh workspace asks what the work is for", () => {
   for (const argv of [["bugfix"], ["--scope", "bugfix"], ["workshop"]]) {
     const plan = argv[argv.length - 1];
@@ -95,23 +111,9 @@ describe("#2355: a plan typed alone on a fresh workspace asks what the work is f
   test("their answer runs the command the step names and starts that plan with their words as the request", () => {
     const proj = fresh();
     const asked = next(proj, ["workshop"]);
-    const creation = next(proj, answerWith(asked.message, WORDS));
-    expect(creation.kind, JSON.stringify(creation).slice(0, 400)).toBe("print");
-    const id = /intent create --scope workshop --request ([0-9a-f]{8})/.exec(String(creation.message))?.[1];
-    expect(id, String(creation.message)).toBeDefined();
-    const made = spawnSync(process.execPath, [join(TOOLS, "aidlc-utility.ts"), "intent-create", "--scope", "workshop", "--request", id!, "--label", "login-fix", "--project-dir", proj], {
-      cwd: proj,
-      encoding: "utf-8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
-    });
-    expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
-    const description = spawnSync(process.execPath, [join(TOOLS, "aidlc-utility.ts"), "project-description", "--project-dir", proj], {
-      cwd: proj,
-      encoding: "utf-8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
-    });
-    expect(description.stdout, description.stderr).toContain(WORDS);
-    expect(description.stdout).not.toContain("[Project description]");
+    const request = requestKept(proj, next(proj, answerWith(asked.message, WORDS)), "workshop");
+    expect(request).toContain(WORDS);
+    expect(request).not.toContain("[Project description]");
   });
 
   test("settings typed with the plan ride the command their answer runs", () => {
@@ -146,5 +148,45 @@ describe("#2355: a plan typed alone on a fresh workspace asks what the work is f
       expect(String(d.message), `${plan}: ${String(d.message).slice(0, 200)}`).not.toContain("intent create");
       expect(records(proj), plan).toEqual([]);
     }
+  });
+});
+
+// `/aidlc-init --scope <plan>` with nothing else ran intent create with no
+// request, so the work started as "[Project description]". The runner now asks
+// the engine (`next --new-intent --scope <plan>`), which takes the same step
+// as a plan typed alone; beside work in progress the answer starts the new work
+// next to it, as the runner promises.
+describe("`/aidlc-init --scope <plan>` with nothing else asks what the work is for", () => {
+  test("fresh: nothing is created, and the answer starts that plan with their words as the request", () => {
+    const proj = fresh();
+    const d = next(proj, ["--new-intent", "--scope", "bugfix"]);
+    expect(d.kind, JSON.stringify(d).slice(0, 400)).toBe("print");
+    expect(d.narration, JSON.stringify(d).slice(0, 400)).toBe(asked("bugfix"));
+    expect(String(d.message)).not.toContain("intent create");
+    expect(String(d.message)).toContain(`next --scope bugfix -- ${THEIR_WORDS}`);
+    expect(questionCount(proj)).toBe(0);
+    expect(records(proj)).toEqual([]);
+    const request = requestKept(proj, next(proj, answerWith(d.message, WORDS)), "bugfix");
+    expect(request).toContain(WORDS);
+    expect(request).not.toContain("[Project description]");
+  });
+
+  test("beside work in progress: nothing is created, and the answer, with the settings typed, starts the new work at once", () => {
+    const proj = createTestProject();
+    created.push(proj);
+    seedStateFile(proj, "state-mid-ideation.md");
+    const before = records(proj);
+    const d = next(proj, ["--new-intent", "--scope", "bugfix", "--depth", "minimal"]);
+    expect(d.kind, JSON.stringify(d).slice(0, 400)).toBe("print");
+    expect(d.narration, JSON.stringify(d).slice(0, 400)).toBe(asked("bugfix"));
+    expect(String(d.message)).not.toContain("intent create");
+    expect(records(proj)).toEqual(before);
+    const answer = answerWith(d.message, WORDS);
+    expect(answer).toContain("--new-intent");
+    expect(answer.join(" ")).toContain("--depth minimal");
+    const creation = next(proj, answer);
+    expect(creation.kind, JSON.stringify(creation).slice(0, 400)).toBe("print");
+    expect(String(creation.message)).toMatch(/intent create --scope bugfix --request [0-9a-f]{8}/);
+    expect(String(creation.message)).toContain("--depth minimal");
   });
 });

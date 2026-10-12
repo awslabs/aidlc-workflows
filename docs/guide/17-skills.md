@@ -18,7 +18,7 @@ Every command this implementation ships is a skill under `.claude/skills/`. They
 - **`/aidlc`** — the full orchestrator. No flags baked in; it detects your scope (or you describe what you want), then drives every stage in your scope to completion. This is the one you reach for most.
 - **Scope-runners** - `/aidlc-bugfix`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch`. Same full workflow, with a scope fixed and no plan to propose.
 - **Stage-runners** — `/aidlc-domain-design`, `/aidlc-code-generation`, and 27 more. Run one stage in isolation, never touching your main workflow. Plugin-owned stages use their bare plugin-prefixed command name, such as `/test-pro-integration`.
-- **`/aidlc-init`** - start a piece of work. With `--scope <name>` it creates the intent (runs the whole Initialization phase) in one step and stops. With only a description it first shows the same plan offer as `/aidlc`, then continues like `/aidlc`. Unlike `/aidlc`, a description that starts with a scope name ("feature flags for billing") is still read as a description. Work already in progress is left as it is, and the new work starts beside it.
+- **`/aidlc-init`** - start a piece of work. With `--scope <name>` and a description it creates the intent (runs the whole Initialization phase) in one step and stops. With `--scope <name>` alone it creates nothing yet: it asks what the work is for, and your answer starts it. With only a description it first shows the same plan offer as `/aidlc`, then continues like `/aidlc`. Unlike `/aidlc`, a description that starts with a scope name ("feature flags for billing") is still read as a description. Work already in progress is left as it is, and the new work starts beside it.
 - **Session skills** — `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack`. Read-only views over a workflow; covered in [Session Management](11-session-management.md).
 - **`/aidlc-knowledge`** — the DocumentKB: index the team's own documents (PDFs, Word files, Markdown, plain text) into a per-space catalog agents can cite. Standalone like the session skills, but read-write: it changes the catalog and emits document audit events (never workflow state). Same surface as `/aidlc knowledge <verb>`; see [CLI Commands](12-cli-commands.md) for the verbs.
 
@@ -99,7 +99,8 @@ pointer, the engine returns an error instead.
 The three bootstrap **initialization** stages ship no stage-runner - creating half an intent has no standalone meaning. Instead the whole initialization phase is packaged as one command:
 
 ```
-/aidlc-init --scope <name> [description]   create the intent in one step, then stop
+/aidlc-init --scope <name> <description>   create the intent in one step, then stop
+/aidlc-init --scope <name>                 ask what the work is for, then start it
 /aidlc-init <description>                  plan offer first, then continue (a leading scope name is part of the description)
 ```
 
@@ -112,7 +113,7 @@ The three bootstrap **initialization** stages ship no stage-runner - creating ha
 | Orchestrator | `/aidlc` | Full workflow, scope detected | — |
 | Scope-runner | `/aidlc-bugfix`, `/aidlc-express`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch` | Full workflow, scope fixed, no detection | `/aidlc --scope <name>` |
 | Stage-runner | `/aidlc-domain-design`, `/aidlc-code-generation`, … (29 total) | One stage in isolation, never advances your workflow | `/aidlc --stage <slug> --single` |
-| Init wrapper | `/aidlc-init` | Start a piece of work: with `--scope`, create it in one step; with only a description, the plan offer first | `/aidlc --scope <name>`, or `/aidlc <description>` on a fresh workspace (except a leading scope name) |
+| Init wrapper | `/aidlc-init` | Start a piece of work: with `--scope` and a description, create it in one step; with `--scope` alone, ask what it is for first; with only a description, the plan offer first | `/aidlc --scope <name>`, or `/aidlc <description>` on a fresh workspace (except a leading scope name) |
 | Session views | `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack` | Read-only workflow reports | see [Session Management](11-session-management.md) |
 | Document knowledge | `/aidlc-knowledge` | Index and read the team's own documents (per-space DocumentKB) | `/aidlc knowledge <verb>` |
 
@@ -167,7 +168,8 @@ For the mechanics of writing a stage file, see [Customization](13-customization.
 /aidlc-code-generation              == /aidlc --stage code-generation --single
 
 # Start a piece of work (Initialization phase)
-/aidlc-init --scope <name>          create it in one step, then stop
+/aidlc-init --scope <name> <desc>   create it in one step, then stop
+/aidlc-init --scope <name>          ask what the work is for, then start it
 /aidlc-init <description>           plan offer first, then continue
 
 # Add your own: write a stage/scope file, then

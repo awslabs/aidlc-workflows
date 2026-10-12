@@ -682,7 +682,7 @@ describe("t164 --new-intent creation carries on in the same chat", () => {
     expect(readIntentRegistry(proj).length).toBe(0);
   });
 
-  test("next --new-intent rejects a missing or blank description", () => {
+  test("next --new-intent with a scope and a missing or blank description asks what the work is for and creates nothing", () => {
     seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
     for (const args of [
       ["--new-intent", "--scope", "bugfix"],
@@ -690,8 +690,9 @@ describe("t164 --new-intent creation carries on in the same chat", () => {
     ]) {
       const r = next(args);
       const d = JSON.parse(r.stdout.trim());
-      expect(d.kind, args.join(" ")).toBe("error");
-      expect(d.message, args.join(" ")).toContain("requires a nonblank new-work description");
+      expect(d.kind, args.join(" ")).toBe("print");
+      expect(d.narration, args.join(" ")).toContain("What should I work on?");
+      expect(d.message, args.join(" ")).not.toContain("intent create");
       expect(readIntentRegistry(proj).length, args.join(" ")).toBe(0);
     }
   });

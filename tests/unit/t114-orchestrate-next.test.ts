@@ -1029,7 +1029,7 @@ describe("t114 parked branch (#367)", () => {
     expect(out).toContain("unpark");
   });
 
-  test("--new-intent bypasses the parked terminal and keeps its description guard", () => {
+  test("--new-intent bypasses the parked terminal and, with nothing said about the work, asks what it is for", () => {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
     park(proj);
@@ -1044,9 +1044,11 @@ describe("t114 parked branch (#367)", () => {
     expect(valid).toContain("intent create --scope bugfix");
     expect(valid).not.toContain('"kind":"parked"');
 
+    // Nothing said about the new work: the person is asked what it is for
+    // (#2355), and nothing is created.
     const missing = runNext(proj, ["--new-intent", "--scope", "bugfix"]).out;
-    expect(missing).toContain('"kind":"error"');
-    expect(missing).toContain("requires a nonblank new-work description");
+    expect(missing).toContain("What should I work on?");
+    expect(missing).not.toContain("intent create");
     expect(missing).not.toContain('"kind":"parked"');
   });
 

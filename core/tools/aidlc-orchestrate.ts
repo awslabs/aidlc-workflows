@@ -4995,11 +4995,13 @@ function createPrintDirective(
 // named here, which creates on that plan with their words as its request and
 // the settings typed with the plan. Their words have a placeholder, never quotes
 // of this engine's: a single quote is no quote on Kiro IDE's cmd shell (#2167).
-function planNamedAloneStep(plan: string, flags: ParsedFlags): PrintDirective {
+// Asked as new work beside work in progress (`/aidlc-init --scope bugfix`), the
+// answer starts it beside that work.
+function planNamedAloneStep(plan: string, flags: ParsedFlags, besideWork = false): PrintDirective {
   // The settings and the stage changes typed with the plan ride the answer, as
   // they ride a routing question's new-work answer.
   const carried = carriedRoutingFlags(flags);
-  const command = `${aidlcToolInvocation("orchestrate")} next --scope ${scopeArg(plan)}${carried.newWork}${carried.planChanges} -- <their words>`;
+  const command = `${aidlcToolInvocation("orchestrate")} next --scope ${scopeArg(plan)}${besideWork ? " --new-intent" : ""}${carried.newWork}${carried.planChanges} -- <their words>`;
   const step = turnEndingPrint(
     `The person picked the \`${plan}\` plan and has not said what the work is for, so nothing is created yet. ` +
       "Say the line above, then wait: when they say what to work on, run " +
@@ -8955,6 +8957,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // rides in flags.intent (the same slot Branch 9a threads as the description).
   if (flags.newIntent) {
     const description = flags.intent?.trim();
+    // A plan with nothing said about the work (`/aidlc-init --scope bugfix`)
+    // takes the step a plan typed alone takes.
+    if (!description && flags.scope) {
+      emit(planNamedAloneStep(flags.scope, flags, stateContent !== null || unselectedRecords(pd) !== null));
+      return;
+    }
     if (!description) {
       emit(errorDirective(
         "`next --new-intent` requires a nonblank new-work description after the confirmed scope.",

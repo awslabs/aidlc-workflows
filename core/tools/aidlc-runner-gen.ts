@@ -266,16 +266,16 @@ no standalone meaning.
    word kebab-case essence of what's being built (\`"I would like to build a
    simple calculator application"\` gives \`--label "simple calc"\`). The label
    becomes the readable, date-prefixed record dir name (\`<YYMMDD>-simple-calc\`);
-   the full \`--arguments\` text is preserved separately in the audit + state.
-   When only a scope was supplied, omit \`--arguments\` and \`--label\` (the tool
-   then falls back to the scope token):
+   the full \`--arguments\` text is preserved separately in the audit + state:
 
    \`\`\`bash
    ${aidlcDispatcherInvocation("intent create")} --scope <scope> --arguments "<description>" --label "<2-3 word essence>"
    \`\`\`
 
    Print the tool's output and stop. This does not advance a stage; run
-   \`${entrySkill}\` afterwards to continue.
+   \`${entrySkill}\` afterwards to continue. When only a scope was supplied, create
+   nothing: run step 3's command, which carries the scope, and act on what it
+   returns as step 3 describes.
 
 3. **The user described the work but gave no \`--scope\`** (even when the
    description starts with a scope name, as in \`feature flags for billing\`):
