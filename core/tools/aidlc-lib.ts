@@ -7197,6 +7197,9 @@ export function resolveInvokingSessionId(projectDir: string): string | null {
   const payloadOverride =
     hostSession !== null ||
     (overrideSession !== null && process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload");
+  // Then the named chat is the answer and nothing below reads the walk's, so
+  // the process chain is not walked (a hook's own process included).
+  if (payloadOverride) return envSession;
   const ancestrySession = resolveSessionIdFromAncestry(projectDir);
   if (
     envSession &&

@@ -813,6 +813,8 @@ aidlc/                                    # neutral, harness-independent, commit
 precedence `in-process sessionId > AIDLC_SESSION_OVERRIDE > the chat the host
 names in the agent's shell (CODEX_THREAD_ID; CLAUDE_CODE_SESSION_ID while its
 CLAUDE_PID process is alive; KIRO_SESSION_ID) > PID ancestry > none`. Hook payload identity uses the in-process option and is authoritative.
+When the host or a hook payload names the chat, the process ancestry is not walked at all: its answer could not
+change the result.
 Whatever id that yields passes through `resolveChat` before a binding is read: a
 helper's id maps to its root chat through the `<id>.helper-of` record the adapter
 wrote (Codex agents and review threads, Kiro CLI delegations, Copilot subagents),
