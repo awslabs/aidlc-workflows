@@ -15,8 +15,9 @@ choice from different perspectives:
 Choose a profile explicitly with `/aidlc <profile>` or describe the work and let
 AI-DLC suggest one. The assistant reads what you describe and proposes the
 profile that fits it, or offers the adaptive composer when none does; you
-confirm the route before anything starts. An explicitly named profile starts
-immediately and prints its stage and gate counts.
+confirm the route before anything starts. An explicitly named profile is used
+as you named it: with what to build after it, it starts and prints its stage
+and gate counts; named alone, it first asks what the work is for.
 
 ## Quick chooser
 

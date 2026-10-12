@@ -554,7 +554,8 @@ function expectInstalledWorkflowWrites(context: CliContext, trace: string): void
     return result;
   };
   // These installed utilities execute locally; no agent or provider is called.
-  const next = run("aidlc-orchestrate.ts", ["next", "--scope", "bugfix"]);
+  // With what to build: a scope named alone first asks what the work is for (#2355).
+  const next = run("aidlc-orchestrate.ts", ["next", "--scope", "bugfix", "--", "Exercise mutable project storage"]);
   const directive = JSON.parse(next.stdout);
   expect(directive.kind).toBe("print");
   expect(directive.message).toContain("intent create --scope bugfix");

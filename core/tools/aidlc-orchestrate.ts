@@ -4987,7 +4987,10 @@ function createPrintDirective(
 // the settings typed with the plan. Their words have a placeholder, never quotes
 // of this engine's: a single quote is no quote on Kiro IDE's cmd shell (#2167).
 function planNamedAloneStep(plan: string, flags: ParsedFlags): PrintDirective {
-  const command = `${aidlcToolInvocation("orchestrate")} next --scope ${scopeArg(plan)}${carriedRoutingFlags(flags).newWork} -- <their words>`;
+  // The settings and the stage changes typed with the plan ride the answer, as
+  // they ride a routing question's new-work answer.
+  const carried = carriedRoutingFlags(flags);
+  const command = `${aidlcToolInvocation("orchestrate")} next --scope ${scopeArg(plan)}${carried.newWork}${carried.planChanges} -- <their words>`;
   const step = turnEndingPrint(
     `The person picked the \`${plan}\` plan and has not said what the work is for, so nothing is created yet. ` +
       "Say the line above, then wait: when they say what to work on, run " +

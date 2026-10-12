@@ -123,6 +123,22 @@ describe("#2355: a plan typed alone on a fresh workspace asks what the work is f
     expect(args.join(" ")).toContain("--learnings off");
   });
 
+  test("stage changes typed with the plan ride the command too, and the answer creates that plan with them", () => {
+    const proj = fresh();
+    const d = next(proj, ["bugfix", "--skip", "deployment-execution", "--add", "functional-design", "--plan-name", "lean-fix"]);
+    expect(String(d.message)).not.toContain("intent create");
+    const args = answerWith(d.message, WORDS).join(" ");
+    for (const change of ["--skip deployment-execution", "--add functional-design", "--plan-name lean-fix"]) {
+      expect(args, change).toContain(change);
+    }
+    const creation = next(proj, answerWith(d.message, WORDS));
+    const message = String(creation.message);
+    expect(message, JSON.stringify(creation).slice(0, 400)).toContain("intent create --scope bugfix --request");
+    for (const change of ["--skip deployment-execution", "--add functional-design", "--plan-name lean-fix"]) {
+      expect(message, change).toContain(change);
+    }
+  });
+
   test("no plan this install ships, typed alone, creates work before the person says what it is for", () => {
     for (const plan of validScopes()) {
       const proj = fresh();
