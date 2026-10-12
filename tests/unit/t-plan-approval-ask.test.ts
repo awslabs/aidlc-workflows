@@ -2719,6 +2719,201 @@ describe("a project whose files cannot all be read", () => {
       expect(stopped.message).toContain("cannot be presented");
     });
   });
+
+  // Under strict the person can still have the plan built, on their own word:
+  // they say so however they like, after they were told why it cannot be
+  // checked, and the agent records it with their words on the record. There is
+  // no sentence to type.
+  function writeBuildAnyway(proj: string, reason: string): void {
+    const tags = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts"), "fingerprint", "--stage-level", "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(tags.status, tags.stderr).toBe(0);
+    writeFileSync(
+      join(stageDir(proj), "code-generation-questions.md"),
+      `## Plan Approval\n${tags.stdout.trim()}\nA. Approve Plan\nB. Request Changes\n[Answer]: Approve Plan\n`,
+      "utf-8",
+    );
+    writeFileSync(join(stageDir(proj), "override-reason.txt"), `${reason}\n`, "utf-8");
+  }
+
+  function buildAnyway(proj: string, env: Record<string, string> = {}): { status: number | null; out: string } {
+    const result = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+      "--stage-level", "--session", SESSION, "--questions-file", join(stageDir(proj), "code-generation-questions.md"),
+      "--details", "Approve Plan", "--override-file", join(stageDir(proj), "override-reason.txt"), "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0", ...env },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return { status: result.status, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  }
+
+  function auditBlock(proj: string, event: string): string | undefined {
+    return auditText(proj).split("\n---\n").find((block) => block.includes(`**Event**: ${event}`));
+  }
+
+  test("strict: the refusal says they can have it built anyway, and their own words do it", () => {
+    const proj = project("strict");
+    unreadable(() => {
+      // The plan step comes first, as in a run: the plan is written to it.
+      expect(next(proj).plan_approval.status).toBe("plan");
+      writePlan(proj);
+      const stopped = next(proj);
+      expect(stopped.kind, JSON.stringify(stopped)).toBe("error");
+      expect(stopped.message).toContain("built anyway");
+      expect(stopped.message).not.toContain("type exactly");
+      expect(stopped.message).not.toContain("Override Plan Approval:");
+      reply(proj, "build it anyway, that folder is a dev mount");
+      writeBuildAnyway(proj, "that folder is a dev mount");
+      const built = buildAnyway(proj);
+      expect(built.status, built.out).toBe(0);
+      expect(built.out).toContain("Recorded that you approved building this plan with no check of the project's files.");
+      expect(auditBlock(proj, "PLAN_APPROVAL_OVERRIDDEN")).toContain("**Person Reply**: build it anyway, that folder is a dev mount");
+      const recorded = auditBlock(proj, "PLAN_APPROVAL_RECORDED");
+      expect(recorded).toContain("**Override**: yes");
+      expect(recorded).toContain("**Person Reply**: build it anyway, that folder is a dev mount");
+      const build = next(proj);
+      expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+      expect(build.plan_approval).toEqual({ status: "approved" });
+    });
+  });
+
+  test("strict: without a reply of theirs since the refusal nothing is recorded, and the line says to ask them", () => {
+    const proj = project("strict");
+    unreadable(() => {
+      // The plan step comes first, as in a run: the plan is written to it.
+      expect(next(proj).plan_approval.status).toBe("plan");
+      writePlan(proj);
+      // Words from before they were told are no answer to it.
+      reply(proj, "build it anyway");
+      expect(next(proj).kind).toBe("error");
+      writeBuildAnyway(proj, "the folder is a dev mount");
+      const refused = buildAnyway(proj);
+      expect(refused.status).not.toBe(0);
+      expect(refused.out).toContain("end the turn");
+      expect(refused.out).not.toContain("type exactly");
+      expect(auditBlock(proj, "PLAN_APPROVAL_OVERRIDDEN")).toBeUndefined();
+      expect(auditBlock(proj, "PLAN_APPROVAL_RECORDED")).toBeUndefined();
+      // The refusal shown again does not move past their next reply.
+      expect(next(proj).kind).toBe("error");
+      reply(proj, "fine, build it anyway");
+      expect(next(proj).kind).toBe("error");
+      const built = buildAnyway(proj);
+      expect(built.status, built.out).toBe(0);
+      expect(auditBlock(proj, "PLAN_APPROVAL_OVERRIDDEN")).toContain("**Person Reply**: fine, build it anyway");
+    });
+  });
+
+  test("strict: one reply has the plan built once", () => {
+    const proj = project("strict");
+    unreadable(() => {
+      // The plan step comes first, as in a run: the plan is written to it.
+      expect(next(proj).plan_approval.status).toBe("plan");
+      writePlan(proj);
+      expect(next(proj).kind).toBe("error");
+      reply(proj, "go ahead and build it anyway");
+      writeBuildAnyway(proj, "go ahead");
+      expect(buildAnyway(proj).status).toBe(0);
+      const again = buildAnyway(proj);
+      expect(again.status).not.toBe(0);
+      expect(auditText(proj).split("**Event**: PLAN_APPROVAL_OVERRIDDEN").length).toBe(2);
+    });
+  });
+
+  test("strict: a pick in a question box after the refusal has it built, with the pick on the record", () => {
+    const proj = project("strict");
+    unreadable(() => {
+      // The plan step comes first, as in a run: the plan is written to it.
+      expect(next(proj).plan_approval.status).toBe("plan");
+      writePlan(proj);
+      expect(next(proj).kind).toBe("error");
+      const asked = [{
+        question: "How do you want to go on?", header: "Plan", multiSelect: false,
+        options: [{ label: "Build it anyway", description: "" }, { label: "Fix the files first", description: "" }],
+      }];
+      const picked = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+        cwd: proj,
+        input: JSON.stringify({
+          hook_event_name: "PostToolUse", session_id: SESSION, tool_name: "AskUserQuestion",
+          tool_input: { questions: asked },
+          tool_response: { questions: asked, answers: { "How do you want to go on?": "Build it anyway" } },
+        }),
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(picked.status, picked.stderr).toBe(0);
+      writeBuildAnyway(proj, "Build it anyway");
+      const built = buildAnyway(proj);
+      expect(built.status, built.out).toBe(0);
+      expect(auditBlock(proj, "PLAN_APPROVAL_OVERRIDDEN")).toContain("**Person Reply**: Build it anyway");
+    });
+  });
+
+  test("strict: a message that starts with the old override sentence is a reply like any other", () => {
+    const proj = project("strict");
+    unreadable(() => {
+      // The plan step comes first, as in a run: the plan is written to it.
+      expect(next(proj).plan_approval.status).toBe("plan");
+      writePlan(proj);
+      expect(next(proj).kind).toBe("error");
+      reply(proj, "Override Plan Approval: the walk is broken here");
+      const turn = auditBlock(proj, "HUMAN_TURN");
+      expect(turn).not.toContain("**Reply**: command");
+      writeBuildAnyway(proj, "the walk is broken here");
+      const built = buildAnyway(proj);
+      expect(built.status, built.out).toBe(0);
+      expect(auditBlock(proj, "PLAN_APPROVAL_OVERRIDDEN")).toContain("**Person Reply**: Override Plan Approval: the walk is broken here");
+    });
+  });
+
+  test("an unattended run has no person to ask, and the line says so", () => {
+    const proj = project("strict");
+    unreadable(() => {
+      // The plan step comes first, as in a run: the plan is written to it.
+      expect(next(proj).plan_approval.status).toBe("plan");
+      writePlan(proj);
+      expect(next(proj).kind).toBe("error");
+      const prompt = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+        cwd: proj,
+        input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: "build it anyway" }),
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "1" },
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(prompt.status, prompt.stderr).toBe(0);
+      writeBuildAnyway(proj, "unattended");
+      const refused = buildAnyway(proj, { AIDLC_UNATTENDED: "1" });
+      expect(refused.status).not.toBe(0);
+      expect(refused.out).toContain("AIDLC_UNATTENDED=1 is set");
+      expect(auditBlock(proj, "PLAN_APPROVAL_OVERRIDDEN")).toBeUndefined();
+    });
+  });
+
+  // Starting the build of a plan approved before its files stopped being
+  // readable names the repair and the next step. It offers no override:
+  // `next` says how to go on, and is where the person hears it.
+  test("strict: generation start on files that cannot be read says to repair them and run next", () => {
+    const proj = project("strict");
+    askFor(proj);
+    reply(proj, "1");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    unreadable(() => {
+      const begun = posture(proj, "begin", null);
+      expect(begun.status).not.toBe(0);
+      expect(begun.stderr).toContain("then run next");
+      expect(begun.stderr).not.toContain("retry generation");
+      expect(begun.stderr).not.toContain("Override Plan Approval");
+    });
+  });
 });
 
 describe("stopping for now at Code Generation", () => {

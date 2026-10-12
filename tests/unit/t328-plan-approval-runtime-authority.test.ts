@@ -1,4 +1,4 @@
-// covers: function:recordPlanApprovalReceipt, function:beginCodeGeneration, function:readPlanApprovalViolation, function:recordPlanApprovalOverrideRequest, function:recordPlanApprovalOverrideReceipt, function:resolvePlanApprovalSession, function:resolveInvokingSessionId, audit:PLAN_APPROVAL_OVERRIDDEN, audit:GUARD_DISABLED
+// covers: function:recordPlanApprovalReceipt, function:beginCodeGeneration, function:readPlanApprovalViolation, function:personAskedForPlanApprovalOverride, function:notePlanApprovalOverrideOffered, function:recordPlanApprovalOverrideReceipt, function:resolvePlanApprovalSession, function:resolveInvokingSessionId, audit:PLAN_APPROVAL_OVERRIDDEN, audit:GUARD_DISABLED
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -24,7 +24,6 @@ import {
   clearActiveDirectiveMarker,
   hooksHealthDir,
   readAuditShardEvents,
-  readPlanApprovalOverrideRequest,
   readPlanApprovalViolation,
   refreshActiveDirectiveMarker,
   sessionsDir,
@@ -1109,16 +1108,38 @@ describe("t328 Plan Approval runtime authority", () => {
 });
 
 describe("t328 human-only break-glass override", () => {
-  const PHRASE = "Override Plan Approval: the source walk is broken on this machine";
+  // The person asks for the plan to be built anyway in their own words, after
+  // the refusal that offers it was shown. There is no sentence to type.
+  const REPLY = "build it anyway, the source walk is broken on this machine";
   const REASON = "the source walk is broken on this machine";
 
-  test("only a typed UserPromptSubmit prompt records the override request", () => {
-    const project = createProject();
-    seedPlan(project);
-    const session = "typed-phrase";
+  function offeredMark(project: string): string {
+    return join(seededRecordDir(project), ".aidlc-engine", "plan-approval-override-offered.json");
+  }
 
-    // A picked option carrying the same text is not a typed instruction.
-    const picked = Bun.spawnSync(
+  // The refusal that offers building anyway, handed out by a Plan Approval
+  // decision while the workspace cannot be bound: it keeps when it was shown.
+  function offer(project: string, questions: string, session: string): void {
+    const refused = runLog(project, [
+      "decision",
+      ...decisionArgs(questions, session),
+      "--decision",
+      "Approve this exact Code Generation plan?",
+      "--options",
+      "Approve Plan,Request Changes",
+    ], UNBINDABLE_ENV);
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr!.toString()).toContain("built anyway");
+    expect(refused.stderr!.toString()).not.toContain("type exactly");
+    expect(existsSync(offeredMark(project))).toBe(true);
+  }
+
+  function pick(project: string, session: string, label: string): ReturnType<typeof Bun.spawnSync> {
+    const asked = [{
+      question: "How do you want to go on?", header: "Plan", multiSelect: false,
+      options: [{ label, description: "" }, { label: "Fix the files first", description: "" }],
+    }];
+    return Bun.spawnSync(
       [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -1128,172 +1149,163 @@ describe("t328 human-only break-glass override", () => {
           hook_event_name: "PostToolUse",
           session_id: session,
           tool_name: "AskUserQuestion",
-          tool_response: { answers: { "Approve this exact Code Generation plan?": PHRASE } },
+          tool_input: { questions: asked },
+          tool_response: { questions: asked, answers: { "How do you want to go on?": label } },
         })),
         stdout: "pipe",
         stderr: "pipe",
       },
     );
-    expect(picked.exitCode).toBe(0);
-    expect(readPlanApprovalOverrideRequest(project, session)).toBeNull();
+  }
 
-    // An unattended driver has no human at the keyboard.
-    expect(humanPrompt(project, session, PHRASE, { AIDLC_UNATTENDED: "1" }).exitCode).toBe(0);
-    expect(readPlanApprovalOverrideRequest(project, session)).toBeNull();
+  test("only a reply after the offer counts: not one before it, a command, or an unattended prompt; a pick does", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    const session = "reply-after-offer";
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    // Words from before the refusal was shown are no answer to it.
+    expect(humanPrompt(project, session, REPLY).exitCode).toBe(0);
+    offer(project, questions, session);
+    markAnswered(questions);
+    const before = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
+    expect(before.exitCode).not.toBe(0);
+    expect(before.stderr).toContain("end the turn");
 
-    // Ordinary prose never opens it either.
-    expect(humanPrompt(project, session, "please override plan approval, I am sure").exitCode).toBe(0);
-    expect(readPlanApprovalOverrideRequest(project, session)).toBeNull();
+    // An unattended driver has no person at the keyboard: no turn is minted.
+    expect(humanPrompt(project, session, REPLY, { AIDLC_UNATTENDED: "1" }).exitCode).toBe(0);
+    expect(overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV).exitCode).not.toBe(0);
 
-    expect(humanPrompt(project, session, `  ${PHRASE}  `).exitCode).toBe(0);
-    const request = readPlanApprovalOverrideRequest(project, session);
-    expect(request?.reason).toBe(REASON);
-    expect(request?.reasonSha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(existsSync(join(sessionsDir(project), "plan-approval", `override-${session}.json`))).toBe(true);
+    // A command to AIDLC is no reply.
+    expect(humanPrompt(project, session, "/aidlc").exitCode).toBe(0);
+    const command = readAuditShardEvents(project).filter((entry) => entry.event === "HUMAN_TURN").at(-1);
+    expect(command?.block).toContain("**Reply**: command");
+    expect(overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV).exitCode).not.toBe(0);
+
+    // A pick in a question box is their reply, and it goes on the record.
+    expect(pick(project, session, "Build it anyway").exitCode).toBe(0);
+    const minted = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
+    expect(minted.exitCode, minted.stderr).toBe(0);
+    const overridden = readAuditShardEvents(project).find((entry) => entry.event === "PLAN_APPROVAL_OVERRIDDEN");
+    expect(overridden?.block).toContain("**Person Reply**: Build it anyway");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("answer --override is refused without the typed phrase, with a mismatched reason, and after consumption", () => {
+  test("answer --override is refused without a reply after the offer, and one reply records one override", () => {
     const project = createProject();
     const questions = seedPlan(project);
     const session = "override-refusals";
     appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    offer(project, questions, session);
     markAnswered(questions);
 
-    const noPhrase = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
-    expect(noPhrase.exitCode).not.toBe(0);
-    expect(noPhrase.stderr).toContain("Plan Approval override is human-only");
-    expect(noPhrase.stderr).toContain("`Override Plan Approval: <reason>`");
+    const noReply = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
+    expect(noReply.exitCode).not.toBe(0);
+    expect(noReply.stderr).toContain("Show them what next says, end the turn");
+    expect(noReply.stderr).not.toContain("type exactly");
     const runtimeDir = join(sessionsDir(project), "plan-approval");
     expect(
       existsSync(runtimeDir) &&
         readdirSync(runtimeDir).some((name) => name.startsWith("receipt-")),
     ).toBe(false);
 
-    expect(humanPrompt(project, session, PHRASE).exitCode).toBe(0);
-    const mismatch = overrideAnswer(project, questions, session, "a different reason", UNBINDABLE_ENV);
-    expect(mismatch.exitCode).not.toBe(0);
-    expect(mismatch.stderr).toContain("Plan Approval override is human-only");
-    expect(readPlanApprovalOverrideRequest(project, session)).not.toBeNull();
-
+    expect(humanPrompt(project, session, REPLY).exitCode).toBe(0);
     const blank = overrideAnswer(project, questions, session, "   ", UNBINDABLE_ENV);
     expect(blank.exitCode).not.toBe(0);
     expect(blank.stderr).toContain("nonblank --override reason");
 
     const minted = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
     expect(minted.exitCode, minted.stderr).toBe(0);
-    expect(readPlanApprovalOverrideRequest(project, session)).toBeNull();
+    expect(existsSync(offeredMark(project))).toBe(false);
 
-    // The consumed phrase cannot authorize a second run.
+    // The reply was used: it cannot record a second one.
     const again = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
     expect(again.exitCode).not.toBe(0);
-    expect(again.stderr).toContain("Plan Approval override is human-only");
+    expect(again.stderr).toContain("end the turn");
+    expect(readAuditShardEvents(project).filter((entry) => entry.event === "PLAN_APPROVAL_OVERRIDDEN")).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // The override authorization check and the receipt bind both read the one
-  // `fields.Session` that resolvePlanApprovalSession returns. The break-glass
-  // request is session-keyed, so if the check and the bind ever read different
-  // ids, the answer would authorize against one session and record under
-  // another. These pin both halves: an auto-resolved answer consumes the request
-  // and binds the receipt under the same id, and a request typed under one
-  // session cannot be spent while answering under a different --session.
-  test("answer --override without --session authorizes, consumes, and binds under the resolved session", () => {
+  // The receipt binds under the one `fields.Session` that
+  // resolvePlanApprovalSession returns, whether or not --session was passed.
+  test("answer --override without --session records and binds under the resolved session", () => {
     const project = createProject();
     const questions = seedPlan(project);
     const session = "override-session-consistency";
     appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
     writeSessionPidEntry(project, process.pid, session);
+    offer(project, questions, session);
     markAnswered(questions);
-    expect(humanPrompt(project, session, PHRASE).exitCode).toBe(0);
-    expect(readPlanApprovalOverrideRequest(project, session)).not.toBeNull();
+    expect(humanPrompt(project, session, REPLY).exitCode).toBe(0);
 
     const minted = overrideAnswer(project, questions, null, REASON, {
       ...UNBINDABLE_ENV,
       ...NO_SESSION_OVERRIDE,
     });
     expect(minted.exitCode, minted.stderr).toBe(0);
-    expect(readPlanApprovalOverrideRequest(project, session)).toBeNull();
     expect(receiptSessions(project)).toEqual([session]);
   }, 60000);
 
-  test("answer --override for a request typed under a different session is refused", () => {
+  // The offer and the reply are the work's, as the engine's own plan question
+  // takes a reply from any chat on the work.
+  test("a reply in another chat on the same work counts", () => {
     const project = createProject();
     const questions = seedPlan(project);
-    const requestSession = "override-owner-session";
-    const answerSession = "override-other-session";
-    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: requestSession }, project);
-    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: answerSession }, project);
+    const offerSession = "override-offer-session";
+    const replySession = "override-reply-session";
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: offerSession }, project);
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: replySession }, project);
+    offer(project, questions, offerSession);
     markAnswered(questions);
-    // The human types the override request under requestSession only.
-    expect(humanPrompt(project, requestSession, PHRASE).exitCode).toBe(0);
-    expect(readPlanApprovalOverrideRequest(project, requestSession)).not.toBeNull();
-
-    // Answering under a different explicit --session must not find that request.
-    const refused = overrideAnswer(project, questions, answerSession, REASON, UNBINDABLE_ENV);
-    expect(refused.exitCode).not.toBe(0);
-    expect(refused.stderr).toContain("Plan Approval override is human-only");
-    // The owner's request is untouched: nothing consumed it under the wrong id.
-    expect(readPlanApprovalOverrideRequest(project, requestSession)).not.toBeNull();
-    expect(readPlanApprovalOverrideRequest(project, answerSession)).toBeNull();
+    expect(humanPrompt(project, replySession, REPLY).exitCode).toBe(0);
+    const minted = overrideAnswer(project, questions, replySession, REASON, UNBINDABLE_ENV);
+    expect(minted.exitCode, minted.stderr).toBe(0);
+    expect(receiptSessions(project)).toEqual([replySession]);
   }, 60000);
 
-  test("answer --override is refused while [Answer] is blank", () => {
+  test("answer --override is refused while [Answer] is blank, and the offer stands", () => {
     const project = createProject();
     const questions = seedPlan(project);
     const session = "override-blank-answer";
     appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
-    expect(humanPrompt(project, session, PHRASE).exitCode).toBe(0);
+    offer(project, questions, session);
+    expect(humanPrompt(project, session, REPLY).exitCode).toBe(0);
     const refused = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr).toContain("must contain exactly [Answer]: Approve Plan");
-    // Nothing was spent: the typed request is still there for the retry.
-    expect(readPlanApprovalOverrideRequest(project, session)).not.toBeNull();
+    // Nothing was spent: the offer and their reply are still there for the retry.
+    expect(existsSync(offeredMark(project))).toBe(true);
+    markAnswered(questions);
+    expect(overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV).exitCode).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a missing request answers with the human-only guidance and nothing else, even when the answer is blank", () => {
+  test("with nothing offered the answer is the step to ask the person and nothing else, even when the answer is blank", () => {
     const project = createProject();
     const questions = seedPlan(project);
     const session = "override-guidance-only";
     appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    expect(humanPrompt(project, session, REPLY).exitCode).toBe(0);
     const refused = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
     expect(refused.exitCode).not.toBe(0);
-    expect(refused.stderr).toContain("Plan Approval override is human-only");
+    expect(refused.stderr).toContain("Show them what next says, end the turn");
     expect(refused.stderr).not.toContain("[Answer]");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS); // Fixture/CLI setup took 32s on Windows; the refusal assertions remain required.
 
-  test("an edited request file or one typed under another intent is not a request", () => {
+  test("an offer record that cannot be read is no offer", () => {
     const project = createProject();
     const questions = seedPlan(project);
-    const session = "override-tampered";
+    const session = "override-unreadable-offer";
     appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    offer(project, questions, session);
     markAnswered(questions);
-    expect(humanPrompt(project, session, PHRASE).exitCode).toBe(0);
-    const requestPath = join(sessionsDir(project), "plan-approval", `override-${session}.json`);
-    const recorded = JSON.parse(readFileSync(requestPath, "utf-8")) as {
-      reason: string;
-      reasonSha256: string;
-      intentId: string;
-    };
-
-    // The stored reason no longer hashes to the stored digest: the digest alone
-    // matching the command's reason is not enough.
-    writeFileSync(requestPath, JSON.stringify({ ...recorded, reason: "something else" }, null, 2));
-    const tampered = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
-    expect(tampered.exitCode).not.toBe(0);
-    expect(tampered.stderr).toContain("Plan Approval override is human-only");
-
-    // Typed while another intent was active.
-    writeFileSync(
-      requestPath,
-      JSON.stringify({ ...recorded, intentId: "00000000-0000-7000-8000-00000000dead" }, null, 2),
-    );
-    const foreign = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
-    expect(foreign.exitCode).not.toBe(0);
-    expect(foreign.stderr).toContain("Plan Approval override is human-only");
+    expect(humanPrompt(project, session, REPLY).exitCode).toBe(0);
+    const recorded = readFileSync(offeredMark(project), "utf-8");
+    writeFileSync(offeredMark(project), "not a mark");
+    const refused = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr).toContain("end the turn");
     const runtimeDir = join(sessionsDir(project), "plan-approval");
-    expect(readdirSync(runtimeDir).some((name) => name.startsWith("receipt-"))).toBe(false);
+    expect(existsSync(runtimeDir) && readdirSync(runtimeDir).some((name) => name.startsWith("receipt-"))).toBe(false);
 
-    // The genuine request still works once restored.
-    writeFileSync(requestPath, JSON.stringify(recorded, null, 2));
+    // The genuine offer still works once restored.
+    writeFileSync(offeredMark(project), recorded);
     const minted = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
     expect(minted.exitCode, minted.stderr).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -1303,13 +1315,14 @@ describe("t328 human-only break-glass override", () => {
   // Windows do not honor the mode bits, so the case is gated the same way.
   const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
   const runIfChmod = process.platform !== "win32" && !isRoot ? test : test.skip;
-  runIfChmod("a PLAN_APPROVAL_OVERRIDDEN row that cannot be appended leaves no receipt and spends no request", () => {
+  runIfChmod("a PLAN_APPROVAL_OVERRIDDEN row that cannot be appended leaves no receipt and ends no offer", () => {
     const project = createProject();
     const questions = seedPlan(project);
     const session = "override-row-first";
     appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    offer(project, questions, session);
     markAnswered(questions);
-    expect(humanPrompt(project, session, PHRASE).exitCode).toBe(0);
+    expect(humanPrompt(project, session, REPLY).exitCode).toBe(0);
     const shard = seededAuditShard(project);
     chmodSync(shard, 0o444);
     let failed: ReturnType<typeof overrideAnswer>;
@@ -1321,17 +1334,17 @@ describe("t328 human-only break-glass override", () => {
     expect(failed.exitCode).not.toBe(0);
     expect(failed.stderr).toContain("Refusing to record Plan Approval override");
     const runtimeDir = join(sessionsDir(project), "plan-approval");
-    expect(readdirSync(runtimeDir).some((name) => name.startsWith("receipt-"))).toBe(false);
-    expect(readPlanApprovalOverrideRequest(project, session)).not.toBeNull();
+    expect(existsSync(runtimeDir) && readdirSync(runtimeDir).some((name) => name.startsWith("receipt-"))).toBe(false);
+    expect(existsSync(offeredMark(project))).toBe(true);
     const events = readAuditShardEvents(project);
     expect(events.some((entry) => entry.event === "PLAN_APPROVAL_OVERRIDDEN")).toBe(false);
     expect(events.some((entry) => entry.event === "PLAN_APPROVAL_RECORDED")).toBe(false);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
 
-    // With the ledger writable again the same typed request completes the run.
+    // With the ledger writable again the same reply completes the run.
     const minted = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
     expect(minted.exitCode, minted.stderr).toBe(0);
-    expect(readPlanApprovalOverrideRequest(project, session)).toBeNull();
+    expect(existsSync(offeredMark(project))).toBe(false);
     expect(readAuditShardEvents(project).filter((entry) => entry.event === "PLAN_APPROVAL_OVERRIDDEN")).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1340,8 +1353,9 @@ describe("t328 human-only break-glass override", () => {
     const questions = seedPlan(project);
     const session = "override-unbindable";
     appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    offer(project, questions, session);
     markAnswered(questions);
-    expect(humanPrompt(project, session, PHRASE).exitCode).toBe(0);
+    expect(humanPrompt(project, session, REPLY).exitCode).toBe(0);
 
     const minted = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
     expect(minted.exitCode, minted.stderr).toBe(0);
@@ -1358,11 +1372,13 @@ describe("t328 human-only break-glass override", () => {
     const overridden = events.filter((entry) => entry.event === "PLAN_APPROVAL_OVERRIDDEN");
     expect(overridden).toHaveLength(1);
     expect(overridden[0].block).toContain(`**Reason**: ${REASON}`);
+    expect(overridden[0].block).toContain(`**Person Reply**: ${REPLY}`);
     expect(overridden[0].block).toContain("**Unit**: stage-level");
     expect(overridden[0].block).toContain("**Failed Checks**: ");
     const recorded = events.filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED");
     expect(recorded).toHaveLength(1);
     expect(recorded[0].block).toContain("**Override**: yes");
+    expect(recorded[0].block).toContain(`**Person Reply**: ${REPLY}`);
 
     const runtimeDir = join(sessionsDir(project), "plan-approval");
     const receiptName = readdirSync(runtimeDir).find((name) => name.startsWith("receipt-"));
@@ -1407,14 +1423,15 @@ describe("t328 human-only break-glass override", () => {
     expect(published.override).toBeDefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("answer --override-file carries a reason with quotes and shell syntax exactly, and refuses any other text", () => {
+  test("answer --override-file carries a reason with quotes and shell syntax exactly", () => {
     const words = `it's "the" submodule; $(touch pwned) | tee x & echo \`id\``;
     const project = createProject();
     const questions = seedPlan(project);
     const session = "override-file";
     appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    offer(project, questions, session);
     markAnswered(questions);
-    expect(humanPrompt(project, session, `Override Plan Approval: ${words}`).exitCode).toBe(0);
+    expect(humanPrompt(project, session, `build it anyway: ${words}`).exitCode).toBe(0);
     const reasonFile = join(codeGenerationRecordDir(project, null), "override-reason.txt");
     const answerWithFile = (file: string, extra: string[] = []) => {
       const result = Bun.spawnSync(
@@ -1435,15 +1452,6 @@ describe("t328 human-only break-glass override", () => {
       return existsSync(dir) ? readdirSync(dir).filter((name) => name.startsWith("receipt-")) : [];
     };
 
-    // Text that differs from what the person typed is not their request: a
-    // different reason, or the same words with another line after them.
-    for (const text of ["a different reason\n", `${words}\nand another line\n`]) {
-      writeFileSync(reasonFile, text);
-      const refused = answerWithFile(reasonFile);
-      expect(refused.exitCode).not.toBe(0);
-      expect(refused.stderr).toContain("Plan Approval override is human-only");
-      expect(receipts()).toHaveLength(0);
-    }
     // A file outside the record, and the reason given twice, are refused before anything is read.
     const outside = join(project, "override-reason.txt");
     writeFileSync(outside, `${words}\n`);
@@ -1452,7 +1460,7 @@ describe("t328 human-only break-glass override", () => {
     expect(answerWithFile(reasonFile, ["--override", words]).stderr).toContain("not both");
     expect(receipts()).toHaveLength(0);
 
-    // The person's exact words, with the line ending an editor adds, authorize it.
+    // Their reason, with the line ending an editor adds, is kept exactly.
     const minted = answerWithFile(reasonFile);
     expect(minted.exitCode, minted.stderr).toBe(0);
     expect((JSON.parse(minted.stdout) as { override: boolean }).override).toBe(true);
@@ -1477,8 +1485,9 @@ describe("t328 human-only break-glass override", () => {
     const questions = seedPlan(project);
     const session = "override-lowered-edited-content";
     appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    offer(project, questions, session);
     markAnswered(questions);
-    expect(humanPrompt(project, session, PHRASE).exitCode).toBe(0);
+    expect(humanPrompt(project, session, REPLY).exitCode).toBe(0);
     const minted = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
     expect(minted.exitCode, minted.stderr).toBe(0);
     const approvalRows = readAuditShardEvents(project).filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED");
@@ -1520,7 +1529,7 @@ describe("t328 human-only break-glass override", () => {
     expect(readFileSync(statePath, "utf-8")).toBe(state);
   });
 
-  test("a refused receipt is recoverable through the typed phrase", () => {
+  test("a refused receipt is recoverable when the person asks to build it anyway", () => {
     const project = createProject();
     const questions = seedPlan(project);
     const session = "override-refused";
@@ -1547,12 +1556,19 @@ describe("t328 human-only break-glass override", () => {
     );
     expect(refusalMessage(refused)).toContain("start a new chat session and run /aidlc");
 
-    expect(humanPrompt(project, session, PHRASE).exitCode).toBe(0);
-    const minted = overrideAnswer(project, questions, session, REASON);
+    // Then the files stop being readable: the refusal offers building anyway.
+    const unbindable = runLog(project, ["answer", ...identity, "--details", "Approve Plan"], UNBINDABLE_ENV);
+    expect(unbindable.exitCode).not.toBe(0);
+    expect(unbindable.stderr!.toString()).toContain("built anyway");
+    expect(existsSync(offeredMark(project))).toBe(true);
+
+    expect(humanPrompt(project, session, REPLY).exitCode).toBe(0);
+    const minted = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
     expect(minted.exitCode, minted.stderr).toBe(0);
-    const output = JSON.parse(minted.stdout) as { override: boolean; failed_checks: string[] };
+    const output = JSON.parse(minted.stdout) as { override: boolean; failed_checks: string[]; say?: string };
     expect(output.override).toBe(true);
-    expect(output.failed_checks.join("\n")).toContain("requires the person's reply to this prompt, in this session");
+    expect(output.failed_checks.join("\n")).toContain("workspace source cannot be bound");
+    expect(output.say).toBe("Recorded that you approved building this plan with no check of the project's files.");
     expect(evaluateCodeGenerationApproval(project, { unit: null })).toMatchObject({
       ok: true,
       reason: "approved",
@@ -1565,6 +1581,8 @@ describe("t328 human-only break-glass override", () => {
     const questions = seedPlan(project);
     const session = "override-not-needed";
     appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    // Offered while the files could not be read; readable again now.
+    offer(project, questions, session);
     const identity = decisionArgs(questions, session);
     expect(
       runLog(project, [
@@ -1577,7 +1595,6 @@ describe("t328 human-only break-glass override", () => {
       ]).exitCode,
     ).toBe(0);
     expect(humanPrompt(project, session, "Approve Plan").exitCode).toBe(0);
-    expect(humanPrompt(project, session, PHRASE).exitCode).toBe(0);
     markAnswered(questions);
     const minted = overrideAnswer(project, questions, session, REASON);
     expect(minted.exitCode, minted.stderr).toBe(0);
@@ -1589,8 +1606,8 @@ describe("t328 human-only break-glass override", () => {
     expect(
       events.find((entry) => entry.event === "PLAN_APPROVAL_RECORDED")?.block,
     ).not.toContain("**Override**");
-    // The typed request was still spent by the successful receipt.
-    expect(readPlanApprovalOverrideRequest(project, session)).toBeNull();
+    // The successful receipt ended the offer.
+    expect(existsSync(offeredMark(project))).toBe(false);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).override).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1662,9 +1679,10 @@ describe("t328 decision refuses a challenge no answer could ever accept", () => 
     ]);
     expect(typed.remedies[0].action).toContain(".aidlc-source-paths.json");
     expect(typed.remedies[1]).toMatchObject({ requiresHuman: true, executableNow: false });
-    expect(typed.remedies[1].action).toContain("`Override Plan Approval: <reason>`");
+    expect(typed.remedies[1].action).toContain("built anyway");
+    expect(typed.remedies[1].action).not.toContain("type exactly");
     // Repair first, break glass last, in the human sentence as well.
-    expect(stderr.indexOf(".aidlc-source-paths.json")).toBeLessThan(stderr.indexOf("Break glass (human only)"));
+    expect(stderr.indexOf(".aidlc-source-paths.json")).toBeLessThan(stderr.indexOf("Last resort, only on the person's own word"));
     const runtimeDir = join(sessionsDir(project), "plan-approval");
     expect(
       existsSync(runtimeDir) && readdirSync(runtimeDir).some((name) => name.startsWith("challenge-")),

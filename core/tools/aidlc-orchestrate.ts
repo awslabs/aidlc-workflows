@@ -494,6 +494,7 @@ import {
   notePlanApprovalAskReply,
   openPlanApprovalQuestion,
   planApprovalKeptReplyWaits,
+  planApprovalOverrideOffers,
   withdrawLatestPlanApprovalReply,
   withdrawPlanApprovalReplies,
   publishPlanApprovalAsk,
@@ -508,6 +509,7 @@ import {
   codeGenerationIssuance,
   codeGenerationResumeNarration,
   codeGenerationStartNarration,
+  notePlanApprovalOverrideOffered,
   promotableTestingPosture,
 } from "./aidlc-testing-posture.ts";
 import {
@@ -1873,6 +1875,12 @@ function withParkedReply(directive: Directive): Directive {
 
 function emit(requested: Directive): void {
   const directive = withBuiltPlanReviewRoute(withPlanApprovalRoute(requested));
+  // A refusal that offers building the plan anyway keeps when it was first
+  // shown, so a reply of the person's after it can be told from one before.
+  if (planApprovalOverrideOffers.has(directive) && !isReadOnlyEngineProbe()) {
+    const projectDir = emissionProjectDir(requested);
+    if (projectDir) notePlanApprovalOverrideOffered(projectDir);
+  }
   const withLegacyOffer = attachLegacyKiroPlanApprovalChoices(
     prepareEmission(directive),
   );

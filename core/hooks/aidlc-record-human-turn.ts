@@ -105,10 +105,8 @@ import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import {
-  PLAN_APPROVAL_OVERRIDE_PHRASE_RE,
   type PlanApprovalPickerQuestion,
   recordPlanApprovalHumanResponse,
-  recordPlanApprovalOverrideRequest,
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
 import {
@@ -491,10 +489,10 @@ try {
   let promptSubmitted = false;
   let humanResponseText = "";
   let questionText: string | null = null;
-  // The break-glass phrase counts only when the human TYPED it: the prompt
-  // text of a UserPromptSubmit payload that names no tool. A picked option
-  // (AskUserQuestion PostToolUse, Codex request_user_input, any adapter's
-  // picker payload) arrives under tool_response and never opens it.
+  // What the person typed: the prompt text of a UserPromptSubmit payload that
+  // names no tool. A picked option (AskUserQuestion PostToolUse, Codex
+  // request_user_input, any adapter's picker payload) arrives under
+  // tool_response instead.
   let typedPrompt = "";
   // Set when the reply is a picker selection: the question and labels the
   // harness reports it under, so it pairs only with the recorded question.
@@ -732,15 +730,14 @@ try {
     }
     if (personHere) {
       // A command to AIDLC (an `/aidlc` line with no words after its flags, or
-      // with its words behind `--`) or the break-glass phrase is an instruction
-      // to the framework, not an answer to the pending Plan Approval question.
+      // with its words behind `--`) is an instruction to the framework, not an
+      // answer to the pending Plan Approval question.
       // A setting typed as a flag is in the message record; the agent reads the
       // line and runs the setter the engine names. The words after the entry
       // and its flags are the reply, so "/aidlc 1" picks the first choice as
       // "1" does, and "/aidlc --guard-policy off approve the plan" approves it.
       const commandLine = typedParse?.command === true;
-      const notAReply = typedPrompt.length > 0 &&
-        (commandLine || PLAN_APPROVAL_OVERRIDE_PHRASE_RE.test(typedPrompt.trim()));
+      const notAReply = typedPrompt.length > 0 && commandLine;
       const entryReply = typedParse !== null && !commandLine && aidlcEntryWords(typedPrompt) !== null
         ? typedParse.words
         : null;
@@ -769,8 +766,8 @@ try {
           }, projectDir);
           // Keep what the person typed in this chat, so a decision at a stage
           // gate records their own words beside the conductor's reading
-          // (recordGateWords in aidlc-lib.ts). A command to AIDLC or the
-          // break-glass phrase instructs the framework; of a picker
+          // (recordGateWords in aidlc-lib.ts). A command to AIDLC instructs
+          // the framework; of a picker
           // reply, free text typed into it counts, and so does a picked gate
           // choice, which is their exact pick. Never blocks the turn.
           const typedWords = answersEngineQuestion ? "" : typedPrompt
@@ -806,9 +803,6 @@ try {
                 recordPlanApprovalHumanResponse(projectDir, sessionId, replyText, pickerQuestion);
               }
             }
-          }
-          if (sessionId && typedPrompt) {
-            recordPlanApprovalOverrideRequest(projectDir, sessionId, typedPrompt);
           }
           // What the question box carried back goes on the record, question
           // by question, so the person's reply stands even when no answer is

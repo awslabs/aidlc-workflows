@@ -77,6 +77,7 @@ import {
   approvalFingerprint,
   approvedPlanChangeLine,
   codeGenerationBuildsWithoutSource,
+  clearPlanApprovalOverrideOffered,
   codeGenerationExecutionAllowed,
   codeGenerationRecordDir,
   codeGenerationTargetId,
@@ -787,6 +788,13 @@ function withPlanState<T extends RunStageDirective | InvokeSwarmDirective>(
 }
 
 /**
+ * The refusals `next` hands out that offer building the plan anyway: `next`
+ * keeps when the first was shown (notePlanApprovalOverrideOffered), outside a
+ * read-only probe.
+ */
+export const planApprovalOverrideOffers = new WeakSet<Directive>();
+
+/**
  * The directive `next` emits in place of a code-generation run-stage or
  * invoke-swarm: the same directive marked plan or build, or the engine's Plan
  * Approval question. Read-only: nothing is written until `publishPlanApprovalAsk`.
@@ -859,7 +867,9 @@ export function routeCodeGenerationPlanApproval(projectDir: string, directive: D
     workspaceSourceState(projectDir) === null &&
     !units.every((unit) => codeGenerationBuildsWithoutSource(projectDir, { unit }, asking.length === 0))
   ) {
-    return { kind: "error", message: new PlanApprovalUnbindableError("presented").message };
+    const refusal: Directive = { kind: "error", message: new PlanApprovalUnbindableError("presented").message };
+    planApprovalOverrideOffers.add(refusal);
+    return refusal;
   }
   if (asking.length === 0 && setting !== null) {
     const skipped = states.filter((state) => state.kind === "skip").map((state) => state.unit);
@@ -1324,6 +1334,8 @@ function approveTarget(
     if (rendered !== null) writeFileAtomic(planPath, plan);
     writeFileAtomic(questionsPath, questions);
     writePlanApprovalReceipt(projectDir, receipt);
+    // Their approval ends any earlier offer to build it anyway.
+    clearPlanApprovalOverrideOffered(projectDir);
     keepApprovedPlanCopy(projectDir, authority, fingerprint, questions);
     if (source !== null) writeWorkspaceSourceSnapshot(projectDir, STAGE, source);
   });

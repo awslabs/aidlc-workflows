@@ -159,7 +159,8 @@ describe("t337 doctor: Workspace source boundary binds", () => {
     const { status, out } = runDoctor(project, { [ENTRIES_BUDGET]: "1" });
     expect(out).toMatch(/\bfail\s+Workspace source boundary binds: no \(budget-entries at \./);
     expect(out).toContain(".aidlc-source-paths.json");
-    expect(out).toContain("Override Plan Approval: <reason>");
+    expect(out).toContain("ask the assistant in chat to build the plan anyway");
+    expect(out).not.toContain("Override Plan Approval");
     expect(status).not.toBe(0);
   });
 

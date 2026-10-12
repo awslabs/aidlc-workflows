@@ -204,12 +204,15 @@ import {
   renderReadableReviewCopy,
 } from "./aidlc-review-brief.js";
 import {
-  authorizingPlanApprovalOverrideRequest,
   codeGenerationPlanApprovalQuestionEvidence,
   type CodeGenerationTarget,
+  notePlanApprovalOverrideOffered,
+  offersPlanApprovalOverride,
   PLAN_APPROVAL_CHECKPOINT,
   PLAN_APPROVAL_BATCH_FALLBACK,
-  PLAN_APPROVAL_OVERRIDE_HUMAN_ONLY,
+  personAskedForPlanApprovalOverride,
+  planApprovalOverrideHumanOnly,
+  planApprovalOverridePersonReply,
   PlanApprovalOverrideHumanOnlyError,
   type PlanApprovalOverrideReceiptResult,
   PlanApprovalSourceDriftError,
@@ -2015,8 +2018,8 @@ function handleAnswer(args: string[]): void {
         'Valid choices are "Approve Plan" or "Request Changes".',
     );
   }
-  // Break-glass (human only). The flag alone authorizes nothing: half A is the
-  // typed phrase the human-turn hook recorded for this session, checked below
+  // Break-glass (human only). The flag alone authorizes nothing: the person's
+  // own reply after the refusal that offered it is checked below and again
   // under the lock. Here only the shape is validated. --override-file carries
   // the reason in a file the conductor wrote with its file tool, so the
   // person's words never pass through shell text; --override stays for
@@ -2035,8 +2038,8 @@ function handleAnswer(args: string[]): void {
     }
     if (overrideReason.length === 0) {
       error(
-        "Plan Approval override requires a nonblank --override reason: the reason the " +
-          "human typed after `Override Plan Approval:`, verbatim.",
+        "Plan Approval override requires a nonblank --override reason: the person's reason, " +
+          "in their own words.",
       );
     }
     if (flags.details !== "Approve Plan") {
@@ -2093,16 +2096,12 @@ function handleAnswer(args: string[]): void {
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
   if (planCheckpoint) {
     fields.Session = resolvePlanApprovalSession(pd, flags);
-    // Half A of the break-glass pairing is checked before anything else is
-    // read and before any lock is held: without the human's typed request the
-    // only answer is the human-only guidance, whatever else the plan or its
-    // answer look like. The intent binding and the consumption happen again
-    // inside the receipt transaction, where the evidence names the intent.
-    if (
-      overrideReason !== null &&
-      authorizingPlanApprovalOverrideRequest(pd, fields.Session, overrideReason, null) === null
-    ) {
-      error(PLAN_APPROVAL_OVERRIDE_HUMAN_ONLY);
+    // The person's reply after the offer is checked before anything else is
+    // read and before any lock is held: without it the only answer is the
+    // step to ask them, whatever else the plan or its answer look like. It is
+    // checked again inside the receipt transaction.
+    if (overrideReason !== null && !personAskedForPlanApprovalOverride(pd)) {
+      error(planApprovalOverrideHumanOnly(pd));
     }
   }
 
@@ -2340,20 +2339,22 @@ function handleAnswer(args: string[]): void {
     }
 
     if (planCheckpoint && overrideReason !== null) {
-      // Half B of the break-glass pairing. Autonomous Construction has no human
-      // at the keyboard, so nobody could have typed the phrase.
+      // The break glass. Autonomous Construction has no person at the
+      // keyboard, so nobody could have asked for it.
       if (autonomousDecision) {
         error(
           "Plan Approval override is refused under autonomous Construction mode: " +
-            "the break-glass phrase must be typed by a human in an attended session.",
+            "the person must ask for it in an attended chat.",
         );
       }
-      // Effects, in order: the typed request is re-validated against the
-      // evidence's intent and consumed inside the receipt transaction; the
-      // normal path is attempted; when it refuses, the PLAN_APPROVAL_OVERRIDDEN
-      // row is appended BEFORE the override receipt is written (a ledger that
-      // cannot take the row leaves no receipt and spends no request); then the
-      // receipt; then PLAN_APPROVAL_RECORDED with Override: yes.
+      // Their words go on the record: their latest reply since the offer.
+      const personReply = planApprovalOverridePersonReply(pd);
+      if (personReply) fields["Person Reply"] = personReply;
+      // Effects, in order: the person's reply is checked again inside the
+      // receipt transaction; the normal path is attempted; when it refuses, the
+      // PLAN_APPROVAL_OVERRIDDEN row is appended BEFORE the override receipt is
+      // written (a ledger that cannot take the row leaves no receipt and ends
+      // no offer); then the receipt; then PLAN_APPROVAL_RECORDED with Override: yes.
       let recorded: PlanApprovalOverrideReceiptResult;
       try {
         recorded = recordPlanApprovalOverrideReceipt(
@@ -2369,6 +2370,7 @@ function handleAnswer(args: string[]): void {
               Session: fields.Session,
               Unit: flags.unit ?? "stage-level",
               Fingerprint: planEvidence!.fingerprint,
+              ...(personReply ? { "Person Reply": personReply } : {}),
             });
           },
         );
@@ -2390,7 +2392,10 @@ function handleAnswer(args: string[]): void {
           stage: flags.stage,
           override: recorded.overridden,
           ...(recorded.overridden
-            ? { failed_checks: recorded.failedChecks }
+            ? {
+              failed_checks: recorded.failedChecks,
+              say: "Recorded that you approved building this plan with no check of the project's files.",
+            }
             : { note: "the normal receipt path succeeded, so the override was not needed and nothing was overridden" }),
           ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
         }),
@@ -2411,6 +2416,7 @@ function handleAnswer(args: string[]): void {
         );
         changeNotices.push(...recorded.changeNotices);
       } catch (e) {
+        if (offersPlanApprovalOverride(e)) notePlanApprovalOverrideOffered(pd);
         if (e instanceof PlanApprovalSourceDriftError) {
           console.error(JSON.stringify({ remedy: e.remedy }));
           error(e.message);
@@ -4550,7 +4556,14 @@ export function main(argv: string[]): void {
     // A Plan Approval source-drift refusal is the human sentence; the
     // conductor's remedy (which command reopens approval) rides beside it. An
     // unbindable source boundary rides its ordered remedies the same way, repair
-    // first and break glass last.
+    // first and break glass last, and keeps when building anyway was offered.
+    if (offersPlanApprovalOverride(e)) {
+      try {
+        notePlanApprovalOverrideOffered(resolveActiveProjectDir(projectDir));
+      } catch {
+        // The refusal is said either way.
+      }
+    }
     if (e instanceof PlanApprovalSourceDriftError) {
       console.error(JSON.stringify({ remedy: e.remedy }));
     }

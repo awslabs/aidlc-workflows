@@ -646,10 +646,10 @@ build the edited plan.
 **Legacy Kiro IDE windows.** A Kiro IDE build that passes no typed text to
 AI-DLC approves plans with the picker only, through the older recorded
 decision and answer steps. There an answer binds to the chat session it was
-given in, and the break-glass exit remains: type exactly `Override Plan
-Approval: <your reason>` as a chat message and the assistant re-runs the answer
-command with that reason. Updating Kiro IDE lets you answer in your own words,
-from any chat, or edit the files.
+given in. When the project's files cannot be checked, you can still ask the
+assistant to build the plan anyway, by picking that or saying so, and it is
+recorded as your approval with no check of the files. Updating Kiro IDE lets
+you answer in your own words, from any chat, or edit the files.
 
 ---
 

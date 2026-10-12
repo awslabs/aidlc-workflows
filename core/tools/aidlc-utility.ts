@@ -5478,9 +5478,8 @@ export async function collectDoctorReport(
           "Add the offending path to the exclude list in .aidlc-source-paths.json " +
           "({\"version\":1,\"exclude\":[\"<path>\"]}), declare the real source under an excluded " +
           "directory in its paths list, or remove the broken symlink; then run " +
-          "next. Last resort, human only: type " +
-          "`Override Plan Approval: <reason>` in chat; the conductor records it with the " +
-          "break-glass steps in code-generation.md.",
+          "next. Last resort, only on your own word: ask the assistant in chat to build the plan " +
+          "anyway, and it is recorded as your approval with no check of the project's files.",
       });
     }
   }

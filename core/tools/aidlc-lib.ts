@@ -4761,8 +4761,9 @@ export interface PlanApprovalRuntimeReceipt
   /** Execution in a verified Unit worktree retains its protected parent authority. */
   delegation?: PlanApprovalWorktreeDelegation;
   /**
-   * Present only on a break-glass receipt: the human typed the override phrase
-   * and the conductor ran `answer --override` with that reason. Such a receipt
+   * Present only on a break-glass receipt: the person asked for the plan to be
+   * built anyway, in a reply after the engine said why it could not be checked,
+   * and the conductor ran `answer --override-file` with their reason. Such a receipt
    * binds to content and attempt only; every source comparison against
    * `certifiedSourceSha256` is skipped for it, and the checks the normal path
    * refused are kept beside the reason so the record says what was overridden.
@@ -4793,19 +4794,6 @@ export interface PlanApprovalWorktreeDelegation {
 export interface PlanApprovalReceiptOverride {
   reason: string;
   failedChecks: string[];
-}
-
-// Half A of the break-glass pairing: written ONLY by the human-turn hook when
-// the human TYPED `Override Plan Approval: <reason>` as a prompt. The answer
-// path (half B) requires this file for the same session with a reason hash
-// equal to sha256 of its trimmed `--override` text, and consumes it once.
-export interface PlanApprovalOverrideRequest {
-  version: 1;
-  session: string;
-  reason: string;
-  reasonSha256: string;
-  requestedAt: string;
-  intentId: string;
 }
 
 export type GuardSwitchKey = "guard-policy" | `guard.${SwitchableGuardFence}` | "summary-confirmation" | "plan-approval";
@@ -5440,7 +5428,6 @@ export function commitPlanApprovalBatch(
     ...members.map((member) => planApprovalReceiptPath(projectDir, member)),
     planApprovalChallengePath(projectDir, session),
     planApprovalResponsePath(projectDir, session),
-    planApprovalOverridePath(projectDir, session),
   ];
   const previous = new Map<string, string | null>();
   for (const path of paths) {
@@ -5499,13 +5486,6 @@ export function commitPlanApprovalBatch(
   }
 }
 
-function planApprovalOverridePath(projectDir: string, session: string): string {
-  const segment = runtimeSessionSegment(session);
-  return segment
-    ? join(planApprovalRuntimeDir(projectDir), `override-${segment}.json`)
-    : "";
-}
-
 // The project-relative path a `decision` prints beside the challenge id, so a
 // conductor can see which challenge file a later answer must pair with.
 export function planApprovalChallengeRelativePath(
@@ -5519,66 +5499,6 @@ export function planApprovalChallengeRelativePath(
 export function protectedQuestionRelativePath(projectDir: string, session: string): string {
   const path = protectedQuestionPath(projectDir, session);
   return path ? relative(projectDir, path).split(sep).join("/") : "";
-}
-
-export function planApprovalOverrideRelativePath(
-  projectDir: string,
-  session: string,
-): string {
-  const path = planApprovalOverridePath(projectDir, session);
-  return path ? relative(projectDir, path).split(sep).join("/") : "";
-}
-
-export function writePlanApprovalOverrideRequest(
-  projectDir: string,
-  request: PlanApprovalOverrideRequest,
-): void {
-  ensurePlanApprovalRuntimeDir(projectDir);
-  const path = planApprovalOverridePath(projectDir, request.session);
-  if (!path) throw new Error("Plan Approval override request requires a nonblank session");
-  writeFileAtomic(path, `${JSON.stringify(request, null, 2)}\n`);
-}
-
-// Fail closed: a blank session resolves to no path, an unreadable or
-// unparseable file is null, and every stored field must have its recorded
-// shape. The answer path maps null to the human-only guidance and nothing else.
-export function readPlanApprovalOverrideRequest(
-  projectDir: string,
-  session: string,
-): PlanApprovalOverrideRequest | null {
-  const value = readPlanApprovalRuntimeJson<PlanApprovalOverrideRequest>(
-    planApprovalOverridePath(projectDir, session),
-    "Plan Approval override request",
-  );
-  return isPlainObject(value) &&
-      value.version === 1 &&
-      value.session === session &&
-      typeof value.reason === "string" &&
-      value.reason.trim().length > 0 &&
-      typeof value.reasonSha256 === "string" &&
-      /^[0-9a-f]{64}$/.test(value.reasonSha256) &&
-      typeof value.requestedAt === "string" &&
-      Number.isFinite(Date.parse(value.requestedAt)) &&
-      typeof value.intentId === "string" &&
-      value.intentId.length > 0
-    ? (value as PlanApprovalOverrideRequest)
-    : null;
-}
-
-// Single-use: every receipt outcome for the session (override, normal, or
-// Request Changes) consumes the typed request, so one phrase authorizes at
-// most one run of `answer --override`.
-export function clearPlanApprovalOverrideRequest(
-  projectDir: string,
-  session: string,
-): void {
-  const path = planApprovalOverridePath(projectDir, session);
-  if (!path) return;
-  try {
-    unlinkSync(path);
-  } catch {
-    // Missing runtime state is already clear.
-  }
 }
 
 export function recordSessionPresenceBypass(projectDir: string, session: string): void {
@@ -11884,42 +11804,53 @@ export function personRepliedAfter(projectDir: string, mark: AuditMark): boolean
   }
 }
 
-// When the engine first asked what the folder is, and the person has not
-// answered yet: the audit mark at that showing, in the work's own record.
-function projectTypeAskPath(projectDir: string): string | null {
+// When the engine first showed the person something they have not answered
+// yet (what the folder is, or that a plan can be built anyway): the audit mark
+// at that showing, in the work's own record, under `name`.
+function engineAskMarkPath(projectDir: string, name: string): string | null {
   const root = recordDir(projectDir);
-  return root === null ? null : join(root, ".aidlc-engine", "project-type-ask.json");
+  return root === null ? null : join(root, ".aidlc-engine", name);
 }
 
-function projectTypeAskedAt(projectDir: string): AuditMark | null {
-  const path = projectTypeAskPath(projectDir);
+export function engineAskMark(projectDir: string, name: string): AuditMark | null {
+  const path = engineAskMarkPath(projectDir, name);
   if (path === null || !existsSync(path)) return null;
   try {
-    const mark = JSON.parse(readAtomicReplacedFileNoFollowOrThrow(path, "project type question").toString("utf-8")) as AuditMark;
+    const mark = JSON.parse(readAtomicReplacedFileNoFollowOrThrow(path, "engine question mark").toString("utf-8")) as AuditMark;
     return typeof mark.shard === "string" && Number.isSafeInteger(mark.offset) ? mark : null;
   } catch {
     return null;
   }
 }
 
-// The engine shows the question: keep the first showing, so a reply the person
-// gave before it is shown again still answers it. Best-effort: the question is
-// asked either way.
-export function noteProjectTypeAsked(projectDir: string): void {
-  const path = projectTypeAskPath(projectDir);
-  if (path === null || projectTypeAskedAt(projectDir) !== null) return;
+// The engine shows it: keep the first showing, so a reply the person gave
+// before it is shown again still answers it. Best-effort: it is shown either
+// way.
+export function noteEngineAskMark(projectDir: string, name: string): void {
+  const path = engineAskMarkPath(projectDir, name);
+  if (path === null || engineAskMark(projectDir, name) !== null) return;
   try {
     assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dirname(path)));
     mkdirSync(dirname(path), { recursive: true });
     writeFileAtomic(path, JSON.stringify(auditMark(projectDir)));
   } catch {
-    // Without the mark the person's word is read as before the question.
+    // Without the mark the person's word is read as before it was shown.
   }
 }
 
-export function clearProjectTypeAsked(projectDir: string): void {
-  const path = projectTypeAskPath(projectDir);
+export function clearEngineAskMark(projectDir: string, name: string): void {
+  const path = engineAskMarkPath(projectDir, name);
   if (path !== null) removeRuntimeFile(path);
+}
+
+const PROJECT_TYPE_ASK = "project-type-ask.json";
+
+export function noteProjectTypeAsked(projectDir: string): void {
+  noteEngineAskMark(projectDir, PROJECT_TYPE_ASK);
+}
+
+export function clearProjectTypeAsked(projectDir: string): void {
+  clearEngineAskMark(projectDir, PROJECT_TYPE_ASK);
 }
 
 // What the folder is, is the person's word: their own words since the last
@@ -11927,7 +11858,7 @@ export function clearProjectTypeAsked(projectDir: string): void {
 // question (an answer, or `/aidlc --project-type ...`). A command typed before
 // the question (a bare `/aidlc` that led to it) is no answer to it.
 export function personSaidProjectType(projectDir: string): boolean {
-  const asked = projectTypeAskedAt(projectDir);
+  const asked = engineAskMark(projectDir, PROJECT_TYPE_ASK);
   if (asked === null || projectRelativePath(projectDir, auditFilePath(projectDir)) !== asked.shard) {
     return personSpokeSinceGate(projectDir, { requests: true });
   }
@@ -28112,11 +28043,18 @@ export function pickerAnswerNote(projectDir: string, details: string): string | 
 // when it was, and its words: the ones its chat kept right after it, or, when
 // the hook kept none, the labels it picked in a question box (the row's
 // `Picked` field, in the order shown). Null words for a slash command or an
-// over-long message. Null when no turn is on record. It only words a notice,
-// so it never throws.
-export function latestPersonTurn(projectDir: string): { at: string; words: string | null } | null {
+// over-long message. Null when no turn is on record. With `repliesAfter`, the
+// latest turn after that mark that replied (more than a command to AIDLC), so
+// a command typed since does not blank the words. It only words a notice or a
+// record, so it never throws.
+export function latestPersonTurn(
+  projectDir: string,
+  options: { repliesAfter?: AuditMark } = {},
+): { at: string; words: string | null } | null {
   try {
     const shardPath = auditFilePath(projectDir);
+    const after = options.repliesAfter;
+    if (after !== undefined && projectRelativePath(projectDir, shardPath) !== after.shard) return null;
     const content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
     const separator = /\r?\n---\r?\n/g;
     let start = 0;
@@ -28126,13 +28064,16 @@ export function latestPersonTurn(projectDir: string): { at: string; words: strin
       const end = match ? match.index : content.length;
       const block = content.slice(start, end).replace(/\r\n/g, "\n");
       if (auditBlockField(block, "Event") === "HUMAN_TURN") {
-        turn = {
-          at: auditBlockField(block, "Timestamp") ?? "",
-          session: auditBlockField(block, "Session"),
-          picked: auditBlockField(block, "Picked"),
-          from: Buffer.byteLength(content.slice(0, start), "utf-8"),
-          to: Buffer.byteLength(content.slice(0, match ? match.index + match[0].length : end), "utf-8"),
-        };
+        const from = Buffer.byteLength(content.slice(0, start), "utf-8");
+        if (after === undefined || (from >= after.offset && isReplyTurn({ event: "HUMAN_TURN", block }))) {
+          turn = {
+            at: auditBlockField(block, "Timestamp") ?? "",
+            session: auditBlockField(block, "Session"),
+            picked: auditBlockField(block, "Picked"),
+            from,
+            to: Buffer.byteLength(content.slice(0, match ? match.index + match[0].length : end), "utf-8"),
+          };
+        }
       }
       if (match === null) break;
       start = match.index + match[0].length;
