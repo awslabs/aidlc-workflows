@@ -58,7 +58,7 @@ Presets set effort only, never model IDs. Per-agent exceptions override group
 dials, which override shipped tier defaults. Kiro IDE, Cursor, and Copilot
 cannot express these group effort dials; a policy you record there anyway is
 kept and reported as unexpressed rather than written as inert keys. Kiro CLI runs each session
-on one model, so there a preset sets ONE effort for the whole session
+on one model, so there a preset sets ONE effort for the whole interactive session
 (`minimal` low, `balanced` medium, `thorough` extra-high), saved with the
 session model in your personal Kiro settings; see
 [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
@@ -245,9 +245,11 @@ words, or a Guard Policy or fence switch, together with the settings typed
 beside it), or when the agent turns off a check you asked it to turn off in the
 chat. Sensors, learnings or summary confirmation you type with a request
 (`/aidlc --learnings on build the export`), or before any work exists, also
-read `set by you` on the work that request creates. Any other change, including
-a flag the agent adds to the command that starts new work, is made by a command
-the agent or a script runs and reads `set by a command`. A change to work already under way records `CEREMONY_SET`
+read `set by you` on the work that request creates. So does plan approval or a
+Guard Policy the command that starts new work carries once you have asked for it
+in that chat: the engine puts your words behind the flag rather than the command.
+A flag the agent adds on its own, with no message of yours behind it, is made by
+a command the agent or a script runs and reads `set by a command`. A change to work already under way records `CEREMONY_SET`
 either way; a flag on the command that starts new work is stored in the new
 state file without one. Turning summary
 confirmation or plan approval off for work already under way needs your own
@@ -439,7 +441,7 @@ A fence is a guard that refuses an action nothing asked for: no step the workflo
 
 Lowering a fence or the policy word is the person's call. Ask in your own words and the agent runs the setter (asking for the guards as a whole to be off, such as "turn the guards off", sets Guard Policy `off`), or type `/aidlc config set guard.<fence> off`, `/aidlc --guard-policy relaxed|off`, or the confirmation words `guard policy relaxed|off`, choosing one value. The human-turn hook applies a typed switch at prompt time to the piece of work selected by `--intent <name>` and `--space <name>`, or by the hook payload session's workflow selection when those selectors are omitted, and writes the state and audit row. It reports `AIDLC Guard Policy: ...` as hook context on harnesses that inject it. A nonexistent named intent is refused. A Guard Policy `relaxed` or `off` switch typed before the work exists is for the piece of work this chat starts next (`Guard Policy relaxed for the piece of work you start now (set by you).`). Typed in the same message as a request, it goes with that request (`Guard Policy relaxed for the work you are asking for (set by you).`): new work takes it when it is created, and if you choose to continue the open work instead, it is applied there; the message alone never changes the open work. A fence switch such as `/aidlc --guard.review-freeze off fix the parser` works the same way (`The review freeze check is off for the work you are asking for (set by you).`). The one exception is while the code plan question is open and you are not editing the plan files: then a setting typed with words (`/aidlc --guard-policy off approve the plan`, or `strict` with your choice) is for this work, and the words are your reply to that question. Words after an unquoted `--` still describe new work. Plan approval `off` and a fence switch typed before the work exists are kept the same way, for the piece of work this chat starts next. No other switch is saved for later, and an unrelated reply opens nothing.
 
-The CLI setters lower only when a reply from you has arrived since the last decision, and perform no switch-authority session lookup. An approval you give in the same message leaves the rest of it standing: "approve, and turn plan approval off" approves, then turns it off, and "approve the plan, and run Construction on its own from here" does both. Any other decision recorded after your message uses it up, and an approval always needs its own reply. Hooks run on Windows too, so the typed switch works on every harness that forwards the prompt. An already-off fence or an identical policy word already marked `set by you` needs no key because the CLI update is a no-op.
+The CLI setters lower only when a reply from you has arrived since the last decision, and perform no switch-authority session lookup. An approval you give in the same message leaves the rest of it standing: "approve, and turn plan approval off" approves, then turns it off, and "approve the plan, and run Construction on its own from here" does both. The answer you give the agent's own question in that message leaves it standing too (the option you pick when the agent offers a change is your request for it); any other decision recorded after your message uses it up, and an approval always needs its own reply. Hooks run on Windows too, so the typed switch works on every harness that forwards the prompt. An already-off fence or an identical policy word already marked `set by you` needs no key because the CLI update is a no-op.
 
 When a guard question offers "turn the check off for this piece of work", choosing it is enough: the agent turns it off for you and says in one line that it is off for this piece of work, comes back on for the next one, and that you can ask to turn it back on. On Codex the skill is `$aidlc`.
 
@@ -469,9 +471,9 @@ A setter that would change the policy to `relaxed`, run when no reply from you h
 
 > Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
-Creation with an explicit `relaxed` flag says:
+Creation with an explicit `relaxed` flag, run with no message of yours on record in that chat, says the same:
 
-> Creating this intent with Guard Policy relaxed would lower fences, which is the person's call. Create it, then, when they ask for it in their own words, run `aidlc engine config set guard-policy relaxed` yourself and say in one line what changed. A scope default applies without asking.
+> Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
 Other fence names and `off` use the corresponding name or value; unattended runs append the driver guidance. Memory-held strict refuses before applying a switch or checking a bypass and instead names the memory file to edit. A human-presence refusal names no switch; it says no reply from the person is on record and what happened to one they already sent (the harness's hook steps, or `/aidlc --doctor`), and never asks them to reply again.
 

@@ -4,8 +4,11 @@ import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./
 import {
   guardPolicyAtLeast,
   latestPersonTurn,
+  isReplyTurn,
   personSpokeSinceGate,
+  readAuditShardEvents,
   assertChangeControlLedgerWritable,
+  type AuditShardEvent,
   auditBlockField,
   auditFilePath,
   CEREMONY_ENV,
@@ -64,9 +67,11 @@ import {
   withAuditLock,
   writePlanApprovalRuntimeRecord,
   writeStateFile,
+  keepActiveDirectiveOverSettingWrite,
   parseGuardPolicyStateLine,
   commandAtPersonsTerminal,
 } from "./aidlc-lib.ts";
+import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { quoted } from "./aidlc-recorded-switches.ts";
 import { settingPurpose } from "./aidlc-settings.ts";
 
@@ -259,6 +264,30 @@ function guardPolicyTypedThisTurn(projectDir: string, value: string, intent?: st
   return null;
 }
 
+// The person's latest turn is a reply (words of theirs, not a typed switch or a
+// command to AIDLC, which the hook carries out itself) and came after this setting
+// last changed. Their words stand behind a setter run that follows them, not
+// behind the setter's own later reversal (the way back after an off they asked
+// for), which no turn of theirs asked for. Rows in one shard order by position;
+// across shards by second, and an equal second is not read as after.
+function personTurnSinceSetting(projectDir: string, key: CeremonyKey, selection: { intent?: string; space?: string }): boolean {
+  let rows: AuditShardEvent[];
+  try {
+    rows = readAuditShardEvents(projectDir, selection.intent, selection.space);
+  } catch {
+    return false;
+  }
+  const after = (row: AuditShardEvent, other: AuditShardEvent): boolean =>
+    row.timestamp > other.timestamp ||
+    (row.timestamp === other.timestamp && row.shardIndex === other.shardIndex && row.pos > other.pos);
+  const latest = (pick: (row: AuditShardEvent) => boolean): AuditShardEvent | null =>
+    rows.filter(pick).reduce<AuditShardEvent | null>((last, row) => (last === null || after(row, last) ? row : last), null);
+  const turn = latest((row) => row.event === "HUMAN_TURN");
+  if (turn === null || !isReplyTurn(turn)) return false;
+  const setting = latest((row) => row.event === "CEREMONY_SET" && auditBlockField(row.block, "Key") === key);
+  return setting === null || after(turn, setting);
+}
+
 export function applyIntentSettings(
   projectDir: string,
   content: string,
@@ -434,7 +463,7 @@ export function applyIntentSettings(
   }
   // An unattended driver never lowers fences, including a recorded presence bypass.
   if (lowering.length > 0 && process.env.AIDLC_UNATTENDED === "1") {
-    die(guardSwitchRefusal(lowering[0], "config"));
+    die(guardSwitchRefusal(lowering[0]));
   }
   // Lowering a fence is the person's call. Their typed switch carries it out,
   // and so does this setter when a person has spoken since the last decision
@@ -447,13 +476,21 @@ export function applyIntentSettings(
   // so is one run in a terminal a host opened for its agent (Copilot in VS Code,
   // Kiro IDE, Cursor), where the line says which chat to ask in.
   // `commandAtPersonsTerminal` owns that test for the refusal and the record alike.
-  const atTheirTerminal = lowering.length > 0 && !typedByPerson && commandAtPersonsTerminal();
+  // The person's own settings here are the checks this command lowers and every
+  // other setting requested as theirs: a ceremony the agent sets from their
+  // words (collaborators, sensors, learnings) or turns back on. Whose it is
+  // follows the one rule below, so none of them is left to read "set by a
+  // command" when the person asked for it.
+  const theirCeremonies = CEREMONY_KEYS.filter((key) =>
+    ceremonies[key] !== undefined && requested[CEREMONY_FLAGS[key].slice(2) as ConfigKey]?.source === "you");
+  const personsRequest = lowering.length > 0 || theirCeremonies.length > 0;
+  const atTheirTerminal = personsRequest && !typedByPerson && commandAtPersonsTerminal();
   if (
     lowering.length > 0 && !typedByPerson && !atTheirTerminal && !fenceKeyBypassed(projectDir, sessionId) &&
     !personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true })
   ) {
     // A question about the switch ("skip plan approval?") asks for nothing.
-    die(guardSwitchRefusal(lowering[0], "config", personSpokeSinceGate(projectDir), projectDir));
+    die(guardSwitchRefusal(lowering[0], personSpokeSinceGate(projectDir), projectDir));
   }
   // The setter carries out what the person asked: their words go on the record.
   // A command they ran themselves, at their own terminal, is their own act and
@@ -463,13 +500,13 @@ export function applyIntentSettings(
   // its whole ancestor chain, so a terminal beside it resolves the same session
   // anyway, and the walk that resolves it fails closed under load, which would
   // drop the person's own words from their record for no reason they could see.
-  const turn = lowering.length > 0 && !typedByPerson && !atTheirTerminal
+  const turn = personsRequest && !typedByPerson && !atTheirTerminal
     ? latestPersonTurn(projectDir)
     : null;
   const askedIn = turn?.words ?? null;
   // Asked for in the chat (not typed): each check it turns off is said in one
   // line, in their words, with the way back, instead of the setter's own line.
-  const askedInChat = lowering.length > 0 && !typedByPerson &&
+  const askedInChat = personsRequest && !typedByPerson && process.env.AIDLC_UNATTENDED !== "1" &&
     personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true });
   // Theirs either way: asked for in their chat, or run by them at their terminal.
   // Both get the one line that names the check, where it applies and the way
@@ -478,9 +515,18 @@ export function applyIntentSettings(
   const saidAsAsked = (key: string): boolean =>
     personsOwn && key !== "plan-approval" && lowering.some((item) => item.key === key);
   // A check the person asked in the chat to turn off is theirs, whoever runs the
-  // setter: turning one off needs their turn, so it is on record behind it.
-  const personAsked = (key: string): boolean =>
-    typedByPerson || (personsOwn && lowering.some((item) => item.key === key));
+  // setter: turning one off needs their turn, so it is on record behind it. Any
+  // other setting requested as theirs is theirs at their own terminal, or when
+  // their latest turn stands behind the setter run, newer than the setting's own
+  // last row (so the way back the agent runs after an off they asked for is the
+  // command's, not theirs).
+  const personAsked = (key: string): boolean => {
+    if (typedByPerson) return true;
+    if (lowering.some((item) => item.key === key)) return personsOwn;
+    const ceremony = theirCeremonies.find((candidate) => CEREMONY_FLAGS[candidate].slice(2) === key);
+    if (ceremony === undefined) return false;
+    return atTheirTerminal || (askedInChat && personTurnSinceSetting(projectDir, ceremony, selection));
+  };
 
   const audit: AuditEntryInput[] = [];
   const lines: string[] = [];
@@ -523,10 +569,21 @@ export function applyIntentSettings(
         },
       });
     }
-    const display = update.storedReview === "" ? `${scopeReviewLevel(target)} (scope default)` : update.storedReview;
-    lines.push(update.changed
-      ? `Review override changed: ${update.oldReview || "none"} -> ${display}`
-      : `Review override is already ${display}`);
+    // The person's line: what the reviews are now, what they were, and the way
+    // back, in the harness's own entry word. With no override set, the level in
+    // force was the scope's own (a first "none" printed "none -> none" in two
+    // live runs; three more printed "Review override changed: advisory (scope
+    // default) -> none" to the person as it stood). An empty stored override is
+    // the scope's own level again.
+    const level = update.storedReview === "" ? scopeReviewLevel(target) : (update.storedReview ?? review);
+    const was = update.oldReview || scopeReviewLevel(target);
+    const word = (value: string): string => (value === "none" ? "off" : value);
+    const back = `say so or type ${entrySkillInvocation()} --review ${was}`;
+    lines.push(!update.changed
+      ? `Specialist reviews are already ${word(level)} for this work.`
+      : level === "none"
+        ? `Specialist reviews are off for the rest of this work. To turn them back on, ${back}.`
+        : `Specialist reviews are ${level} for the rest of this work (they were ${word(was)}). To change it back, ${back}.`);
   }
   // Persist scope-owned updates even while memory controls the effective value.
   // Explicit strict is also recordable; explicit relaxed was refused above.
@@ -681,7 +738,7 @@ export function applyIntentSettings(
       eventType: "CEREMONY_SET",
       fields: {
         Key: key, Old: oldValue, New: value, Source: source,
-        ...(askedIn && value === "off" ? { "Person Reply": askedIn } : {}),
+        ...(askedIn && value === "off" && source === "you" ? { "Person Reply": askedIn } : {}),
       },
     });
     const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
@@ -896,7 +953,11 @@ function applyReadTypedGuardSwitches(
       if (update.content !== content) {
         if (update.audit.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
         if (update.audit.length > 0) appendAuditEntries(update.audit, projectDir, intent, space);
-        writeStateFile(projectDir, setField(update.content, "Last Updated", isoTimestamp()), intent, space);
+        const written = setField(update.content, "Last Updated", isoTimestamp());
+        writeStateFile(projectDir, written, intent, space);
+        // The step in hand stays the open step: a setting changes how it runs,
+        // not which step it is.
+        keepActiveDirectiveOverSettingWrite(projectDir, content, written);
       }
       return { applied: true, lines: update.lines };
     }, intent, space);

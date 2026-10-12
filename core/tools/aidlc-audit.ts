@@ -151,6 +151,13 @@ const VALID_EVENT_TYPES = new Set([
   // Advisory, never a HUMAN_TURN: a Copilot prompt arrived right after a
   // subagent started in that chat and matched no recorded subagent brief.
   "SUBAGENT_PROMPT_UNMATCHED",
+  // No longer written: earlier releases had the plan-approval guard record a
+  // reviewer dispatch whose brief already carried a rendered verdict line. The
+  // reviewer now says so itself (`**Verdict Dictated:**` in its review file,
+  // recorded on REVIEW_COMPLETED). Kept registered so audits and worktree
+  // deltas written before still read and merge (validateMergeDelta refuses an
+  // unknown event).
+  "REVIEW_VERDICT_DICTATED",
   // Reviewer read-scope enforcement (hook-emitted): a per-unit reviewer's
   // tool call was refused for reaching into sibling units' construction/ paths.
   "REVIEWER_SCOPE_BLOCKED",
@@ -335,6 +342,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   ARTIFACT_REUSED: "Artifact Reused",
   SUBAGENT_COMPLETED: "Subagent Completed",
   SUBAGENT_PROMPT_UNMATCHED: "Subagent Prompt Unmatched",
+  REVIEW_VERDICT_DICTATED: "Review Verdict Dictated",
   REVIEWER_SCOPE_BLOCKED: "Reviewer Scope Blocked",
   REVIEW_FREEZE_BLOCKED: "Review Freeze Blocked",
   PLAN_APPROVAL_BLOCKED: "Plan Approval Blocked",

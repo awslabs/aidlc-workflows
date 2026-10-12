@@ -7,7 +7,7 @@
 // function:recordGuardRefusal, function:guardRefusalOutput,
 // function:guardRecoveryAskForRefusal, function:guardTerminalAskForRefusal,
 // function:guardRecoveryAskFromRefusalText, function:guardAttemptState,
-// function:humanAuthorityState, function:isRequestChangesChoice,
+// function:humanAuthorityState,
 // function:normalizeGuardRecoveryText, function:consumeSharedDirectiveAsk,
 // function:guardRecoveryFeedbackStatus, function:guardPreflight,
 // directive:guard-recovery
@@ -58,7 +58,6 @@ import {
   guardRefusalOutput,
   guardRefusalStreakView,
   guardTerminalAskForRefusal,
-  isRequestChangesChoice,
   latestMainWorkflowStageRunFloorForProject,
   isTeamUnitOwnership,
   normalizeGuardRecoveryText,
@@ -2430,56 +2429,7 @@ describe("AttemptView projections and refusal streaks", () => {
     );
   });
 
-  test("the gate's Request Changes choice tolerates case, prefix, punctuation, and a recommended decorator but not paraphrase", () => {
-    for (const reply of [
-      "Request Changes",
-      "request changes",
-      "REQUEST CHANGES",
-      "B. Request Changes",
-      "2) request changes",
-      '"Request Changes"',
-      "Request Changes.",
-      "  Request   Changes  ",
-      // The picker returns the recommended choice's decorated label.
-      "Request Changes (Recommended)",
-      "request changes (recommended)",
-      // The decorator composes with surrounding double quotes.
-      '"Request Changes (Recommended)"',
-      // The decorator composes with surrounding single quotes.
-      "'Request Changes (Recommended)'",
-      // The decorator composes with a trailing period.
-      "Request Changes (Recommended).",
-      // The decorator composes with a trailing exclamation mark.
-      "Request Changes (Recommended)!",
-      // The decorator composes with an alphabetic option prefix.
-      "B. Request Changes (Recommended)",
-      // The decorator composes with a numeric prefix, case, and punctuation.
-      "2) request changes (recommended).",
-      // The decorator must compose both inside and outside the wrappers.
-      // These rows pin the direction a fixed-order normalization would drop.
-      // The decorator sits outside trailing punctuation.
-      "Request Changes. (Recommended)",
-      // The decorator sits outside surrounding quotes.
-      '"Request Changes" (Recommended)',
-      // Quotes sit inside and punctuation outside the decorator.
-      '"Request Changes (Recommended)".',
-    ]) {
-      expect(isRequestChangesChoice(reply), reply).toBe(true);
-    }
-    for (const reply of [
-      "Approve",
-      "please change it",
-      "Request Changes to the plan",
-      "(Recommended)",
-      "Request Changes (Recommended) extra",
-      "Request Changes (Recommended) (Recommended)",
-      '"Approve (Recommended)"',
-      "Changes",
-      "",
-      undefined,
-    ]) {
-      expect(isRequestChangesChoice(reply), String(reply)).toBe(false);
-    }
+  test("normalizeGuardRecoveryText collapses whitespace into one line", () => {
     expect(normalizeGuardRecoveryText("  Split the\n  save-search   flow  ")).toBe(
       "Split the save-search flow",
     );

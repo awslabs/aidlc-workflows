@@ -56,7 +56,11 @@ afterEach(() => {
 function run(tool: string, args: string[], proj: string, env: NodeJS.ProcessEnv = {}) {
   const result = Bun.spawnSync({
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-    cmd: [process.execPath, tool, ...args, "--project-dir", proj],
+    // On a `next` line this engine's own option rides ahead of the person's
+    // words, which is where every caller of it puts it.
+    cmd: [process.execPath, tool, ...(args[0] === "next"
+      ? ["next", "--project-dir", proj, ...args.slice(1)]
+      : [...args, "--project-dir", proj])],
     cwd: proj,
     env: {
       ...process.env,
@@ -517,7 +521,13 @@ describe("t338 atomic per-intent settings", () => {
     expect(creation.kind).toBe("print");
     expect(creation.message).toContain("--sensors off");
     expect(directive(run(ORCHESTRATE, ["next", "compose", "--sensors", "off"], proj).stdout).kind).toBe("error");
-    expect(directive(run(ORCHESTRATE, ["next", "--sensors", "invalid"], proj).stdout).kind).toBe("error");
+    // A ceremony value this engine's table does not hold goes to the agent as a
+    // reading step naming the words it does hold (t-three-ways-to-read-a-line);
+    // nothing is applied either way.
+    const unheld = directive(run(ORCHESTRATE, ["next", "--sensors", "invalid"], proj).stdout);
+    expect(unheld.kind).toBe("print");
+    expect(unheld.message).toContain("on|off");
+    expect(unheld.message).toContain('"invalid"');
   });
 
 

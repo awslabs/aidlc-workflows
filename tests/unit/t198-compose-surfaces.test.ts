@@ -183,9 +183,14 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     for (const [args, description] of [
       [["compose", "--", "--scope", "migration"], "--scope migration"],
       [["compose", "--", "--project-dir", "/tmp/not-a-project"], "--project-dir /tmp/not-a-project"],
-      [["--new-scope", "--enable SSO"], "--enable SSO"],
-      [["bugfix", "--enable"], "--enable"],
-      [["bugfix", "Fix", "duplicate", "todo", "persistence"], "Fix duplicate todo persistence"],
+      // The engine takes no `--enable`, and what the person meant by it is the
+      // agent's to read, so the delimiter is what keeps it theirs at creation.
+      [["--new-scope", "--", "--enable SSO"], "--enable SSO"],
+      [["bugfix", "--", "--enable"], "--enable"],
+      // A plan named with the colon mark keeps their words whole; the same words
+      // after a bare plan word are ambiguous with their own first word, and go
+      // to the agent as a reading step (t-three-ways-to-read-a-line).
+      [["bugfix:", "Fix duplicate todo persistence"], "Fix duplicate todo persistence"],
       [["--scope", "feature", "feature", "flags", "for", "billing"], "feature flags for billing"],
       [["bugfix", "Fix", "duplicate", "todo", "--scope", "mvp"], "bugfix Fix duplicate todo"],
     ] as const) {
@@ -502,15 +507,20 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(state).toContain("- **Plan Approval**: on (set by a command)");
   });
 
-  test("a typed plan approval off is never re-issued by the offer's commands", () => {
+  // The person typed plan approval off with the work they were describing, so
+  // it belongs to the work they pick: every answer the offer names carries it,
+  // and creation takes it from the command (t-flags-next-does-not-take holds
+  // the whole path). Before this it rode only as `on`, and an `off` reached the
+  // new work through the human-turn hook's grant alone.
+  test("a typed plan approval off rides every answer the offer names", () => {
     proj = createTestProject();
     removeWorkspaceRecord(proj);
     const ask = directiveOf(runNext(proj, ["--plan-approval", "off", "Fix the login crash when the session expires"]).out);
     expect(ask.ask_type).toBe("scope-confirm");
-    expect(String(ask.confirm_command)).not.toContain("--plan-approval");
-    expect(String(ask.compose_command)).not.toContain("--plan-approval");
+    expect(String(ask.confirm_command)).toContain("--plan-approval off");
+    expect(String(ask.compose_command)).toContain("--plan-approval off");
     for (const entry of ask.scope_commands as Array<{ scope: string; command: string }>) {
-      expect(entry.command, entry.scope).not.toContain("--plan-approval");
+      expect(entry.command, entry.scope).toContain("--plan-approval off");
     }
   });
 
@@ -605,9 +615,17 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(created.message)).toContain("--depth comprehensive");
   });
 
-  test("plain prose in an unselected workspace still asks which work it is (unchanged)", () => {
+  test("plain prose in an unselected workspace still asks which work it is, after the agent has read the words", () => {
     seedTwoRecordsNoneSelected();
-    const ask = directiveOf(runNext(proj, ["Fix the login crash when the session expires"]).out);
+    // Words alone where work is here but none is selected first reach the agent
+    // (t-carry-on-continues-the-work pins that print); its "new work" reading
+    // re-runs `next --request <id>`, which is the offer this case is about.
+    const read = directiveOf(runNext(proj, ["Fix the login crash when the session expires"]).out);
+    expect(read.kind).toBe("print");
+    expect(String(read.message)).toContain("none is selected in this chat");
+    const id = /--request ([0-9a-f]{8})/.exec(String(read.message))?.[1];
+    expect(id).toBeDefined();
+    const ask = directiveOf(runNext(proj, ["--request", id!]).out);
     const confirm = String(ask.confirm_command);
     const next = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
     expect(next.kind).toBe("ask");
@@ -740,6 +758,25 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(ask.new_work_description).toBe("Fix the login crash when the session expires");
     expect(String(ask.new_intent_command)).toContain(`--scope bugfix --request`);
     if (typed.length > 0) expect(String(ask.new_intent_command)).toContain("--learnings off");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+  });
+
+  test("a raw line of loose words after a plan word goes to the agent, with nothing asked of them", () => {
+    // Settled 2026-10-10: a plan's name at the START of their own sentence,
+    // with nothing marking which it is, has two readings and only the agent can
+    // tell. Named in its own argument with the request in one more (the test
+    // above, and what the orchestrator skill asks the agent for) the reading is
+    // already made and the plan acts.
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+    const step = directiveOf(runNext(proj, ["bugfix", "Fix", "the", "login", "crash"]).out);
+    expect(step.kind).toBe("print");
+    expect(step.narration).toBeUndefined();
+    expect(step.ask_type).toBeUndefined();
+    expect(String(step.message)).toContain("--scope bugfix");
+    expect(String(step.message)).toContain("Fix the login crash");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 

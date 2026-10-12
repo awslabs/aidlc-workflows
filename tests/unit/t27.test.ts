@@ -484,7 +484,7 @@ describe("t27 aidlc-utility status", () => {
     state(["checkbox", "code-generation=skipped"], p);
     const r = util(["status"], p);
     expect(r.stdout).toContain("approved - ready to advance");
-    expect(r.stdout).toContain(" - 1 skipped");
+    expect(r.stdout).toContain(", skipped: Code Generation");
     expect(r.stdout).not.toContain("\u2014");
     expect(r.stdout).not.toContain("\u2192");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

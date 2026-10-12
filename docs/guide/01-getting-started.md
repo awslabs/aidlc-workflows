@@ -56,8 +56,8 @@ Replace `claude` with the harness you use:
 | Harness | Config value | Open | Invoke |
 | --- | --- | --- | --- |
 | Claude Code | `claude` | `claude` | `/aidlc` |
-| Kiro CLI | `kiro` | `kiro-cli chat` | `/aidlc` |
 | Kiro IDE | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker | `/aidlc` |
+| Kiro CLI (legacy) | `kiro` | `kiro-cli chat` | `/aidlc` |
 | Codex CLI | `codex` | `codex` | `$aidlc` |
 | Cursor | `cursor` | Open Cursor or run `agent` | `/aidlc` |
 | opencode | `opencode` | `opencode` | `/aidlc` |
@@ -66,6 +66,10 @@ Replace `claude` with the harness you use:
 A bare `aidlc config` starts the interactive setup when a terminal is
 available. It detects installed harnesses, provider state, runtime needs, and
 trust actions before writing anything.
+
+On Kiro CLI 2.24.1 or later, use `kiro-ide`, which pins Kiro's v3 engine;
+`kiro` is the legacy row ([Kiro CLI](harnesses/kiro-cli.md) says how an
+existing `kiro` project switches).
 
 If you use Kiro IDE's own terminal in a project folder you have not trusted
 yet, Kiro first asks whether you trust it. AI-DLC's hooks run only in a trusted
@@ -108,8 +112,8 @@ still apply.
 | Harness | Important first-run requirement | Guide |
 | --- | --- | --- |
 | Claude Code | Configure a supported provider; AI-DLC preserves the current selection | [Claude setup below](#aws-bedrock-setup) |
-| Kiro CLI >= 2.6 | Sign in with `kiro-cli login` | [Kiro CLI](harnesses/kiro-cli.md) |
 | Kiro IDE >= 1.1.70 (or Kiro CLI >= 2.24.1) | Sign in and open the configured project | [Kiro IDE](harnesses/kiro-ide.md) |
+| Kiro CLI >= 2.6 (legacy) | Sign in with `kiro-cli login` | [Kiro CLI](harnesses/kiro-cli.md) |
 | Codex CLI >= 0.145.0 | Use a Git repository and approve project hook trust | [Codex CLI](harnesses/codex-cli.md) |
 | Cursor | Sign in to the IDE or CLI | [Cursor](harnesses/cursor.md) |
 | opencode >= 1.17 | Configure the session provider globally | [opencode](harnesses/opencode.md) |
@@ -201,8 +205,8 @@ After config, complete any action named in its output:
 | Harness | Typical action |
 | --- | --- |
 | Claude Code | If Claude Code is already open in this folder, exit it and start it again |
-| Kiro CLI | Start `kiro-cli chat`; the project selects the AI-DLC agent |
 | Kiro IDE | Open the configured project, then choose **aidlc** in the chat panel's agent picker |
+| Kiro CLI (legacy) | Start `kiro-cli chat`; the project selects the AI-DLC agent |
 | Codex CLI | Approve the hook trust prompt or apply the generated trust seed |
 | Cursor | Open the configured project or run `agent` |
 | opencode | Start `opencode` in the project |

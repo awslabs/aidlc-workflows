@@ -122,7 +122,8 @@ function next(args: string[], p = proj): Run {
   const env = { ...process.env };
   delete env.AWS_AIDLC_DEFAULT_SCOPE;
   const r = Bun.spawnSync({
-    cmd: [BUN, ORCH, "next", ...args, "--project-dir", p],
+    // Ahead of the person's words, as every caller of `next` builds it.
+    cmd: [BUN, ORCH, "next", "--project-dir", p, ...args],
     stdout: "pipe",
     stderr: "pipe",
     env,

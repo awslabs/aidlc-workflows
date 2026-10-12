@@ -407,6 +407,24 @@ describe("t67 scope-table --check drift guard (migrated from t67 §4-6)", () => 
     expect(r.status).toBe(1);
     expect(r.out).toContain("missing scope-table markers");
   });
+
+  // skill-text prints the installed orchestrator skill whole, for a host whose
+  // command template carries it (opencode cuts the skill tool's output at
+  // 50 KiB). The same AIDLC_SKILL_MD_PATH seam the table checks read.
+  test("13: skill-text prints the SKILL.md whole, byte for byte", () => {
+    const r = util(["skill-text"]);
+    expect(r.status, r.stderr).toBe(0);
+    const skill = readFileSync(SKILL, "utf-8");
+    expect(r.stdout).toBe(skill.endsWith("\n") ? skill : `${skill}\n`);
+    const seam = join(mkdtempSync(join(tmpdir(), "t67-skill-text-")), "skill.md");
+    tempFiles.push(seam);
+    writeFileSync(seam, "# a skill\n\nwith `!NAME!` kept as written\n", "utf-8");
+    expect(util(["skill-text"], seam).stdout).toBe("# a skill\n\nwith `!NAME!` kept as written\n");
+    // The harness the caller names must be a harness folder name.
+    const bad = util(["skill-text", "--harness-dir", "not a folder"]);
+    expect(bad.status).toBe(1);
+    expect(bad.out).toContain("--harness-dir");
+  });
 });
 
 // ============================================================

@@ -97,10 +97,10 @@ const manifest: HarnessManifest = {
     {
       // The team's own opencode.json (model, provider, instructions,
       // permission rules) keeps everything it has: AI-DLC adds only its own
-      // entries and leaves a permission map's "*" rule to the team. Its part
-      // ships in root-blocks; a copy leaves the file out and its setup adds
-      // the part. A file AI-DLC wrote whole before is adopted by the
-      // signatures below.
+      // entries, its asks for the team's own commands first so the team's
+      // rules after them decide. Its part ships in root-blocks; a copy leaves
+      // the file out and its setup adds the part. A file AI-DLC wrote whole
+      // before is adopted by the signatures below.
       path: "opencode.json",
       policy: "json-entries",
       legacySignatures: {

@@ -636,8 +636,14 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     }
   });
 
-  test("only scope-confirm carries the offer's choices, each a label and a command", () => {
-    expect(validateDirective({ ...composeOfferAsk(), choices: (ask() as { choices: unknown }).choices }).valid).toBe(false);
+  test("every ask may carry its choices, each a label with an optional detail and command; the scope offer requires its two commands", () => {
+    // The engine adds the choices to every question it asks (withAgentNotes); a hand-built one may carry them too.
+    expect(validateDirective({ ...composeOfferAsk(), choices: (ask() as { choices: unknown }).choices }).valid).toBe(true);
+    expect(validateDirective({ ...composeOfferAsk(), choices: [{ label: "Tailor a plan", detail: "with you" }] }).valid).toBe(true);
+    for (const entry of [{ command: "x" }, { label: 1, command: "x" }, { label: "Go", command: "x", extra: 1 }, { label: "Go", command: 2 }]) {
+      expect(validateDirective({ ...composeOfferAsk(), choices: [entry] }).valid).toBe(false);
+    }
+    // The scope offer's answers are its two commands: each choice carries one.
     for (const entry of [{ label: "Go ahead" }, { command: "x" }, { label: 1, command: "x" }, { label: "Go", command: "x", extra: 1 }]) {
       expect(validateDirective({ ...ask(), choices: [entry] }).valid).toBe(false);
     }

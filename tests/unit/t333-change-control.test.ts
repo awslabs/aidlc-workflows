@@ -902,9 +902,13 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     const off = lastDirective(run(ORCHESTRATE, ["next", "--guard-policy", "off"], proj).stdout);
     expect(off.kind).toBe("print");
     expect(off.message).toContain("engine config set guard-policy off");
+    // A value this engine's own table does not hold is a reading step naming the
+    // words it does: the person meant one of them, and the agent re-runs it
+    // (t-three-ways-to-read-a-line). A missing value stays its own refusal.
     const bad = lastDirective(run(ORCHESTRATE, ["next", "--guard-policy", "maybe"], proj).stdout);
-    expect(bad.kind).toBe("error");
-    expect(bad.message).toContain('--guard-policy requires <strict|relaxed|off>; received "maybe".');
+    expect(bad.kind).toBe("print");
+    expect(bad.message).toContain("takes `--guard-policy` with strict|relaxed|off");
+    expect(bad.message).toContain('does not take "maybe"');
     const bare = lastDirective(run(ORCHESTRATE, ["next", "--guard-policy"], proj).stdout);
     expect(bare.kind).toBe("error");
     expect(bare.message).toContain("--guard-policy requires <strict|relaxed|off>.");
@@ -1285,7 +1289,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
   // a stuck question was spent by the answer the agent recorded, and the
   // agent's `config set guard-policy relaxed` was then refused as a lowering.
   // Relaxed is stricter than off: raising the checks needs no one's word.
-  test("off to relaxed raises the checks: the setter runs with no person turn left to spend", () => {
+  test("off to relaxed raises the checks without waiting; back to off is the person's call: their message stands for it, another decision uses it up", () => {
     const { proj, state } = project("classic");
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (from scope classic)");
     recordHumanPrompt(proj, "carry on");
@@ -1295,10 +1299,19 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(raised.status, raised.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");
     expect(guardPolicyRows(proj).map((row) => auditBlockField(row.block, "New Value"))).toEqual(["relaxed"]);
-    // Going back down to off is a lowering, and still waits for their word.
+    // Going back down to off is a lowering: the person's message since the last
+    // decision stands for it; the answer the agent recorded from it is not a
+    // second decision, so the agent carries out what it read in their words.
     const lowered = run(dispatcher, ["engine", "config", "set", "guard-policy", "off"], proj, FENCE_ENV_CLEAR);
-    expect(lowered.status).not.toBe(0);
-    expect(refusalError(lowered.stderr)).toContain("Setting Guard Policy off lowers fences, which is the person's call.");
+    expect(lowered.status, lowered.stderr).toBe(0);
+    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (set by you)");
+    // Once another decision has used their message up, a lowering waits for their word.
+    const raisedAgain = run(dispatcher, ["engine", "config", "set", "guard-policy", "relaxed"], proj, FENCE_ENV_CLEAR);
+    expect(raisedAgain.status, raisedAgain.stderr).toBe(0);
+    appendAuditEntry("GATE_REJECTED", { Stage: "requirements-analysis" }, proj);
+    const refused = run(dispatcher, ["engine", "config", "set", "guard-policy", "off"], proj, FENCE_ENV_CLEAR);
+    expect(refused.status).not.toBe(0);
+    expect(refusalError(refused.stderr)).toContain("Setting Guard Policy off lowers fences, which is the person's call.");
     recordHumanPrompt(proj, "put the guards back off");
     const asked = run(dispatcher, ["engine", "config", "set", "guard-policy", "off"], proj, FENCE_ENV_CLEAR);
     expect(asked.status, asked.stderr).toBe(0);
@@ -2069,8 +2082,6 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
 
   const fenceRefusal = "Turning the state-transition check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.";
   const policyRefusal = "Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.";
-  // The agent creates the work, then runs the setter itself for what the person asked.
-  const createRefusal = "Creating this intent with Guard Policy relaxed would lower fences, which is the person's call. Create it, then, when they ask for it in their own words, run `bun .claude/tools/aidlc-utility.ts config-change --guard-policy relaxed` yourself and say in one line what changed. A scope default applies without asking.";
 
   // Human turns and refusals may be logged without mutating workflow facts.
   function mutationRows(proj: string, intent?: string, space?: string) {
@@ -2100,7 +2111,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
           "intent-create", "--scope", "enterprise", "--arguments", "untrusted lowering",
           "--label", "untrusted", "--guard-policy", "relaxed",
         ],
-        refusal: createRefusal,
+        refusal: policyRefusal,
       },
     ])("does not authorize $operation or mutate workflow facts", ({ args, refusal }) => {
       const { proj, state } = project("enterprise");
@@ -2217,32 +2228,42 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(auditBlockField(rowsOf(proj, event)[0].block, "Person Reply")).toBe(asked);
   });
 
-  test.each<{ operation: string; args: string[]; refusal: string }>([
-    {
-      operation: "intent creation",
-      args: [
-        "intent-create", "--scope", "enterprise", "--arguments", "unapproved lowering",
-        "--label", "unapproved", "--guard-policy", "relaxed",
-      ],
-      refusal: createRefusal,
-    },
-  ])("a CLI $operation cannot lower fences even after a fresh human turn", ({ args, refusal }) => {
+  // Creation follows the same rule as the setters above: the person's turn is the
+  // authority, whoever runs the command, so the work it creates records the
+  // lowering as theirs. Before, a CLI creation refused whatever the person had
+  // said and told the agent to create the work and run the setter afterwards.
+  test("a CLI intent creation lowers fences after the person asked, and not before", () => {
+    const args = [
+      "intent-create", "--scope", "enterprise", "--arguments", "unapproved lowering",
+      "--label", "unapproved", "--guard-policy", "relaxed",
+    ];
     const { proj, state } = project("enterprise");
-    recordHumanPrompt(proj, "Continue");
     const before = readFileSync(state, "utf-8");
     const ledger = mutationRows(proj);
     const intents = join(proj, "aidlc", "spaces", "default", "intents");
     const registry = readFileSync(join(intents, "intents.json"), "utf-8");
     const active = readFileSync(join(intents, "active-intent"), "utf-8");
     const records = readdirSync(intents).sort();
+    // With nothing of theirs on record since the last decision, it refuses, and
+    // creates nothing.
     const refused = run(UTILITY, args, proj, FENCE_ENV_CLEAR);
     expect(refused.status).toBe(1);
-    expect(JSON.parse(refused.stderr)).toEqual({ error: refusal });
+    expect(JSON.parse(refused.stderr)).toEqual({ error: policyRefusal });
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
     expect(readFileSync(join(intents, "intents.json"), "utf-8")).toBe(registry);
     expect(readFileSync(join(intents, "active-intent"), "utf-8")).toBe(active);
     expect(readdirSync(intents).sort()).toEqual(records);
+    // Their turn, then the same command: the new work starts with it, as theirs,
+    // and the work already open is untouched.
+    recordHumanPrompt(proj, "please relax the checks for the next piece of work");
+    const created = run(UTILITY, args, proj, FENCE_ENV_CLEAR);
+    expect(created.status, created.stderr).toBe(0);
+    const createdActive = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    const createdState = join(intents, createdActive, "aidlc-state.md");
+    expect(createdState).not.toBe(state);
+    expect(getField(readFileSync(createdState, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");
+    expect(readFileSync(state, "utf-8")).toBe(before);
   });
 
   test.each([
@@ -2533,7 +2554,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
         "intent-create", "--scope", "enterprise", "--arguments", "unattended piece of work",
         "--label", "unattended", "--guard-policy", "relaxed",
       ],
-      refusal: createRefusal,
+      refusal: policyRefusal,
     },
   ])("an unattended prompt applies nothing and the $operation refuses even with the presence bypass", ({ prompt, args, refusal }) => {
     const { proj, state } = project("enterprise");

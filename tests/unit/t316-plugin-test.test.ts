@@ -39,6 +39,7 @@ const CLAUDE_INSTALL = join(REPO_ROOT, "dist", "claude");
 const KIRO_INSTALL = join(REPO_ROOT, "dist", "kiro");
 const OPENCODE_INSTALL = join(REPO_ROOT, "dist", "opencode");
 const CODEX_INSTALL = join(REPO_ROOT, "dist", "codex");
+const KIRO_IDE_INSTALL = join(REPO_ROOT, "dist", "kiro-ide");
 const scratch = mkdtempSync(join(tmpdir(), "aidlc-t316-"));
 const copiedTools = join(scratch, "runtime", "tools");
 const testTool = join(copiedTools, "aidlc-plugin-test.ts");
@@ -212,6 +213,45 @@ describe("t316 standalone plugin compose test", () => {
     expect(json.graph.presentScopes).toContain("test-pro-validation");
     expect(json.composedFiles).toContain(".agents/skills/test-pro-integration/SKILL.md");
     expect(json.composedFiles).toContain(".agents/skills/test-pro-validation/SKILL.md");
+    expect(treeDigest(installRoot)).toBe(before);
+  }, COMPOSE_CASE_TIMEOUT_MS);
+
+  // Kiro IDE dispatches the installed persona Markdown, and core's personas
+  // carry an ask rule; a stage naming a core reviewer must compose there, and
+  // so must the stage that requires it (#2303).
+  test("a stage naming a core reviewer composes cleanly in a disposable Kiro IDE candidate", () => {
+    const { pluginRoot, installRoot } = copyFixture("kiro-ide-core-reviewer", KIRO_IDE_INSTALL);
+    const stagePath = join(pluginRoot, "stages", "construction", "test-pro-integration.md");
+    const stage = readFileSync(stagePath, "utf-8");
+    const reviewed = stage.replace(
+      /^mode: inline$/m,
+      "mode: inline\nreviewer: aidlc-architecture-reviewer-agent\nreview_artifact: test-pro-integration-test-plan",
+    );
+    expect(reviewed).not.toBe(stage);
+    writeFileSync(stagePath, reviewed);
+    const before = treeDigest(installRoot);
+    const result = run([
+      pluginRoot,
+      "--install",
+      installRoot,
+      "--harness",
+      "kiro-ide",
+      "--json",
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    const json = JSON.parse(result.stdout) as {
+      valid: boolean;
+      harness: string;
+      drops: unknown[];
+      graph: { presentStages: string[] };
+      idempotent: boolean;
+    };
+    expect(json.valid).toBe(true);
+    expect(json.harness).toBe("kiro-ide");
+    expect(json.drops).toEqual([]);
+    expect(json.idempotent).toBe(true);
+    expect(json.graph.presentStages).toContain("test-pro-integration");
+    expect(json.graph.presentStages).toContain("test-pro-full-suite");
     expect(treeDigest(installRoot)).toBe(before);
   }, COMPOSE_CASE_TIMEOUT_MS);
 

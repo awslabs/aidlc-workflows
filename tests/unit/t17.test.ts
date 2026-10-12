@@ -273,18 +273,18 @@ describe("t17 get/set/checkbox/count", () => {
   test("4: get errors on missing field", () => {
     proj = createTestProject();
     seedStateFile(proj, INIT_DONE);
-    // .sh: `... || true` then assert_contains "error"
-    expect(runState(proj, ["get", "Nonexistent Field"]).combined).toContain("error");
+    // A field the work does not set exits 1 with one plain line (#2264).
+    expect(runState(proj, ["get", "Nonexistent Field"])).toMatchObject({ rc: 1, stderr: '"Nonexistent Field" is not set in this work.\n' });
   });
 
-  test("4b: get without --optional still refuses an absent field and records ERROR_LOGGED", () => {
+  test("4b: get without --optional still exits 1 on an absent field, with no ERROR_LOGGED row", () => {
     proj = createTestProject();
     seedStateFile(proj, INIT_DONE);
     const before = countEvent(readAudit(proj), "ERROR_LOGGED");
     const res = runState(proj, ["get", "Plan"]);
     expect(res.rc).toBe(1);
-    expect(res.stderr).toContain("Field not found: Plan");
-    expect(countEvent(readAudit(proj), "ERROR_LOGGED")).toBe(before + 1);
+    expect(res.stderr).toBe('"Plan" is not set in this work.\n');
+    expect(countEvent(readAudit(proj), "ERROR_LOGGED")).toBe(before);
   });
 
   test("4c: get --optional prints nothing for an absent field, exits 0, and records no ERROR_LOGGED", () => {

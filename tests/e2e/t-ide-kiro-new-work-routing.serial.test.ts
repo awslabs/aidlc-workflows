@@ -185,11 +185,13 @@ function extractRoutingDirective(
   text: string,
   fromIndex = 0,
 ): ExtractedDirective | null {
-  const start = text.indexOf(
-    '{"kind":"ask","ask_type":"new-work-routing"',
-    fromIndex,
-  );
-  if (start < 0) return null;
+  // The step's line opens with the question for the person; its kind and
+  // ask_type follow, so the anchor is the ask_type and the start is the last
+  // question key before it.
+  const anchor = text.indexOf('"ask_type":"new-work-routing"', fromIndex);
+  if (anchor < 0) return null;
+  const start = text.lastIndexOf('{"question":"', anchor);
+  if (start < fromIndex) return null;
   let depth = 0;
   let inString = false;
   let escaped = false;

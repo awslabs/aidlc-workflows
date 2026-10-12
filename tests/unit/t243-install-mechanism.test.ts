@@ -977,7 +977,7 @@ describe("t243 project initialization", () => {
     expect(layout()).toBe("kas");
     expect(JSON.parse(readFileSync(join(project, ".kiro", "settings", "cli.json"), "utf-8"))["chat.agentEngine"])
       .toBe("v3");
-    expect(existsSync(join(project, ".kiro", "agents", "aidlc.md"))).toBe(true);
+    expect(existsSync(join(project, ".kiro", "agents", "aidlc-aidlc.md"))).toBe(true);
     expect(existsSync(join(project, ".kiro", "hooks", "aidlc-record-human-turn.json"))).toBe(true);
     expect(existsSync(join(project, ".kiro", "agents", "aidlc.json"))).toBe(false);
     expect(existsSync(join(project, ".kiro", "agents", "aidlc-developer-agent.json"))).toBe(false);
@@ -997,7 +997,7 @@ describe("t243 project initialization", () => {
     expect(stamp()).toBe("kiro");
     expect(layout()).toBe("agent-v1");
     expect(existsSync(join(project, ".kiro", "agents", "aidlc.json"))).toBe(true);
-    expect(existsSync(join(project, ".kiro", "agents", "aidlc.md"))).toBe(false);
+    expect(existsSync(join(project, ".kiro", "agents", "aidlc-aidlc.md"))).toBe(false);
     expect(existsSync(join(project, ".kiro", "hooks", "aidlc-record-human-turn.json"))).toBe(false);
     expect(readFileSync(memoryNote, "utf-8")).toContain("- Project-owned note.");
     expect(readFileSync(ownSteering, "utf-8")).toBe("# Team notes\n");
@@ -8446,7 +8446,7 @@ describe("t243 projection channel", () => {
     // The unified Kiro row carries its native grant in the Markdown
     // conductor's permissions, not in .vscode settings Kiro IDE 1.x ignores.
     expect(existsSync(join(KIRO_IDE_RELEASE, ".vscode"))).toBe(false);
-    const ideConductor = readFileSync(join(KIRO_IDE_RELEASE, ".kiro", "agents", "aidlc.md"), "utf-8");
+    const ideConductor = readFileSync(join(KIRO_IDE_RELEASE, ".kiro", "agents", "aidlc-aidlc.md"), "utf-8");
     expect(ideConductor).toContain(`        - "${trustedCommand("*")}"`);
     // A settings change and the per-harness hook entry still show an approval
     // card: ask outranks the broad allow, so the model cannot switch a

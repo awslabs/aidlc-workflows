@@ -6,25 +6,26 @@
 
 ## Way of Working
 
-We use **trunk-based development**. All work merges to `main` via
-short-lived feature branches (typically resolved within 1-2 days).
-Long-lived branches accumulate merge debt; we avoid them.
+AI-DLC's own defaults for the branches and merges it makes. They are not a
+description of how this project works: your team's practices go in `team.md`
+and this project's in `project.md`, which are read first and replace anything
+written here.
 
-For Construction worktrees, the worktree base branch is `main` and the
-merge target is `main`.
+A commit you ask for goes where you already are, on the branch you are on.
+AI-DLC makes a branch for it only when you ask for one, or when `team.md` or
+`project.md` says the project works that way.
 
-If our project requires multiple environments (staging, production), we
-still keep one trunk and gate releases via tags or environment-specific
-deployment configs — not via long-lived release branches.
+For the Construction worktrees AI-DLC creates, the default is
+**trunk-based development**. The worktree base branch is `main` and the
+merge target is `main`. Each Bolt branch is **squash-merged** into `main` as
+one commit named by the Bolt slug, with the Bolt's own commits left on the
+source branch until the worktree is discarded. Squash keeps a linear `main`
+history that maps 1:1 to delivery-planning's Bolt sequence, and the audit log
+holds the full event sequence either way.
 
-We **squash-merge** Bolt branches into `main`. Each Bolt becomes one
-commit on the trunk, named by the Bolt slug, with the full Bolt commit
-history preserved on the source branch until the worktree is discarded.
-
-Squash gives us a clean linear `main` history that maps 1:1 to
-delivery-planning's Bolt sequence. We accept the trade-off of losing
-intermediate commits on `main` because the audit log preserves the full
-event sequence anyway.
+Where a project runs several environments (staging, production), the default
+keeps one trunk and gates releases with tags or environment-specific deployment
+configs rather than long-lived release branches.
 
 ## Walking Skeleton
 

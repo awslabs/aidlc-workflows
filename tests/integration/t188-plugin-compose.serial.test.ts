@@ -3986,6 +3986,29 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         accepted: true,
       },
       {
+        // The three effects core's own personas carry: an ask rule keeps the
+        // engine commands that change a setting asking the person.
+        label: "allow-ask-deny",
+        grant: [
+          'tools: ["read", "write", "shell"]',
+          "permissions:",
+          "  rules:",
+          "    - capability: shell",
+          "      effect: allow",
+          "      match:",
+          '        - "bun .kiro/tools/aidlc-*"',
+          "    - capability: shell",
+          "      effect: ask",
+          "      match:",
+          '        - "bun .kiro/tools/aidlc.ts engine config set *"',
+          "    - capability: fs_write",
+          "      effect: deny",
+          "      match:",
+          '        - ".kiro/**"',
+        ],
+        accepted: true,
+      },
+      {
         label: "empty-tools",
         grant: [
           "tools: []",
@@ -4016,6 +4039,19 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           "  rules:",
           "    - capability: shell",
           "      effect: allow",
+        ],
+        accepted: false,
+      },
+      {
+        label: "unknown-effect",
+        grant: [
+          'tools: ["read"]',
+          "permissions:",
+          "  rules:",
+          "    - capability: shell",
+          "      effect: prompt",
+          "      match:",
+          '        - "bun .kiro/tools/aidlc-*"',
         ],
         accepted: false,
       },
@@ -4081,6 +4117,71 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         expect(composed.drops, variant.label).toContain("permissions.rules");
         expect(composed.drops, variant.label).toContain("mode to inline");
         expect(composed.drops, variant.label).not.toContain("trustedAgents");
+      }
+    }
+  });
+
+  // A core reviewer is the dispatch target every harness ships. Core's own
+  // Kiro IDE personas carry an ask rule (the engine commands that change a
+  // setting keep asking the person), so the dispatch check must read their
+  // files as dispatchable or every plugin stage naming one is dropped (#2303).
+  test("a stage naming a shipped core reviewer composes on Claude, Kiro CLI, Codex, OpenCode and Kiro IDE", () => {
+    const reviewers = {
+      arch: "aidlc-architecture-reviewer-agent",
+      lead: "aidlc-product-lead-agent",
+    } as const;
+    const surfaces = {
+      claude: ".claude",
+      kiro: ".kiro",
+      codex: ".codex",
+      opencode: ".aidlc",
+      "kiro-ide": "kiro-ide",
+      "kas-as-kiro": "kas-as-kiro",
+    } as const;
+    for (const [label, surface] of Object.entries(surfaces)) {
+      const plugin = `syn-core-rev-${label}`;
+      const files: Record<string, string> = {};
+      for (const [short, reviewer] of Object.entries(reviewers)) {
+        const slug = `${plugin}-${short}`;
+        files[`stages/inception/${slug}.md`] = [
+          "---",
+          `slug: ${slug}`,
+          `plugin: ${plugin}`,
+          "phase: inception",
+          "execution: ALWAYS",
+          "condition: always",
+          "lead_agent: aidlc-product-agent",
+          "support_agents: []",
+          `reviewer: ${reviewer}`,
+          `review_artifact: ${slug}-output`,
+          "mode: inline",
+          "produces:",
+          `  - ${slug}-output`,
+          "consumes: []",
+          "requires_stage: []",
+          "inputs: x",
+          "outputs: y",
+          "---",
+          "",
+          `# ${slug}`,
+          "",
+          "## Steps",
+          "body",
+          "",
+        ].join("\n");
+      }
+      const { drops, proj } = composeSynthetic(plugin, files, surface);
+      const leaf = surface === "kiro-ide" || surface === "kas-as-kiro" ? ".kiro" : surface;
+      for (const [short, reviewer] of Object.entries(reviewers)) {
+        expect(existsSync(join(
+          proj,
+          leaf,
+          "aidlc-common",
+          "stages",
+          "inception",
+          `${plugin}-${short}.md`,
+        )), `${label} ${reviewer}`).toBe(true);
+        expect(drops, `${label} ${reviewer}`).not.toContain(`agent "${reviewer}"`);
       }
     }
   });

@@ -50,6 +50,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
@@ -1359,6 +1360,48 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(rows.length).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("9b: the replay cache lives in the project's own aidlc/.aidlc-sessions/, keeps at most 64 slots under 5 minutes old, and writes nothing in the OS temp folder", () => {
+    const dir = scratchProject(true);
+    const temp = realpathSync(mkdtempSync(join(tmpdir(), "t149-temp-")));
+    try {
+      const payload = withCwd(FIXTURES.subagentStop, dir);
+      const tempEnv = { TMPDIR: temp, TEMP: temp, TMP: temp };
+      const cache = join(sessionsDir(dir), "codex-dedupe");
+      // Left from earlier deliveries: one slot past the age bound, and a burst
+      // of 70 fresh ones a minute old (a live run made 1247 in 27 minutes).
+      const stale = join(cache, "stale-slot");
+      mkdirSync(stale, { recursive: true });
+      const past = new Date(Date.now() - 6 * 60 * 1000);
+      utimesSync(stale, past, past);
+      const minuteAgo = new Date(Date.now() - 60 * 1000);
+      for (let i = 0; i < 70; i++) {
+        const fresh = join(cache, `fresh-${String(i).padStart(2, "0")}`);
+        mkdirSync(fresh);
+        utimesSync(fresh, minuteAgo, minuteAgo);
+      }
+      const r1 = runAdapter(dir, "log-subagent", payload, tempEnv);
+      const r2 = runAdapter(dir, "log-subagent", payload, tempEnv);
+      expect(r1.code).toBe(0);
+      expect(r2.code).toBe(0);
+      // The duplicate still replays the first run under the bound.
+      expect(r2.stdout).toBe(r1.stdout);
+      expect((readAudit(dir).match(/SUBAGENT_COMPLETED/g) ?? []).length).toBe(1);
+      // Nothing of the person's outside the project.
+      expect(readdirSync(temp).filter((name) => name.startsWith("aidlc-codex-"))).toEqual([]);
+      // The stale slot is gone, the burst is cut to the newest, the slot that
+      // served this delivery is among them with its response.
+      const slots = readdirSync(cache);
+      expect(slots).not.toContain("stale-slot");
+      expect(slots.length).toBe(64);
+      const slot = slots.find((name) => !name.startsWith("fresh-"));
+      if (slot === undefined) throw new Error(`no slot for the delivery in ${slots.join(",")}`);
+      expect(existsSync(join(cache, slot, "response.json"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(temp, { recursive: true, force: true });
     }
   });
 

@@ -900,6 +900,14 @@ Pre-seeded construction phase output for tests that jump to mid-construction sta
 
 Contents: 1 minimal .md file (functional-design) describing the todo-core unit's component specs and state management.
 
+### Input Corpus: `tests/fixtures/aidlc-input/corpus.json`
+
+What people type after `/aidlc`, and in plain chat once work is under way: one item per typed line at one workspace state (`fresh`, `work-open`, `plan-question-open`, `gate-open`, `two-similar-records`), with `meaning` (what the person means, in plain words) and `expected.engine` (what the engine's first step must do: the directive kinds allowed, the command or words it must name, the message record's words and settings, whether a question may reach the person). Seeded from every `/aidlc` example the docs, skills, stage prose and help text ship (`source` and `documented` carry the origin), from the input-forms audit, and from variations: typos, word order, quoting per shell, CRLF and unicode, replies at gates and plan questions, workspace words, settings in plain words, retired flags, empty lines, ambiguous lines. Items whose expectation needs a change not merged yet carry `after` and are skipped until that change is in the source. The shared mechanics live in `tests/harness/aidlc-input-corpus.ts`; `tests/unit/t-aidlc-input-corpus.test.ts` runs every item through the Claude Code human-turn hook and `next`, and a fixed sample of two items per category through the Codex, Kiro CLI and Kiro IDE hooks as well (`AIDLC_INPUT_ONLY=<ids>` narrows a run, `AIDLC_INPUT_PARALLEL` sets the fixture pool). `tests/e2e/t-live-aidlc-input-corpus.serial.test.ts` drives a sample through real agents on demand (`AIDLC_INPUT_LIVE=1`): what happened on disk is judged by the script against each item's `expected.end` (the work, the setting set by the person, the record switched, the gate or plan answered, questions asked), what the agent told the person is judged by a model against the item's `meaning` and a short rubric (plain words, the product's own names, no engine internals, a question only where the item is `ambiguous`), and a report with a score per category and every miss with its transcript excerpt lands under `AIDLC_INPUT_REPORT_DIR`.
+
+### Answers Corpus: `tests/fixtures/aidlc-answers/corpus.json`
+
+What people reply to every question AI-DLC asks them: one item per reply at the state where that question is open (the stage gate, the gate with Accept as-is, a blocking-sensor question, the code plan question, the Unit and batch checkpoints, the verification command, a Construction policy change, the summary confirmation, a stage question the agent asked, the interaction-mode question, the routing question, the plan offer and scope confirmation, the record pick, the project-type question, a paused Unit, a guard-recovery ask, re-entry, a reopened stage, the learnings question, a jump target), with `meaning` (what the person means), `reader` (`tool` when the reply is an exact pick as the options were shown, `agent` otherwise), `expected.engine` (the choice a tool may record from the reply alone, the words that must be kept, the engine's step) and `expected.end` (what the person ends with after a real agent acted, for the live check). Replies are typed in plain chat, typed after `/aidlc` or `$aidlc`, or picked in the question box. Items whose expectation needs a change not merged yet carry `after` and are skipped until it lands. The shared mechanics live in `tests/harness/aidlc-answers-corpus.ts`; `tests/unit/t-aidlc-answers-corpus.test.ts` runs every item through each host's human-turn hook, then the engine's step and the agent's answer command (`AIDLC_ANSWERS_ONLY=<ids>` narrows a run, `AIDLC_ANSWERS_PARALLEL` sets the pool). `tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts` drives a sample through real agents on demand (`AIDLC_ANSWERS_LIVE=1`): the real agent shows the question first (a bare `/aidlc` at the fixture's state), then the person replies in chat, after `/aidlc`, or in the question box; the script judges what is on disk against `expected.end` (the choice recorded with the person's words beside it, the message record, a question asked twice), a model judges what the agent told the person against `meaning` and `says`, and a report with a score per question and every miss with its transcript excerpt lands under `AIDLC_ANSWERS_REPORT_DIR`. The two live checks share `tests/harness/live-corpus.ts` (gates, the seeded sample, scratch projects and homes, the home digests, the model judge, the report).
+
 ## State Fixtures
 
 | Fixture | Project Type | Scope | State | Used By |
@@ -960,6 +968,17 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 | `AIDLC_TUI_SETTING_SOURCES` | `project` | Setting sources injected into live `claude` TUI launches. Use `default` or an empty value only for focused calibration that intentionally includes user/local Claude settings. |
 | `AIDLC_TUI_TRACE_POLL_MS` | `10000` | Minimum interval between `answer_gate_poll` snapshots in TUI NDJSON traces while a long journey is waiting for the next menu or disk terminator. |
 | `AIDLC_ACP_DIAGNOSTIC_TRACE` | unset | Set to `1` with ACP debug tracing to write a private `<trace>.protocol.ndjson` sidecar containing tool input/chunk events, session/turn identity, cancellation requests and aggregate input shapes. Excludes agent-prose events, prompt/auth RPC bodies and process environment. Tool inputs remain private diagnostic data. Limits: 1 MiB per event and 64 MiB per file; `diagnostic_incomplete` or `json_parse_error` means the capture cannot establish complete protocol evidence. |
+| `AIDLC_INPUT_LIVE` | unset | Set to `1` to drive a sample of the `/aidlc` input corpus through real agents (`tests/e2e/t-live-aidlc-input-corpus.serial.test.ts`); each harness keeps its own gate (`AIDLC_CODEX_EXEC_LIVE`, `AIDLC_KIRO_ACP_LIVE`, the `claude` binary). |
+| `AIDLC_INPUT_HARNESSES` | `claude,codex,kiro` | Which agents the live input check drives. |
+| `AIDLC_INPUT_SAMPLE` | `3` | Items per corpus category for the live input check, or a comma list of item ids. |
+| `AIDLC_INPUT_SEED` | `1` | Seed of the live input check's sample, so a re-run drives the same items. |
+| `AIDLC_ANSWERS_LIVE` | unset | Set to `1` to drive a sample of the answers corpus through real agents (`tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts`); each harness keeps its own gate (`AIDLC_CODEX_EXEC_LIVE`, `AIDLC_KIRO_ACP_LIVE`, the `claude` binary). |
+| `AIDLC_ANSWERS_HARNESSES` | `claude,codex,kiro` | Which agents the live answers check drives. |
+| `AIDLC_ANSWERS_SAMPLE` | `2` | Items per question for the live answers check, or a comma list of item ids. |
+| `AIDLC_ANSWERS_SEED` | `1` | Seed of the live answers check's sample, so a re-run drives the same items. |
+| `AIDLC_INPUT_REPORT_DIR` | `tests/logs/aidlc-input-live` | Where the live input check writes its report (a score per category and every miss with its transcript excerpt). |
+| `AIDLC_INPUT_ONLY` | unset | Comma list of corpus item ids that narrows the unit input check (`tests/unit/t-aidlc-input-corpus.test.ts`). |
+| `AIDLC_INPUT_PARALLEL` | `6` | Fixture pool size of the unit input check. |
 | `AIDLC_KIRO_IDE_LIVE` | unset | Set to `1` to run the signed-in Kiro IDE desktop journey on macOS or Windows. |
 | `AIDLC_KIRO_IDE_BIN` | platform default | Override the Kiro IDE executable. Defaults to `/Applications/Kiro.app/Contents/MacOS/Electron` on macOS and `%LOCALAPPDATA%\Programs\Kiro\Kiro.exe` on Windows. |
 | `AIDLC_KIRO_IDE_SEED` | generated seed | Optional Kiro user-data directory. The test copies it to a disposable temp directory before launch and never mutates the source profile. |
@@ -1966,7 +1985,10 @@ UTF-8 pre-dispatch packet, including its explanatory text, before injecting a
 non-steering directive. Oversized packets and every `load-steering` directive
 use the existing exact-argument forwarding latch so the engine's full JSON is
 returned through the actual tool call. `--single` skips hook pre-dispatch
-entirely, leaving its first issuance to that tool call.
+entirely, leaving its first issuance to that tool call. Only a line the engine
+reads exactly is pre-dispatched at all (`readNextLine`): anything it would hand
+to the agent goes to the agent untouched, so this seam never acts on the
+person's words before anyone has read them.
 
 `t147-kiro-hook-adapter.test.ts` checks the 10 KiB boundary with multibyte
 content, native shell aliases, retained terminal guards, and a real multipart

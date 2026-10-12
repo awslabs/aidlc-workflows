@@ -35,6 +35,8 @@ import { spawnSync } from "node:child_process";
 import {
   createIntent,
   turnEndIsOpen,
+  composeMarkerPath,
+  COMPOSE_MARKER_TTL_MS,
   turnEndMarkerPath,
   engineTouchMarkerPath,
   humanTurnMarkerPath,
@@ -348,7 +350,6 @@ describe("t259 the engine's last word ended the turn", () => {
       for (const [args, said] of [
         [["--status"], "print its output verbatim, then stop"],
         [["--scope", "mvp"], "to change scope, then print its output verbatim and stop"],
-        [["--depth", "minimal"], "to update the configuration, then print its output verbatim and stop"],
       ] as const) {
         markHumanTurn(proj);
         await Bun.sleep(20);
@@ -369,6 +370,94 @@ describe("t259 the engine's last word ended the turn", () => {
       if (!copilot) expect(stop().stdout).toContain('"decision":"block"');
     });
   }
+
+  // A live run: "turn the specialist reviewers off for the rest of this work"
+  // typed while Code Generation was running printed the setting's line and the
+  // turn ended; nothing happened until the person typed "ok, carry on". A
+  // setting over running work, with nothing waiting on the person, hands the
+  // agent back to `next`; at the stage's open gate it still ends the turn.
+  test("a setting typed while the stage runs hands the agent back to next; at a gate it ends the turn", async () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+    delete env[STOP_HOOK_PROBE_ENV];
+    const run = (args: string[], input?: string) =>
+      spawnSync(process.execPath, [".claude/tools/aidlc.ts", ...args], { cwd: proj, input, encoding: "utf-8", env });
+    const stop = () =>
+      run(["engine", "hook", "continue-workflow"], JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-stop" }));
+    markHumanTurn(proj);
+    await Bun.sleep(20);
+    const midStage = JSON.parse(run(["engine", "orchestrate", "next", "--depth", "minimal"]).stdout);
+    expect(midStage.kind).toBe("print");
+    expect(midStage.message).toContain("to update the configuration, then print its output verbatim and re-run next to carry on");
+    expect(midStage.message).not.toContain("and stop");
+    // Nothing paused, so no "picks up" line is said with the setting.
+    expect(midStage.narration).toBeUndefined();
+    expect(existsSync(turnEndMarkerPath(proj))).toBe(false);
+    expect(stop().stdout).toContain('"decision":"block"');
+    // The way back the setter's line names is a typed /aidlc flag: the engine
+    // routes it to the same setter, and the setting goes back.
+    const off = run(["engine", "config", "set", "review", "none"]).stdout;
+    expect(off).toContain("Specialist reviews are off for the rest of this work. To turn them back on, say so or type /aidlc --review ");
+    const named = /type \/aidlc --review (\w+)\./.exec(off)?.[1];
+    expect(named, off).toBeDefined();
+    markHumanTurn(proj);
+    await Bun.sleep(20);
+    const back = JSON.parse(run(["engine", "orchestrate", "next", "--review", named as string]).stdout);
+    expect(back.kind).toBe("print");
+    expect(back.message).toContain(`config set review ${named}`);
+    const restored = run(["engine", "config", "set", "review", named as string]).stdout;
+    expect(restored).toContain(`Specialist reviews are ${named} for the rest of this work (they were off).`);
+    expect(readFileSync(stateFilePath(proj), "utf-8")).not.toMatch(/^- \*\*Review Override\*\*:[ \t]*none[ \t]*$/m);
+    // At the stage's open gate the person must answer next, so the same
+    // setting ends the turn as before.
+    const statePath = stateFilePath(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace("- [-] feasibility", "- [?] feasibility"));
+    markHumanTurn(proj);
+    await Bun.sleep(20);
+    const atGate = JSON.parse(run(["engine", "orchestrate", "next", "--depth", "minimal"]).stdout);
+    expect(atGate.kind).toBe("print");
+    expect(atGate.message).toContain("to update the configuration, then print its output verbatim and stop");
+    // The person acts next, so the agent is told where the work picks up.
+    expect(atGate.narration).toMatch(/^The work picks up at /);
+    expect(existsSync(turnEndMarkerPath(proj))).toBe(true);
+    const gateEnd = stop();
+    expect(gateEnd.status, gateEnd.stderr).toBe(0);
+    expect(gateEnd.stdout).not.toContain('"decision":"block"');
+  });
+
+  // A plan proposal waiting for the person's approve, edit or reject is a stop
+  // the engine itself put up: the Stop hook honours its marker while it is
+  // fresh. A setting typed under it must not hand the agent back to the work
+  // and walk past their pick; a stale orphan is no gate, as the hook reads it.
+  test("a setting typed while a plan proposal waits ends the turn, and a stale marker does not", async () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+    delete env[STOP_HOOK_PROBE_ENV];
+    const setting = () => {
+      markHumanTurn(proj);
+      return JSON.parse(spawnSync(process.execPath, [
+        ".claude/tools/aidlc.ts", "engine", "orchestrate", "next", "--depth", "minimal",
+      ], { cwd: proj, encoding: "utf-8", env }).stdout);
+    };
+    const marker = composeMarkerPath(proj);
+    writeFileSync(marker, "{}\n", "utf-8");
+    await Bun.sleep(20);
+    const waiting = setting();
+    expect(waiting.kind).toBe("print");
+    expect(waiting.message).toContain("print its output verbatim and stop");
+    expect(waiting.message).not.toContain("re-run next");
+    expect(existsSync(turnEndMarkerPath(proj))).toBe(true);
+    // Older than the freshness window the hook honours: no gate, so the work
+    // carries on as it does with no proposal at all.
+    const stale = (Date.now() - COMPOSE_MARKER_TTL_MS - 60_000) / 1000;
+    utimesSync(marker, stale, stale);
+    await Bun.sleep(20);
+    const orphaned = setting();
+    expect(orphaned.message).toContain("re-run next to carry on");
+    expect(existsSync(turnEndMarkerPath(proj))).toBe(false);
+  });
 });
 
 // Live runs on the transcript-free hosts (Kiro CLI, Kiro IDE, opencode): after

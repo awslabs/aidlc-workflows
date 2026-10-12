@@ -48,13 +48,20 @@ export function formatReceivedReply(text: string | undefined | null): string {
 
 // --- Exact picks ---------------------------------------------------------------
 //
-// A reply that is nothing but one offered option, by its number ("2"), its
-// letter ("b"), or its label in any case ("approve plan"), is an exact pick:
-// syntax, not meaning, so a tool may record it straight away. Surrounding quotes,
+// A reply that is nothing but one offered option, by its number ("2") or its
+// label in any case ("approve plan"), is an exact pick: syntax, not meaning, so
+// a tool may record it straight away. Its letter ("b") is a pick only where the
+// options were shown with letters (`lettered`), which is a questions file's own
+// answer line; chat shows a picker or numbers, so a lone letter typed there is
+// the person's words, and the conductor reads them. Surrounding quotes,
 // markdown emphasis, one "(Recommended)", an option prefix before the label
 // ("1. Approve"), and trailing punctuation are allowed; nothing else is. Any
 // other reply is the conductor's to read. Returns the option's index, or null.
-export function exactOptionPick(text: string | undefined | null, labels: readonly string[]): number | null {
+export function exactOptionPick(
+  text: string | undefined | null,
+  labels: readonly string[],
+  lettered = false,
+): number | null {
   const clean = (value: string): string => stripRecommendedDecorator(
     value.trim().replace(/^[`*_"'\s]+|[`*_"'\s]+$/g, ""),
   ).replace(/[\s.!]+$/g, "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -63,7 +70,7 @@ export function exactOptionPick(text: string | undefined | null, labels: readonl
   const index = (position: number): number | null => position >= 0 && position < labels.length ? position : null;
   const number = /^(?:option\s+)?[([#]?\s*(\d{1,2})\s*[)\]]?$/.exec(reply);
   if (number) return index(Number(number[1]) - 1);
-  const letter = /^(?:option\s+)?[([]?([a-z])[)\]]?$/.exec(reply);
+  const letter = lettered ? /^(?:option\s+)?[([]?([a-z])[)\]]?$/.exec(reply) : null;
   if (letter) return index(letter[1].charCodeAt(0) - 97);
   const unprefixed = reply.replace(/^(?:(?:\d{1,2}|[a-z])[.):]\s+)/, "");
   const named = labels.findIndex((label) => clean(label) === unprefixed);

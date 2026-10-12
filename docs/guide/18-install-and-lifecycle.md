@@ -347,7 +347,11 @@ regions, and the non-interactive hook runtime. With one detected harness, the
 wizard names it and offers three choices: recommended defaults, six-step
 customization, or exit with nothing written. Multiple detected harnesses get a
 numbered harness picker first; no detected harness gets the complete picker
-without a default.
+without a default. A Kiro CLI at 2.24.1 or later counts for both Kiro rows; the
+wizard then prefers Kiro IDE (`kiro-ide`), whose `.kiro/settings/cli.json` pins
+Kiro's v3 engine, to Kiro CLI (`kiro`). Other detected harnesses keep their
+order, a harness editor's own terminal still comes first, and the picker's list
+and numbers stay the same.
 
 Before any setup choices, the wizard probes the project filesystem using
 temporary files and directories, then removes them. It checks transaction
@@ -363,12 +367,13 @@ removed is named instead); see
 Recommended defaults preserve the harness's current model provider.
 Customization walks Harness, Model provider, Model effort preset, Plugins, MCP
 servers, and the model-preset settings layer. The provider step offers keeping
-the current provider first and Amazon Bedrock second. On Kiro CLI, step 2 is
-Session model instead: it lists your Kiro account's models and saves the chosen
-model, with the preset's session effort, in your personal Kiro settings, last,
-after every AI-DLC step. Under Kiro auto, recommended defaults ask that one
-model question; see
+the current provider first and Amazon Bedrock second. On the `kiro` row, step
+2 is Session model instead: it lists your Kiro account's models and saves the
+chosen model, with the preset's session effort, in your personal Kiro settings,
+last, after every AI-DLC step. Under Kiro auto, recommended defaults ask that
+one model question; see
 [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
+For the `kiro-ide` row, see [First run](harnesses/kiro-ide.md#first-run).
 Every numbered prompt has
 a bracketed default, invalid input re-asks in place, and each answer is echoed.
 A check-your-answers table accepts Enter to apply or a step number to edit. No
@@ -432,6 +437,13 @@ interactive wizard.
 | `--json` | Emit one result object with counts, actions, `data.notes`, and `data.planToken` |
 | `--quiet` | Emit one summary or remediation line |
 | `--no-color` | Disable color output |
+
+`--project-dir`, `--json`, `--quiet`, `--no-color`, `--yes`, `--offline` and
+`--verbose` are AI-DLC's own options: put them with the command you are running,
+as `aidlc config --project-dir /work/shop` or `aidlc doctor --json`. A word of
+your own that happens to look like one of them is still your word, so
+`/aidlc add a --project-dir flag to the CLI` asks for that work with every word
+you typed kept.
 
 ### Model Policy
 
@@ -545,7 +557,7 @@ run fails with usage guidance.
 
 Harnesses receive only settings they can read. Codex clamps `max` effort down
 to `xhigh`. opencode clamps `xhigh` down to `high`. On Kiro CLI a preset sets
-one effort for the whole session, saved with the session model in your personal
+one effort for the whole interactive session, saved with the session model in your personal
 Kiro settings
 ([Session model and effort](harnesses/kiro-cli.md#session-model-and-effort));
 explicit group dials have no Kiro surface, and a per-agent model exception
@@ -582,7 +594,9 @@ Claude Opus 4.8. Where you set the model and effort depends on the harness:
 - **Kiro CLI:** the session model and its one effort. `aidlc config models`
   saves them in your personal Kiro settings (a preset sets the effort:
   `minimal` low, `balanced` medium, `thorough` extra-high); `/model` and
-  `/effort` change them inside Kiro. See
+  `/effort` change them inside Kiro. Recommended setup keeps an effort you
+  already saved for your model. On Kiro IDE's row setup saves Kiro CLI's
+  session model only. See
   [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
 
 If your organization offers only a mid-tier model, such as a Claude Sonnet
@@ -726,8 +740,9 @@ the two paths that actually exist for it:
 
 Kiro CLI and Kiro IDE provide their own model access, so AI-DLC configures no
 model provider for them. `aidlc config providers` states that model access
-comes with Kiro and asks nothing; so does the first-run wizard on Kiro IDE, while
-on Kiro CLI its step 2 chooses the session model instead. Provider flags are
+comes with Kiro and asks nothing; so does the first-run wizard on Kiro IDE when
+`kiro-cli` cannot be read, while on Kiro CLI, and on Kiro IDE with a readable
+`kiro-cli`, its step 2 chooses Kiro CLI's session model instead. Provider flags are
 refused, and the Providers row reads `[ok]` regardless of a legacy record.
 `aidlc config providers --reset --yes` clears a record left by an earlier build.
 `builtin` records from the previous build still load and read as harness-managed,
@@ -784,9 +799,11 @@ again. See [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feat
 
 On Windows, Kiro IDE runs its agent's commands in your default terminal profile
 (`terminal.integrated.defaultProfile.windows` in Kiro's user settings). While
-it is Command Prompt and you have not answered on this computer, setup asks
-once whether to set it to PowerShell, `aidlc config --yes` sets it, and
-`--kiro-terminal powershell` sets it on its own; each changes that one key and
+it is Command Prompt (where Kiro shows a command's reply only when it finishes
+within a second, so most AI-DLC replies come back empty) and you have not
+answered on this computer, setup asks once whether to set it to PowerShell,
+`aidlc config --yes` sets it, and `--kiro-terminal powershell` sets it on its
+own (and says so when it already is PowerShell); each changes that one key and
 keeps every other byte of the file, and your answer is kept in
 `kiro-ide-terminal` in the AI-DLC install folder. See
 [Command Prompt as Kiro's terminal](harnesses/kiro-ide.md#command-prompt-as-kiros-terminal-on-windows).
@@ -799,7 +816,7 @@ complete seed. Until then zero Codex hooks fire.
 a second seed set produces invalid TOML.
 
 For the `kiro-ide` distribution, trust ships in the conductor's `permissions`
-(`.kiro/agents/aidlc.md`), so the check adds nothing there; Kiro IDE 1.x no
+(`.kiro/agents/aidlc-aidlc.md`), so the check adds nothing there; Kiro IDE 1.x no
 longer reads `.vscode/settings.json` `kiroAgent.trustedCommands`. `--show` lists
 the selected harness's trust and allowlist files.
 
@@ -1131,7 +1148,7 @@ the entries AI-DLC wrote.
 | `.gitignore` | All | Own one marked AI-DLC block containing the union of installed harnesses' shipped entries; preserve every byte outside it |
 | `.mcp.json` / `mcpServers` | Claude | Add or remove only consented, baseline-owned entries; preserve user keys and overrides |
 | `AGENTS.md` | Kiro CLI, Kiro IDE, Codex, Cursor, OpenCode, Copilot | One marked block; harness-neutral and shared (`shared: "identical"`) except Copilot, whose block carries its `@`-imports; preserve project instructions |
-| `opencode.json` | OpenCode | `json-entries`: add AI-DLC's entries (`$schema`, its `skills.paths` and `instructions` strings, its `permission` rules) only where absent, and a permission map's `"*"` rule only when the map has none, first, so the team's rules after it still decide; keep the team's model, provider, own instructions and rules, comments, and layout; record what AI-DLC wrote, follow or retire only entries still holding that value. A file AI-DLC wrote whole in an earlier release is adopted. The copy runtime leaves this file out; its setup (or the first session where setup never ran) adds AI-DLC's part |
+| `opencode.json` | OpenCode | `json-entries`: add AI-DLC's entries (`$schema`, its `skills.paths` and `instructions` strings, its `permission` rules) only where absent, its rules for the team's own commands (the asks before `rm -r...` and `git push`) first in a map so the team's rules after them still decide; keep the team's model, provider, own instructions and rules, comments, and layout; record what AI-DLC wrote, follow or retire only entries still holding that value. A file AI-DLC wrote whole in an earlier release is adopted. The copy runtime leaves this file out; its setup (or the first session where setup never ran) adds AI-DLC's part |
 | `.vscode/settings.json` | Copilot | `jsonc-settings`: add `chat.agent.maxRequests` (200) only when the project does not set it; never change a value someone else set, other keys, or comments; record only what AI-DLC added, and on retirement remove it only while it holds the value AI-DLC wrote; once added, a key the team takes out of a file it keeps is not added back. The copy runtime leaves this file out |
 
 **More than one harness in a project.** Harnesses may coexist when their engine
