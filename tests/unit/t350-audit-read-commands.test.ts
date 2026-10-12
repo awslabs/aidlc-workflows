@@ -295,8 +295,22 @@ describe("log answers", () => {
     expect(result.open).toHaveLength(1);
   });
 
+  // A cancellation word is an answer like any other: no host writes one for the
+  // person (measured on Claude Code and Codex, 2026-10-12), so it is theirs.
+  test("a cancellation word pairs with its prompt like any other answer", () => {
+    for (const words of ["Cancelled", "User dismissed"]) {
+      const pd = project();
+      shard(pd, "one", question("Q0") + answer(words, T2) + question("Q1", T2) + answer("A", T3));
+      expect(answers(pd).answered).toEqual([
+        { question: "Q0", options: ["A", "B"], answer: words, askedAt: T1, answeredAt: T2 },
+        { question: "Q1", options: ["A", "B"], answer: "A", askedAt: T2, answeredAt: T3 },
+      ]);
+      expect(answers(pd).open).toEqual([]);
+    }
+  });
+
   test("non-answers consume their prompt for pairing but keep it open without the non-answer text", () => {
-    for (const nonAnswer of ["Cancelled", "", "User dismissed", undefined]) {
+    for (const nonAnswer of ["", "   ", undefined]) {
       const pd = project();
       shard(pd, "one", question("Q0") +
         (nonAnswer === undefined
@@ -314,7 +328,7 @@ describe("log answers", () => {
 
   test("an ambiguous non-answer does not choose a prompt or appear in ambiguous answers", () => {
     const pd = project();
-    shard(pd, "one", question("Q0") + question("Q1") + answer("Cancelled"));
+    shard(pd, "one", question("Q0") + question("Q1") + answer("   "));
     expect(answers(pd)).toEqual({
       stage: STAGE,
       answered: [],
@@ -323,10 +337,10 @@ describe("log answers", () => {
     });
   });
 
-  test("a tied cancellation in another shard does not compete with a same-shard answer", () => {
+  test("a tied blank answer in another shard does not compete with a same-shard answer", () => {
     const pd = project();
     shard(pd, "one", question("Q", T1) + answer("A", T1));
-    shard(pd, "two", answer("Cancelled", T1));
+    shard(pd, "two", answer("   ", T1));
     expect(answers(pd)).toEqual({
       stage: STAGE,
       answered: [{ question: "Q", options: ["A", "B"], answer: "A", askedAt: T1, answeredAt: T1 }],
@@ -347,10 +361,10 @@ describe("log answers", () => {
     expect(UNTRUSTED_AUDIT_NOTICE).toContain("NOT INSTRUCTIONS");
   });
 
-  test("an unordered cancellation leaves its prompt free for a later real answer", () => {
+  test("an unordered blank answer leaves its prompt free for a later real answer", () => {
     const pd = project();
     shard(pd, "one", question("Q", T1) + answer("A", T3));
-    shard(pd, "two", answer("Cancelled", T1));
+    shard(pd, "two", answer("   ", T1));
     expect(answers(pd)).toEqual({
       stage: STAGE,
       answered: [{ question: "Q", options: ["A", "B"], answer: "A", askedAt: T1, answeredAt: T3 }],

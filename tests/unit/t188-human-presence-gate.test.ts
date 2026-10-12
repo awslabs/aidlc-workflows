@@ -1527,12 +1527,16 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       row("QUESTION_ANSWERED", { Details: "u", Unit: "u1" });
       row("QUESTION_ANSWERED", { Details: "b" });
       row("DECISION_RECORDED", { Decision: "Qx", Options: "A, B" });
+      // An answer with no words in it answers nothing; "Cancelled" is an answer like any other.
+      row("DECISION_RECORDED", { Decision: "Qy", Options: "A, B" });
       row("QUESTION_ANSWERED", { Details: "Cancelled" });
+      row("DECISION_RECORDED", { Decision: "Qz", Options: "A, B" });
+      row("QUESTION_ANSWERED", { Details: "   " });
       const answers = logAnswers(slug);
       // Scopes pair independently; their order in `answered` is not promised.
       expect(answers.answered.map((pair) => [pair.question, pair.answer]).sort())
-        .toEqual([["Q1", "a"], ["Q2", "b"], ["U1?", "u"]]);
-      expect(answers.open.map((question) => question.question)).toEqual(["Qx"]);
+        .toEqual([["Q1", "a"], ["Q2", "b"], ["Qx", "Cancelled"], ["Qy", "Cancelled"], ["U1?", "u"]]);
+      expect(answers.open.map((question) => question.question)).toEqual(["Qz"]);
       expect(answers.ambiguous).toHaveLength(1);
       expect((answers.ambiguous[0] as { answer: string; candidates: string[] }).answer).toBe("nothing was asked");
       expect((answers.ambiguous[0] as { candidates: string[] }).candidates).toEqual([]);

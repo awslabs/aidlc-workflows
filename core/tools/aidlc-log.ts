@@ -2044,13 +2044,12 @@ function handleAnswer(args: string[]): void {
     }
   }
 
-  // A cancelled/dismissed/auto-resolved question widget is not an answer.
-  // Some harnesses return a completed-looking object for a dismissed question.
+  // A reply with no words in it is nobody's answer.
   if (isNonAnswer(flags.details)) {
     error(
-      `Cannot record reply ${formatReceivedReply(flags.details)} because it represents a ` +
-        `dismissed question, not a human answer. Re-present the question and wait for a real ` +
-        `response before trying again.`,
+      `Cannot record reply ${formatReceivedReply(flags.details)} because it has no words in it. ` +
+        "Pass the choice the person made, as you read it from their reply; with no reply of theirs yet, " +
+        "show the question again and wait for one.",
     );
   }
 
@@ -2139,7 +2138,7 @@ function handleAnswer(args: string[]): void {
       flags.single === "true" ? `single-stage:${flags.stage}` : undefined;
 
     // Authorship floor (issue 742): the same interview answer the conductor
-    // wrote for itself. isNonAnswer above rejects a DISMISSED widget; this
+    // wrote for itself. isNonAnswer above rejects an answer with no words; this
     // rejects a self-attributed one ("A. Nothing to add - CONDUCTOR DEFAULT,
     // session unattended"), which the presence check below cannot catch because
     // a human is in the session, just not at this question. Autonomous

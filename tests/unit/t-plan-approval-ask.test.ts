@@ -841,6 +841,22 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
+  // No host hands the hook dismissal text (measured on Claude Code and Codex,
+  // 2026-10-12): a reply that is only "cancel" is the person's word. Kept, the
+  // agent reads it and records the choice it read; dropped, the engine said they
+  // had not replied and the agent asked the same question again.
+  test("a reply that is only 'cancel' is kept, and the agent's reading of it is recorded with their word", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "cancel");
+    const recorded = answer(proj, "Request Changes");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(recorded.message).toContain('Recorded "Request Changes"');
+    // Request Changes keeps their words as the change asked for.
+    expect(auditText(proj)).toContain("**User Input**: cancel");
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "cancel" });
+  });
+
   test("Request Changes in the person's words reaches the revision, and a revised plan is asked about again", () => {
     const proj = project();
     askFor(proj);

@@ -439,7 +439,27 @@ describe("t149 Codex structured request_user_input presence", () => {
     }
   });
 
-  test("empty, cancelled, timed-out, auto-resolved, error, and malformed responses do not mint", () => {
+  // Codex hands the hook nothing when its box is interrupted (measured
+  // 2026-10-12: no PostToolUse at all) and `{"answers":{}}` when it runs out, so
+  // a cancellation word in a box's answers is one the person typed there.
+  test("a cancellation word the person typed into the box is their word, and mints", () => {
+    for (const [index, answers] of [["Approve", "Dismissed"], ["Abort"], ["cancel"]].entries()) {
+      const dir = scratchProject(true);
+      try {
+        const payload = structuredSelectionPayload(
+          dir,
+          JSON.stringify({ answers: { decision: { answers } } }),
+          `typed-cancellation-word-${index}`,
+        );
+        expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+        expect(humanTurnCount(dir), answers.join(", ")).toBe(1);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("empty, timed-out, auto-resolved, error, and malformed responses do not mint", () => {
     const responses: unknown[] = [
       "{}",
       JSON.stringify({ status: "completed", answer: "Cancelled" }),
@@ -450,8 +470,6 @@ describe("t149 Codex structured request_user_input presence", () => {
       JSON.stringify({ answers: {} }),
       JSON.stringify({ answers: { decision: { answers: [] } } }),
       JSON.stringify({ answers: { decision: { answers: ["   "] } } }),
-      JSON.stringify({ answers: { decision: { answers: ["Approve", "Dismissed"] } } }),
-      JSON.stringify({ answers: { decision: { answers: ["Abort"] } } }),
       JSON.stringify({ answer: "Approve" }),
       JSON.stringify({ selection: "Approve" }),
       "{malformed-json",

@@ -2012,11 +2012,12 @@ no prompt before it, or writers tied at one second, is `ambiguous`: it carries
 and its prompts remain in `open`. The person is never asked again for an answer
 `answered` holds.
 
-Recognized non-answers, such as `Cancelled`, use the same pairing rules.
-A uniquely paired non-answer consumes its question as a candidate for later
-answers, but that question is still reported in `open`, not `answered`.
-An ambiguous non-answer consumes no question. Non-answer text never appears
-as an answer in either `answered` or `ambiguous`.
+An answer with no words in it (the one non-answer a reply's text can show) uses
+the same pairing rules. A uniquely paired non-answer consumes its question as a
+candidate for later answers, but that question is still reported in `open`, not
+`answered`. An ambiguous non-answer consumes no question. A cancellation word
+("Cancelled", "abort") is an answer like any other: no host writes one for the
+person, so it is theirs.
 
 `audit history` returns `events`. A taxonomy event has `timestamp`, `event`,
 and a `fields` object containing its named data. A free-form `append-raw` note
@@ -2260,8 +2261,11 @@ that names the same option; its letter only where the caller says the options
 were shown lettered, which is a questions file's own answer line, so a lone
 letter typed in chat is the person's words); anything else is the conductor's to
 read, and it records the choice the person made through the question's own
-command. `isNonAnswer` recognizes host cancellation text, so a
-dismissed question is never taken as a reply. The module imports nothing from
+command. `isNonAnswer` is true only for a reply with no words in it: no host
+hands the hook dismissal text (Claude Code's Esc on a question fires no
+PostToolUse; Codex's Esc fires none, and its box that runs out returns
+`{"answers":{}}`, which the human-turn hook reads by shape), so a cancellation
+word a person typed is their reply like any other. The module imports nothing from
 `aidlc-lib.ts`, which re-exports its `isNonAnswer`, `stripRecommendedDecorator`,
 and `formatReceivedReply`.
 

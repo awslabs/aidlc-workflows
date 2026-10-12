@@ -201,11 +201,36 @@ describe("the park row keeps the words that stopped the work", () => {
     expect(parkedWords(proj)).toBeNull();
   });
 
-  test("a non-answer the host typed for them is not their words", () => {
+  // No host hands the hook dismissal text (measured on Claude Code and Codex,
+  // 2026-10-12): "Cancelled" typed in chat is what the person said when they
+  // stopped, and the step that resumes there carries it.
+  test("a cancellation word typed in chat is their words, and the park row keeps it", () => {
     says(proj, "Cancelled");
     const r = state(proj, ["park"]);
     expect(r.rc, r.out).toBe(0);
-    expect(parkedWords(proj)).toBeNull();
+    expect(parkedWords(proj)).toBe("Cancelled");
+  });
+
+  // Claude Code's picker has a "Type something" field: what is typed there
+  // arrives like a pick, under `answers`, and is the person's words too.
+  test("cancel typed into the picker's own text field is their words, and the park row keeps it", () => {
+    const question = "Shall I build this?";
+    const asked = [{ question, header: "Build", multiSelect: false, options: [{ label: "Yes", description: "" }, { label: "Not yet", description: "" }] }];
+    const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse", session_id: SESSION, tool_name: "AskUserQuestion",
+        tool_input: { questions: asked },
+        tool_response: { questions: asked, answers: { [question]: "cancel" } },
+      }),
+      env: { ...env(SESSION), CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const r = state(proj, ["park"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(parkedWords(proj)).toBe("cancel");
   });
 
   // Stale words: a reply one of the engine's own questions already used up

@@ -518,7 +518,8 @@ describe("the words are ordered against the gate row, not by time", () => {
     recordGateWords(proj, SESSION, `  ${TYPED}  `);
     recordGateWords(proj, SESSION, "cancel");
     expect(gateWordsSincePresentation(proj, SESSION, { stage: slug })).toEqual(["Request Changes", TYPED, "cancel"]);
-    expect(personsGateFeedback(proj, SESSION, { stage: slug })).toBe(TYPED);
+    // The bare choice is dropped; "cancel" is the person's word, kept for the conductor to read.
+    expect(personsGateFeedback(proj, SESSION, { stage: slug })).toBe(`${TYPED}\ncancel`);
     expect(personsGateFeedback(proj, OTHER_SESSION, { stage: slug })).toBeNull();
     expect(personsGateFeedback(proj, null, { stage: slug })).toBeNull();
     expect(personsGateFeedback(proj, SESSION, { stage: "some-other-stage" })).toBeNull();

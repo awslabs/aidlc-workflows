@@ -2,28 +2,23 @@
 // The person drives: the conductor reads what they said, in context, and
 // records the choice they made; the engine keeps their exact words and never
 // reads meaning into them (tools for determinism, the model for knowledge, the
-// human for judgement). What stays here is exact: host-made cancellation text
-// that is not a person's answer, the "(Recommended)" label decoration, how a
-// reply is shown in a message, and the labels each question offers.
+// human for judgement). What stays here is exact: a reply with no words in it,
+// the "(Recommended)" label decoration, how a reply is shown in a message, and
+// the labels each question offers.
 //
 // This module is standalone (no aidlc-lib import) so aidlc-lib can re-export
 // the primitives below.
 
-// A cancelled / auto-resolved structured-question widget is NOT a human
-// answer. Harnesses that auto-complete a dismissed question hand the conductor
-// a completed-looking object whose answer text is cancellation boilerplate
-// ("Cancelled", "user dismissed", a timeout marker). Logging that as
-// QUESTION_ANSWERED or passing it as an approval choice would launder a
-// non-decision into human authority AND consume the turn's HUMAN_TURN. The
-// vocabulary is deliberately tight (cancellation/dismissal/timeout semantics
-// only): a substantive answer that merely CONTAINS these words ("cancel the
-// standing order") does not match, because the whole trimmed string must be
-// the cancellation phrase.
-const NON_ANSWER_RE =
-  /^(?:cancel(?:led|ed)?|cancellation|dismiss(?:ed)?|abort(?:ed)?|timed?[ -]?out|timeout|no (?:answer|response)|(?:user|question) (?:cancel(?:led|ed)|dismissed))[.!]?$/i;
+// A reply with no words in it is nobody's answer. That is the only non-answer
+// a reply's text can show: no host hands the hook dismissal text (measured
+// 2026-10-12: Claude Code's Esc on AskUserQuestion fires no PostToolUse at all;
+// Codex's Esc fires none either, and its box that runs out returns
+// `{"answers":{}}`, which the human-turn hook reads by shape as
+// QUESTION_UNANSWERED). So "cancel", "abort" or "timed out" as a whole reply are
+// words a person typed, kept like any other words of theirs and read by the
+// conductor; the engine never judges them.
 export function isNonAnswer(text: string | undefined | null): boolean {
-  const t = (text ?? "").trim();
-  return t.length === 0 || NON_ANSWER_RE.test(t);
+  return (text ?? "").trim().length === 0;
 }
 
 // Every harness question-rendering guide tells the conductor to append

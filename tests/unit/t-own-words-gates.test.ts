@@ -175,8 +175,12 @@ describe("an exact pick is syntax, and only syntax", () => {
   });
 
   test("the primitives it owns keep their contracts", () => {
-    expect(isNonAnswer("Cancelled")).toBe(true);
-    expect(isNonAnswer("cancel the standing order")).toBe(false);
+    // No host hands the hook dismissal text (measured on Claude Code and Codex,
+    // 2026-10-12): a reply with words in it is the person's, whatever the words.
+    for (const words of ["Cancelled", "cancel", "abort", "dismissed", "timed out", "no answer", "cancel the standing order"]) {
+      expect(isNonAnswer(words), words).toBe(false);
+    }
+    for (const blank of ["", "   ", "\n\t", null, undefined]) expect(isNonAnswer(blank)).toBe(true);
     expect(stripRecommendedDecorator("Approve (Recommended)")).toBe("Approve");
     expect(formatReceivedReply("  a\n b ")).toBe('"a b"');
     expect(stageGateApproval("Accept as-is", true)).toBe("Accept as-is");
@@ -623,7 +627,10 @@ describe("a protected checkpoint question keeps the person's reply", () => {
 
   test("nothing is recorded without a reply", () => {
     expect(() => require("Approve")).toThrow(/requires the person's reply/);
-    expect(recordProtectedHumanResponse(proj, session, "Cancelled", null).recorded).toBe(false);
+    expect(recordProtectedHumanResponse(proj, session, "   ", null).recorded).toBe(false);
+    // "Cancelled" typed by the person is their reply, kept for the conductor to read.
+    expect(recordProtectedHumanResponse(proj, session, "Cancelled", null).recorded).toBe(true);
+    expect(readProtectedResponse(proj, session)?.words).toBe("Cancelled");
   });
 
   // The way back it names runs on the install: the bolt route as this tree
