@@ -4223,7 +4223,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   // (unknownWorkspaceWordStep), so the command stays parsed and that step runs.
   // The seams read the same reading and stand back from the line either way.
   if (
-    reading.kind === "value" ||
+    reading.kind === "value" || reading.kind === "plan-word" ||
     (reading.kind === "noun" && !isWorkspaceNoun(reading.noun))
   ) {
     const said = args.join(" ").replace(ENTRY_WORD_PREFIX, "").trim();
@@ -4635,10 +4635,8 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   // A scope name followed by a colon (`/aidlc classic: Build a notes app`)
   // names the plan the same way, also when the agent quotes the whole request
   // as one argument, as Kiro IDE's PowerShell does. A line readNextLine reads
-  // as their words is their request whole, whatever word opens it: a plan's
-  // name there may be their own first word ("classic car rental website"), and
-  // splitting a plan name off it is the agent's reading of the person's words
-  // (#2359).
+  // as their words (behind the `--` delimiter) is their request whole,
+  // whatever word opens it: a plan's name there is one of their words (#2359).
   if (
     reading.kind !== "words" &&
     intentWords.length > 0 &&
@@ -7709,6 +7707,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         `${JSON.stringify(step.value)}. If the person meant one of those, run \`${next}\` again with ` +
         `\`${step.flag}\` and that word, and their own words after it. ` +
         `If that value is part of what they asked for, ${theirs}. ${ask}`,
+      ));
+      return;
+    }
+    if (step.kind === "plan-word") {
+      emit(printDirective(
+        `\`${step.scope}\` is the name of a plan and also the first word of what the person typed, ` +
+        `and \`next\` cannot tell which they meant, so it took nothing from the line. ` +
+        `If they named the plan, run \`${next} --scope ${step.scope} -- ` +
+        `${quoteCommandArgument(said.slice(step.scope.length).trim())}\`. ` +
+        `If \`${step.scope}\` is their own word, ${theirs}. ${ask}`,
       ));
       return;
     }

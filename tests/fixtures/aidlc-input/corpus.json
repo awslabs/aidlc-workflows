@@ -3392,9 +3392,6 @@
         "words": "classic car rental site",
         "settings": [],
         "no_ask": true,
-        "names": [
-          "--propose <plan> --request"
-        ],
         "never": [
           "--scope classic"
         ]
@@ -3406,7 +3403,7 @@
         }
       }
     },
-    "after": "WO6"
+    "after": "pending"
   },
   {
     "id": "sl01-w",
@@ -3424,7 +3421,7 @@
         "settings": [],
         "no_ask": false,
         "names": [
-          "--propose <plan>"
+          "classic car rental site"
         ],
         "never": [
           "--scope classic"
@@ -3435,7 +3432,7 @@
         "work": "same"
       }
     },
-    "after": "WO6"
+    "after": "pending"
   },
   {
     "id": "sl02-f",
@@ -3452,7 +3449,7 @@
         "settings": [],
         "no_ask": true,
         "names": [
-          "--propose <plan> --request"
+          "--scope bugfix"
         ]
       },
       "end": {
@@ -3464,7 +3461,7 @@
       }
     },
     "unsure": true,
-    "after": "WO6"
+    "after": "pending"
   },
   {
     "id": "sl02-w",
@@ -3482,7 +3479,7 @@
         "settings": [],
         "no_ask": false,
         "names": [
-          "--propose <plan>"
+          "bugfix the login"
         ]
       },
       "end": {
@@ -3491,7 +3488,7 @@
       }
     },
     "unsure": true,
-    "after": "WO6"
+    "after": "pending"
   },
   {
     "id": "sl03-f",
@@ -3507,9 +3504,6 @@
         "words": "feature flags for the admin page",
         "settings": [],
         "no_ask": true,
-        "names": [
-          "--propose <plan> --request"
-        ],
         "never": [
           "--scope feature"
         ]
@@ -3521,7 +3515,7 @@
         }
       }
     },
-    "after": "WO6"
+    "after": "pending"
   },
   {
     "id": "sl03-w",
@@ -3539,7 +3533,7 @@
         "settings": [],
         "no_ask": false,
         "names": [
-          "--propose <plan>"
+          "feature flags for the admin page"
         ],
         "never": [
           "--scope feature"
@@ -3550,7 +3544,7 @@
         "work": "same"
       }
     },
-    "after": "WO6"
+    "after": "pending"
   },
   {
     "id": "sl04-f",
@@ -3566,9 +3560,6 @@
         "words": "express checkout for guests",
         "settings": [],
         "no_ask": true,
-        "names": [
-          "--propose <plan> --request"
-        ],
         "never": [
           "--scope express"
         ]
@@ -3580,7 +3571,7 @@
         }
       }
     },
-    "after": "WO6"
+    "after": "pending"
   },
   {
     "id": "sl05-f",
@@ -3595,10 +3586,7 @@
         ],
         "words": "refactor the payment module",
         "settings": [],
-        "no_ask": true,
-        "names": [
-          "--propose <plan> --request"
-        ]
+        "no_ask": true
       },
       "end": {
         "asks": 0,
@@ -3608,7 +3596,7 @@
       }
     },
     "unsure": true,
-    "after": "WO6"
+    "after": "pending"
   },
   {
     "id": "sl06-f",
@@ -3623,10 +3611,7 @@
         ],
         "words": "poc for a chat widget",
         "settings": [],
-        "no_ask": true,
-        "names": [
-          "--propose <plan> --request"
-        ]
+        "no_ask": true
       },
       "end": {
         "asks": 0,
@@ -3636,7 +3621,7 @@
       }
     },
     "unsure": true,
-    "after": "WO6"
+    "after": "pending"
   },
   {
     "id": "sl07-f",
@@ -3711,7 +3696,7 @@
         "settings": [],
         "no_ask": true,
         "names": [
-          "--propose <plan> --request"
+          "--scope bugfix -- 'fix the login'"
         ]
       },
       "end": {
@@ -7865,7 +7850,7 @@
         "settings": [],
         "no_ask": true,
         "names": [
-          "--propose <plan> --request"
+          "--scope feature -- 'add CSV export'"
         ]
       },
       "end": {
@@ -7875,8 +7860,7 @@
           "words": "add CSV export"
         }
       }
-    },
-    "after": "WO6"
+    }
   },
   {
     "id": "fn04-d",
@@ -12082,10 +12066,10 @@
         ],
         "words": "bugfix Fix the crash",
         "settings": [],
-        "no_ask": true,
         "names": [
-          "--propose <plan> --request"
-        ]
+          "--scope bugfix -- 'Fix the crash'"
+        ],
+        "no_ask": true
       },
       "end": {
         "asks": 0,
@@ -12094,8 +12078,7 @@
           "words": "Fix the crash"
         }
       }
-    },
-    "after": "WO6"
+    }
   },
   {
     "id": "doc-012-w",
@@ -17173,10 +17156,10 @@
         ],
         "words": "workshop Read ./vision.md and build what it describes",
         "settings": [],
-        "no_ask": true,
         "names": [
-          "--propose <plan> --request"
-        ]
+          "--scope workshop -- 'Read ./vision.md and build what it describes'"
+        ],
+        "no_ask": true
       },
       "end": {
         "asks": 0,
@@ -17185,8 +17168,7 @@
           "words": "Read ./vision.md and build what it describes"
         }
       }
-    },
-    "after": "WO6"
+    }
   },
   {
     "id": "doc-141-f",
@@ -18020,10 +18002,10 @@
         ],
         "words": "classic Build a notes app",
         "settings": [],
-        "no_ask": true,
         "names": [
-          "--propose <plan> --request"
-        ]
+          "--scope classic -- 'Build a notes app'"
+        ],
+        "no_ask": true
       },
       "end": {
         "asks": 0,
@@ -18032,8 +18014,7 @@
           "words": "Build a notes app"
         }
       }
-    },
-    "after": "WO6"
+    }
   },
   {
     "id": "doc-167-f",
@@ -18077,24 +18058,23 @@
         "kinds": [
           "print"
         ],
-        "words": "classic car rental website",
+        "words": "car rental website",
         "settings": [],
-        "no_ask": true,
         "names": [
-          "--propose <plan> --request"
+          "engine intent create --scope classic"
         ],
-        "never": [
-          "--scope classic"
-        ]
+        "no_ask": true
       },
       "end": {
         "asks": 0,
         "work": {
-          "words": "classic car rental website"
+          "scope": "classic",
+          "words": "car rental website"
         }
       }
     },
-    "after": "WO6"
+    "after": "pending",
+    "documented_differs": "print: Setting up a classic workflow for this: 14 stages, 14 approval gates, 5 stages repeat per unit of work in Construction; no summary confirmation; lead agent only"
   },
   {
     "id": "doc-169-w",

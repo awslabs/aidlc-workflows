@@ -186,9 +186,9 @@ function buildCase(next: () => number): Case {
       return { shape, argv: [...tail], tail };
     // The same line, as the three harnesses hand it over: the person's own
     // sentence opening with a word that is also a plan's name, split into
-    // tokens or quoted whole, and the plan named in its own argument, which is
-    // the reading the orchestrator skill asks the agent for. That first word
-    // may be their own, so their words stay whole (#2359).
+    // tokens or quoted whole (both ambiguous, at any length), and the plan
+    // named in its own argument, which is the reading the orchestrator skill
+    // asks the agent for.
     case "plan-word-split": {
       const plan = pick([...SCOPES]);
       // With one word after the plan's name the line is two arguments: the
@@ -388,14 +388,14 @@ describe("the flag parser over a seeded sweep of lines", () => {
       }
 
       // A plan named in its own argument is the pick of that plan; any other
-      // line opening with a plan's name is the person's words whole (#2359).
+      // line opening with a plan's name is both readings, every word kept.
       if (testCase.plan !== undefined) {
         expect(parsed.positionalScope, note).toBe(testCase.plan);
         expect(parsed.intent, note).toBe((testCase.tail ?? []).join(" "));
         expect(parsed.readingStep, note).toBeUndefined();
       } else if (testCase.shape.startsWith("plan-word")) {
         expect(parsed.positionalScope, note).toBeUndefined();
-        expect(parsed.readingStep, note).toBeUndefined();
+        expect(parsed.readingStep?.kind, note).toBe("plan-word");
       }
 
       // After the delimiter every token is theirs, word for word, and nothing
@@ -465,7 +465,7 @@ describe("the flag parser over a seeded sweep of lines", () => {
   // it. This is the invariant row 3 broke, where the two readings of one line
   // disagreed.
   test(`reads each of the ${CASES} lines exactly one way, and both seams take that reading`, () => {
-    const kinds = new Set(["exact", "words", "untaken-flag", "value", "noun"]);
+    const kinds = new Set(["exact", "words", "untaken-flag", "value", "plan-word", "noun"]);
     let exact = 0;
     let handed = 0;
     for (const testCase of cases) {
@@ -483,16 +483,21 @@ describe("the flag parser over a seeded sweep of lines", () => {
       }
       // The same line as one quoted argument, as a harness that quotes the
       // whole turn hands it over. Nothing but flags and their values reads as
-      // those tokens; any sentence of theirs is theirs whole, one opening with a
-      // plan's name too (#2359).
+      // those tokens; a sentence opening with a plan's name is the same reading
+      // step either way, because it is the same line; any other sentence is
+      // theirs whole.
       if (testCase.argv.length > 1 && !testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token))) {
         const line = testCase.argv.join(" ");
         const quoted = readNextLine([line]);
-        if (argumentIsFlagShaped(line)) {
+        if (argumentIsFlagShaped(line) || reading.kind === "plan-word") {
+          // A sentence opening with a plan's name is the same reading step
+          // either way, because it is the same line.
           expect(quoted, `quoted ${note}`).toEqual(reading);
+        } else if (SCOPES.has(testCase.argv[0])) {
+          // Split, a plan's name and one word is the plan in its own argument;
+          // quoted whole, the same line is the reading step: no count of words.
+          expect(quoted.kind, `quoted ${note}`).toBe("plan-word");
         } else {
-          // Quoted whole, a line opening with a plan's name is their words.
-          if (SCOPES.has(testCase.argv[0])) expect(quoted.kind, `quoted ${note}`).toBe("words");
           // Otherwise the engine cannot see a flag or a noun inside one
           // argument of theirs, so the line is their words whole, and never a
           // reading it would act on differently.

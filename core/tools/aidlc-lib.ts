@@ -39644,6 +39644,7 @@ export type NextLineReading =
   | { kind: "words" }
   | { kind: "untaken-flag"; token: string; value?: string }
   | { kind: "value"; flag: string; value: string; valid: readonly string[] }
+  | { kind: "plan-word"; scope: string }
   | { kind: "noun"; noun: string };
 
 /**
@@ -39757,10 +39758,14 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
     // (`next bugfix`), or its own argument with the request in one more, which
     // is what the orchestrator skill asks the agent for (`next classic 'Build a
     // notes app'`). Any other line that opens with one is the person's own
-    // sentence, whose first word may be theirs (`classic car rental website`,
-    // loose words or one argument as Kiro IDE's PowerShell hands it over): it is
-    // their words whole, for the agent to read, at any length (#2359).
-    return plans.has(plan) && words.length <= 2 ? { kind: "exact" } : { kind: "words" };
+    // sentence, whose first word may be theirs: loose words after it (`bugfix
+    // Fix duplicate todos`), or the whole line in one argument, as Kiro IDE's
+    // PowerShell hands it over (`classic car rental website`). Both read the
+    // same way, at any length, and only the agent can tell whether that word is
+    // their plan or their own (#2359).
+    if (plans.has(plan) && words.length <= 2) return { kind: "exact" };
+    const opening = plan.split(/\s+/)[0];
+    return plans.has(opening) ? { kind: "plan-word", scope: opening } : { kind: "words" };
   }
   return { kind: "exact" };
 }

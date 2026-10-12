@@ -170,29 +170,31 @@ describe("their reply to the plan offer reaches that offer", () => {
 });
 
 // ---------------------------------------------------------------------------
-// A plan word at the start of their sentence may be their own first word, so
-// a line of words after it is their request whole, for the agent to read (#2359)
+// A bare plan word is ambiguous with their first word
 // ---------------------------------------------------------------------------
 
 describe("a plan word at the start of their sentence", () => {
-  test("with words after it, the line is their request whole: the agent reads it, and nothing is created", () => {
+  test("with words after it, the agent is told both readings and nothing is created", () => {
     const proj = emptyProject();
-    // The agent's proposal step follows (the helper reads "fix" as bugfix): one
-    // plan question, about every word they typed.
     const { d, out } = next(proj, ["bugfix", "Fix", "duplicate", "todos"]);
-    expect(d.kind, out).toBe("ask");
-    expect(String(d.question), out).toContain("bugfix Fix duplicate todos");
-    expect(questions(proj).map((q) => q.text)).toEqual(["bugfix Fix duplicate todos", "bugfix Fix duplicate todos"]);
-    // Nothing was created.
+    expect(d.kind, out).toBe("print");
+    expect(d.narration, out).toBeUndefined();
+    expect(d.ask_type, out).toBeUndefined();
+    // The plan reading, and their words reading, each as a command to run.
+    expect(String(d.message)).toContain("--scope bugfix");
+    expect(String(d.message)).toContain("Fix duplicate todos");
+    expect(String(d.message)).toContain("--");
+    // Nothing was created and nothing was asked of them.
     expect(activeIntent(proj)).toBe("");
+    expect(questions(proj).length).toBe(0);
   });
 
   test("their own first word is never spent as a plan name", () => {
     const proj = emptyProject();
     const { d, out } = next(proj, ["classic", "car", "rental", "website"]);
-    expect(d.kind, out).toBe("ask");
-    expect(String(d.question)).toContain("classic car rental website");
-    // Marked as theirs, it reads the same: every word stays their request.
+    expect(d.kind, out).toBe("print");
+    expect(String(d.message)).toContain("classic car rental website");
+    // One re-run marked as theirs keeps every word.
     const asked = next(proj, ["--", "classic car rental website"]);
     expect(asked.d.kind, asked.out).toBe("ask");
     expect(String(asked.d.question)).toContain("classic car rental website");
@@ -212,16 +214,15 @@ describe("a plan word at the start of their sentence", () => {
   });
 
   test("the three ways a harness hands that line over read the same", () => {
-    // The person's sentence opening with a plan's name is their words whole
-    // however it arrives, split into tokens or quoted whole (Kiro IDE's
-    // PowerShell), and the plan named in its own argument (what the
-    // orchestrator skill asks the agent for) is the reading already made, so
-    // it acts (#2359).
+    // Settled with the conductor 2026-10-10: the person's sentence opening with
+    // a plan's name is the same reading step however it arrives, and the plan
+    // named in its own argument (what the orchestrator skill asks the agent
+    // for) is the reading already made, so it acts.
     const line = "classic car rental website";
     const split = splitKiroCommandArgs(line);
     for (const argv of [split, [line]]) {
       const parsed = parseNextFlags([...argv]);
-      expect(parsed.readingStep, JSON.stringify(argv)).toBeUndefined();
+      expect(parsed.readingStep?.kind, JSON.stringify(argv)).toBe("plan-word");
       expect(parsed.intent, JSON.stringify(argv)).toBe(line);
       expect(parsed.positionalScope, JSON.stringify(argv)).toBeUndefined();
       // No seam acts on it before the agent reads it, in either form.
@@ -298,8 +299,8 @@ describe("a flag the engine takes with a value it does not", () => {
 });
 
 // ---------------------------------------------------------------------------
-// A step that names commands for someone to run never puts the person's own
-// text in one as bare shell syntax
+// A reading step names commands for someone to run, so nothing of the
+// person's own text is ever bare shell syntax in one
 // ---------------------------------------------------------------------------
 
 describe("their own words in a command the step names are one quoted argument", () => {
@@ -309,20 +310,23 @@ describe("their own words in a command the step names are one quoted argument", 
     "classic rental $(id) site",
     "bugfix fix the \"login\" crash && echo no",
   ];
-  test.each(shellish)("%j: the words travel by request id, never inside a command", (line) => {
+  test.each(shellish)("%j is quoted in every command the step names", (line) => {
     const proj = emptyProject();
     const argv = splitKiroCommandArgs(line);
     const said = argv.join(" ");
-    // The agent's proposal step follows: the plan question for every word of theirs.
     const { d, out } = next(proj, argv);
-    expect(d.kind, out).toBe("ask");
-    // No command the question names carries their words: no separator,
-    // substitution or redirection of theirs is syntax in one.
-    const commands = JSON.stringify(d).match(/bun [^"]* next [^"]*/g) ?? [];
-    expect(commands.length, out).toBeGreaterThan(0);
-    for (const command of commands) expect(command, out).not.toContain(argv.slice(1).join(" "));
-    // Their words are kept whole, and nothing ran.
-    expect(new Set(questions(proj).map((q) => q.text))).toEqual(new Set([said]));
+    expect(d.kind, out).toBe("print");
+    const message = String(d.message);
+    // Their text reaches the commands the step names as ONE single-quoted
+    // argument, so no separator, substitution or redirection of theirs is
+    // syntax when the agent runs it.
+    expect(message, out).toContain(`-- '${said}'`);
+    // And nothing of theirs is left bare after a delimiter anywhere.
+    for (const after of message.split(" -- ").slice(1)) {
+      expect(after.startsWith("'") || after.startsWith("`"), message).toBe(true);
+    }
+    // Their words are still all there, and nothing ran.
+    expect(message).toContain(said);
     expect(activeIntent(proj)).toBe("");
     cleanupTestProject(created.pop());
   });

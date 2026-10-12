@@ -408,42 +408,59 @@ describe("t-plan-proposed-by-the-agent: work here but none selected", () => {
   });
 });
 
-// #2359 F1: a line that opens with a plan's name and goes on in words is the
-// person's request whole, because that name may be their own first word
-// (`/aidlc classic car rental website`): the agent reads it. The forms that can
-// only be a pick stay one: the plan's name alone, in its own argument with the
-// request in one more, with a colon, `--scope`, and the agent's `--propose`.
-describe("t-plan-proposed-by-the-agent: a line that opens with a plan's name is the person's words", () => {
+// #2359 F1 and F4: a line that opens with a plan's name and goes on in words
+// keeps every word, and the agent reads which they meant: the both-readings
+// print names the pick (`--scope <plan> -- '<rest>'`, which creates with no
+// question) and their words whole. No count of words decides it. The forms
+// that can only be a pick stay one: the plan's name alone, in its own argument
+// with the request in one more, with a colon, `--scope`, and `--propose`.
+describe("t-plan-proposed-by-the-agent: a line that opens with a plan's name keeps every word, and the agent reads it", () => {
   const LINE = ["fix", "the", "login", "crash", "when", "the", "session", "expires"];
+  const BOTH = "is the name of a plan and also the first word of what the person typed";
+  /** The `next` arguments of the command a print names after `lead`, as the agent runs it. */
+  const commandAfter = (message: unknown, lead: RegExp): string[] => {
+    const command = new RegExp(`\`([^\`]* next ${lead.source}[^\`]*)\``).exec(String(message))?.[1];
+    expect(command, String(message)).toBeDefined();
+    return splitKiroCommandArgs(command!.slice(command!.indexOf(" next ") + 6));
+  };
 
-  test("fresh workspace: `classic car rental website`, split or in one argument, reaches the agent's proposal step whole", () => {
+  test("`/aidlc bugfix fix the login`: the agent's pick reading creates bugfix for \"fix the login\", and nobody is asked", () => {
+    proj = fresh();
+    const d = next(CLAUDE_TOOLS, proj, ["bugfix", "fix", "the", "login"]);
+    expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
+    expect(d.ask_type).toBeUndefined();
+    expect(String(d.message)).toContain(`\`bugfix\` ${BOTH}`);
+    // The engine kept nothing of theirs yet: the agent reads the line first.
+    expect(questionTexts(proj)).toEqual([]);
+    const created = next(CLAUDE_TOOLS, proj, commandAfter(d.message, /--scope bugfix --/));
+    expect(created.kind, JSON.stringify(created).slice(0, 300)).toBe("print");
+    expect(String(created.message)).toContain("intent create --scope bugfix --request");
+    expect(questionTexts(proj).map((q) => q.text)).toEqual(["fix the login"]);
+  });
+
+  test("`/aidlc classic car rental website`, split or in one argument: both readings, every word kept, and the words reading reaches the proposal step whole", () => {
     for (const argv of [["classic", "car", "rental", "website"], ["classic car rental website"]]) {
       proj = fresh();
       const d = next(CLAUDE_TOOLS, proj, argv);
       expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
-      expect(String(d.message)).toContain(PROPOSAL);
-      expect(String(d.message)).toContain('"classic car rental website"');
-      expect(String(d.message)).not.toContain("--scope classic");
+      expect(String(d.message)).toContain(`\`classic\` ${BOTH}`);
+      expect(String(d.message)).toContain("-- 'classic car rental website'");
+      expect(String(d.message)).toContain("--scope classic -- 'car rental website'");
+      expect(questionTexts(proj)).toEqual([]);
+      const theirs = next(CLAUDE_TOOLS, proj, commandAfter(d.message, /-- 'classic/));
+      expect(theirs.kind, JSON.stringify(theirs).slice(0, 300)).toBe("print");
+      expect(String(theirs.message)).toContain(PROPOSAL);
+      expect(String(theirs.message)).toContain('"classic car rental website"');
       expect(questionTexts(proj).map((q) => q.text)).toEqual(["classic car rental website"]);
       cleanupTestProject(proj);
     }
     proj = "";
   });
 
-  test("the agent's reading of `bugfix fix the login ...` names the plan, and the plan question keeps every word", () => {
-    proj = fresh();
-    const words = ["bugfix", ...LINE].join(" ");
-    const ask = planOffer(ORCH, proj, ["bugfix", ...LINE], "bugfix").directive as Directive;
-    expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("scope-confirm");
-    expect(ask.proposed_scope).toBe("bugfix");
-    expect(String(ask.question)).toContain(words);
-    expect(questionTexts(proj).map((q) => q.text)).toEqual([words, words]);
-  });
-
-  test("the forms that can only be a pick stay one: alone, in its own argument, with a colon, by --scope", () => {
+  test("the forms that can only be a pick stay one; every other line that opens with a plan's name is both readings, at any length", () => {
     const parse = (argv: string[]) => {
       const parsed = parseNextFlags(argv);
-      return { plan: parsed.positionalScope ?? parsed.scope, intent: parsed.intent, step: parsed.readingStep };
+      return { plan: parsed.positionalScope ?? parsed.scope, intent: parsed.intent, step: parsed.readingStep?.kind };
     };
     const rest = LINE.join(" ");
     expect(parse(["bugfix"])).toEqual({ plan: "bugfix", intent: undefined, step: undefined });
@@ -451,18 +468,16 @@ describe("t-plan-proposed-by-the-agent: a line that opens with a plan's name is 
     expect(parse([`bugfix: ${rest}`])).toEqual({ plan: "bugfix", intent: rest, step: undefined });
     expect(parse(["bugfix:", ...LINE])).toEqual({ plan: "bugfix", intent: rest, step: undefined });
     expect(parse(["--scope", "bugfix", ...LINE])).toEqual({ plan: "bugfix", intent: rest, step: undefined });
-    // Every other line that opens with a plan's name is the person's words whole.
-    for (const argv of [["bugfix", ...LINE], [`bugfix ${rest}`], splitKiroCommandArgs(`bugfix ${rest}`)]) {
-      expect(parse(argv), JSON.stringify(argv)).toEqual({ plan: undefined, intent: `bugfix ${rest}`, step: undefined });
+    // A plan's name and one word, split, is the plan in its own argument.
+    expect(parse(["bugfix", "login"])).toEqual({ plan: "bugfix", intent: "login", step: undefined });
+    // The rest keep every word for the agent's reading, with no count of words: two
+    // in one argument as much as nine.
+    for (const argv of [["bugfix", ...LINE], [`bugfix ${rest}`], splitKiroCommandArgs(`bugfix ${rest}`), ["bugfix login"]]) {
+      expect(parse(argv), JSON.stringify(argv)).toEqual({ plan: undefined, intent: argv.join(" "), step: "plan-word" });
     }
-    // The plan in its own argument creates on a fresh workspace, with the request by id.
-    proj = fresh();
-    const named = next(CLAUDE_TOOLS, proj, ["bugfix", rest]);
-    expect(String(named.message), JSON.stringify(named).slice(0, 300)).toContain("intent create --scope bugfix --request");
-    expect(questionTexts(proj).map((q) => q.text)).toEqual([rest]);
   });
 
-  test("Kiro IDE's first step reads `/aidlc bugfix fix the login` as words, as it reads any request", () => {
+  test("Kiro IDE's first step reads `/aidlc bugfix fix the login` as the person's words, as it reads any request", () => {
     // The adapter names the first engine step only for a line of words
     // (nextArgsAreOnlyWords over Kiro's split): a line read as a plan pick got
     // no first step, and on Kiro's Default agent AI-DLC did not start.
@@ -472,14 +487,14 @@ describe("t-plan-proposed-by-the-agent: a line that opens with a plan's name is 
     expect(nextArgsAreOnlyWords(splitKiroCommandArgs("bugfix")), "bugfix").toBe(false);
   });
 
-  test("beside active work the line reaches the agent whole, never a routing question naming that plan", () => {
+  test("beside active work the line gets the same both readings, never a routing question naming that plan", () => {
     proj = activeProject();
     const d = next(CLAUDE_TOOLS, proj, ["bugfix", ...LINE]);
     expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
     expect(d.ask_type).toBeUndefined();
-    expect(String(d.message)).toContain("--propose <plan>");
-    expect(String(d.message)).not.toContain("--scope bugfix");
-    expect(questionTexts(proj).map((q) => q.text)).toEqual([["bugfix", ...LINE].join(" ")]);
+    expect(String(d.message)).toContain(`\`bugfix\` ${BOTH}`);
+    expect(String(d.message)).toContain(`--scope bugfix -- '${LINE.join(" ")}'`);
+    expect(questionTexts(proj)).toEqual([]);
   });
 });
 

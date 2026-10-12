@@ -90,8 +90,8 @@ describe("words typed after /aidlc are a reply unless the dispatcher reads a com
     for (const args of leading) expect(nextArgsAreOnlyWords(args), args.join(" ")).toBe(false);
     expect(nextArgsAreOnlyWords([])).toBe(false);
     // A plan's name alone is the plan; with their own words after it, unmarked,
-    // the line is their words whole for the agent to read (#2359), so a reply
-    // typed that way is still a reply.
+    // the two readings go to the agent and the words stay the person's, so a
+    // reply typed that way is still a reply.
     for (const scope of validScopes()) {
       expect(nextArgsAreOnlyWords([scope]), scope).toBe(false);
       expect(nextArgsAreOnlyWords([scope, "fix", "the", "login", "crash"]), scope).toBe(true);
