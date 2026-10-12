@@ -205,6 +205,30 @@ describe("t-kept-setting-follows-the-pick: the work the chat picks gets what was
     expect(getField(state(picked), "Guards Off") ?? "").not.toContain("review-freeze");
   });
 
+  // A later word takes back an earlier one in the kept record as it would on
+  // selected work: one name for one setting, and a whole-policy word clears
+  // the checks it would clear there (AIDA, #2381 first review, F2).
+  test("plan approval off, then on again by its other name: the later word wins on the picked work", () => {
+    const [, picked] = workNoneSelected();
+    typeSetting("/aidlc --plan-approval off");
+    reply("/aidlc config set guard.plan-approval on");
+    const on = next(["config", "set", "guard.plan-approval", "on"]);
+    expect(String(on.message)).toContain("Plan approval will be on for the work you pick up or start next (set by you)");
+    const said = pick(picked);
+    expect(said).not.toContain("built without asking");
+    expect(getField(state(picked), "Plan Approval") ?? "").not.toContain("off");
+  });
+
+  test("a check kept on, then Guard Policy off: the later whole-policy word wins, as on selected work", () => {
+    const [, picked] = workNoneSelected();
+    typeSetting("/aidlc --guard.review-freeze on");
+    const off = typeSetting("/aidlc --guard-policy off", (line) => line);
+    expect(off).toContain("is off for the work you pick up or start next (set by you)");
+    pick(picked);
+    expect(getField(state(picked), "Guard Policy")).toBe("off (set by you)");
+    expect(getField(state(picked), "Guards On") ?? "").not.toContain("review-freeze");
+  });
+
   test("a space switch that lands on that space's one piece of work picks it", () => {
     workNoneSelected();
     expect(utility(["space-create", "foo"]).status).toBe(0);

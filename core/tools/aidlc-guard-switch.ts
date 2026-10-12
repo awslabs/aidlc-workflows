@@ -397,8 +397,9 @@ export function applyIntentSettings(
   const withoutPerCheckEntries = (text: string): string => {
     const off = parseGuardsOffLine(getField(text, GUARDS_OFF_FIELD));
     const on = parseGuardsOnLine(getField(text, GUARDS_ON_FIELD));
-    const keepOff = changeControl === "strict" ? off.filter((fence) => namedFences.has(fence)) : off;
-    const keepOn = changeControl === "off" ? on.filter((fence) => namedFences.has(fence)) : on;
+    const cleared = perCheckSettingClearedBy(changeControl);
+    const keepOff = cleared === "off" ? off.filter((fence) => namedFences.has(fence)) : off;
+    const keepOn = cleared === "on" ? on.filter((fence) => namedFences.has(fence)) : on;
     let updated = text;
     if (keepOff.length !== off.length) updated = setGuardsOffLine(updated, keepOff);
     if (keepOn.length !== on.length) updated = setGuardsOnLine(updated, keepOn);
@@ -915,6 +916,15 @@ interface PlanApprovalCreationGrant {
 // A reply belongs to the question asked in this sitting, not to one left open for days.
 const OPEN_QUESTION_WINDOW_MS = 60 * 60 * 1000;
 
+/**
+ * Which of a piece of work's own per-check settings a whole Guard Policy word
+ * takes back: off clears the checks kept on, strict the checks turned off, and
+ * relaxed neither. A check the same command names keeps its own setting.
+ */
+export function perCheckSettingClearedBy(policy: string | null | undefined): "on" | "off" | null {
+  return policy === "strict" ? "off" : policy === "off" ? "on" : null;
+}
+
 // Where a setting kept before any work is selected goes: the piece of work the
 // chat starts next or, with work here to pick up, whichever it picks or starts.
 const FOR_WORK_STARTED = "for the piece of work you start now";
@@ -1145,13 +1155,15 @@ export function recordCeremoniesAtCreation(
     } catch {
       // An unreadable earlier record is replaced by this one.
     }
-    // A later strict takes back the checks typed off before it, as it does in
-    // their own record (withdrawFencesOffAtCreation), so work picked later never
-    // gets one turned off against the person's later word.
-    if (settings["guard-policy"] === "strict") {
+    // A later whole-policy word takes back the checks typed before it that it
+    // would clear on selected work (perCheckSettingClearedBy), as strict does in
+    // the checks' own record (withdrawFencesOffAtCreation), so work picked later
+    // never gets a check the person's later word took back.
+    const cleared = perCheckSettingClearedBy(settings["guard-policy"]);
+    if (cleared !== null) {
       for (const fence of SWITCHABLE_GUARD_FENCES) {
         const key = guardFenceConfigKey(fence);
-        if (fence !== "plan-approval" && earlier[key] === "off") delete earlier[key];
+        if (fence !== "plan-approval" && earlier[key] === cleared) delete earlier[key];
       }
     }
     const grant: CeremoniesCreationGrant = {
@@ -1472,7 +1484,14 @@ export function keepSettingsForNextWork(
   const kept: Record<string, string> = {};
   for (const key of Object.keys(requested)) {
     const typed = value(key);
-    if (typed !== undefined) kept[key] = typed;
+    if (typed === undefined) continue;
+    // One name for one setting, read as the setter reads it: the other name
+    // for plan approval counts when the line does not name plan-approval too.
+    if (key === "guard.plan-approval") {
+      if (requested["plan-approval"] === undefined) kept["plan-approval"] = typed;
+    } else {
+      kept[key] = typed;
+    }
   }
   recordCeremoniesAtCreation(projectDir, sessionId, kept, false);
   for (const key of [...CREATION_CEREMONY_FLAGS, "collaborators", ...KEPT_LEVEL_KEYS]) {
