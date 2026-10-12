@@ -158,6 +158,9 @@ describe("Codex copy channel: the shipped rules match AI-DLC's own commands", ()
       expect(line).not.toContain("`bun .codex/hooks/`");
       expect(line).not.toContain("`bun .codex/tools/`");
       expect(line).toContain(`\`bun .codex/tools/aidlc.ts ${TRUSTED_ROUTE_NAMESPACE} ...\``);
+      // The scripts behind config, doctor and the machine's install are not
+      // pre-allowed, and the line says so.
+      for (const left of ["`config`", "`doctor`", "`update`", "`uninstall`"]) expect(line).toContain(left);
     }
   });
 });
