@@ -262,6 +262,7 @@ import {
   maximalAttemptEvents,
   resolveReviewClass,
   loadScopeMapping,
+  scopeGuardPolicyDefault,
   nextInScopeStage,
   openPendingDecision,
   parseCheckboxes,
@@ -511,7 +512,6 @@ import {
 import {
   checksAre,
   fenceMemoryLockRefusal,
-  guardPolicyCreationGranted,
   guardPolicyNamed,
   planApprovalMemoryLockRefusal,
   planApprovalOffAtCreation,
@@ -2456,9 +2456,8 @@ function configSetCommand(modifiers: string[]): string {
 // Settings typed with a description while other work exists ride on each
 // answer to the routing question, so they land on the work the person picks.
 // New work is also created with the review level and Guard Policy typed with
-// it. A lowered Guard Policy rides only to the new-work answers,
-// which never try it there: the person's own words already set it on the
-// active work as they sent the message, and the creation says where it landed.
+// it; a lowered one is the new work's when the person typed it in this chat
+// (routedGuardPolicyRides), and the creation says where it landed.
 interface RoutingCarried {
   /** What a plan offer carries: the composer plans new work with these. */
   creation: string;
@@ -4896,8 +4895,8 @@ function createPrintDirective(
   flags: ParsedFlags,
   projectDir: string,
   description?: string,
-  // New work picked on a routing question: a lowered Guard Policy typed with
-  // the request is never tried on it, and the person hears where it landed.
+  // New work picked on a routing question: what the person hears about a
+  // lowered Guard Policy typed with the request (routedGuardPolicyNote).
   routedGuardPolicyNote?: string,
 ): PrintDirective {
   const cmd = [`--scope ${scopeArg(scope)}`];
@@ -4921,9 +4920,10 @@ function createPrintDirective(
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
   if (flags.projectType) cmd.push(`--project-type ${flags.projectType}`);
   if (flags.review) cmd.push(`--review ${flags.review}`);
-  // A lowered Guard Policy the routed note asks them about is not put on the
-  // new work: the note says where it stands and asks (routedGuardPolicyNote).
-  if (flags.changeControl && !(routedGuardPolicyNote && guardPolicyLowered(flags))) {
+  // A lowered Guard Policy typed with routed new work rides to creation when it
+  // is the person's (routedGuardPolicyRides); otherwise the routed note says
+  // where it stands.
+  if (flags.changeControl && !(routedGuardPolicyNote && guardPolicyLowered(flags) && !routedGuardPolicyRides(flags, projectDir))) {
     cmd.push(`--guard-policy ${flags.changeControl}`);
   }
   // A check typed with the work: creation takes it under the person-turn rule.
@@ -5017,25 +5017,32 @@ function activeWorkLabel(stateContent: string): string {
     "the active workflow";
 }
 
-// New work picked on a routing question with a lowered Guard Policy: the new
-// work starts at its default and the person is asked, as they are today. Said
+// A lowered Guard Policy typed with a request is the new work's, as a check
+// typed off is (routedFencesNote): with a message of the person's in this chat
+// it rides the creation command, and creation applies it once under the
+// person-turn rule (handleIntentCreate). A team's strict Guard Policy keeps it
+// off the new work, which is created at strict.
+function routedGuardPolicyRides(flags: ParsedFlags, projectDir: string): boolean {
+  return personAskedInThisChat(projectDir) && teamKeepsTyped(flags, projectDir) === null;
+}
+
+// New work picked on a routing question with a lowered Guard Policy: what the
+// person hears. Theirs, it is said once with where it landed; a value the new
+// work's plan already has is nothing new and goes unsaid. Under a team's strict
+// Guard Policy, the team's line. With no message of theirs in this chat it is
+// not tried on the new work: the person hears where it stands and is asked,
 // about the work the question was about, read from its own state (not whatever
-// the answer selects). A check typed off rides the answer command instead, and
-// routedFencesNote says so.
+// the answer selects).
 function routedGuardPolicyNote(flags: ParsedFlags, projectDir: string, question: StoredQuestion): string {
   if (!guardPolicyLowered(flags)) return "";
   const value = flags.changeControl as string;
-  // Typed with the new work, it is that work's: creation applies the words the
-  // human-turn hook kept for this chat.
-  let session: string | null = null;
-  try {
-    session = resolveInvokingSessionId(projectDir);
-  } catch {
-    session = null;
-  }
-  if (guardPolicyCreationGranted(projectDir, session, question.id) === value) {
+  const team = teamKeepsTyped(flags, projectDir);
+  if (team !== null) return team;
+  if (personAskedInThisChat(projectDir)) {
     // What the setting does comes with its name, as it does on the check line beside it.
-    return `${guardPolicyNamed()} is ${value} for the new work (set by you).`;
+    return flags.scope !== undefined && scopeGuardPolicyDefault(flags.scope) === value
+      ? ""
+      : `${guardPolicyNamed()} is ${value} for the new work (set by you).`;
   }
   const target = question.askedAbout?.targets.length === 1 ? question.askedAbout.targets[0] : undefined;
   let askedState: string | null = null;

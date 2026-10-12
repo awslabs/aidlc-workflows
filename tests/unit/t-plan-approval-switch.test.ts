@@ -1091,49 +1091,98 @@ describe("Guard Policy typed before or with the new work", () => {
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 
-  // The engine's own promise, unchanged by this PR: a LOWERED Guard Policy typed
-  // while other work is open is not put on the new work the line routes to. The
-  // new work starts at its default, the person is asked whether they want it
-  // there, and the open work is untouched either way.
-  test("typed with new work beside open work, the new work starts at its default and the person is asked", () => {
+  /** One piece of work open from the terminal, whose session runs AI-DLC's hooks. */
+  const besideOpenWork = (): { proj: string; openState: () => string; openBefore: string } => {
     const proj = emptyProject();
     expect(utility(proj, ["intent-create", "--scope", "poc"]).status).toBe(0);
-    // The open work's session runs AI-DLC's hooks, which left a heartbeat in its record.
     const health = hooksHealthDir(proj);
     mkdirSync(health, { recursive: true });
     writeFileSync(join(health, "write-audit-log.last"), new Date().toISOString());
     const intents = join(proj, "aidlc", "spaces", "default", "intents");
     const open = readFileSync(join(intents, "active-intent"), "utf-8").trim();
-    const openBefore = readFileSync(join(intents, open, "aidlc-state.md"), "utf-8");
-    expect(reply(proj, "/aidlc --guard-policy off enterprise fix the parser")).not.toContain("AIDLC Guard Policy");
-    const routing = runOrchestrateNext(
-      ORCHESTRATE, proj, ["--guard-policy", "off", "enterprise", "fix the parser"],
-      { env: { ...process.env, ...CLEAR } },
-    );
-    const ask = routing.directive as { ask_type?: string; new_intent_command?: string } | null;
-    expect(ask?.ask_type, routing.out).toBe("new-work-routing");
-    // The person picks new work.
-    const command = String(ask?.new_intent_command);
-    const routed = runOrchestrateNext(ORCHESTRATE, proj, command.slice(command.indexOf(" next ") + 6).split(" "), {
+    const openState = (): string => readFileSync(join(intents, open, "aidlc-state.md"), "utf-8");
+    return { proj, openState, openBefore: openState() };
+  };
+  const nextOf = (proj: string, command: unknown) => {
+    const text = String(command);
+    return runOrchestrateNext(ORCHESTRATE, proj, text.slice(text.indexOf(" next ") + 6).split(" "), {
       env: { ...process.env, ...CLEAR },
     });
-    // The create step the agent is given does not carry the lowering, and the
-    // person is asked about it in the words the engine uses today.
-    const routedMessage = String((routed.directive as { message?: unknown } | null)?.message);
-    expect(routedMessage, routed.out).not.toContain("--guard-policy off");
-    const narration = `${String((routed.directive as { narration?: unknown } | null)?.narration ?? "")} ` +
-      pendingPersonLines(proj, SESSION).lines.join(" ");
-    // Both wordings of the engine's own question end the same way: they are
-    // asked whether they want it for the new work.
-    expect(narration, routed.out).toContain("Do you want off for");
-    const id = /--request ([0-9a-f]{8})/.exec(routedMessage)?.[1];
-    if (id === undefined) throw new Error(`no request in ${routed.out}`);
-    // Created as the step says, the new work keeps its own default; the open
-    // work is untouched throughout.
-    const made = utility(proj, ["intent-create", "--request", id]);
+  };
+  /** The person picks separate work on the routing question; with no plan named, the agent proposes `plan`. */
+  const separateWork = (proj: string, typed: string[], plan?: string) => {
+    const routing = runOrchestrateNext(ORCHESTRATE, proj, typed, { env: { ...process.env, ...CLEAR } });
+    const ask = routing.directive as { ask_type?: string; new_intent_command?: string } | null;
+    expect(ask?.ask_type, routing.out).toBe("new-work-routing");
+    let step = nextOf(proj, ask?.new_intent_command);
+    if (plan !== undefined) {
+      const propose = /`([^`]*next --propose <plan> --request [0-9a-f]{8})`/.exec(
+        String((step.directive as { message?: unknown } | null)?.message),
+      )?.[1];
+      expect(propose, step.out).toBeDefined();
+      const offer = nextOf(proj, (propose as string).replace("<plan>", plan));
+      step = nextOf(proj, (offer.directive as { confirm_command?: unknown } | null)?.confirm_command);
+    }
+    return step;
+  };
+  /** Creation as the agent runs it: the request and every flag the step names. */
+  const createAsPrinted = (proj: string, step: { directive: unknown; out: string }) => {
+    const message = String((step.directive as { message?: unknown } | null)?.message);
+    const request = /--request ([0-9a-f]{8})/.exec(message)?.[1];
+    if (request === undefined) throw new Error(`no request in ${step.out}`);
+    const scope = /--scope ([a-z][a-z-]*)/.exec(message)?.[1];
+    const flags = [...message.matchAll(/--(guard-policy|guard\.[a-z-]+) (strict|relaxed|on|off)/g)].flatMap((m) => [`--${m[1]}`, m[2]]);
+    return utility(proj, ["intent-create", "--request", request, ...(scope === undefined ? [] : ["--scope", scope]), ...flags]);
+  };
+  const heard = (proj: string, step: { directive: unknown }): string =>
+    `${String((step.directive as { narration?: unknown } | null)?.narration ?? "")} ${pendingPersonLines(proj, SESSION).lines.join(" ")}`;
+
+  // Typed with the request, a lowered Guard Policy is the new work's, as a check
+  // typed off is: it rides the creation command, creation applies it once under
+  // the person-turn rule, and the person hears so. Nobody asks them again.
+  test.each([
+    ["the plan they named", ["--guard-policy", "off", "enterprise", "fix the parser"], undefined],
+    ["the plan the agent proposes", ["--guard-policy", "off", "fix the parser"], "enterprise"],
+  ])("typed with new work beside open work, the new work it routes to gets it once: %s", (_label, typed, plan) => {
+    const { proj, openState, openBefore } = besideOpenWork();
+    expect(reply(proj, `/aidlc ${typed.join(" ")}`)).not.toContain("AIDLC Guard Policy");
+    const step = separateWork(proj, typed as string[], plan as string | undefined);
+    const said = heard(proj, step);
+    expect(said, step.out).toContain("Guard Policy (it sets how many checks run) is off for the new work (set by you).");
+    expect(said).not.toContain("Do you want off");
+    const made = createAsPrinted(proj, step);
     expect(made.status, made.stderr).toBe(0);
-    expect(createdPolicy(proj) ?? "").not.toContain("off (set by you)");
-    expect(readFileSync(join(intents, open, "aidlc-state.md"), "utf-8")).toBe(openBefore);
+    expect(createdPolicy(proj)).toBe("off (set by you)");
+    expect(openState()).toBe(openBefore);
+  });
+
+  test("typed off for new work whose plan already ships off: nothing new is said or asked, and the work keeps its plan's value", () => {
+    const { proj, openState, openBefore } = besideOpenWork();
+    reply(proj, "/aidlc --guard-policy off fix the parser");
+    const step = separateWork(proj, ["--guard-policy", "off", "fix the parser"], "bugfix");
+    const said = heard(proj, step);
+    expect(said, step.out).not.toContain("Do you want off");
+    expect(said).not.toContain("is off for the new work (set by you)");
+    const made = createAsPrinted(proj, step);
+    expect(made.status, made.stderr).toBe(0);
+    expect(createdPolicy(proj)).toBe("off (from scope bugfix)");
+    expect(openState()).toBe(openBefore);
+  });
+
+  test("a team's strict Guard Policy: its line is said once, the new work is still created, at strict", () => {
+    const { proj, openState, openBefore } = besideOpenWork();
+    lockMemory(proj);
+    const memory = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
+    reply(proj, "/aidlc --guard-policy off enterprise fix the parser");
+    const step = separateWork(proj, ["--guard-policy", "off", "enterprise", "fix the parser"]);
+    const said = heard(proj, step);
+    const team = `Your team set Guard Policy to strict in ${memory} (section: Guard Policy)`;
+    expect(said.split(team).length - 1, step.out).toBe(1);
+    expect(said).not.toContain("Do you want off");
+    const made = createAsPrinted(proj, step);
+    expect(made.status, made.stderr).toBe(0);
+    expect(createdPolicy(proj)).toContain("strict");
+    expect(openState()).toBe(openBefore);
   });
 
   test("typed with words beside open work, choosing to continue the open work applies it there", () => {
