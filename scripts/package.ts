@@ -1306,10 +1306,6 @@ function rewriteNativeOnboarding(value: string, exactReads = false): string {
       `pre-approves only \`${TRUSTED_COMMAND_PREFIX}\` shell commands`,
     )
     .replace(
-      /pre-allows the deterministic core's exact command prefixes — `bun \.codex\/tools\/`, `bun \.codex\/hooks\/`, and/g,
-      `pre-allows the deterministic core's \`${TRUSTED_COMMAND_PREFIX}\` command prefix and`,
-    )
-    .replace(
       /^\*\*CWD drift warning\*\*: If a stage runs `cd` in Bash.*$/gm,
       "**CWD drift warning**: Native release commands resolve `aidlc` from `PATH`, so changing directories does not change the engine path. Keep project-relative file arguments anchored to the project root, or run `cd` commands in subshells: `(cd subdir && npm install)`.",
     );
