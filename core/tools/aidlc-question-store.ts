@@ -115,7 +115,8 @@ function isSettingTokens(value: unknown): value is string[] {
 export const QUESTION_UNAVAILABLE =
   "That question is no longer available; please describe the work again.";
 
-const QUESTION_ID = /^[0-9a-f]{8}$/;
+const QUESTION_ID_BODY = "[0-9a-f]{8}";
+const QUESTION_ID = new RegExp(`^${QUESTION_ID_BODY}$`);
 // A record folder name as the record list reports it: any single path
 // component (legacy and migrated folders may hold spaces or punctuation), or
 // "" for a workflow without one.
@@ -453,8 +454,8 @@ export function deleteQuestion(projectDir: string, id: string): void {
 // (`<entry> --request <id>`) and the new chat runs it once, as if they had
 // typed it there. It is its own kind of entry, in its own folder, so no
 // question read or scan ever sees it; the id shares the questions' namespace,
-// so `--request` names one or the other. Written once; taking it leaves a
-// marker beside it, so a second run of the same id does nothing again.
+// so `--request` names one or the other. Running it leaves a marker beside it,
+// so a second run of the same id does nothing again.
 export interface RestartRequest {
   id: string;
   /** The stopped `next`'s arguments, a request file already read into them. */
@@ -462,8 +463,13 @@ export interface RestartRequest {
   space: string;
   /** The work it was stopped in, by folder and immutable uuid; null before any. */
   workflow: QuestionTarget | null;
+  /** The chat it was stopped in, when the engine knew it. */
+  session?: string;
   createdAt: string;
 }
+
+// A kept stop's file or its mark, by its id.
+const RESTART_FILE = new RegExp(`^(${QUESTION_ID_BODY})\\.(json|taken)$`);
 
 function restartRel(projectDir: string, name?: string): string {
   const dir = join(sessionsDir(projectDir), "restarts");
@@ -479,7 +485,7 @@ function pruneExpiredRestartRequests(projectDir: string, cutoff: number): void {
     return;
   }
   for (const name of names) {
-    if (!/^[0-9a-f]{8}\.(?:json|taken)$/.test(name)) continue;
+    if (!RESTART_FILE.test(name)) continue;
     try {
       const path = recordFileTargetOrThrow(projectDir, restartRel(projectDir, name));
       if (lstatSync(path).isFile() && lstatSync(path).mtimeMs < cutoff) {
@@ -494,30 +500,61 @@ function pruneExpiredRestartRequests(projectDir: string, cutoff: number): void {
 function restartIdUsed(projectDir: string, id: string): boolean {
   try {
     return existsSync(recordFileTargetOrThrow(projectDir, restartRel(projectDir, `${id}.json`))) ||
-      existsSync(recordFileTargetOrThrow(projectDir, restartRel(projectDir, `${id}.taken`)));
+      restartRequestTaken(projectDir, id);
   } catch {
     // A folder reached through a link holds no request this engine reads.
     return false;
   }
 }
 
-/** Keep a stopped `next` for the chat its step restarts into; returns its id. */
+/**
+ * Keep a stopped `next` for the chat its step restarts into; returns its id.
+ * The same command stopped again in the same chat and work keeps the id it has
+ * while that one has not run, so two lines shown for it can never both run it,
+ * and is kept from now on, so the line just shown never names one about to
+ * expire. A stop in another chat is its own request.
+ */
 export function saveRestartRequest(
   projectDir: string,
   args: readonly string[],
   space: string,
   workflow: QuestionTarget | null,
+  keptAs?: string,
+  session?: string,
 ): string {
   pruneExpiredQuestions(projectDir);
+  const same = keptAs !== undefined ? { id: keptAs } : session === undefined ? undefined : keptRestartRequests(projectDir).find((kept) =>
+    kept.session === session &&
+    kept.space === space && kept.args.length === args.length && kept.args.every((arg, i) => arg === args[i]) &&
+    (kept.workflow === null
+      ? workflow === null
+      : workflow !== null && kept.workflow.intent === workflow.intent && kept.workflow.uuid === workflow.uuid) &&
+    !restartRequestTaken(projectDir, kept.id)
+  );
   const entry: RestartRequest = {
-    id: mintQuestionId(projectDir),
+    id: same?.id ?? mintQuestionId(projectDir),
     args: [...args],
     space,
     workflow: workflow ? { intent: workflow.intent, uuid: workflow.uuid } : null,
+    ...(session === undefined ? {} : { session }),
     createdAt: new Date().toISOString(),
   };
   writeRecordFileNoFollow(projectDir, restartRel(projectDir, `${entry.id}.json`), `${JSON.stringify(entry)}\n`);
   return entry.id;
+}
+
+function keptRestartRequests(projectDir: string): RestartRequest[] {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, restartRel(projectDir)));
+  } catch {
+    return [];
+  }
+  return names.flatMap((name) => {
+    const file = RESTART_FILE.exec(name);
+    const kept = file?.[2] === "json" ? readRestartRequest(projectDir, file[1]) : null;
+    return kept === null ? [] : [kept];
+  });
 }
 
 /** The stopped `next` kept under `id`, or null when there is none to read. */
@@ -536,18 +573,36 @@ export function readRestartRequest(projectDir: string, id: string): RestartReque
     }
     const days = retentionDays(projectDir);
     if (days !== null && Date.parse(raw.createdAt) < Date.now() - days * DAY_MS) return null;
-    return { id, args: raw.args, space: raw.space, workflow, createdAt: raw.createdAt };
+    return {
+      id, args: raw.args, space: raw.space, workflow,
+      ...(typeof raw.session === "string" ? { session: raw.session } : {}),
+      createdAt: raw.createdAt,
+    };
   } catch {
     // Missing, redirected, or unreadable: there is nothing to run.
     return null;
   }
 }
 
-/** Whether the stopped `next` kept under `id` was already run once. */
+/**
+ * The kept stop a `next` runs: its arguments when they are `--request <id>`
+ * alone, naming a kept stop that has not run; null otherwise. The engine runs
+ * those arguments in its place, and a host adapter judges the command by them.
+ */
+export function keptRestartRun(projectDir: string, args: readonly string[]): RestartRequest | null {
+  if (args.length !== 2 || args[0] !== "--request" || !QUESTION_ID.test(args[1])) return null;
+  const request = readRestartRequest(projectDir, args[1]);
+  return request === null || restartRequestTaken(projectDir, args[1]) ? null : request;
+}
+
+/** Whether the stopped `next` kept under `id` was already run once (a link in the mark's place counts). */
 export function restartRequestTaken(projectDir: string, id: string): boolean {
   if (!QUESTION_ID.test(id)) return false;
   try {
-    return existsSync(recordFileTargetOrThrow(projectDir, restartRel(projectDir, `${id}.taken`)));
+    // The folder through no link; the mark itself may be one.
+    const dir = recordFileTargetOrThrow(projectDir, restartRel(projectDir));
+    lstatSync(join(dir, `${id}.taken`));
+    return true;
   } catch {
     return false;
   }
@@ -555,19 +610,28 @@ export function restartRequestTaken(projectDir: string, id: string): boolean {
 
 /**
  * Mark the stopped `next` under `id` as run, once: only the first caller gets
- * true, so two chats given the same line never both run it.
+ * "taken", so two chats given the same line never both run it, and a later one
+ * gets "ran". A mark that cannot be written ("unmarked") does not keep the
+ * person's request from running; the caller says so.
  */
-export function takeRestartRequest(projectDir: string, id: string): boolean {
-  if (!QUESTION_ID.test(id)) return false;
+export function takeRestartRequest(projectDir: string, id: string): "taken" | "ran" | "unmarked" {
+  if (!QUESTION_ID.test(id)) return "ran";
+  if (restartRequestTaken(projectDir, id)) return "ran";
+  let target: string;
   try {
     const rel = restartRel(projectDir, `${id}.taken`);
     const anchor = realpathSync(projectDir);
     mkdirSync(dirname(assertNoSymlinkInChainOrThrow(anchor, rel)), { recursive: true });
-    const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0);
-    closeSync(openSync(assertNoSymlinkInChainOrThrow(anchor, rel), flags, 0o600));
-    return true;
+    target = assertNoSymlinkInChainOrThrow(anchor, rel);
   } catch {
-    return false;
+    return "unmarked";
+  }
+  try {
+    const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0);
+    closeSync(openSync(target, flags, 0o600));
+    return "taken";
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EEXIST" ? "ran" : "unmarked";
   }
 }
 

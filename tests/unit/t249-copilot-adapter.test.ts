@@ -97,6 +97,7 @@ import {
   WORKER_BRIEF_SECTIONS_FIXTURE,
 } from "../harness/fixtures.ts";
 import { writeActiveDirectiveMarker } from "../../core/tools/aidlc-lib.ts";
+import { saveRestartRequest } from "../../core/tools/aidlc-question-store.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -4704,5 +4705,29 @@ describe("the subagent's id belongs to the chat, and a per-call id is no chat", 
       hook_event_name: "SessionStart", source: "new", cwd: chat, session_id: SESSION,
     }).code).toBe(0);
     expect(heartbeat(chat)).toBe(SESSION);
+  });
+});
+
+// A `next` the hooks-off stop kept is run in the new chat as
+// `next --request <id>`. The adapter claims that command, but whether the
+// host's Allow prompt stays is judged by the command it runs.
+describe("a kept next run by its id is judged as the command it runs", () => {
+  test("one that keeps the prompt still gets no Allow; a kept jump does", () => {
+    const dir = orchestrationProject();
+    const call = (args: string[], attempt: string) => {
+      const pre = runAdapter(dir, "guard-tool-call", {
+        hook_event_name: "PreToolUse", session_id: "kept-stop", tool_use_id: attempt, cwd: dir,
+        tool_name: "run_in_terminal",
+        tool_input: { command: commandSpec(dir, "direct", args).text, explanation: "AI-DLC step", goal: "AI-DLC step", mode: "sync" },
+      });
+      expect(pre.code, pre.stderr).toBe(0);
+      const out = pre.stdout.trim() ? JSON.parse(pre.stdout) as { hookSpecificOutput?: { permissionDecision?: string } } : {};
+      return out.hookSpecificOutput?.permissionDecision;
+    };
+    const skip = saveRestartRequest(dir, ["--skip", "user-stories"], "default", null);
+    const jump = saveRestartRequest(dir, ["--stage", "requirements-analysis"], "default", null);
+    expect(call(["next", "--skip", "user-stories"], "typed-skip")).toBeUndefined();
+    expect(call(["next", "--request", skip], "kept-skip")).toBeUndefined();
+    expect(call(["next", "--request", jump], "kept-jump")).toBe("allow");
   });
 });

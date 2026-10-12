@@ -119,6 +119,8 @@ function stubHookBody(hookName: string, exitCode = 0, stderr = ""): string {
 // runtime-paths import is copied as-is (node builtins only). The
 // record-human-turn reads stateFilePath() + appendAuditEntry(); neither is a security
 // surface here, so the stubs are inert (state file absent → no append).
+// The kept stops the hooks-off step leaves: none in these fixtures.
+const QUESTION_STORE_STUB = `export function keptRestartRun(_p: string, _args: readonly string[]): null { return null; }\n`;
 const AUDIT_TOOL_STUB = `export function appendAuditEntry(_k: string, _d: unknown, _p: string): void {}\nexport function appendSubagentPromptUnmatched(_p: string, _r: unknown): void {}\nexport function appendCoordinationStoodAside(_p: string, _r: unknown): boolean { return false; }\n`;
 const LIB_TOOL_STUB = `import { join } from "node:path";
 export { boundDirectiveMessage } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
@@ -189,6 +191,7 @@ function scratch(): Scratch {
   mkdirSync(captureDir, { recursive: true });
   copyFileSync(ADAPTER_SRC, join(hooksDir, "aidlc-copilot-adapter.ts"));
   writeFileSync(join(toolsDir, "aidlc-audit.ts"), AUDIT_TOOL_STUB, "utf-8");
+  writeFileSync(join(toolsDir, "aidlc-question-store.ts"), QUESTION_STORE_STUB, "utf-8");
   writeFileSync(join(toolsDir, "aidlc-lib.ts"), LIB_TOOL_STUB, "utf-8");
   copyFileSync(RUNTIME_PATHS_SRC, join(toolsDir, "aidlc-runtime-paths.ts"));
   for (const source of DISPATCHER_SRCS) copyFileSync(source, join(toolsDir, basename(source)));

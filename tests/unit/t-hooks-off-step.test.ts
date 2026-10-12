@@ -18,7 +18,7 @@
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import { HOOKS_OFF_RERUN, hooksHealthDir, unattendedHumanPresenceHint } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -633,7 +633,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
   const idIn = (directive: Printed): string => (directive.message ?? "").match(/ --request ([0-9a-f]{8})\b/)?.[1] ?? "";
   const JUMP = ["--stage", "requirements-analysis"];
   const ran = (directive: Printed) =>
-    directive.kind === "print" && (directive.message ?? "").startsWith("That request already went ahead once");
+    directive.kind === "print" && (directive.message ?? "").startsWith("That request was already used once");
 
   for (const h of RESTART_HARNESSES) {
     test(`${h.name}: a stopped jump is named by its id and runs once`, () => {
@@ -679,6 +679,18 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     expect(picked.message ?? "").toContain("report --result resumed");
   });
 
+  test("long stopped words reach the print cut, so the step still fits", () => {
+    const words = "take me back to requirements analysis and keep the old layout ".repeat(60).trim();
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, ["--", words]));
+    beat(proj, "reviewer-scope");
+    const picked = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(picked.kind, JSON.stringify(picked).slice(0, 300)).toBe("print");
+    expect(picked.message ?? "").toStartWith('The person\'s words, typed before the restart and kept by AI-DLC (this chat never saw them): "take me back');
+    expect(picked.message ?? "").not.toContain(words);
+  });
+
   test("it runs in the work it was stopped in, never in work selected since", () => {
     const proj = installed(OPENCODE);
     intentCreate(proj, OPENCODE);
@@ -701,6 +713,21 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
   });
 
+  test("work renamed since is the same work, found by its uuid", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, JUMP));
+    beat(proj, "reviewer-scope");
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const before = readdirSync(intents, { withFileTypes: true }).find((entry) => entry.isDirectory())?.name ?? "";
+    const after = `${before}-renamed`;
+    renameSync(join(intents, before), join(intents, after));
+    const registry = join(intents, "intents.json");
+    writeFileSync(registry, readFileSync(registry, "utf-8").replaceAll(`"${before}"`, `"${after}"`), "utf-8");
+    writeFileSync(join(intents, "active-intent"), `${after}\n`, "utf-8");
+    expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+  });
+
   test("the id runs alone: anything beside it is refused", () => {
     const proj = installed(OPENCODE);
     intentCreate(proj, OPENCODE);
@@ -710,6 +737,157 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     expect(refused.kind).toBe("error");
     expect(refused.message ?? "").toContain("with nothing beside it");
     expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+  });
+
+  test("a kept stop stopped again keeps its own id, even with work selected since", () => {
+    const proj = installed(OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, ["--", "add a dark mode toggle"]));
+    intentCreate(proj, OPENCODE);
+    const again = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(isStop(again), JSON.stringify(again)).toBe(true);
+    expect(idIn(again)).toBe(id);
+  });
+
+  test("the same command stopped again in the same chat keeps its id, so two lines never run it twice", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const chat = { AIDLC_SESSION_OVERRIDE: SESSION };
+    const id = idIn(next(proj, OPENCODE, chat, JUMP));
+    expect(idIn(next(proj, OPENCODE, chat, JUMP))).toBe(id);
+    expect(readdirSync(join(proj, "aidlc", ".aidlc-sessions", "restarts")).filter((name) => name.endsWith(".json")))
+      .toHaveLength(1);
+    // Another chat's stop is its own request, with its own id.
+    const other = idIn(next(proj, OPENCODE, { AIDLC_SESSION_OVERRIDE: "22222222-3333-4444-8555-666666666666" }, JUMP));
+    expect(other).toMatch(/^[0-9a-f]{8}$/);
+    expect(other).not.toBe(id);
+  });
+
+  test("words after -- are the person's, even when they hold a kept id", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, JUMP));
+    beat(proj, "reviewer-scope");
+    const words = next(proj, OPENCODE, {}, ["--", "--request", id]);
+    expect(words.message ?? "", JSON.stringify(words)).not.toContain("with nothing beside it");
+    // A line that does not parse names a kept id only through --request.
+    const unparsed = next(proj, OPENCODE, {}, [id, "--project-type"]);
+    expect(unparsed.message ?? "", JSON.stringify(unparsed)).not.toContain("with nothing beside it");
+    // A plan named before it is a flag of the same line, so the id is still read as kept.
+    const planned = next(proj, OPENCODE, {}, ["bugfix", "--request", id]);
+    expect(planned.message ?? "", JSON.stringify(planned)).toContain("with nothing beside it");
+    expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+  });
+
+  test("before any workflow, it runs in the space it was stopped in, and not once that space is gone", () => {
+    const proj = installed(OPENCODE);
+    beat(proj, "record-human-turn");
+    const store = join(proj, OPENCODE.dir, "tools", "aidlc-question-store.ts");
+    const saved = run(proj, [
+      "-e",
+      `const { saveRestartRequest } = await import(${JSON.stringify(store)}); ` +
+        `console.log(saveRestartRequest(${JSON.stringify(proj)}, ["--", "add a dark mode toggle"], "elsewhere", null));`,
+    ], attendedEnv());
+    expect(saved.code, saved.stderr).toBe(0);
+    const id = saved.stdout.trim();
+    mkdirSync(join(proj, "aidlc", "spaces", "elsewhere"), { recursive: true });
+    const there = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(there.kind, JSON.stringify(there)).toBe("print");
+    expect(there.message ?? "").toContain("space switch elsewhere");
+    expect(there.message ?? "").toContain(`next --request ${id}\` again`);
+    rmSync(join(proj, "aidlc", "spaces", "elsewhere"), { recursive: true, force: true });
+    const gone = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(gone.kind, JSON.stringify(gone)).toBe("error");
+    expect(gone.message ?? "").toContain("space this request was kept for is no longer in this project");
+  });
+
+  test("a step that refuses it has used it: the same line then says to ask for it again", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, ["--stage", "no-such-stage", "--", "and keep the old layout"]));
+    beat(proj, "reviewer-scope");
+    const refused = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(refused.kind, JSON.stringify(refused)).toBe("error");
+    // The refusal shows the kept words, for the person to ask again.
+    expect(refused.message ?? "").toContain('Your earlier request was: "/aidlc --stage no-such-stage -- and keep the old layout".');
+    const again = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(ran(again)).toBe(true);
+    expect(again.message ?? "").toContain("If it was refused then, ask for it again.");
+    // Used, with more beside it: that more is sent again without the id, never dropped.
+    const beside = next(proj, OPENCODE, {}, ["--request", id, "--", "also add a logout button"]);
+    expect(beside.kind).toBe("error");
+    expect(beside.message ?? "").toContain(`was already used once, so it is not run again. Send what was typed beside it`);
+  });
+
+  test("a refused kept request with no words shows the line to ask for it again", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, ["--stage", "no-such-stage"]));
+    beat(proj, "reviewer-scope");
+    const refused = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(refused.kind, JSON.stringify(refused)).toBe("error");
+    expect(refused.message ?? "").toContain('Your earlier request was: "/aidlc --stage no-such-stage".');
+  });
+
+  test("a long kept request is shown cut, so the refusal still fits", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const long = "keep the old layout ".repeat(200).trim();
+    const id = idIn(next(proj, OPENCODE, {}, ["--stage", "no-such-stage", "--", long]));
+    beat(proj, "reviewer-scope");
+    const refused = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(refused.kind, JSON.stringify(refused).slice(0, 300)).toBe("error");
+    expect(refused.message ?? "").toContain('Your earlier request was: "/aidlc --stage no-such-stage -- keep the old layout');
+    expect(refused.message ?? "").toContain('..."');
+    expect(refused.message ?? "").not.toContain(long);
+  });
+
+  test("a kept id named beside another request is still run alone or not at all", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, JUMP));
+    beat(proj, "reviewer-scope");
+    const both = next(proj, OPENCODE, {}, ["--request", id, "--request", "0badc0de"]);
+    expect(both.kind, JSON.stringify(both)).toBe("error");
+    expect(both.message ?? "").toContain("with nothing beside it");
+  });
+
+  // Windows: a folder's mode does not stop a write there; as root nothing does.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "a mark that cannot be written does not keep the request from running",
+    () => {
+      const proj = installed(OPENCODE);
+      intentCreate(proj, OPENCODE);
+      const id = idIn(next(proj, OPENCODE, {}, JUMP));
+      beat(proj, "reviewer-scope");
+      const restarts = join(proj, "aidlc", ".aidlc-sessions", "restarts");
+      chmodSync(restarts, 0o500);
+      try {
+        const unmarked = next(proj, OPENCODE, {}, ["--request", id]) as Printed & { change_notices?: string[] };
+        expect(unmarked.message ?? "").toContain("execute --target requirements-analysis");
+        // With no chat to keep the line for, it rides the step's notices, which a stage in parts keeps too.
+        expect(unmarked.change_notices ?? []).toContain(
+          "AI-DLC could not mark it as run, so the same line would run it again.",
+        );
+      } finally {
+        chmodSync(restarts, 0o700);
+      }
+    },
+  );
+
+  test.skipIf(process.platform === "win32")("a link in the mark's place counts as run", () => {
+    // Windows: a symlink needs a privilege the runner may not have.
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, JUMP));
+    beat(proj, "reviewer-scope");
+    symlinkSync(join(proj, "nowhere"), join(proj, "aidlc", ".aidlc-sessions", "restarts", `${id}.taken`));
+    expect(ran(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
+    // The entry alone before any workflow reads the same mark.
+    const early = installed(OPENCODE);
+    const earlyId = idIn(next(early, OPENCODE, {}, ["--", "add a dark mode toggle"]));
+    symlinkSync(join(early, "nowhere"), join(early, "aidlc", ".aidlc-sessions", "restarts", `${earlyId}.taken`));
+    beat(early, "record-human-turn");
+    expect(JSON.stringify(next(early, OPENCODE))).not.toContain("add a dark mode toggle");
   });
 
   test("before any workflow, the id and the entry alone carry it on once between them", () => {
@@ -724,7 +902,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     expect(picked.narration ?? "", JSON.stringify(picked)).toStartWith(LINE);
     expect(JSON.stringify(picked)).toContain(REQUEST);
     expect(noWorkflow(next(named, OPENCODE))).toBe(true);
-    // The entry alone first: the id then says it already went ahead.
+    // The entry alone first: the id then says it was already used.
     const bare = installed(OPENCODE);
     const bareId = idIn(next(bare, OPENCODE, {}, ["--", REQUEST]));
     beat(bare, "record-human-turn");
