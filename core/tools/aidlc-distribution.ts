@@ -677,10 +677,9 @@ function linesAboveOwnSection(text: string, nextBody: string, newline: string): 
 }
 
 // The one rule for AI-DLC's part of a team file: replace the text between its
-// markers, adopt an unmarked file that is exactly a release's, refuse unmarked
-// AI-DLC text it cannot tell from the team's (except in .gitignore), and
-// otherwise add the marked part after the team's content (a missing file gets
-// only that part). Used by config and by the engine for a copy that was never
+// markers, adopt an unmarked file that is exactly a release's, and otherwise
+// add the marked part after the team's content (a missing file gets only that
+// part). Used by config and by the engine for a copy that was never
 // configured.
 export function mergeBlock(
   path: string,
@@ -745,11 +744,8 @@ export function mergeBlock(
       ...(kept ? { keptOwnLines: true } : {}),
     };
   }
-  // Ignore rules can remain user-owned even when they mention AI-DLC. Append
-  // our marked block without claiming or rewriting that existing prefix.
-  if (path !== ".gitignore" && /\baidlc\b|AI-DLC/i.test(current)) {
-    return { error: "legacy root integration ambiguous; move or delete the unmarked AI-DLC content" };
-  }
+  // Any other unmarked text is the team's, whatever it says about AI-DLC: it
+  // stays as it is, and the marked part goes after it.
   const prefix = current.length === 0 || current.endsWith(newline) ? current : `${current}${newline}`;
   return {
     value: `${prefix}${prefix ? newline : ""}${block}${newline}`,

@@ -2648,12 +2648,13 @@ describe("t294 instruction-file doctor row", () => {
     const part = readFileSync(join(project, ".codex", "tools", "data", "root-blocks", "agents"), "utf-8").trim();
     writeFileSync(agentsPath, `# Shop\n\n<!-- BEGIN AI-DLC:agents -->\n${part}\n<!-- END AI-DLC:agents -->\n`);
     expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
-    // An earlier release's text the team changed: the session start cannot
-    // add the part, so the doctor says so instead of calling it intact.
+    // An earlier release's text the team changed is the team's text now: the
+    // session start adds the part after it, and until then the doctor says the
+    // part is missing.
     writeFileSync(agentsPath, `${readFileSync(join(DIST, "codex", "AGENTS.md"), "utf-8")}\nOur own line.\n`);
     const edited = instructionFileDoctorCheck(project, ".codex");
     expect(edited.pass).toBe(false);
-    expect(edited.label).toContain("conflict (AGENTS.md)");
+    expect(edited.label).toContain("missing (AGENTS.md)");
     // The team's own file, before the session start adds the part.
     writeFileSync(agentsPath, "# Shop\n");
     const own = instructionFileDoctorCheck(project, ".codex");

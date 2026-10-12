@@ -4582,13 +4582,15 @@ describe("t243 project initialization", () => {
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  test("modified unmarked AGENTS.md still refuses as ambiguous even with --force", () => {
+  // An unmarked file that is not exactly a release's is the team's text, whatever
+  // it says about AI-DLC: config keeps it and adds the marked block after it.
+  test("a modified unmarked AGENTS.md is kept as the team's text and gets the marked block after it", () => {
     const project = temp("aidlc-t243-agents-ambiguous-");
     mkdirSync(join(project, ".git"));
     const path = join(project, "AGENTS.md");
     const original = `${readFileSync(join(KIRO_RELEASES[0], "AGENTS.md"), "utf-8")}\n# Local AI-DLC instructions\n`;
     writeFileSync(path, original);
-    const refused = run(INIT, [
+    const configured = run(INIT, [
       "config",
       "--project-dir",
       project,
@@ -4598,11 +4600,32 @@ describe("t243 project initialization", () => {
       "kiro",
       "--force",
     ], project);
-    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
-    expect(refused.stdout).toContain("legacy root integration ambiguous");
-    expect(readFileSync(path, "utf-8")).toBe(original);
-    expect(readdirSync(project).sort()).toEqual([".git", "AGENTS.md"]);
-    expect(readdirSync(join(project, ".git"))).toEqual([]);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const merged = readFileSync(path, "utf-8");
+    expect(merged.startsWith(original)).toBe(true);
+    expect(merged.match(/<!-- BEGIN AI-DLC:agents -->/g)).toHaveLength(1);
+    expect(merged.match(/<!-- END AI-DLC:agents -->/g)).toHaveLength(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The person's own AGENTS.md names AI-DLC in their words (the path a team
+  // meets before its first config, or after removing the block): their text is
+  // theirs, the block goes after it, and a second config changes nothing.
+  test("a team's AGENTS.md that mentions AI-DLC in its own words is kept, and the block is added after it", () => {
+    const project = temp("aidlc-t243-agents-mentions-aidlc-");
+    mkdirSync(join(project, ".git"));
+    const path = join(project, "AGENTS.md");
+    const theirs = "# Team notes\n\nWe run specs through AI-DLC; the aidlc folder holds the records.\n";
+    writeFileSync(path, theirs);
+    const args = ["config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro"];
+    const configured = run(INIT, args, project);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    expect(configured.stdout + configured.stderr).not.toContain("ambiguous");
+    const merged = readFileSync(path, "utf-8");
+    expect(merged.startsWith(theirs)).toBe(true);
+    expect(merged.match(/<!-- BEGIN AI-DLC:agents -->/g)).toHaveLength(1);
+    const again = run(INIT, args, project);
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    expect(readFileSync(path, "utf-8")).toBe(merged);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("--force does not replace a pre-existing user-owned JSON entry", () => {
@@ -4865,16 +4888,19 @@ describe("t243 project initialization", () => {
       .replace("<!-- BEGIN AI-DLC:agents -->\n", "")
       .replace("<!-- END AI-DLC:agents -->\n", "") + "\nTeam note: aidlc conventions apply here.\n";
     writeFileSync(modifiedPath, modified);
-    const refused = run(INIT, [
+    // With the markers gone and a team note added, the text is the team's: it
+    // stays, and the marked block is added after it.
+    const merged = run(INIT, [
       "config",
       "--project-dir",
       modifiedProject,
       "--from",
       KIRO_RELEASES[0],
     ], modifiedProject);
-    expect(refused.status).toBe(4);
-    expect(refused.stdout).toContain("legacy root integration ambiguous");
-    expect(readFileSync(modifiedPath, "utf-8")).toBe(modified);
+    expect(merged.status, merged.stdout + merged.stderr).toBe(0);
+    const text = readFileSync(modifiedPath, "utf-8");
+    expect(text.startsWith(modified)).toBe(true);
+    expect(text.match(/<!-- BEGIN AI-DLC:agents -->/g)).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("two managed AGENTS blocks from different versions are a conflict", () => {

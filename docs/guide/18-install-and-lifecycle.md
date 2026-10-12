@@ -1244,14 +1244,11 @@ is exactly what a release shipped as its own. opencode's entries in
 `opencode.json` arrive from the same folder at the same moment.
 
 Known unmarked files and JSON entries from historical shipped projections are
-adopted only when their exact recorded SHA-256 signature matches. Unknown or
-modified unmarked `.gitignore` content remains user-owned, including AI-DLC
-comments and rules. Config preserves that
-content as a prefix and appends a fresh managed block; no rename or deletion
-is needed. Other modified legacy lookalikes, including ambiguous AI-DLC
-content in `AGENTS.md`, remain refused. A `.gitignore` that is not valid UTF-8
-also remains untouched and requires an encoding conversion before config can
-merge it safely.
+adopted only when their exact recorded SHA-256 signature matches. Any other
+unmarked content is the team's, whatever it says about AI-DLC: config preserves
+it as a prefix and appends a fresh managed block; no rename or deletion is
+needed. A `.gitignore` that is not valid UTF-8 remains untouched and requires an
+encoding conversion before config can merge it safely.
 
 Inside a Git repository, config also checks whether a user-owned rule hides
 committed workflow records, including during `--dry-run`. A rule such as
@@ -1270,7 +1267,7 @@ change doctor's exit code and is absent when no records are hidden or Git
 cannot check the project.
 
 `--force` can replace a modified, baseline-owned managed block or managed
-harness file. It cannot adopt ambiguous unmarked content or overwrite a
+harness file. It cannot overwrite a
 user-owned JSON value, including the team's own entries in `opencode.json`. Malformed JSON, malformed or duplicate
 markers, non-regular-file targets, and retired owned content whose integrity
 cannot be proved are hard conflicts.
