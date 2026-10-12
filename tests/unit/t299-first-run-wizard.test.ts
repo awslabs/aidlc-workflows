@@ -1179,8 +1179,8 @@ describe("t299 first-run setup wizard", () => {
     const kept = runWizard("\n\n", { harnesses: bothKiro, env: saved.env });
     expect(kept.status, kept.stdout + kept.stderr).toBe(0);
     expect(kept.stdout).toContain("Using Kiro IDE.");
-    expect(kept.stdout).not.toContain("Kiro CLI runs each AI-DLC session on one model.");
-    expect(kept.stdout).not.toContain("Model [");
+    // Neither the keep-or-choose question nor the model list.
+    expect(kept.stdout).not.toMatch(/model \[/i);
     expect(kiroWrites(saved.writes)).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

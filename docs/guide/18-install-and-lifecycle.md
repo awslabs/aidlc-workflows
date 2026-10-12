@@ -373,7 +373,8 @@ chosen model, with the preset's session effort, in your personal Kiro settings,
 last, after every AI-DLC step. Under Kiro auto, recommended defaults ask that
 one model question; see
 [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
-The `kiro-ide` row saves Kiro CLI's model only, never an effort; see
+On the `kiro-ide` row, when `kiro-cli` is on your PATH, step 2 is Kiro CLI's
+session model, saved without an effort; see
 [First run](harnesses/kiro-ide.md#first-run).
 Every numbered prompt has
 a bracketed default, invalid input re-asks in place, and each answer is echoed.
