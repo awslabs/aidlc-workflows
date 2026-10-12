@@ -474,9 +474,11 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
         drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
 
         expect(await waitForNativeTurnEnd(sessionId)).toBe(true);
-        expect(nativeTranscript(sessionId)).toContain(
-          String.raw`{\"kind\":\"error\",\"message\":\"Invalid AWS_AIDLC_DEFAULT_SCOPE \\\"bogus\\\"`,
-        );
+        // A step leads with the words for the person, so the error's message
+        // and its kind are matched in any key order.
+        const transcript = nativeTranscript(sessionId);
+        expect(transcript).toContain(String.raw`\"message\":\"Invalid AWS_AIDLC_DEFAULT_SCOPE \\\"bogus\\\"`);
+        expect(transcript).toContain(String.raw`\"kind\":\"error\"`);
         // The person sees the engine's exact message: which setting is wrong,
         // its value, and the valid scopes, relayed by the hook byte for byte.
         expect(waitFor(
