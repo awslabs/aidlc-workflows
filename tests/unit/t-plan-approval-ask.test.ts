@@ -422,6 +422,31 @@ describe("the engine asks for Plan Approval", () => {
     expect(still.ask_type).toBe("plan-approval");
   });
 
+  // `/aidlc --config models` typed while the plan question is open: the chat
+  // route ends the turn, the guard lets its read and the change the person
+  // picked through, both run, and the plan question is still the one waiting.
+  test("/aidlc --config models while the plan waits reads and lands the change, and leaves the plan question open", () => {
+    const proj = project();
+    // The project's own installed tools, as the copy channel has them.
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    askFor(proj);
+    const configure = next(proj, ["--config", "models"]);
+    expect(configure.kind, JSON.stringify(configure)).toBe("print");
+    expect(configure.message).toContain("do NOT run `next`");
+    const show = /Read current state first with `([^`]+)`/.exec(configure.message ?? "")?.[1];
+    expect(show, configure.message).toBe("bun .claude/tools/aidlc.ts config models --show --json");
+    const land = "bun .claude/tools/aidlc.ts config models --preset thorough --local --yes";
+    for (const command of [show as string, land]) {
+      const guarded = guardBash(proj, command);
+      expect(guarded.code, `${command}\n${guarded.stderr}`).toBe(0);
+      runInstalled(proj, command);
+    }
+    expect(readFileSync(join(proj, "aidlc.settings.local.json"), "utf-8")).toContain('"thorough"');
+    const still = next(proj);
+    expect(still.kind, JSON.stringify(still)).toBe("ask");
+    expect(still.ask_type).toBe("plan-approval");
+  });
+
   test("a stage without a plan is planned first; a ready plan is asked for with its summary", () => {
     const proj = project();
     const planning = next(proj);

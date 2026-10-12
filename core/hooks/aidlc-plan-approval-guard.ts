@@ -55,6 +55,7 @@ import {
 } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
+import { CONFIG_SECTIONS } from "../tools/aidlc-command.ts";
 import { commandPath, readActiveExecutable } from "../tools/aidlc-install-paths.ts";
 import {
   guardOperationMatchesRemedy,
@@ -1299,6 +1300,48 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
   return changes && (!lowers || personAskedSinceGate(projectDir));
 }
 
+// A config section read or changed, as `/aidlc --config` lands what the person
+// picked (`config <section> ...`), and `config --help`. The config command owns
+// its grammar and refuses what it does not take; this only sorts what passes
+// while a plan waits. A read or a setting passes whoever typed it: none builds
+// anything or changes what the plan says. Kiro's Workflows on, the sensor
+// timeout and which plugins are on (project --reset turns them all on) can take
+// a check away or change the stations, so they pass once the person asked, as
+// a recorded switch turned off does. A release fetched or applied replaces the
+// engine itself, and the switches with their own rule keep it.
+const CONFIG_SECTION_REFUSED = new Set([
+  "--download", "--release-base-url", "--ca-bundle", "--bypass", "--clear-bypass", "--statusline",
+]);
+
+function configSectionChangeAdmitted(projectDir: string, args: readonly string[]): boolean {
+  if (args[0] !== "config") return false;
+  if (args.length === 2 && args[1] === "--help") return true;
+  const section = args[1] ?? "";
+  if (!(CONFIG_SECTIONS as readonly string[]).includes(section)) return false;
+  let harness = false;
+  let lowers = false;
+  for (let index = 2; index < args.length; index++) {
+    const arg = args[index];
+    const equals = arg.startsWith("--") ? arg.indexOf("=") : -1;
+    const name = equals > 0 ? arg.slice(0, equals) : arg;
+    const value = () => (equals > 0 ? arg.slice(equals + 1) : args[++index]);
+    if (CONFIG_SECTION_REFUSED.has(name) || (name === "--from" && section !== "models")) return false;
+    if (name === "--project-dir") {
+      // This project's own folder, however it is spelled.
+      const dir = value();
+      if (dir === undefined || !sameDirectoryIdentity(resolve(dir), projectDir)) return false;
+    } else if (name === "--harness") {
+      if (harness || value() === undefined) return false;
+      harness = true;
+    } else if (name === "--kiro-workflows") {
+      lowers ||= value() !== "off";
+    } else if (name === "--plugins" || name === "--sensor-timeout-ms" || (section === "project" && name === "--reset")) {
+      lowers = true;
+    }
+  }
+  return !lowers || personAskedSinceGate(projectDir);
+}
+
 // AI-DLC's status line switched on or off (#1407): a display setting that
 // lowers no check and builds nothing, so it passes while a plan waits, as
 // status and doctor do, whoever typed it. Exactly `config --statusline on|off`
@@ -1692,8 +1735,8 @@ function everyHelperMayRun(engineArgs: readonly string[]): boolean {
 
 // Everything admitted while a plan waits, in one place: the prerequisites
 // below, the open question's own answers, read-only diagnostics, a recorded
-// switch, the status line switch, what every helper may run, and what the
-// engine names.
+// switch, a config section, the status line switch, what every helper may run,
+// and what the engine names.
 function planWaitAdmits(
   projectDir: string,
   engineArgs: string[],
@@ -1703,7 +1746,7 @@ function planWaitAdmits(
   const personSpoke = () => personSpokeSinceGate(projectDir, { requests: true });
   return isPlanApprovalPrerequisite(engineArgs, gateHeld, personSpoke) ||
     askAdmits(engineArgs) || isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs) ||
-    statusLineSwitchAdmitted(projectDir, engineArgs) ||
+    configSectionChangeAdmitted(projectDir, engineArgs) || statusLineSwitchAdmitted(projectDir, engineArgs) ||
     chatSwitchChangeAdmitted(projectDir, engineArgs) || intentRepoChangeAdmitted(engineArgs, personSpoke) ||
     everyHelperMayRun(engineArgs) ||
     engineDirectedWhilePlanWaits(engineArgs, () => personSpoke() && lastStepAdmitsPersonsMoves(projectDir));

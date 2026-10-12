@@ -582,6 +582,9 @@ function scratchProject(): string {
     "aidlc-review-brief.ts",
     "aidlc-construction-checkpoints.ts",
     "aidlc-testing-posture.ts",
+    // The config sections the hook sorts while a plan waits, and what that imports.
+    "aidlc-command.ts",
+    "aidlc-color.ts",
   ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));
   }
@@ -1809,6 +1812,116 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // `/aidlc --config` reads a section and lands each change the person asked
+  // for with one `config <section> ... --yes`. While a plan waits, a read or a
+  // setting passes whoever typed it: none builds anything or changes what the
+  // plan says. Kiro's Workflows on, the sensor timeout and which plugins are on
+  // can take a check away or change the stations, so they pass once the person
+  // asked. A release fetched or applied, another project's folder, and the
+  // switches with their own rule are not this.
+  test("a config section change passes while the plan waits; a release or another folder does not", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "u1", { plan: true, answer: null });
+      const spellings = (args: string) => [`aidlc ${args}`, `bun .claude/tools/aidlc.ts ${args}`];
+      const expectCode = (command: string, code: number, env: Record<string, string> = {}) => {
+        const result = runHook(proj, BASH(command), env);
+        expect(result.code, `${command}\n${result.stderr}`).toBe(code);
+      };
+      const settings = [
+        "config --help",
+        "config models --show --json",
+        "config models --help",
+        "config runtime --check",
+        "config providers --show",
+        "config trust --show --json",
+        "config flags --show",
+        "config project --show --json",
+        "config models --preset thorough --local --yes",
+        "config models --from balanced --save-as team-default --project --yes",
+        "config models --agent aidlc-developer-agent --effort high --model some-model --yes",
+        "config runtime --record-paths --yes",
+        "config providers --provider amazon-bedrock --region us-east-1 --profile dev --yes",
+        "config trust --acknowledge --yes",
+        "config trust --kiro-workflows off --yes",
+        "config trust --kiro-terminal powershell --yes",
+        "config flags --default-scope feature --swarm on --local --yes",
+        "config flags --hook-debug on --question-retention-days 30 --global --yes",
+        "config flags --reset --local --yes",
+        "config flags --local --yes",
+        "config project --mcp none --completions none --yes",
+        "config models --preset minimal --dry-run",
+        "config models --preset balanced --harness kiro --plan-token abc123 --yes",
+        `config models --preset balanced --project-dir '${proj}' --quiet --no-color --verbose --yes`,
+        `config trust --show --project-dir='${proj}'`,
+      ];
+      for (const args of settings) {
+        for (const command of spellings(args)) expectCode(command, 0);
+      }
+      const asked = [
+        "config trust --kiro-workflows on --yes",
+        "config flags --sensor-timeout-ms 5 --local --yes",
+        "config flags --default-scope feature --sensor-timeout-ms 5 --local --yes",
+        "config project --plugins all --yes",
+        "config project --plugins=test-pro --yes",
+        "config project --reset --yes",
+      ];
+      for (const args of asked) {
+        for (const command of spellings(args)) expectCode(command, 2);
+      }
+      const otherProject = mkdtempSync(join(tmpdir(), "t265-other-project-"));
+      const refused = [
+        "config --yes",
+        "config --pin 2.11.0 --yes",
+        "config --help --yes",
+        "config bogus --show",
+        "config models --preset thorough --download --yes",
+        "config models --preset thorough --download --release-base-url https://example.invalid --yes",
+        "config trust --acknowledge --download --ca-bundle /tmp/ca.pem --yes",
+        "config providers --provider current --download=1 --yes",
+        "config project --from /tmp/release --yes",
+        "config project --mcp none --from=/tmp/release --yes",
+        "config flags --from /tmp/release --yes",
+        "config flags --default-scope feature --bypass AIDLC_DISABLE_SENSORS --local --yes",
+        "config flags --swarm on --clear-bypass AIDLC_DISABLE_SENSORS --yes",
+        "config models --show --harness claude --harness codex",
+        "config models --show --harness",
+        `config models --show --project-dir '${otherProject}'`,
+        `config models --show --project-dir='${otherProject}'`,
+        "config models --show --project-dir /elsewhere",
+        "config models --show --project-dir",
+      ];
+      try {
+        for (const args of refused) {
+          for (const command of spellings(args)) expectCode(command, 2);
+        }
+        for (const command of [
+          "aidlc config models --preset thorough --yes; printf code > src/inline.ts",
+          "env -C other aidlc config models --show",
+        ]) {
+          expectCode(command, 2);
+        }
+        // The person asked: the three that can take a check away pass, and an
+        // unattended driver, with no person behind it, never runs them.
+        appendAuditEntry("HUMAN_TURN", { Session: "t265-config" }, proj);
+        for (const args of asked) {
+          for (const command of spellings(args)) {
+            expectCode(command, 0);
+            expectCode(command, 2, { AIDLC_UNATTENDED: "1" });
+          }
+        }
+        for (const args of refused) {
+          for (const command of spellings(args)) expectCode(command, 2);
+        }
+      } finally {
+        rmSync(otherProject, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   // Switching a check off for the project, or back on, is the person's call,
   // and the engine then tells them which check is off. While a plan waits,
   // turning one back on always passes; turning one off passes once a person
@@ -1857,7 +1970,6 @@ describe("t265b hook lifecycle", () => {
         "aidlc config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --default-scope feature --local --yes",
         "aidlc config flags --bypass NOT_A_SWITCH --local --yes",
         "aidlc config flags --bypass",
-        "aidlc config flags --local --yes",
         "aidlc config models --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --yes",
         `aidlc ${off} --project-dir /elsewhere`,
         `env -C other aidlc ${on}`,
