@@ -184,18 +184,25 @@ function buildCase(next: () => number): Case {
   switch (shape) {
     case "words-only":
       return { shape, argv: [...tail], tail };
-    // The same line, as the three harnesses hand it over: a plan's name typed
-    // first, then the person's words, split into tokens, quoted whole, or the
-    // plan in its own argument with the request in one more. The name is the
-    // person's pick of that plan and the words after it, however many, are
-    // their request (Arden 2026-10-12: the two-word cutoff is gone).
+    // The same line, as the three harnesses hand it over: the person's own
+    // sentence opening with a word that is also a plan's name, split into
+    // tokens or quoted whole, and the plan named in its own argument, which is
+    // the reading the orchestrator skill asks the agent for. That first word
+    // may be their own, so their words stay whole (#2359).
     case "plan-word-split": {
       const plan = pick([...SCOPES]);
-      return { shape, argv: [plan, ...tail], tail, plan };
+      // With one word after the plan's name the line is two arguments: the
+      // plan in its own, the description in one more.
+      return tail.length > 1
+        ? { shape, argv: [plan, ...tail], tail: [plan, ...tail] }
+        : { shape, argv: [plan, ...tail], tail, plan };
     }
     case "plan-word-quoted": {
+      // One argument holding the whole line: the engine never splits their
+      // sentence for them, so every word of it is the request.
       const plan = pick([...SCOPES]);
-      return { shape, argv: [[plan, ...tail].join(" ")], tail, plan };
+      const line = [plan, ...tail].join(" ");
+      return { shape, argv: [line], tail: [line] };
     }
     case "plan-word-named": {
       const plan = pick([...SCOPES]);
@@ -380,11 +387,14 @@ describe("the flag parser over a seeded sweep of lines", () => {
         expect(parsed.intent, note).toBe(testCase.tail.join(" "));
       }
 
-      // A plan's name typed first is the pick of that plan in every form of the
-      // line, and the words after it are the request whole.
+      // A plan named in its own argument is the pick of that plan; any other
+      // line opening with a plan's name is the person's words whole (#2359).
       if (testCase.plan !== undefined) {
         expect(parsed.positionalScope, note).toBe(testCase.plan);
         expect(parsed.intent, note).toBe((testCase.tail ?? []).join(" "));
+        expect(parsed.readingStep, note).toBeUndefined();
+      } else if (testCase.shape.startsWith("plan-word")) {
+        expect(parsed.positionalScope, note).toBeUndefined();
         expect(parsed.readingStep, note).toBeUndefined();
       }
 
@@ -473,18 +483,16 @@ describe("the flag parser over a seeded sweep of lines", () => {
       }
       // The same line as one quoted argument, as a harness that quotes the
       // whole turn hands it over. Nothing but flags and their values reads as
-      // those tokens; a line opening with a plan's name is that plan's pick
-      // either way, because it is the same line; any other sentence is theirs
-      // whole.
+      // those tokens; any sentence of theirs is theirs whole, one opening with a
+      // plan's name too (#2359).
       if (testCase.argv.length > 1 && !testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token))) {
         const line = testCase.argv.join(" ");
         const quoted = readNextLine([line]);
-        if (argumentIsFlagShaped(line) || SCOPES.has(testCase.argv[0])) {
-          // A line opening with a plan's name reads exact in both forms: the
-          // person's pick, however many words follow.
+        if (argumentIsFlagShaped(line)) {
           expect(quoted, `quoted ${note}`).toEqual(reading);
-          if (SCOPES.has(testCase.argv[0])) expect(reading.kind, note).toBe("exact");
         } else {
+          // Quoted whole, a line opening with a plan's name is their words.
+          if (SCOPES.has(testCase.argv[0])) expect(quoted.kind, `quoted ${note}`).toBe("words");
           // Otherwise the engine cannot see a flag or a noun inside one
           // argument of theirs, so the line is their words whole, and never a
           // reading it would act on differently.

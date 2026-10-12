@@ -4,7 +4,7 @@ Orchestration is split across two pieces. A deterministic **engine** (`aidlc-orc
 
 This chapter documents the workflow behaviour from the conductor's side — entry points, session management, scope-to-stage mapping, the stage execution and advancement protocol, and the deliberate deviations. For the engine internals — the `next`/`report` contract, the typed directive union, the conductor persona, plural skills, scope shape, and the swarm referee — see [Engine and Skill System](17-skill-system.md). For user-facing command usage, see the [User Guide -- CLI Commands](../guide/12-cli-commands.md).
 
-> **Ownership note.** Throughout this chapter, the behaviours described — argument resolution, scope detection, jump validation, resume branching — are computed by the **engine** on each `next` and delivered to the conductor as a directive. Where older prose said "the orchestrator does X," read it as "the engine decides X and emits a directive; the conductor carries it out." The decision logic is deterministic tool code, never SKILL.md prose.
+> **Ownership note.** Throughout this chapter, the behaviours described (argument resolution, the plan question, jump validation, resume branching) are computed by the **engine** on each `next` and delivered to the conductor as a directive. Where older prose said "the orchestrator does X," read it as "the engine decides X and emits a directive; the conductor carries it out." The decision logic is deterministic tool code, never SKILL.md prose.
 
 > **Path convention.** Each intent's state, audit trail, and intent-scoped
 > artifacts live under its **record dir** —
@@ -39,7 +39,7 @@ The conductor passes `$ARGUMENTS` to the engine's first `next` verbatim — it n
 
 When the argument matches one of the 11 known scopes (`enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `workshop`, `express`):
 
-An explicitly named scope on a fresh workspace (no intent yet — no `aidlc-state.md` under `aidlc/spaces/*/intents/*/`) **creates the first intent**: the engine's `next` emits a run-then-continue `print` directive naming `aidlc-utility.ts intent-create --scope <scope>` (threading any `--depth` / `--test-strategy` / `--project-type` / `--review` flags onto the named command); the conductor runs it and re-runs `next` to land on the first stage. Both naming shapes — the bare positional (`/aidlc bugfix`) and the explicit flag (`/aidlc --scope bugfix`) — emit the identical creation print. A scope name followed by a colon (`/aidlc bugfix: Fix duplicate todos`) names it the same way, even when the agent passes the whole request as one quoted argument; a scope name that opens one quoted argument (`classic car rental website`, as Kiro IDE's PowerShell hands the line over) names it too. A plan's name typed first is the person's pick of that plan and the words after it, however many, are the request, in every form a harness hands the line over: the plan in its own argument with the request in one more (`next bugfix 'Fix duplicate todos'`, which is what the orchestrator skill asks the conductor for), loose words after it (`next bugfix Fix duplicate todos`), or the whole line in one argument; all create with that plan. The two-word cutoff that sent three or more words after a plan's name to the agent as a reading step is gone (Arden 2026-10-12). Describing what to build (`/aidlc "build the auth service"`) also creates. A bare `/aidlc` with no explicitly named scope and no description does NOT creation (an env- or default-resolved scope is not a creation signal); it emits the no-state error directing the user to describe what to build or name a scope. When this chat holds something the person set for the piece of work they start next (a check off, a Guard Policy, a ceremony, or plan approval off, still within the hour: `switchKeptForNextWork`), nothing is wrong, so the step is a turn-ending `print` instead: its narration tells them what to build next, the line they were already told rides it, and no `error` means no engine-error relay repeating machinery at them.
+An explicitly named scope on a fresh workspace (no intent yet: no `aidlc-state.md` under `aidlc/spaces/*/intents/*/`) **creates the first intent**: the engine's `next` emits a run-then-continue `print` directive naming `aidlc-utility.ts intent-create --scope <scope>` (threading any `--depth` / `--test-strategy` / `--project-type` / `--review` flags onto the named command); the conductor runs it and re-runs `next` to land on the first stage. Both naming shapes, the bare positional (`/aidlc bugfix`) and the explicit flag (`/aidlc --scope bugfix`), emit the identical creation print. A scope name followed by a colon (`/aidlc bugfix: Fix duplicate todos`) names it the same way, even when the agent passes the whole request as one quoted argument. A plan word in its own argument with the request in one more (`next bugfix 'Fix duplicate todos'`, which is what the orchestrator skill asks the conductor for) is that naming and creates; any other line that opens with a plan's name, loose words after it (`next bugfix Fix duplicate todos`, as a harness hands a typed line over) or the whole line in one argument (`classic car rental website`, as Kiro IDE's PowerShell hands it over), is the person's own sentence opening with a word that is also a plan's name, so it is their words whole and reaches the agent's plan proposal step below instead of spending their first word. Describing what to build (`/aidlc "build the auth service"`) also creates. A bare `/aidlc` with no explicitly named scope and no description does NOT creation (an env- or default-resolved scope is not a creation signal); it emits the no-state error directing the user to describe what to build or name a scope. When this chat holds something the person set for the piece of work they start next (a check off, a Guard Policy, a ceremony, or plan approval off, still within the hour: `switchKeptForNextWork`), nothing is wrong, so the step is a turn-ending `print` instead: its narration tells them what to build next, the line they were already told rides it, and no `error` means no engine-error relay repeating machinery at them.
 
 1. Reads guardrails from `aidlc/spaces/<active-space>/memory/`.
 2. Asks the user "What would you like to build?"
@@ -101,9 +101,13 @@ claim gate all consult), so nothing acts off-band on a line the engine would
 hand to the agent. **Exact**: every token read under the grammar, with any free
 words marked as theirs (the `--` delimiter, or a plan named with a colon); it
 acts as it always has. **Words**: nothing on the line was read, so it is a
-request. **A reading step** otherwise: the `print` above, with no `narration`,
+request. So is a line that opens with a plan's name and goes on in words, as
+tokens or as one argument (`classic car rental website`), since that name may
+be their own first word; the name alone, in its own argument with the request
+in one more (`next classic 'Build a notes app'`, which is what the orchestrator
+skill asks the conductor for), or with a colon is a pick. **A reading step** otherwise: the `print` above, with no `narration`,
 naming each reading as a command to run, and nothing created, switched, jumped,
-dropped or refused before the agent has read it. Four lines reach it besides an
+dropped or refused before the agent has read it. Three lines reach it besides an
 untaken token:
 
 - a flag `next` does take, with a value its own table does not hold
@@ -113,13 +117,6 @@ untaken token:
 - a leading `plugin` or `knowledge` noun with two or more words of theirs after
   it (`plugin is confusing`). One word after a noun is a verb or a name, however
   it is spelt, and keeps that noun's own refusal naming its verbs;
-- the person's own sentence opening with a word that is also a plan's name, in
-  either form a harness hands it over: as tokens (`bugfix Fix duplicate todos`)
-  or as one argument (`classic car rental website`). A plan named in its own
-  argument with the request in one more (`next classic 'Build a notes app'`,
-  which is what the orchestrator skill asks the conductor for), a plan named
-  with a colon, and a two-word line (the plan and a one-word description) are
-  readings already made, and act;
 - a reply typed while the engine's own plan question is open and nothing has
   been started from it: the print names that question's own commands, so "yes"
   after the offer answers it instead of becoming work called "yes". Words behind

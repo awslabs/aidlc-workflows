@@ -1983,10 +1983,10 @@ export function killSwitchAdvisories(
 /** Check proposed (granted-at-the-gate) keywords against the keywords the
  *  existing scopes already claim - the same loadScopeMapping data the plan
  *  proposal step (where the agent reads them as hints) and findScopeByKeyword
- *  read. A duplicate keyword would point the agent at two plans with one hint
- *  on every future cold start; a collision is therefore a hard error naming
- *  the colliding scope, never an advisory. Comparison is case-insensitive exact equality, matching
- *  findScopeByKeyword. */
+ *  read. A shared keyword would list one hint under two plans, where it no
+ *  longer tells them apart; a collision is a hard error naming the colliding
+ *  scope, never an advisory. Comparison is case-insensitive exact equality,
+ *  matching findScopeByKeyword. */
 export function keywordCollisions(granted: string[]): string[] {
   const mapping = loadScopeMapping();
   const errors: string[] = [];
@@ -2001,8 +2001,8 @@ export function keywordCollisions(granted: string[]): string[] {
     if (holders.length > 0) {
       errors.push(
         `Keyword "${kw}" is already claimed by scope${holders.length > 1 ? "s" : ""} ` +
-          `[${holders.join(", ")}] - granting it would shadow that scope in ` +
-          `the plan proposal step. Pick a keyword no existing scope claims.`
+          `[${holders.join(", ")}] - granting it would list one hint under two plans in ` +
+          `the plan proposal step, where it would no longer tell them apart. Pick a keyword no existing scope claims.`
       );
     }
   }

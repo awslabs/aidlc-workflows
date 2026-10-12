@@ -39753,17 +39753,14 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
       return { kind: "words" };
     }
     if (colon && plans.has(colon[1].toLowerCase())) return { kind: "exact" };
-    // A plan's name typed first is the person's pick of that plan, and the words
-    // after it, however many, are their request, in every form a harness hands
-    // the line over: the name in its own argument with the rest in one more
-    // (`next classic 'Build a notes app'`, the form the orchestrator skill asks
-    // the agent for), loose words after it (`bugfix Fix duplicate todos`), or
-    // the whole line in one argument, as Kiro IDE's PowerShell hands it over
-    // (`classic car rental website`). One line, one reading, whatever its
-    // length (Arden 2026-10-12: the two-word cutoff goes).
-    const opening = plan.split(/\s+/)[0];
-    if (plans.has(opening)) return { kind: "exact" };
-    return { kind: "words" };
+    // A plan's name is a pick only where it can be nothing else: the whole line
+    // (`next bugfix`), or its own argument with the request in one more, which
+    // is what the orchestrator skill asks the agent for (`next classic 'Build a
+    // notes app'`). Any other line that opens with one is the person's own
+    // sentence, whose first word may be theirs (`classic car rental website`,
+    // loose words or one argument as Kiro IDE's PowerShell hands it over): it is
+    // their words whole, for the agent to read, at any length (#2359).
+    return plans.has(plan) && words.length <= 2 ? { kind: "exact" } : { kind: "words" };
   }
   return { kind: "exact" };
 }

@@ -20,7 +20,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
-import { getField, hooksHealthDir, nextFlagShape, readAuditShardEvents, validScopes } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { getField, hooksHealthDir, nextFlagShape, readAuditShardEvents, splitKiroCommandArgs, validScopes } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { nextArgsAreOnlyWords, parseNextFlags } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
 import {
   AIDLC_SRC,
   REPO_ROOT,
@@ -407,61 +408,78 @@ describe("t-plan-proposed-by-the-agent: work here but none selected", () => {
   });
 });
 
-// A plan's name typed first is the person's pick of that plan, and the words
-// after it, however many and however the harness hands them over, are their
-// request (Arden 2026-10-12: the two-word cutoff goes). Before, two words after
-// the name acted while three went to the agent as "the name of a plan and also
-// the first word of what the person typed".
-describe("t-plan-proposed-by-the-agent: a plan name typed first is the person's pick, however many words follow", () => {
+// #2359 F1: a line that opens with a plan's name and goes on in words is the
+// person's request whole, because that name may be their own first word
+// (`/aidlc classic car rental website`): the agent reads it. The forms that can
+// only be a pick stay one: the plan's name alone, in its own argument with the
+// request in one more, with a colon, `--scope`, and the agent's `--propose`.
+describe("t-plan-proposed-by-the-agent: a line that opens with a plan's name is the person's words", () => {
   const LINE = ["fix", "the", "login", "crash", "when", "the", "session", "expires"];
 
-  test("fresh workspace: the split line and the one-argument line both create with that plan for the words after it", () => {
-    proj = fresh();
-    const split = next(CLAUDE_TOOLS, proj, ["bugfix", ...LINE]);
-    expect(split.kind, JSON.stringify(split).slice(0, 300)).toBe("print");
-    expect(String(split.message)).toContain("intent create --scope bugfix --request");
-    expect(questionTexts(proj).map((q) => q.text)).toContain(LINE.join(" "));
-    cleanupTestProject(proj);
-    proj = fresh();
-    const quoted = next(CLAUDE_TOOLS, proj, [["bugfix", ...LINE].join(" ")]);
-    expect(quoted.kind, JSON.stringify(quoted).slice(0, 300)).toBe("print");
-    expect(String(quoted.message)).toContain("intent create --scope bugfix --request");
-    expect(questionTexts(proj).map((q) => q.text)).toContain(LINE.join(" "));
-  });
-
-  test("the person's plan wins over one the agent names on its own, and the colon form reads the same", () => {
-    proj = fresh();
-    const named = next(CLAUDE_TOOLS, proj, ["--scope", "poc", "express", ...LINE]);
-    // --scope names the routing explicitly: the positional text is the request whole.
-    expect(String(named.message), JSON.stringify(named).slice(0, 300)).toContain("intent create --scope poc --request");
-    expect(questionTexts(proj).map((q) => q.text)).toContain(["express", ...LINE].join(" "));
-    cleanupTestProject(proj);
-    proj = fresh();
-    const colon = next(CLAUDE_TOOLS, proj, [`express: ${LINE.join(" ")}`]);
-    expect(String(colon.message), JSON.stringify(colon).slice(0, 300)).toContain("intent create --scope express --request");
-    expect(questionTexts(proj).map((q) => q.text)).toContain(LINE.join(" "));
-  });
-
-  test("beside active work the routing question proposes that plan, with the words after it as the description", () => {
-    proj = activeProject();
-    const ask = next(CLAUDE_TOOLS, proj, ["bugfix", ...LINE]);
-    expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
-    expect(ask.proposed_scope).toBe("bugfix");
-    expect(ask.new_work_description).toBe(LINE.join(" "));
-    expect(String(ask.new_intent_command)).toContain("--scope bugfix --request");
-    // No agent-facing reading step stands between the line and the question.
-    expect(String(ask.question)).not.toContain("cannot tell which they meant");
-  });
-
-  test("a plan's name is read the same way at any length: one word, two, eight", () => {
-    for (const words of [["login"], ["the", "login"], LINE]) {
+  test("fresh workspace: `classic car rental website`, split or in one argument, reaches the agent's proposal step whole", () => {
+    for (const argv of [["classic", "car", "rental", "website"], ["classic car rental website"]]) {
       proj = fresh();
-      const d = next(CLAUDE_TOOLS, proj, ["bugfix", ...words]);
-      expect(d.kind, `${words.join(" ")}: ${JSON.stringify(d).slice(0, 300)}`).toBe("print");
-      expect(String(d.message)).toContain("intent create --scope bugfix --request");
+      const d = next(CLAUDE_TOOLS, proj, argv);
+      expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
+      expect(String(d.message)).toContain(PROPOSAL);
+      expect(String(d.message)).toContain('"classic car rental website"');
+      expect(String(d.message)).not.toContain("--scope classic");
+      expect(questionTexts(proj).map((q) => q.text)).toEqual(["classic car rental website"]);
       cleanupTestProject(proj);
     }
     proj = "";
+  });
+
+  test("the agent's reading of `bugfix fix the login ...` names the plan, and the plan question keeps every word", () => {
+    proj = fresh();
+    const words = ["bugfix", ...LINE].join(" ");
+    const ask = planOffer(ORCH, proj, ["bugfix", ...LINE], "bugfix").directive as Directive;
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("scope-confirm");
+    expect(ask.proposed_scope).toBe("bugfix");
+    expect(String(ask.question)).toContain(words);
+    expect(questionTexts(proj).map((q) => q.text)).toEqual([words, words]);
+  });
+
+  test("the forms that can only be a pick stay one: alone, in its own argument, with a colon, by --scope", () => {
+    const parse = (argv: string[]) => {
+      const parsed = parseNextFlags(argv);
+      return { plan: parsed.positionalScope ?? parsed.scope, intent: parsed.intent, step: parsed.readingStep };
+    };
+    const rest = LINE.join(" ");
+    expect(parse(["bugfix"])).toEqual({ plan: "bugfix", intent: undefined, step: undefined });
+    expect(parse(["bugfix", rest])).toEqual({ plan: "bugfix", intent: rest, step: undefined });
+    expect(parse([`bugfix: ${rest}`])).toEqual({ plan: "bugfix", intent: rest, step: undefined });
+    expect(parse(["bugfix:", ...LINE])).toEqual({ plan: "bugfix", intent: rest, step: undefined });
+    expect(parse(["--scope", "bugfix", ...LINE])).toEqual({ plan: "bugfix", intent: rest, step: undefined });
+    // Every other line that opens with a plan's name is the person's words whole.
+    for (const argv of [["bugfix", ...LINE], [`bugfix ${rest}`], splitKiroCommandArgs(`bugfix ${rest}`)]) {
+      expect(parse(argv), JSON.stringify(argv)).toEqual({ plan: undefined, intent: `bugfix ${rest}`, step: undefined });
+    }
+    // The plan in its own argument creates on a fresh workspace, with the request by id.
+    proj = fresh();
+    const named = next(CLAUDE_TOOLS, proj, ["bugfix", rest]);
+    expect(String(named.message), JSON.stringify(named).slice(0, 300)).toContain("intent create --scope bugfix --request");
+    expect(questionTexts(proj).map((q) => q.text)).toEqual([rest]);
+  });
+
+  test("Kiro IDE's first step reads `/aidlc bugfix fix the login` as words, as it reads any request", () => {
+    // The adapter names the first engine step only for a line of words
+    // (nextArgsAreOnlyWords over Kiro's split): a line read as a plan pick got
+    // no first step, and on Kiro's Default agent AI-DLC did not start.
+    for (const line of ["bugfix fix the login", "classic car rental website", `express ${LINE.join(" ")}`]) {
+      expect(nextArgsAreOnlyWords(splitKiroCommandArgs(line)), line).toBe(true);
+    }
+    expect(nextArgsAreOnlyWords(splitKiroCommandArgs("bugfix")), "bugfix").toBe(false);
+  });
+
+  test("beside active work the line reaches the agent whole, never a routing question naming that plan", () => {
+    proj = activeProject();
+    const d = next(CLAUDE_TOOLS, proj, ["bugfix", ...LINE]);
+    expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
+    expect(d.ask_type).toBeUndefined();
+    expect(String(d.message)).toContain("--propose <plan>");
+    expect(String(d.message)).not.toContain("--scope bugfix");
+    expect(questionTexts(proj).map((q) => q.text)).toEqual([["bugfix", ...LINE].join(" ")]);
   });
 });
 

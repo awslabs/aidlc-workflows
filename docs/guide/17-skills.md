@@ -16,7 +16,7 @@
 Every command this implementation ships is a skill under `.claude/skills/`. They all drive the same deterministic engine — they differ only in what they bake in before they start:
 
 - **`/aidlc`** — the full orchestrator. No flags baked in; it detects your scope (or you describe what you want), then drives every stage in your scope to completion. This is the one you reach for most.
-- **Scope-runners** — `/aidlc-bugfix`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch`. Same full workflow, with a scope fixed and scope detection skipped.
+- **Scope-runners** - `/aidlc-bugfix`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch`. Same full workflow, with a scope fixed and no plan to propose.
 - **Stage-runners** — `/aidlc-domain-design`, `/aidlc-code-generation`, and 27 more. Run one stage in isolation, never touching your main workflow. Plugin-owned stages use their bare plugin-prefixed command name, such as `/test-pro-integration`.
 - **`/aidlc-init`** - start a piece of work. With `--scope <name>` it creates the intent (runs the whole Initialization phase) in one step and stops. With only a description it first shows the same plan offer as `/aidlc`, then continues like `/aidlc`. Unlike `/aidlc`, a description that starts with a scope name ("feature flags for billing") is still read as a description. Work already in progress is left as it is, and the new work starts beside it.
 - **Session skills** — `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack`. Read-only views over a workflow; covered in [Session Management](11-session-management.md).
@@ -30,7 +30,7 @@ Generated runners are **explicit-only** wherever the host allows it: on Claude C
 
 ## Scope-runners — a named door per problem class
 
-A scope-runner drives the full workflow with one scope locked in. Use it when you already know what kind of work you're doing and want to skip scope detection.
+A scope-runner drives the full workflow with one scope locked in. Use it when you already know what kind of work you're doing and want to skip the plan proposal.
 
 ```
 /aidlc-bugfix          Fix a specific bug — minimal depth, streamlined path
@@ -157,7 +157,7 @@ For the mechanics of writing a stage file, see [Customization](13-customization.
 
 ```
 # Full workflow
-/aidlc                              detect scope, run everything
+/aidlc                              propose a plan, run everything
 /aidlc --scope enterprise           any of the 11 scopes
 
 # Scope-runners (the 5 high-traffic doors)

@@ -17,7 +17,7 @@
 // adapter and the Claude Code dispatcher), as tests/unit/t-message-record does.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, createOrchestrationTestProject, proposalFollowUp } from "../harness/fixtures.ts";
 import {
@@ -138,17 +138,34 @@ describe("next takes the person's own /aidlc line when the agent's command carri
     expect(named.directive.message ?? "").not.toContain("--scope bugfix");
   });
 
-  test("kiro-ide: a plan word that opens the person's sentence is their plan, with every word after it as the request", async () => {
-    // Arden 2026-10-12: the two-word cutoff is gone; a plan name typed first is
-    // the person's pick however many words follow, and it wins over a plan the
-    // agent names on its own.
+  test("kiro-ide: a plan word that opens the person's sentence stays their word: the whole line reaches the agent's proposal step", async () => {
+    // #2359: the line is the person's words whole, and the agent reads whether
+    // that first word picks a plan; a scope the agent named on its own gives way.
     const proj = fresh();
     await say(proj, `/aidlc express ${WORDS}`, "kiro-ide");
     const { directive, out } = await next(proj, "kiro-ide", ["--scope", "bugfix"]);
-    expect(directive.kind, out).toBe("print");
-    expect(directive.message ?? "").toContain("intent create --scope express --request");
-    expect(directive.message ?? "").not.toContain("--scope bugfix");
-    expect(questionFiles(proj)).toHaveLength(1);
+    expect(directive.kind, out).toBe("ask");
+    expect(directive.ask_type).toBe("scope-confirm");
+    expect(directive.question ?? "").toContain(`express ${WORDS}`);
+    // The question proposes the agent's reading of their words (the test's
+    // stand-in reads "express"), never the scope the agent named on its own.
+    expect(directive.proposed_scope).toBe("express");
+    expect(String(directive.confirm_command)).not.toContain("--scope bugfix");
+    expect(questionFiles(proj)).toHaveLength(2);
+  });
+
+  test("kiro-ide: `/aidlc bugfix fix the login` with a bare next is the first step for those words, every one kept", async () => {
+    // The Kiro IDE first-step path (the adapter names a bare `next` for a line
+    // of words): the engine takes the person's recorded line whole.
+    const proj = fresh();
+    await say(proj, "/aidlc bugfix fix the login", "kiro-ide");
+    const { directive, out } = await next(proj, "kiro-ide", []);
+    expect(directive.kind, out).toBe("ask");
+    expect(directive.ask_type).toBe("scope-confirm");
+    expect(directive.question ?? "").toContain("bugfix fix the login");
+    const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+    const texts = questionFiles(proj).map((name) => (JSON.parse(readFileSync(join(dir, name), "utf-8")) as { text: string }).text);
+    expect(texts).toEqual(["bugfix fix the login", "bugfix fix the login"]);
   });
 
   test("kiro-ide: the person's answer to the open plan question goes through the same reading as typed words", async () => {

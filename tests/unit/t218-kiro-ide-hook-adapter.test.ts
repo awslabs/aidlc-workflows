@@ -8006,6 +8006,24 @@ describe("t218 the person-message card names the first engine step on an /aidlc 
     }
   });
 
+  // #2359 F1: a line that opens with a plan's name and goes on in words is a
+  // request like any other, so the card names the first step for it too.
+  test("an /aidlc line that opens with a plan's name and goes on in words names next, like any request", () => {
+    const dir = scratchProject(false);
+    try {
+      for (const [line, session] of [
+        ["/aidlc bugfix fix the login", "sess_first_step_plan_word"],
+        ["/aidlc classic car rental website", "sess_first_step_plan_word_2"],
+      ]) {
+        const r = card(dir, line, session);
+        expect(r.code, r.stderr).toBe(0);
+        expect(r.stdout, line).toContain(FIRST_STEP);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a bare /aidlc names next on any path; a reply in words after the entry names it only before work exists", () => {
     const fresh = scratchProject(false);
     try {

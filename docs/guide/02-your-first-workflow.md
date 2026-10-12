@@ -143,7 +143,7 @@ Proposed plan: feature (Standard depth, Standard test strategy, all 33 stages)
 > Yes
 ```
 
-You can accept the detected scope, change to a different scope (e.g., `mvp`), or adjust the depth level or test strategy. See [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) for guidance.
+You can accept the proposed plan, change to a different scope (e.g., `mvp`), or adjust the depth level or test strategy. See [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) for guidance.
 
 ---
 

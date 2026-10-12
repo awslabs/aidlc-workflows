@@ -770,19 +770,22 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 
-  test("a line of loose words after a plan word is that plan for those words, however many (the two-word cutoff is gone)", () => {
-    // Arden 2026-10-12: a plan's name typed first is the person's pick of it,
-    // and the words after it are their request, three or more as much as one
-    // or two; the agent reads the request, never which word is the plan.
+  test("a raw line of loose words after a plan word goes to the agent, with nothing asked of them", () => {
+    // A plan's name at the START of their own sentence, with nothing marking
+    // which it is, may be their own first word, so the line is their words
+    // whole and the agent reads it (#2359). Named in its own argument with the
+    // request in one more (the test above, and what the orchestrator skill asks
+    // the agent for) the reading is already made and the plan acts.
     proj = createTestProject();
     seedAidlcMemory(proj);
     seedStateFile(proj, MID_IDEATION);
     const before = readFileSync(seededStateFile(proj), "utf-8");
-    const ask = directiveOf(runNext(proj, ["bugfix", "Fix", "the", "login", "crash"]).out);
-    expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
-    expect(ask.proposed_scope).toBe("bugfix");
-    expect(ask.new_work_description).toBe("Fix the login crash");
-    expect(String(ask.new_intent_command)).toContain("--scope bugfix --request");
+    const step = directiveOf(runNext(proj, ["bugfix", "Fix", "the", "login", "crash"]).out);
+    expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
+    expect(step.narration).toBeUndefined();
+    expect(step.ask_type).toBeUndefined();
+    expect(String(step.message)).toContain("--propose <plan>");
+    expect(String(step.message)).not.toContain("--scope bugfix");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 

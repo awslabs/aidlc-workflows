@@ -4634,11 +4634,13 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   // (`--new-intent --scope feature "feature flags for billing"`).
   // A scope name followed by a colon (`/aidlc classic: Build a notes app`)
   // names the plan the same way, also when the agent quotes the whole request
-  // as one argument, as Kiro IDE's PowerShell does. So does a scope name that
-  // opens one quoted argument ("classic car rental website"): the plan typed
-  // first is the person's pick, and the words after it are their request,
-  // however many (the same reading readNextLine makes of the line).
+  // as one argument, as Kiro IDE's PowerShell does. A line readNextLine reads
+  // as their words is their request whole, whatever word opens it: a plan's
+  // name there may be their own first word ("classic car rental website"), and
+  // splitting a plan name off it is the agent's reading of the person's words
+  // (#2359).
   if (
+    reading.kind !== "words" &&
     intentWords.length > 0 &&
     !flags.scope &&
     !flags.newIntent &&
@@ -4648,20 +4650,12 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
     !flags.stage &&
     !flags.phase
   ) {
-    const opening = intentWords[0].replace(ENTRY_WORD_PREFIX, "");
-    const colonNamed = opening.match(/^([A-Za-z][\w-]*):(?:\s+([\s\S]*))?$/);
-    const lead = opening.split(/\s+/)[0];
+    const colonNamed = intentWords[0].replace(ENTRY_WORD_PREFIX, "").match(/^([A-Za-z][\w-]*):(?:\s+([\s\S]*))?$/);
     if (validScopes().has(intentWords[0])) {
       flags.positionalScope = intentWords.shift();
     } else if (colonNamed && validScopes().has(colonNamed[1].toLowerCase())) {
       flags.positionalScope = colonNamed[1].toLowerCase();
       const rest = (colonNamed[2] ?? "").trim();
-      if (rest) intentWords[0] = rest;
-      else intentWords.shift();
-    } else if (!literalIntent && /\s/.test(opening) && validScopes().has(lead)) {
-      // Words behind the delimiter are marked as theirs whole: no plan is peeled.
-      flags.positionalScope = lead;
-      const rest = opening.slice(lead.length).trim();
       if (rest) intentWords[0] = rest;
       else intentWords.shift();
     }

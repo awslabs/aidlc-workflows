@@ -358,7 +358,7 @@ You can change the depth at three points:
    /aidlc --scope bugfix --depth standard
    /aidlc --stage code-generation --depth minimal
    ```
-2. **At scope confirmation** — when the orchestrator confirms the detected scope, reply with `--depth <level>` instead of just confirming
+2. **At scope confirmation** - when the engine asks you to confirm the proposed plan, reply with `--depth <level>` instead of just confirming
 3. **At any approval gate** — request a different depth level as part of your feedback
 
 The first completion message in each session reminds you:

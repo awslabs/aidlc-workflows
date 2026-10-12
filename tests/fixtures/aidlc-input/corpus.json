@@ -3389,20 +3389,24 @@
         "kinds": [
           "print"
         ],
-        "words": "car rental site",
+        "words": "classic car rental site",
         "settings": [],
         "no_ask": true,
         "names": [
+          "--propose <plan> --request"
+        ],
+        "never": [
           "--scope classic"
         ]
       },
       "end": {
         "asks": 0,
         "work": {
-          "words": "car rental site"
+          "words": "classic car rental site"
         }
       }
-    }
+    },
+    "after": "WO6"
   },
   {
     "id": "sl01-w",
@@ -3416,18 +3420,22 @@
           "ask",
           "print"
         ],
-        "words": "car rental site",
+        "words": "classic car rental site",
         "settings": [],
         "no_ask": false,
         "names": [
-          "car rental site"
+          "--propose <plan>"
+        ],
+        "never": [
+          "--scope classic"
         ]
       },
       "end": {
         "asks": 1,
         "work": "same"
       }
-    }
+    },
+    "after": "WO6"
   },
   {
     "id": "sl02-f",
@@ -3440,22 +3448,23 @@
         "kinds": [
           "print"
         ],
-        "words": "the login",
+        "words": "bugfix the login",
         "settings": [],
         "no_ask": true,
         "names": [
-          "--scope bugfix"
+          "--propose <plan> --request"
         ]
       },
       "end": {
         "asks": 0,
         "work": {
           "scope": "bugfix",
-          "words": "the login"
+          "words": "bugfix the login"
         }
       }
     },
-    "unsure": true
+    "unsure": true,
+    "after": "WO6"
   },
   {
     "id": "sl02-w",
@@ -3469,11 +3478,11 @@
           "ask",
           "print"
         ],
-        "words": "the login",
+        "words": "bugfix the login",
         "settings": [],
         "no_ask": false,
         "names": [
-          "the login"
+          "--propose <plan>"
         ]
       },
       "end": {
@@ -3481,7 +3490,8 @@
         "work": "same"
       }
     },
-    "unsure": true
+    "unsure": true,
+    "after": "WO6"
   },
   {
     "id": "sl03-f",
@@ -3494,20 +3504,24 @@
         "kinds": [
           "print"
         ],
-        "words": "flags for the admin page",
+        "words": "feature flags for the admin page",
         "settings": [],
         "no_ask": true,
         "names": [
+          "--propose <plan> --request"
+        ],
+        "never": [
           "--scope feature"
         ]
       },
       "end": {
         "asks": 0,
         "work": {
-          "words": "flags for the admin page"
+          "words": "feature flags for the admin page"
         }
       }
-    }
+    },
+    "after": "WO6"
   },
   {
     "id": "sl03-w",
@@ -3521,18 +3535,22 @@
           "ask",
           "print"
         ],
-        "words": "flags for the admin page",
+        "words": "feature flags for the admin page",
         "settings": [],
         "no_ask": false,
         "names": [
-          "flags for the admin page"
+          "--propose <plan>"
+        ],
+        "never": [
+          "--scope feature"
         ]
       },
       "end": {
         "asks": 1,
         "work": "same"
       }
-    }
+    },
+    "after": "WO6"
   },
   {
     "id": "sl04-f",
@@ -3545,20 +3563,24 @@
         "kinds": [
           "print"
         ],
-        "words": "checkout for guests",
+        "words": "express checkout for guests",
         "settings": [],
         "no_ask": true,
         "names": [
+          "--propose <plan> --request"
+        ],
+        "never": [
           "--scope express"
         ]
       },
       "end": {
         "asks": 0,
         "work": {
-          "words": "checkout for guests"
+          "words": "express checkout for guests"
         }
       }
-    }
+    },
+    "after": "WO6"
   },
   {
     "id": "sl05-f",
@@ -3571,21 +3593,22 @@
         "kinds": [
           "print"
         ],
-        "words": "the payment module",
+        "words": "refactor the payment module",
         "settings": [],
         "no_ask": true,
         "names": [
-          "--scope refactor"
+          "--propose <plan> --request"
         ]
       },
       "end": {
         "asks": 0,
         "work": {
-          "words": "the payment module"
+          "words": "refactor the payment module"
         }
       }
     },
-    "unsure": true
+    "unsure": true,
+    "after": "WO6"
   },
   {
     "id": "sl06-f",
@@ -3598,21 +3621,22 @@
         "kinds": [
           "print"
         ],
-        "words": "for a chat widget",
+        "words": "poc for a chat widget",
         "settings": [],
         "no_ask": true,
         "names": [
-          "--scope poc"
+          "--propose <plan> --request"
         ]
       },
       "end": {
         "asks": 0,
         "work": {
-          "words": "for a chat widget"
+          "words": "poc for a chat widget"
         }
       }
     },
-    "unsure": true
+    "unsure": true,
+    "after": "WO6"
   },
   {
     "id": "sl07-f",
@@ -3683,11 +3707,11 @@
         "kinds": [
           "print"
         ],
-        "words": "fix the login",
+        "words": "bugfix fix the login",
         "settings": [],
         "no_ask": true,
         "names": [
-          "--scope bugfix"
+          "--propose <plan> --request"
         ]
       },
       "end": {
@@ -3698,7 +3722,8 @@
         "asks": 0
       }
     },
-    "documented": "a leading plan word picks that plan for the words after it"
+    "documented": "a leading plan word picks that plan for the words after it",
+    "after": "WO6"
   },
   {
     "id": "sl10-f",
@@ -3725,7 +3750,7 @@
         }
       }
     },
-    "after": "pending"
+    "after": "WO6"
   },
   {
     "id": "sl11-w",
@@ -7836,11 +7861,11 @@
         "kinds": [
           "print"
         ],
-        "words": "add CSV export",
+        "words": "feature add CSV export",
         "settings": [],
         "no_ask": true,
         "names": [
-          "intent create --scope feature --request"
+          "--propose <plan> --request"
         ]
       },
       "end": {
@@ -7850,7 +7875,8 @@
           "words": "add CSV export"
         }
       }
-    }
+    },
+    "after": "WO6"
   },
   {
     "id": "fn04-d",
@@ -12054,12 +12080,12 @@
         "kinds": [
           "print"
         ],
-        "words": "Fix the crash",
+        "words": "bugfix Fix the crash",
         "settings": [],
+        "no_ask": true,
         "names": [
-          "intent create --scope bugfix --request"
-        ],
-        "no_ask": true
+          "--propose <plan> --request"
+        ]
       },
       "end": {
         "asks": 0,
@@ -12068,7 +12094,8 @@
           "words": "Fix the crash"
         }
       }
-    }
+    },
+    "after": "WO6"
   },
   {
     "id": "doc-012-w",
@@ -17144,12 +17171,12 @@
         "kinds": [
           "print"
         ],
-        "words": "Read ./vision.md and build what it describes",
+        "words": "workshop Read ./vision.md and build what it describes",
         "settings": [],
+        "no_ask": true,
         "names": [
-          "intent create --scope workshop --request"
-        ],
-        "no_ask": true
+          "--propose <plan> --request"
+        ]
       },
       "end": {
         "asks": 0,
@@ -17158,7 +17185,8 @@
           "words": "Read ./vision.md and build what it describes"
         }
       }
-    }
+    },
+    "after": "WO6"
   },
   {
     "id": "doc-141-f",
@@ -17990,12 +18018,12 @@
         "kinds": [
           "print"
         ],
-        "words": "Build a notes app",
+        "words": "classic Build a notes app",
         "settings": [],
+        "no_ask": true,
         "names": [
-          "intent create --scope classic --request"
-        ],
-        "no_ask": true
+          "--propose <plan> --request"
+        ]
       },
       "end": {
         "asks": 0,
@@ -18004,7 +18032,8 @@
           "words": "Build a notes app"
         }
       }
-    }
+    },
+    "after": "WO6"
   },
   {
     "id": "doc-167-f",
@@ -18048,22 +18077,24 @@
         "kinds": [
           "print"
         ],
-        "words": "car rental website",
+        "words": "classic car rental website",
         "settings": [],
+        "no_ask": true,
         "names": [
-          "engine intent create --scope classic"
+          "--propose <plan> --request"
         ],
-        "no_ask": true
+        "never": [
+          "--scope classic"
+        ]
       },
       "end": {
         "asks": 0,
         "work": {
-          "scope": "classic",
-          "words": "car rental website"
+          "words": "classic car rental website"
         }
       }
     },
-    "documented_differs": "print: Setting up a classic workflow for this: 14 stages, 14 approval gates, 5 stages repeat per unit of work in Construction; no summary confirmation; lead agent only"
+    "after": "WO6"
   },
   {
     "id": "doc-169-w",

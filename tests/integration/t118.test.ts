@@ -693,13 +693,12 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(existsSync(statePath(p))).toBe(false);
   });
 
-  test("SP5a positional scope + loose words -> that plan's creation, the words after it the request, nothing created, nothing asked", () => {
-    // A plan's name typed first is the person's pick of that plan, and the words
-    // after it, however many, are the request (Arden 2026-10-12: the two-word
-    // cutoff goes; t-three-ways-to-read-a-line, t-plan-proposed-by-the-agent).
-    // The engine names the creation for that plan, keeps the words as the
-    // request by id, asks nothing, and writes no state: creation stays the
-    // conductor's move.
+  test("SP5a positional scope + loose words -> the request whole for the agent's reading, nothing created, nothing asked", () => {
+    // A plan's name at the start of their own sentence may be their own first
+    // word, so the engine takes no plan from it (#2359): the line is their
+    // request whole, kept by id for the agent's plan proposal step
+    // (t-three-ways-to-read-a-line, t-plan-proposed-by-the-agent). Nothing is
+    // asked and no state is written.
     const p = cleanProj();
     const r = run(ORCHESTRATE, [
       // Ahead of their words, as every caller builds it.
@@ -714,11 +713,12 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ]);
     const d = directive(r);
     expect(d.kind).toBe("print");
-    expect(d.message).toContain("intent create --scope bugfix");
+    expect(d.message).toContain("--propose <plan> --request");
+    expect(d.message).not.toContain("intent create --scope bugfix");
     const id = /--request ([0-9a-f]{8})/.exec(String(d.message))?.[1];
     expect(id, String(d.message)).toBeDefined();
     const kept = JSON.parse(readFileSync(join(p, "aidlc", ".aidlc-sessions", "questions", `${id}.json`), "utf-8")) as { text: string };
-    expect(kept.text).toBe("Fix duplicate todo persistence");
+    expect(kept.text).toBe("bugfix Fix duplicate todo persistence");
     expect(d.kind).not.toBe("ask");
     expect(existsSync(statePath(p))).toBe(false);
   });
