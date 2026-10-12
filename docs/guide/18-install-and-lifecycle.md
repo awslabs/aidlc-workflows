@@ -367,13 +367,14 @@ removed is named instead); see
 Recommended defaults preserve the harness's current model provider.
 Customization walks Harness, Model provider, Model effort preset, Plugins, MCP
 servers, and the model-preset settings layer. The provider step offers keeping
-the current provider first and Amazon Bedrock second. On the `kiro` row, step 2 is
-Session model instead: it lists your Kiro account's models and saves the chosen
-model, with the preset's session effort, in your personal Kiro settings, last,
-after every AI-DLC step. Under Kiro auto, recommended defaults ask that one
-model question. On the `kiro-ide` row the same step saves only Kiro CLI's
-model, with no effort, and under Kiro auto Enter keeps Kiro auto; see
+the current provider first and Amazon Bedrock second. On the `kiro` row, step
+2 is Session model instead: it lists your Kiro account's models and saves the
+chosen model, with the preset's session effort, in your personal Kiro settings,
+last, after every AI-DLC step. Under Kiro auto, recommended defaults ask that
+one model question; see
 [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
+The `kiro-ide` row saves Kiro CLI's model only, never an effort; see
+[First run](harnesses/kiro-ide.md#first-run).
 Every numbered prompt has
 a bracketed default, invalid input re-asks in place, and each answer is echoed.
 A check-your-answers table accepts Enter to apply or a step number to edit. No
