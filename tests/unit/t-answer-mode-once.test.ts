@@ -249,6 +249,54 @@ describe("answer mode across a piece of work", () => {
     expect(run(LOG, ["answer", "--stage", second, "--details", "Codes"], proj).status).toBe(0);
   });
 
+  // The engine's own command records the mode question with its kind, so the
+  // question is known by that field whatever the agent's wording or options.
+  test("a mode question recorded with --question-kind answer-mode is the mode question, worded and offered any way", () => {
+    const { proj, state } = project();
+    const first = currentStage(state);
+    const asked = run(LOG, [
+      "decision", "--stage", first, "--decision", "Shall we go through these together?", "--question-kind", "answer-mode",
+    ], proj);
+    expect(asked.status, asked.stderr).toBe(0);
+    const row = readAuditShardEvents(proj).filter((entry) => entry.event === "DECISION_RECORDED").at(-1)!;
+    expect(auditBlockField(row.block, "Question Kind")).toBe("answer-mode");
+    const answered = run(LOG, ["answer", "--stage", first, "--details", "Guide me"], proj);
+    expect(answered.status, answered.stderr).toBe(0);
+    advance(proj, state);
+    expect(runStageAnswerMode(proj)).toMatchObject({ ask: false, mode: "guide", reused_from: first });
+  });
+
+  // A stage's own question that happens to start the way the mode question
+  // does is that stage's question: its answer is recorded as given.
+  test("a content question that starts with the mode question's words is answered like any other", () => {
+    const { proj, state } = project();
+    const first = currentStage(state);
+    const asked = run(LOG, [
+      "decision", "--stage", first, "--decision", "How would you like to answer support tickets?", "--options", "Email,Chat form",
+    ], proj);
+    expect(asked.status, asked.stderr).toBe(0);
+    const answered = run(LOG, ["answer", "--stage", first, "--details", "Email"], proj);
+    expect(answered.status, answered.stdout + answered.stderr).toBe(0);
+    const row = readAuditShardEvents(proj).filter((entry) => entry.event === "QUESTION_ANSWERED").at(-1)!;
+    expect(auditBlockField(row.block, "Details")).toBe("Email");
+    advance(proj, state);
+    expect(runStageAnswerMode(proj)).toMatchObject({ ask: true, mode: null });
+  });
+
+  test("--question-kind takes only answer-mode, and says so", () => {
+    const { proj, state } = project();
+    const first = currentStage(state);
+    const refused = run(LOG, [
+      "decision", "--stage", first, "--decision", "Which database?", "--options", "Postgres,SQLite", "--question-kind", "database",
+    ], proj);
+    expect(refused.status).not.toBe(0);
+    const line = `${refused.stdout}\n${refused.stderr}`.split("\n").find((entry) => entry.startsWith("{"));
+    const message = String((JSON.parse(line ?? "{}") as { error?: string }).error ?? "");
+    expect(message).toContain('--question-kind "database"');
+    expect(message).toContain('"answer-mode"');
+    expect(readAuditShardEvents(proj).some((entry) => entry.event === "DECISION_RECORDED")).toBe(false);
+  });
+
   test("an isolated --single answer never sets the main workflow's mode", () => {
     const { proj, state } = project();
     const first = currentStage(state);

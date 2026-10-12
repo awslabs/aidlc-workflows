@@ -366,7 +366,7 @@ describe("a stage step carries its instructions, not the fields to branch on", (
     expect(note).toContain("I've created [N] questions at [the questions file]. How would you like to answer them?");
     for (const label of ["Guide me", "I'll edit the file", "Chat"]) expect(note).toContain(label);
     expect(note).toContain(
-      `\`${LOG} decision --stage requirements-analysis --decision "How would you like to answer the questions?" --options "Guide me,I'll edit the file,Chat"\``,
+      `\`${LOG} decision --stage requirements-analysis --decision "How would you like to answer the questions?" --options "Guide me,I'll edit the file,Chat" --question-kind answer-mode\``,
     );
     expect(note).toContain(`\`${LOG} answer --stage requirements-analysis --details '<the option label>'\``);
     expect(note.endsWith(ASK_MODE.notice)).toBe(true);

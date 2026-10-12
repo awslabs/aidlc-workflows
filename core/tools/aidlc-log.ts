@@ -90,6 +90,8 @@ import {
   loadStageGraphAll,
   isNonAnswer,
   ANSWER_MODE_LABELS,
+  ANSWER_MODE_QUESTION_KIND,
+  QUESTION_KIND_FIELD,
   answerModeFromReply,
   isAnswerModeDecision,
   openDecisionBlock,
@@ -463,6 +465,7 @@ const DECISION_OPTIONS: ReadonlySet<string> = new Set([
   "--decision",
   "--rationale",
   "--exact-option-labels",
+  "--question-kind",
 ]);
 // --units, --reason and --park: the engine's Plan Approval question, recorded as
 // the person chose (which Units, what to change, and whether to stop for now).
@@ -901,7 +904,7 @@ function demoteReviewHeadings(body: Buffer): { bytes: Buffer; changed: string[] 
 
 // --- Subcommand: decision ---
 // Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>]
-//   [--rationale <text>] [--checkpoint summary-confirmation
+//   [--rationale <text>] [--question-kind answer-mode] [--checkpoint summary-confirmation
 //   --questions-file <path> [--unit <unit>] [--single]]
 //
 // Fires BEFORE AskUserQuestion, recording what options will be shown.
@@ -1195,6 +1198,18 @@ function handleDecision(args: string[]): void {
         : flags.options;
   }
   if (flags.rationale) fields.Rationale = flags.rationale;
+  // Which of the engine's own questions this is, as the step note's command
+  // names it; the answer reads the field, never the question's words.
+  if (flags["question-kind"] !== undefined) {
+    if (flags["question-kind"] !== ANSWER_MODE_QUESTION_KIND) {
+      error(
+        `--question-kind ${JSON.stringify(flags["question-kind"])} is not a kind log decision records. Its one kind ` +
+          `is "${ANSWER_MODE_QUESTION_KIND}", for the question of how the person answers a stage's questions; leave ` +
+          "the flag off for any other question.",
+      );
+    }
+    fields[QUESTION_KIND_FIELD] = ANSWER_MODE_QUESTION_KIND;
+  }
   if (flags.checkpoint === "summary-confirmation") {
     fields.Checkpoint = SUMMARY_CONFIRMATION_CHECKPOINT;
     fields["Questions File"] = summaryEvidence!.relativePath;

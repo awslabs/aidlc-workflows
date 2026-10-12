@@ -40041,8 +40041,10 @@ export function ceremonyPolicyValues(
 export type AnswerModeChoice = "guide" | "file" | "chat";
 /** The STAGE_STARTED field recording the mode a stage starts with. */
 export const ANSWER_MODE_FIELD = "Answer Mode";
-/** The recorded Decision text of the mode question starts with this. */
-export const ANSWER_MODE_QUESTION_PREFIX = "How would you like to answer";
+/** The DECISION_RECORDED field naming which of the engine's own questions a row is. */
+export const QUESTION_KIND_FIELD = "Question Kind";
+/** Its value for the mode question, written by the command the step note hands the agent. */
+export const ANSWER_MODE_QUESTION_KIND = "answer-mode";
 export const ANSWER_MODE_LABELS: Record<AnswerModeChoice, string> = {
   guide: "Guide me",
   file: "I'll edit the file",
@@ -40050,15 +40052,16 @@ export const ANSWER_MODE_LABELS: Record<AnswerModeChoice, string> = {
 };
 
 /**
- * True when a DECISION_RECORDED block is the mode question: it offers exactly
- * the three ways to answer (the options the agent copies from the protocol),
- * or its wording starts the way the protocol logs it. The wording varies with
- * how the agent showed it ("I've created 3 questions at ... How would you
- * like to answer them?"), so the options decide.
+ * True when a DECISION_RECORDED block is the mode question: its Question Kind
+ * says so (the engine's own command writes it). A row recorded before that
+ * field existed is the mode question when it offers exactly the three ways to
+ * answer. Its wording never decides: a stage's own question may start the
+ * same way ("How would you like to answer support tickets?").
  */
 export function isAnswerModeDecision(block: string): boolean {
   if (auditBlockField(block, "Checkpoint") !== null) return false;
-  if ((auditBlockField(block, "Decision") ?? "").trim().startsWith(ANSWER_MODE_QUESTION_PREFIX)) return true;
+  const kind = auditBlockField(block, QUESTION_KIND_FIELD);
+  if (kind !== null) return kind === ANSWER_MODE_QUESTION_KIND;
   const plain = (text: string) => text.trim().replace(/\u2019/g, "'").toLowerCase();
   const offered = (auditBlockField(block, "Options") ?? "").split(",").map(plain).filter((option) => option !== "");
   const labels = Object.values(ANSWER_MODE_LABELS).map(plain);

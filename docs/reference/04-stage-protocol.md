@@ -396,7 +396,12 @@ make on the field: with `ask: true` it carries the question ("I've created [N]
 questions at [the questions file]. How would you like to answer them?"), the
 three choices with their descriptions (Guide me, I'll edit the file, Chat), the
 exact `log decision` and `log answer` commands for this stage, and the notice to
-say afterwards; with `ask: false` it says the notice to say and the way to take
+say afterwards. Its `log decision` command carries `--question-kind answer-mode`,
+which writes `Question Kind: answer-mode` on the `DECISION_RECORDED` row: the
+engine knows the mode question by that field, never by its wording, so a stage's
+own question that starts the same way is answered as asked. A row recorded
+before the field existed is the mode question when it offers exactly the three
+choices. With `ask: false` the note says the notice to say and the way to take
 the questions, with no mode question and nothing recorded for the mode (the
 stage's `STAGE_STARTED` row records the reused mode in its `Answer Mode`
 field). Both variants open with the condition: only if this stage puts

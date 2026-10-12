@@ -1202,7 +1202,8 @@ export function answerModeNote(mode: StageAnswerMode, stage: string, logInvocati
       `question: "${ANSWER_MODE_QUESTION}" with the choices Guide me (walk through each question interactively ` +
       "here), I'll edit the file (they fill in the answers in the file directly) and Chat (discuss freely; you " +
       `extract the decisions from the conversation). Record it with \`${logInvocation} decision --stage ${stage} ` +
-      `--decision "How would you like to answer the questions?" --options "Guide me,I'll edit the file,Chat"\` ` +
+      `--decision "How would you like to answer the questions?" --options "Guide me,I'll edit the file,Chat" ` +
+      "--question-kind answer-mode` " +
       `before showing it, and their choice with \`${logInvocation} answer --stage ${stage} --details '<the option ` +
       "label>'` after (the one they picked, or the one you understood from their words). Then say: " + mode.notice;
   }
