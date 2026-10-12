@@ -4967,8 +4967,8 @@ function verifyReviewerPrecondition(
         : `the .aidlc-source-paths.json of the path's own folder (${registries.join(", ")})`;
       error(
         `Refusing to complete "${stage.slug}": ${unclaimed.length} change${unclaimed.length === 1 ? "" : "s"} made during ${stage.name} ` +
-          `that no Unit's review covers (${rendered.join(", ")}${more}). A Unit that made one of them lists the path, exactly as ` +
-          `printed, in its source manifest and is reviewed once more; a change nobody meant is undone; a path that is not source ` +
+          `that no Unit's review covers (${rendered.join(", ")}${more}). A Unit that made one of them lists the path ` +
+          `in its source manifest and is reviewed once more; a change nobody meant is undone; a path that is not source ` +
           `(a tool's cache, a build output, a folder that is not this project's code) is left out of the source checks by naming ` +
           `it under "exclude" in ${where}.`,
       );

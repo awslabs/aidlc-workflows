@@ -3168,7 +3168,7 @@ describe("t314 multi-unit source attribution", () => {
     const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain("1 change made during Code Generation that no Unit's review covers (old.ts)");
-    expect(refused.out).toContain("lists the path, exactly as printed, in its source manifest");
+    expect(refused.out).toContain("lists the path in its source manifest");
     recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }, { path: "old.ts" }]);
     const done = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(done.rc, done.out).toBe(0);
@@ -3231,6 +3231,8 @@ describe("t314 multi-unit source attribution", () => {
     const boundarySecond = Math.floor(Date.now() / 1000);
     while (Math.floor(Date.now() / 1000) === boundarySecond) {}
     writeFileSync(join(repoA, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    // A real change alpha made and did not list.
+    writeFileSync(join(repoA, "gamma.ts"), "export const gamma = 3;\n", "utf-8");
     writeFileSync(join(repoA, "beta.ts"), "export const beta = 2;\n", "utf-8");
     churnInTreeCache(cache);
     recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ repo: "repo-a", path: "alpha.ts" }]);
@@ -3240,9 +3242,24 @@ describe("t314 multi-unit source attribution", () => {
     const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain("repo-a/.jest-cache/haste-map-abc");
+    expect(refused.out).toContain("repo-a/gamma.ts");
+    // A recorded repo's path prints as repo-a/gamma.ts, but a manifest takes the
+    // repo and the path as two fields, so the line does not say to copy it.
+    expect(refused.out).not.toContain("exactly as");
     // The line names the registry file of the path's own repo folder: the
     // top-level file does not reach a recorded repo's paths.
     expect(refused.out).toContain('under \\"exclude\\" in the .aidlc-source-paths.json of the path\'s own folder (repo-a/.aidlc-source-paths.json)');
+    // alpha lists the path in its manifest ({repo, path}) and is reviewed once
+    // more: the first approve after it no longer names gamma.ts.
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [
+      { repo: "repo-a", path: "alpha.ts" },
+      { repo: "repo-a", path: "gamma.ts" },
+    ]);
+    const claimed = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(claimed.rc).toBe(1);
+    expect(claimed.out).toContain("no Unit's review covers");
+    expect(claimed.out).toContain("repo-a/.jest-cache/haste-map-abc");
+    expect(claimed.out).not.toContain("repo-a/gamma.ts");
     // Written in the wrong place (the root), the exclude changes nothing for
     // repo-a's keys, so the approve is still refused.
     sourceRegistry(proj, { exclude: ["repo-a/.jest-cache"] });

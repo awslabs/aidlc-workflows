@@ -553,8 +553,8 @@ Generation that no Unit's review covers (...)".
 
 Something changed in the workspace during the stage that no Unit's source
 manifest lists. The line names the three ways through, and the assistant takes
-the one that fits: the Unit that made the change lists the path, exactly as
-printed, and is reviewed once more; a change nobody meant is undone; a path that
+the one that fits: the Unit that made the change lists the path and is
+reviewed once more; a change nobody meant is undone; a path that
 is not source (a tool's cache written inside the repo, a build output, a nested
 repository that is not this project's code) is left out of the source checks by
 naming it under `exclude` in `.aidlc-source-paths.json` (the file in that repo's
