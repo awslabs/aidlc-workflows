@@ -286,6 +286,14 @@ function installedProj(mutate?: (claudeDir: string) => void): string {
   return p;
 }
 
+/** The person turned AI-DLC's status line on: it lives in their own settings.local.json (#1407). */
+function withStatusLineOn(claudeDir: string): void {
+  const shipped = JSON.parse(readFileSync(join(claudeDir, "tools", "data", "harness.json"), "utf-8")) as {
+    statusLine?: unknown;
+  };
+  writeFileSync(join(claudeDir, "settings.local.json"), `${JSON.stringify({ statusLine: shipped.statusLine }, null, 2)}\n`);
+}
+
 /** Fresh empty mktemp dir with NO aidlc-docs/ (mirrors the .sh's `mktemp -d`). */
 function emptyDir(): string {
   const base = process.env.TMPDIR || tmpdir();
@@ -511,8 +519,10 @@ describe("t27 aidlc-utility status", () => {
 describe("t27 aidlc-utility doctor", () => {
   test("10-12: doctor mentions aidlc-statusline, write-audit-log, settings", () => {
     // Hook rows now derive from settings.json's wired hooks (the contract), so
-    // the project needs a real .claude/ for those labels to render.
-    const p = installedProj();
+    // the project needs a real .claude/ for those labels to render. AI-DLC's
+    // status line is wired only once the person turns it on, in their own
+    // settings.local.json (#1407), and doctor checks it from there.
+    const p = installedProj(withStatusLineOn);
     const r = util(["doctor", "--verbose"], p);
     expect(r.stdout).toContain("aidlc-statusline");
     expect(r.stdout).toContain("write-audit-log");
@@ -557,7 +567,9 @@ describe("t27 aidlc-utility doctor", () => {
   // silently skipped (runtime-compile, sensor-fire, and the flow-altering stop
   // hook). Each prints a "<hook>.ts present" line. A full install wires all 10.
   test("12b: doctor checks all 10 settings.json-wired hooks, including the 3 the old list skipped", () => {
-    const p = installedProj();
+    // The statusline is the person's choice (#1407): wired by their own
+    // settings.local.json once they turn it on, and checked from there.
+    const p = installedProj(withStatusLineOn);
     const r = util(["doctor", "--verbose"], p);
     for (const hook of [
       "aidlc-write-audit-log",
@@ -574,6 +586,12 @@ describe("t27 aidlc-utility doctor", () => {
       // A wired-and-present hook renders an "ok <hook>.ts present" row.
       expect(r.stdout).toContain(`${hook}.ts present`);
     }
+    // Off, the status line is simply not wired: no row for it, and never
+    // reported as shipped-but-unwired enforcement.
+    const off = util(["doctor", "--verbose"], installedProj());
+    expect(off.stdout).toContain("aidlc-write-audit-log.ts present");
+    expect(off.stdout).not.toContain("aidlc-statusline.ts present");
+    expect(off.stdout).not.toContain("aidlc-statusline.ts shipped but not wired");
   });
 
   // FINDING #1 (review): the hook check must FLAG a wired-but-missing hook, not
