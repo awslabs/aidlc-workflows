@@ -70,6 +70,7 @@ import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
   ARCHIVED_FROM_FIELD,
   type LegacyDoctorResult,
+  reconstructTimeline,
   redactSecretPatterns,
   stateShowsCompletion,
 } from "./aidlc-doctor-bundle.ts";
@@ -5545,12 +5546,12 @@ export async function collectDoctorReport(
     try {
       const auditContent = auditAllShards;
       const stateContent = readFileSync(stateMdPath, "utf-8");
-      // The last WORKFLOW_COMPLETED, unless a stage started after it: that run
-      // was reopened (a scope change on finished work started the stage it
-      // added, #2261), so a Running status is the truth, not a lost write.
-      const wcIdx = auditContent.lastIndexOf("**Event**: WORKFLOW_COMPLETED");
-      const reopenedIdx = auditContent.lastIndexOf("**Event**: STAGE_STARTED");
-      if (wcIdx !== -1 && reopenedIdx < wcIdx) {
+      // The latest run recorded a completion that no later stage start
+      // reopened (a scope change on finished work starts the stage it adds,
+      // #2261). One owner for the rule, the doctor bundle's timeline, which
+      // reads every shard in time order: shards joined by file name put a
+      // teammate's earlier completion after this clone's reopen.
+      if (reconstructTimeline(auditContent, stateContent).workflowCompleted) {
         const status = stateContent.match(/^- \*\*Status\*\*:\s*(\S+)/m);
         if (status && !stateShowsCompletion(stateContent)) {
           results.push({

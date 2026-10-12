@@ -205,6 +205,32 @@ describe("t-scope-change-reopens-finished-work: a scope switch on finished work 
     expect(after.out).not.toContain("Audit recorded WORKFLOW_COMPLETED");
   });
 
+  // AIDA F2 on #2369: a team clone reads every shard, joined in file-name
+  // order. A teammate's shard that sorts after this clone's own, holding the
+  // completion recorded before the reopen, is no drift either: events are read
+  // in time order, as the doctor bundle's own rule reads them.
+  test("in a team clone, a teammate's shard that sorts after this clone's and holds the earlier completion is not drift", () => {
+    const proj = finishedBugfix();
+    const audit = join(recordDir(proj), "audit");
+    const own = readdirSync(audit).filter((f) => f.endsWith(".md")).sort();
+    expect(own.length).toBe(1);
+    const completedAt = /\*\*Timestamp\*\*: (\S+)\n\*\*Event\*\*: WORKFLOW_COMPLETED/.exec(readFileSync(join(audit, own[0]), "utf-8"))?.[1];
+    expect(completedAt).toBeDefined();
+    const teammate = "zz-host-abcd.md";
+    expect([own[0], teammate].sort().at(-1)).toBe(teammate);
+    expect(run(UTILITY, proj, ["scope-change", "--scope", "express"]).rc).toBe(0);
+    expect(field(state(proj), "Status")).toBe("Running");
+    const before = new Date(Date.parse(completedAt!) - 60_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    writeFileSync(join(audit, teammate),
+      "# AI-DLC Audit Log\n\n## Workflow Completion\n" +
+        `**Timestamp**: ${before}\n**Event**: WORKFLOW_COMPLETED\n**Scope**: bugfix\n` +
+        "**Details**: Scope: bugfix, completed on a teammate's clone\n\n---\n", "utf-8");
+    const after = doctor(proj);
+    expect(after.out).not.toContain("State/audit drift");
+    expect(after.out).not.toContain("state-audit-drift");
+    expect(after.out).not.toContain("set Status=Completed");
+  });
+
   test("a real torn write after the completion is still flagged by both doctor surfaces", () => {
     const proj = finishedBugfix();
     // The state write was lost after WORKFLOW_COMPLETED landed: nothing started since.
