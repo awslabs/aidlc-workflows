@@ -11834,7 +11834,12 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       // Reopened work is in flight again on the work list.
       if (intent && reopened) updateIntentStatus(projectDir, intent, "in-flight", space);
     }
-    process.stdout.write(`${outputLines.join("\n")}\n`);
+    // Reopened work goes straight on into the stage it started, so what the
+    // switch did rides the next step the agent speaks from, as a backward
+    // jump's notice does; with no chat to keep it for, it rides this output.
+    const keptForTheStage = reopened !== null && content !== contentBefore && selection.sessionId !== null &&
+      addPendingPersonLines(projectDir, selection.sessionId, outputLines.map((line) => /[.!?]$/.test(line) ? line : `${line}.`));
+    if (!keptForTheStage) process.stdout.write(`${outputLines.join("\n")}\n`);
   }, intent, space));
 }
 

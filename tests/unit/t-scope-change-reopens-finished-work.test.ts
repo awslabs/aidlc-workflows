@@ -45,19 +45,26 @@ const BUGFIX = [
 const LAST = "deployment-execution";
 const ADDED = "observability-setup";
 
-const env = { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+// No chat names itself to the tools unless a case says so: a run from inside a
+// host's own chat would otherwise lend the tools that chat.
+const noChat: Record<string, string | undefined> = { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+for (const key of ["AIDLC_SESSION_OVERRIDE", "AIDLC_SESSION_OVERRIDE_SOURCE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CODEX_THREAD_ID", "KIRO_SESSION_ID"]) {
+  delete noChat[key];
+}
+let env = noChat;
+const SESSION = "01995000-7a11-7000-8000-000000002261";
 
-function run(tool: string, proj: string, args: string[]): { rc: number; out: string } {
+function run(tool: string, proj: string, args: string[]): { rc: number; out: string; stdout: string } {
   const res = spawnSync(process.execPath, [tool, ...args, "--project-dir", proj], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
     env,
   });
-  return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+  return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}`, stdout: res.stdout ?? "" };
 }
 
-type Directive = { kind: string; message?: string; stage?: string; reason?: string; produces?: string[] };
+type Directive = { kind: string; message?: string; stage?: string; reason?: string; produces?: string[]; narration?: string };
 
 function next(proj: string, args: string[] = []): Directive {
   const res = runOrchestrateNext(ORCH, proj, args, { cwd: proj, env });
@@ -114,6 +121,7 @@ function doctor(proj: string): { rc: number; out: string } {
 
 const created: string[] = [];
 afterEach(() => {
+  env = noChat;
   resetAidlcEnv();
   for (const proj of created.splice(0)) cleanupTestProject(proj);
 });
@@ -205,6 +213,35 @@ describe("t-scope-change-reopens-finished-work: a scope switch on finished work 
     expect(torn.out).toContain("State/audit drift: audit has WORKFLOW_COMPLETED but state Status=Running");
     expect(torn.out).toContain("state-audit-drift");
     expect(torn.rc).toBe(1);
+  });
+
+  // The agent goes straight on into the reopened stage, so what the switch did
+  // (the switch line, every setting the new scope changed) is said with the
+  // stage's first line, as a backward jump's notice is: a live Claude Code run
+  // on the carry-on print said the stage's line and never the switch's.
+  test("with a chat, what the switch did is said with the reopened stage's first line", async () => {
+    const lib = await import(LIB) as typeof import("../../dist/claude/.claude/tools/aidlc-lib.ts");
+    env = { ...noChat, AIDLC_SESSION_OVERRIDE: SESSION };
+    const proj = finishedBugfix();
+    expect(next(proj, ["--scope", "express"]).message).toContain(CARRY_ON);
+    const changed = run(UTILITY, proj, ["scope-change", "--scope", "express"]);
+    expect(changed.rc, changed.out).toBe(0);
+    expect(changed.stdout).not.toContain("Switched to");
+    const kept = lib.pendingPersonLines(proj, SESSION).lines.join(" ");
+    expect(kept).toContain("Switched to express");
+    expect(kept).toContain("Plan Approval changed: on (from scope bugfix) to off (from scope express).");
+    expect(kept).toContain("Each code plan is now built without asking you first.");
+
+    const step = next(proj);
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    expect(step.stage).toBe(ADDED);
+    const said = step.narration ?? "";
+    expect(said.startsWith("Switched to express"), said).toBe(true);
+    expect(said).toContain("Plan Approval changed: on (from scope bugfix) to off (from scope express).");
+    expect(said.endsWith("Now working on Observability Setup, wearing the operations engineer hat."), said).toBe(true);
+    // Said once: the next step does not say it again.
+    expect(lib.pendingPersonLines(proj, SESSION).lines).toEqual([]);
+    expect(next(proj).narration ?? "").not.toContain("Switched to");
   });
 
   test("a new scope that adds nothing after the last stage leaves finished work finished", () => {
