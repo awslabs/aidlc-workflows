@@ -274,6 +274,9 @@ import {
   commandAtPersonsTerminal,
   personSpokeSinceGate,
   planApprovalAskIsOpen,
+  planApprovalRuntimeFile,
+  readPlanApprovalRuntimeRecord,
+  writePlanApprovalRuntimeRecord,
   recordDir,
   renderReviewRequestCommand,
   type FreshReviewReceipts,
@@ -7651,6 +7654,7 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): void {
     // rows follow the turn, or its record is newer than the message) a bare
     // `next` is the work's again.
     if (message.settings.length === 0) return;
+    if (lineHandedOut(pd, engineSessionId, message.id)) return;
     if (stateContent !== null ? !turnIsLatestRow(pd, message.id) : settingsKeptSince(pd, engineSessionId, message.at)) return;
   }
   const typed = aidlcEntryWords(message.text);
@@ -7662,6 +7666,35 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): void {
   if (own.intent !== undefined && wordsAlreadyRead(pd, own.intent, message.at)) return;
   for (const key of Object.keys(flags)) delete (flags as unknown as Record<string, unknown>)[key];
   Object.assign(flags, own);
+  if (message.words === null) markLineHandedOut(pd, engineSessionId, message.id);
+}
+
+// A settings-only line is handed to the setter once, and `next`, which hands it
+// out, keeps the mark: whatever the setter then says (changed, already so,
+// refused by a team lock) or whether it ran at all, the bare `next` after it is
+// the work's again. Without the mark a setter that changed nothing wrote no
+// row, the person's turn stayed the latest row, and the same print came back
+// forever. One record per chat, overwritten by the next line taken.
+interface HandedOutLine {
+  version: 1;
+  session: string;
+  messageId: string;
+}
+function handedOutLinePath(pd: string, session: string): string {
+  const segment = session.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96);
+  return planApprovalRuntimeFile(pd, `line-handed-out-${segment}.json`);
+}
+function lineHandedOut(pd: string, session: string, messageId: string): boolean {
+  const record = readPlanApprovalRuntimeRecord<HandedOutLine>(handedOutLinePath(pd, session), "handed-out line");
+  return record?.version === 1 && record.session === session && record.messageId === messageId;
+}
+function markLineHandedOut(pd: string, session: string, messageId: string): void {
+  try {
+    const record: HandedOutLine = { version: 1, session, messageId };
+    writePlanApprovalRuntimeRecord(pd, handedOutLinePath(pd, session), `${JSON.stringify(record)}\n`);
+  } catch (e) {
+    recordHookDrop(pd, "line-handed-out", errorMessage(e));
+  }
 }
 
 // The latest row of the chat's record is the person's turn that carries this

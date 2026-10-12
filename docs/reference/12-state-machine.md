@@ -842,12 +842,13 @@ kept for the piece of work this chat starts next: Guard Policy `relaxed` or
 `strict` withdraws, and plan approval `off` (`guard.plan-approval off` too),
 which a later `plan-approval on` withdraws. Any other fence switch says to
 create the piece of work and type it again.
-The hook checks memory-held strict, then uses the shared settings transaction
-with `typedByPerson: true` to append audit rows and write state under the audit
-lock, returning the result as `AIDLC Guard Policy: ...` hook context on harnesses
-that inject it. When it applied, the same lines are also kept for the engine's
-next step, so the person hears them in every harness rather than only where the
-host shows hook output.
+The hook records the line whole and applies nothing. The engine's `next` hands
+the line to the setter once (`takePersonsOwnLine` keeps the mark, so a setter
+that changes nothing, or one a team lock refuses, is never named for the same
+line again), and the setter checks memory-held strict, then uses the shared
+settings transaction with `typedByPerson: true` to append audit rows and write
+state under the audit lock. Its lines are the step's own output, so the person
+hears them in every harness.
 Apart from those two grants for the next piece of work, no switch is saved for
 later, and the CLI performs no switch-authority session lookup; hooks run on Windows too, so every harness that forwards the prompt
 supports this path.
@@ -1700,8 +1701,9 @@ reply that is exactly a different remedy is a new pick instead: it replaces the
 selection and is not taken as feedback; the same remedy again changes nothing. A
 reply with no recorded pick authorizes no remedy.
 For `lower-fence`, the selection is ready at once (a `command` interaction):
-the conductor runs the setter. The human-turn hook still applies the person's
-exact typed command itself, including any validated companion intent settings.
+the conductor runs the setter. A command the person types themselves is
+recorded whole by the human-turn hook, and the agent runs the setter for it
+once, with any validated companion intent settings.
 A recorded pick authorizes only until the next human response; a later prompt
 before the picked remedy runs withdraws the pick so the conductor reads the new
 reply, while an identical re-recorded response is idempotent.

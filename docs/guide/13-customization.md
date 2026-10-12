@@ -145,8 +145,9 @@ The nine intent settings are `depth`, `test-strategy`, `review`,
 `guard.state-transition`, and `guard.reviewer-scope`, switch one guard off or
 back on for a single piece of work, and `guard.plan-approval` is another name
 for `plan-approval`. The CLI routes share one atomic setter,
-`config-change`; when a typed command lowers a guard, the human-turn hook
-validates and applies its companion intent settings in the same transaction.
+`config-change`. A typed `/aidlc` line with settings is recorded whole by the
+human-turn hook, which applies nothing; the agent runs that setter for the line
+once, and it validates and applies every setting on the line in one transaction.
 Mix the settings in one command rather than chaining separate updates:
 
 ```
@@ -170,8 +171,9 @@ values and sources for Guard Policy, the switchable fences, and the ceremonies
 
 Typed `config set`, `get`, and `list` requests execute during dispatch and
 return the command's actual output before the turn finishes. A refused setting
-returns its error; successful settings do not advance the workflow. Guard
-lowering still belongs to the human-turn hook.
+returns its error; successful settings do not advance the workflow. A guard
+lowered on a typed `/aidlc` line goes through the same setter, run by the agent
+once per line; the hook applies nothing.
 
 The additional read-only `guard.human-presence` lookup reports `on (default)` or `off (env AIDLC_SKIP_HUMAN_PRESENCE_GUARD)`; it is not a per-work setting and is not included in `config list`.
 

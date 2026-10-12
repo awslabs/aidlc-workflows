@@ -1186,11 +1186,11 @@ For a typed lowering switch, both
 piece of work the agent's setter applies it to.
 The trailing `...` in the flags form stands for an optional task description.
 Omitted selectors use the session's workflow selection; a nonexistent named
-intent is refused, and a selection without a state file must be created before
-the person types the switch again.
-The hook validates all recognized companion intent settings before mutation.
+intent is refused, and with no work selected the setter keeps the setting for
+the piece of work the chat starts next.
+The setter validates all recognized companion intent settings before mutation.
 Malformed commands, unknown flags, missing values, and invalid companion values
-change nothing; the later CLI route reports its normal validation error.
+change nothing; the CLI route reports its normal validation error.
 
 The CLI validates all flags and values before mutating state. Invalid values
 and unknown flags refuse that entire update; an unknown flag is named in the error. If an

@@ -123,7 +123,10 @@ For fence and Guard Policy switches, the human-turn hook applies nothing. A
 typed `/aidlc` line is recorded whole in the message record, with its settings
 as the engine's own parser reads them (`parseNextFlags`), and the agent reads
 the line: its first `next` names the setter (`engine config set <key> <value>`)
-and the agent runs it in the same turn. The setter (`applyIntentSettings`,
+and the agent runs it in the same turn, once: `next` marks the line as handed
+out (a runtime record beside the creation grants), so a setter that changes
+nothing, or one a team lock refuses, is never named for the same line again,
+and the bare `next` after it is the work's own step. The setter (`applyIntentSettings`,
 `handleConfigChange` in aidlc-utility.ts) resolves the selected piece of work
 through `resolveWorkflowSelection(projectDir, { sessionId, space?, intent? })`
 using only the selectors the agent passes; omitted selectors use that chat's
@@ -165,9 +168,9 @@ setting, the answer command for a reply), and the agent runs it. Plain chat
 never meets a tool reader: the confirmation words `guard policy relaxed|off`
 and every other phrasing are the person's words, recorded whole and read by the
 agent, which runs the setter they ask for.
-When a recognized command lowers a guard, the hook validates and applies all
-companion intent settings in the same transaction. A malformed command or
-invalid companion changes nothing.
+When a typed command lowers a guard, the setter the agent runs validates and
+applies all companion intent settings in the same transaction; the hook applies
+nothing. A malformed command or invalid companion changes nothing.
 When the person asks in their own words to lower a check, or picks a guard's
 `lower-fence` remedy, the conductor runs the setter itself.
 CLI setters perform no switch-authority session lookup. They lower when a
