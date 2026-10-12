@@ -124,9 +124,9 @@ typed `/aidlc` line is recorded whole in the message record, with its settings
 as the engine's own parser reads them (`parseNextFlags`), and the agent reads
 the line: its first `next` names the setter (`engine config set <key> <value>`)
 and the agent runs it in the same turn, once: `next` marks the line as handed
-out (a runtime record beside the creation grants), so a setter that changes
-nothing, or one a team lock refuses, is never named for the same line again,
-and the bare `next` after it is the work's own step. The setter (`applyIntentSettings`,
+out (a runtime record beside the creation grants) whether the agent passed it
+or a bare `next` took it, so a setter that changes nothing is never named for
+the same line again, and the bare `next` after it is the work's own step. The setter (`applyIntentSettings`,
 `handleConfigChange` in aidlc-utility.ts) resolves the selected piece of work
 through `resolveWorkflowSelection(projectDir, { sessionId, space?, intent? })`
 using only the selectors the agent passes; omitted selectors use that chat's
@@ -152,7 +152,10 @@ reply to the open code plan question (`/aidlc --guard-policy off approve the
 plan`) is for the work in progress: `next` names the setter beside the plan
 question's answer step, and the agent runs both.
 Memory-held strict refuses with the memory file named, at the setter and at
-creation alike.
+creation alike. A lowering typed on the person's line under it is never handed
+to the setter: `next` says the team's line itself, naming the file, and applies
+nothing; a check typed off with new work stays on at creation, which goes ahead
+and says the team's line on the next step.
 
 There is one parser of a typed `/aidlc` line: `parseNextFlags` in
 aidlc-orchestrate.ts, the one `next` reads its own arguments with. The hook

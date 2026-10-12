@@ -2476,17 +2476,22 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
   });
 
   test.each([
-    { prompt: "/aidlc --guard-policy relaxed", args: ["config-change", "--guard-policy", "relaxed"] },
-    { prompt: "/aidlc config set guard.state-transition off", args: ["config-change", "--guard.state-transition", "off"] },
-  ])("memory strict refuses the setter for a typed switch before any setting changes: $prompt", ({ prompt, args }) => {
+    { prompt: "/aidlc --guard-policy relaxed", line: ["--guard-policy", "relaxed"] },
+    { prompt: "/aidlc config set guard.state-transition off", line: ["config", "set", "guard.state-transition", "off"] },
+  ])("memory strict: a typed switch gets the team's line as text to say, naming the file, before any setting changes: $prompt", ({ prompt, line }) => {
     const { proj, state } = project("enterprise");
     declareMemoryMode(proj, "project", "strict");
     const before = readFileSync(state, "utf-8");
     const ledger = mutationRows(proj);
     expect(recordHumanPrompt(proj, prompt)).toBe("");
-    const refused = run(UTILITY, [...args], proj, FENCE_ENV_CLEAR);
-    expect(refused.status).not.toBe(0);
-    expect(refused.stderr).toContain(`Your team set Guard Policy to strict in ${memoryFile(proj, "project")}`);
+    // The agent runs `next` with the person's line. The step it gets carries the
+    // team's line as text, never a setter whose JSON it would print as it came.
+    const step = JSON.parse(run(ORCHESTRATE, ["next", ...line], proj, FENCE_ENV_CLEAR).stdout.trim().split("\n").pop() ?? "{}") as {
+      message?: unknown;
+    };
+    const said = String(step.message);
+    expect(said).toContain(`Your team set Guard Policy to strict in ${memoryFile(proj, "project")} (section: Guard Policy)`);
+    expect(said).not.toContain("config set");
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
   });

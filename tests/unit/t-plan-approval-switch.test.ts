@@ -601,6 +601,18 @@ describe("only the person turns plan approval off", () => {
 });
 
 /** The setter as the agent runs it in the chat. */
+// A refusal's text from the JSON line the utility prints: the encoding doubles
+// a Windows path's backslashes, so the raw output never carries the path.
+function refusalText(stderr: string): string {
+  try {
+    const parsed = JSON.parse(stderr) as { error?: unknown };
+    if (typeof parsed.error === "string") return parsed.error;
+  } catch {
+    // Plain text.
+  }
+  return stderr;
+}
+
 function setterOff(proj: string, args: string[] = ["--plan-approval", "off"]): { status: number; stdout: string; stderr: string } {
   return utility(proj, ["config-change", ...args]);
 }
@@ -999,22 +1011,19 @@ describe("asked before the piece of work exists", () => {
     lockMemory(proj);
     const memory = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
     const asked = requestOf(proj, "build the export");
+    // Plain words: the agent reads them and runs the setter on its own reading,
+    // as it does for every check (t-agent-runs-the-check-switch), and relays the
+    // refusal the setter reports as one JSON line.
     reply(proj, "skip plan approval for this work");
     const locked = setterOff(proj);
     expect(locked.status).not.toBe(0);
-    expect(locked.stderr).toContain(`Your team set Guard Policy to strict in ${memory}, so plan approval stays on for everyone on this repo`);
+    expect(refusalText(locked.stderr)).toContain(
+      `Your team set Guard Policy to strict in ${memory}, so plan approval stays on for everyone on this repo`,
+    );
     expect(planApprovalCreationGranted(proj, SESSION, asked.id)).toBe(false);
     const refused = utility(proj, ["intent-create", "--request", asked.id, "--plan-approval", "off"]);
     expect(refused.status).toBe(1);
-    // Read a JSON refusal's text so the Windows path compares unescaped.
-    let refusal = refused.stderr;
-    try {
-      const parsed = JSON.parse(refused.stderr) as { error?: unknown };
-      if (typeof parsed.error === "string") refusal = parsed.error;
-    } catch {
-      // Plain text refusal.
-    }
-    expect(refusal).toContain(`Your team set Guard Policy to strict in ${memory}`);
+    expect(refusalText(refused.stderr)).toContain(`Your team set Guard Policy to strict in ${memory}`);
   });
 });
 

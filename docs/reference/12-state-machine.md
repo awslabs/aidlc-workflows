@@ -843,12 +843,13 @@ kept for the piece of work this chat starts next: Guard Policy `relaxed` or
 which a later `plan-approval on` withdraws. Any other fence switch says to
 create the piece of work and type it again.
 The hook records the line whole and applies nothing. The engine's `next` hands
-the line to the setter once (`takePersonsOwnLine` keeps the mark, so a setter
-that changes nothing, or one a team lock refuses, is never named for the same
-line again), and the setter checks memory-held strict, then uses the shared
-settings transaction with `typedByPerson: true` to append audit rows and write
-state under the audit lock. Its lines are the step's own output, so the person
-hears them in every harness.
+the line to the setter once (`next` keeps the mark whether the agent passed the
+line or a bare `next` took it, so a setter that changes nothing is never named
+for the same line again), and the setter checks memory-held strict, then uses
+the shared settings transaction with `typedByPerson: true` to append audit rows
+and write state under the audit lock. Its lines are the step's own output, so
+the person hears them in every harness. A lowering memory-held strict refuses is
+not handed to the setter: `next` says the team's line itself.
 Apart from those two grants for the next piece of work, no switch is saved for
 later, and the CLI performs no switch-authority session lookup; hooks run on Windows too, so every harness that forwards the prompt
 supports this path.

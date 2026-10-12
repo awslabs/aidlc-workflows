@@ -29,6 +29,7 @@ import {
   GUARDS_OFF_FIELD,
   GUARDS_ON_FIELD,
   guardFenceConfigKey,
+  type GuardPolicyMemoryDeclaration,
   guardPolicyMemoryStrictRefusal,
   type GuardSwitch,
   guardSwitchRefusal,
@@ -367,13 +368,7 @@ export function applyIntentSettings(
   }
   if (cc.memoryStrict !== null) {
     const loweredFence = fenceRequests.find((request) => request.value === "off");
-    if (loweredFence !== undefined) {
-      const section = cc.memoryStrict.heading.replace(/^## /, "");
-      die(
-        `Your team set Guard Policy to strict in ${cc.memoryStrict.path} (section: ${section}), ` +
-          `so ${loweredFence.fence} stays on for everyone on this repo. Changing that line there changes it.`,
-      );
-    }
+    if (loweredFence !== undefined) die(fenceMemoryLockRefusal(cc.memoryStrict, loweredFence.fence));
   }
 
   const lowering: GuardSwitch[] = [];
@@ -877,6 +872,13 @@ export function formatPlanApprovalSetting(setting: PlanApprovalSetting): string 
   return setting.source.startsWith("guard policy")
     ? `${setting.value} (${setting.source})`
     : formatCeremony(setting.value, setting.source);
+}
+
+/** A check a team's strict Guard Policy keeps on, said with the file that holds it. */
+export function fenceMemoryLockRefusal(declaration: GuardPolicyMemoryDeclaration, fence: string): string {
+  const section = declaration.heading.replace(/^## /, "");
+  return `Your team set Guard Policy to strict in ${declaration.path} (section: ${section}), ` +
+    `so ${fence} stays on for everyone on this repo. Changing that line there changes it.`;
 }
 
 export function planApprovalMemoryLockRefusal(path: string): string {

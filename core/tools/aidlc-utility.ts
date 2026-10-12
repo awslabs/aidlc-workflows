@@ -50,6 +50,7 @@ import {
   consumeFencesOffCreationGrant,
   consumeGuardPolicyCreationGrant,
   consumePlanApprovalCreationGrant,
+  fenceMemoryLockRefusal,
   fencesOffCreationGranted,
   guardPolicyCreationGranted,
   formatPlanApprovalSetting,
@@ -8104,9 +8105,13 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   // it is nobody's word: the setting stays "set by a command".
   const loweringAuthorized = (): boolean =>
     personAskedForThisLowering() || fenceKeyBypassed(projectDir, initialSelection.sessionId);
-  // A check typed off is the person's call too, under the same rule.
-  if (fencesTypedOff.length > 0) {
-    if (preflightMemoryStrict !== null) die(guardPolicyMemoryStrictRefusal(preflightMemoryStrict));
+  // A check typed off is the person's call too, under the same rule. A team's
+  // strict Guard Policy keeps it on, as it keeps a check granted before the
+  // work existed (fencesAsked above): the work is created with the check on,
+  // and the person hears why, once, on the step after creation.
+  const teamKeptCheck = preflightMemoryStrict !== null && fencesTypedOff.length > 0
+    ? fenceMemoryLockRefusal(preflightMemoryStrict, fencesTypedOff[0]) : null;
+  if (fencesTypedOff.length > 0 && teamKeptCheck === null) {
     const wanted: GuardSwitch = { key: `guard.${fencesTypedOff[0]}`, value: "off" };
     if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted));
     if (!loweringAuthorized()) die(guardSwitchRefusal(wanted, projectDir));
@@ -8463,6 +8468,9 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       questionId,
     );
     failIntentCreateAt("after-list");
+    if (teamKeptCheck !== null && initialSelection.sessionId) {
+      addPendingPersonLines(projectDir, initialSelection.sessionId, [teamKeptCheck]);
+    }
     // This chat is now on the work it just created: anything it was still owed
     // (the creation line naming what the person set for this work) follows it.
     carryPendingPersonLines(projectDir, initialSelection.sessionId);

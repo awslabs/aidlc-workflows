@@ -220,18 +220,22 @@ describe("a fence switch typed with a request beside open work", () => {
     expect(String(kept.directive?.message), kept.out).toContain("guard.review-freeze off");
   });
 
-  test("a team's strict Guard Policy refuses it at creation, naming the file, and the new work keeps the check", () => {
+  test("a team's strict Guard Policy keeps it on: the new work is created, and the person hears why once, naming the file", () => {
     const { proj } = oneOpenRecord();
     const memory = lockMemory(proj);
     reply(proj, TYPED);
     const routing = next(proj, ["--guard.review-freeze", "off", "fix the parser"]);
     const routed = next(proj, answerArgs((routing.directive as { new_intent_command?: string } | null)?.new_intent_command));
-    const refused = createFromPrint(proj, routed);
-    expect(refused.status, refused.stdout).not.toBe(0);
-    expect(refused.stderr).toContain(memory);
-    const made = utility(proj, ["intent-create", "--request", requestIn(routed.directive?.message, routed.out)]);
+    // The work the person asked for is created, not refused, with the check on.
+    const made = createFromPrint(proj, routed);
     expect(made.status, made.stderr).toBe(0);
     expect(guardsOff(activeState(proj))).not.toContain("review-freeze");
+    // The team's line waits for the next step as plain text, so the path reads
+    // as the file system spells it on Windows too.
+    expect(pendingPersonLines(proj, SESSION).lines).toContain(
+      `Your team set Guard Policy to strict in ${memory} (section: Guard Policy), so review-freeze stays on for ` +
+        "everyone on this repo. Changing that line there changes it.",
+    );
   });
 
   test("typed alone, with no request, the setter the agent runs applies it to the open work as asked in the chat", () => {

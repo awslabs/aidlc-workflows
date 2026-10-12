@@ -171,6 +171,7 @@ import {
   CEREMONY_FLAGS,
   CEREMONY_KEYS,
   guardFenceFromConfigKey,
+  guardPolicyMemoryStrictRefusal,
   memoryGuardPolicyDeclarations,
   SWITCHABLE_GUARD_FENCES,
   type SwitchableGuardFence,
@@ -509,8 +510,10 @@ import {
 } from "./aidlc-testing-posture.ts";
 import {
   checksAre,
+  fenceMemoryLockRefusal,
   guardPolicyCreationGranted,
   guardPolicyNamed,
+  planApprovalMemoryLockRefusal,
   planApprovalOffAtCreation,
   planApprovalEnv,
   planApprovalOffForOpenRequest,
@@ -5088,6 +5091,31 @@ function personAskedInThisChat(projectDir: string): boolean {
   return session !== null && latestMessage(projectDir, session) !== null;
 }
 
+// A team that holds Guard Policy strict in memory keeps every check on for
+// everyone on the repo, and the setter refuses a lowering under it. A lowering
+// the person typed on their line is not handed to the setter for that refusal,
+// whose output the agent would print as it came: `next` says the team's line
+// itself, as the person heard it when they typed it. Null when nothing typed
+// lowers a check, no team holds strict, or memory cannot be read (the setter
+// then says what is wrong).
+function teamKeepsTyped(flags: ParsedFlags, projectDir: string): string | null {
+  const fence = SWITCHABLE_GUARD_FENCES.find((candidate) =>
+    candidate !== "plan-approval" && flags.fences?.[candidate] === "off");
+  const planApprovalOff = flags.ceremony?.plan_approval === "off" || flags.fences?.["plan-approval"] === "off";
+  if (!guardPolicyLowered(flags) && fence === undefined && !planApprovalOff) return null;
+  let held: ReturnType<typeof memoryGuardPolicyDeclarations>[number] | undefined;
+  try {
+    held = memoryGuardPolicyDeclarations(projectDir, { sessionId: resolveInvokingSessionId(projectDir) ?? undefined })
+      .find((declaration) => declaration.value === "strict");
+  } catch {
+    return null;
+  }
+  if (held === undefined) return null;
+  if (guardPolicyLowered(flags)) return guardPolicyMemoryStrictRefusal(held);
+  if (fence !== undefined) return fenceMemoryLockRefusal(held, fence);
+  return planApprovalMemoryLockRefusal(held.path);
+}
+
 function routedFencesNote(flags: ParsedFlags, projectDir: string): string {
   const typed = SWITCHABLE_GUARD_FENCES.filter((fence) => flags.fences?.[fence] === "off");
   if (typed.length === 0 || !personAskedInThisChat(projectDir)) return "";
@@ -7666,15 +7694,16 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): void {
   if (own.intent !== undefined && wordsAlreadyRead(pd, own.intent, message.at)) return;
   for (const key of Object.keys(flags)) delete (flags as unknown as Record<string, unknown>)[key];
   Object.assign(flags, own);
-  if (message.words === null) markLineHandedOut(pd, engineSessionId, message.id);
 }
 
-// A settings-only line is handed to the setter once, and `next`, which hands it
-// out, keeps the mark: whatever the setter then says (changed, already so,
-// refused by a team lock) or whether it ran at all, the bare `next` after it is
-// the work's again. Without the mark a setter that changed nothing wrote no
-// row, the person's turn stayed the latest row, and the same print came back
-// forever. One record per chat, overwritten by the next line taken.
+// A settings-only line is handed out once, and `next`, which hands it out,
+// keeps the mark: whatever the setter then says (changed, already so, refused)
+// or whether it ran at all, the bare `next` after it is the work's again.
+// Without the mark a setter that changed nothing wrote no row, the person's
+// turn stayed the latest row, and the same print came back forever. The mark
+// is written whichever way the line reached `next`: the agent passed it (its
+// `next $ARGUMENTS`) or takePersonsOwnLine took it (a bare `next`). One record
+// per chat, overwritten by the next line handed out.
 interface HandedOutLine {
   version: 1;
   session: string;
@@ -7687,6 +7716,13 @@ function handedOutLinePath(pd: string, session: string): string {
 function lineHandedOut(pd: string, session: string, messageId: string): boolean {
   const record = readPlanApprovalRuntimeRecord<HandedOutLine>(handedOutLinePath(pd, session), "handed-out line");
   return record?.version === 1 && record.session === session && record.messageId === messageId;
+}
+function handOutSettingsLine(flags: ParsedFlags, pd: string): void {
+  if (engineSessionId === undefined || isReadOnlyEngineProbe()) return;
+  if (typedSettingModifiers(flags).length === 0) return;
+  const message = latestMessage(pd, engineSessionId);
+  if (message === null || message.source !== "prompt" || message.words !== null || message.settings.length === 0) return;
+  markLineHandedOut(pd, engineSessionId, message.id);
 }
 function markLineHandedOut(pd: string, session: string, messageId: string): void {
   try {
@@ -7722,6 +7758,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   activeRetiredGuardPolicyNotice = null;
   const flags = parseNextFlags(args);
   takePersonsOwnLine(flags, resolveProjectDir(projectDir));
+  handOutSettingsLine(flags, resolveProjectDir(projectDir));
   pickingUp = flags.resume === true;
 
   // Turn-shape marker: a `next` that ASKS FOR THE NEXT MOVE is engagement with
@@ -8326,10 +8363,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   }
 
   // Branch 1b2 - the typed settings form (`config set|get|list ...`). A person
-  // who typed `/aidlc config set guard.state-transition off` has already had
-  // the prompt-time hook apply that switch; the words are a setting, never a
-  // task description, so they must not draw the new-work offer or resume the
-  // stage. Execute the canonical config route before returning the terminal
+  // who typed `/aidlc config set guard.state-transition off` typed the setter
+  // itself: the words are a setting, never a task description, so they must
+  // not draw the new-work offer or resume the stage. A refusal reaches the
+  // agent as its plain line (toolErrorMessage), never the setter's JSON. Execute the canonical config route before returning the terminal
   // response: argv-only Stop classification is safe only once the requested
   // operation has actually finished. The setter reports an already-applied
   // switch as a no-op and still refuses lowering on its own.
@@ -9081,6 +9118,19 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // whose step Current Stage does not show (see withWorkPicksUpLine).
     const pickedUpIfTurnEnds = (print: PrintDirective): PrintDirective =>
       withWorkPicksUpLine(print, pd, currentStateScope, stateContent, !turnEndingPrints.has(print));
+    const teamKeeps = modifiers.length > 0 && !describedWork && !planChanges ? teamKeepsTyped(flags, pd) : null;
+    if (teamKeeps !== null) {
+      withdrawSettingWords(pd);
+      const said = `Run nothing. Tell the person in one line: "${teamKeeps}"`;
+      emit(keptWhilePlanWaits(
+        pickedUpIfTurnEnds(settingPrint(
+          stillParked === null ? `${said} Then stop.` : `${said} Then say "${stillParked}", and stop.${resumeOnYes()}`,
+          `${said} Then re-run next to carry on with the work.`,
+        )),
+        planApprovalAskIsOpen(pd),
+      ));
+      return;
+    }
     if (modifiers.length > 0 && !describedWork) {
       const command = configSetCommand(modifiers);
       withdrawSettingWords(pd);
@@ -9296,6 +9346,14 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // aidlc-guard-switch.ts): the agent runs it and says its line. A step, not
     // an error.
     const typedBeforeWork = typedSettingModifiers(flags);
+    const teamKeepsBeforeWork = typedBeforeWork.length > 0 && !flags.intent && !flags.resume
+      ? teamKeepsTyped(flags, pd) : null;
+    if (teamKeepsBeforeWork !== null) {
+      emit(turnEndingPrint(
+        `Run nothing. Tell the person in one line: "${teamKeepsBeforeWork}" Then wait for them to say what to build.`,
+      ));
+      return;
+    }
     if (typedBeforeWork.length > 0 && !flags.intent && !flags.resume) {
       emit(turnEndingPrint(
         `Run \`${configSetCommand(typedBeforeWork)}\` to keep these settings for the piece of work the person starts ` +

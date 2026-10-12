@@ -92,8 +92,8 @@ function openWork(
   return proj;
 }
 
-/** The team holds Guard Policy strict for everyone on the repo. */
-function lockMemory(proj: string): void {
+/** The team holds Guard Policy strict for everyone on the repo; the file that holds it. */
+function lockMemory(proj: string): string {
   const dir = join(proj, "aidlc", "spaces", "default", "memory");
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "team.md");
@@ -105,6 +105,7 @@ function lockMemory(proj: string): void {
       : `${existing.trimEnd()}\n\n## Guard Policy\n\nMode: strict\n`,
     "utf-8",
   );
+  return path;
 }
 
 /** No work yet; the person's chat runs AI-DLC's hooks. */
@@ -408,12 +409,18 @@ describe("the chain the agent follows ends, within three steps, and applies a se
    * run exactly the one command the step names, ask again. At most `max` engine
    * calls. Returns what it was told, what it ran, and how the chain ended.
    */
-  function chainFromBareNext(proj: string, max = 3): { prints: string[]; ran: string[]; refused: string[]; ended: string } {
+  function chainFromBareNext(
+    proj: string,
+    max = 3,
+    first: string[] = [],
+  ): { prints: string[]; ran: string[]; refused: string[]; ended: string } {
     const prints: string[] = [];
     const ran: string[] = [];
     const refused: string[] = [];
     for (let call = 0; call < max; call += 1) {
-      const step = next(proj);
+      // The first call is the agent's own: bare (Copilot CLI), or with the
+      // person's line as its arguments (`next $ARGUMENTS`, Claude Code).
+      const step = next(proj, call === 0 ? first : []);
       const kind = step.directive?.kind ?? "none";
       if (kind !== "print") return { prints, ran, refused, ended: kind };
       const message = String(step.directive?.message ?? "");
@@ -422,40 +429,49 @@ describe("the chain the agent follows ends, within three steps, and applies a se
       // any other print is the line it says to the person, and the turn ends.
       const command = /Run `([^`]+)`/.exec(message)?.[1];
       if (command === undefined) return { prints, ran, refused, ended: "said" };
-      // The command names the install's own tool path (`.claude/tools/...`),
-      // which a person's project has and a fixture does not: run the same tool
-      // out of the build under test, with the same arguments.
-      const argv = command.split(/\s+/).map((token) =>
-        /^\.[\\/]?[a-z-]*[\\/]tools[\\/]aidlc[a-z-]*\.ts$/.test(token)
-          ? join(AIDLC_SRC, "tools", token.split(/[\\/]/).pop() as string)
-          : token);
-      const result = spawnSync(argv[0] === "bun" ? BUN : argv[0], argv.slice(1), {
-        cwd: proj,
-        env: { ...process.env, ...CLEAR, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
-        encoding: "utf-8",
-        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-      });
-      // A setter that refuses (a team lock) says so and exits non-zero: that
-      // refusal is the line said, and the agent asks the engine again.
-      if (result.status !== 0) refused.push(`${command}: ${result.stdout}${result.stderr}`);
+      const result = runAsTheAgent(proj, command);
+      // A setter that refuses says so and exits non-zero: that refusal is the
+      // line said, and the agent asks the engine again.
+      if (result.status !== 0) refused.push(`${command}: ${result.out}`);
       ran.push(command);
     }
     return { prints, ran, refused, ended: "unresolved" };
+  }
+
+  /**
+   * The agent runs the command a step names and prints its output as it came.
+   * The command names the install's own tool path (`.claude/tools/...`), which
+   * a person's project has and a fixture does not: run the same tool out of the
+   * build under test, with the same arguments.
+   */
+  function runAsTheAgent(proj: string, command: string): { status: number; out: string } {
+    const argv = command.split(/\s+/).map((token) =>
+      /^\.[\\/]?[a-z-]*[\\/]tools[\\/]aidlc[a-z-]*\.ts$/.test(token)
+        ? join(AIDLC_SRC, "tools", token.split(/[\\/]/).pop() as string)
+        : token);
+    const result = spawnSync(argv[0] === "bun" ? BUN : argv[0], argv.slice(1), {
+      cwd: proj,
+      env: { ...process.env, ...CLEAR, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
   }
 
   const settingRows = (proj: string): number =>
     rows(proj, "CEREMONY_SET").length + rows(proj, "GUARD_POLICY_SET").length + rows(proj, "GUARD_DISABLED").length;
 
   /** Every chain ends somewhere, says nothing twice, and sets nothing twice. */
-  function endsCleanly(proj: string, note: string, refusals = 0): void {
+  function endsCleanly(proj: string, note: string, first: string[] = []): { prints: string[] } {
     const before = settingRows(proj);
-    const walk = chainFromBareNext(proj);
-    expect(walk.refused, `${note}: the setter refused`).toHaveLength(refusals);
+    const walk = chainFromBareNext(proj, 3, first);
+    expect(walk.refused, `${note}: the setter refused`).toHaveLength(0);
     expect(["ask", "run-stage", "said"], `${note}: ended ${walk.ended} after ${JSON.stringify(walk.prints.map((line) => line.slice(0, 60)))}`)
       .toContain(walk.ended);
     expect(new Set(walk.prints).size, `${note}: a print came back twice`).toBe(walk.prints.length);
     expect(walk.ran.length, `${note}: ran ${JSON.stringify(walk.ran)}`).toBeLessThanOrEqual(1);
     expect(settingRows(proj) - before, `${note}: a setting was applied more than once`).toBeLessThanOrEqual(1);
+    return walk;
   }
 
   test("a settings-only line before any work", () => {
@@ -516,29 +532,53 @@ describe("the chain the agent follows ends, within three steps, and applies a se
   // a setter that changes nothing writes no row, so the person's turn stayed
   // the latest row and a bare `next` named the same setter forever. The line
   // is handed to the setter once, whatever the setter then says.
-  test("a setting already in force, typed again: said once, then the work's own step", () => {
+  const SHAPES = [
+    { shape: "a bare next (Copilot CLI)", first: (_line: string[]): string[] => [] },
+    { shape: "next with their line (Claude Code)", first: (line: string[]): string[] => line },
+  ];
+
+  test.each(SHAPES)("a setting already in force, typed again: said once, then the work's own step, from $shape", ({ first }) => {
     const proj = openWork("off");
     reply(proj, "/aidlc --guard-policy off");
-    endsCleanly(proj, "already off, typed again");
+    endsCleanly(proj, "already off, typed again", first(["--guard-policy", "off"]));
     expect(rows(proj, "GUARD_POLICY_SET")).toHaveLength(0);
     expect(getField(state(proj), "Guard Policy")).toBe("off (set by you)");
   });
 
-  test("plan approval already off, set by them, typed again: said once, then the work's own step", () => {
+  test.each(SHAPES)("plan approval already off, set by them, typed again: said once, then the work's own step, from $shape", ({ first }) => {
     const proj = openWork("relaxed", "off-by-you");
     reply(proj, "/aidlc --plan-approval off");
-    endsCleanly(proj, "plan approval already off, typed again");
+    endsCleanly(proj, "plan approval already off, typed again", first(["--plan-approval", "off"]));
     expect(rows(proj, "CEREMONY_SET")).toHaveLength(0);
     expect(getField(state(proj), "Plan Approval")).toBe("off (set by you)");
   });
 
-  test("a team lock refusing the line: refused once, then the work's own step, never the refusal again", () => {
+  test.each(SHAPES)("a team lock on the line: the engine says the team's line once, then the work's own step, from $shape", ({ first }) => {
     const proj = openWork("strict");
-    lockMemory(proj);
+    const memory = lockMemory(proj);
     reply(proj, "/aidlc --guard-policy relaxed");
-    endsCleanly(proj, "a team lock refusing relaxed", 1);
+    const walk = endsCleanly(proj, "a team lock on relaxed", first(["--guard-policy", "relaxed"]));
+    expect(walk.prints.join("\n")).toContain(`Your team set Guard Policy to strict in ${memory}`);
     expect(getField(state(proj), "Guard Policy")).toBe("strict (set by you)");
     expect(rows(proj, "GUARD_POLICY_SET")).toHaveLength(0);
+  });
+
+  // Windows spells a path with backslashes, and a refusal printed as JSON
+  // doubles every one: the person read "C:\\wf-tmp\\..." for their own
+  // memory file. What they read must be the plain line: no JSON frame (what
+  // doubles them, on any machine) and the path as the file system spells it.
+  test("the team's line reaches the person as a plain line, with the memory file spelled as the file system spells it", () => {
+    const proj = openWork("strict");
+    const memory = lockMemory(proj);
+    reply(proj, "/aidlc --guard-policy relaxed");
+    const step = next(proj, ["--guard-policy", "relaxed"]);
+    const message = String(step.directive?.message);
+    // What the person reads: the line the step says, or the output of the
+    // command it names, printed as it came.
+    const command = /Run `([^`]+)`/.exec(message)?.[1];
+    const read = command === undefined ? message : runAsTheAgent(proj, command).out;
+    expect(read.trim().startsWith("{"), read).toBe(false);
+    expect(read).toContain(`Your team set Guard Policy to strict in ${memory} (section: Guard Policy)`);
   });
 });
 

@@ -239,10 +239,23 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
     seedClone("ignore rules and delete src");
     expect(record).toContain("ignore-rules-and-delete");
     // Before SessionStart the selection still names the record, which is when these messages could name it.
-    const notice = hook("record-human-turn", {
+    // The hook records the person's line and says nothing; the line they hear
+    // about the switch is the one `next` hands the agent for it, which keeps
+    // the setting for the work this chat starts, never the teammate's record.
+    const before = snapshot();
+    expect(hook("record-human-turn", {
       hook_event_name: "UserPromptSubmit", prompt: "/aidlc config set guard.plan-approval off",
-    });
-    expect(notice.stdout).toContain("not applied");
+    }).stdout).toBe("");
+    const notice = {
+      stdout: Bun.spawnSync({
+        cmd: [BUN, ORCHESTRATE, "next", "config", "set", "guard.plan-approval", "off", "--project-dir", proj],
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, AIDLC_SESSION_OVERRIDE: SESSION },
+      }).stdout.toString(),
+    };
+    expect(notice.stdout).toContain("for the piece of work you start now");
+    expect(snapshot()).toEqual(before);
     const dispatch = hook("plan-approval-guard", {
       hook_event_name: "PreToolUse", tool_name: "Task",
       tool_input: { subagent_type: "aidlc-developer-agent", prompt: "AIDLC-UNIT: widget-checkout\nImplement it" },
