@@ -1,9 +1,10 @@
-# AI-DLC — one core, many harnesses
+# AI-DLC: one core, many harnesses
 
 This directory contains a native implementation of the AI-DLC (AI-Driven
-Development Life Cycle) methodology that ships to many CLI harnesses — today
-Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, and GitHub Copilot, and any capable CLI you port it to — from
-a single hand-authored source.
+Development Life Cycle) methodology that ships to many harnesses (today Claude Code, Kiro CLI, Kiro
+IDE, Codex CLI, Cursor, opencode, and GitHub Copilot, and any capable CLI
+[you port it to](docs/harness-engineering/09-porting-to-a-new-harness.md))
+from a single hand-authored source.
 
 ## What AI-DLC is
 
@@ -17,8 +18,9 @@ design a fix with all of them in mind.
 
 Ideation transforms the person's intent into a more clearly defined idea;
 Inception turns the idea into a spec and a plan; Construction builds the code
-that implements the idea and the spec; Operation deploys it and verifies it
-(Initialization is the setup before them).
+that implements the idea and the spec; Operation deploys it and verifies it;
+Initialization is the setup before them
+([Phases and Stages](docs/guide/04-phases-and-stages.md)).
 
 Scopes are the production lines, stages are the stations on a line, and agents
 are the workers at each station. Each station takes what the one before it
@@ -26,13 +28,60 @@ produced, and an approved output is the work order for what follows. It is not
 a waterfall: the person can go back to any station, change what it produced and
 iterate from there, as many times as they like.
 
+The factory is configured, not coded, so a team can reshape it to how it works
+([Harness Engineer Guide](docs/harness-engineering/00-overview.md)). A stage
+defines what gets done
+([Anatomy of a Stage](docs/harness-engineering/01-anatomy-of-a-stage.md)); the
+agents define who does it, each with knowledge of its trade that a team
+customises with its own
+([Adding an Agent](docs/harness-engineering/03-adding-an-agent.md),
+[Team Knowledge](docs/harness-engineering/07-team-knowledge.md)); the rules say
+how the work is done, from the framework's defaults to the team's and the
+project's own
+([Rules and the Learning Loop](docs/harness-engineering/05-rules-and-the-loop.md));
+sensors check a station's output the same way every time, advisory unless the
+team makes one block at a gate
+([Sensors](docs/harness-engineering/06-sensors.md)), and together rules and
+sensors are how the factory learns: a correction made at a station becomes a
+standing rule or a check for next time. A scope picks which stations a kind of
+work goes through, and how deep ([Scopes](docs/harness-engineering/04-scopes.md)).
+A plugin adds to the factory without changing what ships, never overriding it,
+and the team picks which plugins are on in an install; with every plugin off
+the install is bare core
+([Authoring a Plugin](docs/harness-engineering/10-authoring-a-plugin.md),
+[The Plugin Mechanism](docs/reference/18-plugin-mechanism.md)).
+
+The conductor is AI-DLC's core orchestrator: the person's interface to the
+engine and the coordinator of the work. (The name comes from an orchestra: a
+conductor reads the score and cues the players.) The engine decides which
+station is next and keeps the record of the work; the conductor never decides
+the route. It asks the engine for the next step, carries that step out, and
+reports the outcome through the engine's own command
+([The Orchestration Engine and Skill System](docs/reference/17-skill-system.md),
+[Orchestrator](docs/reference/03-orchestrator.md)). Its own work is
+coordination: it puts the station's agents to work and owns how well the step
+is done ([The Conductor's Craft](core/aidlc-common/conductor.md)). Today it
+works most stations in the chat itself, wearing the lead agent's hat; the
+direction is for every station to be worked by its own separate agent, in the
+cloud when the person chooses, so what a station needs (its steps, its agent,
+its knowledge, its checks) is authored in the stage and its agent, never in
+the conductor's own prose. Toward the person it reads what they meant and
+hands the engine exact answers, brings them only the decisions that are
+theirs, and says in plain words where the work stands. Agents never call each
+other; only the conductor hands out work.
+
 Workers make the calls their station needs and bring the knowledge the person
 may not have, like a good colleague; the person makes the judgement calls and
 keeps the wheel, reading a dashboard that says in plain words what happened,
 what to decide and how to undo it. Guards are there to keep the workers on
 track, on the spec and plan the person last approved; they serve the person,
 not the engine, and never stand between the person and what the person asks
-for.
+for. The engine's own words for these (conductor, engine, directive, stage,
+scope, agent, fence, Guard Policy) are defined once in the
+[Glossary](docs/guide/glossary.md); the factory words here are the picture: a
+line is a scope, a station is a stage, a worker is an agent, and the switchable
+guards are the Glossary's fences, with Guard Policy the setting that says how
+far they stand aside for one piece of work.
 
 ## The factory works with what the person brings
 
@@ -41,7 +90,13 @@ own materials and tools to it: the building they drive from, the project as it
 is, and the way they have set their tools up. The factory uses all of it as it
 is, the way the person's own hands would. A worker who rewires the building or
 swaps the owner's tools so their own station feels safer is not keeping on
-track; they are taking the wheel.
+track; they are taking the wheel. AI-DLC keeps its own record of the work
+(state, audit trail, artifacts, the team's rules and knowledge) in the
+project's `aidlc/` folder
+([Spaces and Intents](docs/guide/03-spaces-and-intents.md)), its install in
+the harness directory, and its own marked part in files it shares with the
+person, such as `AGENTS.md` and `.gitignore`; everything else in the project is
+the person's.
 
 ## The four tenets, in this order; the first wins any conflict
 
@@ -86,19 +141,33 @@ in this repository is judged by what a person sees and does in a normal run.
   call of what the person meant or wants; when meaning is really unclear, the
   agent asks once, in plain words.
 
-The engine exists to enforce the will of the human, never to overrule it. When
-the person explicitly asks for something, the flow does it and says in one line
-what happened: no confirmation question unless the action cannot be undone and
-is not what they asked for, no re-asking what they already said, and no refusal
-that puts the engine's rules ahead of their words. Follow up only when their
-intent is genuinely unclear. Gates exist to collect the person's judgement, so
-when the person decides (approve, change, skip, jump, or switch a check off),
-the flow records that decision through its own mechanism instead of refusing
-it. An explicit request means the person's own words, never the agent's account
+An explicit request means the person's own words, never the agent's account
 of them. Exact answers such as "Approve", an option number, or a slash command
-are shortcuts the tools may read; anything else is the agent's to understand. A
-tool that judges the meaning of a person's words, or that second-guesses an
-explicit request, is a defect, however safe it looks.
+are shortcuts the tools may read; anything else is the agent's to understand.
+Gates exist to collect the person's judgement, so when the person decides
+(approve, change, skip, jump, or switch a check off), the flow records that
+decision through its own mechanism instead of refusing it. A tool that judges
+the meaning of a person's words, or that second-guesses an explicit request,
+is a defect, however safe it looks.
+
+**What the person reads.** In a normal run, every line AI-DLC puts in front of
+the person, printed by the engine or written by the agent, is about their work:
+what happened, where it stands against what they approved, what they can
+decide, and the way back, in plain words and in their tool's own terms. How the
+engine got there (its steps and fields, hooks, receipts, protocol labels,
+internal tags) stays off the screen unless they ask, or run a check or report
+on purpose (doctor, status, the audit record), where they get the whole
+picture. A command or path they need in order to act (an undo, a file to edit)
+is their work and is said; the agent's account of their code (files read, tests
+run, what it found) is their work too. A frame the host tool draws itself
+(Claude Code's "Stop hook error") is the host's; the words inside it are
+AI-DLC's. Plain words change how a thing is said, never what is said: a real
+risk, a skipped step, and a refusal with its next step are still said, once and
+in one line, and a wrong line is a defect whatever its words. The fix for
+engine words the agent says belongs in the tools (cut the words reaching the
+agent, move the branch into the tool), never in a "do not say X" sentence. This
+rule never drops a risk line, a skipped-step note, an undo, a guard's next step
+or doctor and status detail, and never charges a host frame to AI-DLC.
 
 **Guards.** A guard is a deterministic check over recorded facts, aimed at an
 agent's action, never at a person's message. Its refusal names the exact next
@@ -110,9 +179,10 @@ re-ask, a refusal, or a loop with no way out. Evidence that selects or binds a
 human decision (an approval record, the plan fingerprint, the marker naming the
 approved target) is different: it never falls back to a guess. Its owning
 mechanism decides whether the approval still holds (for Plan Approval, the
-contract in `docs/reference/06-hooks-and-tools.md`, "Plan-Approval Guard
-Hook"), and the flow never loops on it and never asks the person to approve
-again what that mechanism says still holds.
+contract in
+[Plan-Approval Guard Hook](docs/reference/06-hooks-and-tools.md#plan-approval-guard-hook)),
+and the flow never loops on it and never asks the person to approve again what
+that mechanism says still holds.
 
 **What guards are for.** Guards keep the workers on track, on the spec and plan
 the person last approved, when a worker runs ahead, skips a step or misreads.
@@ -139,15 +209,15 @@ ceremony, a per-intent setting, or the conversation language whenever they ask.
 
 ## Project Structure
 
-- `core/` — **The hand-authored, harness-neutral source of truth.** Tools, stages (`aidlc-common/`), agents, memory (the rule/method layer), scopes, sensors, knowledge, hooks, and the 3 session skills. Prose names the harness directory with the `{{HARNESS_DIR}}` token; the packager substitutes `.claude`/`.kiro`/`.codex`/`.aidlc`/`.cursor` per tree.
-- `harness/<name>/` — **The thin per-harness authored surface.** Each holds `manifest.ts` (how to project `core/` into that harness's dist) plus the orchestrator skill and harness-specific files; `harness/codex/`, `harness/opencode/`, and `harness/copilot/` add an `emit.ts` (per-shell emissions). `claude/`, `kiro/`, `kiro-ide/`, `codex/`, `cursor/`, `opencode/`, `copilot/`.
-- `plugins/<name>/` — **Optional, owned AIDLC plugins** (the plugin mechanism; design in the single chapter `docs/reference/18-plugin-mechanism.md`, authoring guide `docs/harness-engineering/10-authoring-a-plugin.md`). Each holds `.aidlc-plugin/plugin.json` (the declarative manifest) + core-shaped subtrees (`stages/`, `contributions/`, `sensors/`, `tools/`, …) + `tests/`. `bun scripts/package.ts` emits a real host plugin per harness at `dist/plugins/<name>/{claude,codex,copilot,cursor,kiro,kiro-ide,opencode}/`; a compose hook merges the plugin into an install (new stages + the additive contribution seam). Plugins add, the install selects: `tools/data/harness.json` `plugins` filters the enabled graph/scope/runner surfaces while keeping installed files re-enableable. `plugins/test-pro/` is the reference fixture. Guarded by `tests/integration/t188-plugin-compose.serial.test.ts` (mechanism) + `plugins/test-pro/tests/` (content, wired into the integration tier).
-- `scripts/package.ts` — **The build entry.** `bun scripts/package.ts` materializes every local `dist/<harness>/` and `dist-release/<harness>/`; `bun scripts/package.ts --check` builds twice in independent temp roots and byte-compares the results as the determinism guard. `manifest-types.ts` is the shared manifest contract.
-- `dist/` and `dist-release/` — **GENERATED, ignored local outputs.** They are never committed or hand-edited. CI, tests, binary builds, and release packaging regenerate them before use. Native users install release assets; copy-channel users take `runtime/<harness>/` from the versioned `aidlc-runtime.tar.gz` release asset.
-- `tests/` — All-TypeScript test suite (`t*.test.ts`, run via bun), four levels (smoke/unit/integration/e2e). Run `bash tests/run-tests.sh --help` for levels and profiles.
-- `docs/guide/` — User Guide: getting started, workflows, scopes, agents, customization, troubleshooting
-- `docs/harness-engineering/` — Harness Engineer Guide: reshaping AIDLC through configuration (stages, agents, scopes, rules, sensors, knowledge) without code, plus porting AIDLC to a new harness
-- `docs/reference/` — Developer Reference: architecture, orchestrator, stage protocol, hooks, testing, contributing
+- `core/`: **The hand-authored, harness-neutral source of truth.** Tools, stages (`aidlc-common/`), agents, memory (the rule/method layer), scopes, sensors, knowledge, hooks, and the 4 skills (3 read-only session skills and `aidlc-knowledge`, the team-document index). Prose names the harness directory with the `{{HARNESS_DIR}}` token; the packager substitutes `.claude`/`.kiro`/`.codex`/`.aidlc`/`.cursor` per tree.
+- `harness/<name>/`: **The thin per-harness authored surface.** Each holds `manifest.ts` (how to project `core/` into that harness's dist) plus the orchestrator skill and harness-specific files; `harness/codex/`, `harness/opencode/`, and `harness/copilot/` add an `emit.ts` (per-shell emissions). `claude/`, `kiro/`, `kiro-ide/`, `codex/`, `cursor/`, `opencode/`, `copilot/`.
+- `plugins/<name>/`: **Optional, owned AIDLC plugins** (the plugin mechanism; design in the single chapter `docs/reference/18-plugin-mechanism.md`, authoring guide `docs/harness-engineering/10-authoring-a-plugin.md`). Each holds `.aidlc-plugin/plugin.json` (the declarative manifest) + core-shaped subtrees (`stages/`, `contributions/`, `sensors/`, `tools/`, ...) + `tests/`. `bun scripts/package.ts` emits a real host plugin per harness at `dist/plugins/<name>/{claude,codex,copilot,cursor,kiro,kiro-ide,opencode}/`; a compose hook merges the plugin into an install (new stages + the additive contribution seam). Plugins add, the install selects: `tools/data/harness.json` `plugins` filters the enabled graph/scope/runner surfaces while keeping installed files re-enableable. `plugins/test-pro/` is the reference fixture. Guarded by `tests/integration/t188-plugin-compose.serial.test.ts` (mechanism) + `plugins/test-pro/tests/` (content, wired into the integration tier).
+- `scripts/package.ts`: **The build entry.** `bun scripts/package.ts` materializes every local `dist/<harness>/` and `dist-release/<harness>/`; `bun scripts/package.ts --check` builds twice in independent temp roots and byte-compares the results as the determinism guard. `manifest-types.ts` is the shared manifest contract.
+- `dist/` and `dist-release/`: **GENERATED, ignored local outputs.** They are never committed or hand-edited. CI, tests, binary builds, and release packaging regenerate them before use. Native users install release assets; copy-channel users take `runtime/<harness>/` from the versioned `aidlc-copy-runtime-X.Y.Z.tar.gz` release asset.
+- `tests/`: All-TypeScript test suite (`t*.test.ts`, run via bun), four levels (smoke/unit/integration/e2e). Run `bash tests/run-tests.sh --help` for levels and profiles.
+- `docs/guide/`: User Guide: getting started, workflows, scopes, agents, customization, troubleshooting
+- `docs/harness-engineering/`: Harness Engineer Guide: reshaping AIDLC through configuration (stages, agents, scopes, rules, sensors, knowledge) without code, plus porting AIDLC to a new harness
+- `docs/reference/`: Developer Reference: architecture, orchestrator, stage protocol, hooks, testing, contributing
 
 ## How It Works
 
@@ -155,13 +225,14 @@ The hand-authored source lives in `core/` (harness-neutral) + `harness/<name>/`
 (per-CLI surfaces); `bun scripts/package.ts` regenerates the `dist/<harness>/`
 trees. The core uses the same building blocks in every harness:
 
-- **Skills** (`skills/aidlc/`) — Orchestrator (`SKILL.md`), stage protocol, and 33 stage files across 5 phases (initialization, ideation, inception, construction, operation)
-- **Agents** (`agents/`) — 14 `aidlc-<role>-agent.md` files: 11 domain-expert personas (product, design, delivery, architect, aws-platform, compliance, devsecops, developer, quality, pipeline-deploy, operations), 2 review-only agents (product-lead, architecture-reviewer), and the adaptive-workflows composer (aidlc-composer-agent)
-- **Method/rules** (`memory/`) — Layered config in the space memory layer: `org.md` (framework defaults), `team.md` (affirmed practices), `project.md` (project overrides), and `phases/<phase>.md` for ideation/inception/construction/operation
-- **Sensors** (`sensors/`) — Deterministic verification manifests (advisory): `aidlc-claim-sources.md`, `aidlc-required-sections.md`, `aidlc-upstream-coverage.md`, `aidlc-traceability.md`, `aidlc-linter.md`, `aidlc-type-check.md`
-- **Knowledge** (`knowledge/`) — Methodology reference. Per-agent under `aidlc-<agent>-agent/`; cross-agent material in `aidlc-shared/`
-- **Tools** (`tools/`) — TypeScript CLI tools, all prefixed `aidlc-*.ts` and run via bun
-- **Hooks** (`hooks/`) — 17 framework hooks, all prefixed `aidlc-*.ts`, covering audit emission, sensor dispatch, stage-graph rebuild, session lifecycle, state validation, subagent tracking, statusline rendering, human-turn recording, exact stage-rule delivery, forwarding-loop enforcement, reviewer read-scope enforcement, review-receipt write-freeze enforcement, code-generation plan-approval enforcement, direct state-transition enforcement, and token-usage folding (the Claude-only usage-ledger producer)
+- **Stages** (`aidlc-common/`): the stage protocol (`protocols/`) and 33 stage files across 5 phases (`stages/<phase>/`: initialization, ideation, inception, construction, operation); the orchestrator skill is per harness (`harness/<name>/skills/aidlc/SKILL.md`)
+- **Skills** (`skills/`): the 3 read-only session skills and `aidlc-knowledge`
+- **Agents** (`agents/`): 14 `aidlc-<role>-agent.md` files: 11 domain-expert personas (product, design, delivery, architect, aws-platform, compliance, devsecops, developer, quality, pipeline-deploy, operations), 2 review-only agents (product-lead, architecture-reviewer), and the adaptive-workflows composer (aidlc-composer-agent)
+- **Method/rules** (`memory/`): Layered config in the space memory layer: `org.md` (framework defaults), `team.md` (affirmed practices), `project.md` (project overrides), and `phases/<phase>.md` for ideation/inception/construction/operation
+- **Sensors** (`sensors/`): Deterministic verification manifests (advisory): `aidlc-claim-sources.md`, `aidlc-required-sections.md`, `aidlc-upstream-coverage.md`, `aidlc-traceability.md`, `aidlc-linter.md`, `aidlc-type-check.md`
+- **Knowledge** (`knowledge/`): Methodology reference. Per-agent under `aidlc-<agent>-agent/`; cross-agent material in `aidlc-shared/`
+- **Tools** (`tools/`): TypeScript CLI tools, all prefixed `aidlc-*.ts` and run via bun
+- **Hooks** (`hooks/`): 17 framework hooks, all prefixed `aidlc-*.ts`, covering audit emission, sensor dispatch, stage-graph rebuild, session lifecycle, state validation, subagent tracking, statusline rendering, human-turn recording, exact stage-rule delivery, forwarding-loop enforcement, reviewer read-scope enforcement, review-receipt write-freeze enforcement, code-generation plan-approval enforcement, direct state-transition enforcement, and token-usage folding (the Claude-only usage-ledger producer)
 
 ## Working on This Project
 
@@ -169,7 +240,7 @@ trees. The core uses the same building blocks in every harness:
 - **Markdown block structure has one interpreter:** `markdownBlocks` in `core/tools/aidlc-lib.ts`, backed by the built-in `Bun.markdown` renderer, supplies block visibility, containers, link reference definitions, and claim-splitting structure; `visibleMarkdownLines` projects it. Do not add a Markdown dependency, another block scanner, or a definition grammar. The security-sensitive `Bun.markdown.render` review-authority check is a deliberately separate code path.
 - The orchestrator skill (`harness/<name>/skills/aidlc/SKILL.md`) is per-harness; the engine and methodology live in `core/`.
 - User-facing onboarding uses two skeletons: `core/templates/onboarding.md` is marker-free neutral guidance; `core/templates/onboarding-harness.md` carries each harness's `onboarding.fills.ts`. Edit the neutral template for shared project guidance and the harness skeleton/fills for native setup. Kiro, Kiro IDE, Codex, Cursor, and opencode share byte-identical root `AGENTS.md` content and ship native onboarding inside their harness directories; Claude concatenates both parts in `.claude/CLAUDE.md`, and Copilot in its exclusive root `AGENTS.md`.
-- "harness" has three senses in this repo: `harness/` (top-level, the per-CLI distribution surfaces — this effort), `docs/harness-engineering/` (the Harness Engineer Guide), and `tests/harness/` (test-suite helper library) — unrelated.
+- "harness" has three senses in this repo: `harness/` (top-level, the per-CLI distribution surfaces of this effort), `docs/harness-engineering/` (the Harness Engineer Guide), and `tests/harness/` (test-suite helper library), which are unrelated.
 - See `docs/guide/` (User Guide), `docs/harness-engineering/` (Harness Engineer Guide), and `docs/reference/` (Developer Reference) for full documentation
 
 ## Test Suite
@@ -178,11 +249,11 @@ Run `bash tests/run-tests.sh --help` for levels and flags. See `docs/reference/0
 
 ## Utility Handler Checklist
 
-See `docs/reference/11-contributing.md` § "Adding a Utility Handler" before implementing a new `/aidlc --*` command.
+See `docs/reference/11-contributing.md` section "Adding a Utility Handler" before implementing a new `/aidlc --*` command.
 
 ## Documentation Policy
 
-IMPORTANT: When adding, removing, or renaming files, directories, commands, or flags — grep `docs/` and `README.md` for stale references and update them in the same commit.
+IMPORTANT: When adding, removing, or renaming files, directories, commands, or flags, grep `docs/` and `README.md` for stale references and update them in the same commit.
 
 ## Release Metadata Policy
 
