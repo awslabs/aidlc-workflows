@@ -6616,6 +6616,26 @@ function macProcessTable(deadlineMs: number): ProcessTable | null {
   }
 }
 
+// The table this process read last, reused for the ancestry cache window: one
+// engine command walks the chain many times (hundreds on the late-question
+// scope run), and the chain of a running process does not change while it
+// runs. Liveness is still checked per hop and the PID entries are read fresh
+// each walk; a SessionStart write clears it, so the next walk reads anew.
+let sessionProcessTableCache: { table: ProcessTable; readAt: number } | null = null;
+
+export function clearSessionProcessTable(): void {
+  sessionProcessTableCache = null;
+}
+
+function cachedMacProcessTable(deadlineMs: number): ProcessTable | null {
+  const now = Date.now();
+  const cached = sessionProcessTableCache;
+  if (cached && now >= cached.readAt && now - cached.readAt < SESSION_ANCESTRY_CACHE_MS) return cached.table;
+  const table = macProcessTable(deadlineMs);
+  sessionProcessTableCache = table === null ? null : { table, readAt: Date.now() };
+  return table;
+}
+
 function loadWindowsSessionProcessApi() {
   const kernel = dlopen("kernel32.dll", {
     // Win32 BOOL is a 32-bit int, including on x64 and arm64.
@@ -6745,7 +6765,7 @@ function processIdentityReader(deadlineMs: number): (pid: number) => ProcessIden
     if (platform === "linux") return linuxProcessIdentity(pid);
     if (platform === "win32") return windowsSessionProcessIdentity(pid, deadlineMs);
     if (platform !== "darwin") return null;
-    if (table === undefined) table = macProcessTable(deadlineMs);
+    if (table === undefined) table = cachedMacProcessTable(deadlineMs);
     return table?.get(pid) ?? null;
   };
 }
@@ -6807,6 +6827,7 @@ export function writeSessionPidEntry(
   identity: ProcessIdentity | null | undefined = undefined,
 ): void {
   sessionAncestryCache.delete(projectDir);
+  clearSessionProcessTable();
   const path = sessionPidEntryPath(projectDir, pid);
   if (
     Date.now() >= deadlineMs ||
@@ -6881,6 +6902,7 @@ export function writeSessionPidAncestry(
   readWindowsIdentity = windowsSessionProcessIdentity,
 ): void {
   sessionAncestryCache.delete(projectDir);
+  clearSessionProcessTable();
   if (validSessionId(sessionId) === null) return;
   const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
   const windows = sessionProcessPlatform() === "win32";

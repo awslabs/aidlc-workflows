@@ -1,4 +1,4 @@
-// covers: function:readSessionBinding function:writeSessionBinding function:resolveWorkflowSelection function:workflowParticipation function:readActiveIntentCursor function:SessionResolutionConflictError function:validSessionId function:writeSessionPidEntry function:writeSessionPidAncestry function:resolveSessionIdFromAncestry function:hookChildEnv function:windowsSessionProcessIdentity
+// covers: function:clearSessionProcessTable function:readSessionBinding function:writeSessionBinding function:resolveWorkflowSelection function:workflowParticipation function:readActiveIntentCursor function:SessionResolutionConflictError function:validSessionId function:writeSessionPidEntry function:writeSessionPidAncestry function:resolveSessionIdFromAncestry function:hookChildEnv function:windowsSessionProcessIdentity
 //
 // Deterministic coverage for the per-session binding store and PID ancestry
 // resolver. All writes stay under a fresh project fixture.
@@ -15,6 +15,7 @@ import { join } from "node:path";
 import {
   activeIntent,
   auditFilePath,
+  clearSessionProcessTable,
   createIntent,
   docsRoot,
   hookChildEnv,
@@ -82,6 +83,8 @@ beforeEach(() => {
   delete process.env.AIDLC_SESSION_OVERRIDE_SOURCE;
   delete process.env.AIDLC_TEST_SESSION_PLATFORM;
   delete process.env.AIDLC_TEST_PS_DENIED;
+  // A table cached under the real clock would look fresh under a mocked one.
+  clearSessionProcessTable();
   proj = createTestProject();
 });
 
@@ -418,6 +421,22 @@ describe("t318 session binding helpers", () => {
       }
     } finally {
       for (const child of children) child.kill();
+    }
+  });
+
+  test("one process reads the table once a second, and a SessionStart write reads it anew", () => {
+    const lookup = mockMacProcessTree(new Map([[process.ppid, process.pid]]));
+    try {
+      writeSessionPidAncestry(proj, "table-session");
+      lookup.ps.mockClear();
+      expect(resolveSessionIdFromAncestry(proj)).toBe("table-session");
+      expect(resolveSessionIdFromAncestry(proj)).toBe("table-session");
+      expect(lookup.ps).toHaveBeenCalledTimes(1);
+      writeSessionPidEntry(proj, process.ppid, "near-session");
+      expect(resolveSessionIdFromAncestry(proj)).toBe("near-session");
+      expect(lookup.ps).toHaveBeenCalledTimes(2);
+    } finally {
+      lookup.restore();
     }
   });
 
