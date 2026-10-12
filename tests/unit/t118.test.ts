@@ -536,14 +536,13 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
     // pre-hardening engine relayed a circular no-state error here that told the
     // user to do exactly what they had just done). Pre-finding-2 this mis-read
     // the scope as prose and emitted an `ask` defaulting to "feature".
-    test("no-state bare known-scope 'bugfix' -> creation print naming intent-create (recognised as scope, not freeform) [finding 2]", () => {
+    test("no-state bare known-scope 'bugfix' -> the plan is kept and the person is asked what it is for (recognised as scope, not freeform) [finding 2]", () => {
       const r = emitNextNoState("bugfix");
       expect(r.directive.kind).toBe("print");
-      // The print names the intent-create move for the EXPLICITLY NAMED scope
-      // (P4: --init retired; the engine NAMES the deterministic creation handler).
-      expect(r.directive.message ?? "").toContain("intent create --scope bugfix");
-      // Run-then-continue shape: the conductor creates, then re-enters the loop.
-      expect(r.directive.message ?? "").toContain("re-run `next` to continue");
+      // The scope is the person's pick with nothing described yet (#2355): no
+      // creation is named, and the answer's command keeps the plan.
+      expect(r.directive.message ?? "").not.toContain("intent create");
+      expect(r.directive.message ?? "").toContain("next --scope bugfix -- <their words>");
       // STRONGER: a regression that mis-read bugfix as freeform would emit an
       // `ask` (the pre-fix bug) — assert it is NOT an ask, pinning finding 2.
       expect(r.directive.kind).not.toBe("ask");

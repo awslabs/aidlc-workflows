@@ -1,7 +1,7 @@
 // covers: scope:bugfix
 //
 // t143-scope-start-creation.test.ts — the restored explicit-scope workflow creation
-// journey (sdk). Drives a REAL `/aidlc --scope bugfix` on a fresh project
+// journey (sdk). Drives a REAL `/aidlc --scope bugfix <description>` on a fresh project
 // (no aidlc-docs/aidlc-state.md) through the Claude Agent SDK and proves the
 // creation seam end-to-end:
 //
@@ -72,7 +72,9 @@ describe("t143 explicit-scope workflow creation (/aidlc --scope bugfix, sdk live
         stripEnvScope: true,
       });
       try {
-        const r = await driveAidlc(`/aidlc --scope ${SCOPE}`, {
+        // With a description: named alone, the scope first asks what the work is
+        // for (#2355), and this journey is about the creation that follows.
+        const r = await driveAidlc(`/aidlc --scope ${SCOPE} fix the login: it rejects a correct password`, {
           projectDir: proj,
           answerScript: "default",
           timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {

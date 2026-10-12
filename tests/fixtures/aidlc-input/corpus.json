@@ -11769,12 +11769,15 @@
           ]
         ],
         "names": [
-          "engine intent create --scope bugfix --depth comprehensive"
+          "next --scope bugfix --depth comprehensive -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -14009,12 +14012,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope feature"
+          "next --scope feature -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -14035,12 +14041,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope bugfix"
+          "next --scope bugfix -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -14789,12 +14798,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope feature"
+          "next --scope feature -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -15763,12 +15775,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope bugfix"
+          "next --scope bugfix -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -16614,12 +16629,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope enterprise"
+          "next --scope enterprise -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17278,12 +17296,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope workshop"
+          "next --scope workshop -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17331,12 +17352,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope classic"
+          "next --scope classic -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17357,12 +17381,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope express"
+          "next --scope express -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17383,12 +17410,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope enterprise"
+          "next --scope enterprise -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17409,12 +17439,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope mvp"
+          "next --scope mvp -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17435,12 +17468,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope poc"
+          "next --scope poc -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17461,12 +17497,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope refactor"
+          "next --scope refactor -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17487,12 +17526,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope infra"
+          "next --scope infra -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17513,12 +17555,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope security-patch"
+          "next --scope security-patch -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }

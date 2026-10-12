@@ -4980,6 +4980,23 @@ function createPrintDirective(
   return directive;
 }
 
+// A plan named with nothing after it (`/aidlc bugfix`, `/aidlc --scope bugfix`)
+// is the person's pick with no work described yet (#2355): nothing is created,
+// they are asked once what it is for, and their answer runs the one command
+// named here, which creates on that plan with their words as its request and
+// the settings typed with the plan. Their words have a placeholder, never quotes
+// of this engine's: a single quote is no quote on Kiro IDE's cmd shell (#2167).
+function planNamedAloneStep(plan: string, flags: ParsedFlags): PrintDirective {
+  const command = `${aidlcToolInvocation("orchestrate")} next --scope ${scopeArg(plan)}${carriedRoutingFlags(flags).newWork} -- <their words>`;
+  const step = turnEndingPrint(
+    `The person picked the \`${plan}\` plan and has not said what the work is for, so nothing is created yet. ` +
+      "Say the line above, then wait: when they say what to work on, run " +
+      `\`${command}\` with their words as one shell-safe argument, and follow what it returns: it starts the work.`,
+  );
+  step.narration = `I'll use the ${plan} plan. What should I work on? Tell me in your own words and I'll start it.`;
+  return step;
+}
+
 // The optional line offering a clean chat for new work, in the host's own words.
 function cleanChatLine(projectDir: string): string {
   const skill = entrySkillInvocation();
@@ -9244,7 +9261,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       emit(pick);
       return;
     }
-    emit(createPrintDirective(flags.positionalScope, flags, pd, flags.intent));
+    emit(flags.intent
+      ? createPrintDirective(flags.positionalScope, flags, pd, flags.intent)
+      : planNamedAloneStep(flags.positionalScope, flags));
     return;
   }
 
@@ -9332,8 +9351,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     }
     // flags.intent here is freeform feature text typed alongside an explicit
     // --scope (e.g. `/aidlc --scope feature "build the auth service"`) — thread
-    // it as the created intent's description; a bare `--scope <s>` carries none.
-    emit(createPrintDirective(scope, flags, pd, flags.intent));
+    // it as the created intent's description; a bare `--scope <s>` carries none,
+    // so the person is asked what the work is for first.
+    emit(flags.intent ? createPrintDirective(scope, flags, pd, flags.intent) : planNamedAloneStep(scope, flags));
     return;
   }
   //

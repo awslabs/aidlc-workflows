@@ -238,8 +238,9 @@ describe("t214 creation print carries the cost parenthetical", () => {
   test("next bugfix prints intent-create AND the computed cost", () => {
     proj = createTestProject();
     // A genuinely empty workspace creates instead of prompting to pick (t198:208).
+    // The plan with a description creates; named alone it first asks (#2355).
     removeWorkspaceRecord(proj);
-    const d = directiveOf(runNext(proj, ["bugfix"]).out);
+    const d = directiveOf(runNext(proj, ["bugfix", "Fix the login crash"]).out);
     expect(d.kind).toBe("print");
     const m = String(d.message);
     expect(m).toContain("intent create --scope bugfix");
@@ -266,7 +267,7 @@ describe("t214 creation print carries the cost parenthetical", () => {
   test("feature creation preview discloses the environment sensor kill switch", () => {
     proj = createTestProject();
     removeWorkspaceRecord(proj);
-    const result = runNext(proj, ["--scope", "feature", "--sensors", "on"], {
+    const result = runNext(proj, ["--scope", "feature", "--sensors", "on", "add login support"], {
       AIDLC_DISABLE_SENSORS: "1",
     });
     expect(result.rc, result.out).toBe(0);
@@ -279,7 +280,7 @@ describe("t214 creation print carries the cost parenthetical", () => {
     test(`next ${scope} retains the derived per-unit clause`, () => {
       proj = createTestProject();
       removeWorkspaceRecord(proj);
-      const d = directiveOf(runNext(proj, [scope]).out);
+      const d = directiveOf(runNext(proj, [scope, "add login support"]).out);
       expect(d.kind).toBe("print");
       const expected = counts(GRID[scope].stages, true);
       expect(expected.perUnitStages).toBeGreaterThan(0);

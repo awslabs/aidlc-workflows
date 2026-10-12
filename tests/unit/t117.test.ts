@@ -349,7 +349,13 @@ describe("t117 creation branch (P4: --init retired, engine names intent-create)"
   // it; `next` itself must create NO state (mutation stays conductor-side).
   test("8: named scope on a clean workspace → print naming intent-create AND no state created", () => {
     const p = cleanProj(); // genuinely empty workspace (seeded record stripped)
-    const r = next(["--scope", "poc"], p);
+    // Named alone, the scope is the person's pick with nothing described yet:
+    // the step asks what the work is for and names no creation (#2355).
+    const alone = directive(next(["--scope", "poc"], p).stdout);
+    expect(alone.kind).toBe("print");
+    expect(alone.message).not.toContain("intent create");
+    expect(alone.message).toContain("next --scope poc -- <their words>");
+    const r = next(["--scope", "poc", "--", "prove the importer reads the old files"], p);
     expect(r.out).toContain('"kind":"print"');
     const d = directive(r.stdout);
     expect(d.kind).toBe("print");

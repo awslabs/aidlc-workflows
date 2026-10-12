@@ -1899,7 +1899,8 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
     });
 
     test("Branch 9a creates on zero intents", () => {
-      const r = next(["--scope", "poc"]);
+      // With a description: named alone, the scope first asks what the work is for (#2355).
+      const r = next(["--scope", "poc", "--", "prove the importer reads the old files"]);
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("print");
       expect(d.message).toContain("intent create --scope poc");
@@ -1907,8 +1908,8 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(existsSync(intentsDir(proj))).toBe(false);
     });
 
-    test("Branch 7b creates on zero intents (bare valid-scope positional)", () => {
-      const r = next(["poc"]);
+    test("Branch 7b creates on zero intents (valid-scope positional with a description)", () => {
+      const r = next(["poc", "prove the importer reads the old files"]);
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("print");
       expect(d.message).toContain("intent create --scope poc");
@@ -1963,7 +1964,7 @@ describe("t171 archived intents never block or appear in the creation gate (issu
     for (const name of inFlight) {
       expect(util(["intent", "archive", name]).status).toBe(0);
     }
-    const created = JSON.parse(next(["--scope", "poc"]).stdout.trim());
+    const created = JSON.parse(next(["--scope", "poc", "--", "prove the importer reads the old files"]).stdout.trim());
     expect(created.kind).toBe("print");
     expect(created.message).toContain("intent create --scope poc");
     // Read-only throughout: three records remain, all archived, no cursor.

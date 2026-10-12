@@ -17,7 +17,7 @@
 // adapter and the Claude Code dispatcher), as tests/unit/t-message-record does.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, createOrchestrationTestProject, proposalFollowUp } from "../harness/fixtures.ts";
 import {
@@ -116,6 +116,48 @@ describe("next takes the person's own /aidlc line when the agent's command carri
     expect(directive.kind, out).toBe("ask");
     expect(directive.ask_type).toBe("scope-confirm");
     expect(directive.question ?? "").toContain(WORDS);
+  });
+
+  // #2355: a plan typed alone is the person's pick with nothing yet to build:
+  // the agent passes it on (the adapter names no first step for a plan alone),
+  // and Kiro IDE's own engine tree asks them what it is for and creates nothing.
+  test("kiro-ide: `/aidlc workshop` passed on by the agent asks what the work is for and creates nothing", async () => {
+    const proj = fresh();
+    await say(proj, "/aidlc workshop", "kiro-ide");
+    const { directive, out } = await next(proj, "kiro-ide", ["workshop"]);
+    expect(directive.kind, out).toBe("print");
+    expect(directive.message ?? "").not.toContain("intent create");
+    expect(directive.message ?? "").toContain("next --scope workshop -- <their words>");
+    expect((directive as { narration?: string }).narration, out).toBe(
+      "I'll use the workshop plan. What should I work on? Tell me in your own words and I'll start it.",
+    );
+    expect(questionFiles(proj)).toHaveLength(0);
+  });
+
+  // The answer as Kiro IDE's agent sends it: their words, quotes and all, as
+  // one argument after the delimiter, or through the request file the skill
+  // names for words a Windows shell could change. Either way the work starts on
+  // the plan they picked with their words exactly as written.
+  test("kiro-ide: the answer to `/aidlc workshop`, with quotes in the words, starts workshop with every character kept", async () => {
+    const words = `the "Sign in" button says it's locked`;
+    for (const form of ["argument", "request-file"] as const) {
+      const proj = fresh();
+      await say(proj, "/aidlc workshop", "kiro-ide");
+      const step = await next(proj, "kiro-ide", ["workshop"]);
+      expect(step.directive.message ?? "", step.out).toContain("next --scope workshop -- <their words>");
+      let args = ["--scope", "workshop", "--", words];
+      if (form === "request-file") {
+        mkdirSync(join(proj, "aidlc", ".aidlc-request-text"), { recursive: true });
+        writeFileSync(join(proj, "aidlc", ".aidlc-request-text", "request.txt"), words, "utf-8");
+        args = ["--scope", "workshop", "--request-file", "aidlc/.aidlc-request-text/request.txt"];
+      }
+      const { directive, out } = await next(proj, "kiro-ide", args);
+      expect(directive.kind, `${form}: ${out}`).toBe("print");
+      expect(directive.message ?? "", form).toContain("intent create --scope workshop --request");
+      const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+      const texts = questionFiles(proj).map((name) => (JSON.parse(readFileSync(join(dir, name), "utf-8")) as { text: string }).text);
+      expect(texts, form).toEqual([words]);
+    }
   });
 
   test("kiro-ide: the explicit forms are untouched: --scope with the words after -- still creates", async () => {

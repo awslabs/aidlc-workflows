@@ -888,13 +888,13 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
   // login screen") is the agent's to read: the engine proposes nothing from the
   // words (t-plan-proposed-by-the-agent), so no case here pins a word's reading.
 
-  test("known-scope positional still creates (Branch 7b untouched)", () => {
+  test("known-scope positional with a description still creates (Branch 7b)", () => {
     proj = createTestProject();
     // The creation path needs a GENUINELY empty workspace (zero intents), else the
     // engine asks to select the seeded record instead of creating (t118's
-    // pattern).
+    // pattern). Named alone, the plan first asks what the work is for (#2355).
     removeWorkspaceRecord(proj);
-    const d = directiveOf(runNext(proj, ["bugfix"]).out);
+    const d = directiveOf(runNext(proj, ["bugfix", "Fix the login crash"]).out);
     expect(d.kind).toBe("print");
     expect(String(d.message)).toContain("intent create --scope bugfix");
   });

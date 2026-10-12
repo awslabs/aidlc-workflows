@@ -678,14 +678,17 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   // workspace prints the intent-create move + creates NO state; (b) a named scope
   // over existing state is a resume/scope-change, NOT a creation.
   // ============================================================
-  test("SP5a: named scope (clean) -> print naming intent-create, next creates NO state (read-only)", () => {
+  test("SP5a: named scope (clean) with a description -> print naming intent-create, next creates NO state (read-only)", () => {
     const p = cleanProj();
+    // Named alone, the scope first asks what the work is for (#2355).
     const r = run(ORCHESTRATE, [
       "next",
       "--scope",
       "poc",
       "--project-dir",
       p,
+      "--",
+      "prove the importer reads the old files",
     ]);
     expect(directive(r).kind).toBe("print");
     expect(directive(r).message).toContain("intent create");
