@@ -82,10 +82,10 @@
 //      stage questions file (notably the learnings ritual), and for harnesses
 //      that render questions as prose.
 //      Like the pending-file carve-out, it is limited to [-]. Under autonomous
-//      Construction it allows only a checkpoint question (the verification
-//      command, a plan approval, a summary confirmation, a Construction policy
-//      change): the protocol keeps those the person's, while a plain question
-//      there is one the agent records itself.
+//      Construction it allows any logged question while a person is there;
+//      an unattended driver (AIDLC_UNATTENDED=1) has nobody to answer, so
+//      there it allows only a checkpoint question (the verification command,
+//      a plan approval, a summary confirmation, a Construction policy change).
 //   5. An IN-FLIGHT COMPOSE gate is positively signalled by the fresh
 //      workspace-level compose marker and is suppressed under autonomous
 //      Construction.
@@ -855,10 +855,13 @@ function isPendingQuestionStop(
 // that are not represented by a blank tag in `<slug>-questions.md`, such as the
 // §13 learning selection and "Anything to add?" prompts. Keep the same strict
 // stage-state gate as the question-file carve-out. Under autonomous
-// Construction only a checkpoint question is the person's (the verification
-// command, a plan approval, a summary confirmation, a Construction policy
-// change: the protocol's separate human stops); a plain question there is one
-// the agent records itself, so the loop stays alive for it.
+// Construction a person who is there still answers the questions the agent
+// asks them (the protocol keeps failures theirs, and this hook's own carry-on
+// step tells the agent to log a question and end its turn), so a logged
+// question waits as it does elsewhere. An unattended driver (AIDLC_UNATTENDED=1)
+// has nobody to answer: there only a checkpoint question waits (the
+// verification command, a plan approval, a summary confirmation, a
+// Construction policy change), and the loop stays alive for a plain one.
 function isPendingDecisionStop(
   projectDir: string,
   stateContent: string,
@@ -866,9 +869,10 @@ function isPendingDecisionStop(
   activeUnit?: string,
 ): boolean {
   try {
-    const autonomous = getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous";
+    const checkpointsOnly = !humanTurnMintAllowed() &&
+      getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous";
     const waitsOnThePerson = (open: string | null): boolean =>
-      open !== null && (!autonomous || auditBlockField(open, "Checkpoint") !== null);
+      open !== null && (!checkpointsOnly || auditBlockField(open, "Checkpoint") !== null);
     const currentSlug = currentStageSlug(stateContent);
     const teamUnitMajorDirective =
       isTeamUnitOwnership(stateContent) &&

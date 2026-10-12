@@ -2501,38 +2501,93 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(i.out).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("(f2) under autonomous Construction an open checkpoint question (the verification command) allows the stop; a plain question does not", () => {
+  test("(f2) under autonomous Construction an open checkpoint question (the verification command) allows the stop, and so does a plain question in an attended run; an unattended driver waits only on the checkpoint", () => {
     // The verification command stays the person's under autonomy (the
     // construction module: "Wait for the human even under autonomous
     // completion"). The conductor logs it as a checkpoint decision; nothing else
     // marks the wait, and the hook pushed the agent on until the person's reply
     // cancelled that turn.
-    const theirs = makeProject();
-    seedInProgressWithQuestions(theirs, { slug: "code-generation", phase: "construction", autonomy: "autonomous" });
-    seedInteractionAudit(theirs, [
-      { event: "STAGE_STARTED", stage: "code-generation" },
-      {
-        event: "DECISION_RECORDED",
-        stage: "code-generation",
-        fields: { Checkpoint: "Construction Verification Command", Decision: "Use this command to verify each completed Unit?" },
-      },
-    ]);
-    const waits = runHook(theirs, '{"stop_hook_active":false}', "run-stage", "", "", "code-generation");
+    const seed = (fields: Record<string, string>): string => {
+      const proj = makeProject();
+      seedInProgressWithQuestions(proj, { slug: "code-generation", phase: "construction", autonomy: "autonomous" });
+      seedInteractionAudit(proj, [
+        { event: "STAGE_STARTED", stage: "code-generation" },
+        { event: "DECISION_RECORDED", stage: "code-generation", fields },
+      ]);
+      return proj;
+    };
+    const checkpoint = { Checkpoint: "Construction Verification Command", Decision: "Use this command to verify each completed Unit?" };
+    const plain = { Decision: "Anything to add for next time?" };
+    const stop = (proj: string, unattended: "0" | "1") =>
+      runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "code-generation", "", false, { AIDLC_UNATTENDED: unattended });
+
+    const theirs = seed(checkpoint);
+    const waits = stop(theirs, "0");
     expect(waits.rc, waits.diagnostic).toBe(0);
     expect(waits.out).toBe("");
     const trace = readFileSync(join(seededRecordDir(theirs), ".aidlc-engine/hooks-health", "continue-workflow.trace"), "utf-8");
     expect(trace).toContain("pending-decision carve-out");
 
-    // A plain question under autonomy is one the agent records itself, so the
-    // loop stays alive for it.
-    const agents = makeProject();
-    seedInProgressWithQuestions(agents, { slug: "code-generation", phase: "construction", autonomy: "autonomous" });
-    seedInteractionAudit(agents, [
-      { event: "STAGE_STARTED", stage: "code-generation" },
-      { event: "DECISION_RECORDED", stage: "code-generation", fields: { Decision: "Anything to add for next time?" } },
-    ]);
-    const nudged = runHook(agents, '{"stop_hook_active":false}', "run-stage", "", "", "code-generation");
-    expect((JSON.parse(nudged.out) as { decision?: string }).decision).toBe("block");
+    // A question the agent logged for a person who is there waits for them too:
+    // the hook's own carry-on step tells the agent to log it and end its turn.
+    expect(stop(seed(plain), "0").out).toBe("");
+
+    // An unattended driver has nobody to answer, so there only the checkpoint
+    // question waits and the loop stays alive for a plain one.
+    expect(stop(seed(checkpoint), "1").out).toBe("");
+    expect((JSON.parse(stop(seed(plain), "1").out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(f2) under Continue automatically the question the agent logged for the person ends the turn on every evidence path, with no repeated nudges", () => {
+    // Live on main (Codex 0.160 and Kiro CLI 2.29.0 on 2026-10-13, Claude Code
+    // on 2026-10-11): the parallel build needed the person's files committed,
+    // the agent asked "May I commit ...?" and logged it as its carry-on step
+    // says, and the hook pushed it on up to seven times, until it released or
+    // the agent committed with the question unanswered. The person's last
+    // message was answered with engine calls, so the turn is not a chat.
+    const blocks: Record<string, number> = {};
+    const traces: Record<string, string> = {};
+    for (const evidence of ["claude", "codex", "kiro"] as const) {
+      const proj = makeProject();
+      const env = { ...(evidence === "kiro" ? addKiroLayout(proj) : {}), AIDLC_UNATTENDED: "0" };
+      seedInProgressWithQuestions(proj, { slug: "code-generation", phase: "construction", autonomy: "autonomous" });
+      seedInteractionAudit(proj, [
+        { event: "STAGE_STARTED", stage: "code-generation" },
+        {
+          event: "DECISION_RECORDED",
+          stage: "code-generation",
+          fields: {
+            Decision: "May I also commit .agents/, .codex/, and the versioned aidlc/ records, then retry?",
+            Options: "Commit remaining project files,Leave them uncommitted",
+          },
+        },
+      ]);
+      let transcript: string | undefined;
+      if (evidence === "kiro") {
+        seedTurnMarkers(proj, { humanNewer: false });
+      } else {
+        transcript = seedTranscriptEntries(proj, evidence, [
+          { kind: "human", text: "ok, carry on with the build" },
+          { kind: "bash", command: "bun .claude/tools/aidlc.ts engine swarm prepare --batch 1 --units u1-greeting,u2-version --base main" },
+          { kind: "text" },
+        ]);
+      }
+      blocks[evidence] = 0;
+      for (let stop = 0; stop < 8; stop++) {
+        const r = runHook(
+          proj,
+          JSON.stringify({ stop_hook_active: stop > 0, ...(transcript ? { transcript_path: transcript } : {}) }),
+          "run-stage", "", "", "code-generation", "", false, env,
+        );
+        expect(r.rc, r.diagnostic).toBe(0);
+        if (r.out !== "") blocks[evidence]++;
+      }
+      const tracePath = join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "continue-workflow.trace");
+      traces[evidence] = existsSync(tracePath) ? readFileSync(tracePath, "utf-8") : "";
+    }
+    // Main pushed seven times on each path before it let go.
+    expect(blocks).toEqual({ claude: 0, codex: 0, kiro: 0 });
+    for (const [evidence, trace] of Object.entries(traces)) expect(trace, evidence).toContain("pending-decision carve-out");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("(f2) solo unit-major keeps Current Stage authority and the legacy trace message", () => {
@@ -3160,7 +3215,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(r.out).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("(f2) autonomous Construction ignores an unresolved logged decision", () => {
+  test("(f2) autonomous Construction lets an unresolved logged decision end an attended turn, not an unattended one", () => {
     const proj = makeProject();
     seedInProgressWithQuestions(proj, {
       slug: "code-generation",
@@ -3172,7 +3227,10 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       { event: "DECISION_RECORDED", stage: "code-generation" },
     ]);
 
-    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    const attended = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, { AIDLC_UNATTENDED: "0" });
+    expect(attended.rc, attended.diagnostic).toBe(0);
+    expect(attended.out).toBe("");
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, { AIDLC_UNATTENDED: "1" });
     expect(r.rc).toBe(0);
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
