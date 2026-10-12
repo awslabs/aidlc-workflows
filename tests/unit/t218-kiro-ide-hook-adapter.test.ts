@@ -3219,10 +3219,13 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
             command: `Set-Location -LiteralPath '${dir}'; aidlc engine orchestrate next`,
             code: toolName === "execute_pwsh" ? 0 : 2,
           },
-          { command: "aidlc engine state advance", code: 2 },
+          // A plain native engine command is the engine's own to judge: the
+          // state tool refuses a bare advance itself, and a lifecycle report
+          // is the orchestrator's. The guard holds the build, not AI-DLC.
+          { command: "aidlc engine state advance", code: 0 },
           {
             command: "aidlc engine orchestrate report --stage code-generation --result completed",
-            code: 2,
+            code: 0,
           },
           { command: "echo blocked > src/blocked.ts", code: 2 },
           { command: "aidlc engine orchestrate next | Out-File src/blocked.ts", code: 2 },

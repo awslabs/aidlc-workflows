@@ -871,7 +871,10 @@ describe("a parallel batch's writes judged from the parent", () => {
     expect(both.code, `${both.out}\n${both.err}`).toBe(2);
   });
 
-  test("the reviewer writes the open review file of a listed Unit, and nothing else of the kind", () => {
+  // The review files are AI-DLC's own records: the engine's `log review` reads
+  // the one it asked for and the review-freeze guard owns reviewed content. This
+  // guard holds the build and leaves every review file alone, open or not.
+  test("the reviewer's review files are AI-DLC's records: open, unrequested or closed, the guard leaves them to the engine", () => {
     const pd = fixture();
     publish(pd);
     const reviews = join(recordDir(pd)!, REVIEW_RECORDS_DIR);
@@ -887,22 +890,21 @@ describe("a parallel batch's writes judged from the parent", () => {
     expect(own.code, `${own.out}\n${own.err}`).toBe(0);
     expect(own.out).toBe("");
     expect(blocked(pd)).toBe(before);
-    // Another file in the reviews folder, no request behind it.
+    // Another file in the reviews folder, no request behind it: a record too.
     const unrequested = write(pd, join(reviews, "code-generation", "units", UNIT, "1234567890abcdef", "1.ffff.review.md"));
-    expect(unrequested.code, `${unrequested.out}\n${unrequested.err}`).toBe(2);
-    expect(unrequested.err).toContain(REFUSAL);
-    // A request for a Unit the batch does not list.
+    expect(unrequested.code, `${unrequested.out}\n${unrequested.err}`).toBe(0);
+    // A request for a Unit the batch does not list: the engine's record as well.
     request("later", "bbbb0000bbbb0000");
     const foreign = write(pd, join(recordDir(pd)!, slot("later", "bbbb0000bbbb0000")));
-    expect(foreign.code, `${foreign.out}\n${foreign.err}`).toBe(2);
+    expect(foreign.code, `${foreign.out}\n${foreign.err}`).toBe(0);
     // The verdict is in: the slot is closed again.
     appendAuditEntry("REVIEW_COMPLETED", {
       Stage: STAGE, Unit: UNIT, Reviewer: "aidlc-architecture-reviewer-agent", Iteration: "1",
       "Request Id": "review:aaaa0000aaaa0000", Verdict: "READY",
     }, pd);
     const closed = write(pd, join(recordDir(pd)!, slot(UNIT, "aaaa0000aaaa0000")));
-    expect(closed.code, `${closed.out}\n${closed.err}`).toBe(2);
-    expect(blocked(pd)).toBe(before + 3);
+    expect(closed.code, `${closed.out}\n${closed.err}`).toBe(0);
+    expect(blocked(pd)).toBe(before);
   });
 
   test("a read-only probe passes under the batch with the fence on; a shell that writes waits", () => {
@@ -941,7 +943,7 @@ describe("a parallel batch's writes judged from the parent", () => {
     expect(blocked(pd)).toBe(before + refusedProbes.length);
   });
 
-  test("the review request and verdict commands pass when they name a listed Unit's prepared worktree", () => {
+  test("the review request and verdict commands are the engine's own, whichever folder or Unit they name", () => {
     const pd = fixture();
     succeeded(prepare(pd));
     publish(pd);
@@ -966,7 +968,9 @@ describe("a parallel batch's writes judged from the parent", () => {
       }
     }
     expect(blocked(pd)).toBe(before);
-    // The same route against the parent, an unlisted Unit, a folder prepare did not bind, or behind a pipe: refused.
+    // The same route against the parent, an unlisted Unit or a folder prepare did
+    // not bind is the engine's own folder and Unit judgement; a pipe only reads
+    // the output. None of them is the build.
     mkdirSync(join(pd, ".aidlc", "worktrees", "bolt-stray"), { recursive: true });
     for (const command of [
       review("aidlc engine log review", UNIT, pd),
@@ -974,23 +978,25 @@ describe("a parallel batch's writes judged from the parent", () => {
       review("aidlc engine log review", UNIT, join(pd, ".aidlc", "worktrees", "bolt-stray")),
       `${review("aidlc engine log review", UNIT, worker)} 2>&1 | head -5`,
     ]) {
-      const refused = parentHook(pd, "Bash", { command });
-      expect(refused.code, `${command}\n${refused.out}\n${refused.err}`).toBe(2);
-      expect(refused.err).toContain(REFUSAL);
+      const result = parentHook(pd, "Bash", { command });
+      expect(result.code, `${command}\n${result.out}\n${result.err}`).toBe(0);
     }
-    expect(blocked(pd)).toBe(before + 4);
+    expect(blocked(pd)).toBe(before);
   });
 
-  test("the parent's reviewer dispatch record passes while a listed Unit's worktree holds the open request", () => {
+  // The reviewer dispatch record is the reviewer-scope hook's own record: it
+  // only narrows what a dispatched reviewer may read. Open request or not, this
+  // guard leaves it to its owner.
+  test("the parent's reviewer dispatch record is AI-DLC's record: it passes with or without an open request", () => {
     const pd = fixture();
     succeeded(prepare(pd));
     publish(pd);
     const worker = child(pd);
     const slot = `${REVIEW_RECORDS_DIR}/code-generation/units/${UNIT}/1234567890abcdef/1.cccc0000cccc0000.review.md`;
     const before = blocked(pd);
-    // Nothing open yet: the dispatch record waits.
+    // Nothing open yet: the dispatch record is a record all the same.
     const early = write(pd, reviewerDispatchPath(pd));
-    expect(early.code, `${early.out}\n${early.err}`).toBe(2);
+    expect(early.code, `${early.out}\n${early.err}`).toBe(0);
     // The protocol's request is logged against the worktree, so its row lives in the worktree's audit.
     appendAuditEntry("REVIEW_REQUESTED", {
       Stage: STAGE, Unit: UNIT, Reviewer: "aidlc-architecture-reviewer-agent", Iteration: "1",
@@ -1000,15 +1006,15 @@ describe("a parallel batch's writes judged from the parent", () => {
     expect(dispatch.code, `${dispatch.out}\n${dispatch.err}`).toBe(0);
     const verdictFile = write(pd, join(recordDir(worker)!, slot));
     expect(verdictFile.code, `${verdictFile.out}\n${verdictFile.err}`).toBe(0);
-    expect(blocked(pd)).toBe(before + 1);
+    expect(blocked(pd)).toBe(before);
     // The verdict is recorded in the same audit: the dispatch record is closed again.
     appendAuditEntry("REVIEW_COMPLETED", {
       Stage: STAGE, Unit: UNIT, Reviewer: "aidlc-architecture-reviewer-agent", Iteration: "1",
       "Request Id": "review:cccc0000cccc0000", Verdict: "READY",
     }, worker);
     const closed = write(pd, reviewerDispatchPath(pd));
-    expect(closed.code, `${closed.out}\n${closed.err}`).toBe(2);
-    expect(blocked(pd)).toBe(before + 2);
+    expect(closed.code, `${closed.out}\n${closed.err}`).toBe(0);
+    expect(blocked(pd)).toBe(before);
   });
 
   test.each(["relaxed", "off"] as const)("a %s fence stands aside for a main-checkout write and the worker's changed plan", (mode) => {
