@@ -9340,32 +9340,34 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // carried words never reaches this error: takePersonsOwnLine read that line
   // in the agent's place at the top of routeNext.
   if (!stateContent) {
+    // A setting typed with no work selected for this chat is the setter's to
+    // keep for the piece of work this chat starts next (keepSettingsForNextWork
+    // in aidlc-guard-switch.ts): the agent runs it and says its line, before
+    // anything else, so it is never lost behind the question of which work to
+    // pick up. A step, not an error. Where work is here to pick from, the agent
+    // asks the engine again and the person gets that question in the same turn.
+    const typedBeforeWork = typedSettingModifiers(flags);
+    const settingBeforeWork = typedBeforeWork.length > 0 && !flags.intent && !flags.resume;
+    const pickFollows = settingBeforeWork && unselectedRecords(pd) !== null;
+    const thenWait = pickFollows ? "re-run next and follow what it returns." : "wait for them to say what to build.";
+    const teamKeepsBeforeWork = settingBeforeWork ? teamKeepsTyped(flags, pd) : null;
+    if (teamKeepsBeforeWork !== null) {
+      const said = `Run nothing. Tell the person in one line: "${teamKeepsBeforeWork}" Then ${thenWait}`;
+      emit(pickFollows ? printDirective(said) : turnEndingPrint(said));
+      return;
+    }
+    if (settingBeforeWork) {
+      const kept = `Run \`${configSetCommand(typedBeforeWork)}\` to keep these settings for the piece of work the person starts ` +
+        `next, then print its output verbatim and ${thenWait}`;
+      emit(pickFollows ? printDirective(kept) : turnEndingPrint(kept));
+      return;
+    }
     // Work in progress here with none selected (a teammate's fresh clone, or a
     // conversation that has not joined the record it found) is put to the
     // person by name, never answered as if there were none.
     const pick = intentPickPromptIfRecordsExist(pd);
     if (pick) {
       emit(pick);
-      return;
-    }
-    // A setting typed before any work exists is the setter's to keep for the
-    // piece of work this chat starts next (keepSettingsForNextWork in
-    // aidlc-guard-switch.ts): the agent runs it and says its line. A step, not
-    // an error.
-    const typedBeforeWork = typedSettingModifiers(flags);
-    const teamKeepsBeforeWork = typedBeforeWork.length > 0 && !flags.intent && !flags.resume
-      ? teamKeepsTyped(flags, pd) : null;
-    if (teamKeepsBeforeWork !== null) {
-      emit(turnEndingPrint(
-        `Run nothing. Tell the person in one line: "${teamKeepsBeforeWork}" Then wait for them to say what to build.`,
-      ));
-      return;
-    }
-    if (typedBeforeWork.length > 0 && !flags.intent && !flags.resume) {
-      emit(turnEndingPrint(
-        `Run \`${configSetCommand(typedBeforeWork)}\` to keep these settings for the piece of work the person starts ` +
-          "next, then print its output verbatim and wait for them to say what to build.",
-      ));
       return;
     }
     // The person set something for the piece of work they start next, and this

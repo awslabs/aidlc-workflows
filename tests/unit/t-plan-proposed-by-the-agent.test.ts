@@ -538,7 +538,10 @@ describe("t-plan-proposed-by-the-agent: creation retires the request's whole cha
     expect(readdirSync(join(proj, "aidlc", "spaces", "default", "intents")).filter((name) => /^\d{6}-/.test(name))).toHaveLength(1);
   });
 
-  test("a check turned off in a chat with no work selected is off for the work that chat builds next, not lost on the login work's gone question", () => {
+  test.each([
+    ["a bare next (Kiro IDE: the engine takes the line from the record)", []],
+    ["next with the line (Claude Code)", ["--guard.review-freeze", "off"]],
+  ])("a check turned off in a chat with no work selected is off for the work that chat builds next, not lost on the login work's gone question: %s", (_shape, first) => {
     // Work exists and none is selected: a switch typed bare is for the work the
     // chat creates next, and binds to the request open at the time, if any.
     proj = cloneWithWork(CLAUDE_TOOLS);
@@ -554,6 +557,19 @@ describe("t-plan-proposed-by-the-agent: creation retires the request's whole cha
     rmSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), { force: true });
     const chat = { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0", AIDLC_SESSION_OVERRIDE: OTHER_CHAT };
     reply(proj, "/aidlc --guard.review-freeze off", OTHER_CHAT);
+    // The agent's first step hands the line to the setter, which keeps it for
+    // the work this chat starts next and says so; then the agent asks again and
+    // the person gets the question of which work to pick up.
+    const step = next(CLAUDE_TOOLS, proj, first as string[], chat);
+    const setter = /Run `bun \.claude\/tools\/aidlc\.ts ([^`]+)`/.exec(String(step.message))?.[1];
+    expect(setter, JSON.stringify(step).slice(0, 300)).toBe("engine config set guard.review-freeze off");
+    const kept = spawnSync(process.execPath, [join(CLAUDE_TOOLS, "aidlc.ts"), ...(setter as string).split(" ")], {
+      cwd: proj,
+      encoding: "utf-8",
+      env: { ...chat, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    });
+    expect(kept.status, `${kept.stdout}${kept.stderr}`).toBe(0);
+    expect(kept.stdout).toContain("is off for the piece of work you start now (set by you)");
     const bare = next(CLAUDE_TOOLS, proj, [], chat);
     expect(bare.ask_type, JSON.stringify(bare).slice(0, 300)).toBe("intent-pick");
     expect(String(bare.question ?? ""), JSON.stringify(bare).slice(0, 300)).not.toContain("fix the login");

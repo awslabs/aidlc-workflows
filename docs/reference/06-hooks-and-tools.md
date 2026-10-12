@@ -135,7 +135,8 @@ Lowering a check is the person's call: the setter applies it when a turn of
 theirs is on record since the last decision (their typed line is that turn),
 and its line says what changed, as asked in the chat; with no turn of theirs it
 refuses with the line below, and under `AIDLC_UNATTENDED=1` it refuses outright.
-With no work selected for the chat, the setter keeps the setting for the piece
+With no work selected for the chat (none exists, or other work is there to pick
+up), `next` names the setter first, and it keeps the setting for the piece
 of work the chat starts next (`keepSettingsForNextWork` in aidlc-guard-switch.ts:
 the same records creation reads, written by the setter instead of the hook) and
 says so once: `Guard Policy (it sets how many checks run) is relaxed for the
