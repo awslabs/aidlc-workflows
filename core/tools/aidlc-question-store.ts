@@ -1,7 +1,17 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
 import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  realpathSync,
+} from "node:fs";
+import { dirname, join, relative } from "node:path";
+import {
+  assertNoSymlinkInChainOrThrow,
   listSpaces,
   readIntentRegistry,
   readRegularFileNoFollowOrThrow,
@@ -228,6 +238,7 @@ export function pruneExpiredQuestions(projectDir: string): void {
   const days = retentionDays(projectDir);
   if (days === null) return;
   const cutoff = Date.now() - days * DAY_MS;
+  pruneExpiredRestartRequests(projectDir, cutoff);
   let names: string[];
   try {
     names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
@@ -383,7 +394,7 @@ export function mintQuestionId(
     const id = candidate();
     if (!QUESTION_ID.test(id)) continue;
     const taken = existsSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir, id))) ||
-      startedWorkUses(projectDir, id);
+      startedWorkUses(projectDir, id) || restartIdUsed(projectDir, id);
     if (!taken) return id;
   }
 }
@@ -434,6 +445,129 @@ export function deleteQuestion(projectDir: string, id: string): void {
     }
   } catch {
     // Best effort: the work list already records which question started the work.
+  }
+}
+
+// A `next` the hooks-off step stopped where that step has the person start a
+// new chat, kept under its own id so the line they are shown names it
+// (`<entry> --request <id>`) and the new chat runs it once, as if they had
+// typed it there. It is its own kind of entry, in its own folder, so no
+// question read or scan ever sees it; the id shares the questions' namespace,
+// so `--request` names one or the other. Written once; taking it leaves a
+// marker beside it, so a second run of the same id does nothing again.
+export interface RestartRequest {
+  id: string;
+  /** The stopped `next`'s arguments, a request file already read into them. */
+  args: string[];
+  space: string;
+  /** The work it was stopped in, by folder and immutable uuid; null before any. */
+  workflow: QuestionTarget | null;
+  createdAt: string;
+}
+
+function restartRel(projectDir: string, name?: string): string {
+  const dir = join(sessionsDir(projectDir), "restarts");
+  return relative(projectDir, name === undefined ? dir : join(dir, name));
+}
+
+// A kept stop and its taken marker go with the questions' retention period.
+function pruneExpiredRestartRequests(projectDir: string, cutoff: number): void {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, restartRel(projectDir)));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!/^[0-9a-f]{8}\.(?:json|taken)$/.test(name)) continue;
+    try {
+      const path = recordFileTargetOrThrow(projectDir, restartRel(projectDir, name));
+      if (lstatSync(path).isFile() && lstatSync(path).mtimeMs < cutoff) {
+        removeRecordFileNoFollow(projectDir, restartRel(projectDir, name));
+      }
+    } catch {
+      // Not ours to remove, or already gone: keep going.
+    }
+  }
+}
+
+function restartIdUsed(projectDir: string, id: string): boolean {
+  try {
+    return existsSync(recordFileTargetOrThrow(projectDir, restartRel(projectDir, `${id}.json`))) ||
+      existsSync(recordFileTargetOrThrow(projectDir, restartRel(projectDir, `${id}.taken`)));
+  } catch {
+    // A folder reached through a link holds no request this engine reads.
+    return false;
+  }
+}
+
+/** Keep a stopped `next` for the chat its step restarts into; returns its id. */
+export function saveRestartRequest(
+  projectDir: string,
+  args: readonly string[],
+  space: string,
+  workflow: QuestionTarget | null,
+): string {
+  pruneExpiredQuestions(projectDir);
+  const entry: RestartRequest = {
+    id: mintQuestionId(projectDir),
+    args: [...args],
+    space,
+    workflow: workflow ? { intent: workflow.intent, uuid: workflow.uuid } : null,
+    createdAt: new Date().toISOString(),
+  };
+  writeRecordFileNoFollow(projectDir, restartRel(projectDir, `${entry.id}.json`), `${JSON.stringify(entry)}\n`);
+  return entry.id;
+}
+
+/** The stopped `next` kept under `id`, or null when there is none to read. */
+export function readRestartRequest(projectDir: string, id: string): RestartRequest | null {
+  if (!QUESTION_ID.test(id)) return null;
+  try {
+    const target = recordFileTargetOrThrow(projectDir, restartRel(projectDir, `${id}.json`));
+    const raw = JSON.parse(readRegularFileNoFollowOrThrow(target, "restart request", QUESTION_MAX_BYTES).toString("utf-8"));
+    const workflow = raw?.workflow === null ? null : isTargetList([raw?.workflow]) ? raw.workflow as QuestionTarget : undefined;
+    if (
+      raw?.id !== id || !Array.isArray(raw.args) || !raw.args.every((arg: unknown) => typeof arg === "string") ||
+      typeof raw.space !== "string" || !SPACE_NAME_REGEX.test(raw.space) || workflow === undefined ||
+      typeof raw.createdAt !== "string"
+    ) {
+      return null;
+    }
+    const days = retentionDays(projectDir);
+    if (days !== null && Date.parse(raw.createdAt) < Date.now() - days * DAY_MS) return null;
+    return { id, args: raw.args, space: raw.space, workflow, createdAt: raw.createdAt };
+  } catch {
+    // Missing, redirected, or unreadable: there is nothing to run.
+    return null;
+  }
+}
+
+/** Whether the stopped `next` kept under `id` was already run once. */
+export function restartRequestTaken(projectDir: string, id: string): boolean {
+  if (!QUESTION_ID.test(id)) return false;
+  try {
+    return existsSync(recordFileTargetOrThrow(projectDir, restartRel(projectDir, `${id}.taken`)));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Mark the stopped `next` under `id` as run, once: only the first caller gets
+ * true, so two chats given the same line never both run it.
+ */
+export function takeRestartRequest(projectDir: string, id: string): boolean {
+  if (!QUESTION_ID.test(id)) return false;
+  try {
+    const rel = restartRel(projectDir, `${id}.taken`);
+    const anchor = realpathSync(projectDir);
+    mkdirSync(dirname(assertNoSymlinkInChainOrThrow(anchor, rel)), { recursive: true });
+    const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0);
+    closeSync(openSync(assertNoSymlinkInChainOrThrow(anchor, rel), flags, 0o600));
+    return true;
+  } catch {
+    return false;
   }
 }
 

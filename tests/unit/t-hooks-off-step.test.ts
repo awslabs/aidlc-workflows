@@ -622,6 +622,117 @@ describe("the request the first next stopped with carries on after the restart",
   });
 });
 
+// Where the step has the person start a new chat, that chat never saw the
+// stopped command, inside a workflow too: the line names it by the id the
+// engine kept it under, and the new chat runs it once, in the work it was
+// stopped in, as if the person had typed it there. A bare entry carries on
+// where the work stands and never runs it.
+describe("a next stopped inside a workflow is named in the restart line and runs once in the new chat", () => {
+  const LINE = "Carrying on with your earlier request.";
+  const RESTART_HARNESSES = HARNESSES.filter((h) => h.name !== "codex");
+  const idIn = (directive: Printed): string => (directive.message ?? "").match(/ --request ([0-9a-f]{8})\b/)?.[1] ?? "";
+  const JUMP = ["--stage", "requirements-analysis"];
+  const ran = (directive: Printed) =>
+    directive.kind === "print" && (directive.message ?? "").startsWith("That request already went ahead once");
+
+  for (const h of RESTART_HARNESSES) {
+    test(`${h.name}: a stopped jump is named by its id and runs once`, () => {
+      const proj = installed(h);
+      intentCreate(proj, h);
+      const stopped = next(proj, h, {}, JUMP);
+      expect(isStop(stopped), JSON.stringify(stopped)).toBe(true);
+      const id = idIn(stopped);
+      expect(id, stopped.message).toMatch(/^[0-9a-f]{8}$/);
+      expect(stopped.message ?? "").toContain(`/aidlc --request ${id}`);
+      // Only the id: the stopped command's own arguments never enter the line.
+      expect(stopped.message ?? "").not.toContain("requirements-analysis");
+      beat(proj, "reviewer-scope");
+      // The entry alone carries on where the work stands.
+      expect(JSON.stringify(next(proj, h))).not.toContain("aidlc-jump");
+      const picked = next(proj, h, {}, ["--request", id]) as Printed & { narration?: string };
+      expect(picked.narration ?? "", JSON.stringify(picked)).toStartWith(LINE);
+      expect(picked.message ?? "").toContain("execute --target requirements-analysis");
+      expect(ran(next(proj, h, {}, ["--request", id]))).toBe(true);
+    });
+  }
+
+  test("a step that carries on in the same chat keeps nothing under an id", () => {
+    const h = HARNESSES[1];
+    const proj = installed(h);
+    intentCreate(proj, h);
+    const stopped = next(proj, h, {}, JUMP);
+    expect(isStop(stopped)).toBe(true);
+    expect(stopped.message ?? "").not.toContain("--request");
+    expect(existsSync(join(proj, "aidlc", ".aidlc-sessions", "restarts"))).toBe(false);
+  });
+
+  test("stopped words reach the new chat with the step that reads them", () => {
+    const words = "take me back to requirements analysis";
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, ["--", words]));
+    beat(proj, "reviewer-scope");
+    const picked = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(picked.kind).toBe("print");
+    expect(picked.message ?? "").toStartWith(`The person's words, typed before the restart and kept by AI-DLC`);
+    expect(picked.message ?? "").toContain(JSON.stringify(words));
+    expect(picked.message ?? "").toContain("report --result resumed");
+  });
+
+  test("it runs in the work it was stopped in, never in work selected since", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, JUMP));
+    beat(proj, "reviewer-scope");
+    const first = readdirSync(join(proj, "aidlc", "spaces", "default", "intents"), { withFileTypes: true })
+      .find((entry) => entry.isDirectory())?.name ?? "";
+    const other = run(proj, [
+      join(proj, OPENCODE.dir, "tools", "aidlc-utility.ts"),
+      "intent-create", "--scope", "bugfix", "--label", "other work", "--arguments", "fix the other parser",
+    ], attendedEnv());
+    expect(other.code, other.stderr).toBe(0);
+    const elsewhere = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(elsewhere.kind, JSON.stringify(elsewhere)).toBe("print");
+    expect(elsewhere.message ?? "").toContain(`intent switch ${first}`);
+    expect(elsewhere.message ?? "").toContain(`next --request ${id}\` again`);
+    // Nothing ran: once that work is selected, the same command runs it.
+    const switched = run(proj, [join(proj, OPENCODE.dir, "tools", "aidlc.ts"), "engine", "intent", "switch", first], attendedEnv());
+    expect(switched.code, switched.stdout + switched.stderr).toBe(0);
+    expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+  });
+
+  test("the id runs alone: anything beside it is refused", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, JUMP));
+    beat(proj, "reviewer-scope");
+    const refused = next(proj, OPENCODE, {}, ["--request", id, "--resume"]);
+    expect(refused.kind).toBe("error");
+    expect(refused.message ?? "").toContain("with nothing beside it");
+    expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+  });
+
+  test("before any workflow, the id and the entry alone carry it on once between them", () => {
+    const REQUEST = "add a dark mode toggle to the settings page";
+    const noWorkflow = (directive: Printed) =>
+      directive.kind === "error" && (directive.message ?? "").includes("No workflow state found");
+    // The id first: the entry alone then finds nothing to carry on with.
+    const named = installed(OPENCODE);
+    const id = idIn(next(named, OPENCODE, {}, ["--", REQUEST]));
+    beat(named, "record-human-turn");
+    const picked = next(named, OPENCODE, {}, ["--request", id]) as Printed & { narration?: string };
+    expect(picked.narration ?? "", JSON.stringify(picked)).toStartWith(LINE);
+    expect(JSON.stringify(picked)).toContain(REQUEST);
+    expect(noWorkflow(next(named, OPENCODE))).toBe(true);
+    // The entry alone first: the id then says it already went ahead.
+    const bare = installed(OPENCODE);
+    const bareId = idIn(next(bare, OPENCODE, {}, ["--", REQUEST]));
+    beat(bare, "record-human-turn");
+    expect(JSON.stringify(next(bare, OPENCODE))).toContain(REQUEST);
+    expect(ran(next(bare, OPENCODE, {}, ["--request", bareId]))).toBe(true);
+  });
+});
+
 describe("a refusal for a reply that was not recorded carries the same step when the hooks never ran", () => {
   test("it never asks the person to answer again, and gives the tool's own line only while no hook has run", () => {
     const h = HARNESSES[0];

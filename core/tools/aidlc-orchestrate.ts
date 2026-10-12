@@ -99,6 +99,7 @@ import { fileURLToPath } from "node:url";
 import {
   deleteQuestion,
   firstFrontQuestionSince,
+  isQuestionId,
   latestFrontQuestionId,
   wordsAlreadyRead,
   latestQuestion,
@@ -111,7 +112,12 @@ import {
   readComposeEntry,
   readQuestion,
   type StoredQuestion,
+  readRestartRequest,
+  type RestartRequest,
+  restartRequestTaken,
   saveQuestion,
+  saveRestartRequest,
+  takeRestartRequest,
 } from "./aidlc-question-store.ts";
 import { latestMessage } from "./aidlc-message-store.ts";
 import { aidlcEntryWords } from "./aidlc-reply-reader.ts";
@@ -806,8 +812,14 @@ function engineWorkflow(projectDir: string): { intent?: string; space: string } 
 // `next` that does not move the workflow (status, doctor, help, config, the
 // intent, space, plugin and knowledge commands, park, team-board, a claim or
 // release) runs as asked. The step runs the stopped command again, so what it
-// carried goes on.
-function hooksOffStop(projectDir: string, selection: WorkflowSelection, nextArgs: string[]): string | null {
+// carried goes on; where it has the person start a new chat, `keep` keeps the
+// command for that chat (see keepStoppedRequest).
+function hooksOffStop(
+  projectDir: string,
+  selection: WorkflowSelection,
+  nextArgs: string[],
+  keep?: () => string | null,
+): string | null {
   if (!humanTurnMintAllowed() || humanPresenceGuardDisabled(projectDir)) return null;
   const flags = parseNextFlags(nextArgs);
   if (
@@ -818,8 +830,10 @@ function hooksOffStop(projectDir: string, selection: WorkflowSelection, nextArgs
   const hostStep = hooksOffAgentStep(projectDir, HOOKS_OFF_RERUN);
   if (hostStep === null) return null;
   // A person at their own terminal, in a project no chat ever ran: the host's
-  // hook step does not apply, so name the step that works from here.
-  const step = personAtOwnTerminal(projectDir) ? OWN_TERMINAL_PRESENCE_STEP : hostStep;
+  // hook step does not apply, so name the step that works from here. The step
+  // is filled once the stop is certain, so nothing is kept for a `next` that runs.
+  const step = (): string | null =>
+    personAtOwnTerminal(projectDir) ? OWN_TERMINAL_PRESENCE_STEP : hooksOffAgentStep(projectDir, HOOKS_OFF_RERUN, keep);
   try {
     if (delegatedWorktreeIntent(projectDir) !== null) return null;
     if (selection.intent === null) {
@@ -829,7 +843,7 @@ function hooksOffStop(projectDir: string, selection: WorkflowSelection, nextArgs
       if (!hookActivation()?.notRunYet) return null;
       if (hookLiveness(projectDir, [], { space: selection.space }).hasHookFiredContent) return null;
       if (hookStatusPathLinked(projectDir, undefined, selection.space)) return null;
-      return step;
+      return step();
     }
     const workflow = { intent: selection.intent, space: selection.space };
     const liveness = hookLiveness(projectDir, undefined, workflow);
@@ -851,15 +865,18 @@ function hooksOffStop(projectDir: string, selection: WorkflowSelection, nextArgs
     // An unreadable record proves nothing about the hooks.
     return null;
   }
-  return step;
+  return step();
 }
 
 // The request the first `next` carried when the stop above came before any
-// workflow. Where the tool's step is a restart, the new chat never saw it, so
-// the first bare `next` there carries on with it, once; new words from the
-// person replace it. It is kept for a day in this machine's own runtime
-// folder, which git never shares, and only in the shape of a request: words or
-// a scope with their creation settings, never a command of another kind.
+// workflow, for a step that carries on in the same chat: the first bare `next`
+// with no workflow selected carries on with it, once; new words from the
+// person replace it. Where the step can also have the person start a new chat,
+// the same request is kept under an id as well (keepStoppedRequest), and the
+// file names that id, so whichever way they carry on it runs once. It is kept
+// for a day in this machine's own runtime folder, which git never shares, and
+// only in the shape of a request: words or a scope with their creation
+// settings, never a command of another kind.
 const KEPT_REQUEST_FILE = "kept-request.json";
 const KEPT_REQUEST_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const KEPT_REQUEST_MAX_BYTES = 64 * 1024;
@@ -901,7 +918,30 @@ function keptRequestPath(projectDir: string): string | null {
   }
 }
 
-function keepStoppedRequest(projectDir: string, space: string, args: readonly string[]): void {
+// The stopped `next` kept for the new chat the stop's step has the person
+// start, which never saw it: the line they are shown names its id, and that
+// chat runs it once, as if they had typed it there (see namedRestartRequest).
+// A bare `next` or `--resume` carries nothing a resume would not, so it is not
+// kept, and neither is a read-only probe's. Null leaves the line's entry bare.
+function keepStoppedRequest(projectDir: string, selection: WorkflowSelection, args: readonly string[]): string | null {
+  if (isReadOnlyEngineProbe() || args.length === 0 || (args.length === 1 && args[0] === "--resume")) return null;
+  try {
+    const uuid = selection.intent === null ? null : intentUuidForSelection(projectDir, selection);
+    if (selection.intent !== null && uuid === null) return null;
+    const workflow = selection.intent === null ? null : { intent: selection.intent, uuid: uuid! };
+    return saveRestartRequest(projectDir, args, selection.space, workflow);
+  } catch {
+    // Not kept: after the restart the person types the request again.
+    return null;
+  }
+}
+
+// `next --request <id>` naming a stopped `next` kept for a new chat: its
+// arguments, to run in place of these, or the step that comes first. It runs in
+// the work it was stopped in, never in whichever another chat selected since:
+// with that work here but not selected, the step selects it and names the same
+// command again; with that work gone, nothing runs. Null for any other `next`.
+function writeKeptRequest(projectDir: string, space: string, args: readonly string[], restart: string | null): void {
   if (isReadOnlyEngineProbe() || !isKeptRequest(args) || keptRequestPath(projectDir) === null) return;
   try {
     mkdirSync(sessionsDir(projectDir), { recursive: true });
@@ -910,14 +950,75 @@ function keepStoppedRequest(projectDir: string, space: string, args: readonly st
     const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | (fsConstants.O_NOFOLLOW ?? 0);
     const fd = openSync(path, flags, 0o600);
     try {
-      writeSync(fd, `${JSON.stringify({ at: Date.now(), space, args })}\n`);
+      writeSync(fd, `${JSON.stringify({ at: Date.now(), space, args, ...(restart === null ? {} : { restart }) })}\n`);
     } finally {
       closeSync(fd);
     }
   } catch {
-    // Not kept: after the restart the person types the request again.
+    // Not kept: the person types the request again.
   }
 }
+
+function namedRestartRequest(
+  projectDir: string,
+  selection: WorkflowSelection,
+  args: readonly string[],
+): { request: RestartRequest } | { directive: Directive } | null {
+  const at = args.indexOf("--request");
+  const id = at < 0 ? undefined : args[at + 1];
+  if (id === undefined || !isQuestionId(id)) return null;
+  const request = readRestartRequest(projectDir, id);
+  const ran = restartRequestTaken(projectDir, id);
+  if (request === null && !ran) return null;
+  if (args.length !== 2) {
+    return {
+      directive: errorDirective(
+        `Run \`${aidlcToolInvocation("orchestrate")} next --request ${id}\` with nothing beside it: it carries the ` +
+          "request kept before the restart.",
+      ),
+    };
+  }
+  if (ran || request === null) return { directive: restartRequestRanDirective() };
+  const workflow = request.workflow;
+  if (
+    workflow !== null && !(selection.space === request.space && selection.intent === workflow.intent &&
+      intentUuidForSelection(projectDir, selection) === workflow.uuid)
+  ) {
+    const record = listIntents(projectDir, request.space).find((entry) => entry.uuid === workflow.uuid);
+    if (record === undefined || !isSafeIntentRecordName(record.dirName)) {
+      return {
+        directive: errorDirective(
+          `The work this request was kept for (${workflow.intent}) is no longer in this project, so it was not run. ` +
+            "Send the request again.",
+        ),
+      };
+    }
+    const spaceStep = selection.space === request.space
+      ? ""
+      : `\`${aidlcDispatcherInvocation("space switch")} ${shellArg(request.space)}\`, then `;
+    return {
+      directive: printDirective(
+        `This request was kept for ${record.dirName}. Run ${spaceStep}` +
+          `\`${aidlcDispatcherInvocation("intent switch")} ${shellArg(record.dirName)}\`, then run ` +
+          `\`${aidlcToolInvocation("orchestrate")} next --request ${id}\` again and follow what it returns.`,
+      ),
+    };
+  }
+  return { request };
+}
+
+// A kept stop runs once: the same line again carries on where the work stands.
+function restartRequestRanDirective(): PrintDirective {
+  return printDirective(
+    'That request already went ahead once, so it is not run again. Tell the person in one line: "That request ' +
+      `already went ahead, so it was not run again." Then run \`${aidlcToolInvocation("orchestrate")} next\` with ` +
+      "nothing after it and follow what it returns.",
+  );
+}
+
+// The words a kept stop carried, which the new chat never saw: said first on
+// the print it leads to, so the agent can read them.
+let activeRestartWords: string | null = null;
 
 function dropKeptRequest(projectDir: string): void {
   const path = keptRequestPath(projectDir);
@@ -929,18 +1030,21 @@ function dropKeptRequest(projectDir: string): void {
   }
 }
 
-// The request kept for this space, still fresh and still a request, or null.
-function keptRequest(projectDir: string, space: string): string[] | null {
+// The request kept for this space, still fresh and still a request, with the
+// id it is also kept under for a new chat, or null.
+function keptRequest(projectDir: string, space: string): { args: string[]; restart: string | null } | null {
   const path = keptRequestPath(projectDir);
   const text = path === null ? null : readBoundedRegularFile(path, KEPT_REQUEST_MAX_BYTES);
   if (text === null) return null;
   try {
-    const saved = JSON.parse(text) as { at?: unknown; space?: unknown; args?: unknown };
+    const saved = JSON.parse(text) as { at?: unknown; space?: unknown; args?: unknown; restart?: unknown };
     if (typeof saved.at !== "number" || saved.space !== space || !Array.isArray(saved.args)) return null;
     const age = Date.now() - saved.at;
     if (!(age > -60_000 && age <= KEPT_REQUEST_MAX_AGE_MS)) return null;
     const args = saved.args.filter((arg): arg is string => typeof arg === "string");
-    return args.length === saved.args.length && isKeptRequest(args) ? args : null;
+    if (args.length !== saved.args.length || !isKeptRequest(args)) return null;
+    const restart = typeof saved.restart === "string" && isQuestionId(saved.restart) ? saved.restart : null;
+    return { args, restart };
   } catch {
     return null;
   }
@@ -1138,6 +1242,13 @@ function prepareEmission(directive: Directive): PreparedEmission {
       ? `${activeKeptRequestLine} ${directive.narration}`
       : activeKeptRequestLine;
     activeKeptRequestLine = null;
+  }
+  if (activeRestartWords !== null) {
+    if (directive.kind === "print") {
+      directive.message = "The person's words, typed before the restart and kept by AI-DLC (this chat never saw " +
+        `them): ${JSON.stringify(activeRestartWords)}. ${directive.message}`;
+    }
+    activeRestartWords = null;
   }
   // Before transport, so a run-stage delivered in parts (rebuilt by
   // `continue`) carries the person's kept replies too.
@@ -8216,9 +8327,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       const kept = selection.intent === null ? keptRequest(pdKept, selection.space) : null;
       if (kept !== null) {
         dropKeptRequest(pdKept);
-        activeKeptRequestLine = KEPT_REQUEST_LINE;
-        routeNext(kept, projectDir);
-        return;
+        // Kept for a new chat too: whichever way the person carries on, it runs once.
+        if (kept.restart === null || takeRestartRequest(pdKept, kept.restart)) {
+          activeKeptRequestLine = KEPT_REQUEST_LINE;
+          routeNext(kept.args, projectDir);
+          return;
+        }
       }
     }
   }
@@ -17028,6 +17142,20 @@ export function main(argv: string[]): void {
   engineSessionId = resolvedSelection.sessionId ?? undefined;
   engineSelections.clear();
   engineSelections.set(resolvedProjectDir, resolvedSelection);
+  // A stopped `next` kept for this chat, named by its id, runs as if the
+  // person had typed it here, once (see namedRestartRequest).
+  let restart: RestartRequest | null = null;
+  if (subcommand === "next") {
+    const named = namedRestartRequest(resolvedProjectDir, resolvedSelection, subArgs);
+    if (named !== null && "directive" in named) {
+      emit(named.directive);
+      return;
+    }
+    if (named !== null) {
+      restart = named.request;
+      subArgs = [...restart.args];
+    }
+  }
   const commandKind = (["next", "continue", "report", "park"] as const).find((kind) => kind === subcommand);
   // Resolving a record is not joining it. For a conversation that has not
   // joined the selected workflow, `next` sees a workspace with no active
@@ -17051,18 +17179,36 @@ export function main(argv: string[]): void {
     engineSelections.set(resolvedProjectDir, { ...resolvedSelection, intent: null, binding: null });
   }
   if (commandKind === "next" && !unjoined) {
-    const stop = hooksOffStop(resolvedProjectDir, resolvedSelection, subArgs);
+    // Where the step has the person start a new chat, the command waits there
+    // under its id; a kept one stopped again keeps the id it has.
+    let restartId: string | null = null;
+    const stop = hooksOffStop(
+      resolvedProjectDir,
+      resolvedSelection,
+      subArgs,
+      () => (restartId = restart?.id ?? keepStoppedRequest(resolvedProjectDir, resolvedSelection, subArgs)),
+    );
     if (stop !== null) {
-      // Before any workflow, the request it carried waits for the chat the
-      // step may restart into.
-      if (resolvedSelection.intent === null) {
-        keepStoppedRequest(resolvedProjectDir, resolvedSelection.space, subArgs);
+      // Before any workflow, a step that carries on in the same chat finds the
+      // request on the first bare `next` there.
+      if (resolvedSelection.intent === null && restart === null) {
+        writeKeptRequest(resolvedProjectDir, resolvedSelection.space, subArgs, restartId);
       }
       // The stop carries the step; the notice is not added on top.
       activeHookHealthNotice = null;
       emit(printDirective(stop));
       return;
     }
+  }
+  if (restart !== null && !isReadOnlyEngineProbe()) {
+    // Two chats given the same line: only the first runs it.
+    if (!takeRestartRequest(resolvedProjectDir, restart.id)) {
+      emit(restartRequestRanDirective());
+      return;
+    }
+    if (keptRequest(resolvedProjectDir, restart.space)?.restart === restart.id) dropKeptRequest(resolvedProjectDir);
+    activeKeptRequestLine = KEPT_REQUEST_LINE;
+    activeRestartWords = parseNextFlags([...subArgs]).intent ?? null;
   }
   spendRequestFile();
   if (commandKind) engineInvocation = {
@@ -17116,6 +17262,7 @@ export function main(argv: string[]): void {
     activeHookHealthNotice = undefined;
     activeSwitchOffNotices = null;
     activeKeptRequestLine = null;
+    activeRestartWords = null;
     routingAnsweredAsActiveWork = false;
     routingAnsweredWords = null;
     engineProjectDir = undefined;

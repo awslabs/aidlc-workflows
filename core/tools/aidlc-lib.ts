@@ -27037,12 +27037,14 @@ export function hookExecutionRecoveryText(projectDir?: string): string {
 // project folder as <entry> and <folder>, and the engine's next step as
 // <next>, so one manifest string reads right on every install channel.
 // `next`'s stop names the command it stopped instead, in fixed words: the
-// command's own arguments never enter the text.
+// command's own arguments never enter the text. Where its step has the person
+// start a new chat, the entry they type there names the stopped command by the
+// id the engine kept it under (`<entry> --request <id>`), never by its words.
 export const HOOKS_OFF_RERUN = "the engine command that returned this message again, exactly as you ran it,";
 
-export function fillHookActivationText(text: string, projectDir?: string, next?: string): string {
+export function fillHookActivationText(text: string, projectDir?: string, next?: string, entry?: string): string {
   return text
-    .replaceAll("<entry>", entrySkillInvocation())
+    .replaceAll("<entry>", entry ?? entrySkillInvocation())
     .replaceAll("<next>", next ?? `\`${aidlcInvocation()} engine orchestrate next\``)
     .replaceAll("<folder>", projectDir ?? "this project's folder");
 }
@@ -27061,9 +27063,11 @@ const HOOKS_OFF_AGENT_RULES =
  * What the agent does, then the one line it shows the person, when this
  * harness's hooks are not running here; null for a harness that declares no
  * such step. `next` stops with it before any work, and a refusal for a reply
- * that was not recorded carries it.
+ * that was not recorded carries it. `keep` is the stop's: asked only when the
+ * step has the person type the entry in a new chat, it keeps the stopped
+ * command and returns its id, or null to leave the entry bare.
  */
-export function hooksOffAgentStep(projectDir?: string, next?: string): string | null {
+export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () => string | null): string | null {
   const activation = hookActivation();
   if (!activation?.agentStep) return null;
   // Through a link the agent would change a file outside the project.
@@ -27075,7 +27079,9 @@ export function hooksOffAgentStep(projectDir?: string, next?: string): string | 
   }
   // An agent given each tool's line showed the wrong one (#2167), so the engine picks it.
   const step = inHostShell(activation.agentStepInHost?.env) ? activation.agentStepInHost!.text : activation.agentStep;
-  return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(step, projectDir, next)}`;
+  const kept = keep && step.includes("<entry>") ? keep() : null;
+  const entry = kept === null ? undefined : `${entrySkillInvocation()} --request ${kept}`;
+  return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(step, projectDir, next, entry)}`;
 }
 
 /**
