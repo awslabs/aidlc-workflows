@@ -25,7 +25,7 @@ configs, hook wiring, activation) differs.
 Harness-specific onboarding lives in `.kiro/steering/aidlc-onboarding.md`,
 loaded through the conductor agent's `resources`. The root `AGENTS.md` block
 is harness-neutral and shared with other installed harnesses; engine directories
-must still differ (Kiro CLI and Kiro IDE cannot share one `.kiro/` install).
+must still differ (the `kiro` and `kiro-ide` rows cannot share one `.kiro/` install).
 
 ## Prerequisites
 

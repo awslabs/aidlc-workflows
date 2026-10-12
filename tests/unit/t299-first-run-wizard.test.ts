@@ -1159,6 +1159,29 @@ describe("t299 first-run setup wizard", () => {
     expect(cli["chat.agentEngine"]).toBe("v3");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("Enter on a Kiro CLI both Kiro rows detect sets Kiro CLI's model as Kiro IDE's row does", () => {
+    const bothKiro = {
+      claude: { found: false },
+      kiro: { found: true, version: "kiro-cli 2.28.0" },
+      "kiro-ide": { found: true, version: "kiro-cli 2.28.0" },
+    };
+    // Kiro auto: Enter at the picker, the defaults and the model list keeps it.
+    const auto = kiroSeam({});
+    const onAuto = runWizard("\n\n\n", { harnesses: bothKiro, env: auto.env });
+    expect(onAuto.status, onAuto.stdout + onAuto.stderr).toBe(0);
+    expect(onAuto.stdout).toContain(`    6. Kiro IDE${" ".repeat(8)}(detected, default)\n`);
+    expect(onAuto.stdout).toContain("Choose the Kiro CLI session model (Enter keeps Kiro auto):");
+    expect(onAuto.stdout).toContain("Model [4]:");
+    expect(kiroWrites(auto.writes)).toEqual([]);
+
+    // A saved model is kept, and no preset effort is written for it.
+    const saved = kiroSeam({ "chat.defaultModel": "claude-opus-5" });
+    const kept = runWizard("\n\n", { harnesses: bothKiro, env: saved.env });
+    expect(kept.status, kept.stdout + kept.stderr).toBe(0);
+    expect(kept.stdout).toContain("Using Kiro IDE.");
+    expect(kiroWrites(saved.writes)).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("the Kiro row preference leaves an earlier harness the default and the kiro row one number away", () => {
     const bothKiro = {
       kiro: { found: true, version: "kiro-cli 2.28.0" },
