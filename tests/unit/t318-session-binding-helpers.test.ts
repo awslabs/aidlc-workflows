@@ -1,4 +1,4 @@
-// covers: function:clearSessionProcessTable function:readSessionBinding function:writeSessionBinding function:resolveWorkflowSelection function:workflowParticipation function:readActiveIntentCursor function:SessionResolutionConflictError function:validSessionId function:writeSessionPidEntry function:writeSessionPidAncestry function:resolveSessionIdFromAncestry function:hookChildEnv function:windowsSessionProcessIdentity
+// covers: function:clearSessionProcessTable function:resolveInvokingSessionId function:readSessionBinding function:writeSessionBinding function:resolveWorkflowSelection function:workflowParticipation function:readActiveIntentCursor function:SessionResolutionConflictError function:validSessionId function:writeSessionPidEntry function:writeSessionPidAncestry function:resolveSessionIdFromAncestry function:hookChildEnv function:windowsSessionProcessIdentity
 //
 // Deterministic coverage for the per-session binding store and PID ancestry
 // resolver. All writes stay under a fresh project fixture.
@@ -22,6 +22,7 @@ import {
   listIntents,
   readActiveIntentCursor,
   readSessionBinding,
+  resolveInvokingSessionId,
   resolveSessionIdFromAncestry,
   resolveWorkflowSelection,
   SessionResolutionConflictError,
@@ -50,6 +51,9 @@ const originalSessionOverrideSource =
   process.env.AIDLC_SESSION_OVERRIDE_SOURCE;
 const originalTestSessionPlatform = process.env.AIDLC_TEST_SESSION_PLATFORM;
 const originalTestPsDenied = process.env.AIDLC_TEST_PS_DENIED;
+// The chat a Claude Code shell names; a test run from a Claude tab inherits it.
+const originalClaudePid = process.env.CLAUDE_PID;
+const originalClaudeSession = process.env.CLAUDE_CODE_SESSION_ID;
 
 function mockMacProcessTree(parents = new Map<number, number>(), msPerPs = 5) {
   let now = 1000;
@@ -81,6 +85,8 @@ function mockMacProcessTree(parents = new Map<number, number>(), msPerPs = 5) {
 beforeEach(() => {
   delete process.env.AIDLC_SESSION_OVERRIDE;
   delete process.env.AIDLC_SESSION_OVERRIDE_SOURCE;
+  delete process.env.CLAUDE_PID;
+  delete process.env.CLAUDE_CODE_SESSION_ID;
   delete process.env.AIDLC_TEST_SESSION_PLATFORM;
   delete process.env.AIDLC_TEST_PS_DENIED;
   // A table cached under the real clock would look fresh under a mocked one.
@@ -89,6 +95,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const [name, value] of [["CLAUDE_PID", originalClaudePid], ["CLAUDE_CODE_SESSION_ID", originalClaudeSession]] as const) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
   if (originalSessionOverride === undefined) {
     delete process.env.AIDLC_SESSION_OVERRIDE;
   } else {
@@ -460,6 +470,41 @@ describe("t318 session binding helpers", () => {
       }
     } finally {
       for (const child of children) child.kill();
+    }
+  });
+
+  test("a chat the host or a hook payload names is used without walking the process chain", () => {
+    const lookup = mockMacProcessTree(new Map([[process.ppid, process.pid]]));
+    try {
+      // The walk returns before any ps when the PID map is missing, so one
+      // exists; the table it read is cleared so each step below reads its own.
+      writeSessionPidEntry(proj, process.ppid, "ancestry-session");
+      const walks = () => {
+        clearSessionProcessTable();
+        lookup.ps.mockClear();
+      };
+      walks();
+      process.env.CLAUDE_PID = String(process.pid);
+      process.env.CLAUDE_CODE_SESSION_ID = "named-session";
+      expect(resolveInvokingSessionId(proj)).toBe("named-session");
+      expect(lookup.ps).toHaveBeenCalledTimes(0);
+
+      walks();
+      delete process.env.CLAUDE_PID;
+      delete process.env.CLAUDE_CODE_SESSION_ID;
+      process.env.AIDLC_SESSION_OVERRIDE = "payload-session";
+      process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+      expect(resolveInvokingSessionId(proj)).toBe("payload-session");
+      expect(lookup.ps).toHaveBeenCalledTimes(0);
+
+      // With no chat named, the walk still runs and its session is the answer.
+      walks();
+      delete process.env.AIDLC_SESSION_OVERRIDE;
+      delete process.env.AIDLC_SESSION_OVERRIDE_SOURCE;
+      expect(resolveInvokingSessionId(proj)).toBe("ancestry-session");
+      expect(lookup.ps).toHaveBeenCalledTimes(1);
+    } finally {
+      lookup.restore();
     }
   });
 
