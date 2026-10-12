@@ -1187,7 +1187,9 @@ piece of work the agent's setter applies it to.
 The trailing `...` in the flags form stands for an optional task description.
 Omitted selectors use the session's workflow selection; a nonexistent named
 intent is refused, and with no work selected the setter keeps the setting for
-the piece of work the chat starts next.
+the work the chat picks up or starts next: picking existing work (the pick
+question, `/aidlc intent <name>`, or a space switch that lands on its one piece
+of work) applies it there and says so once after the line naming the work.
 The setter validates all recognized companion intent settings before mutation.
 Malformed commands, unknown flags, missing values, and invalid companion values
 change nothing; the CLI route reports its normal validation error.
@@ -1272,6 +1274,9 @@ workflow selection.
 A nonexistent named intent is refused. A Guard Policy `relaxed` or `off`
 switch typed before the work exists is kept for the piece of work this chat
 starts next: `Guard Policy relaxed for the piece of work you start now (set by you).`
+Where other work is there to pick up, it goes to whichever work the chat picks
+up or starts next (`... for the work you pick up or start next (set by you).`);
+a later `strict` takes back a check typed off before it.
 Typed with a request, it goes with that request
 (`Guard Policy relaxed for the work you are asking for (set by you).`): new work
 takes it at creation, and continuing open work applies it there; the message

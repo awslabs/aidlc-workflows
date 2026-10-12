@@ -4332,6 +4332,39 @@ export interface IntentInfo {
 // suffix so a registry row resolves to its record dir even when the slug was
 // later renamed. A record dir with no registry row (a hand-created or migrated
 // orphan) is appended so the listing never hides an on-disk intent.
+/**
+ * The work a chat with none selected can pick up in `space`, with each piece's
+ * state text: what the pick question offers, and what a setting typed then is
+ * kept for besides new work. Archived intents are retired work: never offered
+ * (the listing shows them only under --all). Finished work has nothing left to
+ * continue or reshape, so it is neither listed nor counted as work in
+ * progress; either signal marks it finished: the registry row, or the state
+ * file a finalize completed (`intent list` and `intent <record>` still reach
+ * it). Null when nothing is left, no piece is in this checkout (registry rows
+ * whose folders are missing cannot be picked here), or a cursor already
+ * resolves the space's work.
+ */
+export function workToPickUp(
+  projectDir: string,
+  space: string,
+  selectedIntent: string | null,
+): Array<{ intent: IntentInfo; state: string }> | null {
+  const recorded = listIntents(projectDir, space, selectedIntent).filter((intent) => !isArchivedIntent(intent));
+  if (recorded.length === 0 || recorded.some((intent) => intent.active)) return null;
+  const unfinished = recorded.map((intent) => {
+    let state = "";
+    if (intent.dirName) {
+      try {
+        state = readFileSync(stateFilePath(projectDir, intent.dirName, space), "utf-8");
+      } catch {
+        // Registry-only or incomplete record: leave unannotated.
+      }
+    }
+    return { intent, state };
+  }).filter(({ intent, state }) => !isCompletedIntent(intent) && getField(state, "Status") !== "Completed");
+  return unfinished.some(({ intent }) => intent.dirName) ? unfinished : null;
+}
+
 export function listIntents(
   projectDir: string,
   space?: string,

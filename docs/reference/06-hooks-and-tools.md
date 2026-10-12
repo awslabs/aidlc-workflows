@@ -136,8 +136,8 @@ theirs is on record since the last decision (their typed line is that turn),
 and its line says what changed, as asked in the chat; with no turn of theirs it
 refuses with the line below, and under `AIDLC_UNATTENDED=1` it refuses outright.
 With no work selected for the chat (none exists, or other work is there to pick
-up), `next` names the setter first, and it keeps the setting for the piece
-of work the chat starts next (`keepSettingsForNextWork` in aidlc-guard-switch.ts:
+up), `next` names the setter first, and it keeps the setting for the work the
+chat picks up or starts next (`keepSettingsForNextWork` in aidlc-guard-switch.ts:
 the same records creation reads, written by the setter instead of the hook) and
 says so once: `Guard Policy (it sets how many checks run) is relaxed for the
 piece of work you start now (set by you).`, `The review freeze check (it stops
@@ -145,7 +145,11 @@ edits to work you already approved) is off for the piece of work you start now
 (set by you).`; `guard.<fence> on`, or Guard Policy `strict`, typed before the
 work exists withdraws it. Depth, test strategy, review and the ceremonies typed
 before any work are kept the same way, and creation takes them when its command
-carries none. Typed in the same message as a request, a lowering flag rides the
+carries none. Picking existing work instead (`intent <name>`, or a space switch
+landing on its one piece of work) applies what was kept there through the
+setter (`keptForPickedWork`), said once after the line naming the work, and
+spends it; a setting kept while a new-work question was open stays that
+work's. Typed in the same message as a request, a lowering flag rides the
 engine's answer commands to creation (`carriedCreationFlags`), which takes it
 under the same rule (`handleIntentCreate`), so the open work's settings never
 change from a line that describes new work. A flag typed with the person's

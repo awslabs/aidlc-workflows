@@ -55,7 +55,9 @@ import {
   guardPolicyCreationGranted,
   formatPlanApprovalSetting,
   type IntentSettingsRequest,
+  consumeKeptSettings,
   keepSettingsForNextWork,
+  keptForPickedWork,
   levelsKeptForNextWork,
   parseReviewOverride,
   planApprovalCreationGranted,
@@ -253,6 +255,7 @@ import {
   listIntentDirs,
   legacyWorktreePath,
   listIntents,
+  workToPickUp,
   listSpaces,
   ARCHIVED_INTENT_STATUS,
   clearActiveIntentCursor,
@@ -9098,7 +9101,9 @@ function handleIntent(
     ? null
     : intents.filter((i) => i.slug === prior.slug && i.dirName !== null).length > 1 ? prior.dirName : intentDisplayLabel(prior);
   const back = priorName === null ? "" : ` You were on \`${priorName}\`: \`${entrySkillInvocation()} intent ${priorName}\` goes back.`;
+  const kept = sid ? applyKeptToPickedWork(projectDir, sid, space, match.dirName) : [];
   process.stdout.write(`Now working on \`${intentDisplayLabel(match)}\`${where}.${back}\n`);
+  if (kept.length > 0) process.stdout.write(`${kept.join("\n")}\n`);
 }
 
 // A switch this command cannot tie to a chat was typed somewhere else: another
@@ -9548,8 +9553,11 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   // so the NEXT turn loads its method into ambient context (the cursor alone
   // only moves AIDLC's own resolver).
   refreshActiveMemory(projectDir, target);
+  // Landing on the space's one piece of work is the chat picking it up.
+  const kept = sessionId && loneIntent ? applyKeptToPickedWork(projectDir, sessionId, target, loneIntent) : [];
   // The person's words for the move, as the intent switch says it.
   process.stdout.write(`Now working in space \`${target}\`.\n`);
+  if (kept.length > 0) process.stdout.write(`${kept.join("\n")}\n`);
 }
 
 // `aidlc-utility.ts codekb-path [--repo <name>] [--json]` — read-only. Prints the
@@ -12446,21 +12454,41 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   const selection = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
-  // No work selected for this chat yet: the setting is kept for the piece of
-  // work it starts next, and said once (keepSettingsForNextWork). A terminal
+  // No work selected for this chat yet: the setting is kept for the work it
+  // picks up or starts next, and said once (keepSettingsForNextWork). A terminal
   // with no chat has nothing to keep it for, and a piece of work named on the
   // command (`--intent <name>`) that is not there is still the missing-work
   // error: nothing was typed for work the chat is about to start.
   if (!existsSync(stateFilePath(projectDir, intent, space))) {
     if (!selection.sessionId || flags.intent !== undefined || selection.intent !== null) die(NO_STATE_FILE_MESSAGE);
-    const lines = keepSettingsForNextWork(projectDir, selection.sessionId, intentSettingsFromFlags(flags), space, die);
+    const lines = keepSettingsForNextWork(
+      projectDir, selection.sessionId, intentSettingsFromFlags(flags), space, die,
+      workToPickUp(projectDir, space, null) !== null,
+    );
     process.stdout.write(`${lines.join("\n")}\n`);
     return;
   }
+  const lines = writeSettings(projectDir, intent, space, intentSettingsFromFlags(flags), {
+    sessionId: selection.sessionId, fail: die,
+  });
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+// The setter's one transaction on a piece of work: the settings applied, their
+// audit rows, the state written, and the step in hand kept; its lines returned.
+function writeSettings(
+  projectDir: string,
+  intent: string | undefined,
+  space: string,
+  request: IntentSettingsRequest,
+  options: { sessionId: string | null; fail?: (message: string) => never; typedByPerson?: boolean },
+): string[] {
+  let lines: string[] = [];
   withAuditLock(projectDir, () => {
     const content = readConfigState(projectDir, { intent, space });
-    const update = applyIntentSettings(projectDir, content, intentSettingsFromFlags(flags), {
-      intent, space, sessionId: selection.sessionId, fail: die,
+    const update = applyIntentSettings(projectDir, content, request, {
+      intent, space, sessionId: options.sessionId, typedByPerson: options.typedByPerson,
+      ...(options.fail ? { fail: options.fail } : {}),
     });
     if (update.content !== content) {
       if (update.audit.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
@@ -12477,8 +12505,27 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
       }
     }
-    process.stdout.write(`${update.lines.join("\n")}\n`);
+    lines = update.lines;
   }, intent, space);
+  return lines;
+}
+
+// What this chat kept for the work it picks up or starts next goes to the work
+// it just picked (keptForPickedWork): through the setter's one transaction, as
+// the person's own setting, as creation takes it for new work. Spent either
+// way, so new work started later does not get it too. A team's strict Guard
+// Policy set since keeps the check on, and its line is what is said.
+function applyKeptToPickedWork(projectDir: string, sessionId: string, space: string, intent: string): string[] {
+  const kept = keptForPickedWork(projectDir, sessionId);
+  if (kept === null) return [];
+  let lines: string[];
+  try {
+    lines = writeSettings(projectDir, intent, space, kept, { sessionId, typedByPerson: true });
+  } catch (e) {
+    lines = [errorMessage(e)];
+  }
+  consumeKeptSettings(projectDir, sessionId);
+  return lines;
 }
 
 

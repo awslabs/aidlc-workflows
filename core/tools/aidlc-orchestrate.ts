@@ -245,8 +245,6 @@ import {
   isRefusedModifierNextArgv,
   isRetiredOnlyNextArgv,
   isRegularFile,
-  isArchivedIntent,
-  isCompletedIntent,
   isRouteCheckProbe,
   isStopHookProbe,
   isTeamUnitOwnership,
@@ -255,7 +253,10 @@ import {
   intentStartedByQuestion,
   intentsDir,
   intentUuidForSelection,
+  isArchivedIntent,
+  isCompletedIntent,
   listIntents,
+  workToPickUp,
   readProjectDescriptionAuthority,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
   loadScopeMetadata,
@@ -5315,40 +5316,12 @@ function unselectedRecords(
 ): UnselectedRecords | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
-  // Archived intents are retired work: they never block creation and are never
-  // offered as a pick (the listing shows them only under --all). A space whose
-  // every record is archived therefore reads as zero intents here.
-  const recorded = listIntents(projectDir, space, selection.intent).filter(
-    (intent) => !isArchivedIntent(intent),
-  );
-  if (recorded.length === 0) return null; // zero intents -> creation is correct
-  if (recorded.some((i) => i.active)) return null; // a cursor already resolves -> not a creation path
   // Records exist but no cursor is set (the fresh-clone / >1-no-cursor case).
   // Carry exact record-dir selectors accepted by `intent <name>`. Slugs remain
   // display labels because duplicate labels are legal and ambiguous to switch.
-  // Finished work has nothing left to continue or reshape, so it is neither
-  // listed nor counted as work in progress, and a space holding only finished
-  // work creates. Either signal marks it finished: the registry row, or the
-  // state file a finalize completed. `intent list` and `intent <record>` still
-  // reach it.
-  const intentStates = recorded.map((intent) => {
-    let state = "";
-    if (intent.dirName) {
-      try {
-        state = readFileSync(
-          stateFilePath(projectDir, intent.dirName, space),
-          "utf-8",
-        );
-      } catch {
-        // Registry-only or incomplete record: leave unannotated.
-      }
-    }
-    return { intent, state };
-  }).filter(({ intent, state }) =>
-    !isCompletedIntent(intent) && getField(state, "Status") !== "Completed"
-  );
+  const intentStates = workToPickUp(projectDir, space, selection.intent);
+  if (intentStates === null) return null;
   const intents = intentStates.map(({ intent }) => intent);
-  if (intents.length === 0) return null;
   const annotate = intents.length > 1 &&
     intentStates.some(({ state }) => isTeamUnitOwnership(state));
   // Where each piece of work stands, in the stage names the person sees. Work

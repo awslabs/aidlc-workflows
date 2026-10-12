@@ -254,7 +254,8 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
         env: { ...process.env, AIDLC_SESSION_OVERRIDE: SESSION },
       }).stdout.toString(),
     };
-    expect(notice.stdout).toContain("for the piece of work you start now");
+    // The teammate's work is here to pick up, so the setting is for whichever work this chat picks up or starts.
+    expect(notice.stdout).toContain("for the work you pick up or start next");
     expect(snapshot()).toEqual(before);
     const dispatch = hook("plan-approval-guard", {
       hook_event_name: "PreToolUse", tool_name: "Task",

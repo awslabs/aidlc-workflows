@@ -569,7 +569,7 @@ describe("t-plan-proposed-by-the-agent: creation retires the request's whole cha
       env: { ...chat, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
     });
     expect(kept.status, `${kept.stdout}${kept.stderr}`).toBe(0);
-    expect(kept.stdout).toContain("is off for the piece of work you start now (set by you)");
+    expect(kept.stdout).toContain("is off for the work you pick up or start next (set by you)");
     const bare = next(CLAUDE_TOOLS, proj, [], chat);
     expect(bare.ask_type, JSON.stringify(bare).slice(0, 300)).toBe("intent-pick");
     expect(String(bare.question ?? ""), JSON.stringify(bare).slice(0, 300)).not.toContain("fix the login");
