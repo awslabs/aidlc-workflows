@@ -267,7 +267,7 @@ function resolveSpec(item: AskUserQuestionItem, spec: AnswerSpec): string | stri
  * 0-based index of this menu within the whole run, produce the `answers`
  * object: question-text -> chosen label (or label[] for multi-select).
  */
-function buildAnswers(
+export function buildAnswers(
   questions: AskUserQuestionItem[],
   script: AnswerScript,
   menuIndex: number,

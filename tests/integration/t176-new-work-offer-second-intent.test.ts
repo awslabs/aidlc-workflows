@@ -65,7 +65,7 @@ import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { driveAidlc } from "../harness/sdk-drive.ts";
+import { buildAnswers, driveAidlc } from "../harness/sdk-drive.ts";
 import { readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 // The case and file own the work budget; each SDK call uses what remains.
@@ -100,6 +100,24 @@ const CONFIRM_OFFER = {
   map: {},
   fallback: { labelContains: "Yes" },
 };
+
+// The engine's routing question in its own order, as the agent showed it in the
+// dev-3 runs of 2026-10-12 (02:18Z and 02:50Z): the separate-work option is the
+// second one, and the person's answer is that option wherever it is shown.
+// Deterministic; the live journey below drives the real picker.
+test("the answer is the separate-work option wherever the agent puts it", () => {
+  const question = "Work is already in progress on the widget feature. What should I do?";
+  const menu = [{
+    header: "Route work",
+    question,
+    options: [
+      { label: "Part of the active work", description: "Continue the current workflow" },
+      { label: "Separate new piece of work", description: "Yes, set it up alongside the current one as \"classic\" work without changing it" },
+      { label: "Reshape the active work", description: "Change how the remaining plan is shaped" },
+    ],
+  }];
+  expect(buildAnswers(menu, CONFIRM_OFFER, 0)).toEqual({ [question]: "Separate new piece of work" });
+});
 
 describe("t176 P4 new-work offer (orchestrator offers a 2nd intent, sdk live)", () => {
   test(
