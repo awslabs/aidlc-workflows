@@ -9552,15 +9552,16 @@ function planRootIntegrations(
     const currentBytes = targetRegular ? readFileSync(targetPath) : Buffer.alloc(0);
     const current = currentBytes.toString("utf-8");
     // A file that is not valid UTF-8 would be written back with each such byte
-    // replaced; session start leaves it alone too (aidlc-includes.ts).
-    if (!Buffer.from(current, "utf-8").equals(currentBytes)) {
+    // replaced, so config writes none (session start leaves it alone too,
+    // aidlc-includes.ts). One config would leave as it is stays as it is.
+    const lossless = Buffer.from(current, "utf-8").equals(currentBytes);
+    const notUtf8 = (): void => {
       actions.push({
         path: targetRel,
         action: "conflict",
         detail: `${targetRel} is not valid UTF-8; convert its encoding before config`,
       });
-      continue;
-    }
+    };
     const priorContribution = prior?.rootContributions[integration.path];
     if (integration.policy === "managed-block") {
       const marker = integration.marker || basename(integration.path);
@@ -9701,6 +9702,8 @@ function planRootIntegrations(
       };
       if (value === current) {
         actions.push({ path: integration.path, action: "preserve", detail: keptTitle ? KEPT_TITLE_LINE_DETAIL : undefined });
+      } else if (!lossless) {
+        notUtf8();
       } else {
         operations.push(writeOperation(integration.path, value, expected(targetPath)));
         actions.push({
@@ -9832,6 +9835,8 @@ function planRootIntegrations(
       const semanticChanged = canonical(targetValue) !== canonical(current ? JSON.parse(withoutBom(current)) : {});
       if (!semanticChanged) {
         actions.push({ path: integration.path, action: "preserve" });
+      } else if (!lossless) {
+        notUtf8();
       } else {
         const value = jsonFileText(target, current);
         operations.push(writeOperation(integration.path, value, expected(targetPath)));
@@ -9906,6 +9911,8 @@ function planRootIntegrations(
       };
       if (value === current) {
         actions.push({ path: integration.path, action: "preserve" });
+      } else if (!lossless) {
+        notUtf8();
       } else {
         operations.push(writeOperation(integration.path, value, expected(targetPath)));
         actions.push({ path: integration.path, action: targetExists ? "merge" : "create" });
@@ -9953,6 +9960,8 @@ function planRootIntegrations(
       };
       if (merged.text === current) {
         actions.push({ path: targetRel, action: "preserve" });
+      } else if (!lossless) {
+        notUtf8();
       } else {
         operations.push(writeOperation(targetRel, merged.text, expected(targetPath)));
         actions.push({
@@ -10017,6 +10026,8 @@ function planRootIntegrations(
       const semanticChanged = canonical(targetValue) !== canonical(current ? JSON.parse(withoutBom(current)) : {});
       if (!semanticChanged) {
         actions.push({ path: integration.path, action: "preserve" });
+      } else if (!lossless) {
+        notUtf8();
       } else {
         operations.push(writeOperation(
           integration.path,

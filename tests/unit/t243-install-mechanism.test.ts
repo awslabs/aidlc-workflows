@@ -2762,7 +2762,12 @@ describe("t243 project initialization", () => {
     const copyRuntime = temp("aidlc-t243-vscode-copy-runtime-");
     cpSync(COPILOT_RELEASE, copyRuntime, { recursive: true });
     rmSync(join(copyRuntime, ".vscode"), { recursive: true, force: true });
-    for (const start of [null, '{\n  "editor.tabSize": 2\n}\n']) {
+    // The last start has a legacy byte in a comment: the file is left alone
+    // either way, so its encoding stops nothing.
+    const legacyComment = Buffer.concat([
+      Buffer.from("{\n  // caf"), Buffer.from([0xe9]), Buffer.from("\n  \"editor.tabSize\": 2\n}\n"),
+    ]);
+    for (const start of [null, '{\n  "editor.tabSize": 2\n}\n', legacyComment]) {
       const project = temp("aidlc-t243-vscode-copy-");
       mkdirSync(join(project, ".git"));
       if (start !== null) {
@@ -2772,7 +2777,7 @@ describe("t243 project initialization", () => {
       const configured = configCopilot(project, copyRuntime);
       expect(configured.status, configured.stdout + configured.stderr).toBe(0);
       if (start === null) expect(existsSync(join(project, VSCODE_SETTINGS))).toBe(false);
-      else expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(start);
+      else expect(readFileSync(join(project, VSCODE_SETTINGS))).toEqual(Buffer.from(start));
     }
     // A project that AI-DLC already gave the value keeps it and its record.
     const owned = temp("aidlc-t243-vscode-copy-owned-");
@@ -4565,6 +4570,31 @@ describe("t243 project initialization", () => {
       expect(readFileSync(path)).toEqual(original);
       expect(readdirSync(project).sort()).toEqual([".git", "AGENTS.md"]);
       expect(readdirSync(join(project, ".git"))).toEqual([]);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A file config would leave as it is needs no conversion: an AGENTS.md that
+  // already holds AI-DLC's current block, with a legacy byte in the team's own
+  // text, is kept byte for byte and config carries on.
+  test("an AGENTS.md that is not valid UTF-8 but already holds the current block is kept and config carries on", () => {
+    const project = temp("aidlc-t243-agents-encoding-kept-");
+    mkdirSync(join(project, ".git"));
+    const path = join(project, "AGENTS.md");
+    writeFileSync(path, "# Cafe\n\nWe use AI-DLC.\n");
+    const args = ["config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--json"];
+    const first = run(INIT, args, project);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    const installed = readFileSync(path);
+    const at = installed.indexOf("Cafe") + 3;
+    const legacy = Buffer.concat([installed.subarray(0, at), Buffer.from([0xe9]), installed.subarray(at + 1)]);
+    writeFileSync(path, legacy);
+    type ConfigPlan = { data: { actions: Array<{ path: string; action: string; detail?: string }> } };
+    for (const extra of [[], ["--dry-run", "--verbose"]]) {
+      const refreshed = run(INIT, [...args, ...extra], project);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      const plan = JSON.parse(refreshed.stdout) as ConfigPlan;
+      expect(plan.data.actions.find((action) => action.path === "AGENTS.md")?.action).toBe("preserve");
+      expect(readFileSync(path)).toEqual(legacy);
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
