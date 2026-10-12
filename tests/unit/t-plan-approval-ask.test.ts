@@ -2541,10 +2541,10 @@ describe("what the engine names while a plan waits", () => {
     expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
   });
 
-  test("a jump or a skip is the engine's own command: it passes, spoken or not, and the code waits", () => {
+  test("a jump waits for the person to ask (the jump tool checks no one); a skip is the engine's own command; the code waits", () => {
     const proj = waitingPlan();
     const jump = "bun .claude/tools/aidlc-jump.ts execute --target nfr-requirements --direction backward --scope poc";
-    expect(guardBash(proj, jump).code).toBe(0);
+    expect(guardBash(proj, jump).code).toBe(2);
     expect(guardBash(proj, "bun .claude/tools/aidlc.ts engine recompose --skip build-and-test").code).toBe(0);
     reply(proj, "/aidlc --stage nfr-requirements");
     // The jump the engine printed for that request.

@@ -1309,15 +1309,11 @@ describe("t265b hook lifecycle", () => {
         const result = runHook(proj, BASH(command));
         expect(result.code, `${command}\n${result.stderr}`).toBe(0);
       }
-      // The engine's own commands are the engine's to judge: the completion
-      // report wants the stage's outputs, a direct state advance is the
-      // state-transition guard's.
-      for (const command of [
-        "aidlc engine orchestrate report --stage code-generation --result completed",
-        "aidlc engine state advance",
-      ]) {
-        expect(runHook(proj, BASH(command)).code, command).toBe(0);
-      }
+      // A direct state advance is the state-transition guard's. A completion
+      // report waits for the plan: the report tool does not check it.
+      expect(runHook(proj, BASH("aidlc engine state advance")).code).toBe(0);
+      expect(runHook(proj, BASH("aidlc engine orchestrate report --stage code-generation --result completed")).code)
+        .toBe(2);
       for (const command of [
         "./aidlc engine orchestrate next",
         "PATH=. aidlc engine orchestrate next",
@@ -1359,9 +1355,10 @@ describe("t265b hook lifecycle", () => {
         const report = "bun .claude/tools/aidlc.ts engine orchestrate report --stage code-generation";
         const approve = `${report} --result approved --user-input "Approve"`;
         seedUnit(proj, null, { plan: true, answer: null });
-        // Before Plan Approval the answer route is the engine's own command:
-        // `state approve` wants the person's reply, and says so itself.
-        expect(runHook(proj, BASH(approve)).code).toBe(0);
+        // Before Plan Approval, completing Code Generation waits like the build:
+        // `report` would open the gate or complete the stage without checking the
+        // plan's approval, so this guard keeps that one condition.
+        expect(runHook(proj, BASH(approve)).code).toBe(2);
 
         seedUnit(proj, null, { plan: true, answer: "Approve Plan" });
         expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(true);
@@ -1383,10 +1380,17 @@ describe("t265b hook lifecycle", () => {
           const result = runHook(proj, BASH(command));
           expect(result.code, `${command}\n${result.stderr}`).toBe(0);
         }
-        // Other reports and a direct state verb are the engine's to judge.
+        // At the held gate only the person's answer completes the stage; another
+        // completion report still waits for a current step.
         for (const command of [
           `${report} --result completed`,
           `${report} --result approved --result completed`,
+        ]) {
+          expect(runHook(proj, BASH(command)).code, command).toBe(2);
+        }
+        // Another stage's report is the engine's to refuse, and a direct state
+        // verb is the state-transition guard's and the state tool's.
+        for (const command of [
           'bun .claude/tools/aidlc.ts engine orchestrate report --stage build-and-test --result approved --user-input "Approve"',
           "bun .claude/tools/aidlc.ts engine state approve code-generation",
         ]) {
@@ -1467,14 +1471,14 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
-  test("a redo the engine names is the engine's own command, selection or none, and leaves generation closed", () => {
+  test("native redo requires the issued recovery's human selection and leaves generation closed", () => {
     const proj = scratchProject();
     try {
       const state = seedRestartRecoveryState(proj);
       const command = "aidlc engine jump execute --target code-generation --direction redo --scope poc";
-      expect(runHook(proj, BASH(command)).code).toBe(0);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
       publishRestartRecovery(proj);
-      expect(runHook(proj, BASH(command)).code).toBe(0);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
       recordRecoverySelection(proj);
       const selected = readActiveDirectiveMarker(proj, state);
       expect(selected?.delivery).toBe("consumed");
@@ -1497,15 +1501,14 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
-  test("a jump the engine names passes in any plain spelling; wrappers, a second mutation and redirection still wait", () => {
+  test("selected native redo admits no different target, scope, direction, flags, commands or wrappers", () => {
     const proj = scratchProject();
     try {
       seedRestartRecoveryState(proj);
       publishRestartRecovery(proj);
       recordRecoverySelection(proj);
       const command = "aidlc engine jump execute --target code-generation --direction redo --scope poc";
-      // The target, scope, direction and flags are the engine's to check.
-      for (const plain of [
+      for (const changed of [
         command.replace("code-generation", "requirements-analysis").replace("redo", "backward"),
         command.replace("--scope poc", "--scope feature"),
         command.replace("--direction redo", "--direction forward"),
@@ -1513,23 +1516,17 @@ describe("t265b hook lifecycle", () => {
         `${command} --force`,
         `${command} --scope feature`,
         `${command} --project-dir other`,
-        `pwd && ${command}`,
-        `${command} 2>&1`,
-        // A job-control `&` or a subshell runs the same command.
-        `${command} &`,
-        `(${command})`,
-      ]) {
-        const result = runHook(proj, BASH(plain));
-        expect(result.code, `${plain}\n${result.stderr}`).toBe(0);
-      }
-      for (const changed of [
         `${command}; printf code > src/inline.ts`,
         `${command}; true`,
+        `pwd && ${command}`,
         `${command} > src/inline.ts`,
+        `${command} 2>&1`,
+        `${command} &`,
         `env ${command}`,
         `command ${command}`,
         `sudo ${command}`,
         `bash -c '${command}'`,
+        `(${command})`,
         `PATH=. ${command}`,
         `./${command}`,
       ]) {
@@ -1543,18 +1540,18 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
-  test("a backward jump the engine names passes; its direction is the engine's to check", () => {
+  test("native backward recovery must match the actual current position", () => {
     const proj = scratchProject();
     try {
       seedRestartRecoveryState(proj, "build-and-test");
       publishRestartRecovery(proj, "code-generation", "restore-or-jump");
       const command = "aidlc engine jump execute --target code-generation --direction backward --scope poc";
-      expect(runHook(proj, BASH(command)).code).toBe(0);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
       recordRecoverySelection(proj);
       const result = runHook(proj, BASH(command));
       expect(result.code, result.stderr).toBe(0);
       for (const direction of ["redo", "forward"]) {
-        expect(runHook(proj, BASH(command.replace("backward", direction))).code).toBe(0);
+        expect(runHook(proj, BASH(command.replace("backward", direction))).code).toBe(2);
       }
       expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
     } finally {
@@ -1562,16 +1559,16 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
-  test("a reset the engine names passes whatever the recorded selection or scope; both are the engine's to check", () => {
+  test("native reset requires current selection rather than an earlier state or another remedy", () => {
     const proj = scratchProject();
     try {
       const state = seedRestartRecoveryState(proj);
       const command = "aidlc engine jump execute --target code-generation --direction redo --scope poc";
       publishRestartRecovery(proj);
       recordRecoverySelection(proj, "Request Changes");
-      expect(runHook(proj, BASH(command)).code).toBe(0);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
       recordRecoverySelection(proj, "Update the implementation plan.");
-      expect(runHook(proj, BASH(command)).code).toBe(0);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
 
       publishRestartRecovery(proj);
       recordRecoverySelection(proj);
@@ -1579,15 +1576,15 @@ describe("t265b hook lifecycle", () => {
       recordRecoverySelection(proj);
       expect(runHook(proj, BASH(command)).code).toBe(0);
       recordRecoverySelection(proj, "Cancel that; keep the current attempt.");
-      expect(runHook(proj, BASH(command)).code).toBe(0);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
       recordRecoverySelection(proj);
       expect(runHook(proj, BASH(command)).code).toBe(0);
       writeFileSync(
         join(proj, RECORD_REL, "aidlc-state.md"),
         state.replace("**Scope**: poc", "**Scope**: feature"),
       );
-      expect(runHook(proj, BASH(command)).code).toBe(0);
-      expect(runHook(proj, BASH(command.replace("--scope poc", "--scope feature"))).code).toBe(0);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      expect(runHook(proj, BASH(command.replace("--scope poc", "--scope feature"))).code).toBe(2);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
@@ -1635,10 +1632,17 @@ describe("t265b hook lifecycle", () => {
           expect(result.code, `[${checkbox}] ${admitted}\n${result.stderr}`).toBe(0);
         }
         const plan = join(proj, RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
-        // Other reports and a direct state verb are the engine's to judge.
-        for (const other of [
+        // A completion the person did not pick waits for the plan: the report
+        // tool does not check it.
+        for (const completion of [
           reject.replace("--result rejected", "--result approved"),
           reject.replace("--result rejected", "--result revised"),
+        ]) {
+          const result = runHook(proj, BASH(completion));
+          expect(result.code, `[${checkbox}] ${completion}\n${result.stderr}`).toBe(2);
+        }
+        // Other reports and a direct state verb are the engine's to judge.
+        for (const other of [
           reject.replace("--stage code-generation", "--stage build-and-test"),
           `${reject} --project-dir /elsewhere`,
           "aidlc engine state reject code-generation --reason x",
@@ -1667,7 +1671,7 @@ describe("t265b hook lifecycle", () => {
           { op: "finish-revision", action: "Finish the revision.", interaction: "external-work" },
         ]);
         const revised = "aidlc engine orchestrate report --stage code-generation --result revised";
-        expect(runHook(proj, BASH(revised)).code).toBe(0);
+        expect(runHook(proj, BASH(revised)).code).toBe(2);
         expect(runHook(proj, WRITE(plan)).code).toBe(0);
         recordRecoverySelection(proj, "1");
         expect(runHook(proj, BASH(revised)).code).toBe(0);
@@ -1700,14 +1704,16 @@ describe("t265b hook lifecycle", () => {
         ["state unpark", 0],
         // Generation start refuses itself without the receipt-backed approval.
         ["testing-posture begin --unit u1", 0],
-        // Work, lifecycle transitions, and completion are the engine's own
-        // commands: each refuses itself without the approval or the person's
-        // reply, and this guard lets it say so.
+        // Work and lifecycle transitions are the engine's own commands: each
+        // refuses itself without the approval or the person's reply, and this
+        // guard lets it say so.
         ["bolt prepare --unit u1", 0],
         ["state approve code-generation", 0],
-        ["state unit complete --stage code-generation --unit u1", 0],
-        ["orchestrate report --stage code-generation --result approved --user-input Approve", 0],
-        ["orchestrate report --skeleton-stance off --result completed", 0],
+        // A completion waits for the plan: neither tool checks it. Before
+        // approval only a picked recovery may complete a Unit.
+        ["state unit complete --stage code-generation --unit u1", 2],
+        ["orchestrate report --stage code-generation --result approved --user-input Approve", 2],
+        ["orchestrate report --skeleton-stance off --result completed", 2],
       ];
       for (const [route, code] of cases) {
         const [noun, ...rest] = route.split(" ");
@@ -2260,18 +2266,14 @@ describe("t265b hook lifecycle", () => {
           const result = runHook(proj, WRITE(doc));
           expect(result.code, `${doc}\n${result.stderr}`).toBe(0);
         }
-        // AI-DLC's records and AI-DLC's own commands pass: the questions file
-        // holds no receipt, and the engine refuses an approval nobody gave.
+        // AI-DLC's records pass: the questions file holds no receipt.
         const record = join(proj, RECORD_REL, "construction", "code-generation");
+        const questions = runHook(proj, WRITE(join(record, "code-generation-questions.md")));
+        expect(questions.code, questions.stderr).toBe(0);
+        // The build waits as before: code, the developer, and a completion
+        // report, which the report tool does not check against the plan.
         for (const payload of [
-          WRITE(join(record, "code-generation-questions.md")),
           BASH('aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"'),
-        ]) {
-          const result = runHook(proj, payload);
-          expect(result.code, `${JSON.stringify(payload)}\n${result.stderr}`).toBe(0);
-        }
-        // The build waits as before: code and the developer.
-        for (const payload of [
           WRITE(join(proj, "src", "inline.ts")),
           BASH("echo 'export const x = 1;' > src/inline.ts"),
           STAGE_DISPATCH(proj, "Build the plan."),
@@ -2358,10 +2360,10 @@ describe("t265b hook lifecycle", () => {
               expect(result.code, `${state}: ${JSON.stringify(payload.tool_input)}\n${result.stderr}`).toBe(0);
               expect(result.stderr, `${state}: ${JSON.stringify(payload.tool_input)}`).toBe("");
             }
-            // AI-DLC's own command passes: the engine refuses an approval nobody gave.
-            expect(runHook(proj, BASH('aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"')).code, state).toBe(0);
-            // The build still waits: code, a shell write to code, and the developer.
+            // The build still waits: code, a shell write to code, the developer,
+            // and a completion report, which the report tool does not check.
             for (const payload of [
+              BASH('aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"'),
               WRITE(join(proj, "src", "new.ts")),
               BASH("echo 'export const x = 1;' > src/inline.ts"),
               DISPATCH(proj, "Build the plan."),
@@ -2389,18 +2391,18 @@ describe("t265b hook lifecycle", () => {
     });
   }
 
-  test("a jump through the installed tool passes with or without the selection; only the installed tool itself", () => {
+  test("a selected restart continues in its source-install spelling too", () => {
     const proj = scratchProject();
     try {
       seedRestartRecoveryState(proj);
       writeFileSync(join(proj, ".claude", "tools", "aidlc-jump.ts"), "// installed tool\n");
       const command = "bun .claude/tools/aidlc-jump.ts execute --target code-generation --direction redo --scope poc";
       publishRestartRecovery(proj);
-      expect(runHook(proj, BASH(command)).code).toBe(0);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
       recordRecoverySelection(proj);
       const result = runHook(proj, BASH(command));
       expect(result.code, result.stderr).toBe(0);
-      expect(runHook(proj, BASH(`${command} --force`)).code).toBe(0);
+      expect(runHook(proj, BASH(`${command} --force`)).code).toBe(2);
       expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
       // Only the installed tool itself: not a symlink to project code, not a missing file.
       const tool = join(proj, ".claude", "tools", "aidlc-jump.ts");
@@ -2414,7 +2416,7 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
-  test("a jump the engine names passes whatever the state says; a missing stage or scope is the engine's to refuse", () => {
+  test("native reset checks the effective plan and rejects a forward target even with a reset direction", () => {
     const proj = scratchProject();
     try {
       const base = seedRestartRecoveryState(proj);
@@ -2434,7 +2436,7 @@ describe("t265b hook lifecycle", () => {
           ? command.replace("--scope poc", "--scope missing-scope")
           : command;
         const result = runHook(proj, BASH(attempted));
-        expect(result.code, `${state}\n${result.stderr}`).toBe(0);
+        expect(result.code, `${state}\n${result.stderr}`).toBe(2);
       }
     } finally {
       rmSync(proj, { recursive: true, force: true });
@@ -2500,10 +2502,12 @@ describe("t265b hook lifecycle", () => {
           const result = runHook(proj, BASH(command));
           expect(result.code, `${command}\n${result.stderr}`).toBe(0);
         }
+        // A completion report waits for the plan: the report tool does not check it.
+        expect(runHook(proj, BASH(`bun ${entry} engine orchestrate report --stage code-generation --result completed`)).code)
+          .toBe(2);
         // Every other engine verb through the installed entry point is the
         // engine's to judge (the checkpoint refuses --check-cmd itself).
         for (const command of [
-          `bun ${entry} engine orchestrate report --stage code-generation --result completed`,
           `bun ${entry} engine state advance`,
           `bun ${entry} engine runtime compile`,
           `bun ${entry} engine bolt checkpoint --action verify --unit todo-core --check-cmd "touch src/inline.ts"`,

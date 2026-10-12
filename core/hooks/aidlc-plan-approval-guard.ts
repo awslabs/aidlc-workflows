@@ -23,10 +23,16 @@
 // AI-DLC's own bookkeeping never meets this guard: a write whose every target is
 // a stage's record output under aidlc/spaces (not the engine's own files there)
 // passes, and so does a direct, unwrapped invocation of the installed engine,
-// whose verbs the engine judges itself. Two conditions stay: a recorded switch
-// that turns a check off passes only once a person has asked
-// (engineCommandAdmitted), and while the person is editing the plan files
-// themselves those files are theirs (personIsEditingPlanFile). Three exact files
+// whose verbs the engine judges itself. Where no tool of the engine's owns the
+// call, a condition stays here (engineCommandAdmitted): a recorded switch that
+// turns a check off, and four config settings that can take a check away, pass
+// once a person has asked; a release fetched or applied, and a Code Generation
+// completion (a report that opens or passes the gate, a Unit's completion
+// receipt), wait while the plan does (the person's answer at the held gate and
+// the recovery remedy they picked excepted); a jump waits for the person's
+// move: the restart they picked at the recovery question, or one they asked
+// for while the last step is current. While the person is editing the plan
+// files themselves, those files are theirs (personIsEditingPlanFile). Three exact files
 // outside the record pass too: the composer's grid proposal, a person's answer
 // text and a person's request file, which the engine reads and nothing else.
 //
@@ -66,6 +72,11 @@ import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import { CONFIG_SECTIONS } from "../tools/aidlc-command.ts";
 import { commandPath, readActiveExecutable } from "../tools/aidlc-install-paths.ts";
 import {
+  guardOperationMatchesRemedy,
+  parseGuardRestartContinuationCommand,
+  sameGuardOperation,
+} from "../tools/aidlc-guard-operation.ts";
+import {
   hookOutsideGate,
   enterHookWorkflow,
   acquireAuditLock,
@@ -81,6 +92,11 @@ import {
   errorMessage,
   getField,
   GUARD_RECOVERY_ASK_TYPE,
+  guardRecoveryAnswerAdmits,
+  loadScopeMapping,
+  loadStageGraph,
+  parseCheckboxes,
+  parseStateStageSuffixes,
   PLAN_APPROVAL_ASK_TYPE,
   guardStandAsideSpeaks,
   guardStoodAsideLine,
@@ -92,6 +108,7 @@ import {
   isClaudeCodeHookInput,
   isoTimestamp,
   personAskedSinceGate,
+  personSpokeSinceGate,
   readActiveDirectiveMarker,
   spacesRoot,
   activeDirectiveOutOfDateReason,
@@ -1345,6 +1362,130 @@ function installedEngineArgs(
   return route ? ["engine", route, ...toolArgs] : null;
 }
 
+// The durable state holds the Code Generation completion gate open: the stage
+// is still current and its checkbox reads awaiting-approval.
+function codeGenerationGateHeld(state: string): boolean {
+  return normalizeStageName(getField(state, "Current Stage") ?? "") === GUARDED_STAGE &&
+    parseCheckboxes(state).some(
+      (entry) => entry.slug === GUARDED_STAGE && entry.state === "awaiting-approval",
+    );
+}
+
+function isSelectedGuardRestartContinuation(
+  projectDir: string,
+  cwd: string,
+  command: string,
+  state: string,
+  marker: ActiveDirectiveMarker | null,
+): boolean {
+  const continuation = parseGuardRestartContinuationCommand(command, { harnessDir: harnessDir() });
+  // The source spelling names a script: it must be the installed tool itself.
+  const script = command.split(" ")[1] ?? "";
+  if (
+    continuation === null ||
+    (command.startsWith("bun ") && !isTrustedToolFile(projectDir, cwd, script)) ||
+    marker?.version !== 2 ||
+    marker.kind !== "ask" ||
+    marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+    marker.state_present !== true ||
+    marker.needs_rehydrate !== false ||
+    // An issued ask becomes consumed only when its human selection is recorded.
+    marker.delivery !== "consumed" ||
+    marker.guard_recovery_response?.status !== "ready" ||
+    marker.guard_recovery_response.feedback_sha256 !== undefined
+  ) return false;
+
+  const selected = marker.remedies?.filter(
+    (remedy) => remedy.op === marker.guard_recovery_response?.selected_op,
+  ) ?? [];
+  if (
+    selected.length !== 1 ||
+    selected[0].interaction !== "command" ||
+    !sameGuardOperation(selected[0].operation, continuation.operation) ||
+    !guardOperationMatchesRemedy(
+      continuation.operation, selected[0].op, marker.stage, marker.unit,
+    ) ||
+    continuation.scope !== getField(state, "Scope")
+  ) return false;
+
+  const scope = loadScopeMapping()[continuation.scope];
+  if (!scope) return false;
+  const graph = loadStageGraph();
+  const target = continuation.operation.stage;
+  const current = getField(state, "Current Stage");
+  const targetIndex = graph.findIndex((stage) => stage.slug === target);
+  const currentIndex = graph.findIndex((stage) => stage.slug === current);
+  if (
+    targetIndex < 0 || currentIndex < 0 || targetIndex > currentIndex ||
+    graph[targetIndex].phase === "initialization"
+  ) return false;
+  const checkboxes = parseCheckboxes(state);
+  if (
+    checkboxes.filter((entry) => entry.slug === target).length !== 1 ||
+    checkboxes.filter((entry) => entry.slug === current).length !== 1 ||
+    (parseStateStageSuffixes(state).get(target) ?? scope.stages[target]) !== "EXECUTE"
+  ) return false;
+
+  // Match aidlc-jump resolve's graph-order calculation, not the caller's
+  // claimed direction. A selection cannot turn a forward move into a reset.
+  return continuation.direction === (targetIndex === currentIndex ? "redo" : "backward");
+}
+
+// What AI-DLC's own command still waits on in the step and the state at hand:
+// the Code Generation completion gate held open (the person's answer to it
+// passes), and whether a jump is the person's move (jumpIsPersonsMove).
+interface EngineCommandContext {
+  gateHeld: boolean;
+  marker: ActiveDirectiveMarker | null;
+  jumpAdmitted: () => boolean;
+}
+
+const NO_ENGINE_CONTEXT: EngineCommandContext = { gateHeld: false, marker: null, jumpAdmitted: () => false };
+
+// The engine's last step is current and was delivered as issued, and it is not
+// its recovery question, whose own picked restart is the one jump it carries out
+// (isSelectedGuardRestartContinuation). A step gone stale or superseded since
+// names nothing the person's earlier words still ask for: `next` names the step
+// now. Parked work's last step is the park, which no issued step outlives.
+function lastStepAdmitsPersonsMoves(projectDir: string): boolean {
+  try {
+    const state = readFileSync(stateFilePath(projectDir), "utf-8");
+    if ((getField(state, "Parked") ?? "").trim().length > 0) return true;
+    const marker = readActiveDirectiveMarker(projectDir, state);
+    return marker !== null && marker.delivery !== "superseded" &&
+      !(marker.kind === "ask" && marker.ask_type === GUARD_RECOVERY_ASK_TYPE);
+  } catch {
+    return false;
+  }
+}
+
+// A jump is the person's move: the restart they picked at the engine's recovery
+// question, or one they asked for since the last decision while the last step
+// is current. The jump tool checks neither.
+function jumpIsPersonsMove(
+  projectDir: string,
+  cwd: string,
+  command: unknown,
+  state: string,
+  marker: ActiveDirectiveMarker | null,
+): boolean {
+  return (typeof command === "string" && isSelectedGuardRestartContinuation(projectDir, cwd, command, state, marker)) ||
+    (personSpokeSinceGate(projectDir, { requests: true }) && lastStepAdmitsPersonsMoves(projectDir));
+}
+
+// The results that open the Code Generation gate or complete the stage.
+const CODE_GENERATION_COMPLETIONS = new Set(["awaiting-approval", "approved", "completed", "revised"]);
+
+// The last value given for a flag, as `--flag value` or `--flag=value`.
+function lastFlag(args: readonly string[], name: string): string | undefined {
+  let value: string | undefined;
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] === name) value = args[index + 1];
+    else if (args[index].startsWith(`${name}=`)) value = args[index].slice(name.length + 1);
+  }
+  return value;
+}
+
 // The config setup tool's own arguments (its section first), in either spelling
 // that runs it: `config ...` or its script, `aidlc-init.ts`, which drops a
 // leading `config` or `init` itself. Null for every other command, and for
@@ -1389,11 +1530,32 @@ function configToolAdmitted(projectDir: string, rest: readonly string[]): boolea
 // person has asked since the last decision, because its setter never refuses
 // and the next tool call would pass under the switch. As `config flags` it is
 // judged whole (recordedSwitchChangeAdmitted); the config tool's two forms above
-// keep theirs; every other engine command is the engine's to judge.
-function engineCommandAdmitted(projectDir: string, engineArgs: readonly string[]): boolean {
+// keep theirs. Two more have no other owner: a Code Generation completion (a
+// report that opens the gate or completes the stage, a Unit's completion
+// receipt; neither tool checks the plan's approval) waits while the plan does,
+// the person's answer at the held gate and the remedy they picked at the
+// recovery question excepted; and a jump (the jump tool checks no pick and no
+// person) waits for the person's move (jumpIsPersonsMove). Every other engine
+// command is the engine's to judge.
+function engineCommandAdmitted(
+  projectDir: string,
+  engineArgs: readonly string[],
+  context: EngineCommandContext = NO_ENGINE_CONTEXT,
+): boolean {
   const configArgs = configToolArgs(engineArgs);
   if (configArgs !== null && !configToolAdmitted(projectDir, configArgs)) return false;
   const args = configArgs !== null ? ["config", ...configArgs] : engineArgs[0] === "engine" ? engineArgs.slice(1) : engineArgs;
+  const stage = lastFlag(args, "--stage");
+  const result = lastFlag(args, "--result") ?? "";
+  const report = args[0] === "orchestrate" && args[1] === "report";
+  if (
+    (stage === undefined || stage === GUARDED_STAGE) &&
+    ((report && CODE_GENERATION_COMPLETIONS.has(result)) ||
+      (args[0] === "state" && args[1] === "unit" && args[2] === "complete")) &&
+    !(report && context.gateHeld && stage === GUARDED_STAGE && result === "approved") &&
+    !guardRecoveryAnswerAdmits(context.marker, engineArgs, projectDir)
+  ) return false;
+  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted()) return false;
   if (!args.some((arg) => arg === "--bypass" || arg.startsWith("--bypass="))) return true;
   if (args[0] === "config" && args[1] === "flags") return recordedSwitchChangeAdmitted(projectDir, args);
   return personAskedSinceGate(projectDir);
@@ -1461,6 +1623,7 @@ function shellInvocationNeedsApproval(
   hasConcreteTargets: boolean,
   rawCommand: string,
   dialect: ShellDialect = POSIX_DIALECT,
+  context: EngineCommandContext = NO_ENGINE_CONTEXT,
 ): boolean {
   const name = normalizedCommandName(invocation.name);
   const executable = invocation.executable ?? invocation.name;
@@ -1471,7 +1634,7 @@ function shellInvocationNeedsApproval(
   if (
     dialect.pathsAsWritten && /[\\/]/.test(executable) &&
     !(unwrapped && isNativeEngine(executable, invocation.args, true) &&
-      engineCommandAdmitted(projectDir, invocation.args))
+      engineCommandAdmitted(projectDir, invocation.args, context))
   ) return true;
   if (name === "cd" || (dialect.powerShell && POWERSHELL_SET_LOCATION.has(name))) {
     // The shared lexer is intentionally not a full Bash parser. Do not grant
@@ -1514,7 +1677,7 @@ function shellInvocationNeedsApproval(
   // not, with one exception: a recorded switch that would turn a check off
   // passes only when a person has asked (engineCommandAdmitted).
   const engineArgs = installedEngineArgs(projectDir, cwd, executable, invocation.args, unwrapped, dialect.enginePaths);
-  if (engineArgs !== null) return !engineCommandAdmitted(projectDir, engineArgs);
+  if (engineArgs !== null) return !engineCommandAdmitted(projectDir, engineArgs, context);
   if (
     TRACKED_SHELL_MUTATORS.has(name) &&
     hasConcreteTargets &&
@@ -1564,6 +1727,7 @@ async function mutationIntent(
   toolInput: Record<string, unknown> | undefined,
   cwd: string,
   powerShellHint = false,
+  context: EngineCommandContext = NO_ENGINE_CONTEXT,
 ): Promise<MutationIntent> {
   let targets: string[] = [];
   let opaqueShell = false;
@@ -1603,7 +1767,7 @@ async function mutationIntent(
     opaqueShell =
       dynamic ||
       invocations.some((invocation) =>
-        shellInvocationNeedsApproval(projectDir, cwd, invocation, targets.length > 0, analysed, dialect)
+        shellInvocationNeedsApproval(projectDir, cwd, invocation, targets.length > 0, analysed, dialect, context)
       );
     // A command that names AI-DLC and that the shell reading refused: an
     // untrusted spelling (a retained version, a copy of the tools outside the
@@ -1882,6 +2046,12 @@ async function evaluate(
             projectDir, toolName, toolInput, cwd,
             // Set by the adapter that ran the tool, outside the agent's input.
             parsed.aidlc_shell === "powershell",
+            {
+              gateHeld: codeGenerationGateHeld(state),
+              marker: activeDirective,
+              jumpAdmitted: () =>
+                toolName === "Bash" && jumpIsPersonsMove(projectDir, cwd, toolInput.command, state ?? "", activeDirective),
+            },
           )
         : {
             targets: [],

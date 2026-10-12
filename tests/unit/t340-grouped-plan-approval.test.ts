@@ -533,9 +533,9 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       });
       publish(pd, "run-stage");
       for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(false);
-      // The report is the orchestrator's own command and judgement.
+      // A completion report waits for the plan: the report tool does not check it.
       const report = guard(pd, "aidlc engine orchestrate report --stage code-generation --result completed --approved");
-      expect(report.code, `${report.out}\n${report.err}`).toBe(0);
+      expect(report.code, `${report.out}\n${report.err}`).toBe(2);
       const checkpoint = guard(pd, "aidlc engine bolt swarm-checkpoint --action status --batch 1 --units alpha,beta");
       expect(checkpoint.code, `${checkpoint.out}\n${checkpoint.err}`).toBe(0);
       expect(gates(pd)).toBe(0);

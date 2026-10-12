@@ -3220,12 +3220,12 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
             code: toolName === "execute_pwsh" ? 0 : 2,
           },
           // A plain native engine command is the engine's own to judge: the
-          // state tool refuses a bare advance itself, and a lifecycle report
-          // is the orchestrator's. The guard holds the build, not AI-DLC.
+          // state tool refuses a bare advance itself. A completion report
+          // waits for the plan: the report tool does not check it.
           { command: "aidlc engine state advance", code: 0 },
           {
             command: "aidlc engine orchestrate report --stage code-generation --result completed",
-            code: 0,
+            code: 2,
           },
           { command: "echo blocked > src/blocked.ts", code: 2 },
           { command: "aidlc engine orchestrate next | Out-File src/blocked.ts", code: 2 },

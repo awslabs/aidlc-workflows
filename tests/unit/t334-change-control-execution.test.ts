@@ -52,6 +52,7 @@ import {
   hookDrops,
   humanTurn,
   movedNotice,
+  HUMAN_TURN,
   presentPlan,
   receiptFiles,
   runChangeControlTool,
@@ -216,7 +217,7 @@ describe("t334 (7) at the dispatch guard, other code moving after approval is ne
     expect(acceptedRows(project)).toHaveLength(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("the native fence switch a refusal prints is admitted by the hook it lowers, and nothing near it is", () => {
+  test("the native fence switch a refusal prints is admitted by the hook it lowers; the setter refuses what is near it", () => {
     const project = createProject("strict");
     const questions = presentPlan(project);
     startSession(project, "strict-native");
@@ -232,12 +233,31 @@ describe("t334 (7) at the dispatch guard, other code moving after approval is ne
     expect(admitted.stdout).not.toContain("Continuing past");
     // Turning plan approval on only adds the stop, so it is admitted too.
     expect(bash("aidlc engine config set guard.plan-approval on").code).toBe(0);
+    // A changed spelling and Guard Policy off are AI-DLC's own commands: the hook
+    // passes them, and the setter refuses each itself while nobody has asked (it
+    // takes no --force).
     for (const command of [
       "aidlc engine config set guard.plan-approval off --force",
       "aidlc engine config set guard-policy off",
-      "aidlc engine config set guard.plan-approval off; touch src/x.ts",
+    ]) {
+      expect(bash(command).code, command).toBe(0);
+    }
+    for (const args of [["guard.plan-approval", "off", "--force"], ["guard-policy", "off"]]) {
+      const before = readFileSync(join(seededRecordDir(project), "aidlc-state.md"), "utf-8");
+      const refused = runChangeControlTool([BUN, HUMAN_TURN, "engine", "config", "set", ...args], project);
+      expect(refused.code, `${args.join(" ")}\n${refused.stdout}${refused.stderr}`).not.toBe(0);
+      expect(readFileSync(join(seededRecordDir(project), "aidlc-state.md"), "utf-8")).toBe(before);
+    }
+    // A write the plan names (its instructions name unit.test.ts) still waits
+    // beside the switch; one it does not name runs beside it, as it runs alone.
+    for (const command of [
+      "aidlc engine config set guard.plan-approval off; touch src/unit.test.ts",
+      "aidlc engine config set guard.plan-approval off && printf code > unit.test.ts",
     ]) {
       expect(bash(command).code, command).toBe(2);
+    }
+    for (const command of ["touch src/x.ts", "aidlc engine config set guard.plan-approval off; touch src/x.ts"]) {
+      expect(bash(command).code, command).toBe(0);
     }
     // The argv check behind the admission is exact.
     const argv = ["engine", "config", "set", "guard.plan-approval", "off"];
