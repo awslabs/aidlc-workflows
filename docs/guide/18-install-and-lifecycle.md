@@ -1247,8 +1247,9 @@ Known unmarked files and JSON entries from historical shipped projections are
 adopted only when their exact recorded SHA-256 signature matches. Any other
 unmarked content is the team's, whatever it says about AI-DLC: config preserves
 it as a prefix and appends a fresh managed block; no rename or deletion is
-needed. A `.gitignore` that is not valid UTF-8 remains untouched and requires an
-encoding conversion before config can merge it safely.
+needed. A root file that is not valid UTF-8 (`.gitignore`, `AGENTS.md` or any other
+AI-DLC merges into) remains untouched and requires an encoding conversion before
+config can merge it safely.
 
 Inside a Git repository, config also checks whether a user-owned rule hides
 committed workflow records, including during `--dry-run`. A rule such as

@@ -9551,11 +9551,13 @@ function planRootIntegrations(
     }
     const currentBytes = targetRegular ? readFileSync(targetPath) : Buffer.alloc(0);
     const current = currentBytes.toString("utf-8");
-    if (integration.path === ".gitignore" && !Buffer.from(current, "utf-8").equals(currentBytes)) {
+    // A file that is not valid UTF-8 would be written back with each such byte
+    // replaced; session start leaves it alone too (aidlc-includes.ts).
+    if (!Buffer.from(current, "utf-8").equals(currentBytes)) {
       actions.push({
-        path: integration.path,
+        path: targetRel,
         action: "conflict",
-        detail: "gitignore is not valid UTF-8; convert its encoding before config",
+        detail: `${targetRel} is not valid UTF-8; convert its encoding before config`,
       });
       continue;
     }

@@ -4527,10 +4527,43 @@ describe("t243 project initialization", () => {
       ], project);
       expect(refused.status, refused.stdout + refused.stderr).toBe(4);
       expect(refused.stdout).toContain(
-        "gitignore is not valid UTF-8; convert its encoding before config",
+        ".gitignore is not valid UTF-8; convert its encoding before config",
       );
       expect(readFileSync(path)).toEqual(original);
       expect(readdirSync(project).sort()).toEqual([".git", ".gitignore"]);
+      expect(readdirSync(join(project, ".git"))).toEqual([]);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Session start leaves a root file that is not valid UTF-8 alone; config did
+  // not, and wrote the team's AGENTS.md back with each such byte replaced.
+  test("an AGENTS.md that is not valid UTF-8 refuses without changing its bytes even with --force", () => {
+    const project = temp("aidlc-t243-agents-encoding-");
+    mkdirSync(join(project, ".git"));
+    const path = join(project, "AGENTS.md");
+    const original = Buffer.concat([
+      Buffer.from("# Caf"),
+      Buffer.from([0xe9]),
+      Buffer.from("\n\nWe use AI-DLC.\n"),
+    ]);
+    writeFileSync(path, original);
+    for (const flags of [["--dry-run", "--verbose"], ["--force"]]) {
+      const refused = run(INIT, [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        KIRO_RELEASES[0],
+        "--harness",
+        "kiro",
+        ...flags,
+      ], project);
+      expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+      expect(refused.stdout).toContain(
+        "AGENTS.md is not valid UTF-8; convert its encoding before config",
+      );
+      expect(readFileSync(path)).toEqual(original);
+      expect(readdirSync(project).sort()).toEqual([".git", "AGENTS.md"]);
       expect(readdirSync(join(project, ".git"))).toEqual([]);
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
