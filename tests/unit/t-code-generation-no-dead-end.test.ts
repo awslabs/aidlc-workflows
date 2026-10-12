@@ -311,6 +311,29 @@ describe("the guard judges only the build: records and engine commands pass, the
     expect(clear.code, clear.said).toBe(0);
   });
 
+  test("S6b: the person hands the plan back while editing: every shape's refusal names the answer, and three calls later the plan is the agent's", async () => {
+    const state = STATES.find((builder) => builder.id === "S6b")!.build();
+    created.push(state.proj);
+    const planPath = join(stageDir(state.proj), "code-generation-plan.md");
+    for (const shape of SHAPES) {
+      shape.install(state.proj);
+      const refused = await shape.call(state.proj, state.session, { tool: "Write", path: planPath });
+      expect(refused.code, `[${shape.name}] the plan file passed while the person's edit mode is open`).toBe(2);
+      const handBack = namedCommands(refused.said).find((command) => command.includes('--details "Request Changes"'));
+      expect(handBack, `[${shape.name}] the refusal names no answer: ${refused.said}`).toBeDefined();
+      const admitted = await shape.call(state.proj, state.session, { tool: "Bash", command: respell(handBack as string, ".claude") });
+      expect(admitted.code, `[${shape.name}] ${handBack} -> ${admitted.said}`).toBe(0);
+    }
+    // The answer, the write, next: the plan is the agent's, with their words, and no second edit-mode question.
+    const recorded = runNamed(state.proj, 'bun .claude/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --details "Request Changes"');
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    const write = await claude.call(state.proj, state.session, { tool: "Write", path: planPath });
+    expect(write.code, write.said).toBe(0);
+    const step = next(state.proj);
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    expect(step.plan_approval, JSON.stringify(step)).toEqual({ status: "revise", feedback: "you finish it" });
+  });
+
   test("S6: while the person edits the plan files, the agent's write to them is refused with that sentence", async () => {
     const state = STATES.find((builder) => builder.id === "S6")!.build();
     created.push(state.proj);

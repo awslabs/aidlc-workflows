@@ -67,6 +67,7 @@ export interface Step {
     status?: string;
     editing?: boolean;
     skipped?: true;
+    feedback?: string;
     targets?: Array<{ unit: string | null; plan_path?: string; questions_path?: string }>;
   };
   [key: string]: unknown;
@@ -337,6 +338,18 @@ export const STATES: StateBuilder[] = [
         throw new Error(`expected edit mode, got ${JSON.stringify(step)}`);
       }
       return { proj, session: SESSION, approved: false, how: "reply I'll edit the files, next shows edit mode" };
+    },
+  },
+  {
+    id: "S6b", name: "the person edited the plan files, then handed them back",
+    build: () => {
+      const proj = createCodeGenerationProject();
+      next(proj);
+      askOpen(proj);
+      reply(proj, "I'll edit the files");
+      next(proj);
+      reply(proj, "you finish it");
+      return { proj, session: SESSION, approved: false, how: "edit mode, then the person said: you finish it" };
     },
   },
   {

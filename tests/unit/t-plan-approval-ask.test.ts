@@ -1076,6 +1076,35 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).kind).toBe("ask");
   });
 
+  // The person edits the plan files, then hands the plan back in their own words.
+  // Their reply is kept; the agent reads which answer it is. The refusal and the
+  // edit-mode question name the answer to record, so nobody goes round: the
+  // answer, the write and next, and the plan is the agent's, with their words.
+  test("edit mode: the person hands the plan back; the refusal names the answer to record, and their words are the change", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "I'll edit the files");
+    expect(next(proj).plan_approval.editing).toBe(true);
+    const planPath = join(stageDir(proj), "code-generation-plan.md");
+    // Before they reply, the files are theirs, in today's words.
+    const waiting = guardWrite(proj, planPath);
+    expect(waiting.code).toBe(2);
+    expect(waiting.stderr).toContain("When they say they are done");
+    expect(waiting.stderr).not.toContain("--checkpoint plan-approval");
+    reply(proj, "you finish it");
+    const handedBack = guardWrite(proj, planPath);
+    expect(handedBack.code).toBe(2);
+    expect(handedBack.stderr).toContain('answer --stage code-generation --checkpoint plan-approval --details "Request Changes"');
+    expect(handedBack.stderr).toContain('--details "Approve Plan"');
+    const asked = next(proj);
+    expect(asked.plan_approval.editing).toBe(true);
+    expect(String(asked.plan_approval.note)).toContain('--details "Request Changes"');
+    const recorded = answer(proj, "Request Changes");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(guardWrite(proj, planPath).code).toBe(0);
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "you finish it" });
+  });
+
   test("edit mode: the agent cannot touch the files, and done approves them as the person left them", () => {
     const proj = project();
     askFor(proj);

@@ -634,6 +634,7 @@ function authorityRemedy(
   reason: string,
   standing: PlanStanding | null,
   asked: ReturnType<typeof planApprovalAskState> = null,
+  editingReply: string | null = null,
 ): string {
   if (reason === ENGINE_QUESTION_OPEN) return engineQuestionOpenReason();
   if (reason === PLAN_APPROVAL_ASK_OPEN) {
@@ -647,9 +648,13 @@ function authorityRemedy(
       return `The person has answered the plan question. Run ${nextOnItsOwn()}, and follow the step ` +
         "it prints: it carries out their choice. Do not show them the question again.";
     }
+    // Once they reply while editing, the ask tool's step records it (editingReply).
     if (asked === "editing") {
-      return "The person is editing the plan files themselves: leave those files to them. When they say " +
-        `they are done, run ${nextOnItsOwn()}, and follow the step it prints.`;
+      return editingReply
+        ? `The person is editing the plan files themselves and has replied since: ${editingReply}. Then run ` +
+          `${nextOnItsOwn()}, and follow the step it prints.`
+        : "The person is editing the plan files themselves: leave those files to them. When they say " +
+          `they are done, run ${nextOnItsOwn()}, and follow the step it prints.`;
     }
     // Some hosts show this refusal to the person as written, so it is only their
     // sentence; the agent's steps for it are in the skill's refusal clause.
@@ -671,9 +676,10 @@ function authorityBlockReason(
   reason: string,
   standing: PlanStanding | null = null,
   asked: ReturnType<typeof planApprovalAskState> = null,
+  editingReply: string | null = null,
 ): string {
   if (reason === ENGINE_QUESTION_OPEN || reason === PLAN_APPROVAL_ASK_OPEN) {
-    return authorityRemedy(reason, standing, asked);
+    return authorityRemedy(reason, standing, asked, editingReply);
   }
   return (
     "Code generation cannot start because its Plan Approval authority is ambiguous or stale. " +
@@ -1978,6 +1984,8 @@ async function evaluate(
   let briefTargets: BriefTargets | null = null;
   // The person's answer to the open Plan Approval question, when one is recorded.
   let asked: ReturnType<typeof planApprovalAskState> = null;
+  // How to record the person's reply while they edit the plan files, once they replied.
+  let editingReply: string | null = null;
   // What is wrong with the developer handoff itself, said only once the plan it
   // hands over may be built: before that, the `brief` it would name refuses too.
   let handoffDefect: HandoffDefect | null = null;
@@ -2178,8 +2186,11 @@ async function evaluate(
         // Loaded only here: the question's own record, read the way its owner
         // reads it, and kept off the path every other tool call takes.
         try {
-          const { planApprovalAskState: askState } = await import("../tools/aidlc-plan-approval-ask.ts");
+          const { planApprovalAskState: askState, planApprovalEditingReplyStep } = await import(
+            "../tools/aidlc-plan-approval-ask.ts"
+          );
           asked = askState(projectDir);
+          editingReply = asked === "editing" ? planApprovalEditingReplyStep(projectDir) : null;
         } catch {
           asked = null;
         }
@@ -2289,7 +2300,7 @@ async function evaluate(
   }
   const refusalProse = (detail: string | null): string =>
     authorityFailure
-      ? authorityBlockReason(authorityFailure, standing, asked)
+      ? authorityBlockReason(authorityFailure, standing, asked, editingReply)
       : blockedMutation
       ? mutationBlockReason(
           blockedMutation.unit,
@@ -2364,7 +2375,7 @@ async function evaluate(
       if (authorityFailure && !swarmBatchOut) {
         // The plan question is open: the same words as with the fence on.
         const waiting = authorityFailure === PLAN_APPROVAL_ASK_OPEN;
-        return refuseExecutionIneligible(authorityRemedy(authorityFailure, standing, asked), !waiting, !waiting);
+        return refuseExecutionIneligible(authorityRemedy(authorityFailure, standing, asked, editingReply), !waiting, !waiting);
       }
       if (verdict.mentioned.length === 0) {
         return refuseExecutionIneligible(refusalProse(null), false);
