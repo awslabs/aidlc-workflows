@@ -740,10 +740,10 @@ This recognition and conductor-authored offer apply only before an engine ask
 is emitted. Once an ask exists, follow its typed route and supplied commands,
 preserving any \`--request\` id rather than rebuilding the request.
 
-- **Default to CONTINUATION.** Treat the input as new-work ONLY when it clearly
+- Treat the input as new-work ONLY when it clearly
   names a distinct feature/bug/unit unrelated to the active intent's subject
   (\`${aidlcDispatcherInvocation("intent list")} --json\` gives its \`slug\` and
-  \`status\`). When in doubt, continue: false-positive offers are the main risk.
+  \`status\`).
 - **On genuine new-work, OFFER, never auto-create.** Surface an
   \`AskUserQuestion\` showing the active intent and the proposed new one, **including
   the scope you'd give the new intent**. Default that scope to this runner's baked
