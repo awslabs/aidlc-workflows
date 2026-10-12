@@ -6586,20 +6586,31 @@ function linuxProcessIdentity(pid: number): ProcessIdentity | null {
   }
 }
 
-function macProcessIdentity(pid: number, deadlineMs: number): ProcessIdentity | null {
+// macOS has no /proc, so one `ps` call reads the whole process table (pid,
+// parent, lstart) and a walk reads every hop from it, instead of one `ps` per
+// hop inside the same budget. The start time is the lstart string a per-pid
+// lookup prints, so the entries SessionStart recorded before still match.
+type ProcessTable = ReadonlyMap<number, ProcessIdentity>;
+
+function macProcessTable(deadlineMs: number): ProcessTable | null {
   if (process.env.AIDLC_TEST_PS_DENIED === "1") return null;
   const timeout = Math.max(1, deadlineMs - Date.now());
   if (timeout <= 1) return null;
   try {
-    const result = spawnSync("ps", ["-o", "ppid=,lstart=", "-p", String(pid)], {
+    const result = spawnSync("ps", ["-A", "-o", "pid=,ppid=,lstart="], {
       encoding: "utf-8",
       timeout,
     });
     if (result.status !== 0) return null;
-    const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(result.stdout ?? "");
-    if (!match) return null;
-    const ppid = Number.parseInt(match[1], 10);
-    return Number.isSafeInteger(ppid) ? { ppid, startTime: match[2] } : null;
+    const table = new Map<number, ProcessIdentity>();
+    for (const line of (result.stdout ?? "").split("\n")) {
+      const match = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line);
+      if (!match) continue;
+      const pid = Number.parseInt(match[1], 10);
+      const ppid = Number.parseInt(match[2], 10);
+      if (Number.isSafeInteger(pid) && Number.isSafeInteger(ppid)) table.set(pid, { ppid, startTime: match[3] });
+    }
+    return table;
   } catch {
     return null;
   }
@@ -6720,12 +6731,23 @@ function windowsParentEdge(
 }
 
 function processIdentity(pid: number, deadlineMs: number): ProcessIdentity | null {
-  if (!Number.isSafeInteger(pid) || pid <= 1 || Date.now() >= deadlineMs) return null;
+  return processIdentityReader(deadlineMs)(pid);
+}
+
+// One walk's process lookups. On macOS the first lookup reads the process
+// table and every later one in the same walk reads from it; Linux and Windows
+// read each pid directly, as cheaply as before.
+function processIdentityReader(deadlineMs: number): (pid: number) => ProcessIdentity | null {
   const platform = sessionProcessPlatform();
-  if (platform === "linux") return linuxProcessIdentity(pid);
-  if (platform === "darwin") return macProcessIdentity(pid, deadlineMs);
-  if (platform === "win32") return windowsSessionProcessIdentity(pid, deadlineMs);
-  return null;
+  let table: ProcessTable | null | undefined;
+  return (pid) => {
+    if (!Number.isSafeInteger(pid) || pid <= 1 || Date.now() >= deadlineMs) return null;
+    if (platform === "linux") return linuxProcessIdentity(pid);
+    if (platform === "win32") return windowsSessionProcessIdentity(pid, deadlineMs);
+    if (platform !== "darwin") return null;
+    if (table === undefined) table = macProcessTable(deadlineMs);
+    return table?.get(pid) ?? null;
+  };
 }
 
 function processIsAlive(pid: number): boolean {
@@ -6815,6 +6837,7 @@ function gcSessionPidEntries(
   projectDir: string,
   deadlineMs: number,
   skip: ReadonlySet<number> = new Set(),
+  readIdentity: (pid: number) => ProcessIdentity | null = processIdentityReader(deadlineMs),
 ): void {
   let names: string[];
   try {
@@ -6832,7 +6855,7 @@ function gcSessionPidEntries(
     if (!entry || !processIsAlive(pid)) {
       stale = true;
     } else if (entry.startTime !== null) {
-      const identity = processIdentity(pid, deadlineMs);
+      const identity = readIdentity(pid);
       if (identity === null) continue;
       stale = identity.startTime !== entry.startTime;
     } else {
@@ -6861,6 +6884,7 @@ export function writeSessionPidAncestry(
   if (validSessionId(sessionId) === null) return;
   const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
   const windows = sessionProcessPlatform() === "win32";
+  const readIdentity = processIdentityReader(deadline);
   let childIdentity: ProcessIdentity | null = null;
   const seen = new Set<number>();
   let pid = process.ppid;
@@ -6887,7 +6911,7 @@ export function writeSessionPidAncestry(
     writeSessionPidRecord(projectDir, pid, { sessionId: null, startTime: null });
     if (Date.now() >= deadline) break;
     if (windows && windowsEdge !== "verified") break;
-    if (!windows) identity = processIdentity(pid, deadline);
+    if (!windows) identity = readIdentity(pid);
     if (!identity) break;
     writeSessionPidEntry(projectDir, pid, sessionId, deadline, identity);
     childIdentity = identity;
@@ -6896,7 +6920,7 @@ export function writeSessionPidAncestry(
   // GC is best-effort hygiene: dead pids are reaped without spawning, a live
   // process whose identity cannot be read within the budget is left alone, and
   // visited slots, including rejected Windows edges, are never re-examined.
-  gcSessionPidEntries(projectDir, deadline, seen);
+  gcSessionPidEntries(projectDir, deadline, seen, readIdentity);
 }
 
 // Resolve the nearest mapped ancestor of the calling process. Every failure is
@@ -6946,12 +6970,13 @@ function resolveSessionIdFromAncestryUncached(projectDir: string): string | null
   const windows = sessionProcessPlatform() === "win32";
   let childIdentity = windows ? windowsSessionProcessIdentity(process.pid, deadline) : null;
   if (windows && (!childIdentity || childIdentity.ppid !== process.ppid)) return null;
+  const readIdentity = processIdentityReader(deadline);
   const seen = new Set<number>();
   let pid = process.ppid;
   for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
     if (pid <= 1 || seen.has(pid) || Date.now() >= deadline) return null;
     seen.add(pid);
-    const identity = processIdentity(pid, deadline);
+    const identity = readIdentity(pid);
     if (!identity || !processIsAlive(pid)) return null;
     // A parent PID can outlive its original owner. Do not join this walk to a
     // replacement process born after (or indistinguishably close to) its child.
