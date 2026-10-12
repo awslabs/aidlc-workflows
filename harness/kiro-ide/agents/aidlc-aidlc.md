@@ -32,11 +32,6 @@ permissions:
         - "*aidlc-init.ts*"
         - "*aidlc-lifecycle.ts*"
         - "*aidlc-machine-config.ts*"
-    - capability: shell
-      effect: deny
-      match:
-        - "rm -rf *"
-        - "git push *"
     - capability: fs_read
       effect: allow
       match:

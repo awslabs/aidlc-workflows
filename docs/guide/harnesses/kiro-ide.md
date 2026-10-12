@@ -317,9 +317,10 @@ of a workflow. It does not change which AI-DLC checkpoints stop for you.
 - **Autopilot** (switch on): file changes go through without the card. Select
   **View changes** in the chat to see what changed.
 - In both modes, Kiro asks you to **Allow** any command that the `aidlc` agent
-  does not already allow, such as your project's test command. Your own
-  commands meet no AI-DLC rule, so once you choose **Always allow** for one,
-  Kiro remembers it, redirects and chains included. AI-DLC's own commands ask
+  does not already allow, such as your project's test command, a `git push`
+  or a recursive delete. Your own commands meet no AI-DLC rule, so once you
+  choose **Always allow** for one, Kiro remembers it, redirects and chains
+  included. AI-DLC's own commands ask
   when one holds a redirect, a chain or a substitution (`>`, `&&`, `$(...)`),
   so an allowed AI-DLC command cannot be stretched into another. Kiro also asks
   before the two AI-DLC commands held back on purpose (see
