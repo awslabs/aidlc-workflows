@@ -18,6 +18,7 @@ import {
   createTestProject,
   removeWorkspaceRecord,
   runOrchestrateNext,
+  seedAidlcMemory,
 } from "../harness/fixtures.ts";
 import { getField, hooksHealthDir, planApprovalRuntimeFile } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -62,6 +63,7 @@ function state(record: string, space = "default"): string {
  */
 function workNoneSelected(): string[] {
   proj = createTestProject();
+  seedAidlcMemory(proj);
   removeWorkspaceRecord(proj);
   for (const scope of ["poc", "enterprise"]) expect(utility(["intent-create", "--scope", scope]).status).toBe(0);
   rmSync(join(intentsDir(), "active-intent"), { force: true });
@@ -143,6 +145,38 @@ describe("t-kept-setting-follows-the-pick: the work the chat picks gets what was
     expect(made.status, made.out).toBe(0);
     const created = readFileSync(join(intentsDir(), "active-intent"), "utf-8").trim();
     expect(getField(state(created), "Guards Off") ?? "").not.toContain("review-freeze");
+  });
+
+  test.each(SHAPES)("from the typed line to the pick and on, no print comes back twice, and the setting is said once: %s", (_shape, first) => {
+    const [, picked] = workNoneSelected();
+    const prints: string[] = [];
+    const seen = (step: Record<string, unknown>): void => {
+      const text = String(step.message ?? step.question ?? "");
+      expect(prints, `the same print twice: ${text.slice(0, 160)}`).not.toContain(text);
+      prints.push(text);
+    };
+    reply("/aidlc --guard.review-freeze off");
+    const setter = next(first(["--guard.review-freeze", "off"]));
+    seen(setter);
+    expect(runNamed(setter).status).toBe(0);
+    const asked = next([]);
+    seen(asked);
+    expect(asked.ask_type).toBe("intent-pick");
+    const picking = next(["--pick", picked]);
+    seen(picking);
+    const switched = runNamed(picking);
+    expect(times(switched.out, REVIEW_FREEZE_OFF), switched.out).toBe(1);
+    // The agent carries on as the pick's step says: the work's own step, the
+    // setting not said again and not handed to the setter a second time. (A
+    // further bare next while that step waits repeats the step itself.)
+    for (let call = 0; call < 2; call += 1) {
+      const after = next([]);
+      if (call === 0) seen(after);
+      const text = JSON.stringify(after);
+      expect(text).not.toContain("review freeze check is off");
+      expect(text).not.toContain("config set guard.review-freeze");
+    }
+    expect(getField(state(picked), "Guards Off") ?? "").toContain("review-freeze");
   });
 
   test("depth and sensors typed, then existing work picked: both land there, as theirs", () => {
