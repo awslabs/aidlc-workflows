@@ -475,9 +475,13 @@ A rejection resets review and run-floor accounting but never replaces that
 completion baseline: otherwise any unclaimed path present at rejection would be
 grandfathered into the next attempt. When the prior attempt has a validated
 `SWARM_SOURCE_MERGED` chain, `GATE_REJECTED` carries only its final
-`Prior Accepted Source Fingerprint`. The next attempt's first source merge must
+`Prior Accepted Source Fingerprint`, with the `Prior Accepted Source Listing`
+its landing kept when it has one. The next attempt's first source merge must
 start from that aggregate, while completion continues to compare against the
-original stage-entry baseline.
+original stage-entry baseline. With the listing, a change only to AI-DLC's own
+files since then (an AI-DLC update) does not stop that merge, and a change to
+the person's source names their files; a rejection without it is compared by
+fingerprint.
 
 There is one narrowly bounded reconciliation of the global boundary: if an
 unclaimed baseline change — addition, modification, or deletion — is fully

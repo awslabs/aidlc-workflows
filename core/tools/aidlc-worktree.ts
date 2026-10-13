@@ -2070,19 +2070,24 @@ function assertAggregateSourceBeforeMerge(
     ? undefined
     : recordedSourceListingUnderCurrentBoundary(opening.listing, current.listing);
   // An AI-DLC update the person took changed only AI-DLC's own files: nobody's source.
-  const changed = opening.source === "stage-baseline" && openingListing !== undefined
+  const changed = openingListing !== undefined
     ? sourceChangedOutsideAidlc(pd, openingListing, current.listing)
     : [];
   if (changed.length > 0) {
     if (acceptsChanges) return keepChange(opening.fingerprint, changed);
     errorWithSlug(
       slug,
-      `refusing to merge: the main checkout source changed since the stage-entry baseline (${renderChangedPaths(changed)}). ` +
+      (opening.source === "prior-accepted"
+        ? "refusing to merge: the main checkout source does not match the prior attempt's final reviewed aggregate"
+        : "refusing to merge: the main checkout source changed since the stage-entry baseline") +
+        ` (${renderChangedPaths(changed)}). ` +
         "Undo those changes and run the merge again; or, if the person wants to keep them, set Guard Policy relaxed for this piece of work with their go-ahead, then run the merge again.",
     );
   }
+  // A rejection an earlier release wrote kept no listing: compare fingerprints.
   if (
     opening.source === "prior-accepted" &&
+    openingListing === undefined &&
     !sameWorkspaceSource(opening.fingerprint, current.fingerprint)
   ) {
     if (acceptsChanges) return keepChange(opening.fingerprint, null);

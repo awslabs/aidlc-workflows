@@ -36215,10 +36215,17 @@ export function currentSwarmSourceOpeningFingerprint(
           reason: "current rejection carries malformed prior accepted source authority",
         };
       }
+      // The listing that landing kept, when it reads back exactly; rows an
+      // earlier release wrote have none and are compared by fingerprint.
+      const recorded = auditBlockField(row.block, "Prior Accepted Source Listing");
+      const listing = recorded === null
+        ? null
+        : readBaselineSourceSnapshot(projectDir, slug, recorded, intent, space);
       return {
         state: "ready",
         fingerprint: prior,
         source: "prior-accepted",
+        ...(listing === null ? {} : { listing }),
       };
     }
   }

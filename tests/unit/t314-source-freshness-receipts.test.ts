@@ -6149,6 +6149,54 @@ process.stdin.on("end", () => server.stop(true));
     expect(second.out).toContain("the main checkout source changed after the previous reviewed-source merge");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  // After Request Changes the revised Unit's landing starts from the prior
+  // attempt's last landing: the person answers at the gate, the Unit is built
+  // again, and it is finalized for the new attempt.
+  function reviseKeptUnitAfterRequestChanges(proj: string): void {
+    finalizeKeptUnit(proj);
+    const merged = mergeUnit(proj, "kept");
+    expect(merged.status, merged.out).toBe(0);
+    const rejected = guarded(proj, ["reject", "code-generation", "--feedback", "Revise the kept unit"]);
+    expect(rejected.rc, rejected.out).toBe(0);
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
+    runSwarm(proj, ["prepare", "--batch", "2", "--units", "kept", "--base", "main"]);
+    const wt = wtPath(proj, "kept");
+    writeFileSync(join(wt, "kept.ts"), "export const kept = 2;\n", "utf-8");
+    recordReview(wt, "code-generation", REVIEWER, "kept");
+    const f = runSwarm(proj, [
+      "finalize", "--batch", "2", "--units", "kept", "--claimed", "kept",
+      "--check-cmd", `"${process.execPath}" -e "require('fs').accessSync('kept.ts')"`,
+    ]);
+    expect(f.rc, f.diagnostic).toBe(0);
+  }
+
+  test("under strict, an AI-DLC update after Request Changes never stops the revised Unit's landing", () => {
+    const proj = installedProject();
+    reviseKeptUnitAfterRequestChanges(proj);
+    installSkill(proj, "AI-DLC 2\n");
+    const merged = mergeUnit(proj, "kept");
+    expect(merged.out).not.toContain("does not match the prior attempt's final reviewed aggregate");
+    expect(merged.status, merged.out).toBe(0);
+    expect(readFileSync(join(proj, "kept.ts"), "utf-8")).toBe("export const kept = 2;\n");
+    expect(readFileSync(join(proj, ".agents", "skills", "aidlc", "SKILL.md"), "utf-8")).toBe("AI-DLC 2\n");
+    expect(readAllAuditShards(proj)).toMatch(/\*\*Event\*\*: GATE_REJECTED\n(?:\*\*[^\n]*\n)*?\*\*Prior Accepted Source Listing\*\*: sha256:/);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, the person's own edit after Request Changes still stops the revised Unit's landing, named", () => {
+    const proj = installedProject();
+    reviseKeptUnitAfterRequestChanges(proj);
+    installSkill(proj, "AI-DLC 2\n");
+    writeFileSync(join(proj, "notes.ts"), "export const notes = 1;\n", "utf-8");
+    const refused = mergeUnit(proj, "kept");
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("the main checkout source does not match the prior attempt's final reviewed aggregate (notes.ts).");
+    // Undoing their own edit is enough: the update stays.
+    rmSync(join(proj, "notes.ts"));
+    const retry = mergeUnit(proj, "kept");
+    expect(retry.status, retry.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("with Guard Policy off, a changed protected test file is said, not refused", () => {
     for (const policy of ["strict", "off"]) {
       const proj = makeFixture();
