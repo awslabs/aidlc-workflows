@@ -271,13 +271,20 @@ can do:
 ### Without questions
 
 A script, CI, or a terminal without a prompt gets no wizard. Every harness
-runtime is installed, so name yours; `--yes` confirms and chooses nothing
-else (MCP stays off unless you add `--mcp defaults`):
+runtime is installed, so name yours. `--yes` confirms; it does not turn the MCP
+servers on (add `--mcp defaults` for that):
 
 ```text
 $ aidlc config --harness claude --mcp defaults --yes
 configured /home/you/ci-demo for Claude Code X.Y.Z; next: open Claude Code in this project (if it is already open in this folder, exit it and start it again) and run `/aidlc --doctor`
 ```
+
+On Kiro IDE, `--yes` also takes the recommended answer to the two questions
+setup asks there about Kiro settings for all your projects: it turns Kiro's
+Workflows feature off (while it is on, AI-DLC's reviews and helpers do not run)
+and, when Command Prompt is Kiro's terminal on Windows, sets it to PowerShell.
+To turn Workflows back on, run
+`aidlc config trust --harness kiro-ide --kiro-workflows on --yes`.
 
 Without `--harness`, it stops before writing anything:
 
