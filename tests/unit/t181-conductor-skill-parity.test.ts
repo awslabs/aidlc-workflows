@@ -1336,7 +1336,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // A live run asked "Does this all look correct" while the summary sat folded
   // inside tool output: the person must read what they confirm.
   test("the summary the person confirms is on screen with its question, on every harness", () => {
-    const protocol = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"), "utf-8");
+    const protocol = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol-summary.md"), "utf-8");
     expect(protocol).toContain(
       "The person confirms what they can read: the bullets sit in the question itself, or right above it in the same " +
         "message, as the question-rendering annex shows; never only in a tool's output or a file.",

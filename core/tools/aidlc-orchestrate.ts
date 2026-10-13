@@ -1310,8 +1310,25 @@ function nameUnitReviewModule(directive: Directive): void {
   if (modules && at >= 0 && !modules.includes("reviewer-unit")) modules.splice(at + 1, 0, "reviewer-unit");
 }
 
+// The summary confirmation and the sensor rules come with their ceremony on
+// every shape a step can take, so they are named as the step goes out.
+function nameCeremonyModules(directive: Directive): void {
+  if (directive.kind !== "run-stage") return;
+  const named: ProtocolModule[] = [];
+  // A shown-again gate, a checkpoint and settled swarm bookkeeping ask no stage questions.
+  const asks = !directive.gate_only && !directive.construction_checkpoint && !directive.swarm_checkpoint &&
+    !directive.swarm_settled;
+  if (directive.ceremony?.summary_confirmation === "on" && asks) named.push("summary");
+  if (directive.ceremony?.sensors === "on") named.push("sensors");
+  if (named.length === 0) return;
+  const modules = directive.protocol_modules ?? [];
+  for (const module of named) if (!modules.includes(module)) modules.push(module);
+  directive.protocol_modules = modules;
+}
+
 function prepareEmission(directive: Directive): PreparedEmission {
   nameUnitReviewModule(directive);
+  nameCeremonyModules(directive);
   const requested = directive;
   // Read before the notices below can copy the directive. A guard-recovery
   // ask whose ways on are the conductor's own work (agent_work) is no question
@@ -10909,6 +10926,7 @@ function tryEmitSwarm(
     "loopback",
     "swarm",
   ];
+  if (ceremonyPolicyValues(scope, stateContent).sensors === "on") protocolModules.push("sensors");
   const resumeExisting = stateContent !== null && checkpointPolicyEnabled(stateContent) &&
     swarmRevisionNeedsPreparation(projectDir, slug, pendingBatch, pendingUnits);
   if (repos.length === 1) {

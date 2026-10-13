@@ -21,7 +21,7 @@ map to the static protocol or the named conditional module.
 
 ## Protocol File Structure
 
-The stage protocol is split across fourteen files, loaded conditionally by the
+The stage protocol is split across sixteen files, loaded conditionally by the
 conductor based on workflow context:
 
 | File | Contents | When Loaded |
@@ -39,6 +39,8 @@ conductor based on workflow context:
 | `stage-protocol-checkpoint.md` | Unit and skeleton checkpoint verification and approval, and the verification command every checkpoint uses | When `directive.protocol_modules` lists `checkpoint`: a checkpoint step and every invoke-swarm |
 | `stage-protocol-loopback.md` | Build-and-Test failure loop-back | When `directive.protocol_modules` lists `loopback`: every Code Generation and Build and Test step and every invoke-swarm |
 | `stage-protocol-wave.md` | Per-unit batch waves | When `directive.protocol_modules` lists `wave`: a step that carries `directive.wave` |
+| `stage-protocol-summary.md` | The consolidated summary confirmation before generation | When `directive.protocol_modules` lists `summary`: the step asks for the summary confirmation |
+| `stage-protocol-sensors.md` | Sensor imports and a blocking gate sensor at the approval gate | When `directive.protocol_modules` lists `sensors`: Sensors are on, and every invoke-swarm under them |
 | `stage-protocol-swarm.md` | Harness-specific autonomous fan-out, the autonomous Code Generation plan contract (§12b), the batch checkpoint, convergence, finalize, and reviewer boundary | Every invoke-swarm |
 
 ### Conditional Loading Logic (from SKILL.md Routing)
@@ -68,6 +70,9 @@ The conductor's Routing section defines the loading rules:
   when `protocol_modules` names `checkpoint`, `loopback`, `wave`, or
   `collaborators`. The engine names each only on the steps that take that
   branch, so the other steps never read them.
+- **`stage-protocol-summary.md`** and **`stage-protocol-sensors.md`**: load when
+  `protocol_modules` names `summary` or `sensors`, which the engine does while
+  that ceremony is on.
 - **`stage-protocol-swarm.md`**: load for invoke-swarm.
 
 Before running the stage body, the conductor reads every module named by
