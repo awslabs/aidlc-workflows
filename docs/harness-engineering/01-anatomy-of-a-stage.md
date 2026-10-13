@@ -63,7 +63,7 @@ One boundary worth internalizing: a stage file is a framework artifact, immutabl
 
 ## consumes and produces from the graph
 
-The dependency graph isn't written anywhere directly: it emerges from the `consumes` and `produces` declarations across every stage. A stage's `produces` list is its forward edges: when another stage asks "who produces `scope-document`?", the answer is whichever stage declares it. A stage's `consumes` list is its backward edges: a `required` artifact must be there when its producer runs in this plan, and an optional one is read when it is there (the plan-scoped rule above).
+The dependency graph isn't written anywhere directly: it emerges from the `consumes` and `produces` declarations across every stage. A stage's `produces` list is its forward edges: when another stage asks "who produces `scope-document`?", the answer is whichever stage declares it. A stage's `consumes` list is its backward edges: a `required` artifact must exist when this stage runs if its producer is in this plan, and an optional one is read when it is there (the plan-scoped rule above).
 
 `requires_stage` makes the dependency explicit and also encodes pure ordering. It carries two roles:
 

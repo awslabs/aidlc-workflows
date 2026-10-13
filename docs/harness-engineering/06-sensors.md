@@ -118,10 +118,11 @@ When the graph compiles, the resolver walks `.claude/sensors/`, indexes every
 manifest by id, and for each stage looks up each declared import, throwing
 loudly at compile time if an id has no manifest, rather than failing silently
 when the stage runs. Which sensors a stage imports is baked onto its graph
-node. The manifest itself is read again each time a sensor fires, so a changed
-`matches`, `command` or `timeout_seconds` applies from the next fire, while a
-new import waits for the next compile. Recompile after any sensor edit for
-predictable behaviour. On a native install the six shipped sensors' workers are
+node, and so is each manifest's `matches`, which the write hook uses to decide
+whether a sensor fires. The dispatcher reads the manifest again each time a
+sensor fires, so a changed `command` or `timeout_seconds` applies from the next
+fire, while a changed `matches` and a new import wait for the next compile.
+Recompile after any sensor edit for predictable behaviour. On a native install the six shipped sensors' workers are
 picked by id, so editing a shipped manifest's `command` runs nothing different;
 a different check needs its own id. The
 full resolver mechanics are in

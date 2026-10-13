@@ -251,10 +251,16 @@ $ aidlc engine graph producers glossary
 glossary-capture
 ```
 
-It lands at the end of Inception, not right after Requirements Analysis: its
-only edge is `requires_stage: [requirements-analysis]`, and nothing orders it
-before User Stories. That is the presentation-order edge from step 3 at work;
-to place it earlier, a later stage would name it in its own `requires_stage`.
+It lands at the end of Inception, not right after Requirements Analysis: a new
+stage takes the next free number in its phase, after the stages already there,
+and no existing stage is renumbered. An edge from an earlier stage to the new
+one is refused at compile; with `glossary-capture` added to User Stories'
+`requires_stage`, the same tree prints (its long dash shown as `-`):
+
+```text
+$ aidlc engine graph compile
+aidlc-graph compile: Compile invariant violated: stage "user-stories" (2.4) requires "glossary-capture" (2.10) - dependency must be lower-numbered. Fix: either renumber in stage-graph.json to match the dependency direction, or remove the offending requires_stage edge.
+```
 
 A brand-new stage does **not** automatically run in any scope. Scope
 membership now lives on the stage itself: its frontmatter `scopes:` list names
