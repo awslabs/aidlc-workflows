@@ -1178,7 +1178,12 @@ function prepareEmission(directive: Directive): PreparedEmission {
   ) {
     directive.mode = "inline";
     const unit = directive.unit !== undefined && directive.unit !== UNIT_NAME_PLACEHOLDER ? ` for ${directive.unit}` : "";
-    directive.narration = `Writing the code plan for Code Generation${unit} first; the developer builds from it.`;
+    // On a plan with no Units this line is the stage's start, so it says which
+    // stage of how many, as every other stage start does.
+    const projectDir = unit ? undefined : emissionProjectDir(directive);
+    const state = projectDir ? loadStateFileIfPresent(projectDir) : null;
+    const count = state ? stageOfPlan("code-generation", getField(state, "Scope")?.trim() ?? "", state) : "";
+    directive.narration = `Writing the code plan for Code Generation${unit}${count} first; the developer builds from it.`;
   }
   if (activeKeptRequestLine !== null) {
     directive.narration = directive.narration
@@ -2241,7 +2246,7 @@ function narrateStageEntry(
   gate: GateValue,
   stateContent: string | null,
 ): string {
-  const stageName = node.name;
+  const stageName = `${node.name}${stageOfPlan(node.slug, scope, stateContent)}`;
   if (isFirst) {
     // Said again wherever the work is picked up, by someone who may not have
     // approved it, so it names the plan, not who approved it.
@@ -2303,11 +2308,12 @@ function peopleClause(node: GraphStage, scope: string, stateContent: string | nu
 
 // A dispatched stage hands the work to a named specialist. The user cares that
 // someone with a particular focus is doing it, not that a Task call happened.
-function narrateSpecialistStage(node: GraphStage): string {
+function narrateSpecialistStage(node: GraphStage, scope: string, stateContent: string | null): string {
   const role = roleInWords(node.lead_agent);
+  const stageName = `${node.name}${stageOfPlan(node.slug, scope, stateContent)}`;
   return role
-    ? `Bringing in the ${role} to work on ${node.name}.`
-    : `Now working on ${node.name}.`;
+    ? `Bringing in the ${role} to work on ${stageName}.`
+    : `Now working on ${stageName}.`;
 }
 
 // The spoken line for ONE iteration of a per-unit Construction stage. Called
@@ -6996,7 +7002,7 @@ function buildRunStageDirective(
   // iteration beat, because callers set `unit` after this builder returns.
   directive.narration =
     node.mode === "subagent" || node.mode === "pipeline"
-      ? narrateSpecialistStage(node)
+      ? narrateSpecialistStage(node, scope, stateContent)
       : narrateStageEntry(node, scope, firstOfWorkflow, directive.gate, stateContent);
   if (codekbCtx) {
     runStageRoutes.set(directive, {
@@ -15480,15 +15486,31 @@ function approvalProgressLine(stateContent: string, approvedSlug: string, scope:
   if (!approved || approved.phase === "initialization" || !next) return null;
   const boxes = parseCheckboxes(stateContent);
   const finished = (slug: string) => checkboxStateOf(boxes, slug) === "completed";
-  const runs = (slug: string) =>
-    finished(slug) ||
-    (checkboxStateOf(boxes, slug) !== "skipped" && effectivePlanAction(slug, scope, stateContent) === "EXECUTE");
-  const planned = graph.filter((stage) => stage.phase !== "initialization" && runs(stage.slug));
+  const planned = plannedStages(stateContent, scope);
   const inPhase = planned.filter((stage) => stage.phase === approved.phase);
   const overall = `${graph.filter((stage) => finished(stage.slug)).length}/${graph.length}`;
   const phase = `${inPhase.filter((stage) => finished(stage.slug)).length}/${inPhase.length} ${approved.phase.toUpperCase()}`;
   return `Progress: ${planned.filter((stage) => finished(stage.slug)).length}/${planned.length} in-scope stages complete ` +
     `(${overall} overall) | ${phase}. Next: ${next.name}`;
+}
+
+// The stages the plan runs after Initialization, in run order: every one that
+// finished, and every one not skipped that the plan executes. The progress line
+// and each stage's start line count from this one list.
+function plannedStages(stateContent: string, scope: string): GraphStage[] {
+  const boxes = parseCheckboxes(stateContent);
+  const runs = (slug: string) =>
+    checkboxStateOf(boxes, slug) === "completed" ||
+    (checkboxStateOf(boxes, slug) !== "skipped" && effectivePlanAction(slug, scope, stateContent) === "EXECUTE");
+  return loadGraph().filter((stage) => stage.enabled !== false && stage.phase !== "initialization" && runs(stage.slug));
+}
+
+// " (stage 3 of 9)" for a stage the plan runs, "" for one it does not.
+function stageOfPlan(slug: string, scope: string, stateContent: string | null): string {
+  if (!stateContent) return "";
+  const planned = plannedStages(stateContent, scope);
+  const at = planned.findIndex((stage) => stage.slug === slug);
+  return at < 0 ? "" : ` (stage ${at + 1} of ${planned.length})`;
 }
 
 function workflowContinues(pd: string): { workflow_continues?: true } {

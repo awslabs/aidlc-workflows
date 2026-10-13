@@ -488,7 +488,7 @@ describe("the engine asks for Plan Approval", () => {
     // stage's dispatched mode and handed the plan to the developer, which the
     // guard refused), and the person hears who does what.
     expect(planning.mode).toBe("inline");
-    expect(planning.narration).toBe("Writing the code plan for Code Generation first; the developer builds from it.");
+    expect(planning.narration).toBe("Writing the code plan for Code Generation (stage 21 of 30) first; the developer builds from it.");
 
     const ask = askFor(proj);
     expect(ask.question).toBe("Approve the code plan?");
