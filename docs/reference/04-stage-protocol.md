@@ -21,7 +21,7 @@ map to the static protocol or the named conditional module.
 
 ## Protocol File Structure
 
-The stage protocol is split across eight files, loaded conditionally by the
+The stage protocol is split across twelve files, loaded conditionally by the
 conductor based on workflow context:
 
 | File | Contents | When Loaded |
@@ -31,9 +31,13 @@ conductor based on workflow context:
 | `stage-protocol-governance.md` | Phase Boundary Verification (§13) | At phase boundaries (1.7->2.1, 2.9->3.1, 3.7->4.1) |
 | `stage-protocol-learnings.md` | §13 diary, surfacing, human learning question, admission check, and persistence | Only when `directive.protocol_modules` lists `learnings` |
 | `stage-protocol-reviewer.md` | Reviewer dispatch, receipts, read scope, terminal ordering, and NOT-READY loop | When the directive names an effective reviewer |
-| `stage-protocol-ensemble.md` | Ensemble topology, subagent returns, contribution files, and objection triage | For subagent, pipeline, mob, or support-agent stages |
-| `stage-protocol-construction.md` | Planned Bolt-major ceremony (labeled non-executable future-state), the shipped per-unit walk, Build-and-Test loop-back, receipts, and waves | On the first Construction directive of the session and every invoke-swarm |
-| `stage-protocol-swarm.md` | Harness-specific autonomous fan-out, convergence, finalize, and reviewer boundary | Every invoke-swarm |
+| `stage-protocol-ensemble.md` | Ensemble topology and subagent returns | For subagent, pipeline, mob, or support-agent stages |
+| `stage-protocol-collaborators.md` | Contribution files, mob rounds, and objection triage | When `directive.protocol_modules` lists `collaborators`: a stage that dispatches support agents |
+| `stage-protocol-construction.md` | Construction routing, policy changes, the autonomy choice, halt-and-ask, the shipped per-unit walk, receipts, team-owned Units, and Grouped Plan Approval | On the first Construction directive of the session and every invoke-swarm |
+| `stage-protocol-checkpoint.md` | Unit and skeleton checkpoint verification and approval, and the verification command every checkpoint uses | When `directive.protocol_modules` lists `checkpoint`: a checkpoint step and every invoke-swarm |
+| `stage-protocol-loopback.md` | Build-and-Test failure loop-back | When `directive.protocol_modules` lists `loopback`: every Code Generation and Build and Test step and every invoke-swarm |
+| `stage-protocol-wave.md` | Per-unit batch waves | When `directive.protocol_modules` lists `wave`: a step that carries `directive.wave` |
+| `stage-protocol-swarm.md` | Harness-specific autonomous fan-out, the autonomous Code Generation plan contract (§12b), the batch checkpoint, convergence, finalize, and reviewer boundary | Every invoke-swarm |
 
 ### Conditional Loading Logic (from SKILL.md Routing)
 
@@ -55,6 +59,11 @@ The conductor's Routing section defines the loading rules:
   `ensemble`; the fallback trigger is a dispatched topology or support agents.
 - **`stage-protocol-construction.md`**: load on the first Construction
   directive of the session and every invoke-swarm.
+- **`stage-protocol-checkpoint.md`**, **`stage-protocol-loopback.md`**,
+  **`stage-protocol-wave.md`**, and **`stage-protocol-collaborators.md`**: load
+  when `protocol_modules` names `checkpoint`, `loopback`, `wave`, or
+  `collaborators`. The engine names each only on the steps that take that
+  branch, so the other steps never read them.
 - **`stage-protocol-swarm.md`**: load for invoke-swarm.
 
 Before running the stage body, the conductor reads every module named by
@@ -173,8 +182,8 @@ turn for that reply.
 **No Emergent Behavior Rule:** Construction and Operation stages (phases 3-4)
 must always use this 2-option format. They must never introduce additional
 navigation options. Two sanctioned carve-outs exist: the revision escape
-hatch (below) and the Build-and-Test failure loop-back in the construction
-protocol module (`aidlc-common/protocols/stage-protocol-construction.md`,
+hatch (below) and the Build-and-Test failure loop-back in the loop-back
+protocol module (`aidlc-common/protocols/stage-protocol-loopback.md`,
 "Build-and-Test failure loop-back" -- the bounded 3.6 to 3.5 repair loop with
 its impact-estimated halt-and-ask question).
 

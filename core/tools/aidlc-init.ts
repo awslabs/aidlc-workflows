@@ -145,7 +145,7 @@ import {
 } from "./aidlc-lib.ts";
 import { cutPluginFragment, editTomlInstructions, personaTwinRels } from "./aidlc-plugin.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
-import { KIRO_IDE_STEERING, kiroIdeSteering } from "./aidlc-includes.ts";
+import { KIRO_IDE_STEERING, kiroIdeSteering, refreshActiveMemory } from "./aidlc-includes.ts";
 import {
   activeWorkflowPluginDependencies,
   canonicalScopeTableRegion,
@@ -2616,23 +2616,23 @@ let configTargetHarnessDir: string | null = null;
 // tool (a runtime unpacked elsewhere, which may be adding a harness the project
 // does not have yet) is named by its own path, unless it is the one under the
 // working directory. In the source tree the project's own tool of the harness
-// being set up stands in.
+// being set up stands in. A newer release's config that an older copied tool
+// handed its refresh to names the tool the person ran.
 function configInvocationFor(projectDir = process.cwd()): string {
   const invocation = aidlcInvocation();
   if (invocation === "aidlc") return invocation;
-  const ran = projectedDispatcher();
-  // A projection's relative invocation names the harness directory it was
-  // built for, whatever the environment says the harness is.
+  const ran = process.env.AIDLC_CONFIG_HANDOFF || projectedDispatcher();
+  // A tool's relative invocation names the harness directory it lives in,
+  // whatever the environment says the harness is.
   const harnessDir = ran === null
     ? configTargetHarnessDir ?? runtimeHarnessDir()
     : basename(dirname(dirname(ran)));
+  const own = `bun ${harnessDir}/tools/aidlc.ts`;
   const toolIn = (root: string) => join(root, harnessDir, "tools", "aidlc.ts");
   if (ran === null || sameFile(ran, toolIn(projectDir))) {
-    return ranFromProject(projectDir)
-      ? ran === null ? `bun ${harnessDir}/tools/aidlc.ts` : invocation
-      : `bun ${quoteCommandArgument(toolIn(projectDir))}`;
+    return ranFromProject(projectDir) ? own : `bun ${quoteCommandArgument(toolIn(projectDir))}`;
   }
-  return sameFile(ran, toolIn(process.cwd())) ? invocation : `bun ${quoteCommandArgument(ran)}`;
+  return sameFile(ran, toolIn(process.cwd())) ? own : `bun ${quoteCommandArgument(ran)}`;
 }
 
 // The command the user ran, printed again with the flags that resolve it, so
@@ -12482,6 +12482,37 @@ export async function main(
       recordOnly = false;
     }
     if (!selected) throw new Error("no configuration source was selected");
+    // A copied project's tool refreshing from a newer release's files hands the
+    // run to that release's own config, since an older tool may not read them:
+    // the person's command as typed, in the same project, with the download they
+    // agreed to. Sections may have asked their own questions already, so they
+    // stay here; a handed run never hands on.
+    const ranTool = projectedDispatcher();
+    const newerTool = join(selected.root, selected.descriptor.harnessDir, "tools", "aidlc.ts");
+    if (
+      copyChannel && ranTool && !section && (from || downloadCleanup) &&
+      process.env.AIDLC_CONFIG_HANDOFF === undefined &&
+      (requiredVersion === undefined || requiredVersion === selected.stamp.frameworkVersion) &&
+      VERSION_ID.test(selected.stamp.frameworkVersion) &&
+      compareVersions(AIDLC_VERSION, selected.stamp.frameworkVersion) < 0 &&
+      regularFile(newerTool)
+    ) {
+      if (options.mode === "human") {
+        process.stdout.write(
+          `  Note: ${selected.stamp.frameworkVersion}'s own config runs this refresh; the tool you ran is ${AIDLC_VERSION}.\n`,
+        );
+      }
+      const args = stripVerb([...input]);
+      if (downloadCleanup && !args.includes("--download")) args.push("--download");
+      const handed = spawnSync(process.execPath, [newerTool, "config", ...args], {
+        cwd: process.cwd(),
+        env: { ...process.env, AIDLC_CONFIG_HANDOFF: ranTool, AIDLC_PROJECT_DIR: projectDir },
+        stdio: "inherit",
+      });
+      if (handed.error) throw handed.error;
+      process.exitCode = handed.status ?? EXIT.failure;
+      return;
+    }
     if (selected.note) sourceNotes.push(selected.note);
     if (pendingConfirm && !askedConfirm) {
       const first = [
@@ -13140,6 +13171,17 @@ export async function main(
       );
     } else {
       executeSettingsAndProjectMutation(settingsMutation, plan);
+    }
+    // The copy of the active space's memory that the harness includes read is
+    // written now, before a chat loads them, so the first chat holds the rules
+    // it loaded and is not handed them again on every step (#1330). Best-effort,
+    // as at every session start, which writes it otherwise.
+    if (!recordOnly) {
+      try {
+        refreshActiveMemory(projectDir);
+      } catch {
+        // The first session start writes it.
+      }
     }
     // Said as soon as it is done, so no later step can leave it unsaid.
     if (options.mode === "human") {

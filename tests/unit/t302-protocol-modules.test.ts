@@ -7,7 +7,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -33,6 +33,10 @@ const MODULES = [
   "ensemble",
   "construction",
   "learnings",
+  "checkpoint",
+  "loopback",
+  "wave",
+  "collaborators",
 ] as const;
 
 let project = "";
@@ -335,7 +339,7 @@ describe("t302 conditional protocol modules", () => {
   // the next test pins, so this is the scope's own word rather than a global.
   test("express code-generation omits reviewer and the learnings ritual", () => {
     const modules = moduleList(directiveFor("code-generation", "express"));
-    expect(modules).toEqual(["ensemble", "construction"]);
+    expect(modules).toEqual(["ensemble", "construction", "loopback"]);
     expect(modules).not.toContain("reviewer");
     expect(modules).not.toContain("learnings");
   });
@@ -346,9 +350,9 @@ describe("t302 conditional protocol modules", () => {
     expect(directive.review_class).toBe("advisory");
   });
 
-  test("classic code-generation lists the reviewer, ensemble, construction, and learnings", () => {
+  test("classic code-generation lists the reviewer, ensemble, construction, loopback, and learnings", () => {
     const directive = directiveFor("code-generation", "classic");
-    expect(moduleList(directive)).toEqual(["reviewer", "ensemble", "construction", "learnings"]);
+    expect(moduleList(directive)).toEqual(["reviewer", "ensemble", "construction", "loopback", "learnings"]);
     expect(directive.review_class).toBe("advisory");
   });
 
@@ -365,12 +369,32 @@ describe("t302 conditional protocol modules", () => {
     });
   });
 
-  test("invoke-swarm lists reviewer, construction, and swarm modules", () => {
+  test("invoke-swarm lists reviewer, construction, checkpoint, loopback, and swarm modules", () => {
     expect(moduleList(swarmDirective())).toEqual([
       "reviewer",
       "construction",
+      "checkpoint",
+      "loopback",
       "swarm",
     ]);
+  });
+
+  // A step reads only the Construction branches it can take: the checkpoint
+  // module comes with a checkpoint, the loop-back with Code Generation and
+  // Build and Test, the contribution rules with dispatched support agents.
+  test("build-and-test lists loopback; an inline design stage lists no branch module", () => {
+    expect(moduleList(directiveFor("build-and-test", "classic"))).toEqual(["construction", "loopback", "learnings"]);
+    const design = moduleList(directiveFor("functional-design", "classic"));
+    expect(design).toContain("construction");
+    for (const module of ["checkpoint", "loopback", "wave", "collaborators"]) expect(design).not.toContain(module);
+  });
+
+  test("collaborators comes only with support agents a stage dispatches", () => {
+    expect(moduleList(directiveFor("practices-discovery", "classic"))).toEqual(["ensemble", "learnings"]);
+    expect(moduleList(directiveFor("practices-discovery", "enterprise"))).toContain("collaborators");
+    expect(moduleList(directiveFor("user-stories", "enterprise"))).toContain("collaborators");
+    expect(moduleList(directiveFor("reverse-engineering", "enterprise"))).toContain("collaborators");
+    expect(moduleList(directiveFor("reverse-engineering", "classic"))).not.toContain("collaborators");
   });
 });
 
@@ -390,5 +414,29 @@ describe("t302 learnings: keeping no note is a pick", () => {
         "beside other picks the notes picked are kept.",
     );
     expect(learnings).not.toMatch(/[Ll]eave (them )?all unticked/);
+  });
+});
+
+// Each branch's text lives in the one module the engine names for it, in core
+// and in every shipped tree, so a step that names the module gets it and a
+// step that does not reads none of it.
+describe("t302 construction branches live in their own modules", () => {
+  const MOVED: Array<[string, string]> = [
+    ["checkpoint", "### Checkpoint verification and approval"],
+    ["loopback", "### Build-and-Test failure loop-back (3.6 \u2192 3.5)"],
+    ["wave", "**Per-unit batch waves (optional, stage-major only).**"],
+    ["swarm", "### 12b. Autonomous Code Generation Plan Contract"],
+    ["collaborators", "### Collaborator contribution files (ensemble topologies)"],
+  ];
+  const roots = [join(REPO_ROOT, "core"), ...HARNESS_MATRIX.map((harness) => harness.engineRoot)];
+  test.each(roots)("each moved section is in exactly one protocol file under %s", (root) => {
+    const dir = join(root, "aidlc-common", "protocols");
+    const files = readdirSync(dir).filter((file) => file.endsWith(".md"));
+    for (const [module, heading] of MOVED) {
+      const holders = files.filter((file) => readFileSync(join(dir, file), "utf-8").includes(heading));
+      expect(holders, heading).toEqual([`stage-protocol-${module}.md`]);
+    }
+    const construction = readFileSync(join(dir, "stage-protocol-construction.md"), "utf-8");
+    expect(construction).not.toContain("Non-executable future-state");
   });
 });

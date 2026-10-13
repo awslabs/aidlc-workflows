@@ -1,4 +1,4 @@
-// covers: doc:aidlc-common/protocols/stage-protocol.md, doc:aidlc-common/protocols/stage-protocol-construction.md, doc:aidlc-common/protocols/stage-protocol-recovery.md, file:aidlc-common/stages/construction/build-and-test.md, file:aidlc-common/stages/construction/code-generation.md
+// covers: doc:aidlc-common/protocols/stage-protocol.md, doc:aidlc-common/protocols/stage-protocol-construction.md, doc:aidlc-common/protocols/stage-protocol-loopback.md, doc:aidlc-common/protocols/stage-protocol-recovery.md, file:aidlc-common/stages/construction/build-and-test.md, file:aidlc-common/stages/construction/code-generation.md
 //
 // t305 — Build-and-Test failure loop-back PROSE-PIN (issue #611). t34-style:
 // mechanism = none. Every assertion is readFileSync + a string / regex check
@@ -12,8 +12,8 @@
 //      — Step 9's 4-rung failure-escalation ladder, the `## Loop-Back Log`
 //      artifact shape, and the single-stage (--single) carve-out.
 //   2. dist/claude/.claude/aidlc-common/protocols/
-//      stage-protocol-construction.md — the loop-back subsection as a sibling
-//      of "Halt-and-ask on failure", including the ledger, engine-routed jump,
+//      stage-protocol-loopback.md: the loop-back module the engine names on
+//      Code Generation and Build and Test, including the ledger, engine-routed jump,
 //      settlement paths, swarm path, question variants, and second
 //      autonomous-stop case.
 //   3. dist/claude/.claude/aidlc-common/protocols/stage-protocol.md — the
@@ -56,6 +56,10 @@ const AUTHORED_CONSTRUCTION_PROTOCOL = readFileSync(
     "protocols",
     "stage-protocol-construction.md",
   ),
+  "utf-8",
+);
+const LOOPBACK_PROTOCOL = readFileSync(
+  join(AIDLC_SRC, "aidlc-common", "protocols", "stage-protocol-loopback.md"),
   "utf-8",
 );
 const RECOVERY = readFileSync(
@@ -108,7 +112,7 @@ describe("t305 build-and-test.md — Step 9 failure-escalation ladder", () => {
     expect(STAGE).toContain("`Construction Autonomy Mode:\n   autonomous` (in aidlc-state.md)");
     expect(STAGE).toContain("an impact-estimated fix exists, and fewer than\n   3 entries exist under `## Loop-Back Log` in test-results.md");
     expect(STAGE).toContain(
-      "construction protocol module\n   (`aidlc-common/protocols/stage-protocol-construction.md`)",
+      "loop-back protocol module\n   (`aidlc-common/protocols/stage-protocol-loopback.md`)",
     );
     expect(STAGE).toContain(
       "approval gate on the failed run.",
@@ -173,68 +177,65 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
   });
 
   test('the "### Build-and-Test failure loop-back (3.6 → 3.5)" heading exists (anchored H3)', () => {
-    expect(/^### Build-and-Test failure loop-back \(3\.6 → 3\.5\)$/m.test(CONSTRUCTION_PROTOCOL)).toBe(true);
+    expect(/^### Build-and-Test failure loop-back \(3\.6 → 3\.5\)$/m.test(LOOPBACK_PROTOCOL)).toBe(true);
   });
 
-  test("the subsection is a SIBLING of the Construction Halt-and-ask block", () => {
-    const haltIdx = CONSTRUCTION_PROTOCOL.indexOf("**Halt-and-ask on failure**");
-    const loopIdx = CONSTRUCTION_PROTOCOL.indexOf("### Build-and-Test failure loop-back (3.6 → 3.5)");
-    const nextSectionIdx = CONSTRUCTION_PROTOCOL.indexOf("\n---\n", loopIdx);
-    expect(haltIdx).toBeGreaterThan(-1);
-    expect(loopIdx).toBeGreaterThan(haltIdx);
-    expect(nextSectionIdx).toBeGreaterThan(loopIdx);
+  test("the loop-back is its own module; the Construction halt-and-ask stays in the construction module", () => {
+    expect(CONSTRUCTION_PROTOCOL).toContain("**Halt-and-ask on failure**");
+    expect(CONSTRUCTION_PROTOCOL).not.toContain("### Build-and-Test failure loop-back (3.6 → 3.5)");
+    expect(LOOPBACK_PROTOCOL.startsWith("# Loop-back Protocol Module\n")).toBe(true);
   });
 
   test("sanctioned-exception sentence on the NO EMERGENT BEHAVIOR RULE paragraph", () => {
     expect(MAIN_PROTOCOL).toContain(
-      "Two sanctioned carve-outs exist: the revision loop escape hatch (below) and the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`).",
+      "Two sanctioned carve-outs exist: the revision loop escape hatch (below) and the Build-and-Test failure loop-back in the loop-back protocol module (`aidlc-common/protocols/stage-protocol-loopback.md`).",
     );
   });
 
 
   test("ledger paragraph: artifact ledger beats counting STAGE_JUMPED rows", () => {
-    expect(CONSTRUCTION_PROTOCOL).toContain("the count of `### Loop-back N` entries IS the bound (max 3 per intent)");
-    expect(CONSTRUCTION_PROTOCOL).toContain("survives the backward jump (jumps reset checkboxes, never artifacts)");
-    expect(CONSTRUCTION_PROTOCOL).toContain("colocated with the diagnosis");
-    expect(CONSTRUCTION_PROTOCOL).toContain("readable at the\nfinal gate");
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain("the count of `### Loop-back N` entries IS the bound (max 3 per intent)");
+    expect(LOOPBACK_PROTOCOL).toContain("survives the backward jump (jumps reset checkboxes, never artifacts)");
+    expect(LOOPBACK_PROTOCOL).toContain("colocated with the diagnosis");
+    expect(LOOPBACK_PROTOCOL).toContain("readable at the\nfinal gate");
+    expect(LOOPBACK_PROTOCOL).toContain(
       "the rows the jump tool emits (a `STAGE_JUMPED` for every unit, a\nunit-tagged `GATE_REJECTED` per reopened unit) remain the\ndeterministic audit cross-check",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain("The log is append-only.");
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain("The log is append-only.");
+    expect(LOOPBACK_PROTOCOL).toContain(
       "A human-directed\nbackward jump does not count against the bound",
     );
   });
 
   test("autonomous procedure routes the jump through the ENGINE, not a hand-composed execute", () => {
     // Step 2 names the engine invocation, for each unit the diagnosis names,
-    expect(CONSTRUCTION_PROTOCOL).toContain("tools/aidlc-orchestrate.ts next --stage\n   code-generation --unit <unit>`");
+    expect(LOOPBACK_PROTOCOL).toContain("tools/aidlc-orchestrate.ts next --stage\n   code-generation --unit <unit>`");
     // which answers with the validated reopen print the conductor runs verbatim.
-    expect(CONSTRUCTION_PROTOCOL).toContain("run the command its `print` directive\n   names verbatim");
-    expect(CONSTRUCTION_PROTOCOL).toContain("`aidlc-jump.ts reopen --target\n   code-generation ... --units <unit>`");
+    expect(LOOPBACK_PROTOCOL).toContain("run the command its `print` directive\n   names verbatim");
+    expect(LOOPBACK_PROTOCOL).toContain("`aidlc-jump.ts reopen --target\n   code-generation ... --units <unit>`");
     // Only a cause that spans every unit takes the stage-wide jump, and stage
     // by stage it is taken at once, with no question.
-    expect(CONSTRUCTION_PROTOCOL).toContain("Only for a cause that spans every\n   unit, or names none, run `next --stage code-generation` instead");
-    expect(CONSTRUCTION_PROTOCOL).toContain("`unit-major`), one unit cannot be reopened alone: run that\n   `next --stage code-generation` at once, without asking");
-    expect(CONSTRUCTION_PROTOCOL).toContain("`aidlc-jump.ts execute --target code-generation --direction backward\n   --scope <scope>`");
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain("Only for a cause that spans every\n   unit, or names none, run `next --stage code-generation` instead");
+    expect(LOOPBACK_PROTOCOL).toContain("`unit-major`), one unit cannot be reopened alone: run that\n   `next --stage code-generation` at once, without asking");
+    expect(LOOPBACK_PROTOCOL).toContain("`aidlc-jump.ts execute --target code-generation --direction backward\n   --scope <scope>`");
+    expect(LOOPBACK_PROTOCOL).toContain(
       "Never compose the `reopen` or `execute` call by hand: the engine's print\n   is the validated form.",
     );
   });
 
   test("procedure step 1 appends the ledger entry AND a Deviations note in memory.md", () => {
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "Append the `### Loop-back N — <ISO timestamp>` entry (Diagnosis /\n   Root-cause stage / Planned fix / Estimated impact) to test-results.md and a matching\n   Deviations entry to this stage's memory.md.",
     );
   });
 
   test("replay retains the grant and follows current checkpoint policy without inventing a human answer", () => {
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "`Construction Autonomy Mode: autonomous` grant is unchanged by the jump",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain("completion follows the current checkpoint/policy directive");
-    expect(CONSTRUCTION_PROTOCOL).toContain("completion omits `--user-input`");
-    expect(CONSTRUCTION_PROTOCOL).toContain("Fresh Plan Approval is still mandatory");
+    expect(LOOPBACK_PROTOCOL).toContain("completion follows the current checkpoint/policy directive");
+    expect(LOOPBACK_PROTOCOL).toContain("completion omits `--user-input`");
+    expect(LOOPBACK_PROTOCOL).toContain("Fresh Plan Approval is still mandatory");
   });
 
   test("plan approval is re-minted for the replay's new stage attempt", () => {
@@ -242,16 +243,16 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     // approval. It is not the re-issued directive: the engine re-issues directives
     // constantly, and treating each one as a new decision point is what made an
     // approval impossible to keep.
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "The jump opens a new stage attempt",
     );
     // The engine asks again: nothing for the conductor to blank or re-mint.
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "after the repaired plan is written, `next` asks the\nperson for Plan Approval again before generation",
     );
-    expect(CONSTRUCTION_PROTOCOL).not.toContain("regenerate the target-bound fingerprint");
+    expect(LOOPBACK_PROTOCOL).not.toContain("regenerate the target-bound fingerprint");
     expect(CODE_GENERATION).toContain(
-      "**Build-and-Test loop-back:** The construction protocol module",
+      "**Build-and-Test loop-back:** The loop-back protocol module",
     );
     expect(CODE_GENERATION).toContain(
       "`next` asks for Plan Approval again under\n> the replayed directive",
@@ -259,11 +260,11 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     expect(CODE_GENERATION).not.toContain("decision/human-turn/answer receipt");
   });
 
-  test("cross-file references point to the conditional Construction module", () => {
+  test("cross-file references point to the conditional loop-back module", () => {
     const modulePath =
-      "aidlc-common/protocols/stage-protocol-construction.md";
+      "aidlc-common/protocols/stage-protocol-loopback.md";
     expect(MAIN_PROTOCOL).toContain(modulePath);
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "### Build-and-Test failure loop-back (3.6 → 3.5)",
     );
     expect(STAGE).toContain(modulePath);
@@ -276,60 +277,60 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
   });
 
   test("replay ends with Modify at build-and-test's own re-use prompt + fresh Step 9", () => {
-    expect(CONSTRUCTION_PROTOCOL).toContain("choose Modify\n   at its own Artifact Re-use prompt");
-    expect(CONSTRUCTION_PROTOCOL).toContain("re-execute Step 9 fresh");
+    expect(LOOPBACK_PROTOCOL).toContain("choose Modify\n   at its own Artifact Re-use prompt");
+    expect(LOOPBACK_PROTOCOL).toContain("re-execute Step 9 fresh");
   });
 
   test("re-entry is settlement-aware and every path refreshes per-unit reviews", () => {
-    expect(CONSTRUCTION_PROTOCOL).toContain("**Re-entry settlement and review.**");
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain("**Re-entry settlement and review.**");
+    expect(LOOPBACK_PROTOCOL).toContain(
       "**Artifact-only workflow** — when no code-generation lifecycle row has ever",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "The re-entry `next`\n   call can therefore emit the all-covered `gate: true` fast path",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "**Receipt-mode workflow** — once any code-generation lifecycle row exists,\n   receipt mode is sticky",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "re-mint `unit start` / `unit complete`",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "On BOTH paths, after every fix and re-use decision and BEFORE presenting or\nauto-approving the settle/approval gate, dispatch code-generation's declared\nreviewer for every applicable unit",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "The reopen invalidates each applicable unit's\nprior review receipts (every unit's, after the stage-wide `STAGE_JUMPED`), and\nthe engine refuses approval",
     );
   });
 
   test("unit-major replay stays serial and uses the same receipt/review route", () => {
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "Under unit-major iteration the autonomous swarm never\nfires: the replay follows the ordinary per-unit walk",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "Fresh target-bound Plan Approval remains\na human stop for the repair",
     );
   });
 
   test("swarm interaction: exact attempt floor, fresh prepare, review-before-finalize cheap path", () => {
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "the jump establishes a new exact stage-attempt `Run floor`\nboundary token (`<event>:<timestamp>#<ordinal>`",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain("prior-attempt rows no longer count and all units\nre-dispatch by default");
-    expect(CONSTRUCTION_PROTOCOL).toContain("after\n`prepare`, run\n`check <unit> --check-cmd");
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain("prior-attempt rows no longer count and all units\nre-dispatch by default");
+    expect(LOOPBACK_PROTOCOL).toContain("after\n`prepare`, run\n`check <unit> --check-cmd");
+    expect(LOOPBACK_PROTOCOL).toContain(
       "A unit already green needs no builder turn, but before putting it in\n`finalize --claimed`, dispatch code-generation's reviewer",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "`finalize`\nthen verifies the current prepare stamp, the terminal receipt, and its current\nartifact fingerprint",
     );
   });
 
   test("halt-and-ask question template: 3 impact-estimated options, bound surfaced", () => {
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       'prompt: "Build and Test failed: [short error]. Root cause: [diagnosis]. Candidate fix: [fix] — estimated impact — effort: [effort]; financial cost: [cost]; risk: [risk]. Loop-backs used: [N]/3. How would you like to proceed?"',
     );
-    const lines = CONSTRUCTION_PROTOCOL.split("\n");
+    const lines = LOOPBACK_PROTOCOL.split("\n");
     const retryIdx = lines.findIndex((l) => /^\s*- label: Retry with fix$/.test(l));
     expect(retryIdx).toBeGreaterThan(-1);
     expect(lines[retryIdx + 1]).toContain(
@@ -341,13 +342,13 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
   });
 
   test("impact-unestimated give-up option is a protocol violation; human retry counts + may override bound", () => {
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "presenting an\nimpact-unestimated give-up option is a protocol violation",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "A human-approved retry does count an entry in the Loop-Back",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "the human may override the bound explicitly",
     );
   });
@@ -400,11 +401,11 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
   });
 
   test("Finding 1 (must-fix): Retry with fix names both settlement routes and fresh reviews", () => {
-    const retryIdx = CONSTRUCTION_PROTOCOL.indexOf('"Retry with fix" runs the same procedure as the autonomous loop-back');
-    const settlementAwareIdx = CONSTRUCTION_PROTOCOL.indexOf('"Retry with fix" runs the same settlement-aware procedure as the autonomous');
+    const retryIdx = LOOPBACK_PROTOCOL.indexOf('"Retry with fix" runs the same procedure as the autonomous loop-back');
+    const settlementAwareIdx = LOOPBACK_PROTOCOL.indexOf('"Retry with fix" runs the same settlement-aware procedure as the autonomous');
     expect(retryIdx).toBe(-1);
     expect(settlementAwareIdx).toBeGreaterThan(-1);
-    const retry = CONSTRUCTION_PROTOCOL.slice(settlementAwareIdx, settlementAwareIdx + 1_100);
+    const retry = LOOPBACK_PROTOCOL.slice(settlementAwareIdx, settlementAwareIdx + 1_100);
     expect(retry).toContain(
       "Artifact-only workflows may take the\nall-covered `gate: true` fast path",
     );
@@ -432,15 +433,15 @@ describe("t305 failure stops remain explicit under autonomy", () => {
 
 describe("t305 Finding 4 (should-fix): no-fix halt-and-ask variant", () => {
   test("a distinct no-fix template exists with no Candidate fix slot and no Retry with fix option", () => {
-    const headingIdx = CONSTRUCTION_PROTOCOL.indexOf("**Halt-and-ask, no-fix variant");
+    const headingIdx = LOOPBACK_PROTOCOL.indexOf("**Halt-and-ask, no-fix variant");
     expect(headingIdx).toBeGreaterThan(-1);
     // Only the fenced question TEMPLATE itself must lack the slot/option —
     // the preceding prose legitimately names "Retry with fix" to explain
     // why it's omitted, so the template fence is isolated first.
-    const fenceStart = CONSTRUCTION_PROTOCOL.indexOf("```question", headingIdx);
-    const fenceEnd = CONSTRUCTION_PROTOCOL.indexOf("```", fenceStart + 10) + 3;
+    const fenceStart = LOOPBACK_PROTOCOL.indexOf("```question", headingIdx);
+    const fenceEnd = LOOPBACK_PROTOCOL.indexOf("```", fenceStart + 10) + 3;
     expect(fenceStart).toBeGreaterThan(-1);
-    const block = CONSTRUCTION_PROTOCOL.slice(fenceStart, fenceEnd);
+    const block = LOOPBACK_PROTOCOL.slice(fenceStart, fenceEnd);
     expect(block).toContain(
       'prompt: "Build and Test failed: [short error]. Root cause: [diagnosis]. No identifiable fix exists in any swappable dimension',
     );
@@ -454,8 +455,8 @@ describe("t305 Finding 4 (should-fix): no-fix halt-and-ask variant", () => {
   });
 
   test("the impact-estimated variant is explicitly named as the other option, keyed on rung 2's outcome", () => {
-    expect(CONSTRUCTION_PROTOCOL).toContain("**Halt-and-ask, impact-estimated variant");
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain("**Halt-and-ask, impact-estimated variant");
+    expect(LOOPBACK_PROTOCOL).toContain(
       "Choose the variant by whether rung 2's classify-and-estimate step actually\nproduced an impact-estimated candidate fix",
     );
   });
@@ -478,7 +479,7 @@ describe("t305 Finding 5 (should-fix): isolated-run summary, not a workflow gate
 
   test("no stray 'at this/that run's gate' phrasing remains anywhere in the pinned protocol or stage files", () => {
     expect(MAIN_PROTOCOL).not.toContain("run's gate");
-    expect(CONSTRUCTION_PROTOCOL).not.toContain("run's gate");
+    expect(LOOPBACK_PROTOCOL).not.toContain("run's gate");
     expect(STAGE).not.toContain("run's gate");
   });
 });
@@ -507,18 +508,18 @@ describe("t305 Finding 6 (should-fix): crash-resume bullet lives under Session r
 
 describe("t305 Finding 7 (should-fix): swarm cheap-path premises are handled, not silently assumed", () => {
   test("prepare-collision handling: discard stale worktrees/branches before a fresh prepare", () => {
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "`prepare` hard-errors on collision, and\n`finalize` refuses a unit without the current attempt's prepare stamp, so\ndiscard the stale worktrees/branches before a fresh `prepare`",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain("never adopt\nthem into the new attempt");
-    expect(CONSTRUCTION_PROTOCOL).not.toContain("or adopt them if their code is still wanted");
+    expect(LOOPBACK_PROTOCOL).toContain("never adopt\nthem into the new attempt");
+    expect(LOOPBACK_PROTOCOL).not.toContain("or adopt them if their code is still wanted");
   });
 
   test("the already-green premise is softened: depends on the prior attempt's code merge completing", () => {
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "true only\nonce that attempt's git code merge actually completed",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain(
+    expect(LOOPBACK_PROTOCOL).toContain(
       "the cheap\npath degrades gracefully to full re-dispatch rather than silently claiming\nunbuilt units",
     );
   });
@@ -531,7 +532,7 @@ describe("t305 stage-protocol-recovery.md — crash-resume bullet", () => {
     );
     expect(RECOVERY).toContain("the session\ndied between logging and jumping");
     expect(RECOVERY).toContain(
-      "re-execute the jump per the construction\nprotocol module (`aidlc-common/protocols/stage-protocol-construction.md`)",
+      "re-execute the jump per the loop-back\nprotocol module (`aidlc-common/protocols/stage-protocol-loopback.md`)",
     );
     // A loop-back cut off between two Units' reopens reopens the rest.
     expect(RECOVERY).toContain("reopen the others\nthe same way before going on");

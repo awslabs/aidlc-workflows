@@ -6,7 +6,7 @@
 |-------|-------|
 | Name | aidlc-quality-agent |
 | Tier | **judgment** |
-| Allowed Claude Code Tools | Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion |
+| Claude Code Tools | Inherits the full session toolset, MCP tools included (no `tools:` allowlist); expected to use Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion |
 | Disallowed Claude Code Tools | Task |
 
 ---
@@ -57,16 +57,16 @@ Path: `.claude/knowledge/aidlc-quality-agent/`
 
 | File | Content |
 |------|---------|
-| nfr-reliability-guide.md | Reliability testing methodology and resilience validation |
+| nfr-reliability-guide.md | Reliability target-setting (SLA/SLO/SLI, availability, recovery objectives) and observability requirements |
 | nfr-validation-methods.md | NFR validation techniques (load testing, performance profiling) |
 | test-strategy-patterns.md | Test pyramid patterns, test data strategies, quality gate design |
 | testing-guide.md | Testing methodology and test case design principles |
 
 ### Team (Tier 2)
 
-Path: `aidlc/knowledge/aidlc-quality-agent/` (the space-level knowledge dir; user-managed)
+Path: `aidlc/spaces/<active-space>/knowledge/aidlc-quality-agent/` (the space-level knowledge dir; user-managed)
 
-A space-level directory the team creates when it has content (the engine ships `aidlc/knowledge/` empty). Populated by the team with project-specific
+A space-level directory the team creates when it has content (the engine creates the space's `knowledge/` folder empty). Populated by the team with project-specific
 QA context such as existing test frameworks, coverage targets, performance
 baselines, or quality gate thresholds.
 

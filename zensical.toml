@@ -116,6 +116,7 @@ nav = [
       "reference/10-knowledge-system.md",
       "reference/16-artifact-vocabulary.md",
       "reference/18-plugin-mechanism.md",
+      "reference/19-supply-chain-security.md",
       "reference/20-commit-provenance.md",
     ] },
     { "Agent Reference" = [
@@ -145,6 +146,7 @@ nav = [
       { "Example Plugin: test-pro" = "reference/examples/test-pro/README.md" },
       "reference/research/Codex Manifest Shape Report.md",
       "reference/research/Cross-Tool Plugin Comparison.md",
+      "reference/research/kiro-windows-output-encoding/README.md",
     ] },
   ] },
   { "Roadmap" = "roadmap.md" },

@@ -45,8 +45,6 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 const STAGE_REL = "core/aidlc-common/stages/construction/code-generation.md";
 const PRACTICES_REL =
   "core/aidlc-common/stages/inception/practices-discovery.md";
-const CONSTRUCTION_PROTOCOL_REL =
-  "core/aidlc-common/protocols/stage-protocol-construction.md";
 const SWARM_PROTOCOL_REL =
   "core/aidlc-common/protocols/stage-protocol-swarm.md";
 const AGENT_REL = "core/agents/aidlc-developer-agent.md";
@@ -968,13 +966,10 @@ describe("t299 (5) authored consumers use the same contract", () => {
   });
 
   test("the shared protocol and every harness require approved swarm worker markers", () => {
-    const construction = read(CONSTRUCTION_PROTOCOL_REL);
-    expect(construction).toContain("## 12b. Autonomous Code Generation Plan Contract");
-    expect(construction).toContain("AIDLC-TESTING-CONTRACT: <contract_sha256");
     const swarm = read(SWARM_PROTOCOL_REL);
-    expect(swarm).toContain(
-      'stage-protocol-construction.md` §12b "Autonomous Code Generation Plan Contract"',
-    );
+    expect(swarm).toContain("### 12b. Autonomous Code Generation Plan Contract");
+    expect(swarm).toContain("AIDLC-TESTING-CONTRACT: <contract_sha256");
+    expect(swarm).toContain('read and follow §12b "Autonomous Code Generation Plan Contract" above');
     for (const harness of [
       "claude",
       "kiro",

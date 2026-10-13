@@ -233,7 +233,7 @@ function approvedInWords(p: string): void {
   expect(shown.construction_checkpoint?.review_not_finished).toEqual({ stages: [CG], approved_in_words: true });
   expect(shown.construction_checkpoint?.rereview).toBeUndefined();
   // No learnings question comes before the approval either.
-  expect(shown.protocol_modules).toEqual(["construction"]);
+  expect(shown.protocol_modules).toEqual(["construction", "checkpoint"]);
   const approved = checkpoint(p, "alpha", "approve");
   expect(approved.status, approved.out).toBe(0);
   expect(approved.json?.approved).toBe(true);

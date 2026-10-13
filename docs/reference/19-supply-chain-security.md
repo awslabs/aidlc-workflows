@@ -5,10 +5,11 @@ workflows: `.github/workflows/release.yml` for stable tags and
 `.github/workflows/preview-release.yml` for scheduled or manually dispatched
 previews. Both use the repository-provided `GITHUB_TOKEN`. Neither requires a
 GitHub App, a personal access token, a second repository, or repository
-secrets for publication. Full Suite live tests, called by the preview and by a
-stable release that has no reusable result, use the existing `ai-pr-review`
-environment's `AWS_AI_PR_REVIEW_ROLE_ARN` secret, resolved by the called
-workflow's live jobs. The caller passes `secrets: inherit`, without which that
+secrets for publication. Full Suite live tests use the existing `ai-pr-review`
+environment's `AWS_AI_PR_REVIEW_ROLE_ARN` secret, resolved by Full Suite's own
+live jobs. The preview starts Full Suite as a separate run through the GitHub
+API (a workflow dispatch); a stable release that has no reusable result calls
+it as a reusable workflow and passes `secrets: inherit`, without which that
 environment secret resolved empty in the called run.
 
 ## Release trigger
@@ -31,7 +32,7 @@ that qualifies. Evidence counts only from those reviewed workflows on `main`:
 runs on other branches or events, verification artifacts, and results for
 another commit or run never qualify. When none qualifies, the release calls
 `full-suite.yml` for the tagged commit with `contents: read`,
-`id-token: write` and `secrets: inherit`, as the preview does. A failed search
+`id-token: write` and `secrets: inherit`. A failed search
 falls back to running the suite. `Require a passing Full Suite` then downloads
 the result and runs `scripts/ci-full-suite-evidence.ts check`, which requires the
 tagged `sha`, the producing `runId`, `purpose: "release"`,
@@ -69,9 +70,10 @@ credentials are reachable. Every Full Suite checkout sets
 `persist-credentials: false`, so candidate code does not find the repository
 token on disk either. It refuses `verification_family` and `verification_test`
 filters. Its artifact is named `full-suite-verification-result` and records
-`purpose: "full-verification"`, `complete: false`, and exactly those six jobs
-in `omittedLegs`; a successful result requires every other job to succeed and
-the six to be skipped. No release workflow consumes it, even after the
+`purpose: "full-verification"`, `complete: false`, and exactly seven jobs in
+`omittedLegs`: those six and `scope_runs`, whose tests the deterministic job
+already runs; a successful result requires every other job to succeed and the
+seven to be skipped. No release workflow consumes it, even after the
 candidate merges.
 
 Manual verification can additionally select `verification_family` as
@@ -97,7 +99,7 @@ runner directories are protected. Collection retires that macOS account's
 launchd domains and refuses to copy while executable processes remain.
 
 Live matrices assign one file per supported platform to each job. Linux, macOS
-and Windows live jobs have separate concurrency caps of 12, 6 and 6. Each role session requests
+and Windows live jobs have separate concurrency caps of 4, 2 and 3. Each role session requests
 3,600 seconds just before its run step; jobs allow 80 minutes, test steps 70
 minutes, and live files and runs 3,600 seconds. Model work stops at the
 five-minute cleanup reserve, so it always ends while the session is valid, and
@@ -158,8 +160,10 @@ Each later run re-reads the release list: the planner skips the publication buil
 chain if the source commit is unchanged since the latest published preview, or
 if that preview was built from a newer commit that descends from this run's
 source (an older run, retried or queued), so the channel never moves backwards.
-Contract checks and Full Suite still run for that source, and the final result requires their
-success even when publication is deduplicated. If `main` advances again on the
+Contract checks and Full Suite still run for that source. The final result
+requires validation and the release tests (which report the Full Suite result)
+to succeed, and publication to succeed or be skipped as intended; a failed Full
+Suite does not fail it, deduplicated or not. If `main` advances again on the
 same UTC date, another preview can publish with the next build counter.
 
 A run tests and publishes the commit it was started on. `main` receives merges
@@ -193,7 +197,10 @@ without failing Preview Release. Only the preview's Full Suite dispatch job adds
 PR CI test matrix.
 PR CI and Full Suite use the same `deterministic-tests.yml` workflow definition
 with different matrices: Linux smoke/twelve unit shards/integration for PRs, and
-Linux/macOS/Windows smoke/twelve unit shards/integration/E2E for nightly coverage.
+Linux/macOS/Windows smoke/twelve unit shards/integration/E2E for a manual full
+verification. The nightly (release purpose) Full Suite runs no deterministic
+tier: its scope runs and guard matrix run in a job of their own on every OS,
+beside the live jobs.
 Integration and isolated E2E run in separate jobs with fresh runner processes. Each call
 tests a fresh checkout of the supplied commit and retains sanitized evidence;
 no previous test result is substituted for a run.

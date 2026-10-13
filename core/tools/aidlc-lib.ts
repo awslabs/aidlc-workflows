@@ -1,4 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { listMessages } from "./aidlc-message-store.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -6603,6 +6604,12 @@ export function personLineHeard(projectDir: string, sessionId: string, line: str
   const { turn, work } = personTurnAndWork(projectDir);
   return readPendingPersonLines(path, turn, work).said.includes(line);
 }
+
+// The reason the engine's skip step hands the agent for a stage the person
+// asked to skip where it stands (orchestrate's planChangeDirective). report
+// and the state tool read it back: that skip is the person's, so a stage that
+// must run, or one waiting at its own question, is skipped as they asked.
+export const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
 
 // What the person asked to leave out of a build (#1342): the `Deferred` items
 // in these traceability.json files, at most ten by id and then a count, or
@@ -27230,21 +27237,23 @@ export function sourceListingChangedPaths(
 /**
  * The changed paths between a recorded workspace fingerprint and the current
  * state, when the recorded listing was kept; null when only the digests can
- * be compared.
+ * be compared. `outsideAidlc` leaves AI-DLC's own files out: an update the
+ * person took is nobody's change.
  */
 export function workspaceSourceChangedPaths(
   projectDir: string,
   stageSlug: string,
   recordedFingerprint: string,
   current: WorkspaceSourceState | null,
+  outsideAidlc = false,
 ): string[] | null {
   if (current === null) return null;
   const recorded = readWorkspaceSourceSnapshot(projectDir, stageSlug, recordedFingerprint);
   if (recorded === null) return null;
-  return sourceListingChangedPaths(
-    recordedSourceListingUnderCurrentBoundary(recorded, current.listing),
-    current.listing,
-  );
+  const before = recordedSourceListingUnderCurrentBoundary(recorded, current.listing);
+  return outsideAidlc
+    ? sourceChangedOutsideAidlc(projectDir, before, current.listing)
+    : sourceListingChangedPaths(before, current.listing);
 }
 
 export function currentStageSourceBaseline(
@@ -27894,6 +27903,97 @@ export interface HookLiveness {
   neverFired: boolean;
 }
 
+// Every readable `<hook>.last` in one hooks-health folder.
+function readHeartbeats(dir: string): { entries: string[]; newest: HookHeartbeatStamp | null; fired: boolean } {
+  const entries: string[] = [];
+  let newest: HookHeartbeatStamp | null = null;
+  let fired = false;
+  if (!existsSync(dir)) return { entries, newest, fired };
+  try {
+    const files = readdirSync(dir).filter((f) => f.endsWith(".last"));
+    if (files.length > 0) fired = true;
+    for (const f of files) {
+      try {
+        const ts = readFileSync(join(dir, f), "utf-8").trim();
+        const entry = `${f.replace(".last", "")} ${ts}`;
+        entries.push(entry);
+        const timestampMs = Date.parse(ts);
+        if (Number.isFinite(timestampMs) && (newest === null || timestampMs > newest.timestampMs)) {
+          newest = { timestampMs, timestampRaw: ts };
+        }
+      } catch {
+        // skip unreadable
+      }
+    }
+  } catch {
+    // skip unreadable dir
+  }
+  return { entries, newest, fired };
+}
+
+// The newest beat of the turn that created a record: in a space's pre-workflow
+// folder or in another record, of any space (a chained `space switch` beats in
+// the space it leaves), or a terminal prompt kept outside its historical
+// record, from the slack before the record's first event up to that event.
+// Null when the record is the space folder itself, has no event, or no such
+// beat exists.
+function creationHeartbeat(
+  projectDir: string,
+  workflow: { intent?: string; space?: string },
+  events: readonly AuditShardEvent[],
+): { stamp: HookHeartbeatStamp; entry: string } | null {
+  let first: number | null = null;
+  for (const event of events) {
+    const timestampMs = Date.parse(event.timestamp);
+    if (Number.isFinite(timestampMs) && (first === null || timestampMs < first)) first = timestampMs;
+  }
+  if (first === null) return null;
+  const createdAt = first;
+  try {
+    const record = resolvePath(docsRoot(projectDir, workflow.intent, workflow.space));
+    if (record === resolvePath(intentsDir(projectDir, workflow.space))) return null;
+    const dirs: string[] = [];
+    for (const { name } of listSpaces(projectDir)) {
+      const intents = resolvePath(intentsDir(projectDir, name));
+      try {
+        const entries = readdirSync(intents, { withFileTypes: true });
+        dirs.push(join(engineDirFor(intents), "hooks-health"));
+        for (const entry of entries) {
+          if (!entry.isDirectory() || entry.name === ENGINE_DIR) continue;
+          const root = join(intents, entry.name);
+          if (resolvePath(root) === record) continue;
+          dirs.push(engineReadDirFor(root, join(engineDirFor(root), "hooks-health"), LEGACY_HOOKS_HEALTH_DIR));
+        }
+      } catch {
+        // A space with no intents folder, or an unreadable one, has no beat.
+      }
+    }
+    let found: { stamp: HookHeartbeatStamp; entry: string } | null = null;
+    const consider = (entry: string): void => {
+      const raw = entry.slice(entry.indexOf(" ") + 1);
+      const timestampMs = Date.parse(raw);
+      // Audit timestamps are to the second; a beat in that second is before it.
+      if (!Number.isFinite(timestampMs) || timestampMs < createdAt - HOOK_HEARTBEAT_STALE_SLACK_MS || timestampMs >= createdAt + 1000) return;
+      if (found === null || timestampMs > found.stamp.timestampMs) found = { stamp: { timestampMs, timestampRaw: raw }, entry };
+    };
+    for (const dir of dirs) {
+      for (const entry of readHeartbeats(dir).entries) consider(entry);
+    }
+    // Completed/archived work stays untouched by hooks. Its prompt record is
+    // the human-turn hook's evidence that it ran before a chained creation,
+    // with the same time bounds as a beat in a running or pre-workflow record.
+    for (const message of listMessages(projectDir)) {
+      if (message.source === "prompt" && message.workflow !== undefined) {
+        consider(`record-human-turn ${message.at}`);
+      }
+    }
+    return found;
+  } catch {
+    // An unreadable space proves nothing either way.
+    return null;
+  }
+}
+
 // The one comparison behind the doctor's "Hooks last fired ... but the workflow
 // last advanced ..." row and the Plan Approval decision's liveness refusal, so
 // the two cannot disagree about what "hooks are not firing" means.
@@ -27906,33 +28006,11 @@ export function hookLiveness(
 ): HookLiveness {
   const healthDir = hooksHealthReadDir(projectDir, workflow.intent, workflow.space);
   const recordEvents = events ?? readAuditShardEvents(projectDir, workflow.intent, workflow.space);
-  const heartbeatEntries: string[] = [];
-  let newestHeartbeat: HookHeartbeatStamp | null = null;
-  let hasHookFiredContent = false;
+  const own = readHeartbeats(healthDir);
+  const heartbeatEntries = own.entries;
+  let newestHeartbeat = own.newest;
+  let hasHookFiredContent = own.fired;
   const healthDirExists = existsSync(healthDir);
-  if (healthDirExists) {
-    try {
-      const files = readdirSync(healthDir).filter((f) => f.endsWith(".last"));
-      if (files.length > 0) hasHookFiredContent = true;
-      for (const f of files) {
-        try {
-          const ts = readFileSync(join(healthDir, f), "utf-8").trim();
-          heartbeatEntries.push(`${f.replace(".last", "")} ${ts}`);
-          const timestampMs = Date.parse(ts);
-          if (
-            Number.isFinite(timestampMs) &&
-            (newestHeartbeat === null || timestampMs > newestHeartbeat.timestampMs)
-          ) {
-            newestHeartbeat = { timestampMs, timestampRaw: ts };
-          }
-        } catch {
-          // skip unreadable
-        }
-      }
-    } catch {
-      // skip unreadable dir
-    }
-  }
   let newestStageOrGateEvent: HookHeartbeatStamp | null = null;
   for (const event of recordEvents) {
     if (!event.event.startsWith("STAGE_") && !event.event.startsWith("GATE_")) continue;
@@ -27942,6 +28020,25 @@ export function hookLiveness(
       (newestStageOrGateEvent === null || timestampMs > newestStageOrGateEvent.timestampMs)
     ) {
       newestStageOrGateEvent = { timestampMs, timestampRaw: event.timestamp };
+    }
+  }
+  // The turn that created this record beat before the record existed: in a
+  // space's pre-workflow folder, or in the record the chat was on (#2263). A
+  // record with no beat of its own counts the newest such beat from the slack
+  // before its first event up to that event, and only while both its newest
+  // stage or gate event and now are within the slack of it, as `stale` reads a
+  // beat: past that, this record's own hooks should have beaten (a record
+  // parked at a gate writes no stage event, so the clock bounds it too).
+  if (!hasHookFiredContent && newestStageOrGateEvent !== null) {
+    const created = creationHeartbeat(projectDir, workflow, recordEvents);
+    if (
+      created !== null &&
+      newestStageOrGateEvent.timestampMs - created.stamp.timestampMs <= HOOK_HEARTBEAT_STALE_SLACK_MS &&
+      Date.now() - created.stamp.timestampMs <= HOOK_HEARTBEAT_STALE_SLACK_MS
+    ) {
+      hasHookFiredContent = true;
+      newestHeartbeat = created.stamp;
+      heartbeatEntries.push(created.entry);
     }
   }
   return {
@@ -37135,6 +37232,30 @@ export function currentSwarmSourceMergeChain(
   return priorFingerprint === null
     ? { state: "none" }
     : { state: "ready", fingerprint: priorFingerprint, listing: priorListing, units };
+}
+
+// Whether the main checkout moved, since the build's last verified source (the
+// last landing's listing, else the stage's opening listing), only in AI-DLC's
+// own files: the comparison a landing makes. False when no listing reads back
+// or the evidence cannot be read; the caller then keeps its fingerprint compare.
+export function onlyAidlcFilesChangedInSwarmStage(
+  projectDir: string,
+  slug: string,
+  current: WorkspaceSourceState,
+): boolean {
+  try {
+    const chain = currentSwarmSourceMergeChain(projectDir, slug);
+    if (chain.state === "ready") return onlyAidlcFilesChangedSince(projectDir, slug, chain.listing, current);
+    if (chain.state !== "none") return false;
+    const opening = currentSwarmSourceOpeningFingerprint(projectDir, slug);
+    return opening.state === "ready" && opening.listing !== undefined && sourceChangedOutsideAidlc(
+      projectDir,
+      recordedSourceListingUnderCurrentBoundary(opening.listing, current.listing),
+      current.listing,
+    ).length === 0;
+  } catch {
+    return false;
+  }
 }
 
 // The set of units the CURRENT attempt of an INLINE per-unit stage has

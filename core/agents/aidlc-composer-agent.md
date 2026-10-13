@@ -966,7 +966,7 @@ word is placed in a command. Check them before the gate:
 {{INVOKE}} engine graph validate-grid --keywords <granted,csv>
 ```
 and the conductor passes them to `scope save --keywords <granted,csv>`, which
-runs the same collision check before it writes.
+says in one line when another plan has the same hint.
 
 ---
 

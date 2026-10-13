@@ -134,7 +134,7 @@ participants, and the Product Leader reviews afterwards (`stage-protocol-reviewe
 - Story dependencies and relationships
 - INVEST compliance notes
 
-**Round 1 — dispatch the mob.** Per stage-protocol-ensemble.md §5 `mode: mob`,
+**Round 1 — dispatch the mob.** Per stage-protocol-collaborators.md `mode: mob`,
 dispatch exactly the collaborators the directive lists in `support_agents`, in
 parallel against the draft (artifacts by path: the two draft artifacts, the Q&A
 file, requirements.md; rules per `stage-protocol.md` § "For subagent stages" step 2),
@@ -150,7 +150,7 @@ the collaborators switch is off for this scope, so the stage runs lead-only
 integrate, or triage, and no contribution files.
 
 **Integrate and triage.** As the lead, fold the contributions into the two
-artifacts, then triage unresolved objections per stage-protocol-ensemble.md §5: a judgment call (both
+artifacts, then triage unresolved objections per stage-protocol-collaborators.md: a judgment call (both
 positions legitimate) goes to the user NOW as a structured question (add it
 to the questions file first, blank `[Answer]:` tag); a knowledge dispute
 goes to **round 2** — re-dispatch only the objecting agent(s) with the

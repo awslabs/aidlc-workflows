@@ -60,8 +60,8 @@
 //   - .sh 13 graph-refs sad (bogus requires_stage) -> grep "broken reference"
 //       -> Test 13 (+ status 1 STRONGER).
 //   - .sh 14 keyword happy -> grep "Keyword overlap: no conflicts" -> Test 14.
-//   - .sh 15 keyword sad (two scopes share a kw) -> grep -E "Keyword overlap:
-//       [0-9]* conflict" -> Test 15 (+ status 1 STRONGER).
+//   - .sh 15 keyword shared (two scopes share a kw) -> Test 15: a warning now,
+//       since nothing picks a plan by a hint (the plan proposal lists them all).
 //   - .sh 16 heartbeat advisory on fresh install -> grep "Hook heartbeats: not
 //       yet fired" -> Test 16. Tests 16b-16e extend the process contract across
 //       empty, debug-only, and populated health dirs with stage-start evidence.
@@ -533,7 +533,7 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     expect(r.out).toContain("Keyword overlap: no conflicts");
   });
 
-  test("15: keyword overlap sad -> two scopes share a keyword yields conflict, exit 1", () => {
+  test("15: two scopes share a hint -> a warning naming both, never a failure", () => {
     const p = track(createTestProject());
     const mapping = fixtureFile(
       "kw-mapping",
@@ -553,9 +553,25 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
       }),
     );
     const r = doctor(p, { AIDLC_SCOPE_MAPPING: mapping });
-    // Mirrors grep -E "Keyword overlap: [0-9]* conflict".
-    expect(r.out).toMatch(/Keyword overlap: [0-9]* conflict/);
-    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/warn {2}Keyword overlap: 1 shared hint/);
+    expect(r.out).toContain('"shared-kw" is a hint of scope-a, scope-b');
+    expect(r.out).not.toMatch(/fail {2}Keyword overlap/);
+  });
+
+  // scope save keeps a hint lowercased and calls `CVE` and `cve` one hint, so
+  // doctor does too.
+  test("15b: two scopes share a hint in different case -> the same warning", () => {
+    const p = track(createTestProject());
+    const mapping = fixtureFile(
+      "kw-mapping-case",
+      JSON.stringify({
+        "security-patch": { depth: "Minimal", keywords: ["CVE"], description: "fixture A", stages: {} },
+        "cve-fix": { depth: "Minimal", keywords: ["cve"], description: "fixture B", stages: {} },
+      }),
+    );
+    const r = doctor(p, { AIDLC_SCOPE_MAPPING: mapping });
+    expect(r.out).toMatch(/warn {2}Keyword overlap: 1 shared hint/);
+    expect(r.out).toContain('"cve" is a hint of cve-fix, security-patch');
   });
 
   // Claude Code's hooks leave a heartbeat on the person's first chat message,

@@ -401,7 +401,6 @@ import {
   harnessDir,
   hookActivation,
   hookChildEnv,
-  HOOK_HEARTBEAT_STALE_SLACK_MS,
   hookLiveness,
   hooksOffAgentStep,
   OWN_TERMINAL_PRESENCE_STEP,
@@ -445,6 +444,7 @@ import {
   noReviewerNotice,
   findStageBySlug,
   withPersonsWordsFirst,
+  PERSON_ASKED_SKIP_REASON,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -868,20 +868,9 @@ function hooksOffStop(
       return step();
     }
     const workflow = { intent: selection.intent, space: selection.space };
-    const liveness = hookLiveness(projectDir, undefined, workflow);
-    if (!liveness.neverFired) return null;
-    // The stop asks the agent to edit a settings file, so it waits for the
-    // same staleness slack `stale` already uses before concluding "no
-    // heartbeat yet" means "never fired": on the first turn of a fresh
-    // project, `intent-create` writes this workflow's newest stage event in
-    // the same breath that creates the record, before this harness's own hook
-    // on the agent's shell command -- the thing that is supposed to beat the
-    // engine to the heartbeat -- has had a turn to run for the command that
-    // follows it. Treating that as proof the hooks are off is a false
-    // positive (#2263). `hookHealthNotice`'s advisory line and `doctor`'s
-    // diagnostic read the same liveness without this grace: only the hard
-    // stop that interrupts the agent's turn waits it out.
-    if (Date.now() - liveness.newestStageOrGateEvent!.timestampMs <= HOOK_HEARTBEAT_STALE_SLACK_MS) return null;
+    // A first turn's beat lands before its record exists; hookLiveness counts
+    // it for the record (#2263), so a never-fired record is the stop at once.
+    if (!hookLiveness(projectDir, undefined, workflow).neverFired) return null;
     if (hookStatusPathLinked(projectDir, workflow.intent, workflow.space)) return null;
   } catch {
     // An unreadable record proves nothing about the hooks.
@@ -3402,7 +3391,8 @@ function openGateReplyDirective(stage: string, requestId: string, folder: string
       `if it asks for changes, run \`${orchestrate} report --stage ${shellArg(stage)} --result rejected ` +
       `--user-input "Request Changes"\`. Then follow what it returns. If it asks about what the stage found or ` +
       `produced, answer it from the files in ${folder ? `${folder}/` : "the stage's folder"}, then ask the approval ` +
-      "question again. If it is about something else, such as new " +
+      `question again. If it asks to skip this stage, run \`${orchestrate} next --skip ${shellArg(stage)}\` and ` +
+      "follow what it returns. If it is about something else, such as new " +
       `work or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: ` +
       "the engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
       "person in one short question and follow their answer.",
@@ -7264,8 +7254,18 @@ function buildRunStageDirective(
   ) {
     protocolModules.push("ensemble");
   }
+  // Contribution files and mob rounds apply only when support agents are
+  // dispatched; an inline stage adopts its supports in the lead's own chat.
+  if (effectiveSupports.length > 0 && node.mode !== "inline") {
+    protocolModules.push("collaborators");
+  }
   if (node.phase === "construction") {
     protocolModules.push("construction");
+  }
+  // A Build and Test failure can loop back to Code Generation, and a reopened
+  // Code Generation runs by the same procedure.
+  if (node.slug === "code-generation" || node.slug === "build-and-test") {
+    protocolModules.push("loopback");
   }
   // The learnings ritual runs at a gate's first showing, never again for a
   // revision of it (stage-protocol.md, Request Changes).
@@ -10523,6 +10523,7 @@ function applyGateOnlyShape(
     (module) =>
       module !== "reviewer" &&
       module !== "ensemble" &&
+      module !== "collaborators" &&
       module !== "learnings",
   );
   if (directive.construction_policy) {
@@ -10654,7 +10655,9 @@ function applyConstructionCheckpointShape(
     directive.consumes = rechecked.consumes;
     directive.produces = rechecked.produces;
   }
-  directive.protocol_modules = checkpoint.rereview ? ["reviewer", "construction"] : ["construction"];
+  directive.protocol_modules = checkpoint.rereview
+    ? ["reviewer", "construction", "checkpoint"]
+    : ["construction", "checkpoint"];
   // A checkpoint the person approves offers one learnings ritual for the
   // stages it covers, as a stage's own approval gate does. A re-check of
   // changed code asks only for the approval, and so does a checkpoint whose
@@ -10687,7 +10690,7 @@ function applySwarmCheckpointShape(
   delete directive.review_artifact;
   delete directive.review_class;
   delete directive.reviewer_max_iterations;
-  directive.protocol_modules = ["construction", "swarm"];
+  directive.protocol_modules = ["construction", "checkpoint", "swarm"];
 }
 
 // Try to handle an eligible autonomous swarm stage, returning true (and emitting)
@@ -10924,9 +10927,13 @@ function tryEmitSwarm(
             : node.reviewer_max_iterations ?? 2,
       }
     : {};
+  // A swarm batch verifies with the checkpoint's command and can replay a
+  // Build and Test loop-back.
   const protocolModules: ProtocolModule[] = [
     ...(node.reviewer ? (["reviewer"] as const) : []),
     "construction",
+    "checkpoint",
+    "loopback",
     "swarm",
   ];
   const resumeExisting = stateContent !== null && checkpointPolicyEnabled(stateContent) &&
@@ -11498,6 +11505,7 @@ function attachBoundedWave(
     );
   }
   directive.wave = { batch_index: wave.batch_index, entries };
+  directive.protocol_modules = [...(directive.protocol_modules ?? []), "wave"];
   if (directive.ceremony.learnings === "on") {
     for (const entry of entries) {
       bootstrapDirectiveMemory(entry.unit_memory_path, codekbCtx);
@@ -13738,11 +13746,6 @@ function keptWhilePlanWaits<T extends Directive>(directive: T, planWaits: boolea
   return directive;
 }
 
-// The reason the step below hands the agent for a started stage the person
-// asked to skip. report reads its own token back: that skip is the person's,
-// so it gives no reason of its own (the step already said the one line).
-const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
-
 // A typed `--skip`/`--add` on a running workflow. The person named the
 // stages, so recompose applies them straight away (after any scope or setting
 // command typed with them), and one line says what changed and the way back;
@@ -13753,8 +13756,9 @@ const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
 // gate. Approve first, and the next stage had started before the skip reached
 // recompose, which refused it as no longer pending; skip first, and this step
 // ended the turn before the approval was recorded, so the person approved
-// twice. So: a named stage that has already started (or is being revised) is
-// skipped where it stands, through the report that routes forward, whatever
+// twice. So: a named stage that has already started (or is being revised, or
+// waits at its own approval question) is skipped where it stands, through the
+// report that routes forward, whatever
 // kind of stage it is (the report's reason is the engine's own token for the
 // person's skip; recompose only reaches stages ahead), and the work goes on,
 // or ends on the last stage; and at an open gate the step hands the agent the
@@ -13802,7 +13806,8 @@ function planChangeDirective(
   // Where the work stands: the current stage, started or waiting at its gate.
   const current = plan === null ? "" : (getField(plan.stateContent, "Current Stage") ?? "").trim();
   const currentState = current === "" ? undefined : parseCheckboxes(plan!.stateContent).find((c) => c.slug === current)?.state;
-  const started = (currentState === "in-progress" || currentState === "revising") && skip.includes(current)
+  const started = (currentState === "in-progress" || currentState === "revising" ||
+      currentState === "awaiting-approval") && skip.includes(current)
     ? current
     : null;
   const gateOpen = currentState === "awaiting-approval" && !skip.includes(current) ? current : null;
@@ -16143,14 +16148,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // A Current Stage skip marks the stage skipped for every unit. Under
     // unit-major the walk may already have finished units' work for it (the
     // late gate still has to approve that work), so refuse it then. Once the
-    // person's plan no longer runs the stage (they changed scope), the skip
-    // goes through and the Units' files stay as they are.
+    // person's plan no longer runs the stage (they changed scope), or they
+    // asked to skip it, the skip goes through and the Units' files stay as
+    // they are.
     const unitsDone =
       readConstructionIteration(stateContent) === "unit-major" &&
       node.phase === "construction" && isPerUnit(node)
         ? unitsWithStageWork(pd, node, unitWorkContext(pd))
         : [];
-    if (unitsDone.length > 0 && planAction !== "SKIP") {
+    if (unitsDone.length > 0 && planAction !== "SKIP" && !personAsked) {
       emit(errorDirective(
         `Cannot skip "${slug}": ${unitNames(unitsDone)} already ` +
           `${unitsDone.length === 1 ? "has" : "have"} this step's files, and skipping the step ` +
@@ -16160,13 +16166,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
     // A stage at its open gate is skipped only when the plan no longer runs
-    // it (the person said the work is a new project): their decision closes
-    // the gate as skipped.
+    // it (the person said the work is a new project) or the person asked to
+    // skip it: their decision closes the gate as skipped.
     if (
       stageCheckbox.state !== "in-progress" &&
       stageCheckbox.state !== "revising" &&
       stageCheckbox.state !== "skipped" &&
-      !(stageCheckbox.state === "awaiting-approval" && planAction === "SKIP")
+      !(stageCheckbox.state === "awaiting-approval" && (planAction === "SKIP" || personAsked))
     ) {
       emit(errorDirective(
         `Stage "${slug}" is ${stageCheckbox.state}; only an active, revising, or interrupted skipped stage can be routed as skipped.`,

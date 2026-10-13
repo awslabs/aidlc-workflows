@@ -185,7 +185,7 @@ Before and during EVERY stage, verify:
 2. [ ] **Log non-gate questions via `aidlc-log.ts`**: before presenting a structured question that is not an approval gate: `{{INVOKE}} engine log decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `{{INVOKE}} engine log answer --stage <slug> --details '<exact choice>'`. Log every question a menu shows before you show the menu, and put all of one reply's answers in a single `log answer` (`--details 'Q1: <choice>; Q2: <choice>'` when it answered both, `--details 'Q2: <choice>'` when it answered Q2 alone: only the questions the reply really answered go in it, never a slot filled with words that answered something else), even when the reply came before the log. When you log a question after the person already replied, name the message that answered it: `--message <id>` on the `log decision` or on each `log answer` (a refused answer names the id in its hint); the person is never asked to say it again. Approval choices go only through `aidlc-orchestrate.ts report`. (§2, §3)
 3. [ ] **Record the choice the person made**: read their reply and record their choice; the human-turn hook keeps their exact words with it. Never choose for them unless they leave the choice to you (§3, `--on-instruction`), and never paraphrase their words in an answer or note. (§1, §2, §3)
 4. [ ] **Task transitions + state sync** — Mark previous task `completed`, then `TaskUpdate({ ..., status: "in_progress", activeForm: "Running [Stage] [slug]" })`. The `[slug]` suffix triggers the PostToolUse hook that syncs the state file. Only when `TaskCreate`/`TaskUpdate`, or the plan or todo tool your skill maps them to, is in your tool list; otherwise skip task transitions silently. `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input '<exact choice>'` auto-advances to the next in-scope stage (or completes the workflow on the final stage) — do NOT call `advance` separately after approval. (§4)
-5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings (only when the directive lists the `learnings` protocol module) → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes only when the directive lists the `learnings` protocol module. EXCEPTION: the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) jumps back from a deliberately in-flight failed stage; its §13 learnings ritual defers to the eventual passing run.
+5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings (only when the directive lists the `learnings` protocol module) → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes only when the directive lists the `learnings` protocol module. EXCEPTION: the Build-and-Test failure loop-back in the loop-back protocol module (`aidlc-common/protocols/stage-protocol-loopback.md`) jumps back from a deliberately in-flight failed stage; its §13 learnings ritual defers to the eventual passing run.
 6. [ ] **Autonomy is NEVER inferred** — a user saying "go with recommended" or "pick the best answers" for one stage is a ONE-TIME instruction for THAT stage only. It does NOT create a standing rule. The next stage starts fresh with its declared autonomy mode. The ONLY way to get autonomous mode is: (a) the directive explicitly carries `autonomy: autonomous`, OR (b) the human explicitly says "run this autonomous" for the specific stage being proposed. NEVER carry forward an autonomy inference from a previous stage. NEVER self-answer questions without explicit permission for THIS stage; with it, record each answer with `--on-instruction` (§3).
 
 ---
@@ -223,7 +223,7 @@ Construction completion-only bookkeeping. It grants no approval itself.
 When you present an approval gate question, you MUST end your turn immediately and wait for the user's explicit response. Do NOT call any tool until the user has typed their choice in a new message. An approval gate is a mandatory human checkpoint that cannot be inferred, auto-approved, or skipped.
 
 ### NO EMERGENT BEHAVIOR RULE
-Construction and Operation stages MUST use standardized 2-option completion messages. DO NOT create 3-option menus or other emergent navigation patterns. Only IDEATION and INCEPTION stages may conditionally include a 3rd option (to add a previously skipped stage). Any deviation from these patterns is a protocol violation. Two sanctioned carve-outs exist: the revision loop escape hatch (below) and the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`).
+Construction and Operation stages MUST use standardized 2-option completion messages. DO NOT create 3-option menus or other emergent navigation patterns. Only IDEATION and INCEPTION stages may conditionally include a 3rd option (to add a previously skipped stage). Any deviation from these patterns is a protocol violation. Two sanctioned carve-outs exist: the revision loop escape hatch (below) and the Build-and-Test failure loop-back in the loop-back protocol module (`aidlc-common/protocols/stage-protocol-loopback.md`).
 
 ### For simple decisions (3 or fewer options):
 Present a structured question:
@@ -368,9 +368,9 @@ After the 2nd revision cycle (before the escape hatch activates), include a note
 
 ### Conditional construction protocol
 
-Walking-skeleton, ladder, Bolt-gate, halt-and-ask, and Build-and-Test
-failure-loop-back behavior lives in
-`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-construction.md`.
+Walking-skeleton, ladder, Bolt-gate, and halt-and-ask behavior lives in
+`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-construction.md`, and the Build-and-Test
+failure loop-back in `{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-loopback.md`.
 Load it on the first Construction-phase directive of the session and on every `invoke-swarm` (the engine lists it in `directive.protocol_modules`).
 ---
 
@@ -722,8 +722,9 @@ Plan files and question files are co-located with their stage artifacts, not in 
 
 ### Conditional Construction question protocol
 
-Within-Bolt questions, per-unit iteration, lifecycle receipts, waves, and iteration ordering live in
-`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-construction.md`.
+Per-unit iteration, lifecycle receipts, and iteration ordering live in
+`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-construction.md`, and waves in
+`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-wave.md`.
 Load it on the first Construction-phase directive of the session and on every `invoke-swarm` (the engine lists it in `directive.protocol_modules`).
 ---
 
@@ -962,8 +963,9 @@ methodology (2 and 3): read it in the order listed.
 
 ### Conditional ensemble protocol
 
-Multi-agent topology, contribution, objection-triage, and completion-evidence behavior lives in
-`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-ensemble.md`.
+Multi-agent topology and completion-evidence behavior lives in
+`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-ensemble.md`, and contribution files and
+objection triage in `{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-collaborators.md` (named when support agents are dispatched).
 Load it when `directive.mode` is `subagent`, `pipeline`, or `mob`, or when the stage declares support agents (the engine lists it in `directive.protocol_modules`).
 ### 11 Agents (v2):
 aidlc-product-agent, aidlc-design-agent, aidlc-delivery-agent, aidlc-architect-agent, aidlc-aws-platform-agent, aidlc-compliance-agent, aidlc-devsecops-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent
@@ -1177,8 +1179,9 @@ When generating content that will be written to markdown files:
 
 ## Conditional ensemble return protocol
 
-Subagent return summaries, contribution files, context budgets, and failure recovery live in
-`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-ensemble.md`.
+Subagent return summaries, context budgets, and failure recovery live in
+`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-ensemble.md`, and contribution files in
+`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-collaborators.md`.
 Load it when `directive.mode` is `subagent`, `pipeline`, or `mob`, or when the stage declares support agents (the engine lists it in `directive.protocol_modules`).
 ## 12. Phase Boundary Verification
 
@@ -1235,8 +1238,8 @@ again. See
 This applies to ALL stages, not just jump targets: when the workflow replays forward after a backward jump, each subsequent stage will also encounter existing artifacts and offer the same choice, unless the person already said what they want for it.
 
 **Autonomous failure loop-back**: when the replay was initiated by the
-Build-and-Test failure loop-back in the construction protocol module
-(`aidlc-common/protocols/stage-protocol-construction.md`) under `Construction
+Build-and-Test failure loop-back in the loop-back protocol module
+(`aidlc-common/protocols/stage-protocol-loopback.md`) under `Construction
 Autonomy Mode: autonomous`, the 3-option question is NOT presented (the loop is
 meant to run without the human). The conductor decides deterministically from
 the Loop-Back Log's planned fix: **Modify** for the unit(s) the fix targets,
@@ -1251,8 +1254,8 @@ fresh current-attempt reviews for every applicable unit are mandatory before
 the replayed gate is auto-approved.
 
 **Gated failure loop-back**: the same override applies when the human chose
-"Retry with fix" at the Build-and-Test halt-and-ask in the construction
-protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) under
+"Retry with fix" at the Build-and-Test halt-and-ask in the loop-back
+protocol module (`aidlc-common/protocols/stage-protocol-loopback.md`) under
 `Construction Autonomy Mode: gated` (or unset). Artifact-only workflows may
 arrive directly at the all-covered `gate: true` directive, where the ordinary
 Artifact Re-use question never fires; receipt-mode workflows instead receive

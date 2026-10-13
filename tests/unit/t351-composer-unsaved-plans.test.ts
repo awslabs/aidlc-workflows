@@ -680,7 +680,7 @@ describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
     expect(stateOf(proj)).not.toContain("- **Plan**:");
   });
 
-  test("a taken or malformed name, a claimed keyword, or an unknown flag writes nothing", () => {
+  test("a taken or malformed name, a hint that is not one word, or an unknown flag writes nothing", () => {
     const proj = installedProject();
     expect(createComposed(proj).status).toBe(0);
     const refused = (args: string[], message: string) => {
@@ -693,16 +693,38 @@ describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
     refused(["--name", "Quick_Fix"], '"Quick_Fix" cannot name a scope');
     refused(["--name", "-quick"], '"-quick" cannot name a scope');
     refused(["--name", `a${"b".repeat(40)}`], "cannot name a scope");
-    refused(["--name", "quick-fix", "--keywords", "fix"], 'Keyword "fix" is already claimed by scope');
     refused(["--name", "quick-fix", "--keywords", "semi;colon"], '"semi;colon" cannot be a keyword');
     refused(["--name", "quick-fix", "--keywords", "two words"], '"two words" cannot be a keyword');
     refused(["--name", "quick-fix", "--scope", "bugfix"], "scope-save does not accept --scope.");
     expect(savedRecords(proj)).toEqual([]);
     expect(runTool(proj, "aidlc-utility.ts", ["scope-save", "--name", "quick-fix", "--keywords", "parser-fix"]).status).toBe(0);
     refused(["--name", "quick-fix"], "A scope named quick-fix already exists.");
-    // A keyword the first save claimed is checked again under the lock.
-    refused(["--name", "other-fix", "--keywords", "parser-fix"], 'Keyword "parser-fix" is already claimed by scope');
     expect(savedRecords(proj)).toEqual(["quick-fix.md"]);
+  });
+
+  // Nothing picks a plan by a hint any more: the plan proposal lists every
+  // plan's hints for the agent to weigh. So a hint another plan has is saved
+  // as asked, and the person is told once that it now names both.
+  test("a hint another plan already has is saved, with one line saying both plans have it", () => {
+    const proj = installedProject();
+    expect(createComposed(proj).status).toBe(0);
+    const saved = runTool(proj, "aidlc-utility.ts", ["scope-save", "--name", "quick-fix", "--keywords", "bug,parser-fix"]);
+    expect(saved.status, saved.out).toBe(0);
+    expect(saved.out).toContain("Saved as scope quick-fix (");
+    expect(saved.out).toContain('The hint "bug" is also bugfix\'s; the plan proposal lists it under both.');
+    expect(saved.out).not.toContain('The hint "parser-fix"');
+    const record = readFileSync(join(proj, "aidlc", "scopes", "quick-fix.md"), "utf-8");
+    expect(record).toContain("  - bug");
+    expect(record).toContain("  - parser-fix");
+    // The next plan saved with the first one's hint names that plan, checked under the lock.
+    const other = runTool(proj, "aidlc-utility.ts", ["scope-save", "--name", "other-fix", "--keywords", "parser-fix"]);
+    expect(other.status, other.out).toBe(0);
+    expect(other.out).toContain('The hint "parser-fix" is also quick-fix\'s; the plan proposal lists it under both.');
+    expect(savedRecords(proj)).toEqual(["other-fix.md", "quick-fix.md"]);
+    // Doctor says it as a note, not a failure.
+    const doctor = runTool(proj, "aidlc-utility.ts", ["doctor", "--verbose"]);
+    expect(doctor.out).toMatch(/warn {2}Keyword overlap: 2 shared hints/);
+    expect(doctor.out).not.toMatch(/fail {2}Keyword overlap/);
   });
 
   test("a failed audit undoes the save, so the same name works on retry", () => {

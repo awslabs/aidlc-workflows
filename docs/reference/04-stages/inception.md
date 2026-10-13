@@ -75,10 +75,10 @@ describe the full roster.
 | feature          | All 2.1--2.9                                                   |
 | mvp              | 2.1 (if brownfield), 2.2, 2.3, 2.4, 2.5 (if UI), 2.6, 2.7, 2.8, 2.9 |
 | poc              | 2.1 (if brownfield), 2.3 (minimal)                             |
-| bugfix           | 2.1 (always -- find the bug), 2.3 (minimal -- bug description) |
-| refactor         | 2.1 (always -- understand current code), 2.3 (minimal)         |
+| bugfix           | 2.1 (if brownfield -- find the bug), 2.3 (minimal -- bug description) |
+| refactor         | 2.1 (if brownfield -- understand current code), 2.3 (minimal)  |
 | infra            | 2.2, 2.3 (infra requirements)                                  |
-| security-patch   | 2.1 (find vulnerability context), 2.3 (minimal)                 |
+| security-patch   | 2.1 (if brownfield -- find vulnerability context), 2.3 (minimal) |
 | classic          | 2.1--2.9                                                       |
 | workshop         | 2.1--2.9                                                       |
 | express          | 2.1 (if brownfield), 2.3                                      |
@@ -147,9 +147,8 @@ before one stage-level lifecycle report.
    reverse engineer"`. The engine records `[S]` and routes onward atomically.
 
 2. **Developer Code Scan** -- Delegate to Task tool with the aidlc-developer-agent
-   subagent (`subagent_type="aidlc-developer-agent"`). Include aidlc-developer-agent persona from
-   `agents/aidlc-developer-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-developer-agent/` in the delegation prompt.
+   subagent (`subagent_type="aidlc-developer-agent"`). The agent's persona and
+   knowledge load automatically; the conductor does not inject the persona.
    Include workspace state from `aidlc-state.md` as context.
 
    The developer scans the entire codebase for:
@@ -161,26 +160,45 @@ before one stage-level lifecycle report.
    - Code quality indicators (linting, CI/CD, documentation)
    - Technical debt signals
 
-   Developer returns structured scan results following the Developer Code Scan
-   Template in
-   `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`.
+   The developer writes its scan, following the Developer Code Scan Template in
+   `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`, to a
+   durable handoff file: `<record>/inception/reverse-engineering/developer-scan.md`
+   for the project-root repo, or `developer-scan-<repo>.md` for a registered
+   repo. Its return names that path and any concerns, not the scan body.
 
 3. **Architect Synthesis** -- Delegate to Task tool with the aidlc-architect-agent
-   subagent (`subagent_type="aidlc-architect-agent"`). Include aidlc-architect-agent persona from
-   `agents/aidlc-architect-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-architect-agent/` in the delegation prompt. Pass
-   the complete developer scan results as context. Include workspace state from
+   subagent (`subagent_type="aidlc-architect-agent"`); its persona and knowledge
+   also load automatically. Pass the developer's handoff path (the architect
+   reads the file) and the template path, plus workspace state from
    `aidlc-state.md`. Resolve the repository's output directory with
    `aidlc engine workspace codekb --repo <repo>`.
    Immediately before the scan, capture source/store generations with
-   `codekb-snapshot`. Pass the existing store plus its snapshot to the
-   architect.
+   `codekb-snapshot`, and pass the existing store plus its snapshot to the
+   architect. In a brownfield project with no store yet:
+
+   ```text
+   $ aidlc engine workspace codekb-snapshot --repo shop-api --paths ./ --json
+   {"repo":"shop-api","store":"aidlc/spaces/default/codekb/shop-api/","paths":["./"],"store_generation":"none","source_fingerprint":"git:bc8ac8583f61da1edd5bdc681a9db722a937848b"}
+   ```
 
    The architect synthesizes scan results into the 9 output artifacts (see
-   Outputs below) in a temporary complete candidate directory. The engine
-   publishes that candidate with `codekb-publish`, which refuses a source
-   change or concurrent shared-store generation and requires a fresh scan or
-   re-merge before retrying.
+   Outputs below) in a complete candidate directory,
+   `<record>/.aidlc-engine/codekb-stage-<repo>/`. `codekb-publish` then swaps it
+   into the store, with the snapshot's values passed back:
+
+   ```text
+   aidlc engine workspace codekb-publish --repo shop-api \
+     --staged <record>/.aidlc-engine/codekb-stage-shop-api/ \
+     --paths ./ --expect-store none \
+     --expect-source git:bc8ac8583f61da1edd5bdc681a9db722a937848b --json
+   ```
+
+   It refuses with `CODEKB_STORE_CHANGED` when another intent published to
+   the store after the snapshot (re-read the store, re-merge, take a fresh
+   snapshot and retry). Under Guard Policy strict it also refuses with
+   `CODEKB_SOURCE_CHANGED` when the code changed after the snapshot (scan
+   again); under relaxed or off it publishes the scan as taken and returns a
+   change notice.
 
 4. **Prepare Completion** -- Verify all nine artifacts exist. Do not edit
    `aidlc-state.md`; lifecycle completion belongs to the report after the gate.
@@ -194,7 +212,7 @@ before one stage-level lifecycle report.
 
 All 9 artifacts for each repository are written to
 `aidlc/spaces/<active-space>/codekb/<repo>/`, using the exact directory printed
-by `aidlc-utility.ts codekb-path --repo <repo>`:
+by `aidlc engine workspace codekb --repo <repo>`:
 
 | #  | File                             | Contents                                                    |
 |----|----------------------------------|-------------------------------------------------------------|
@@ -210,24 +228,23 @@ by `aidlc-utility.ts codekb-path --repo <repo>`:
 
 ### Approval Gate
 
-Standard 2-option gate: **Approve** (continue to Requirements Analysis) /
-**Request Changes**.
+Standard 2-option gate: **Approve** / **Request Changes**. The stage file
+labels Approve "continue to Requirements Analysis"; the engine routes to the
+next stage the plan runs, which is Practices Discovery in the scopes that
+include it.
 
 ### Notes
 
 - **Rerun guard:** This stage verifies each brownfield repository's recorded
-  scope and fingerprint before the human chooses reuse or rescan. It is a
-  deliberate deviation from the upstream reference, documented in SKILL.md's
-  "Deliberate Deviations" section.
+  scope and fingerprint before the human chooses reuse or rescan.
 - **Two-link pipeline:** The aidlc-developer-agent performs the raw code
   scan (link 1, the lead), then the aidlc-architect-agent synthesizes the scan
   into structured artifacts and writes them (link 2, the final link). This separation ensures the scan is thorough (developer
   perspective) and the synthesis is architecturally informed (architect
   perspective).
-- For bugfix and refactor scopes, this stage always executes (even for what
-  might be borderline greenfield) because understanding existing code is
-  essential.
-- For security-patch scope, this stage executes to find vulnerability context.
+- In bugfix, refactor and security-patch it runs on brownfield work, to
+  understand the code being fixed or changed; on greenfield work creation sets
+  it to SKIP, as in every scope.
 - The 9 artifacts produced here are consumed by Requirements Analysis (2.3),
   User Stories (2.4), Domain Design (2.6), and Units Generation (2.7).
 - The `architecture.md` artifact must include Interaction Diagrams showing how
@@ -338,7 +355,16 @@ On affirmation, content is promoted to:
    promotion occurs.
 7. **Promote After Human Approval** -- Only after the human chooses Approve,
    run the deterministic promotion into active-space `team.md` and
-   `project.md`. It writes `project.md` first and `team.md` second and emits
+   `project.md`:
+
+   ```text
+   aidlc engine state practices-promote \
+     --team-practices <record>/inception/practices-discovery/team-practices.md \
+     --discovered-rules <record>/inception/practices-discovery/discovered-rules.md \
+     --affirming-user "<user>"
+   ```
+
+   It writes `project.md` first and `team.md` second and emits
    `PRACTICES_AFFIRMED`. If promotion fails, it emits `PRACTICES_OVERRIDE`,
    leaves the stage `[?]` with the gate open, and does not report approval.
 8. **Verify Receipt, Then Report** -- Successful promotion atomically records
@@ -359,9 +385,9 @@ gate open and the stage incomplete.
 
 ### Notes
 
-- The `replaceSection` helper in `.claude/tools/aidlc-lib.ts` was added in milestone 8
-  specifically to support the team.md cross-row promotion (the existing
-  `appendUnderHeading` accumulates duplicates across re-runs).
+- The promotion replaces each `team.md` section's body and keeps its heading
+  (`replaceSection` in `.claude/tools/aidlc-lib.ts`), so a re-run does not
+  pile up duplicates the way `appendUnderHeading` would.
 - `org.md` and `team.md` share one Title Case heading set
   (`## Way of Working`, `## Walking Skeleton`, `## Testing Posture`,
   `## Deployment`, `## Code Style`). The stage reads each section from
@@ -411,13 +437,16 @@ large scope with significant unknowns.
 
 - Reverse Engineering artifacts from Stage 2.1
   (`aidlc/spaces/<active-space>/codekb/<repo>/`), if brownfield
-- User's project description from the intent's `audit/` shards
+- The authoritative project description from the `project-description`
+  utility (never rebuilt from an audit `Request`)
+- Intent statement and scope document from Ideation, and team practices from
+  Practices Discovery, when those stages ran
 
 ### Steps
 
 1. **Load Prior Context** -- If brownfield: read RE artifacts from
-   `aidlc/spaces/<active-space>/codekb/<repo>/`. Read user's project
-   description from the intent's `audit/` shards.
+   `aidlc/spaces/<active-space>/codekb/<repo>/`. Read the project description
+   with `project-description`.
 
 2. **Analyze User Request** -- Assess the request for:
    - **Clarity**: How well-defined is the request?
@@ -551,7 +580,7 @@ Conditional gate format:
 | Condition        | CONDITIONAL -- execute for user-facing features, multiple personas, complex business logic, or cross-team work |
 | Lead Agent       | aidlc-product-agent                                                          |
 | Support Agents   | aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent               |
-| Mode             | mob (the 2.5.0 mob-elaboration showcase; lead only when collaborators are off) |
+| Mode             | mob (lead only when collaborators are off)                             |
 | Completion Emoji | :books:                                                                |
 
 ### Purpose
@@ -567,8 +596,7 @@ leads, and the design, developer, and quality agents are dispatched as
 independent collaborators against the lead's draft - blind round, integrate,
 one bounded objection round - with the Product Leader reviewing afterwards.
 The aidlc-design-agent's user-experience perspective is a deliberate addition
-not in the upstream reference, documented in SKILL.md's "Deliberate
-Deviations" section.
+not in the upstream reference.
 
 ### Inputs
 
@@ -684,6 +712,7 @@ All artifacts written to `<record>/inception/user-stories/`:
 | `stories.md`                   | User stories with acceptance criteria, priority, dependencies, INVEST notes |
 | `personas.md`                  | User persona definitions, relationships, priority ranking    |
 | `user-stories-assessment.md`   | Execute/skip decision with rationale and factors considered   |
+| `traceability.json`            | Every `FR` and `NFR` ID from `requirements.md` mapped to stories (`OK`), or marked `Deferred` with a named downstream stage or `N/A` with a justification; checked by the `traceability` sensor |
 | `user-stories-questions.md`    | Story plan with clarifying questions using `[Answer]:` tags (input artifact) |
 | `contributions/aidlc-{design,developer,quality}-agent.md` | Mutually blind support contributions integrated by the lead before the gate |
 
@@ -707,8 +736,7 @@ Changes**.
   integrated all three. A lead-only run owes none.
 - Stories produced here are consumed by Refined Mockups (2.5), Domain
   Design (2.6), Units Generation (2.7), and Delivery Planning (2.9).
-- The aidlc-design-agent support is a deliberate addition for UX-informed
-  development, noted in SKILL.md's Deliberate Deviations section.
+- The aidlc-design-agent support adds a UX view to the stories.
 
 ---
 
@@ -720,7 +748,7 @@ Changes**.
 |------------------|------------------------------------------------------------------------|
 | Phase            | Inception                                                              |
 | Stage #          | 2.5                                                                    |
-| Condition        | CONDITIONAL -- skip for non-UI, API-only, or infrastructure-only initiatives |
+| Condition        | CONDITIONAL -- execute when user-facing UI exists and rough mockups were produced in Ideation; for APIs, refine interaction diagrams |
 | Lead Agent       | aidlc-design-agent                                                           |
 | Support Agents   | aidlc-product-agent (validates against stories)                              |
 | Mode             | inline                                                                 |
@@ -737,7 +765,8 @@ checklists.
 For non-UI initiatives (API-only, backend), the stage refines interaction
 diagrams into an API developer experience specification.
 
-This stage is typically skipped if Stage 1.6 (Rough Mockups) was also skipped.
+When Stage 1.6 (Rough Mockups) did not run, as in classic and workshop, it
+designs the refined mockups from the stories and requirements.
 
 ### Inputs
 
@@ -800,8 +829,9 @@ Standard 2-option gate: **Approve** / **Request Changes**.
 
 ### Notes
 
-- Skip condition: non-UI, API-only, or infrastructure-only initiatives. Also
-  typically skipped if Stage 1.6 (Rough Mockups) was skipped.
+- Runs for user-facing UI; for an API it refines interaction diagrams into an
+  API developer experience specification. When Rough Mockups did not run
+  (classic, workshop), it designs from the stories and requirements instead.
 - For mvp scope, this stage executes only if the project has UI.
 - The mockups produced here feed into Domain Design (2.6) and ultimately
   into Construction's Code Generation (3.5) for UI components.
@@ -1017,7 +1047,7 @@ actual unit artifacts.
 7. **Present Completion & Request Approval** -- Display completion message
    with :wrench: emoji, summary of units defined, dependencies mapped, stories
    assigned, and review path. Standard 2-option approval gate: Approve
-   (continue to Construction phase) / Request Changes.
+   (continue to the next stage the engine names) / Request Changes.
 
 ### Outputs
 
@@ -1038,8 +1068,8 @@ Additionally, a questions file is created as input:
 
 ### Approval Gate
 
-Standard 2-option gate: **Approve** (continue to Construction phase) /
-**Request Changes**.
+Standard 2-option gate: **Approve** (continue to the next stage the engine
+names) / **Request Changes**.
 
 ### Notes
 
@@ -1080,7 +1110,7 @@ Standard 2-option gate: **Approve** (continue to Construction phase) /
 | Lead Agent       | aidlc-architect-agent                                                        |
 | Support Agents   | aidlc-aws-platform-agent                                                    |
 | Mode             | inline                                                                 |
-| Completion Emoji | :building_construction:                                                |
+| Completion Emoji | :handshake:                                                            |
 
 ### Purpose
 
@@ -1410,7 +1440,3 @@ See `docs/guide/04-phases-and-stages.md` for the current Construction walk.
 - **Construction Phase**: `docs/reference/04-stages/construction.md` — conditional
   checkpoint default, explicit execution choices, and preserved legacy paths;
   `bolt-plan.md` is planning, not the runtime walk source
-- **Deliberate Deviations**: SKILL.md documents intentional differences from
-  the upstream reference, including the RE scope/fingerprint rerun guard,
-  aidlc-design-agent support additions, ADR artifacts, and the Delivery
-  Planning expansion

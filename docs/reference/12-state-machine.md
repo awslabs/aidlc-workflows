@@ -214,8 +214,10 @@ workflow with an explicit nonblank `--stage` and `--reason`, when the named
 stage is declared `execution: CONDITIONAL` (a stage of any kind when the
 reason is the one the engine's skip step names for a stage the person asked
 to skip, `the person asked to skip it`), equals `Current Stage`, and is
-Active or Revising, or AwaitingApproval when its plan row now says SKIP (a
-gate the person's own decision made moot). It runs before
+Active or Revising, or AwaitingApproval when its plan row now says SKIP or
+the reason is that token (a gate the person's own decision made moot; under
+Unit-by-Unit Construction the Units' files for it stay as they are). It runs
+before
 artifact, per-unit, and ensemble-evidence guards because a justified skip owes
 no completion evidence. The engine invokes the internal skip transition with
 its routing marker: the transaction preserves `[S]`, emits exactly one
@@ -560,7 +562,13 @@ Policy a Unit's manifest that changed after its review, and files the Unit
 changed outside its manifest, keep the review: finalize records each once as
 `CHANGE_ACCEPTED` and returns its line in the Unit's `change_notices`. Swarm
 prepare likewise keeps parent source that moved after Plan Approval (generation
-start records it and says it), as the single-agent build does.
+start records it and says it), as the single-agent build does. On any Guard
+Policy prepare leaves AI-DLC's own files out (an AI-DLC update the person took):
+they need not be committed before the worktrees fork, and under `strict` they
+are no reason to approve the plan again; it refuses only when the person's own
+files moved since the build's last verified source, compared as a landing
+compares it, or when no listing is on record to tell (a rejection an earlier
+release wrote).
 
 Swarm footprint verification and immutable Source Commit creation apply the
 same boundary. Clean-filter raw-byte replacement is restricted to exact

@@ -339,8 +339,8 @@ bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoi
 
 Tell the person the `say` line it prints, once, then run `next`.
 
-> **Build-and-Test loop-back:** The construction protocol module
-> (`aidlc-common/protocols/stage-protocol-construction.md`) defines this replay.
+> **Build-and-Test loop-back:** The loop-back protocol module
+> (`aidlc-common/protocols/stage-protocol-loopback.md`) defines this replay.
 > A backward jump opens a new stage attempt, so the prior approval no longer
 > applies. Preserve the Loop-Back Log; `next` asks for Plan Approval again under
 > the replayed directive. The earlier "Retry with fix" choice authorizes the jump,
