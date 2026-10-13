@@ -211,7 +211,9 @@ state lifecycle verbs before or after reporting.
 
 **Routed skip.** `report --result skipped` is accepted only on the main
 workflow with an explicit nonblank `--stage` and `--reason`, when the named
-stage is declared `execution: CONDITIONAL`, equals `Current Stage`, and is
+stage is declared `execution: CONDITIONAL` (a stage of any kind when the
+reason is the one the engine's skip step names for a stage the person asked
+to skip, `the person asked to skip it`), equals `Current Stage`, and is
 Active or Revising, or AwaitingApproval when its plan row now says SKIP (a
 gate the person's own decision made moot). It runs before
 artifact, per-unit, and ensemble-evidence guards because a justified skip owes

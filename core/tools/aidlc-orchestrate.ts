@@ -13249,12 +13249,12 @@ const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
 // gate. Approve first, and the next stage had started before the skip reached
 // recompose, which refused it as no longer pending; skip first, and this step
 // ended the turn before the approval was recorded, so the person approved
-// twice. So: a named stage that has already started is skipped where it
-// stands, through the report that routes forward (only a stage that may be
-// skipped at all, CONDITIONAL, takes it; a started ALWAYS stage keeps
-// recompose's refusal, which names the jump past it), and the work goes on;
-// and at an open gate the step hands the agent the gate's report for the
-// answer the person's message gave, so both happen once.
+// twice. So: a named stage that has already started (or is being revised) is
+// skipped where it stands, through the report that routes forward, whatever
+// kind of stage it is (the report's reason is the engine's own token for the
+// person's skip; recompose only reaches stages ahead), and the work goes on,
+// or ends on the last stage; and at an open gate the step hands the agent the
+// gate's report for the answer the person's message gave, so both happen once.
 function planChangeDirective(
   changes: PlanChanges,
   before: string | null,
@@ -13298,7 +13298,7 @@ function planChangeDirective(
   // Where the work stands: the current stage, started or waiting at its gate.
   const current = plan === null ? "" : (getField(plan.stateContent, "Current Stage") ?? "").trim();
   const currentState = current === "" ? undefined : parseCheckboxes(plan!.stateContent).find((c) => c.slug === current)?.state;
-  const started = currentState === "in-progress" && skip.includes(current) && nodeForSlug(current)?.execution === "CONDITIONAL"
+  const started = (currentState === "in-progress" || currentState === "revising") && skip.includes(current)
     ? current
     : null;
   const gateOpen = currentState === "awaiting-approval" && !skip.includes(current) ? current : null;
@@ -15512,13 +15512,18 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
     const planAction = effectivePlanAction(slug, scope, stateContent);
-    if (node.execution !== "CONDITIONAL" && planAction !== "SKIP") {
+    const reason = flags.reason?.trim();
+    // A stage that must run is skipped only when the person asked: the
+    // reason is then the engine's own token from the step that named this
+    // report (planChangeDirective). A skip the agent reports on its own
+    // reading still needs a CONDITIONAL stage.
+    const personAsked = reason === PERSON_ASKED_SKIP_REASON;
+    if (node.execution !== "CONDITIONAL" && planAction !== "SKIP" && !personAsked) {
       emit(errorDirective(
         `Stage "${slug}" is execution: ${node.execution}; only a CONDITIONAL stage can report skipped.`,
       ));
       return;
     }
-    const reason = flags.reason?.trim();
     if (!reason) {
       emit(errorDirective(
         "report --result skipped requires a nonblank --reason <text>.",
@@ -15655,7 +15660,6 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // already said the skip in one line, so no reason is added here. Reverse
     // Engineering kept on the existing code knowledge base applies too, so its
     // line says that knowledge base was reused instead of a scan.
-    const personAsked = reason === PERSON_ASKED_SKIP_REASON;
     const skipped: Directive = {
       kind: "done",
       reason:

@@ -2627,6 +2627,43 @@ describe("what the engine names while a plan waits", () => {
     expect(auditText(proj)).toContain("**Person Reply**: approve the plan, but let's stop there for today");
   });
 
+  // Skipping Code Generation itself while its plan waits: the skip the engine
+  // names gets through and runs, the plan question goes with the stage, and the
+  // work goes on to Build and Test without asking about the plan again.
+  test("a skip of Code Generation while its plan waits is carried out, and the plan is not asked about again", () => {
+    const proj = project("strict");
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8").replace("- [ ] code-generation", "- [-] code-generation"), "utf-8");
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    askFor(proj);
+    reply(proj, "/aidlc --skip code-generation");
+    const named = next(proj, ["--skip", "code-generation"]);
+    const commands = namedCommands(named);
+    expect(commands.some((command) => command.includes("engine recompose")), JSON.stringify(named)).toBe(false);
+    const skip = commands.find((command) => command.includes("report --stage code-generation --result skipped"));
+    expect(skip, JSON.stringify(named)).toBeDefined();
+    const verdict = guardBash(proj, skip as string);
+    expect(verdict.code, `${skip}\n${verdict.stderr}`).toBe(0);
+    const reason = /--reason '([^']*)'/.exec(skip as string)?.[1];
+    const skipped = spawnSync(BUN, [
+      join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), "report", "--stage", "code-generation",
+      "--result", "skipped", "--reason", String(reason), "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(skipped.status, `${skipped.stdout}${skipped.stderr}`).toBe(0);
+    expect(readFileSync(file, "utf-8")).toContain("- [S] code-generation");
+    expect(planApprovalAskIsOpen(proj)).toBe(false);
+    for (let turn = 0; turn < 2; turn++) {
+      const after = next(proj);
+      expect(after.kind, JSON.stringify(after)).toBe("run-stage");
+      expect(after.stage).toBe("build-and-test");
+    }
+  });
+
   // A scope or setting change asked for while the plan waits, alone or with a
   // skip: each step the engine names runs, and the plan question is still the
   // open step, answered with the person's words. A new scope tests the plan
