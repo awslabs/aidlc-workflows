@@ -6702,7 +6702,12 @@ export interface ProcessIdentity {
   startTime: string | null;
 }
 
-const SESSION_ANCESTRY_BUDGET_MS = 50;
+// The whole time one walk may spend finding its chat. macOS reads the process
+// table with one `ps -A`, about 16 ms on an idle machine and several times that
+// on a busy one, so it gets longer; Linux and Windows read each hop natively.
+export function sessionAncestryBudgetMs(): number {
+  return sessionProcessPlatform() === "darwin" ? 250 : 50;
+}
 const SESSION_ANCESTRY_MAX_DEPTH = 64;
 const SESSION_ANCESTRY_CACHE_MS = 1000;
 const sessionAncestryCache = new Map<
@@ -6827,7 +6832,7 @@ let windowsSessionProcessApi: ReturnType<typeof loadWindowsSessionProcessApi> | 
 // independent of the lock subsystem's process probes.
 export function windowsSessionProcessIdentity(
   pid: number,
-  deadlineMs = Date.now() + SESSION_ANCESTRY_BUDGET_MS,
+  deadlineMs = Date.now() + sessionAncestryBudgetMs(),
 ): ProcessIdentity | null {
   // A test platform override must never load Windows DLLs on another host.
   if (
@@ -6983,7 +6988,7 @@ export function writeSessionPidEntry(
   projectDir: string,
   pid: number,
   sessionId: string,
-  deadlineMs: number = Date.now() + SESSION_ANCESTRY_BUDGET_MS,
+  deadlineMs: number = Date.now() + sessionAncestryBudgetMs(),
   identity: ProcessIdentity | null | undefined = undefined,
 ): void {
   sessionAncestryCache.delete(projectDir);
@@ -7064,7 +7069,7 @@ export function writeSessionPidAncestry(
   sessionAncestryCache.delete(projectDir);
   clearSessionProcessTable();
   if (validSessionId(sessionId) === null) return;
-  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  const deadline = Date.now() + sessionAncestryBudgetMs();
   const windows = sessionProcessPlatform() === "win32";
   const readIdentity = processIdentityReader(deadline);
   let childIdentity: ProcessIdentity | null = null;
@@ -7126,7 +7131,7 @@ export function resolveSessionIdFromAncestry(projectDir: string): string | null 
 // A valid payload always carries the private source marker, so the selection
 // chokepoint lets payload identity win without weakening bare env refusal. It
 // used to be set only when this process's ancestry walk named a different
-// session, but that walk fails closed within its 50 ms budget on a loaded host:
+// session, but that walk fails closed within its budget on a loaded host:
 // the child then saw an unmarked override, its own walk could find the other
 // session, and it refused. enterHookWorkflow and the Codex adapter already mark
 // payload identity without a walk.
@@ -7148,7 +7153,7 @@ export function hookChildEnv(
 
 function resolveSessionIdFromAncestryUncached(projectDir: string): string | null {
   if (!existsSync(sessionPidMapDir(projectDir))) return null;
-  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  const deadline = Date.now() + sessionAncestryBudgetMs();
   const windows = sessionProcessPlatform() === "win32";
   let childIdentity = windows ? windowsSessionProcessIdentity(process.pid, deadline) : null;
   if (windows && (!childIdentity || childIdentity.ppid !== process.ppid)) return null;
