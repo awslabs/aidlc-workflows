@@ -7,7 +7,7 @@
 // every call it made after. Each place that needs one names it by path.
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { SHIPPED_FORMAT_DOCS } from "../../core/tools/aidlc-inline-context.ts";
 
 const REPO = join(import.meta.dir, "..", "..");
@@ -37,17 +37,17 @@ function preflightLine(text: string): string | null {
 
 describe("a dispatched agent's knowledge preflight leaves out the format docs", () => {
   const lines = agentFiles(DIST)
-    .map((file) => ({ file, line: preflightLine(readFileSync(file, "utf-8")) }))
+    .map((file) => ({ file, line: preflightLine(readFileSync(file, "utf-8").replace(/\r\n/g, "\n")) }))
     .filter((entry): entry is { file: string; line: string } => entry.line !== null);
 
   test("every harness ships agents with the preflight, plugin agents included", () => {
     for (const harness of HARNESSES) {
       expect(
-        lines.some(({ file }) => file.startsWith(join(DIST, harness) + "/")),
+        lines.some(({ file }) => file.startsWith(join(DIST, harness) + sep)),
         `${harness}: no packaged agent carries the preflight`,
       ).toBe(true);
     }
-    expect(lines.some(({ file }) => file.startsWith(join(DIST, "plugins") + "/"))).toBe(true);
+    expect(lines.some(({ file }) => file.startsWith(join(DIST, "plugins") + sep))).toBe(true);
   });
 
   test("the shared folder it names comes without the five format docs", () => {
