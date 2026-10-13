@@ -596,8 +596,7 @@ leads, and the design, developer, and quality agents are dispatched as
 independent collaborators against the lead's draft - blind round, integrate,
 one bounded objection round - with the Product Leader reviewing afterwards.
 The aidlc-design-agent's user-experience perspective is a deliberate addition
-not in the upstream reference, documented in SKILL.md's "Deliberate
-Deviations" section.
+not in the upstream reference.
 
 ### Inputs
 
@@ -1070,8 +1069,7 @@ Additionally, a questions file is created as input:
 ### Approval Gate
 
 Standard 2-option gate: **Approve** (continue to the next stage the engine
-names: Contract Design, or Delivery Planning when Contract Design does not run) /
-**Request Changes**.
+names) / **Request Changes**.
 
 ### Notes
 
