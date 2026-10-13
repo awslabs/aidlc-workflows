@@ -12419,6 +12419,7 @@ export async function main(
     if (
       copyChannel && ranTool && !section && (from || downloadCleanup) &&
       process.env.AIDLC_CONFIG_HANDOFF === undefined &&
+      (requiredVersion === undefined || requiredVersion === selected.stamp.frameworkVersion) &&
       VERSION_ID.test(selected.stamp.frameworkVersion) &&
       compareVersions(AIDLC_VERSION, selected.stamp.frameworkVersion) < 0 &&
       regularFile(newerTool)
@@ -12435,6 +12436,7 @@ export async function main(
         env: { ...process.env, AIDLC_CONFIG_HANDOFF: ranTool, AIDLC_PROJECT_DIR: projectDir },
         stdio: "inherit",
       });
+      if (handed.error) throw handed.error;
       process.exitCode = handed.status ?? EXIT.failure;
       return;
     }
