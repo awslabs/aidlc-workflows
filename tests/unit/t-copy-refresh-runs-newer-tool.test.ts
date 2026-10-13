@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
-import { serveReleaseFixture, writeReleaseFixture } from "../harness/release-fixture.ts";
+import { type ReleaseServerFault, serveReleaseFixture, writeReleaseFixture } from "../harness/release-fixture.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -115,9 +115,10 @@ async function ownAsync(
   args: string[],
   extra: Record<string, string>,
   input?: string,
+  cwd = project,
 ): Promise<{ status: number; out: string }> {
   const child = Bun.spawn([BUN, join(project, ".codex", "tools", "aidlc.ts"), ...args], {
-    cwd: project,
+    cwd,
     env: env({ AIDLC_GH_BIN: FAKE_GH, ...extra }),
     stdin: input === undefined ? "ignore" : new TextEncoder().encode(input),
     stdout: "pipe",
@@ -132,7 +133,7 @@ async function ownAsync(
 }
 
 // A served release whose copy runtime is the marked newer projection.
-function servedRelease(): { baseUrl: string; stop(): void } {
+function servedRelease(fault?: ReleaseServerFault): { baseUrl: string; requests: string[]; stop(): void } {
   const repo = temp("aidlc-t-copy-newer-repo-");
   codexRelease(join(repo, "dist", "codex"), NEWER, { mark: true });
   cpSync(join(REPO_ROOT, "dist-release", "codex"), join(repo, "dist-release", "codex"), { recursive: true });
@@ -140,7 +141,7 @@ function servedRelease(): { baseUrl: string; stop(): void } {
   for (const name of ["install.sh", "install.ps1"]) cpSync(join(REPO_ROOT, "scripts", name), join(repo, "scripts", name));
   const root = temp("aidlc-t-copy-newer-release-");
   writeReleaseFixture({ root, repoRoot: repo, version: NEWER, distributions: ["codex"] });
-  return serveReleaseFixture(root);
+  return serveReleaseFixture(root, fault);
 }
 
 // A Codex project copied from 2.11.0 and set up by its own tool, with the
@@ -216,6 +217,46 @@ describe("a copied project's refresh from a newer release runs that release's ow
     expect(result.status, result.out).toBe(0);
     expect(existsSync(mark), result.out).toBe(true);
     expect(result.out.split("own config runs this refresh")).toHaveLength(2);
+  });
+
+  test("a pinned project's refresh from other files is refused by its own tool alone, as before", () => {
+    const project = copiedAt2110();
+    writeFileSync(join(project, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+    const runtime = runtimeAt(NEWER, { mark: true });
+    const mark = join(temp("aidlc-t-copy-newer-mark-"), "ran");
+    const result = own(project, ["config", "--from", runtime, "--harness", "codex", "--mcp", "none", "--yes"], { [MARK]: mark });
+    expect(result.status, result.out).toBe(4);
+    expect(result.out).toContain(`error: the files passed to --from are ${NEWER}, but this project is pinned to ${AIDLC_VERSION}`);
+    expect(result.out).not.toContain("own config runs this refresh");
+    expect(existsSync(mark), result.out).toBe(false);
+  });
+
+  // Windows keeps the working folder of a running process, so it cannot be
+  // taken away mid-run there.
+  test.skipIf(process.platform === "win32")("a hand-off that cannot start says why", async () => {
+    const project = copiedAt2110();
+    writeFileSync(join(project, ".aidlc-version"), `${NEWER}\n`);
+    const elsewhere = temp("aidlc-t-copy-newer-cwd-");
+    const asset = `aidlc-copy-runtime-${NEWER}.tar.gz`;
+    // The download waits, so the working folder can go before the newer tool starts.
+    const release = servedRelease({ kind: "delay", asset, milliseconds: 3000 });
+    try {
+      const run = ownAsync(
+        project,
+        ["config", "--download", "--harness", "codex", "--mcp", "none", "--yes", "--project-dir", project],
+        { AIDLC_RELEASE_BASE_URL: release.baseUrl },
+        undefined,
+        elsewhere,
+      );
+      const deadline = Date.now() + 120_000;
+      while (!release.requests.some((path) => path.endsWith(asset)) && Date.now() < deadline) await Bun.sleep(20);
+      rmSync(elsewhere, { recursive: true, force: true });
+      const { status, out } = await run;
+      expect(status, out).not.toBe(0);
+      expect(out).toContain("error: ENOENT");
+    } finally {
+      release.stop();
+    }
   });
 
   test("the newer tool's commands name the project's own tool, not where the runtime was unpacked", () => {
