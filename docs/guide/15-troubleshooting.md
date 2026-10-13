@@ -626,13 +626,19 @@ AI-DLC. Answer the question it shows. If it keeps coming back, run
 reply. A long chat that compacts its context while the question waits keeps
 the question open, so your answer still counts.
 
-If AI-DLC says the workspace source cannot be read, the plan cannot be approved
-yet, because nothing could say what the build starts from. Repair the source
-boundary the message names (add the offending path to the exclude list in
-`.aidlc-source-paths.json`, declare real source under an excluded directory in
-its paths list, or remove a broken symlink), then run `/aidlc` (`$aidlc` on
-Codex). `/aidlc --doctor` has a "Workspace source boundary binds" check that
-names the failing path.
+If AI-DLC says the project's files cannot all be read, or that the workspace
+source cannot be bound (a link that loops, a tree too large to read, or a
+source path outside the project), what happens depends on your settings. Under Guard Policy strict with plan approval on, the
+plan cannot be approved yet, because nothing could say what the build starts
+from. Otherwise the plan question is asked as usual (with plan approval off,
+the plan is built as written) and the build starts without a check of the
+project's files, with one line that says so. To have the files checked, repair
+the source boundary the message names (add the offending path to the exclude
+list in `.aidlc-source-paths.json`, which looks like
+`{"version":1,"exclude":["<path>"]}`, declare real source under an excluded
+directory in its paths list, or remove a broken symlink), then run `/aidlc`
+(`$aidlc` on Codex). `/aidlc --doctor` has a "Workspace source boundary binds"
+check that names the failing path and says which of these applies to you.
 
 If the plan's Testing Contract is refused, the message names one of three
 causes: the block is missing, it is not valid JSON, or it changed after it was

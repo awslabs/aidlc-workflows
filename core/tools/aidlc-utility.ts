@@ -142,6 +142,10 @@ import {
   localUnitClaimOverviewForIntent,
   main as unitMain,
 } from "./aidlc-unit.ts";
+import {
+  codeGenerationBuildsWithoutSource,
+  PLAN_APPROVAL_REPAIR_SOURCE_BOUNDARY_REMEDY,
+} from "./aidlc-testing-posture.ts";
 import { unitProgress } from "./aidlc-unit-walk-view.ts";
 import {
   isBindableIntentRecordName,
@@ -5452,10 +5456,13 @@ export async function collectDoctorReport(
   }
 
   // 6c. Workspace source boundary. Plan Approval binds a plan to the source
-  // fingerprint of the workspace; when that walk fails, every decision on a
-  // Code Generation plan is refused as "unbindable". Run the same walk here so
-  // the reason (which budget or path) is visible before the checkpoint is, and
-  // only when workflow state exists (the same self-gate the project checks use).
+  // fingerprint of the workspace; when that walk fails, a decision on a Code
+  // Generation plan is refused as "unbindable" only while the plan-approval
+  // check holds, and otherwise the build starts without that record. Run the
+  // same walk here so the reason (which budget or path) is visible before the
+  // checkpoint is, and say which of the two the settings in force do, from the
+  // same decision the plan question makes. Only when workflow state exists
+  // (the same self-gate the project checks use).
   if (existsSync(stateMdPath)) {
     let sourceState: WorkspaceSourceState | null = null;
     try {
@@ -5473,16 +5480,24 @@ export async function collectDoctorReport(
       const where = failure === null
         ? "no reason was recorded"
         : `${failure.code}${failure.path !== undefined ? ` at ${failure.repo !== undefined ? `${failure.repo}/${failure.path}` : failure.path}` : ""}: ${failure.detail}`;
+      let planApprovalOff = false;
+      try {
+        planApprovalOff = resolvePlanApprovalSetting(projectDir, stateContent).value === "off";
+      } catch {
+        planApprovalOff = false;
+      }
+      const builds = codeGenerationBuildsWithoutSource(projectDir, { unit: null }, planApprovalOff);
       results.push({
         pass: false,
         label: `Workspace source boundary binds: no (${where})`,
-        fix:
-          "Plan Approval decisions are refused while the source cannot be bound. " +
-          "Add the offending path to the exclude list in .aidlc-source-paths.json " +
-          "({\"version\":1,\"exclude\":[\"<path>\"]}), declare the real source under an excluded " +
-          "directory in its paths list, or remove the broken symlink; then run " +
-          "next. Last resort, only on your own word: ask the assistant in chat to build the plan " +
-          "anyway, and it is recorded as your approval with no check of the project's files.",
+        fix: builds
+          ? `${planApprovalOff
+            ? "Plan approval is off for this piece of work, so the plan is built as written, without a check of the project's files."
+            : "The plan question is asked as usual, and the build starts without a check of the project's files."} ` +
+            PLAN_APPROVAL_REPAIR_SOURCE_BOUNDARY_REMEDY
+          : "Plan Approval decisions are refused while the source cannot be bound. " +
+            `${PLAN_APPROVAL_REPAIR_SOURCE_BOUNDARY_REMEDY} Last resort, only on your own word: ask the assistant ` +
+            "in chat to build the plan anyway, and it is recorded as your approval with no check of the project's files.",
       });
     }
   }

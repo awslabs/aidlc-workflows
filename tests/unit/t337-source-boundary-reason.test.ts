@@ -13,7 +13,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { aidlcInvocation } from "../../core/tools/aidlc-runtime-paths.ts";
 import {
@@ -21,6 +21,7 @@ import {
   workspaceSourceFailureSuffix,
   workspaceSourceState,
 } from "../../core/tools/aidlc-lib.ts";
+import { PLAN_APPROVAL_REPAIR_SOURCE_BOUNDARY_REMEDY } from "../../core/tools/aidlc-testing-posture.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -162,6 +163,58 @@ describe("t337 doctor: Workspace source boundary binds", () => {
     expect(out).toContain("ask the assistant in chat to build the plan anyway");
     expect(out).not.toContain("Override Plan Approval");
     expect(status).not.toBe(0);
+  });
+
+  // What doctor says next to the failing row is what the plan question does
+  // under the settings in force: refused only while the plan-approval check
+  // holds (Guard Policy strict, plan approval on); otherwise the plan goes on
+  // and the build starts without a check. The repair words are the refusal's own.
+  function unboundProject(policyLines: string): string {
+    const project = createOrchestrationTestProject();
+    created.push(project);
+    seedStateFile(project, "state-brownfield-feature.md");
+    const state = seededStateFile(project);
+    writeFileSync(state, readFileSync(state, "utf-8").replace("- **Change Control**: strict (from scope feature)", policyLines));
+    mkdirSync(join(project, "src"), { recursive: true });
+    writeFileSync(join(project, "src", "main.ts"), "export const main = 1;\n");
+    writeFileSync(join(project, "README.md"), "# fixture\n");
+    return project;
+  }
+
+  test("under strict with plan approval on it says decisions are refused, with the repair and the last resort", () => {
+    const project = unboundProject("- **Guard Policy**: strict (from scope enterprise)");
+    const { status, out } = runDoctor(project, { [ENTRIES_BUDGET]: "1" });
+    expect(out).toMatch(/\bfail\s+Workspace source boundary binds: no \(budget-entries at \./);
+    expect(out).toContain(
+      `fix: Plan Approval decisions are refused while the source cannot be bound. ${PLAN_APPROVAL_REPAIR_SOURCE_BOUNDARY_REMEDY} Last resort,`,
+    );
+    expect(out).toContain("ask the assistant in chat to build the plan anyway");
+    expect(status).not.toBe(0);
+  });
+
+  test.each(["off", "relaxed"] as const)("under Guard Policy %s the plan question is asked and the build starts without a check", (policy) => {
+    const project = unboundProject(`- **Guard Policy**: ${policy} (from scope feature)`);
+    const { status, out } = runDoctor(project, { [ENTRIES_BUDGET]: "1" });
+    expect(out).toMatch(/\bfail\s+Workspace source boundary binds: no \(budget-entries at \./);
+    expect(out).toContain(
+      "fix: The plan question is asked as usual, and the build starts without a check of the project's files. " +
+        PLAN_APPROVAL_REPAIR_SOURCE_BOUNDARY_REMEDY,
+    );
+    expect(out).not.toContain("refused");
+    expect(out).not.toContain("build the plan anyway");
+    expect(status).not.toBe(0);
+  });
+
+  test.each(["off", "strict"] as const)("with plan approval off under Guard Policy %s the plan is built as written without a check", (policy) => {
+    const project = unboundProject(`- **Guard Policy**: ${policy} (set by you)\n- **Plan Approval**: off (set by you)`);
+    const { out } = runDoctor(project, { [ENTRIES_BUDGET]: "1" });
+    expect(out).toContain(
+      "fix: Plan approval is off for this piece of work, so the plan is built as written, without a check of the " +
+        `project's files. ${PLAN_APPROVAL_REPAIR_SOURCE_BOUNDARY_REMEDY}`,
+    );
+    expect(out).not.toContain("refused");
+    expect(out).not.toContain("plan question");
+    expect(out).not.toContain("build the plan anyway");
   });
 
   test("is skipped when no workflow state exists", () => {
