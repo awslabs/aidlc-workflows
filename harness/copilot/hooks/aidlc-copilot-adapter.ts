@@ -1075,12 +1075,19 @@ export async function run(
         : { status: "unrelated" };
     }
     const subArgs = normalized.slice(1);
+    // `next --request <id>` naming a `next` the hooks-off stop kept runs that
+    // command (words behind the id's `--` are the person's next request), so
+    // whether the prompt stays is judged by it. The claim's resume and jump hints stay the line's
+    // own: the kept command may belong to other work, which the engine switches
+    // to before running anything, and a hint read from it would retire this
+    // work's waiting resume choice.
+    const runs = commandKind === "next" ? keptRestartRun(projectDir, subArgs)?.args ?? subArgs : subArgs;
     // Read-only next returns a terminal print before workflow inspection and
     // touches no engine marker on other harnesses. Claiming it here advanced
     // engine_sequence, so Stop demanded a fresh bare next after a query (#1258).
-    if (commandKind === "next" && isReadOnlyNextArgv(subArgs)) {
+    if (commandKind === "next" && isReadOnlyNextArgv(runs)) {
       // `next config set` changes a setting, as `engine config set` does.
-      const vouched = !(subArgs[0] === "config" && subArgs[1] === "set") && argumentsStayInProject(subArgs);
+      const vouched = !(runs[0] === "config" && runs[1] === "set") && argumentsStayInProject(runs);
       return { status: vouched ? "terminal" : "unrelated" };
     }
     // A bare `continue` (the receipt lost) is claimed too: the engine answers it
@@ -1093,12 +1100,6 @@ export async function run(
       return { status: "unsupported", reason: `\`park\` takes no options${extra}, so it did not run. Run \`${form("park")}\`.` };
     }
     const digest = createHash("sha256").update(JSON.stringify([commandKind, ...subArgs])).digest("hex");
-    // `next --request <id>` naming a `next` the hooks-off stop kept runs that
-    // command, so whether the prompt stays is judged by it. The claim's resume
-    // and jump hints stay the line's own: the kept command may belong to other
-    // work, which the engine switches to before running anything, and a hint
-    // read from it would retire this work's waiting resume choice.
-    const runs = commandKind === "next" ? keptRestartRun(projectDir, subArgs)?.args ?? subArgs : subArgs;
     const flagValue = (name: string): string => subArgs[subArgs.lastIndexOf(name) + 1] ?? "";
     const reportResult = flagValue("--result");
     const skipRecovery = reportResult === "skipped" && subArgs.length === 6 && subArgs[0] === "--stage" && subArgs[2] === "--result" && subArgs[4] === "--reason" && flagValue("--reason") === "stage is SKIP in the approved workflow plan";

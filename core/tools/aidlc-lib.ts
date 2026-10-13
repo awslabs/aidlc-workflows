@@ -12691,6 +12691,18 @@ const ANSWER_TEXT_MAX_BYTES = 64 * 1024;
 export const REQUEST_TEXT_DIR = "aidlc/.aidlc-request-text";
 
 /**
+ * A `next` line's `--request-file <file>` pair, taken out of the line: the
+ * engine reads that file in as the person's words behind `--` before anything
+ * reads the line (nextArgsWithRequestFile). Null when the line has none; `file`
+ * is undefined when nothing follows the flag.
+ */
+export function requestFilePair(args: readonly string[]): { file: string | undefined; rest: string[] } | null {
+  const at = args.indexOf("--request-file");
+  if (at < 0) return null;
+  return { file: args[at + 1], rest: [...args.slice(0, at), ...args.slice(at + 2)] };
+}
+
+/**
  * Read one answer text file the agent wrote, then remove it. The path is
  * record-relative and must name a plain file inside ANSWER_TEXT_DIR, reached
  * through no link; nothing outside that folder is ever read.

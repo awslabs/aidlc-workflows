@@ -4728,6 +4728,15 @@ describe("a kept next run by its id is judged as the command it runs", () => {
     const jump = saveRestartRequest(dir, ["--stage", "requirements-analysis"], "default", null);
     expect(call(["next", "--skip", "user-stories"], "typed-skip")).toBeUndefined();
     expect(call(["next", "--request", skip], "kept-skip")).toBeUndefined();
+    // With words typed beside the id it is still the kept command that runs, and is judged.
+    expect(call(["next", "--request", skip, "--", "and keep the old layout"], "kept-skip-words")).toBeUndefined();
+    // A request file is read in as words behind `--` before the engine reads the line: the same kept command.
+    expect(call(["next", "--request", skip, "--request-file", "aidlc/.aidlc-request-text/request.txt"], "kept-skip-file")).toBeUndefined();
+    // Words behind the id's `--` are the person's next request, so a kept `config` never becomes a
+    // setting change: the line is judged as the kept `next config` itself.
+    const config = saveRestartRequest(dir, ["config"], "default", null);
+    expect(call(["next", "--request", config, "--", "set", "depth", "comprehensive"], "kept-config-words"))
+      .toBe(call(["next", "config"], "typed-config"));
     expect(call(["next", "--request", jump], "kept-jump")).toBe("allow");
   });
 });

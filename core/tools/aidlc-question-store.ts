@@ -17,6 +17,7 @@ import {
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
+  requestFilePair,
   SPACE_NAME_REGEX,
   sessionsDir,
   writeRecordFileNoFollow,
@@ -585,14 +586,34 @@ export function readRestartRequest(projectDir: string, id: string): RestartReque
 }
 
 /**
- * The kept stop a `next` runs: its arguments when they are `--request <id>`
- * alone, naming a kept stop that has not run; null otherwise. The engine runs
- * those arguments in its place, and a host adapter judges the command by them.
+ * A line that runs a kept stop: `--request <id>` alone, or with the person's
+ * words behind one `--`, the mark that says what follows is theirs (nothing
+ * reads them), or in a request file, which the engine reads in behind `--`
+ * before it reads the line. Null for any other line, which runs no kept stop.
+ * The same answer for the line as typed and as the engine reads it, so a host
+ * adapter that never opens the file judges the command the engine runs.
+ */
+export function keptRestartLine(args: readonly string[]): { id: string; words: boolean } | null {
+  const pair = requestFilePair(args);
+  const line = pair === null ? args : pair.rest;
+  if (line.length < 2 || line[0] !== "--request" || !QUESTION_ID.test(line[1])) return null;
+  if (pair !== null) return line.length === 2 ? { id: line[1], words: true } : null;
+  if (line.length === 2) return { id: line[1], words: false };
+  return line[2] === "--" ? { id: line[1], words: line.slice(3).some((word) => word.trim() !== "") } : null;
+}
+
+/**
+ * The kept stop a `next` runs: a `keptRestartLine` naming a kept stop that has
+ * not run; null otherwise. Words behind the id's `--` are the person's next
+ * request, not part of the kept one, so the kept command runs as it was kept.
+ * The engine runs its arguments in place of the line, and a host adapter judges
+ * the command by them.
  */
 export function keptRestartRun(projectDir: string, args: readonly string[]): RestartRequest | null {
-  if (args.length !== 2 || args[0] !== "--request" || !QUESTION_ID.test(args[1])) return null;
-  const request = readRestartRequest(projectDir, args[1]);
-  return request === null || restartRequestTaken(projectDir, args[1]) ? null : request;
+  const line = keptRestartLine(args);
+  if (line === null) return null;
+  const request = readRestartRequest(projectDir, line.id);
+  return request === null || restartRequestTaken(projectDir, line.id) ? null : request;
 }
 
 /** Whether the stopped `next` kept under `id` was already run once (a link in the mark's place counts). */

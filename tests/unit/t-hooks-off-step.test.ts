@@ -679,7 +679,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     expect(picked.message ?? "").toContain("report --result resumed");
   });
 
-  test("long stopped words reach the print cut, so the step still fits", () => {
+  test("long stopped words reach the print whole; only words no step can carry are cut", () => {
     const words = "take me back to requirements analysis and keep the old layout ".repeat(60).trim();
     const proj = installed(OPENCODE);
     intentCreate(proj, OPENCODE);
@@ -687,8 +687,18 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     beat(proj, "reviewer-scope");
     const picked = next(proj, OPENCODE, {}, ["--request", id]);
     expect(picked.kind, JSON.stringify(picked).slice(0, 300)).toBe("print");
-    expect(picked.message ?? "").toStartWith('The person\'s words, typed before the restart and kept by AI-DLC (this chat never saw them): "take me back');
-    expect(picked.message ?? "").not.toContain(words);
+    expect(picked.message ?? "").toContain(JSON.stringify(words));
+    // Longer than any step can carry: cut, and the step says so, still a print.
+    // Quotes and line breaks cost more once the step is written out: measured there.
+    const huge = 'keep the "old" layout\nand the old colours '.repeat(1200).trim();
+    const big = installed(OPENCODE);
+    intentCreate(big, OPENCODE);
+    const bigId = idIn(next(big, OPENCODE, {}, ["--", huge]));
+    beat(big, "reviewer-scope");
+    const cut = next(big, OPENCODE, {}, ["--request", bigId]);
+    expect(cut.kind, JSON.stringify(cut).slice(0, 300)).toBe("print");
+    expect(cut.message ?? "").toContain("(cut to fit this step)");
+    expect(cut.message ?? "").not.toContain(huge);
   });
 
   test("it runs in the work it was stopped in, never in work selected since", () => {
@@ -707,6 +717,9 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     expect(elsewhere.kind, JSON.stringify(elsewhere)).toBe("print");
     expect(elsewhere.message ?? "").toContain(`intent switch ${first}`);
     expect(elsewhere.message ?? "").toContain(`next --request ${id}\` again`);
+    // Words typed beside the id ride the same line through the switch.
+    const withWords = next(proj, OPENCODE, {}, ["--request", id, "--", "and keep the old layout"]);
+    expect(withWords.message ?? "").toContain(`next --request ${id} -- <the words typed beside it>\` again`);
     // Nothing ran: once that work is selected, the same command runs it.
     const switched = run(proj, [join(proj, OPENCODE.dir, "tools", "aidlc.ts"), "engine", "intent", "switch", first], attendedEnv());
     expect(switched.code, switched.stdout + switched.stderr).toBe(0);
@@ -728,14 +741,66 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
   });
 
-  test("the id runs alone: anything beside it is refused", () => {
+  test("words typed beside the id are the next request: the kept one runs as kept, once", () => {
+    // Behind `--` every word is theirs, a flag-shaped or plan word too.
+    for (const beside of [["--", "and keep the old layout"], ["--", "add", "a", "--json", "output", "option"], ["--", "bugfix", "the", "login"]]) {
+      const proj = installed(OPENCODE);
+      intentCreate(proj, OPENCODE);
+      const id = idIn(next(proj, OPENCODE, {}, JUMP));
+      beat(proj, "reviewer-scope");
+      const picked = next(proj, OPENCODE, {}, ["--request", id, ...beside]) as Printed & { narration?: string };
+      expect(picked.kind, JSON.stringify(picked)).toBe("print");
+      expect(picked.narration ?? "", JSON.stringify(picked)).toStartWith(LINE);
+      expect(picked.message ?? "").toContain("execute --target requirements-analysis");
+      // The words typed here go on as the person's next request, not into the kept one.
+      // Named, not quoted: the person's words are in this chat whole.
+      expect(picked.message ?? "").toContain("words are their next request, not part of this one");
+      expect(picked.message ?? "").not.toContain(beside.filter((word) => word !== "--").join(" "));
+      expect(picked.message ?? "").not.toContain("typed before the restart");
+      expect(ran(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
+    }
+    // In a request file the words are theirs as behind `--`, and an empty `--` carries none.
+    const filed = installed(OPENCODE);
+    intentCreate(filed, OPENCODE);
+    const filedId = idIn(next(filed, OPENCODE, {}, JUMP));
+    beat(filed, "reviewer-scope");
+    mkdirSync(join(filed, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(filed, "aidlc", ".aidlc-request-text", "request.txt"), "and keep the old layout\n");
+    const fromFile = next(filed, OPENCODE, {}, ["--request", filedId, "--request-file", "aidlc/.aidlc-request-text/request.txt"]);
+    expect(fromFile.kind, JSON.stringify(fromFile)).toBe("print");
+    expect(fromFile.message ?? "").toContain("execute --target requirements-analysis");
+    expect(fromFile.message ?? "").toContain("words are their next request, not part of this one");
+    const empty = installed(OPENCODE);
+    intentCreate(empty, OPENCODE);
+    const emptyId = idIn(next(empty, OPENCODE, {}, JUMP));
+    beat(empty, "reviewer-scope");
+    const bare = next(empty, OPENCODE, {}, ["--request", emptyId, "--", ""]);
+    expect(bare.message ?? "").toContain("execute --target requirements-analysis");
+    expect(bare.message ?? "").not.toContain("words are their next request");
+    // Stopped again with words beside it: the kept command stays as it was kept.
+    const again = installed(OPENCODE);
+    intentCreate(again, OPENCODE);
+    const id = idIn(next(again, OPENCODE, {}, JUMP));
+    const stoppedAgain = next(again, OPENCODE, {}, ["--request", id, "--", "and keep the old layout"]);
+    expect(isStop(stoppedAgain)).toBe(true);
+    expect(idIn(stoppedAgain)).toBe(id);
+    expect(stoppedAgain.message ?? "").toContain("are not kept; send them again after the restart");
+    const kept = JSON.parse(readFileSync(join(again, "aidlc", ".aidlc-sessions", "restarts", `${id}.json`), "utf-8")) as { args: string[] };
+    expect(kept.args).toEqual(JUMP);
+  });
+
+  test("anything beside the id but words behind -- runs nothing and gives the agent its step", () => {
     const proj = installed(OPENCODE);
     intentCreate(proj, OPENCODE);
     const id = idIn(next(proj, OPENCODE, {}, JUMP));
     beat(proj, "reviewer-scope");
-    const refused = next(proj, OPENCODE, {}, ["--request", id, "--resume"]);
-    expect(refused.kind).toBe("error");
-    expect(refused.message ?? "").toContain("with nothing beside it");
+    const beside = [["--resume"], ["--json"], ["add", "a", "--json", "output", "option"], ["and", "keep", "the", "old", "layout"]];
+    for (const line of [...beside.map((words) => ["--request", id, ...words]), ["and", "keep", "the", "old", "layout", "--request", id]]) {
+      const step = next(proj, OPENCODE, {}, line);
+      expect(step.kind, JSON.stringify(step)).toBe("print");
+      expect(step.message ?? "").toContain("Nothing ran.");
+      expect(step.message ?? "").toContain(`or with \`--\` before the words typed beside it (\`next --request ${id} -- <their words>\`)`);
+    }
     expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
   });
 
@@ -812,10 +877,14 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     const again = next(proj, OPENCODE, {}, ["--request", id]);
     expect(ran(again)).toBe(true);
     expect(again.message ?? "").toContain("If it was refused then, ask for it again.");
-    // Used, with more beside it: that more is sent again without the id, never dropped.
+    // Used, with words beside it: those words still go on as the next request, never asked for again.
     const beside = next(proj, OPENCODE, {}, ["--request", id, "--", "also add a logout button"]);
-    expect(beside.kind).toBe("error");
-    expect(beside.message ?? "").toContain(`was already used once, so it is not run again. Send what was typed beside it`);
+    expect(ran(beside)).toBe(true);
+    expect(beside.message ?? "").toContain("those words are their next request");
+    // Used, with a flag beside it: nothing ran, and the agent runs the flag without the id.
+    const flag = next(proj, OPENCODE, {}, ["--request", id, "--resume"]);
+    expect(flag.kind, JSON.stringify(flag)).toBe("print");
+    expect(flag.message ?? "").toContain(`Run what was typed beside it without \`--request ${id}\``);
   });
 
   test("a refused kept request with no words shows the line to ask for it again", () => {
@@ -847,8 +916,9 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     const id = idIn(next(proj, OPENCODE, {}, JUMP));
     beat(proj, "reviewer-scope");
     const both = next(proj, OPENCODE, {}, ["--request", id, "--request", "0badc0de"]);
-    expect(both.kind, JSON.stringify(both)).toBe("error");
-    expect(both.message ?? "").toContain("with nothing beside it");
+    expect(both.kind, JSON.stringify(both)).toBe("print");
+    expect(both.message ?? "").toContain("Nothing ran.");
+    expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
   });
 
   // Windows: a folder's mode does not stop a write there; as root nothing does.
