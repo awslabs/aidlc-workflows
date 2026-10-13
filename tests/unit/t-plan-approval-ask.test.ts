@@ -2012,6 +2012,24 @@ describe("after approval, whatever the engine said last", () => {
     }
   });
 
+  // Only this work's own Code Generation step stands in when it is out of date.
+  test("an out-of-date step of another stage or another piece of work is not read for the approval", () => {
+    const { pd } = groupedProject();
+    reply(pd, "approve all");
+    expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
+    const file = join(activeDirectiveStorageDir(pd), "active-directive.json");
+    const issued = JSON.parse(readFileSync(file, "utf-8")) as Record<string, unknown>;
+    const route = (change: Record<string, unknown>) => {
+      writeFileSync(file, JSON.stringify({ ...issued, state_sha256: stateDigest("# an earlier state\n"), ...change }));
+      return routeCodeGenerationPlanApproval(pd, {
+        kind: "run-stage", stage: "code-generation", unit: "alpha",
+      } as Parameters<typeof routeCodeGenerationPlanApproval>[1]) as unknown as Emitted;
+    };
+    expect(route({}).plan_approval).toEqual({ status: "approved" });
+    expect(route({ stage: "functional-design" }).kind).toBe("ask");
+    expect(route({ intent_uuid: "01995000-7a11-7000-8000-00000000ffff" }).kind).toBe("ask");
+  });
+
   // "Review the plan first" is the person's own request, whatever the engine
   // said last: the plan is shown for approval again before anything is built.
   for (const how of INTERRUPTIONS) {
