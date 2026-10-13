@@ -355,7 +355,7 @@ Session re-entry, bare or with `--resume`, carries on (option 1) with no menu. T
 
 ## Scope-to-Stage Mapping
 
-The scope determines which of the 33 stages execute and at what depth. Stages not in scope are skipped: no approval gate is presented, and where the harness has a task list their task is marked completed with a skip note. All scopes begin with the Initialization phase (0.1-0.3).
+The scope determines which of the 33 stages execute and at what depth. Stages not in scope are skipped: no task is created for them and no approval gate is presented. All scopes begin with the Initialization phase (0.1-0.3).
 
 ### Complete Mapping
 
@@ -514,7 +514,7 @@ The 6-step process:
    session. The field selects reviewer, ensemble, Construction, and swarm
    contracts; the SKILL's prose triggers are the compatibility fallback.
 5. **Execute steps directly in conversation.** The orchestrator performs the stage work inline: asking questions, analyzing answers, producing artifacts, and interacting with the user.
-6. **Follow stage-protocol.md for approval gates.** Every inline stage (except the 3 Initialization stages) ends with the 5-part completion message and an `AskUserQuestion` approval gate, unless its directive is completion-only (Construction work the person already approved Unit by Unit), which reports without a question.
+6. **Follow stage-protocol.md for approval gates.** Every inline stage (except the 3 Initialization stages) ends with the 5-part completion message and an `AskUserQuestion` approval gate, unless its directive carries `construction_policy.human_completion_required: false` (autonomous Construction, or the completion-only close of Construction work the person already approved Unit by Unit), which reports without a question.
 7. **Return control to the engine.** After approval, the conductor reports the outcome; the engine atomically updates state, logs completion, and routes to the next stage.
 
 ### Dispatched and Hybrid Execution
@@ -894,7 +894,7 @@ The orchestration engine owns every transition above. The conductor reports outc
 
 ### Phase Boundary Verification
 
-At phase transitions (initialization to the first phase the plan runs, ideation to inception, inception to construction, construction to operation), the state transition the conductor's `report` triggers emits PHASE_COMPLETED + PHASE_VERIFIED + PHASE_STARTED; the conductor never calls `advance` itself. The traceability check from `.claude/knowledge/aidlc-shared/verification.md` runs before that report, in the stage that ends the phase (Approval & Handoff, Delivery Planning and CI Pipeline write `phase-check-<phase>.md`); if verification fails, surface the issues to the user before proceeding.
+At phase transitions (ideation to inception, inception to construction, construction to operation), the state transition the conductor's `report` triggers emits PHASE_COMPLETED + PHASE_VERIFIED + PHASE_STARTED; intent creation writes the same three for Initialization, and the conductor never calls `advance` itself. PHASE_VERIFIED records the crossing, not a check: the traceability check from `.claude/knowledge/aidlc-shared/verification.md` runs only in Approval & Handoff, Delivery Planning and CI Pipeline (each writes `phase-check-<phase>.md` before its report), so a plan without that stage crosses with no check; if verification fails, surface the issues to the user before proceeding.
 
 ---
 
@@ -964,7 +964,7 @@ The following intentional differences from the upstream `aidlc-workflows/` refer
 | 13 | State file naming | `state.md` | `aidlc-state.md` | Hooks hardcode path; changing breaks scripts |
 | 14 | Rules in the memory layer | Multiple rule files | The space memory files (`org.md` holds working practices, walking skeleton, testing, Guard Policy, deployment, code style and guardrails; `team.md`, `project.md`, phase files), delivered to each stage in its rule bundle | Avoids context bloat in non-AI-DLC conversations |
 | 15 | Scope-to-stage mapping location | In rules | File-authored: `.claude/scopes/aidlc-<name>.md` (identity) + per-stage `scopes:` frontmatter (membership), transposed at compile into `scope-grid.json` (the runtime source the engine reads) | Scope is a file-authored primitive; no `scope-mapping.json`, no SKILL.md-resident routing |
-| 16 | Agent tool access | Scoped restrictions | No per-agent grant: every persona inherits the session toolset, `Task` denied | A persona narrows only by an explicit `tools:` allowlist, which none ships |
+| 16 | Agent tool access | Scoped restrictions | No authored persona carries a `tools:` list, so on Claude Code each inherits the session toolset, `Task` denied | Other harnesses project the personas to their native tool lists (row 17) |
 | 17 | No nested delegation | Agents can delegate | Authored/Claude personas deny `Task`; other harnesses project the same boundary to native tool policy | Prevents cascading subagent chains |
 | 18 | Flat agent location | `.claude/agents/aidlc/*.md` | `.claude/agents/*.md` | Matches Claude Code standard discovery |
 | 19 | Agent memory | `memory: project` defined | Omitted | Not a supported Claude Code frontmatter field |
