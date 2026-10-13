@@ -164,6 +164,7 @@ function emitForWithProject(
   fixture: string,
   slug: string,
   seedArtifacts?: (proj: string) => void,
+  orch: string = ORCH,
 ): { directive: RunStageDirective; projectDir: string } {
   const proj = createTestProject();
   tempDirs.push(proj);
@@ -190,7 +191,7 @@ function emitForWithProject(
     delete e.AWS_AIDLC_DEFAULT_SCOPE;
     return e;
   })();
-  let res = spawnSync(BUN, [ORCH, "next", "--project-dir", proj], {
+  let res = spawnSync(BUN, [orch, "next", "--project-dir", proj], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
@@ -209,7 +210,7 @@ function emitForWithProject(
     expect(dir.receipt).toBeString();
     res = spawnSync(
       BUN,
-      [ORCH, "continue", dir.receipt ?? "", "--project-dir", proj],
+      [orch, "continue", dir.receipt ?? "", "--project-dir", proj],
       { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
     );
   }
@@ -727,6 +728,20 @@ describe("t116 inline context roster", () => {
     });
     expect(directive.mode).toBe("mob");
     expect(directive.inline_context_paths[0]).toBe(".claude/agents/aidlc-product-agent.md");
+    expect(directive.inline_context_paths[1]).toBe(own);
+  });
+
+  // Kiro IDE's lead reads the persona copy without the tool permissions; it is
+  // still the persona, so it still comes first and the team's knowledge second.
+  test("18c: on Kiro IDE a mob lead reads its persona copy first, then its project knowledge", () => {
+    const own = `aidlc/spaces/${DEFAULT_SPACE}/knowledge/aidlc-product-agent/stories-conventions.md`;
+    const { directive } = emitForWithProject("state-construction.md", "user-stories", (proj) => {
+      const absolute = join(proj, ...own.split("/"));
+      mkdirSync(dirname(absolute), { recursive: true });
+      writeFileSync(absolute, "# Story conventions\n", "utf-8");
+    }, join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "tools", "aidlc-orchestrate.ts"));
+    expect(directive.mode).toBe("mob");
+    expect(directive.inline_context_paths[0]).toBe(".kiro/aidlc-common/personas/aidlc-product-agent.md");
     expect(directive.inline_context_paths[1]).toBe(own);
   });
 

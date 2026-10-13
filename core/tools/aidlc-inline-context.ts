@@ -97,7 +97,8 @@ export function inlineAgentsFor(node: GraphStage): string[] {
 // belongs to (null for the aidlc-shared tree, which belongs to every agent) -
 // the deliver-once derivation filters on it. inlineContextPaths below is the
 // path-only projection the directive's roster field carries.
-export type InlineContextEntry = { abs: string; rel: string; agent: string | null };
+// `persona` marks a persona file, which the roster lists before any knowledge.
+export type InlineContextEntry = { abs: string; rel: string; agent: string | null; persona?: true };
 type PluginKnowledgeOwners = ReadonlyMap<string, ReadonlySet<string>>;
 
 // Minimal scopes still load every active-space rule, persona, stage file,
@@ -369,6 +370,7 @@ export function shippedInlineContextEntries(
       abs: persona,
       rel,
       agent,
+      persona: true,
     });
   }
   const sharedRoot = join(harnessRoot, "knowledge", "aidlc-shared");
