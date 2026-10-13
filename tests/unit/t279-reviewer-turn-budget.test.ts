@@ -65,9 +65,8 @@ const REVIEWERS = [
 
 const CAP = "60";
 const REVIEWER_MODULE = "aidlc-common/protocols/stage-protocol-reviewer.md";
-// A Unit's review rules and a re-dispatch's context, named on the reviews that take them.
+// A Unit's review rules, named on the reviews that take them.
 const REVIEWER_UNIT_MODULE = "aidlc-common/protocols/stage-protocol-reviewer-unit.md";
-const REVIEWER_REPAIR_MODULE = "aidlc-common/protocols/stage-protocol-reviewer-repair.md";
 const SKILL = join("skills", "aidlc", "SKILL.md");
 const MISSING_VERDICT_FINDING = "review did not complete within its turn budget";
 
@@ -236,7 +235,11 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(request).toBeGreaterThan(-1);
       expect(hydrate).toBeGreaterThan(request);
       expect(dispatch).toBeGreaterThan(hydrate);
-      const repair = readFileSync(path.replace(REVIEWER_MODULE, REVIEWER_REPAIR_MODULE), "utf-8");
+      // The file name only: join() gives backslashes on Windows.
+      const repair = readFileSync(
+        path.replace("stage-protocol-reviewer.md", "stage-protocol-reviewer-repair.md"),
+        "utf-8",
+      );
       expect(repair).toContain("settled decisions from the engine-owned list");
       expect(repair.replace(/\s+/g, " ")).toContain(
         "excludes fixed findings",
