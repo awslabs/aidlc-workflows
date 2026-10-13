@@ -10215,13 +10215,13 @@
   "question": "scope-confirm",
   "shown": "numbered",
   "via": "chat",
-  "input": "2",
-  "meaning": "the person means: pick option 2 (Tailor a plan to this task)",
+  "input": "3",
+  "meaning": "the person means: pick option 3 (Tailor a plan to this task)",
   "reader": "agent",
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": "2",
+    "words": "3",
     "step": "none",
     "no_ask": true
    },
@@ -10240,13 +10240,13 @@
   "question": "scope-confirm",
   "shown": "numbered",
   "via": "chat",
-  "input": "2. Tailor a plan to this task",
+  "input": "3. Tailor a plan to this task",
   "meaning": "the person means: Tailor a plan to this task (the numbered line as shown)",
   "reader": "agent",
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": "2. Tailor a plan to this task",
+    "words": "3. Tailor a plan to this task",
     "step": "none",
     "no_ask": true
    },
@@ -10265,13 +10265,13 @@
   "question": "scope-confirm",
   "shown": "numbered",
   "via": "chat",
-  "input": "the second one",
-  "meaning": "the person means: option 2 (Tailor a plan to this task), said in words; the agent reads the order the options were shown in",
+  "input": "the third one",
+  "meaning": "the person means: option 3 (Tailor a plan to this task), said in words; the agent reads the order the options were shown in",
   "reader": "agent",
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": "the second one",
+    "words": "the third one",
     "step": "none",
     "no_ask": true
    },
