@@ -447,16 +447,35 @@ this kind of work. Here it picked `mvp`; your words may get another:
  gates, 5 stages repeat per unit of work in Construction; lead agent only. Do you want me to go
  ahead with it, use a different plan, or tailor one to this task?
  > 1. Go ahead with the "mvp" plan
-      Skip operations, ship the core: 19 stages through Ideation, Inception and Construction.
-   2. Tailor a plan to this task
-      Build a plan fitted to this specific task instead of a ready-made one.
-   3. Type something.
-   4. Chat about this
+      19 stages: skips operations and ships the core API.
+   2. Use a different plan
+      Pick another ready-made plan (e.g. classic, feature, express, poc).
+   3. Tailor a plan to this task
+      Have a plan composed specifically for this work.
+   4. Type something.
+   5. Chat about this
 ```
 
-Go ahead starts the work. To run another ready-made plan, choose **Type
-something** and name it, for example `feature` or `mvp`;
-[Workflow Profiles](workflow-profiles.md) describes each one. **Tailor** has
+Go ahead starts the work. **Use a different plan** lists the others with their
+length, and you pick one or type its name:
+
+```text
+ Plan
+ Which plan would you like for the inventory REST API?
+ > 1. classic (14 stages)
+      V1-style ceremony through Inception and Construction - the implicit default.
+   2. feature (29 stages)
+      Full lifecycle for new features, practical depth.
+   3. express (6 stages)
+      Lightest run: requirements to deploy, no design pass, no reviewers.
+   4. poc (4 stages)
+      Prove feasibility fast.
+   5. Type something.
+   6. Chat about this
+```
+
+This run typed "mvp after all" there and went on with `mvp`.
+[Workflow Profiles](workflow-profiles.md) describes each plan. **Tailor** has
 the agent propose a plan of its own from your words.
 
 Every question also offers **Type something** (your own answer) and **Chat

@@ -112,9 +112,10 @@ they do not). For the inventory API the agent proposed `mvp`, 19 stages; a
 `feature` plan runs all 33. You can:
 
 - go ahead with the proposed plan;
+- use a different plan: the agent lists the other ready-made plans with their
+  length, and you pick one or type its name;
 - tailor a plan to this task, so the agent proposes a set of stages of its own
-  from your words;
-- type the name of another plan, for example `feature`.
+  from your words.
 
 [Workflow Profiles](workflow-profiles.md) describes each plan, and
 [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) how to change depth
