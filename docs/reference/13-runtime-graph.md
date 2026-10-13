@@ -363,9 +363,10 @@ removes it; neither emits an audit row. The compile populates
 `STATE_FORKED` rows for at least two distinct Bolt slugs. The full
 lifecycle is in section 11.
 
-Nothing reads the worktree fragment back: `resume` reports from
-`aidlc-state.md` and the audit tail (above), and main's post-merge
-`runtime-graph.json` is rebuilt from main's audit shards.
+No consumer reads the worktree fragment's content: `fragment-merge`
+hashes and removes it, a swarm recovery moves it into its resume archive,
+`resume` reports from `aidlc-state.md` and the audit tail (above), and
+main's post-merge `runtime-graph.json` is rebuilt from main's audit shards.
 
 ---
 
