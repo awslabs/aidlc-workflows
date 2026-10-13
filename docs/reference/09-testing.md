@@ -965,7 +965,7 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 | `AIDLC_TEST_GUARD_PROFILE` | `fixture` (runner-set) | Runner-provided diagnostic for tests: `fixture` or `production`, selected by the runner CLI. An inherited value does not select the profile; the runner replaces it in every test child. |
 | `AIDLC_TEST_COMPILED_DIR` | `<runner log dir>/compiled` (runner-set) | Run-owned handoff from t238 to t249: the verified native `aidlc` / `aidlc.exe` plus adjacent `runtime/`. The runner replaces inherited values in every child, keeping the artifact outside per-file temp cleanup and isolated from other runs. |
 | `AIDLC_TEST_COMPILED_EXECUTABLE` | unset | Optional existing executable for direct, non-sharded t249 invocations without a runner handoff. Never a build destination; it cannot replace a missing sharded handoff. |
-| `AIDLC_TUI_SETTING_SOURCES` | `project` | Setting sources injected into live `claude` TUI launches. Use `default` or an empty value only for focused calibration that intentionally includes user/local Claude settings. |
+| `AIDLC_TUI_SETTING_SOURCES` | `project,local` | Setting sources injected into live `claude` TUI launches: the project's settings and its own `.claude/settings.local.json` (where AI-DLC's status line is the person's choice), never user settings. Use `default` or an empty value only for focused calibration that intentionally includes user Claude settings. |
 | `AIDLC_TUI_TRACE_POLL_MS` | `10000` | Minimum interval between `answer_gate_poll` snapshots in TUI NDJSON traces while a long journey is waiting for the next menu or disk terminator. |
 | `AIDLC_ACP_DIAGNOSTIC_TRACE` | unset | Set to `1` with ACP debug tracing to write a private `<trace>.protocol.ndjson` sidecar containing tool input/chunk events, session/turn identity, cancellation requests and aggregate input shapes. Excludes agent-prose events, prompt/auth RPC bodies and process environment. Tool inputs remain private diagnostic data. Limits: 1 MiB per event and 64 MiB per file; `diagnostic_incomplete` or `json_parse_error` means the capture cannot establish complete protocol evidence. |
 | `AIDLC_INPUT_LIVE` | unset | Set to `1` to drive a sample of the `/aidlc` input corpus through real agents (`tests/e2e/t-live-aidlc-input-corpus.serial.test.ts`); each harness keeps its own gate (`AIDLC_CODEX_EXEC_LIVE`, `AIDLC_KIRO_ACP_LIVE`, the `claude` binary). |
@@ -1038,9 +1038,11 @@ substrate preflight. This gives CI a full-tier deterministic profile without
 live-model cost or flakiness, even when CLIs are installed and live variables
 were inherited as `1`.
 
-Live SDK and TUI harness drivers default to project-only Claude setting sources.
-That means they load the copied test `.claude/` project settings and hooks while
-excluding developer user-level hooks/settings. This mirrors the installed
+Live SDK and TUI harness drivers default to the project's own Claude setting
+sources: the SDK driver loads the copied test `.claude/` project settings and
+hooks, and the TUI driver also loads that project's `.claude/settings.local.json`,
+where the person's choice of AI-DLC's status line lives. Both exclude developer
+user-level hooks/settings. This mirrors the installed
 framework surface and prevents local interactive preferences from changing test
 behavior; explicit driver options or `AIDLC_TUI_SETTING_SOURCES` remain the
 escape hatch for calibration.
