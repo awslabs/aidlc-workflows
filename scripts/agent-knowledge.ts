@@ -24,6 +24,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
+import { sharedKnowledgeWithoutFormatDocs } from "../core/tools/aidlc-inline-context.ts";
 
 // Walk core and owned-plugin stages and collect every frontmatter `reviewer:`
 // value. Cached per coreRoot - the packager calls this once per projected
@@ -105,7 +106,7 @@ export function injectDelegatedKnowledgePreflight(
     `${DELEGATED_KNOWLEDGE_PREFLIGHT}\n` +
     `**Delegated knowledge preflight (mandatory):** Before substantive work, ` +
     `ensure every readable Markdown file under these directories is loaded, in order: ` +
-    `\`${harnessDir}/knowledge/aidlc-shared/\`, ` +
+    `${sharedKnowledgeWithoutFormatDocs(harnessDir)}, ` +
     `\`${harnessDir}/knowledge/${agentName}/\`, ` +
     `\`aidlc/spaces/<active-space>/knowledge/aidlc-shared/\`, then ` +
     `\`aidlc/spaces/<active-space>/knowledge/${agentName}/\`. ` +

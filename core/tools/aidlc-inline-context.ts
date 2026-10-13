@@ -166,14 +166,21 @@ const SHIPPED_INLINE_KNOWLEDGE: Readonly<
 // taxonomy, the worktree info schema, and the state, memory and knowledge
 // README templates. They ship beside the methodology but never join a roster,
 // at any depth: each place that needs one names it by path and the agent reads
-// it there.
-const SHIPPED_FORMAT_DOCS: ReadonlySet<string> = new Set([
+// it there. A dispatched agent's knowledge preflight leaves them out the same way.
+export const SHIPPED_FORMAT_DOCS: ReadonlySet<string> = new Set([
   "audit-format.md",
   "knowledge-readme-template.md",
   "memory-template.md",
   "state-template.md",
   "worktree-info-schema.md",
 ]);
+
+// The shared folder as a dispatched agent's preflight names it.
+export function sharedKnowledgeWithoutFormatDocs(harnessDir: string): string {
+  const docs = [...SHIPPED_FORMAT_DOCS].map((doc) => `\`${doc}\``);
+  return `\`${harnessDir}/knowledge/aidlc-shared/\` (all but its format references ` +
+    `${docs.slice(0, -1).join(", ")} and ${docs[docs.length - 1]}: a step that needs one names it)`;
+}
 
 // Roster metadata read from a checkout (compiled graph, selection, ownership
 // records): only a regular file that is not a symlink and fits the cap. A FIFO,

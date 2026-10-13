@@ -101,6 +101,7 @@ import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
 import { copyStartsWithout, sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
 import { kiroIdeSteering } from "../core/tools/aidlc-includes.ts";
+import { SHIPPED_FORMAT_DOCS } from "../core/tools/aidlc-inline-context.ts";
 import { AIDLC_SETTINGS_SCHEMA } from "../core/tools/aidlc-settings.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -339,6 +340,21 @@ function projectKiroAgentJson(srcPath: string, content: Buffer): Buffer {
     writeKiroAgentSurface(content.toString("utf-8"), effective),
     "utf-8",
   );
+}
+
+// The authored Kiro agent JSONs preload the shared knowledge with a glob; a
+// dispatched agent gets the shared methodology files only, as every other
+// harness's preflight names them (SHIPPED_FORMAT_DOCS is the one list).
+function projectKiroSharedKnowledge(content: Buffer): Buffer {
+  const parsed = JSON.parse(content.toString("utf-8")) as { resources?: unknown };
+  const glob = "file://.kiro/knowledge/aidlc-shared/*.md";
+  if (!Array.isArray(parsed.resources) || !parsed.resources.includes(glob)) return content;
+  const files = readdirSync(join(CORE_ROOT, "knowledge", "aidlc-shared"))
+    .filter((file) => file.endsWith(".md") && !SHIPPED_FORMAT_DOCS.has(file))
+    .sort()
+    .map((file) => `file://.kiro/knowledge/aidlc-shared/${file}`);
+  parsed.resources = parsed.resources.flatMap((entry) => (entry === glob ? files : [entry]));
+  return Buffer.from(`${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
 }
 
 // Merge the tier-derived chat.modelDefaults entries into an authored Kiro
@@ -892,7 +908,7 @@ function buildTree(
     );
     if (harnessKind === "kiro") {
       if (src.startsWith("agents/") && src.endsWith(".json")) {
-        out = projectKiroAgentJson(srcPath, out);
+        out = projectKiroSharedKnowledge(projectKiroAgentJson(srcPath, out));
       } else if (src === "settings/cli.json") {
         out = projectKiroCliJson(out);
       }
