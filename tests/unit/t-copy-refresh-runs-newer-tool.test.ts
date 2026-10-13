@@ -108,6 +108,41 @@ function own(project: string, args: string[], extra: Record<string, string> = {}
   return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
+// A server in this process cannot answer a child that blocks it, so the
+// download runs spawn asynchronously.
+async function ownAsync(
+  project: string,
+  args: string[],
+  extra: Record<string, string>,
+  input?: string,
+): Promise<{ status: number; out: string }> {
+  const child = Bun.spawn([BUN, join(project, ".codex", "tools", "aidlc.ts"), ...args], {
+    cwd: project,
+    env: env({ AIDLC_GH_BIN: FAKE_GH, ...extra }),
+    stdin: input === undefined ? "ignore" : new TextEncoder().encode(input),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [status, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  return { status, out: `${stdout}${stderr}` };
+}
+
+// A served release whose copy runtime is the marked newer projection.
+function servedRelease(): { baseUrl: string; stop(): void } {
+  const repo = temp("aidlc-t-copy-newer-repo-");
+  codexRelease(join(repo, "dist", "codex"), NEWER, { mark: true });
+  cpSync(join(REPO_ROOT, "dist-release", "codex"), join(repo, "dist-release", "codex"), { recursive: true });
+  mkdirSync(join(repo, "scripts"));
+  for (const name of ["install.sh", "install.ps1"]) cpSync(join(REPO_ROOT, "scripts", name), join(repo, "scripts", name));
+  const root = temp("aidlc-t-copy-newer-release-");
+  writeReleaseFixture({ root, repoRoot: repo, version: NEWER, distributions: ["codex"] });
+  return serveReleaseFixture(root);
+}
+
 // A Codex project copied from 2.11.0 and set up by its own tool, with the
 // person's own lines in config.toml: a member of AI-DLC's `set` table and a
 // key of their own under its header.
@@ -220,31 +255,13 @@ describe("a copied project's refresh from a newer release runs that release's ow
   test("--download of a newer pinned release runs that release's own config", async () => {
     const project = copiedAt2110();
     writeFileSync(join(project, ".aidlc-version"), `${NEWER}\n`);
-    // A release whose copy runtime is the marked newer projection.
-    const repo = temp("aidlc-t-copy-newer-repo-");
-    codexRelease(join(repo, "dist", "codex"), NEWER, { mark: true });
-    cpSync(join(REPO_ROOT, "dist-release", "codex"), join(repo, "dist-release", "codex"), { recursive: true });
-    mkdirSync(join(repo, "scripts"));
-    for (const name of ["install.sh", "install.ps1"]) cpSync(join(REPO_ROOT, "scripts", name), join(repo, "scripts", name));
-    const root = temp("aidlc-t-copy-newer-release-");
-    writeReleaseFixture({ root, repoRoot: repo, version: NEWER, distributions: ["codex"] });
-    const server = serveReleaseFixture(root);
+    const release = servedRelease();
     const mark = join(temp("aidlc-t-copy-newer-mark-"), "ran");
     try {
-      // A server in this process cannot answer a child that blocks it.
-      const child = Bun.spawn([BUN, join(project, ".codex", "tools", "aidlc.ts"), "config", "--download", "--harness", "codex", "--mcp", "none", "--yes"], {
-        cwd: project,
-        env: env({ AIDLC_RELEASE_BASE_URL: server.baseUrl, AIDLC_GH_BIN: FAKE_GH, [MARK]: mark }),
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
+      const { status, out } = await ownAsync(project, ["config", "--download", "--harness", "codex", "--mcp", "none", "--yes"], {
+        AIDLC_RELEASE_BASE_URL: release.baseUrl,
+        [MARK]: mark,
       });
-      const [status, stdout, stderr] = await Promise.all([
-        child.exited,
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-      ]);
-      const out = `${stdout}${stderr}`;
       expect(status, out).toBe(0);
       expect(out).toContain(ranLine(NEWER));
       expect(existsSync(mark), out).toBe(true);
@@ -253,7 +270,36 @@ describe("a copied project's refresh from a newer release runs that release's ow
       expect(JSON.parse(readFileSync(join(project, ".codex", "tools", "data", "aidlc-stamp.json"), "utf-8")).frameworkVersion)
         .toBe(NEWER);
     } finally {
-      server.stop();
+      release.stop();
+    }
+  });
+
+  test("at a terminal, what the person answered before the hand-off is never asked again", async () => {
+    const project = copiedAt2110();
+    // Outside a recognized project config first asks whether to set it up here.
+    rmSync(join(project, ".git"), { recursive: true, force: true });
+    writeFileSync(join(project, ".aidlc-version"), `${NEWER}\n`);
+    const release = servedRelease();
+    const mark = join(temp("aidlc-t-copy-newer-mark-"), "ran");
+    try {
+      // Set it up here: yes; download: Enter. The test terminal takes every
+      // answer at the first question, so the newer tool's own setup map after
+      // the refresh finds the input closed and stops there.
+      const { status, out } = await ownAsync(project, ["config", "--harness", "codex", "--mcp", "none"], {
+        AIDLC_RELEASE_BASE_URL: release.baseUrl,
+        AIDLC_TEST_CONFIG_TTY: "1",
+        [MARK]: mark,
+      }, "y\n\n");
+      expect(existsSync(mark), out).toBe(true);
+      expect(out.split("Initialize AI-DLC in "), out).toHaveLength(2);
+      expect(out.split(`Download ${NEWER} from `), out).toHaveLength(2);
+      expect(out).toContain(ranLine(NEWER));
+      expect(JSON.parse(readFileSync(join(project, ".codex", "tools", "data", "aidlc-stamp.json"), "utf-8")).frameworkVersion)
+        .toBe(NEWER);
+      expect(out).toContain("Run bun .codex/tools/aidlc.ts config again where you can answer.");
+      expect(status, out).toBe(2);
+    } finally {
+      release.stop();
     }
   });
 });
