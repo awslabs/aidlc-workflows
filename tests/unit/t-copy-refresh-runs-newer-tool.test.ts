@@ -1,0 +1,242 @@
+// covers: tool:aidlc-init
+//
+// A copied project refreshes with its own tool. When the release it refreshes
+// from is newer than that tool, the newer release's own config does the run:
+// an older tool may not read a newer release's files (a Codex copy set up on
+// 2.11.0 and refreshed by its own tool from a later runtime got a false
+// ".codex/config.toml (locally modified or unowned)" conflict, because its
+// merge could not retire the inline table that release dropped). The same
+// command, the same project and the person's lines carry over; a same-version
+// or older release is still refreshed by the project's own tool.
+
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { serveReleaseFixture, writeReleaseFixture } from "../harness/release-fixture.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const BUN = process.execPath;
+const DIST = join(REPO_ROOT, "dist");
+const FAKE_GH = join(REPO_ROOT, "tests", "fixtures", "bin", process.platform === "win32" ? "gh.cmd" : "gh");
+const NEWER = "2.99.0";
+const OLDER = "2.10.0";
+const MARK = "T_COPY_NEWER_TOOL_RAN";
+// The block 2.11.0 shipped in .codex/config.toml and later releases retired.
+const POINTER = '[shell_environment_policy]\nset = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }\n\n';
+
+const temporary: string[] = [];
+afterAll(() => {
+  for (const path of temporary) rmSync(path, { recursive: true, force: true });
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+function temp(prefix: string): string {
+  const path = mkdtempSync(join(realpathSync(tmpdir()), prefix));
+  temporary.push(path);
+  return path;
+}
+
+const machine = temp("aidlc-t-copy-newer-machine-");
+function env(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const base = { ...process.env };
+  for (const name of Object.keys(base)) {
+    if (/^(AIDLC_|CLAUDE_|KIRO_|CODEX_)/.test(name) || name === MARK) delete base[name];
+  }
+  return {
+    ...base,
+    AIDLC_INSTALL_ROOT: join(machine, "share"),
+    AIDLC_BIN_DIR: join(machine, "bin"),
+    CODEX_HOME: join(machine, "codex-home"),
+    ...extra,
+  };
+}
+
+// The Codex projection as a release at `version` ships it: its stamp and its
+// tool's own version say `version`. `pointer` puts 2.11.0's block back; `mark`
+// makes its dispatcher write its own path to $T_COPY_NEWER_TOOL_RAN.
+function codexRelease(root: string, version: string, options: { pointer?: boolean; mark?: boolean } = {}): string {
+  cpSync(join(DIST, "codex"), root, { recursive: true });
+  const stamp = join(root, ".codex", "tools", "data", "aidlc-stamp.json");
+  writeFileSync(stamp, `${JSON.stringify({ ...JSON.parse(readFileSync(stamp, "utf-8")), frameworkVersion: version }, null, 2)}\n`);
+  const own = join(root, ".codex", "tools", "aidlc-version.ts");
+  writeFileSync(own, readFileSync(own, "utf-8").replace(`"${AIDLC_VERSION}"`, `"${version}"`));
+  if (options.pointer) {
+    const config = join(root, ".codex", "config.toml");
+    writeFileSync(config, readFileSync(config, "utf-8").replace("[sandbox_workspace_write]", `${POINTER}[sandbox_workspace_write]`));
+  }
+  if (options.mark) {
+    const tool = join(root, ".codex", "tools", "aidlc.ts");
+    const [shebang, ...rest] = readFileSync(tool, "utf-8").split("\n");
+    writeFileSync(tool, [
+      shebang,
+      `import { appendFileSync as markRun } from "node:fs";`,
+      `if (process.env.${MARK}) markRun(process.env.${MARK}, import.meta.path + "\\n");`,
+      ...rest,
+    ].join("\n"));
+  }
+  return root;
+}
+
+// The copy runtime's layout: one projection per harness under runtime/.
+function runtimeAt(version: string, options: { mark?: boolean } = {}): string {
+  const root = temp("aidlc-t-copy-newer-runtime-");
+  mkdirSync(join(root, "runtime"));
+  codexRelease(join(root, "runtime", "codex"), version, options);
+  return join(root, "runtime");
+}
+
+function own(project: string, args: string[], extra: Record<string, string> = {}): { status: number; out: string } {
+  const result = spawnSync(BUN, [join(project, ".codex", "tools", "aidlc.ts"), ...args], {
+    cwd: project,
+    env: env(extra),
+    encoding: "utf-8",
+    input: "",
+  });
+  if (result.error) throw result.error;
+  return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+}
+
+// A Codex project copied from 2.11.0 and set up by its own tool, with the
+// person's own lines in config.toml: a member of AI-DLC's `set` table and a
+// key of their own under its header.
+function copiedAt2110(): string {
+  const prior = codexRelease(join(temp("aidlc-t-copy-newer-prior-"), "codex"), AIDLC_VERSION, { pointer: true });
+  const project = temp("aidlc-t-copy-newer-project-");
+  mkdirSync(join(project, ".git"));
+  cpSync(prior, project, { recursive: true });
+  const setup = own(project, ["config", "--from", prior, "--harness", "codex", "--mcp", "none", "--yes"]);
+  expect(setup.status, setup.out).toBe(0);
+  const config = join(project, ".codex", "config.toml");
+  const shipped = readFileSync(config, "utf-8");
+  expect(shipped).toContain(POINTER);
+  writeFileSync(config, shipped.replace(
+    POINTER,
+    '[shell_environment_policy]\ninherit = "core"\nset = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory", MY_VAR = "mine" }\n\n',
+  ));
+  return project;
+}
+
+const ranLine = (version: string) =>
+  `  Note: ${version}'s own config runs this refresh; the tool you ran is ${AIDLC_VERSION}.`;
+
+describe("a copied project's refresh from a newer release runs that release's own config", () => {
+  for (const endings of ["LF", "CRLF"] as const) {
+    test(`--from a newer runtime: its tool runs, no conflict, the person's lines kept (${endings})`, () => {
+      const project = copiedAt2110();
+      const config = join(project, ".codex", "config.toml");
+      if (endings === "CRLF") writeFileSync(config, readFileSync(config, "utf-8").replace(/\r?\n/g, "\r\n"));
+      const runtime = runtimeAt(NEWER, { mark: true });
+      const mark = join(temp("aidlc-t-copy-newer-mark-"), "ran");
+
+      const result = own(project, ["config", "--from", runtime, "--harness", "codex", "--mcp", "none", "--yes"], { [MARK]: mark });
+
+      expect(result.status, result.out).toBe(0);
+      expect(result.out).toContain(ranLine(NEWER));
+      expect(result.out).not.toContain("conflict");
+      // The newer release's own dispatcher ran, from where the runtime is.
+      expect(existsSync(mark), result.out).toBe(true);
+      const ran = readFileSync(mark, "utf-8").split("\n")[0];
+      expect(ran).toContain(basename(dirname(runtime)));
+      expect(ran.endsWith(join("codex", ".codex", "tools", "aidlc.ts"))).toBe(true);
+      const after = readFileSync(config, "utf-8");
+      expect(after).not.toContain("AIDLC_RULES_DIR");
+      expect(after).toContain('inherit = "core"');
+      expect(after).toContain('set = { MY_VAR = "mine" }');
+      if (endings === "CRLF") expect(after.replace(/\r\n/g, "")).not.toContain("\n");
+      expect(JSON.parse(readFileSync(join(project, ".codex", "tools", "data", "aidlc-stamp.json"), "utf-8")).frameworkVersion)
+        .toBe(NEWER);
+    });
+  }
+
+  test("a same-version or older runtime is refreshed by the project's own tool, as before", () => {
+    for (const version of [AIDLC_VERSION, OLDER]) {
+      const project = copiedAt2110();
+      const runtime = runtimeAt(version, { mark: true });
+      const mark = join(temp("aidlc-t-copy-newer-mark-"), "ran");
+      const result = own(project, ["config", "--from", runtime, "--harness", "codex", "--mcp", "none", "--yes"], { [MARK]: mark });
+      expect(result.status, `${version}: ${result.out}`).toBe(0);
+      expect(result.out).not.toContain("own config runs this refresh");
+      expect(existsSync(mark), `${version}: ${result.out}`).toBe(false);
+    }
+  });
+
+  test("the newer tool's commands name the project's own tool, not where the runtime was unpacked", () => {
+    const project = copiedAt2110();
+    // A change of the person's own to a file AI-DLC ships: a real conflict.
+    const agent = join(project, ".codex", "agents", "aidlc-developer-agent.toml");
+    writeFileSync(agent, `${readFileSync(agent, "utf-8")}\n# mine\n`);
+    const runtime = runtimeAt(NEWER, { mark: true });
+    const mark = join(temp("aidlc-t-copy-newer-mark-"), "ran");
+    const result = own(project, ["config", "--from", runtime, "--harness", "codex", "--mcp", "none", "--yes"], { [MARK]: mark });
+    expect(result.status, result.out).toBe(4);
+    expect(existsSync(mark), result.out).toBe(true);
+    expect(result.out).toContain(".codex/agents/aidlc-developer-agent.toml");
+    const commands = result.out.split(/\r?\n/).filter((line) => line.includes("aidlc.ts config"));
+    expect(commands.length, result.out).toBeGreaterThan(0);
+    for (const line of commands) {
+      expect(line).toContain("bun .codex/tools/aidlc.ts config");
+      expect(line).not.toContain(basename(dirname(runtime)));
+    }
+  });
+
+  test("--json prints the newer tool's one result and nothing else", () => {
+    const project = copiedAt2110();
+    const runtime = runtimeAt(NEWER, { mark: true });
+    const mark = join(temp("aidlc-t-copy-newer-mark-"), "ran");
+    const result = spawnSync(BUN, [join(project, ".codex", "tools", "aidlc.ts"), "config", "--from", runtime, "--harness", "codex", "--mcp", "none", "--yes", "--json"], {
+      cwd: project,
+      env: env({ [MARK]: mark }),
+      encoding: "utf-8",
+      input: "",
+    });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(existsSync(mark)).toBe(true);
+    expect(JSON.parse(result.stdout).ok).toBe(true);
+  });
+
+  test("--download of a newer pinned release runs that release's own config", async () => {
+    const project = copiedAt2110();
+    writeFileSync(join(project, ".aidlc-version"), `${NEWER}\n`);
+    // A release whose copy runtime is the marked newer projection.
+    const repo = temp("aidlc-t-copy-newer-repo-");
+    codexRelease(join(repo, "dist", "codex"), NEWER, { mark: true });
+    cpSync(join(REPO_ROOT, "dist-release", "codex"), join(repo, "dist-release", "codex"), { recursive: true });
+    mkdirSync(join(repo, "scripts"));
+    for (const name of ["install.sh", "install.ps1"]) cpSync(join(REPO_ROOT, "scripts", name), join(repo, "scripts", name));
+    const root = temp("aidlc-t-copy-newer-release-");
+    writeReleaseFixture({ root, repoRoot: repo, version: NEWER, distributions: ["codex"] });
+    const server = serveReleaseFixture(root);
+    const mark = join(temp("aidlc-t-copy-newer-mark-"), "ran");
+    try {
+      // A server in this process cannot answer a child that blocks it.
+      const child = Bun.spawn([BUN, join(project, ".codex", "tools", "aidlc.ts"), "config", "--download", "--harness", "codex", "--mcp", "none", "--yes"], {
+        cwd: project,
+        env: env({ AIDLC_RELEASE_BASE_URL: server.baseUrl, AIDLC_GH_BIN: FAKE_GH, [MARK]: mark }),
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [status, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      const out = `${stdout}${stderr}`;
+      expect(status, out).toBe(0);
+      expect(out).toContain(ranLine(NEWER));
+      expect(existsSync(mark), out).toBe(true);
+      expect(out).not.toContain("conflict");
+      expect(readFileSync(join(project, ".codex", "config.toml"), "utf-8")).toContain('set = { MY_VAR = "mine" }');
+      expect(JSON.parse(readFileSync(join(project, ".codex", "tools", "data", "aidlc-stamp.json"), "utf-8")).frameworkVersion)
+        .toBe(NEWER);
+    } finally {
+      server.stop();
+    }
+  });
+});
