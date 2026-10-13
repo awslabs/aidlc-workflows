@@ -125,7 +125,7 @@ function buildStage(p: string, slug: string, unit: string, verdicts: Array<strin
       stage: slug, unit, version: 1, writes: [{ path: `src/${unit}.ts` }],
     }));
   }
-  verdicts.forEach((finding, index) => review(p, slug, index + 1, finding, unit));
+  for (const [index, finding] of verdicts.entries()) review(p, slug, index + 1, finding, unit);
   afterReview?.();
   appendAuditEntry("UNIT_COMPLETED", {
     Stage: slug, Unit: unit, Mode: "wave",
