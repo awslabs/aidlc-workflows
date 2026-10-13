@@ -1801,6 +1801,11 @@ script, to download that exact `aidlc-copy-runtime-X.Y.Z.tar.gz`, verify its
 command. Without network access, the error's `offline:` line names the file
 to fetch elsewhere and pass with `--from`.
 
+When a refresh (`config` with `--from` or `--download`) brings in files from a
+newer release than the project's own tool, that release's own config runs the
+command as you typed it, and a `Note:` line names the release whose tool ran
+it. A same or older release is refreshed by the project's own tool.
+
 The archive is assembled from the freshly regenerated Bun projections under
 `dist/`. Its generated hooks and tools invoke the included TypeScript through
 Bun. The native installers and lifecycle commands instead consume

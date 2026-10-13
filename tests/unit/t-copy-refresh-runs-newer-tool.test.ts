@@ -58,14 +58,19 @@ function env(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
 }
 
 // The Codex projection as a release at `version` ships it: its stamp and its
-// tool's own version say `version`. `pointer` puts 2.11.0's block back; `mark`
-// makes its dispatcher write its own path to $T_COPY_NEWER_TOOL_RAN.
-function codexRelease(root: string, version: string, options: { pointer?: boolean; mark?: boolean } = {}): string {
+// tool's own version say `version` (`stampOnly` leaves the tool's, as test
+// fixtures do). `pointer` puts 2.11.0's block back; `mark` makes its dispatcher
+// write its own path to $T_COPY_NEWER_TOOL_RAN.
+function codexRelease(
+  root: string,
+  version: string,
+  options: { pointer?: boolean; mark?: boolean; stampOnly?: boolean } = {},
+): string {
   cpSync(join(DIST, "codex"), root, { recursive: true });
   const stamp = join(root, ".codex", "tools", "data", "aidlc-stamp.json");
   writeFileSync(stamp, `${JSON.stringify({ ...JSON.parse(readFileSync(stamp, "utf-8")), frameworkVersion: version }, null, 2)}\n`);
   const own = join(root, ".codex", "tools", "aidlc-version.ts");
-  writeFileSync(own, readFileSync(own, "utf-8").replace(`"${AIDLC_VERSION}"`, `"${version}"`));
+  if (!options.stampOnly) writeFileSync(own, readFileSync(own, "utf-8").replace(`"${AIDLC_VERSION}"`, `"${version}"`));
   if (options.pointer) {
     const config = join(root, ".codex", "config.toml");
     writeFileSync(config, readFileSync(config, "utf-8").replace("[sandbox_workspace_write]", `${POINTER}[sandbox_workspace_write]`));
@@ -84,7 +89,7 @@ function codexRelease(root: string, version: string, options: { pointer?: boolea
 }
 
 // The copy runtime's layout: one projection per harness under runtime/.
-function runtimeAt(version: string, options: { mark?: boolean } = {}): string {
+function runtimeAt(version: string, options: { mark?: boolean; stampOnly?: boolean } = {}): string {
   const root = temp("aidlc-t-copy-newer-runtime-");
   mkdirSync(join(root, "runtime"));
   codexRelease(join(root, "runtime", "codex"), version, options);
@@ -97,6 +102,7 @@ function own(project: string, args: string[], extra: Record<string, string> = {}
     env: env(extra),
     encoding: "utf-8",
     input: "",
+    timeout: 240_000,
   });
   if (result.error) throw result.error;
   return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
@@ -164,6 +170,17 @@ describe("a copied project's refresh from a newer release runs that release's ow
       expect(result.out).not.toContain("own config runs this refresh");
       expect(existsSync(mark), `${version}: ${result.out}`).toBe(false);
     }
+  });
+
+  test("the newer release's tool never hands the run on, even when its own code is older than its stamp", () => {
+    const project = copiedAt2110();
+    const runtime = runtimeAt(NEWER, { mark: true, stampOnly: true });
+    const mark = join(temp("aidlc-t-copy-newer-mark-"), "ran");
+    const result = own(project, ["config", "--from", runtime, "--harness", "codex", "--mcp", "none", "--yes"], { [MARK]: mark });
+    // Handing on again would loop until the timeout above; one Note is one hand-off.
+    expect(result.status, result.out).toBe(0);
+    expect(existsSync(mark), result.out).toBe(true);
+    expect(result.out.split("own config runs this refresh")).toHaveLength(2);
   });
 
   test("the newer tool's commands name the project's own tool, not where the runtime was unpacked", () => {
