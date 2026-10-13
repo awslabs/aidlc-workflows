@@ -21,7 +21,13 @@ Release assets cover:
 - Windows x64
 
 Native installs are per-user. The Unix installer refuses root and does not need
-`sudo`. Windows installation targets the account running PowerShell. Run it
+`sudo`. Where root is the only user, such as a container image without `USER`,
+a CI container job, or a cloud agent sandbox whose setup script runs as root,
+pass `--allow-root` (or set `AIDLC_ALLOW_ROOT=1`) to install under root's own
+`$HOME`. The opt-in is still refused under `sudo` (`SUDO_USER` is set) and when
+`$HOME` is not owned by root, so `sudo sh install.sh` from a normal account
+keeps failing. `aidlc uninstall` takes the same `--allow-root` opt-in with the
+same limits. Windows installation targets the account running PowerShell. Run it
 from a normal PowerShell window. A window opened with "Run as administrator"
 under UAC is warned that installing as administrator is less safe, because
 another program running as the same account could interfere with files the
@@ -1510,6 +1516,13 @@ aidlc config --project-dir "$PWD" --harness claude --mcp none --quiet
 aidlc doctor --project-dir "$PWD" --quiet
 ```
 
+A CI container job or agent sandbox that runs as root, with root as its only
+user, adds `--allow-root` to the installer line:
+
+```bash
+sh "$tmp/install.sh" --version "$version" --quiet --yes --allow-root
+```
+
 ## Harness Selection
 
 Harness selection belongs to `aidlc config --harness <name>`. Machine-level
@@ -1870,7 +1883,9 @@ run preserves an earlier record, so that entry is still removed on uninstall.
 At a terminal, uninstall says what it removes and keeps, then proceeds; without
 a terminal it needs `--yes`. It refuses filesystem, home, shared-system, and
 project roots, as well as root-owned, package-manager-owned, or
-mixed-ownership commands. On Windows, a bound file list and expected checksums
+mixed-ownership commands. A root install made with `--allow-root` is removed
+with `aidlc uninstall --allow-root` (or `AIDLC_ALLOW_ROOT=1`); the opt-in is
+refused under `sudo` and when `$HOME` is not owned by root. On Windows, a bound file list and expected checksums
 are recorded before cleanup is scheduled. The worker rechecks paths and hashes,
 refuses reparse points, and deletes files individually after the running command
 exits; uninstall is done when the `aidlc` command is no longer found. An

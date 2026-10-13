@@ -42,6 +42,8 @@ import {
   previousWindowsShimHelpers,
   previousWindowsShimHelperState,
   replacePreviousWindowsShimHelper,
+  rootUninstallRefusal,
+  validatePublicLifecycleArgs,
   windowsPosixShim,
 } from "../../core/tools/aidlc-lifecycle.ts";
 import {
@@ -1759,6 +1761,30 @@ describe("t244 management lifecycle", () => {
     for (const root of [homedir(), parse(homedir()).root]) {
       expect(() => assertSafeUninstallRoot(root)).toThrow("refusing uninstall");
     }
+  });
+
+  test("uninstall refuses root unless the caller opts in, and never under sudo or a non-root home", () => {
+    const rootHome = () => 0;
+    const userHome = () => 501;
+    // Not root: the opt-in is irrelevant.
+    expect(rootUninstallRefusal([], 501, {}, rootHome)).toBeNull();
+    // Root without the opt-in keeps the old refusal and names the way out.
+    expect(rootUninstallRefusal([], 0, {}, rootHome)).toContain("refusing to uninstall a root-owned installation");
+    expect(rootUninstallRefusal([], 0, {}, rootHome)).toContain("--allow-root");
+    expect(rootUninstallRefusal([], 0, { AIDLC_ALLOW_ROOT: "0" }, rootHome)).toContain("root-owned");
+    // Root that opts in with the flag or the environment variable proceeds.
+    expect(rootUninstallRefusal(["--allow-root"], 0, {}, rootHome)).toBeNull();
+    expect(rootUninstallRefusal([], 0, { AIDLC_ALLOW_ROOT: "1" }, rootHome)).toBeNull();
+    expect(rootUninstallRefusal([], 0, { AIDLC_ALLOW_ROOT: "true" }, rootHome)).toBeNull();
+    // A root shell reached from a normal account stays refused.
+    expect(rootUninstallRefusal(["--allow-root"], 0, { SUDO_USER: "alice" }, rootHome)).toContain("under sudo");
+    expect(rootUninstallRefusal(["--allow-root"], 0, {}, userHome)).toContain("not owned by root");
+    expect(rootUninstallRefusal(["--allow-root"], 0, {}, () => undefined)).toContain("not owned by root");
+  });
+
+  test("uninstall accepts --allow-root in its public grammar", () => {
+    expect(validatePublicLifecycleArgs(["uninstall", "--allow-root", "--yes"])).toBeNull();
+    expect(validatePublicLifecycleArgs(["uninstall", "--allow-rooted"])).not.toBeNull();
   });
 
   test("uninstall rejects disposable project and malformed roots without changing files", () => {

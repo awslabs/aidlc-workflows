@@ -496,7 +496,7 @@ export const ROUTES: readonly Route[] = [
     mutationScope: "machine",
     outputModes: ["human", "quiet", "json"],
     human: [{ command: "uninstall [--purge]", summary: "remove the machine installation" }],
-    all: ["uninstall [--purge] [--yes] [--json|--quiet]"],
+    all: ["uninstall [--purge] [--yes] [--allow-root] [--json|--quiet]"],
   },
   {
     id: "top-completions",

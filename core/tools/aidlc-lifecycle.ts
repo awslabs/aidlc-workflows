@@ -16,7 +16,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { extractTarGz } from "./aidlc-archive.ts";
 import {
@@ -204,6 +204,7 @@ const PUBLIC_LIFECYCLE_GRAMMARS: Readonly<
   uninstall: {
     values: new Set(["--project-dir"]),
     bare: new Set([
+      "--allow-root",
       "--json",
       "--no-color",
       "--purge",
@@ -2010,6 +2011,40 @@ function uninstallResultData(purge: boolean, plan: UninstallPlan) {
   };
 }
 
+// Root is refused unless the caller opts in, matching install.sh: an install
+// made with --allow-root (a container, CI job, or agent sandbox where root is
+// the only user) is removed the same way. A root shell reached from a normal
+// account stays refused even with the opt-in: under sudo (SUDO_USER is set),
+// or when $HOME is not owned by uid 0.
+export function rootUninstallRefusal(
+  argv: readonly string[],
+  uid: number | undefined,
+  env: NodeJS.ProcessEnv,
+  homeOwnerUid: () => number | undefined,
+): string | null {
+  if (uid !== 0) return null;
+  const allowed = argv.includes("--allow-root") ||
+    env.AIDLC_ALLOW_ROOT === "1" || env.AIDLC_ALLOW_ROOT === "true";
+  if (!allowed) {
+    return "refusing to uninstall a root-owned installation; pass --allow-root where root is the only user";
+  }
+  if (env.SUDO_USER) {
+    return `refusing a root uninstall under sudo; run aidlc uninstall as ${env.SUDO_USER} without sudo`;
+  }
+  if (homeOwnerUid() !== 0) {
+    return `refusing a root uninstall from a home directory not owned by root: ${homedir()}`;
+  }
+  return null;
+}
+
+function homeDirectoryOwnerUid(): number | undefined {
+  try {
+    return statSync(homedir()).uid;
+  } catch {
+    return undefined;
+  }
+}
+
 function uninstallCommand(argv: string[]): CommandResult {
   try {
     assertSafeUninstallRoot();
@@ -2025,9 +2060,13 @@ function uninstallCommand(argv: string[]): CommandResult {
       manager.remediation,
     );
   }
-  if (typeof process.getuid === "function" && process.getuid() === 0) {
-    return failure("refusing to uninstall a root-owned installation", EXIT.integrity);
-  }
+  const rootRefusal = rootUninstallRefusal(
+    argv,
+    typeof process.getuid === "function" ? process.getuid() : undefined,
+    process.env,
+    homeDirectoryOwnerUid,
+  );
+  if (rootRefusal) return failure(rootRefusal, EXIT.integrity);
   const purge = argv.includes("--purge");
   // The cleanup worker inherits this window's token. A UAC-elevated window is
   // warned before anything is removed; the person asked, so it proceeds.

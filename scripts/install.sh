@@ -14,6 +14,8 @@ CA_BUNDLE=${AIDLC_CA_BUNDLE:-}
 MODE=human
 PROFILE=
 PROGRESS_ACTIVE=0
+ALLOW_ROOT=0
+case "${AIDLC_ALLOW_ROOT:-}" in 1|true) ALLOW_ROOT=1 ;; esac
 # Release version grammar: stable x.y.z, or a preview id
 # x.y.z-preview.YYYYMMDD.N. Shell literal of PREVIEW_CHANNEL / VERSION_ID in
 # core/tools/aidlc-channel.ts; keep the two in step.
@@ -82,7 +84,7 @@ fail() {
 }
 
 usage_text() {
-  echo "Usage: install.sh [--version <x.y.z|x.y.z-preview.YYYYMMDD.N>] [--from <dir>] [--offline] [--profile <startup-file>] [--json|--quiet] [--no-color] [--yes]"
+  echo "Usage: install.sh [--version <x.y.z|x.y.z-preview.YYYYMMDD.N>] [--from <dir>] [--offline] [--profile <startup-file>] [--json|--quiet] [--no-color] [--yes] [--allow-root]"
 }
 
 usage() {
@@ -116,6 +118,7 @@ while [ "$#" -gt 0 ]; do
     --quiet) [ "$MODE" = "json" ] || MODE=quiet; shift ;;
     --no-color) shift ;;
     --yes) shift ;;
+    --allow-root) ALLOW_ROOT=1; shift ;;
     -h|--help) usage_text; exit 0 ;;
     *) usage "unknown argument: $1" ;;
   esac
@@ -125,7 +128,19 @@ if [ -z "$VERSION" ] && [ -z "$FROM" ]; then
   VERSION=$PACKAGED_VERSION
 fi
 
-[ "$(id -u)" -ne 0 ] || fail 4 failed "refusing a root install; run as the target user"
+# Root is refused unless the caller opts in (containers, CI jobs, agent
+# sandboxes where root is the only user). Even then, a root shell reached
+# from a normal account (sudo, or a home not owned by root) stays refused,
+# so `sudo sh install.sh` keeps failing as before.
+if [ "$(id -u)" -eq 0 ]; then
+  [ "$ALLOW_ROOT" -eq 1 ] ||
+    fail 4 failed "refusing a root install; run as the target user, or pass --allow-root where root is the only user"
+  [ -z "${SUDO_USER:-}" ] ||
+    fail 4 failed "refusing a root install under sudo; run install.sh as $SUDO_USER without sudo"
+  home_uid=$(ls -ldn "$HOME" 2>/dev/null | awk '{print $3}')
+  [ "$home_uid" = 0 ] ||
+    fail 4 failed "refusing a root install into a home directory not owned by root: $HOME"
+fi
 if [ -n "$VERSION" ] && ! printf '%s\n' "$VERSION" | grep -Eq "$VERSION_PATTERN"; then
   usage "invalid --version: $VERSION"
 fi

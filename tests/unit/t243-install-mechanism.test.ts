@@ -5762,6 +5762,62 @@ describe("t243 release lifecycle", () => {
     }));
   });
 
+  test("Unix installer refuses root unless opted in, and never under sudo or a non-root home", () => {
+    if (process.platform === "win32") return;
+    // CI does not run as root, so an `id` shim first on PATH reports uid 0.
+    // An invalid --version makes every run stop right after the root check:
+    // reaching the usage error (exit 2) proves the root check let it through.
+    const shims = temp("aidlc-t243-installer-root-shim-");
+    writeFileSync(
+      join(shims, "id"),
+      '#!/bin/sh\nif [ "$1" = "-u" ]; then echo 0; else exec /usr/bin/id "$@"; fi\n',
+    );
+    chmodSync(join(shims, "id"), 0o755);
+    const userHome = temp("aidlc-t243-installer-root-user-home-");
+    const run = (args: string[], env: Record<string, string>) => {
+      const childEnv: Record<string, string | undefined> = { ...process.env, ...env };
+      childEnv.PATH = `${shims}${delimiter}${process.env.PATH ?? ""}`;
+      if (!("SUDO_USER" in env)) delete childEnv.SUDO_USER;
+      if (!("AIDLC_ALLOW_ROOT" in env)) delete childEnv.AIDLC_ALLOW_ROOT;
+      return spawnSync("sh", [INSTALLER, ...args, "--version", "not-a-version", "--json"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+        env: childEnv,
+      });
+    };
+    const parsed = (result: ReturnType<typeof run>) => JSON.parse(result.stdout ?? "") as {
+      code: number;
+      status: string;
+      message: string;
+    };
+
+    // "/" is owned by root on every Unix runner, so it stands in for root's own home.
+    const refused = run([], { HOME: "/" });
+    expect(refused.status).toBe(4);
+    expect(parsed(refused).message).toContain("refusing a root install");
+    expect(parsed(refused).message).toContain("--allow-root");
+
+    for (const [args, env] of [
+      [["--allow-root"], { HOME: "/" }],
+      [[], { HOME: "/", AIDLC_ALLOW_ROOT: "1" }],
+      [[], { HOME: "/", AIDLC_ALLOW_ROOT: "true" }],
+    ] as const) {
+      const allowed = run([...args], { ...env });
+      expect(allowed.status).toBe(2);
+      expect(parsed(allowed).status).toBe("usage");
+      expect(parsed(allowed).message).toContain("invalid --version");
+    }
+
+    const underSudo = run(["--allow-root"], { HOME: "/", SUDO_USER: "alice" });
+    expect(underSudo.status).toBe(4);
+    expect(parsed(underSudo).message).toContain("under sudo");
+
+    const userOwnedHome = run(["--allow-root"], { HOME: userHome });
+    expect(userOwnedHome.status).toBe(4);
+    expect(parsed(userOwnedHome).message).toContain("not owned by root");
+  });
+
   test("Unix installer rejects an authenticated version mismatch before acquiring or invoking assets", async () => {
     if (process.platform === "win32") return;
     const release = fixtureReleaseBytes();
