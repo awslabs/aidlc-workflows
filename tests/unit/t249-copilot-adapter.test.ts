@@ -3119,6 +3119,97 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  // The claim's hints are the flags the engine's own reading takes: a `--resume`
+  // among the person's words behind `--` asks for nothing.
+  test("23c-words: a --resume among the person's words leaves the waiting Resume question as it is", () => {
+    const dir = orchestrationProject();
+    const session = "words-resume-waiting";
+    driveToRunStage(dir, session);
+    rewriteMarker(dir, (value) => {
+      value.kind = "ask";
+      value.delivery = "issued";
+      value.needs_rehydrate = false;
+      delete value.continue_token;
+      delete value.continue_token_sha256;
+      value.resume = {
+        status: "waiting",
+        issuing_stage: "requirements-analysis",
+        issuing_state_sha256: value.state_sha256,
+        issuing_session: session,
+        issuing_intent_uuid: value.intent_uuid,
+      };
+    });
+    const spec = commandSpec(dir, "direct", ["next", "--", "fix", "the", "--resume", "bug"]);
+    runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, "words-resume"));
+    expect(marker(dir).resume).toMatchObject({ status: "waiting" });
+  });
+
+  // The attempt id rides right after the verb, where the engine reads it: behind
+  // the person's words it would be two of their words and the attempt is lost.
+  test("23c-attempt: the attempt id goes in front of the person's words, marked or not, and the attempt is claimed", () => {
+    for (const words of [["--", "fix", "the", "bug"], ["fix", "the", "bug"]]) {
+      const dir = orchestrationProject();
+      const session = `words-attempt-${words.length}`;
+      const attempt = `words-attempt-${words.length}`;
+      const spec = commandSpec(dir, "direct", ["next", ...words]);
+      const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, attempt));
+      const rewritten = rewrittenCommand(pre);
+      expect(rewritten, spec.text).toBe(
+        `bun .aidlc/tools/aidlc-orchestrate.ts "next" --aidlc-attempt-id ${attempt} ${words.map((word) => JSON.stringify(word)).join(" ")}`,
+      );
+      const executed = runShell(dir, rewritten);
+      expect(executed.status, executed.stderr).toBe(0);
+      expect(executed.stdout, rewritten).not.toContain("stale or superseded");
+      runAdapter(dir, "post-tool", commandPayload(dir, session, rewritten, attempt, true, executed.stdout));
+      expect(marker(dir), rewritten).toMatchObject({ active_attempt: { id: attempt } });
+    }
+  });
+
+  // The person's words behind `--` may name the engine's own option; the claim
+  // reads it as theirs, as the engine does, and still gives the command its id.
+  test("23c-option-word: an attempt option among the words behind -- is theirs, not one the agent already set", () => {
+    const dir = orchestrationProject();
+    const spec = commandSpec(dir, "direct", ["next", "--", "add", "an", "--aidlc-attempt-id", "option"]);
+    const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, "words-option", spec.text, "words-option"));
+    expect(rewrittenCommand(pre), pre.stdout).toBe(
+      'bun .aidlc/tools/aidlc-orchestrate.ts "next" --aidlc-attempt-id words-option "--" "add" "an" "--aidlc-attempt-id" "option"',
+    );
+  });
+
+  // A folder named in front of the verb is the launcher's, and the attempt id
+  // still goes right after the verb.
+  test("23c-lead: with the folder named in front of next, the attempt id goes right after next", () => {
+    const dir = orchestrationProject();
+    const text = `bun .aidlc/tools/aidlc-orchestrate.ts --project-dir ${JSON.stringify(dir)} next fix the bug`;
+    const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, "lead-folder", text, "lead-folder"));
+    expect(rewrittenCommand(pre), pre.stdout).toBe(
+      `bun .aidlc/tools/aidlc-orchestrate.ts --project-dir ${JSON.stringify(dir)} next --aidlc-attempt-id lead-folder fix the bug`,
+    );
+  });
+
+  // The claim reads the launcher's folder where the dispatcher reads it, so a
+  // folder the dispatcher would run the work in is checked, whatever comes before it.
+  test("23c-dispatcher-folder: a folder the dispatcher takes after a flag and a word is still checked", () => {
+    const dir = orchestrationProject();
+    const other = scratchProject(true);
+    const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, "dispatcher-folder", `aidlc next --new-intent notes --project-dir ${JSON.stringify(other)}`, "dispatcher-folder"));
+    expect(pre.stdout).toContain("targets a different physical project");
+    // Its own flag in front of the words: the dispatcher takes every folder on the line.
+    const global = runAdapter(dir, "guard-tool-call", commandPayload(dir, "dispatcher-folder-global", `aidlc next --json fix bug --project-dir ${JSON.stringify(other)}`, "dispatcher-folder-global"));
+    expect(global.stdout).toContain("targets a different physical project");
+  });
+
+  // A folder left off the end is the agent's slip only where the engine would
+  // read the option; among the person's words the token is theirs.
+  test("23c-folder-word: `--project-dir` at the end of the person's words is not a missing folder", () => {
+    const dir = orchestrationProject();
+    const slip = "`--project-dir` needs this project's folder after it";
+    const words = runAdapter(dir, "guard-tool-call", commandPayload(dir, "folder-word", "aidlc next add a flag named --project-dir", "folder-word"));
+    expect(words.stdout).not.toContain(slip);
+    const missing = runAdapter(dir, "guard-tool-call", commandPayload(dir, "folder-slip", "aidlc next --project-dir", "folder-slip"));
+    expect(missing.stdout).toContain(slip);
+  });
+
   // A `next` that reaches the engine outside the chat's own answer (a
   // terminal, a delegate) while the resume question waits is not published.
   // Retrying repeats that, so it names the answer, and the answer goes through.

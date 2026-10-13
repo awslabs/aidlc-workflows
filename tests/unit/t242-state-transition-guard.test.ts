@@ -792,6 +792,20 @@ describe("t242 state-transition ownership guard", () => {
     }
   });
 
+  // The dispatcher runs its internal human-turn entry only as its first
+  // argument; the same token among the person's words runs nothing.
+  test("runtime integrity reads the internal human-turn entry and the route where the dispatcher reads them", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const refused = (command: string) => violatesRuntimeIntegrity({ cwd: project, tool_name: "Bash", tool_input: { command } });
+    expect(refused("aidlc engine orchestrate next -- add an --internal-aidlc-record-human-turn option")).toBe(false);
+    expect(refused("aidlc --internal-aidlc-record-human-turn .claude/hooks/aidlc-record-human-turn.ts")).toBe(true);
+    // Bun drops a `--` right after the script, so the dispatcher's first argument is the one after it.
+    expect(refused("bun .claude/tools/aidlc.ts -- --internal-aidlc-record-human-turn .claude/hooks/aidlc-record-human-turn.ts")).toBe(true);
+    expect(refused("bun .claude/tools/aidlc.ts -- engine hook record-human-turn")).toBe(true);
+    expect(refused("aidlc -- engine hook record-human-turn")).toBe(true);
+  });
+
   test("runtime integrity refuses every terminal form that sets an AI-DLC control variable", () => {
     const project = createTestProject();
     projects.push(project);
