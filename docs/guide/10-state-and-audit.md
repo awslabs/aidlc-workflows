@@ -295,6 +295,10 @@ modern evidence fails closed. `AIDLC_SKIP_SOURCE_FRESHNESS=1` is the
 deterministic emergency off-switch and must be present again when consuming a
 bypass-marked receipt.
 
+An AI-DLC update after the review changes only AI-DLC's own files, so it leaves
+the review current when the receipt's `Source Listing` is on this machine; a
+receipt without one is compared by `Source Fingerprint` as above.
+
 ---
 
 ## How State and Audit Work Together

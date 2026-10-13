@@ -394,7 +394,12 @@ lost.
 **Source freshness and per-unit attribution (#629/#646/#662).** On a
 `workspace_requires` stage, every terminal review still carries the workspace-
 global `Source Fingerprint`; the newest modern binding is normally the outer
-post-review-mutation boundary on all four completion routes. Per-unit receipts
+post-review-mutation boundary on all four completion routes. The receipt also
+names the listing the reviewer saw (`Source Listing`), so when only AI-DLC's own
+files moved since then (an AI-DLC update; the set `aidlcOwnedSourceKey` names)
+the review still holds and nothing is said, and a relaxed or off line names
+only the files outside that set; a receipt without the field, or whose listing
+is not on this machine, is compared by fingerprint as before. Per-unit receipts
 add `Unit Source Fingerprint`, which binds the bytes of the unit's strict
 `source-manifest.json` and the current content of every exact/directory claim
 (CRLF text read as LF, see the stage protocol's line endings rule).

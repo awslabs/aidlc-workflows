@@ -186,6 +186,7 @@ import {
   withAuditLock,
   withWorkspaceSourceStateCache,
   workspaceSourceState,
+  writeBaselineSourceSnapshot,
   writeUnitSourceSnapshot,
   writeWorkspaceSourceSnapshot,
   PLAN_APPROVAL_ASKED_BY_ENGINE,
@@ -4282,6 +4283,18 @@ function handleReview(args: string[]): void {
         if (requestBinding.sourceFingerprint !== null) sourceFingerprint = requestBinding.sourceFingerprint;
         fields["Request Source Fingerprint"] = sourceFingerprint;
         fields["Source Fingerprint"] = sourceFingerprint;
+        // The listing the reviewer saw, so the completion can tell an AI-DLC
+        // update after the review from a change to source. Only when the source
+        // did not move during the review: a move kept under relaxed or off is
+        // still said at the gate. Without it the completion compares
+        // fingerprints, so a failed write never fails the verdict.
+        if (sourceState !== null && !sourceMoved) {
+          try {
+            fields["Source Listing"] = writeBaselineSourceSnapshot(pd, flags.stage as string, sourceState.listing, intent, space);
+          } catch {
+            // Left out: fingerprints decide.
+          }
+        }
         if (bindsUnitSource) {
           unitFingerprint =
             sourceState === null || manifest?.ok !== true

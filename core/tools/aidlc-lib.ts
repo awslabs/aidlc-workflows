@@ -3926,9 +3926,27 @@ export function sourceChangedOutsideAidlc(
   return sourceListingChangedPaths(theirs(before), theirs(after));
 }
 
-// Whether the main checkout moved from the listing a landing kept (its
-// `Source Listing`) only in AI-DLC's own files. False when no listing was kept
-// or it does not read back exactly: the caller then compares fingerprints.
+// The paths outside AI-DLC's own files that moved since a kept listing (a
+// landing's or a review's `Source Listing`). Null when no listing was kept or
+// it does not read back exactly: the caller then compares fingerprints.
+export function sourceChangedOutsideAidlcSince(
+  projectDir: string,
+  stageSlug: string,
+  listing: string | undefined,
+  current: WorkspaceSourceState,
+  intent?: string,
+  space?: string,
+): string[] | null {
+  const recorded = listing === undefined ? null : readBaselineSourceSnapshot(projectDir, stageSlug, listing, intent, space);
+  return recorded === null ? null : sourceChangedOutsideAidlc(
+    projectDir,
+    recordedSourceListingUnderCurrentBoundary(recorded, current.listing),
+    current.listing,
+  );
+}
+
+// Whether the main checkout moved from a kept listing only in AI-DLC's own
+// files. False when no listing was kept or it does not read back exactly.
 export function onlyAidlcFilesChangedSince(
   projectDir: string,
   stageSlug: string,
@@ -3937,12 +3955,7 @@ export function onlyAidlcFilesChangedSince(
   intent?: string,
   space?: string,
 ): boolean {
-  const recorded = listing === undefined ? null : readBaselineSourceSnapshot(projectDir, stageSlug, listing, intent, space);
-  return recorded !== null && sourceChangedOutsideAidlc(
-    projectDir,
-    recordedSourceListingUnderCurrentBoundary(recorded, current.listing),
-    current.listing,
-  ).length === 0;
+  return sourceChangedOutsideAidlcSince(projectDir, stageSlug, listing, current, intent, space)?.length === 0;
 }
 
 function generatedRunnerSkill(skillDir: string): boolean {
@@ -20546,6 +20559,9 @@ export function freshReviewReceipts(
   >();
   let stageVerdict: ReviewVerdict | null = null;
   let newestSourceFingerprint: string | null = null;
+  // The listing that receipt kept (`Source Listing`), absent on receipts an
+  // earlier release wrote and when the source moved during the review.
+  let newestSourceListing: string | undefined;
   let newestSourceUnit: string | null = null;
   let newestSourceProgress: StaleReviewProgress | null = null;
   let sourceRecoverySpent = false;
@@ -20868,6 +20884,7 @@ export function freshReviewReceipts(
       const sourceFingerprint = auditBlockField(e.block, "Source Fingerprint");
       if (sourceFingerprint && !eventIsCrossShardTied(i)) {
         newestSourceFingerprint = sourceFingerprint;
+        newestSourceListing = auditBlockField(e.block, "Source Listing") ?? undefined;
         newestSourceUnit = unit ?? null;
         newestSourceProgress = {
           nextIteration: iteration + 1,
@@ -21032,11 +21049,20 @@ export function freshReviewReceipts(
   const currentSourceState = needsCurrentSource ? currentSource() : null;
   const currentSourceFingerprint = currentSourceState?.fingerprint ?? null;
   const currentSourceListing = currentSourceState?.listing ?? null;
-  const sourceMismatch =
+  const fingerprintMoved =
     newestSourceFingerprint !== null &&
     newestSourceFingerprint !== UNBINDABLE_FINGERPRINT &&
     currentSourceFingerprint !== null &&
     !sameWorkspaceSource(newestSourceFingerprint, currentSourceFingerprint);
+  // What moved outside AI-DLC's own files since the listing the newest review
+  // kept: an AI-DLC update the person took after the review moves only those,
+  // and then the reviewed source did not change. Null when no listing reads
+  // back here (an earlier release, a move during the review, another machine):
+  // fingerprints decide. Read for the active record, like the walk above.
+  const movedOutsideAidlc = fingerprintMoved && currentSourceState !== null
+    ? sourceChangedOutsideAidlcSince(projectDir, stage.slug, newestSourceListing, currentSourceState)
+    : null;
+  const sourceMismatch = fingerprintMoved && (movedOutsideAidlc === null || movedOutsideAidlc.length > 0);
   // An unbindable boundary or an unreadable workspace is not a change: strict
   // holds it stale, relaxed and off say once that it could not be checked. A
   // moved fingerprint is the governed drift.
@@ -21064,7 +21090,9 @@ export function freshReviewReceipts(
   ) {
     // The paths that moved since the review, when its listing was kept: the
     // person's line names them, the way a Unit's own change is named below.
-    const paths = workspaceSourceChangedPaths(
+    // The review's own listing leaves AI-DLC's files out; a receipt without
+    // one falls back to the listing its request kept.
+    const paths = movedOutsideAidlc ?? workspaceSourceChangedPaths(
       projectDir,
       stage.slug,
       newestSourceFingerprint,

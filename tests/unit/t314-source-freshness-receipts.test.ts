@@ -2007,8 +2007,8 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
   function installedStageLevelBuild(): string {
     const statePath = seededStateFile(proj);
     writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
-      "- [ ] units-generation — EXECUTE",
-      "- [S] units-generation — SKIP",
+      /^- \[ \] units-generation (.*) EXECUTE$/m,
+      "- [S] units-generation $1 SKIP",
     ));
     mkdirSync(join(proj, ".agents", "skills", "aidlc"), { recursive: true });
     const skill = join(proj, ".agents", "skills", "aidlc", "SKILL.md");
