@@ -2071,6 +2071,9 @@ Read them and run the action they chose, with no question shown; when they
 answer nothing, present the question and wait as below. When `ask` returns
 `left_out`, what the person asked to leave out of the Unit's build, it is said just
 before the question, for example "Left out of this build: AC2.1.1 and AC2.2.1."
+So is `check_offer`, when a stage's review passes are spent and its reviewed work
+changed after the last review: "Do you want me to have the new approach checked
+before you decide?"
 
 Wait for the human's **Approve** / **Request Changes** reply in that
 session, to this checkpoint question. It authorizes only the matching action;

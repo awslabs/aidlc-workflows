@@ -298,6 +298,12 @@ artifact, and refuses a verdict whose artifacts changed. How the verdict is hand
   findings remain after the cap, the workflow proceeds to the approval gate
   with the unresolved findings noted.
 
+When a stage's review passes are used up and its reviewed work changed after
+the last review (the work took another approach, for example), the approval
+asks once: "Do you want me to have the new approach checked before you
+decide?" Say yes and the review runs again, past the passes, before you are
+asked to approve; say approve and it is approved as it is.
+
 The reviewers also run under a hard turn budget - `maxTurns: 60`, authored in
 the persona frontmatter, enforced natively on Claude Code and projected to
 opencode's per-agent `steps: 60`; elsewhere it ships as persona prose. If a

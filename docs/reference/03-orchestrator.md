@@ -691,7 +691,9 @@ asked for, and before any other question was asked, are the reply, so run the
 action they chose without presenting the
 question (or present it when they answer nothing). When `ask` returns
 `left_out` (the Unit's `Deferred` traceability items: what the person asked to
-leave out of its build), say that line just before the question. The human's exact reply
+leave out of its build) or `check_offer` (a stage's review passes are spent and
+its reviewed work changed after the last review), say each line just before the
+question. The human's exact reply
 in that session, to this checkpoint question, authorizes the matching action;
 an unrelated reply, another session's reply, or a reply to a different question
 does not. These commands find their own session; never pass `--user-input`

@@ -313,6 +313,7 @@ import {
   readAllAuditShards,
   QUESTION_TURN_REPLY,
   readAuditShardEvents,
+  reviewCheckOffer,
   readApplicableTeamUnitScopeStamp,
   readStateFile,
   resolveInvokingSessionId,
@@ -10036,6 +10037,7 @@ function applyGateOnlyShape(
       line, leftOutNotice(projectDir, gateNode, unit), failedCheckNotices(projectDir, gateNode, unit).join(" "),
     ].filter(Boolean).join("\n");
     if (narration) directive.narration = narration;
+    addReviewCheckOffer(directive, projectDir, gateNode, unit);
   }
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(
     (module) =>
@@ -14044,6 +14046,22 @@ function withChangeNotices<T extends Directive>(directive: T, notices: string[])
   return notices.length > 0 ? { ...directive, change_notices: notices } : directive;
 }
 
+// The check offered when a stage's review passes are spent and its reviewed
+// work changed after (#1189) follows the change line it is about: at the end
+// of that line when this reply says it, else as the narration's last line.
+function addReviewCheckOffer(
+  reply: { narration?: string; change_notices?: string[] },
+  projectDir: string,
+  node: GraphStage,
+  unit: string | null,
+): void {
+  const found = reviewCheckOffer(projectDir, node, unit);
+  if (found === null) return;
+  const at = reply.change_notices?.lastIndexOf(found.change) ?? -1;
+  if (at >= 0) reply.change_notices![at] = `${found.change} ${found.offer}`;
+  else reply.narration = reply.narration ? `${reply.narration}\n${found.offer}` : found.offer;
+}
+
 // A retired relaxed or off line needs confirmation before its notice stops. The
 // notice speaks about the EFFECTIVE policy: a memory layer holding strict wins
 // over the retired line, lowers nothing, and would refuse the relaxed setting
@@ -15873,7 +15891,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         const lines = [leftOutNotice(pd, node, unit), failedCheckNotices(pd, node, unit).join(" ")].filter(Boolean);
         if (lines.length > 0) unitReply.narration = lines.join("\n");
       }
-      emit(withChangeNotices(unitReply, changeNotices));
+      const unitGate = withChangeNotices(unitReply, changeNotices);
+      if (unitGate.kind === "print" && (flags.result === "awaiting-approval" || flags.result === "revised")) {
+        addReviewCheckOffer(unitGate, pd, node, unit);
+      }
+      emit(unitGate);
       return;
     }
     if (flags.unit) {
@@ -16134,6 +16156,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         const narration = [line, leftOutNotice(pd, node, unit), failedCheckNotices(pd, node, unit).join(" ")]
           .filter(Boolean).join("\n");
         if (narration) gateReply.narration = narration;
+        addReviewCheckOffer(gateReply, pd, node, unit);
       }
     }
     emit(gateReply);

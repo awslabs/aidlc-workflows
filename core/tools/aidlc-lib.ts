@@ -6574,6 +6574,52 @@ export function leftOutLine(paths: readonly string[]): string | null {
   return `Left out of this build: ${list}.`;
 }
 
+// The one check the approval offers when a stage's review passes are spent
+// and its reviewed work changed after the last review (#1189): a review the
+// person asks for runs past the passes. From the record only: the attempt's
+// own review count (the one the cap refuses on) against the stage's passes,
+// and a kept change that names files after the Unit's last verdict. The stage
+// gate of a per-Unit stage asks for each Unit reviewed in it. `change` is that
+// change's own line, so a reply that says it can end it with the offer.
+export const REVIEW_CHECK_OFFER = "Do you want me to have the new approach checked before you decide?";
+export function reviewCheckOffer(
+  projectDir: string,
+  stage: StageEntry,
+  unit: string | null,
+): { offer: string; change: string } | null {
+  if (!stage.reviewer) return null;
+  try {
+    const state = readStateFile(projectDir);
+    const reviewClass = resolveReviewClass(stage.review_class ?? "adversarial", getField(state, "Scope") ?? "", state);
+    if (reviewClass === "none") return null;
+    const passes = reviewClass === "advisory" ? 1 : stage.reviewer_max_iterations ?? 2;
+    const rows = readAuditShardEvents(projectDir);
+    const view = reviewInvalidationAttemptView(rows, stage.slug);
+    const attempt = view.events.filter((event) =>
+      attemptEventAfterFrontier(view.floor, event) && auditBlockField(event.block, "Stage") === stage.slug);
+    const units = unit !== null || stage.for_each !== "unit-of-work"
+      ? [unit ?? undefined]
+      : [...new Set(attempt.filter((event) => event.event === "REVIEW_COMPLETED")
+        .map((event) => auditBlockField(event.block, "Unit") ?? undefined))];
+    for (const each of units) {
+      const mine = attempt.filter((event) => (auditBlockField(event.block, "Unit") ?? undefined) === each);
+      const review = mine.filter((event) => event.event === "REVIEW_COMPLETED").at(-1);
+      const change = mine.filter((event) =>
+        event.event === "CHANGE_ACCEPTED" && auditBlockField(event.block, "Checkpoint") === "review-receipt" &&
+        ![null, "", "(paths unavailable)"].includes(auditBlockField(event.block, "Changed"))).at(-1);
+      if (!review || !change || !attemptEventDefinitelyBefore(review, change)) continue;
+      const used = reviewAttemptAccounting(
+        projectDir, reviewAttemptWindow(projectDir, state, stage, rows), state, stage, stage.reviewer, each, undefined,
+        { eventFilter: (row) => reviewAttemptEventMatchesCurrentClaim(projectDir, state, each, row) },
+      ).budgetCount;
+      if (used >= passes) return { offer: REVIEW_CHECK_OFFER, change: auditBlockField(change.block, "Details") ?? "" };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 // What the person hears about a finished stage that is behind something it
 // used: the work carries on, and the redo is offered as a plain question.
 export function staleStageLine(name: string): string {
