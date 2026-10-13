@@ -1,6 +1,6 @@
 # Structured questions and human-turn recording
 
-**Finding:** DEVIN-08. **Status:** Implemented response compatibility; live batch/cancellation authority coverage remains limited. **Source baseline:** `6e208f7b`. **Fact-checked:** 2026-09-12.
+**Finding:** DEVIN-08. **Status:** Implemented response compatibility; live batch/cancellation authority coverage remains limited. **Source baseline:** `6e208f7b`. **Fact-checked:** 2026-09-12; upstream-merge 2026-10-13.
 
 ## Why this was needed
 
@@ -14,7 +14,7 @@ Native calls allow 1–4 questions with 2–4 explicit options each. Other is su
 
 Hook parsing and tool-facing rendering are different layers. normalizeToolResponse accepts a string or an object containing an output string. extractJsonFromString handles a leading User answered your questions prefix. The selection parser supports legacy answers arrays, synthetic arrays of selected objects, and wrapped/unwrapped question-text maps with selected arrays.
 
-record-human-turn skips only when no explicit selection was recognized AND the response is classified as cancellation. Otherwise it forwards to the shared human-turn hook, even for some unknown or missing response shapes. Explicit text extraction chooses the first nonempty selected label, then custom text when applicable, rather than returning the entire batch. This is the implemented compatibility behavior, not a guarantee of complete batch approval semantics.
+record-human-turn skips only when no explicit selection was recognized AND the response is classified as cancellation. Otherwise it forwards to the shared human-turn hook, even for some unknown or missing response shapes. Explicit text extraction chooses the first nonempty selected label, then custom text when applicable, rather than returning the entire batch. This is the implemented compatibility behavior, not a guarantee of complete batch approval semantics. Since the `59264b2c` merge, upstream `e0b28084` (#2336) narrowed `isNonAnswer` to a reply with no words in it — "cancel"/"abort"/"timed out" count as the person's own words, so a `selected` label carrying one is an explicit selection; Devin-side cancellation is recognised by shape, not words, via `success:false` (`isAskUserQuestionCancellation`) or `skipped:true` on the answer record. The t149 Devin-shape case that expected `selected:["cancelled"]` to be rejected was replaced by two cases — an empty selection is not an explicit selection, and `["cancelled"]` is one.
 
 A HUMAN_TURN is evidence of interaction in the engine's model; it is not a Plan Approval receipt. Correct offered choice, session, challenge, content, and attempt checks remain necessary. Contradictory success/selection/cancellation fields and partial batches need explicit regression coverage rather than optimistic assumptions.
 

@@ -1,6 +1,6 @@
 # Version baseline, binary discovery, and diagnostic evidence
 
-**Finding:** DEVIN-13. **Status:** Implemented checks; not a full compatibility certification. **Source baseline:** `79cf8498`; hook-dispatch, session-linked evidence, and native-trust rows at `dafdaa99` plus the change set that landed with them. **Fact-checked:** 2026-09-22 (doctor rows, install layouts, and test hermeticity re-verified during the PR #996 Item 7 work); 2026-10-09 (compiled-dispatch doctor rows); 2026-10-10 (macOS bundled path externally observed).
+**Finding:** DEVIN-13. **Status:** Implemented checks; not a full compatibility certification. **Source baseline:** `79cf8498`; hook-dispatch, session-linked evidence, and native-trust rows at `dafdaa99` plus the change set that landed with them. **Fact-checked:** 2026-09-22 (doctor rows, install layouts, and test hermeticity re-verified during the PR #996 Item 7 work); 2026-10-09 (compiled-dispatch doctor rows); 2026-10-10 (macOS bundled path externally observed); upstream-merge 2026-10-13.
 
 ## Why this was needed
 
@@ -42,6 +42,8 @@ Recorded from `evidence/devin-e2e-run/compiled-hook-dispatch-run/` (2026-10-08, 
 t334 exercises injected discovery/execution and numeric comparison. t294 checks the shared diagnostics floor. t331 drives the spawned doctor through a `devin` PATH shim (t150 codex pattern), so the version row, the shared `Harness CLI` row, and the exit code are pinned in pass, below-floor, and unparseable states on any machine — including one with no Devin installed; the missing-CLI and Desktop-editor branches stay in t334 because the macOS Desktop editor candidate is an absolute path no env var can redirect. t331/t332 exercise absent/valid/invalid markers and adapter behavior in fixtures. None is an authenticated live-host, organization-model, Desktop, or complete workflow certification.
 
 The opt-in status test covers only no-workflow status and absence of workflow scaffolding. A skipped test is not a passing live compatibility check; see DEVIN-14.
+
+Harness-roster pins: Devin occupies option 5 of the setup wizard's harness list, so upstream-authored tests that pin menu positions expect Kiro CLI at 6 and Kiro IDE at 7 (t299 first-run wizard, t304 round-18 acceptance), and t-skill-title-in-plain-words expects 8 shipped `SKILL.md` files. These pins encode the roster, not behavior — every upstream merge must re-shift them.
 
 ## Regression and upgrade checks
 

@@ -1,6 +1,6 @@
 # Skills, ambient rules, and onboarding
 
-**Finding:** DEVIN-02. **Status:** Implemented; host injection limits documented in the 3000.11.3 bundle, effective threshold unmeasured. **Source baseline:** `6e208f7b`. **Fact-checked:** 2026-09-12; injection limits 2026-10-10.
+**Finding:** DEVIN-02. **Status:** Implemented; host injection limits documented in the 3000.11.3 bundle, effective threshold unmeasured. **Source baseline:** `6e208f7b`. **Fact-checked:** 2026-09-12; injection limits 2026-10-10; upstream-merge 2026-10-13.
 
 ## Why this was needed
 
@@ -14,11 +14,11 @@ This is invocation policy, not a requirement to make a skill discoverable. Devin
 
 `rules-aidlc.md` emits `.devin/rules/aidlc.md` with `trigger: always_on`. The loaded rule names the active-space memory directory; it does not import those files. Since the `b8d9bdc3` merge it also names `aidlc/active-memory/` — the engine's git-ignored copy of the active space's memory — as readable, while edits go only to `aidlc/spaces/<active-space>/memory/`. Actual method delivery belongs to the engine's resolver and load-steering protocol. Skill `triggers` and rule `trigger` are different fields.
 
-Upstream's harness-neutral skill changes were ported to Devin's `SKILL.md` and `question-rendering.md` (`ea936ecb`, 2026-10-09): for example the engine now emits nine directive kinds including `notice`. `composer.md` now ships as `.devin/skills/aidlc/composer.md`. Upstream also retired the per-harness "fresh session" hand-off text (`aidlc-runner-gen.ts` `freshSessionFlow` removed); "exit or restart Devin CLI and start a new session" survives only in t123's `RETIRED_FRESH_SESSION_TEXT` as retired wording.
+Upstream's harness-neutral skill changes were ported to Devin's `SKILL.md` and `question-rendering.md` (`ea936ecb`, 2026-10-09): for example the engine now emits nine directive kinds including `notice`. `composer.md` now ships as `.devin/skills/aidlc/composer.md`. Upstream also retired the per-harness "fresh session" hand-off text (`aidlc-runner-gen.ts` `freshSessionFlow` removed); "exit or restart Devin CLI and start a new session" survives only in t123's `RETIRED_FRESH_SESSION_TEXT` as retired wording. The `b9fa361c` merge brought a second wording pass, ported with Devin's `exec`/`run_subagent`/`ask_user_question` surfaces kept: `b9c3e900` (new work typed over open work is not pushed toward it), `41e4f301` (a typed setting is recorded whole and applied once by the setter the agent runs), `cf1202b8` (the agent proposes the plan — `--propose <plan>` — with the keyword classifier out of the engine), `f80d0df5` (each row says what the agent does, not which directive field to branch on; the summary confirmation comes "when the step asks for" it), and `04f974af` (the skill names itself AI-DLC; the gate line names no engine path). `question-rendering.md` needed no change; t181 conductor parity is green.
 
 Onboarding is split: root `AGENTS.md` renders from `core/templates/onboarding.md` and is byte-identical across the harnesses that share it, while the Devin onboarding rule `.devin/rules/aidlc-onboarding.md` renders from `core/templates/onboarding-harness.md` with `harness/devin/onboarding.fills.ts` — the fills gained upstream's "Show AI-DLC's questions and choices…" paragraph in the same pass. t331 currently enforces at most 16,384 UTF-8 bytes on that Devin onboarding rule, no duplicated DocumentKB section, and no blanket claim of identical behavior across harnesses. The old 12 KiB proposal is not the current test limit.
 
-No custom statusline is wired for Devin. `/aidlc --status` is the on-demand alternative; injecting display text into model context is not an equivalent persistent user-visible status strip.
+No custom statusline is wired for Devin. `/aidlc --status` is the on-demand alternative; injecting display text into model context is not an equivalent persistent user-visible status strip. Since the `59264b2c` merge upstream makes the status line an opt-in manifest field (`statusLine`, `c089a1a4` / #1407) written into the person's own settings only when they choose it; Devin declares none.
 
 ## Evidence and limits
 

@@ -2045,7 +2045,7 @@ describe("t149 codex adapter — hasExplicitHumanSelection recognizes Devin's as
   });
 
   test("keeps 'cancelled' as the person's word", () => {
-    // isNonAnswer matches only a reply with no words in it (upstream #1513):
+    // isNonAnswer matches only a reply with no words in it (upstream #2336):
     // "cancelled" is a word a person typed, so it counts as an explicit
     // selection. Real Devin cancellations arrive as success:false or
     // skipped:true, handled by isAskUserQuestionCancellation / the skipped
