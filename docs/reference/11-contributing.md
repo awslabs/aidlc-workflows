@@ -260,9 +260,10 @@ otherwise the current stored value stays and the output says so in one line.
 Memory continues to control the effective value.
 
 Preserve state and event contracts: `review adversarial` stores an empty
-`Review Override`; explicit Guard Policy values use `(set by you)`, explicit
-ceremony values use `(set by you)` from a typed switch or a check the person
-asked to turn off, and `(set by a command)` otherwise, while inherited scope defaults retain scope provenance. A
+`Review Override`; explicit Guard Policy and ceremony values use `(set by you)`
+when `settingTheirs` finds the person behind them (a typed switch, their own
+terminal, or `--person-words` equal to a reply of theirs on record) and
+`(set by a command)` otherwise, while inherited scope defaults retain scope provenance. A
 scope change preserves explicit overrides and absent legacy Guard
 Policy/ceremony rows. Only real stored field or source changes produce setting
 events or update `Last Updated`. The utility applier builds `GUARD_POLICY_SET`,

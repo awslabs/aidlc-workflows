@@ -11,7 +11,15 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
-import { isMessageId, listMessages, readMessage, type StoredMessage } from "./aidlc-message-store.ts";
+import {
+  chatsSince,
+  isMessageId,
+  latestSpendingTimestamp,
+  listMessages,
+  messageIsReply,
+  readMessage,
+  type StoredMessage,
+} from "./aidlc-message-store.ts";
 import {
   humanRepliedSinceGate,
   NoGuardRecoveryAskError,
@@ -915,29 +923,6 @@ function demoteReviewHeadings(body: Buffer): { bytes: Buffer; changed: string[] 
 //   --questions-file <path> [--unit <unit>] [--single]]
 //
 // Fires BEFORE AskUserQuestion, recording what options will be shown.
-// Rows that spend the person's messages: a decision of another kind than an
-// answer. One message backs at most one approval plus any answers (round 2 of
-// the input-record design), so answers never spend it.
-const MESSAGE_SPENDING_EVENTS: ReadonlySet<string> = new Set([
-  "GATE_APPROVED",
-  "GATE_REJECTED",
-  "PLAN_APPROVAL_RECORDED",
-  "SUMMARY_CONFIRMATION_RECORDED",
-  "VERIFICATION_COMMAND_RECORDED",
-  "CONSTRUCTION_POLICY_RECORDED",
-  "QUESTION_UNANSWERED",
-  // A routing answer sends the words before it to the work they named.
-  "REQUEST_ROUTED",
-]);
-
-function latestSpendingTimestamp(rows: AuditShardEvent[]): string | null {
-  let latest: string | null = null;
-  for (const row of rows) {
-    if (MESSAGE_SPENDING_EVENTS.has(row.event) && (latest === null || row.timestamp > latest)) latest = row.timestamp;
-  }
-  return latest;
-}
-
 // The chat this command serves, when the engine can tell (the hook's override,
 // Codex's thread id, the process ancestry); null when it cannot.
 function invokingChat(pd: string): string | null {
@@ -953,37 +938,6 @@ function invokingChat(pd: string): string | null {
 // through this chat and is not spent by a later decision, and reads no words.
 // A same-second tie with a spending row favours the message: one message can
 // give an approval and the answers beside it.
-// A message that can answer a question: it carries the person's words, and its
-// turn was not only a command to AIDLC or a question about a switch (the marks
-// the presence check reads on the HUMAN_TURN row).
-function messageIsReply(rows: AuditShardEvent[], message: StoredMessage): boolean {
-  if (message.words === null) return false;
-  for (const row of rows) {
-    if (row.event !== "HUMAN_TURN" || auditBlockField(row.block, "Message Id") !== message.id) continue;
-    const mark = auditBlockField(row.block, "Reply");
-    if (mark === "command" || mark === "question") return false;
-  }
-  return true;
-}
-
-// The chats that have spoken on this work since the last spending row. A message
-// counts when a HUMAN_TURN row of this record names it: the hook wrote that row
-// only while the chat was on the work, so a chat that joined through its turn
-// alone counts from that turn, and words a chat typed while it was on nothing
-// (before the work was chosen here, or a cold workspace) never count, however
-// the chat stands now. A message no hook minted a row for (none exists today
-// besides those) is read as before.
-function chatsSince(rows: AuditShardEvent[], pd: string, spentAt: string | null): Set<string> {
-  const named = new Set<string>();
-  for (const row of rows) {
-    const id = row.event === "HUMAN_TURN" ? auditBlockField(row.block, "Message Id") : null;
-    if (id !== null) named.add(id);
-  }
-  return new Set(listMessages(pd)
-    .filter((m) => (spentAt === null || m.at >= spentAt) && (m.session === null || named.has(m.id)))
-    .map((m) => m.session ?? "terminal"));
-}
-
 function proveMessage(pd: string, id: string, what: "answer" | "decision"): { message: StoredMessage } | { refusal: string } {
   const message = isMessageId(id) ? readMessage(pd, id) : null;
   if (message === null) {

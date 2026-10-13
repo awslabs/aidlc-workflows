@@ -285,7 +285,7 @@ describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
         .replace(" [--skip <changes.skip>]", " --skip team-formation")
         .replace(" [--add <changes.add>]", "")
         // No settings were approved with this stage change.
-        .replace(" [approved setting flags]", "")
+        .replace(" [approved setting flags --person-words '<their words>']", "")
         .split(/\s+/);
       expect(argv.shift()).toBe(native ? "aidlc" : "bun");
       const before = readFileSync(seededStateFile(proj), "utf-8");
@@ -674,11 +674,15 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(created.message)).toContain("to start the new intent");
     const kept = runEmitted(String(ask.continue_command));
     expect(kept.kind).toBe("print");
-    expect(String(kept.message)).toContain("config set depth minimal --learnings off` to update the configuration");
+    // No line of the person's is on record here, so the step names their words
+    // for the agent to fill with the reply that asked.
+    expect(String(kept.message)).toContain(
+      "config set depth minimal --learnings off --person-words '<their words>'` to update the configuration",
+    );
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
     // A setting typed alone is still for the active work.
     const alone = directiveOf(runNext(proj, ["--learnings", "off"]).out);
-    expect(String(alone.message)).toContain("config set learnings off` to update the configuration");
+    expect(String(alone.message)).toContain("config set learnings off --person-words '<their words>'` to update the configuration");
   });
 
   test("the reshape answer applies the typed settings to the active work first, then composes", () => {
@@ -694,7 +698,10 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     const first = runEmitted(compose);
     expect(first.kind).toBe("print");
     const message = String(first.message);
-    expect(message).toContain("config set review none --learnings off` to apply the settings typed with this request to the work being reshaped");
+    // No line of the person's is on record here, so the step names their words.
+    expect(message).toContain(
+      "config set review none --learnings off --person-words '<their words>'` to apply the settings typed with this request to the work being reshaped",
+    );
     const then = /then run `([^`]+)` and follow what it returns/.exec(message)?.[1];
     expect(then, message).toBeDefined();
     expect(then).not.toContain("--learnings");
@@ -750,7 +757,9 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(ask.ask_type).toBe("new-work-routing");
     // Continuing the active work takes the typed Guard Policy with it.
     const kept = directiveOf(runNext(proj, ["1"]).out);
-    expect(String(kept.message)).toContain("config set depth minimal --guard-policy relaxed` to update the configuration");
+    expect(String(kept.message)).toContain(
+      "config set depth minimal --guard-policy relaxed --person-words '<their words>'` to update the configuration",
+    );
     // The separate-work reply reaches the plan question, then the creation; once
     // that question is in front of them, a bare number answers it, not this one.
     const separate = createdThrough(directiveOf(runNext(proj, ["2"]).out));

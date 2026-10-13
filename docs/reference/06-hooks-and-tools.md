@@ -640,7 +640,8 @@ separately withholds human-turn minting; it does not lower the fence.
 
 For the three switchable fences, `config-change --guard.<fence> off|on` writes
 the `Guards Off` or `Guards On` line in canonical order as
-`<comma list> (set by you)` or `none`, and one `GUARD_DISABLED` or
+`<comma list> (set by you)` (or `(set by a command)` once a check on it is not
+the person's on record), or `none`, and one `GUARD_DISABLED` or
 `GUARD_RESTORED` row. Setting `on` can raise a policy-lowered fence and records
 that override in `Guards On` with `GUARD_RESTORED`. A Guard Policy word the person
 sets (source `you`) clears both lines, except a fence the same command names,
@@ -648,7 +649,7 @@ with one `GUARD_DISABLED` or `GUARD_RESTORED` row per fence that changes; a fenc
 it turns off counts as a lowering. `/aidlc --status` names each fence
 the person or an environment kill switch turned off on its `Checks off:` line,
 grouped by where the setting came from and worded by `fenceSourceLabel` as
-`formatFence` words it: `set by you` or `env <VAR>`. A fence the Guard Policy
+`formatFence` words it: `set by you`, `set by a command` or `env <VAR>`. A fence the Guard Policy
 word lowers is left to the `Guard Policy:` line, which names where the policy
 came from; with no such fence off there is no line.
 
@@ -760,7 +761,9 @@ switch in front of the person who met it, in whichever shape that refusal has:
 `review-freeze` builds a typed refusal with `fence` set, so
 `evaluateGuardRefusal` appends `lowerFenceRemedy` (`op: "lower-fence"`) as a
 `command` choice whose `command` is the setter. When the person picks it, the
-conductor runs the setter and says in one line what changed.
+conductor runs the setter with their reply as `--person-words` (the choice's
+`action` says so), so the check reads `set by you`, and says in one line what
+changed.
 The other three fences refuse from `PreToolUse` with exit 2.
 Main-session prose refusals use
 `fenceSwitchSentence`: it returns `lowerFenceSentence` when the switch is
@@ -827,7 +830,8 @@ against a project with no ledger, a stand-aside therefore leaves neither a line
 nor a row. `hold` refuses as before. Switchable-fence main-session refusals use
 `fenceSwitchSentence` to append `lowerFenceSentence`, which tells the
 conductor to offer the switch and, when the person says so, run the setter
-itself, only when memory does not hold strict.
+itself with their reply as `--person-words`, only when memory does not hold
+strict.
 Memory-held strict withholds the switch everywhere; the prose refusal names
 the memory file to edit instead. An unreadable policy also withholds the switch.
 Plan-approval and direct state-tool refusals withhold both sentences from
@@ -2151,12 +2155,14 @@ and do not change `Last Updated`.
 A memory layer's `Mode: strict` refuses an explicit `--guard-policy relaxed` or
 `--guard-policy off` for the whole command, including companion settings or a
 scope change, and names the memory file. Explicit strict and unrelated settings
-remain allowed. `review adversarial` stores an empty `Review Override`; explicit
-Guard Policy choices store `<value> (set by you)`; a ceremony choice stores
-`<value> (set by you)` when the setter applies the person's typed switch or the
-setter turns off a check the person asked in the chat to turn off, and
-`<value> (set by a command)` otherwise, never relabeling an identical
-`set by you` line; and a fence switch stores the `Guards Off` or `Guards On` line. An `on` override can raise a
+remain allowed. `review adversarial` stores an empty `Review Override`; a Guard
+Policy or ceremony choice stores `<value> (set by you)` when `settingTheirs`
+finds the person behind it (their typed switch, their own terminal, or the words
+the agent passes with `--person-words` equal to a reply of theirs in this chat
+since the last decision, stored as `Person Reply`), and `<value> (set by a
+command)` otherwise, never relabeling an identical `set by you` line; and a fence
+switch stores the `Guards Off` or `Guards On` line. Who may lower a check is
+unchanged: a reply of theirs since the last decision, as before. An `on` override can raise a
 policy-lowered fence and records `GUARD_RESTORED`. Scope defaults retain their
 scope source, and a same-value change of source is still a recorded change.
 Environment kill switches override effective ceremony values without changing

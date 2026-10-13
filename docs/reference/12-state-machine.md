@@ -846,8 +846,13 @@ says so in one line. Ceremony values still
 follow the new scope under memory policy, which controls the effective Guard
 Policy. Changed stored values or sources are audited with scope provenance;
 explicit overrides and absent legacy rows are preserved. Explicit Guard
-Policy flags store `<value> (set by you)`; ceremony flags store it when the
-person typed the switch and `<value> (set by a command)` otherwise.
+Policy and ceremony flags store `<value> (set by you)` when the record shows
+the person asked (`settingTheirs`: their typed line, their own terminal, or
+`--person-words` that equal a reply of theirs in this chat since the last
+decision) and `<value> (set by a command)` otherwise. When the agent sends such
+a setting through `next` and the person's line did not carry it, the `config
+set` step `next` names ends with `--person-words '<their words>'`, for the
+agent to fill with the reply that asked.
 A same-value source change still counts as a change; `review adversarial`
 clears `Review Override` to an empty string.
 

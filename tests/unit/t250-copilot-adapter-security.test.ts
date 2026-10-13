@@ -2021,7 +2021,12 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         // Not asked for: the host still asks.
         expect(decision(command), command).toBeUndefined();
       }
-      // Another setting, or the switch with anything joined to it, keeps the prompt.
+      // The person's words beside the switch (--person-words) are still that switch.
+      expect(decision("aidlc engine config set guard.review-freeze off --person-words 'turn the review freeze off'",
+        "guard.review-freeze=off")).toBe("allow");
+      expect(decision("aidlc engine config set guard.review-freeze off --person-words-file .aidlc-engine/answer-text/answer.txt",
+        "guard.review-freeze=off")).toBe("allow");
+      // Another setting, or the switch with anything else joined to it, keeps the prompt.
       expect(decision("aidlc engine config set depth Minimal")).toBeUndefined();
       expect(decision("aidlc engine config set guard.review-freeze off --global", "guard.review-freeze=off")).toBeUndefined();
     } finally {

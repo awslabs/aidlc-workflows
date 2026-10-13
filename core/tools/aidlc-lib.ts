@@ -2645,6 +2645,15 @@ function isTerminalUtilityNext(invocation: { command: string; args: string[] }):
   return isReadOnlyNextArgv(args);
 }
 
+// A setting the person's own line did not carry is theirs only with their
+// words (settingTheirs): the configuration step names --person-words with this
+// slot, and says what fills it, for the agent to put the reply that asked there.
+export const PERSON_WORDS_SLOT = "<their words>";
+export const PERSON_WORDS_FILL = `, with ${PERSON_WORDS_SLOT} the person's reply that asked for it, word for word`;
+const CONFIGURATION_STEP = new RegExp(
+  `^Run \`([^\`]+)\` to update the configuration(${escapeRegex(PERSON_WORDS_FILL)})?, then print its output verbatim and stop\\.$`,
+);
+
 // A modifier-only next, or one naming a scope, can initialize work or dispatch
 // configuration or a scope change depending on state. Its own successful
 // result must prove the terminal branch ran; the
@@ -2727,8 +2736,9 @@ function isTerminalConfigurationDispatch(
     if (!validated.valid || validated.data.kind !== "print") return false;
     const match = (scope !== undefined
       ? /^Run `([^`]+)` to change scope, then print its output verbatim and stop\.$/
-      : /^Run `([^`]+)` to update the configuration, then print its output verbatim and stop\.$/).exec(validated.data.message);
+      : CONFIGURATION_STEP).exec(validated.data.message);
     if (!match) return false;
+    if (match[2] !== undefined) expected.push("--person-words", PERSON_WORDS_SLOT);
     const literal = parseLiteralShellInvocation(match[1]);
     if (!literal || literal.directory !== null) return false;
     const command = engineInvocationFromWords(literal.argv, literal.rawWords);
@@ -31330,13 +31340,16 @@ function guardOperation(operation: GuardRecoveryOperation): Pick<GuardRemedy, "o
  * "Turn this fence off for this piece of work": the in-band offer that makes the
  * switch reachable at the moment it is needed. When the person picks it, the
  * conductor runs the setter; the setter accepts it because their reply is on
- * record, and a memory-held strict Guard Policy withholds the offer.
+ * record, and a memory-held strict Guard Policy withholds the offer. The
+ * command stays the exact setter; the agent adds the reply that picked it, so
+ * the check reads as theirs.
  */
 export function lowerFenceRemedy(fence: SwitchableGuardFence): GuardRemedy {
   return {
     op: "lower-fence",
     action:
-      `Turn the ${fence} check off for this piece of work. After the command succeeds, tell the person in one ` +
+      `Turn the ${fence} check off for this piece of work: run the command with \`--person-words ` +
+      `'${PERSON_WORDS_SLOT}'\` added${PERSON_WORDS_FILL}. After the command succeeds, tell the person in one ` +
       "line that it is off for this piece of work, comes back on for the next one, and that they can ask you " +
       "to turn it back on; then retry what was refused.",
     ...guardOperation({ kind: "lower-fence", fence }),
@@ -31350,8 +31363,9 @@ export function lowerFenceSentence(fence: SwitchableGuardFence): string {
   const setter = renderGuardOperation({ kind: "lower-fence", fence }, { harnessDir: harnessDir() });
   return (
     `If the person meant to do this now, offer to turn the ${fence} check off for this piece of work. When ` +
-    `they say so, run \`${setter}\` yourself and tell them in one line that it is off for this piece of work, ` +
-    "comes back on for the next one, and that they can ask you to turn it back on."
+    `they say so, run \`${setter} --person-words '${PERSON_WORDS_SLOT}'\` yourself${PERSON_WORDS_FILL}, and ` +
+    "tell them in one line that it is off for this piece of work, comes back on for the next one, and that " +
+    "they can ask you to turn it back on."
   );
 }
 
@@ -41027,19 +41041,32 @@ export function parseGuardsOnLine(raw: string | null | undefined): SwitchableGua
   return parseGuardsOffLine(raw);
 }
 
-/** The `Guards Off` line for a set of lowered fences, in canonical order. */
-export function formatGuardsOffLine(fences: readonly SwitchableGuardFence[]): string {
+/**
+ * The `Guards Off` line for a set of lowered fences, in canonical order, with one
+ * label for the line: `set by you` while every check on it is the person's,
+ * `set by a command` otherwise. One trailing label keeps the line readable by
+ * every version (parseGuardsOffLine drops the whole parenthesis).
+ */
+export function formatGuardsOffLine(fences: readonly SwitchableGuardFence[], source = "you"): string {
   const ordered = SWITCHABLE_GUARD_FENCES.filter((fence) => fences.includes(fence));
-  return ordered.length === 0 ? "none" : `${ordered.join(", ")} (set by you)`;
+  return ordered.length === 0 ? "none" : `${ordered.join(", ")} (${changeControlSourceLabel(source)})`;
 }
 
 /** The `Guards On` line for fences raised above the policy, in canonical order. */
-export function formatGuardsOnLine(fences: readonly SwitchableGuardFence[]): string {
-  return formatGuardsOffLine(fences);
+export function formatGuardsOnLine(fences: readonly SwitchableGuardFence[], source = "you"): string {
+  return formatGuardsOffLine(fences, source);
+}
+
+/** Whose a `Guards Off` / `Guards On` line says its checks are: `you`, `command`, or a line with no label, `you`. */
+export function guardsLineSource(raw: string | null | undefined): string {
+  const label = /\(([^()]*)\)\s*$/.exec(raw ?? "")?.[1]?.trim() ?? "";
+  return changeControlSourceFromLabel(label);
 }
 
 /** Write the `Guards Off` line, inserting it under the policy line when absent. */
-export function setGuardsOffLine(content: string, fences: readonly SwitchableGuardFence[]): string {
+export function setGuardsOffLine(content: string, fences: readonly SwitchableGuardFence[], source?: string): string {
+  // With no source named, the line keeps its own label as checks leave it.
+  const label = source ?? guardsLineSource(getField(content, GUARDS_OFF_FIELD));
   if (getField(content, GUARDS_OFF_FIELD) === null) {
     const beforeInsert = content;
     for (const anchor of [GUARD_POLICY_FIELD, CHANGE_CONTROL_FIELD, "Review Override", "Test Strategy", "Scope"]) {
@@ -41051,11 +41078,12 @@ export function setGuardsOffLine(content: string, fences: readonly SwitchableGua
     }
     if (content === beforeInsert) content = `${content.trimEnd()}\n- **${GUARDS_OFF_FIELD}**:\n`;
   }
-  return setField(content, GUARDS_OFF_FIELD, formatGuardsOffLine(fences));
+  return setField(content, GUARDS_OFF_FIELD, formatGuardsOffLine(fences, label));
 }
 
 /** Write `Guards On`, inserting it under `Guards Off` or the same state anchors. */
-export function setGuardsOnLine(content: string, fences: readonly SwitchableGuardFence[]): string {
+export function setGuardsOnLine(content: string, fences: readonly SwitchableGuardFence[], source?: string): string {
+  const label = source ?? guardsLineSource(getField(content, GUARDS_ON_FIELD));
   if (getField(content, GUARDS_ON_FIELD) === null) {
     const beforeInsert = content;
     for (const anchor of [GUARDS_OFF_FIELD, GUARD_POLICY_FIELD, CHANGE_CONTROL_FIELD, "Review Override", "Test Strategy", "Scope"]) {
@@ -41067,7 +41095,7 @@ export function setGuardsOnLine(content: string, fences: readonly SwitchableGuar
     }
     if (content === beforeInsert) content = `${content.trimEnd()}\n- **${GUARDS_ON_FIELD}**:\n`;
   }
-  return setField(content, GUARDS_ON_FIELD, formatGuardsOnLine(fences));
+  return setField(content, GUARDS_ON_FIELD, formatGuardsOnLine(fences, label));
 }
 
 export interface FenceResolution {
@@ -41088,6 +41116,8 @@ export function resolveFences(
 ): Record<GuardFence, FenceResolution> {
   const perRunOff = parseGuardsOffLine(getField(stateContent ?? "", GUARDS_OFF_FIELD));
   const perRunOn = parseGuardsOnLine(getField(stateContent ?? "", GUARDS_ON_FIELD));
+  const offSource = guardsLineSource(getField(stateContent ?? "", GUARDS_OFF_FIELD));
+  const onSource = guardsLineSource(getField(stateContent ?? "", GUARDS_ON_FIELD));
   const byPolicy = fencesLoweredByPolicy(policy.value);
   const out = {} as Record<GuardFence, FenceResolution>;
   for (const fence of GUARD_FENCES) {
@@ -41095,9 +41125,9 @@ export function resolveFences(
     if (env !== undefined && resolveProjectFlag(env) === "1") {
       out[fence] = { fence, value: "off", source: killSwitchSource(env) };
     } else if (policy.memoryStrict === null && isSwitchableGuardFence(fence) && perRunOff.includes(fence)) {
-      out[fence] = { fence, value: "off", source: "you" };
+      out[fence] = { fence, value: "off", source: offSource };
     } else if (isSwitchableGuardFence(fence) && perRunOn.includes(fence)) {
-      out[fence] = { fence, value: "on", source: "you" };
+      out[fence] = { fence, value: "on", source: onSource };
     } else if (policy.memoryStrict !== null && isSwitchableGuardFence(fence) && perRunOff.includes(fence)) {
       out[fence] = {
         fence,
@@ -41118,7 +41148,9 @@ export function resolveFences(
 }
 
 export function fenceSourceLabel(resolution: FenceResolution): string {
-  return resolution.source === "you" ? "set by you" : resolution.source;
+  return resolution.source === "you" || resolution.source === "command"
+    ? changeControlSourceLabel(resolution.source)
+    : resolution.source;
 }
 
 /** `on (default)`, `on (set by you)`, `off (set by you)`, `off (env ...)`, or `off (guard policy off (from scope express))`. */

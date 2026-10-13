@@ -524,7 +524,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       ...PHRASE_AND_LINE,
       "Where it applies is what they say: this piece of work, this project, or this machine.",
       "`{{INVOKE}} config flags --bypass <switch> --local --yes`",
-      "`{{INVOKE}} engine config set <key> <on|off>`",
+      "`{{INVOKE}} engine config set <key> <on|off> --person-words '<their words>'`",
     ]) {
       if (!onboarding.includes(tok)) problems.push(`core/templates/onboarding-harness.md  missing: ${tok}`);
     }
@@ -943,8 +943,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         .map((file) => readFileSync(join(REPO_ROOT, file), "utf-8"))
         .join("\n");
       for (const setter of [
-        "run `{{INVOKE}} engine config set guard-policy <value>` yourself",
-        "running `{{INVOKE}} engine config set summary-confirmation off` yourself",
+        "run `{{INVOKE}} engine config set guard-policy <value> --person-words '<their words>'` yourself",
+        "running `{{INVOKE}} engine config set summary-confirmation off --person-words '<their words>'` yourself",
       ]) {
         if (!body.includes(setter)) found.push(`${rel}  missing: ${setter}`);
       }
