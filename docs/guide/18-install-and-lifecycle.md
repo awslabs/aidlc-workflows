@@ -1333,7 +1333,35 @@ Update downloads and fully validates a candidate before changing the active
 pointer. Failed updates automatically restore the prior consistent
 installation. A successful update retains the prior active version and every
 registered project pin, then prunes older unprotected versions automatically.
-There is no public rollback or retained-version management command.
+There is no separate rollback or retained-version management command; to go
+back, see [Go Back to an Earlier Version](#go-back-to-an-earlier-version).
+
+## Go Back to an Earlier Version
+
+To put this machine back on an earlier release, run `aidlc use <version>`, for
+example `aidlc use 2.10.0`. It downloads that release if the machine does not
+have it, then says `Now using aidlc 2.10.0 (was 2.11.0; retained locally, no
+project changes).` Every project without a pin now runs on 2.10.0; run
+`aidlc config` in a project to bring its files to 2.10.0 as well.
+`aidlc use 2.11.0` goes forward again.
+
+To put one project back for everyone on it, pin it, then refresh it:
+
+```bash
+aidlc config --pin 2.10.0 --yes
+aidlc config --yes
+git add .aidlc-version
+```
+
+The pin switches the project to 2.10.0; the refresh brings its files to that
+release and lists any file 2.10.0 does not ship. `aidlc config --unpin` makes
+the project follow the machine again ([Project Pins and CI](#project-pins-and-ci)).
+
+Releases before 2.8.0 have no native release, so `aidlc use` and
+`aidlc config --pin` cannot select them; they stop with `No published native
+release is available yet`. A copied project goes back with the earlier
+release's `aidlc-copy-runtime-X.Y.Z.tar.gz` (published from 2.9.0), as
+[Refresh Safety](#refresh-safety) shows.
 
 ## Release Channels
 
@@ -1419,7 +1447,7 @@ schema. Use the preview channel on projects you can recreate, or pin them.
 ## Project Pins and CI
 
 ```bash
-aidlc config --pin 2.5.45
+aidlc config --pin 2.10.0
 git add .aidlc-version
 ```
 

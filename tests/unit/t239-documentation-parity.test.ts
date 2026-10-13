@@ -5,6 +5,7 @@ import codexOnboardingFills from "../../harness/codex/onboarding.fills.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import { type Tier, TIER_PROJECTIONS, TIERS } from "../../core/tools/aidlc-tiers.ts";
 import { parseStageFrontmatter } from "../../core/tools/aidlc-lib.ts";
+import { compareVersions } from "../../core/tools/aidlc-channel.ts";
 import { validateStageFrontmatter } from "../../core/tools/aidlc-stage-schema.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -1104,5 +1105,20 @@ describe("documentation parity derives current behavior from authored implementa
     expect(onboarding).not.toContain("None is a bug");
     expect(read("docs", "reference", "06-hooks-and-tools.md")).not.toContain("can never trap the session");
     expect(read("docs", "guide", "harnesses", "copilot.md")).not.toContain("the doctor pins the floor");
+  });
+
+  test("every version a page tells you to switch or pin to is one the native install can select", () => {
+    // 2.8.0 is the first release published with native binaries; `aidlc use`
+    // and `aidlc config --pin` stop with "No published native release" on one
+    // before it.
+    const pages = [...filesBelow(at("docs"), ".md"), at("README.md")];
+    const named: string[] = [];
+    for (const page of pages) {
+      for (const match of readFileSync(page, "utf8").matchAll(/(?:aidlc use|--pin) (\d+\.\d+\.\d+(?:-preview\.\d{8}\.\d+)?)/g)) {
+        named.push(match[1]);
+        expect(compareVersions(match[1], "2.8.0"), `${basename(page)} names ${match[0]}`).toBeGreaterThanOrEqual(0);
+      }
+    }
+    expect(named.length).toBeGreaterThan(0);
   });
 });
