@@ -13921,12 +13921,14 @@ function planChangeDirective(
   // that Unit is reopened for it. A way back after the person's own action is
   // a plain fact that names the command, never a line telling them to type it
   // (t-offers-are-plain-questions).
-  const onItsOwn = `${entrySkillInvocation()} --stage <stage> --single`;
+  // Each command names its stage, so it can be typed as shown.
+  const onItsOwn = skip.map((slug) => `\`${entrySkillInvocation()} --stage ${slug} --single\``);
+  const anyOf = onItsOwn.length <= 1 ? onItsOwn.join("") : `${onItsOwn.slice(0, -1).join(", ")} or ${onItsOwn.at(-1)}`;
   const wayBack = unitStep !== null
     ? forTheUnit
     : started === null
       ? "You can undo that any time."
-      : `${skip.length === 1 ? "It" : "Either one"} can still be run on its own with \`${onItsOwn}\`.`;
+      : `${skip.length === 1 ? "It" : skip.length === 2 ? "Either one" : "Any of them"} can still be run on its own with ${anyOf}.`;
   const line = `"${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ${wayBack}${noted ? ` ${noted}` : ""}${parkedTail}"`;
   const undo = `If they later ask to undo it, run \`${aidlcDispatcherInvocation("recompose")} ${flips(add, planSkip)}\`.`;
   const message =

@@ -578,7 +578,11 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(d.message).toContain('"Skipped Deployment Pipeline and Deployment Execution.');
     // The way back is a plain fact naming the command, never "type this"
     // (tests/unit/t-offers-are-plain-questions.test.ts).
-    expect(d.message).toContain("Either one can still be run on its own with `/aidlc --stage <stage> --single`.");
+    expect(d.message).toContain(
+      "Either one can still be run on its own with `/aidlc --stage deployment-pipeline --single` or " +
+        "`/aidlc --stage deployment-execution --single`.",
+    );
+    expect(d.message).not.toContain("<stage>");
     expect(d.message).not.toMatch(/[Tt]ype `\/aidlc/);
     expect(d.message).toMatch(/re-run `next`/);
     expect(d.message).not.toContain("Then stop.");
