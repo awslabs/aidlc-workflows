@@ -70,7 +70,11 @@ generating instructions. Read all applicable stage-level and per-unit sources:
   plan runs CI Pipeline: `aidlc-state.md` lists `ci-pipeline` as an `EXECUTE`
   stage whose checkbox is not `[S]`. When the plan does not run it, record that
   target `N/A` with the reason "the plan runs no CI Pipeline": it is not
-  applicable, so it is never `Unverified` and never a failure.
+  applicable, so it is never `Unverified` and never a failure. While CI
+  Pipeline is still ahead (its checkbox is `[ ]`), the target is CI Pipeline's
+  to meet: record Owning Stage `ci-pipeline`, Verdict `N/A`, and the reason "CI
+  Pipeline, later in this plan, sets up CI to run these tests before merge".
+  It is never `Unverified` and never a failure here.
 
 For each target, record a stable target ID (derive one from the source path and
 section when the source has none), source path/section, expected value, the
@@ -124,8 +128,9 @@ Create `<record>/construction/build-and-test/build-and-test-summary.md`:
 - Each applicable target begins with Actual and Evidence `Pending`, and Verdict
   `Pending`. `N/A` is valid only when the source inventory found no applicable
   measurable target (then write one explanatory `N/A` row), or for a target the
-  plan makes inapplicable, as Step 1 says for the CI obligation of a plan that
-  runs no CI Pipeline. An applicable target may never use `N/A`.
+  plan makes inapplicable here, as Step 1 says for the CI obligation of a plan
+  that runs no CI Pipeline or has it still ahead. An applicable target may never
+  use `N/A`.
 - Readiness assessment (build-ready, test-ready, deployment-ready)
 - Known limitations or outstanding items
 
