@@ -8,6 +8,7 @@ import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { ROUTES } from "../../core/tools/aidlc.ts";
 import { cleanupTestProject, createTestProject, seedStateFile } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
@@ -41,7 +42,7 @@ const errorRows = (p: string) => readAllAuditShards(p).split("**Event**: ERROR_L
 
 describe("log", () => {
   for (const verb of ["decision", "answer", "answers", "link", "review"]) {
-    for (const help of [["--help"], ["-h"], ["--stage", "feasibility", "--help"]]) {
+    for (const help of [["--help"], ["-h"], ["help"]]) {
       test(`log ${verb} ${help.join(" ")} prints its usage, exits 0 and records nothing`, () => {
         const p = project();
         const before = errorRows(p);
@@ -69,6 +70,17 @@ describe("log", () => {
     expect(answer).toContain("--details-file");
   });
 
+  test("review and link offer no selector their handlers refuse", () => {
+    const p = project();
+    for (const [verb, required] of [["review", "--reviewer"], ["link", "--link"]] as const) {
+      const usage = run(p, "aidlc-log.ts", [verb, "--help"]).stdout;
+      expect(usage).not.toMatch(/--intent <|--space <|--intent,|--space\./);
+      expect(usage).toContain("Runs in the active workspace");
+      const refused = run(p, "aidlc-log.ts", [verb, "--stage", "feasibility", required, "x", "--intent", "x"]);
+      expect(refused.out).toContain("does not accept --intent/--space selectors");
+    }
+  });
+
   test("an unknown checkpoint names only the ones that subcommand accepts", () => {
     const p = project();
     const decision = run(p, "aidlc-log.ts", ["decision", "--stage", "feasibility", "--decision", "Pick", "--checkpoint", "guard-recovery"]);
@@ -94,14 +106,29 @@ describe("log", () => {
     expect(r.status, r.out).toBe(0);
     expect(r.stdout).toContain('"emitted":"DECISION_RECORDED"');
   });
+
+  // Windows PowerShell 5.1 splits `Run "todo --help" first` at the inner quotes,
+  // so the person's words arrive as `--details "Run todo" --help first`. That
+  // `--help` is theirs: it is refused with the way to pass the words whole, never
+  // read as help, which would exit 0 and drop the answer (t31 s9).
+  for (const [verb, textFlag] of [["decision", "--decision"], ["answer", "--details"]] as const) {
+    for (const fragments of [["--help"], ["--help first"], ["--help first and check", "it again"]]) {
+      test(`log ${verb} ${textFlag} "Run todo" ${fragments.join(" ")} is the person's words, not help`, () => {
+        const p = project();
+        const r = run(p, "aidlc-log.ts", [verb, "--stage", "feasibility", textFlag, "Run todo", ...fragments]);
+        expect(r.status, r.out).toBe(1);
+        expect(r.stdout).not.toContain(`engine log ${verb} --stage <slug>`);
+        expect(r.out).toContain("is not an option of log");
+      });
+    }
+  }
 });
 
-// Each routed verb, with a required flag (or the positional id) it takes, so
-// `--help` after a flag that waits for a value is help too.
-function describeVerbHelp(noun: string, tool: string, verbs: Record<string, string[]>): void {
-  for (const [verb, required] of Object.entries(verbs)) {
-    const helps = [["--help"], ["-h"], ...(required.length > 0 ? [[...required, "--help"]] : [])];
-    for (const help of helps) {
+// Each routed verb asked for help first, the one place no flag can be waiting
+// for its argument as a value.
+function describeVerbHelp(noun: string, tool: string, verbs: readonly string[]): void {
+  for (const verb of verbs) {
+    for (const help of [["--help"], ["-h"], ["help"]]) {
       test(`${noun} ${verb} ${help.join(" ")} prints its usage, exits 0 and records nothing`, () => {
         const p = project();
         const before = errorRows(p);
@@ -118,18 +145,7 @@ function describeVerbHelp(noun: string, tool: string, verbs: Record<string, stri
 }
 
 describe("bolt", () => {
-  describeVerbHelp("bolt", "aidlc-bolt.ts", {
-    start: ["--name", "b1"],
-    complete: ["--name", "b1"],
-    fail: ["--name", "b1"],
-    abort: ["--slug", "b1"],
-    "set-autonomy": ["--mode", "gated"],
-    checkpoint: ["--unit", "u1"],
-    "swarm-checkpoint": ["--batch", "1"],
-    "dispatch-event": ["--slug", "b1"],
-    "hold-merge": ["--slug", "b1"],
-    "release-merge": ["--slug", "b1"],
-  });
+  describeVerbHelp("bolt", "aidlc-bolt.ts", ["start", "complete", "fail", "abort", "set-autonomy", "checkpoint", "swarm-checkpoint", "dispatch-event", "hold-merge", "release-merge"]);
 
   test("the usage names the values the subcommands check", () => {
     const p = project();
@@ -148,19 +164,18 @@ describe("bolt", () => {
     expect(r.stdout).toContain('"emitted":"BOLT_FAILED"');
     expect(r.stdout).toContain('"error":"-h"');
   });
+
+  test("a --help after a value is not help: nothing is recorded with the words cut short", () => {
+    const p = project();
+    const r = run(p, "aidlc-bolt.ts", ["fail", "--name", "b1", "--error", "Run todo", "--help"]);
+    expect(r.status, r.out).not.toBe(0);
+    expect(r.stdout).not.toContain("engine bolt fail --name");
+    expect(r.stdout).not.toContain('"emitted":"BOLT_FAILED"');
+  });
 });
 
 describe("worktree", () => {
-  describeVerbHelp("worktree", "aidlc-worktree.ts", {
-    create: ["--slug", "b1"],
-    merge: ["--slug", "b1"],
-    discard: ["--slug", "b1"],
-    restore: ["--slug", "b1"],
-    purge: ["--slug", "b1"],
-    list: [],
-    verify: ["--slug", "b1"],
-    info: ["--slug", "b1"],
-  });
+  describeVerbHelp("worktree", "aidlc-worktree.ts", ["create", "merge", "discard", "restore", "purge", "list", "verify", "info"]);
 
   test("a recovery verb's usage lists the flags it accepts", () => {
     const p = project();
@@ -180,11 +195,7 @@ describe("worktree", () => {
 });
 
 describe("sensor", () => {
-  describeVerbHelp("sensor", "aidlc-sensor.ts", {
-    list: [],
-    describe: ["aidlc-linter"],
-    fire: ["aidlc-linter", "--stage", "feasibility"],
-  });
+  describeVerbHelp("sensor", "aidlc-sensor.ts", ["list", "describe", "fire"]);
 
   test("a value that only looks like help is still the value", () => {
     const p = project();
@@ -195,31 +206,51 @@ describe("sensor", () => {
 });
 
 describe("engine <noun> --help", () => {
-  // The dispatcher owns each noun's verbs; it lists them and names the way to
-  // a verb's flags, where it used to say "unknown verb '--help'" with exit 2.
-  for (const [noun, verbs] of [
-    ["log", ["decision", "answer", "answers", "review", "link"]],
-    ["bolt", ["start", "complete"]],
-    ["worktree", ["create", "restore"]],
-    ["sensor", ["list", "describe", "fire"]],
-    ["state", ["unit"]],
+  // The dispatcher owns each noun's verbs; it lists them, where it used to say
+  // "unknown verb '--help'" with exit 2. It names `<verb> --help` only for a
+  // noun whose tool answers it, so it never prints a command that fails.
+  for (const [noun, verbs, verbHelp] of [
+    ["log", ["decision", "answer", "answers", "review", "link"], true],
+    ["bolt", ["start", "complete"], true],
+    ["worktree", ["create", "restore"], true],
+    ["sensor", ["list", "describe", "fire"], true],
+    ["state", ["unit"], false],
   ] as const) {
-    for (const help of ["--help", "-h", "help"]) {
+    for (const help of ["--help", "-h"]) {
       test(`engine ${noun} ${help} lists its verbs and exits 0`, () => {
         const p = project();
         const r = run(p, "aidlc.ts", ["engine", noun, help]);
         expect(r.status, r.out).toBe(0);
         expect(r.stdout).toContain(`engine ${noun} <verb> [flags]`);
         for (const verb of verbs) expect(r.stdout).toContain(verb);
-        expect(r.stdout).toContain(`engine ${noun} <verb> --help`);
+        expect(r.stdout.includes(`engine ${noun} <verb> --help`)).toBe(verbHelp);
       });
     }
   }
 
-  test("an unknown verb is still an error", () => {
+  // Every route that says its tool answers `<verb> --help` does, for every
+  // verb it routes: the claim the noun help prints is checked, not assumed.
+  test("every verb of a route marked verbHelp answers --help", () => {
     const p = project();
-    const r = run(p, "aidlc.ts", ["engine", "log", "bogus"]);
-    expect(r.status).toBe(2);
-    expect(r.out).toContain("unknown verb 'bogus'");
+    const marked = ROUTES.filter((route) => route.verbHelp === true);
+    expect(marked.map((route) => route.group).sort()).toEqual(["bolt", "log", "sensor", "worktree"]);
+    const before = errorRows(p);
+    for (const route of marked) {
+      for (const verb of route.verbs) {
+        const r = run(p, "aidlc.ts", ["engine", route.group, verb, "--help"]);
+        expect(r.status, `${route.group} ${verb}: ${r.out}`).toBe(0);
+        expect(r.stdout).toContain(`engine ${route.group} ${verb}`);
+      }
+    }
+    expect(errorRows(p)).toBe(before);
+  });
+
+  test("an unknown verb, or the bare word help, is still an error", () => {
+    const p = project();
+    for (const verb of ["bogus", "help"]) {
+      const r = run(p, "aidlc.ts", ["engine", "log", verb]);
+      expect(r.status).toBe(2);
+      expect(r.out).toContain(`unknown verb '${verb}'`);
+    }
   });
 });

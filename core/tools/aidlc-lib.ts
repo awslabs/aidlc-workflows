@@ -39640,11 +39640,13 @@ function waitAtErrorEmitSelectionBarrier(selection: WorkflowSelection): void {
 /**
  * An engine subcommand's arguments ask for its usage (#2449). Read before any
  * flag parsing, so `--help` never needs a value, is never an error, and adds no
- * audit row. `--help` counts anywhere, since no flag takes a value that starts
- * with `--`; `-h` and `help` count only first, where no flag waits for a value.
+ * audit row. Only the first argument counts: later, a `--help` can be a piece
+ * of the person's words that a bare double quote split off (`Run "todo --help"
+ * first` arrives as `--details "Run todo" --help first`), and the tool's own
+ * split-value refusal keeps those words instead of printing usage over them.
  */
 export function asksForHelp(args: readonly string[]): boolean {
-  return args[0] === "-h" || args[0] === "help" || args.includes("--help");
+  return args[0] === "--help" || args[0] === "-h" || args[0] === "help";
 }
 
 /** Print a subcommand's usage and exit 0: help is never an error. */

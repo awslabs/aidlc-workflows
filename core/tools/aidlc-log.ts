@@ -4560,13 +4560,13 @@ function logUsage(subcommand: string | undefined): string {
     answers: [`${invoke("answers")} --stage <slug> [--unit <unit>]`, "  Lists the answers recorded for a stage."],
     link: [
       `${invoke("link")} --stage <slug> --link <agent> [--repo <repo>] [--artifact <path>] [--single]`,
-      "  Records that a declared pipeline link returned.",
+      "  Records that a declared pipeline link returned. Runs in the active workspace (no --intent or --space).",
     ],
     review: [
       `${invoke("review")} --stage <slug> --reviewer <agent> --iteration <n> [--unit <unit>]`,
       "  Records that the reviewer was sent the work.",
       `${invoke("review")} --stage <slug> --reviewer <agent> --iteration <n> [--unit <unit>] --verdict ${[...VALID_VERDICTS].join("|")} [--review-file <path>]`,
-      "  Records the reviewer's verdict. Also: --retry-pending, --single, --intent, --space.",
+      "  Records the reviewer's verdict. Also: --retry-pending, --single. Runs in the active workspace (no --intent or --space).",
     ],
   };
   if (subcommand !== undefined && usage[subcommand]) return usage[subcommand].join("\n");
