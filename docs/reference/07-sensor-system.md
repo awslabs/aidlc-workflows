@@ -146,7 +146,8 @@ exactly one value today:
   per-fire flags. The worker prints one JSON line on stdout with a boolean
   `pass` (plus `findings` and `findings_count`, the number the audit row
   records) and exits 0 whether the check passes or fails; the dispatcher
-  writes the failure detail file. A non-zero exit, or output with no boolean
+  writes the failure detail file. Exit 127 is recorded as a pass noted
+  `tool-unavailable`; any other non-zero exit, or output with no boolean
   `pass`, is recorded as a pass with a `script-error` note (see
   [`default_severity`](#default_severity) for what a blocking gate binding
   does with it).
@@ -202,11 +203,13 @@ filename stem minus the `aidlc-` prefix. The compile resolver:
 
 The runtime PostToolUse hook, `gate-start`, and `revise` read
 `sensors_applicable` off the graph node to decide what fires; none re-opens
-the manifest for that. The dispatcher then reads the manifest again at every
-fire: its `command`, `input_schema`, `timeout_seconds` and `matches` (checked
-against the path) come from the file as it is at that moment. So a new import,
-or a `matches` widened to more files, waits for the next compile, while other
-manifest edits apply from the next fire. Recompile after any sensor edit.
+the manifest for that. The dispatcher re-reads the manifest at every fire only
+for `command`, `input_schema`, `timeout_seconds` and its own `matches` re-check
+against the path. Everything the graph copied (`fire_on`, `default_severity`,
+`category`, the hook's `matches` filter) and a new import wait for the next
+compile. On a native install the six shipped sensors run their bundled worker
+by id, so editing their `command` changes nothing. Recompile after any sensor
+edit.
 
 ### Per-stage sensor matrix (33 framework stages)
 
