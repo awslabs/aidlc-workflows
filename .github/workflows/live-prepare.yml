@@ -19,6 +19,7 @@ env:
   CLAUDE_CODE_VERSION: 2.1.278
   CODEX_VERSION: 0.151.0
   OPENCODE_VERSION: 1.18.31
+  COPILOT_VERSION: 1.0.96
   GIT_CONFIG_COUNT: "1"
   GIT_CONFIG_KEY_0: core.autocrlf
   GIT_CONFIG_VALUE_0: "false"
@@ -52,7 +53,7 @@ jobs:
       - run: bun scripts/package.ts
       - name: Install relocatable pinned CLIs
         if: "runner.os != 'Windows'"
-        run: npm install -g --prefix "$RUNNER_TEMP/aidlc-cli" "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" "@openai/codex@$CODEX_VERSION" "opencode-ai@$OPENCODE_VERSION"
+        run: npm install -g --prefix "$RUNNER_TEMP/aidlc-cli" "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" "@openai/codex@$CODEX_VERSION" "opencode-ai@$OPENCODE_VERSION" "@github/copilot@$COPILOT_VERSION"
       - name: Pack POSIX live dependencies
         if: "runner.os != 'Windows'"
         run: |

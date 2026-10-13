@@ -1510,7 +1510,7 @@ describe("t345 complete nightly coverage", () => {
       AIDLC_CODEX_AWS_PROFILE: "runner-profile",
       AIDLC_BROKER_URL: "http://127.0.0.1:1234", AIDLC_BROKER_IDENTITY: JSON.stringify({ account: "123456789012", arn: "arn:aws:sts::123456789012:assumed-role/ci/test" }),
     };
-    for (const family of ["claude-sdk", "claude-tui", "codex", "opencode", "release-contract"] as const) {
+    for (const family of ["claude-sdk", "claude-tui", "codex", "copilot", "opencode", "release-contract"] as const) {
       const env = sandboxEnvironment(family, "/home/aidlc-live", "/usr/local/lib/aidlc-live/bin:/usr/bin:/bin", inherited);
       expect(env.PATH).toBe("/usr/local/lib/aidlc-live/bin:/usr/bin:/bin");
       expect(env.HOME).toBe("/home/aidlc-live");
@@ -1522,6 +1522,15 @@ describe("t345 complete nightly coverage", () => {
       if (family === "opencode") expect(env.AWS_PROFILE).toBe("broker");
       if (family === "codex") expect(env.AIDLC_CODEX_AWS_PROFILE).toBe("codex");
       else expect(env.AIDLC_CODEX_AWS_PROFILE).toBeUndefined();
+      // Copilot's own-model mode reaches the broker's Mantle route with a dummy
+      // key, offline from GitHub; no other family gets these settings.
+      expect(Object.fromEntries(Object.entries(env).filter(([key]) => key.startsWith("COPILOT_")))).toEqual(family === "copilot"
+        ? {
+          COPILOT_PROVIDER_TYPE: "openai", COPILOT_PROVIDER_BASE_URL: "http://127.0.0.1:1234/openai/v1",
+          COPILOT_PROVIDER_WIRE_API: "responses", COPILOT_PROVIDER_API_KEY: "broker", COPILOT_MODEL: CI_BEDROCK_MODELS.codex,
+          COPILOT_OFFLINE: "true", COPILOT_AUTO_UPDATE: "false",
+        }
+        : {});
       expect(env).toMatchObject(FAMILIES[family].env);
       const windows = sandboxEnvironment(family, "C:\\aidlc-live\\home", "C:\\aidlc-live\\tools", {
         ...inherited, PATHEXT: ".UNTRUSTED",
@@ -2015,7 +2024,7 @@ describe("t345 complete nightly coverage", () => {
     });
     expect(emitted.status, emitted.stderr).toBe(0);
     expect(emitted.stdout.trim().split("\n")).toEqual(liveRunnerArgs("release-contract", "linux"));
-    for (const args of [["missing"], ["claude-tui", "--platform", "other"], ["copilot", "--run", "--", "--e2e-plan"], ["codex", "--args", "--run"]]) {
+    for (const args of [["missing"], ["claude-tui", "--platform", "other"], ["cursor", "--run", "--", "--e2e-plan"], ["codex", "--args", "--run"]]) {
       expect(spawnSync(process.execPath, [script, ...args], { timeout: NATIVE_STARTUP_TIMEOUT_MS }).status).toBe(2);
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

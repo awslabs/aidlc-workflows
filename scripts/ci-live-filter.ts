@@ -23,16 +23,16 @@ export const FAMILIES = {
   codex: { env: { AIDLC_CODEX_EXEC_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
   opencode: { env: { AIDLC_OPENCODE_RUN_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
   cursor: { env: { AIDLC_CURSOR_RUN_LIVE: "1" }, platforms: [], hosting: "excluded", requireCoverage: true, reason: "no credential separation: vendor CLI reads the API key from the agent environment" },
-  copilot: { env: { AIDLC_COPILOT_EXEC_LIVE: "1" }, platforms: [], hosting: "excluded", requireCoverage: true },
+  copilot: { env: { AIDLC_COPILOT_EXEC_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
   "claude-tui": { env: { AIDLC_TUI_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
   "claude-sdk": { env: { AIDLC_CLAUDE_SDK_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
   "release-contract": { env: { AIDLC_RELEASE_CONTRACT_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: false },
 } as const satisfies Record<string, Family>;
 export type LiveFamily = keyof typeof FAMILIES;
-export const VERIFICATION_FAMILIES = ["all", "claude-sdk", "claude-tui", "codex", "opencode"] as const;
+export const VERIFICATION_FAMILIES = ["all", "claude-sdk", "claude-tui", "codex", "copilot", "opencode"] as const;
 export type VerificationFamily = (typeof VERIFICATION_FAMILIES)[number];
 export const LIVE_SHARD_COUNTS: Partial<Record<LiveFamily, number>> = {
-  "claude-sdk": 2, "claude-tui": 3, codex: 1, opencode: 1, "release-contract": 1,
+  "claude-sdk": 2, "claude-tui": 3, codex: 1, copilot: 1, opencode: 1, "release-contract": 1,
 };
 /** More shards where a family's files run on one OS only (the golden journeys run on Linux). */
 export const LIVE_PLATFORM_SHARD_COUNTS: Partial<Record<LiveFamily, Partial<Record<NodeJS.Platform, number>>>> = {

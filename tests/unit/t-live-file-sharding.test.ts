@@ -147,9 +147,9 @@ describe("bounded live file sharding", () => {
   });
 
   test("the live matrix stays bounded as files accumulate", () => {
-    expect(LIVE_SHARD_COUNTS).toEqual({ "claude-sdk": 2, "claude-tui": 3, codex: 1, opencode: 1, "release-contract": 1 });
+    expect(LIVE_SHARD_COUNTS).toEqual({ "claude-sdk": 2, "claude-tui": 3, codex: 1, copilot: 1, opencode: 1, "release-contract": 1 });
     expect(LIVE_PLATFORM_SHARD_COUNTS).toEqual({ "claude-sdk": { linux: 4 } });
-    expect(kinds.flatMap(kind => liveMatrix(kind).include).filter(row => row.family !== "release-contract")).toHaveLength(23);
+    expect(kinds.flatMap(kind => liveMatrix(kind).include).filter(row => row.family !== "release-contract")).toHaveLength(26);
     expect(selectedLiveFiles("claude-sdk", "linux", "1/4").length).toBeGreaterThan(1);
     expect(selectedLiveFiles("codex", "linux", "1/1")).toHaveLength(6);
     const file = selectedLiveFiles("claude-sdk", "linux", "2/4")[0];
@@ -182,7 +182,7 @@ describe("bounded live file sharding", () => {
     for (const kind of ["other", "hosted", "toString", "__proto__"]) {
       expect(() => liveMatrix(kind as LiveMatrixKind)).toThrow("unknown live matrix");
     }
-    for (const family of ["", "unknown", "release-contract", "copilot", "kiro-tui", "codex\n"]) {
+    for (const family of ["", "unknown", "release-contract", "cursor", "kiro-tui", "codex\n"]) {
       for (const kind of kinds) {
         expect(() => liveMatrix(kind, family as VerificationFamily)).toThrow("unknown verification family");
       }
@@ -353,7 +353,7 @@ describe("bounded live file sharding", () => {
       ["codex", "--shard", "1/999", "--run", "--", "--e2e-plan"],
       ["codex", "--shard", "1/1", "--shard", "2/5"],
       ["codex", "--run", "--", "--unit", "--e2e-plan"],
-      ["copilot"], ["missing"], ["codex", "--platform", "aix"],
+      ["cursor"], ["missing"], ["codex", "--platform", "aix"],
     ]) {
       const result = cli(args);
       expect(result.status, `${JSON.stringify(args)}: ${result.stderr}`).toBe(2);

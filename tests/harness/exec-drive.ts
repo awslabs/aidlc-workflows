@@ -242,6 +242,48 @@ export function runCopilot(proj: string, args: string): ExecResult {
   };
 }
 
+/** A person's Copilot home (COPILOT_HOME) that trusts `proj`, as Copilot's own trust dialog records it. */
+export function trustCopilotFolder(copilotHome: string, proj: string): void {
+  mkdirSync(copilotHome, { recursive: true });
+  writeFileSync(join(copilotHome, "config.json"), `${JSON.stringify({ trustedFolders: [proj] }, null, 2)}\n`);
+}
+
+export interface CopilotTurnOptions {
+  /** The person's Copilot home: their folder trust and the session record. */
+  copilotHome: string;
+  /** The session the test names; the first turn opens it, later turns resume it. */
+  sessionId: string;
+  resume: boolean;
+  /** Where Copilot writes the session's token usage. */
+  usageFile?: string;
+  timeoutMs?: number;
+}
+
+// One person turn in a named Copilot CLI session: the typed line rides the
+// prompt as it is (`/aidlc ...` or a reply), so AI-DLC's hooks see what the
+// person typed. --allow-all-tools as in runCopilot.
+export function copilotTurn(proj: string, line: string, options: CopilotTurnOptions): ExecResult {
+  const result = spawnSync(
+    COPILOT_BIN,
+    [
+      "-p", line, "-s", "--no-remote", "--allow-all-tools",
+      ...(options.resume ? ["--resume", options.sessionId] : ["--session-id", options.sessionId]),
+      ...(options.usageFile ? ["--usage-output-file", options.usageFile] : []),
+    ],
+    {
+      cwd: proj,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, PWD: proj, COPILOT_HOME: options.copilotHome },
+      timeout: remainingOperationTimeoutMs(options.timeoutMs ?? TEST_TIMEOUT_MS, { phase: "Copilot turn" }),
+    },
+  );
+  return {
+    rc: result.status ?? -1,
+    out: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+  };
+}
+
 export interface OpencodeProject {
   proj: string;
   root: string;

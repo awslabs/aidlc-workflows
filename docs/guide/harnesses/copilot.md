@@ -469,5 +469,6 @@ floor is a warning, never a failure. The deterministic engine tests for
 this harness are `tests/unit/t248-copilot-packaging.test.ts`,
 `t249-copilot-adapter.test.ts`, `t250-copilot-adapter-security.test.ts`, and
 `t-copilot-directive-budget.test.ts`;
-the live journey is `tests/e2e/t-exec-copilot-status.serial.test.ts`, gated
-on `AIDLC_COPILOT_EXEC_LIVE=1`.
+the live journeys are `tests/e2e/t-exec-copilot-status.serial.test.ts` and
+`tests/e2e/t-exec-copilot-release-journey.serial.test.ts`, gated on
+`AIDLC_COPILOT_EXEC_LIVE=1`; the Full Suite runs both on Linux, macOS and Windows.

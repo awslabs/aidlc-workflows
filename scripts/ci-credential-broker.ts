@@ -4,6 +4,10 @@ import { request as httpsRequest } from "node:https";
 import { Readable } from "node:stream";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../core/tools/aidlc-runtime-budget.ts";
 
+// Copilot CLI's own-model mode (BYOK) speaks the same OpenAI Responses API to
+// Mantle as Codex, so both use the one model the broker's Mantle route admits.
+const MANTLE_MODEL = "openai.gpt-5.5";
+
 /** CI-only provider pins; shipped settings intentionally contain no provider configuration. */
 export const CI_BEDROCK_MODELS = Object.freeze({
   claude: Object.freeze({
@@ -12,7 +16,8 @@ export const CI_BEDROCK_MODELS = Object.freeze({
     ANTHROPIC_DEFAULT_SONNET_MODEL: "global.anthropic.claude-sonnet-4-6[1m]",
     ANTHROPIC_DEFAULT_HAIKU_MODEL: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
   }),
-  codex: "openai.gpt-5.5",
+  codex: MANTLE_MODEL,
+  copilot: MANTLE_MODEL,
   opencode: "global.anthropic.claude-sonnet-4-6",
 });
 
