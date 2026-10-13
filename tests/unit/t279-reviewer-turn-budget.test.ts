@@ -235,13 +235,8 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(request).toBeGreaterThan(-1);
       expect(hydrate).toBeGreaterThan(request);
       expect(dispatch).toBeGreaterThan(hydrate);
-      // The file name only: join() gives backslashes on Windows.
-      const repair = readFileSync(
-        path.replace("stage-protocol-reviewer.md", "stage-protocol-reviewer-repair.md"),
-        "utf-8",
-      );
-      expect(repair).toContain("settled decisions from the engine-owned list");
-      expect(repair.replace(/\s+/g, " ")).toContain(
+      expect(labelled).toContain("settled decisions from the engine-owned list");
+      expect(labelled.replace(/\s+/g, " ")).toContain(
         "excludes fixed findings",
       );
       expect(labelled).toContain("as the one file the reviewer writes");
@@ -250,7 +245,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toContain("Writes NOTHING else");
       // The Part 0 revision-path paragraph relies on request binding, not on
       // deleting anything from the artifact.
-      expect(repair).toContain("the new request binds");
+      expect(labelled).toContain("the new request binds");
       // Negative pins: the retired appendix mechanics must not come back.
       expect(labelled).not.toContain("DELETE the existing `## Review` section");
       expect(labelled).not.toContain("## Review (superseded)");
@@ -407,12 +402,8 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(inList).toContain(
         "in any form including a table or a section of its own",
       );
-      const repair = readFileSync(
-        join(harness.engineRoot, "aidlc-common", "protocols", "stage-protocol-reviewer-repair.md"),
-        "utf-8",
-      );
-      expect(repair).toContain("settled decisions from the engine-owned list");
-      expect(repair.replace(/\s+/g, " ")).toContain(
+      expect(labelled).toContain("settled decisions from the engine-owned list");
+      expect(labelled.replace(/\s+/g, " ")).toContain(
         "excludes fixed findings",
       );
       expect(labelled).toContain("Writes exactly ONE file: its review, at the passed `reviewFile` path");

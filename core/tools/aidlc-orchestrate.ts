@@ -7225,16 +7225,13 @@ function buildRunStageDirective(
         reviewClass === "advisory" ? 1 : node.reviewer_max_iterations ?? 2;
     }
   }
-  // The learnings ritual runs at a gate's first showing, never again for a
-  // revision of it (stage-protocol.md, Request Changes).
-  const revising = stateContent !== null && checkboxStateOf(parseCheckboxes(stateContent), node.slug) === "revising";
   const protocolModules: ProtocolModule[] = [];
   if (directive.reviewer && directive.review_class) {
     protocolModules.push("reviewer");
-    // A review that can repair: an adversarial one, a revision's re-review,
-    // or the one stale-receipt recovery Guard Policy strict allows.
+    // A review that can repair: an adversarial one, or the one stale-receipt
+    // recovery Guard Policy strict allows.
     if (
-      directive.review_class === "adversarial" || revising ||
+      directive.review_class === "adversarial" ||
       !codekbCtx || !guardPolicyAcceptsChanges(codekbCtx.projectDir, stateContent)
     ) {
       protocolModules.push("reviewer-repair");
@@ -7261,6 +7258,9 @@ function buildRunStageDirective(
   if (node.slug === "code-generation" || node.slug === "build-and-test") {
     protocolModules.push("loopback");
   }
+  // The learnings ritual runs at a gate's first showing, never again for a
+  // revision of it (stage-protocol.md, Request Changes).
+  const revising = stateContent !== null && checkboxStateOf(parseCheckboxes(stateContent), node.slug) === "revising";
   if (ceremony.learnings === "on" && !revising) protocolModules.push("learnings");
   if (protocolModules.length > 0) {
     directive.protocol_modules = protocolModules;

@@ -3557,7 +3557,7 @@ describe("t304 protocol and harness projections use the deterministic renderer",
       "of fixed findings it includes only decided ones, marked reported fixed",
     );
     expect(
-      read("core", "aidlc-common", "protocols", "stage-protocol-reviewer-repair.md"),
+      read("core", "aidlc-common", "protocols", "stage-protocol-reviewer.md"),
     ).toContain(
       "A decided finding later reported fixed stays among the settled decisions",
     );

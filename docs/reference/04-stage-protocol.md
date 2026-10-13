@@ -32,7 +32,7 @@ conductor based on workflow context:
 | `stage-protocol-learnings.md` | §13 diary, surfacing, human learning question, admission check, and persistence | Only when `directive.protocol_modules` lists `learnings` |
 | `stage-protocol-reviewer.md` | Reviewer dispatch, receipts, and terminal ordering | When the directive names an effective reviewer |
 | `stage-protocol-reviewer-unit.md` | A Unit's review: membership, per-Unit inputs and source, read scope, dispatch record | When `directive.protocol_modules` lists `reviewer-unit`: a Unit's review and every invoke-swarm |
-| `stage-protocol-reviewer-repair.md` | The re-dispatch context, the adversarial NOT-READY loop, the revision re-review, and the strict stale-receipt recovery | When `directive.protocol_modules` lists `reviewer-repair`: an adversarial review, a revision, Guard Policy `strict`, a checkpoint re-check, and every invoke-swarm |
+| `stage-protocol-reviewer-repair.md` | The adversarial NOT-READY loop and the strict stale-receipt recovery | When `directive.protocol_modules` lists `reviewer-repair`: an adversarial review, Guard Policy `strict`, a checkpoint re-check, and every invoke-swarm |
 | `stage-protocol-ensemble.md` | Ensemble topology and subagent returns | For subagent, pipeline, mob, or support-agent stages |
 | `stage-protocol-collaborators.md` | Contribution files, mob rounds, and objection triage | When `directive.protocol_modules` lists `collaborators`: a stage that dispatches support agents |
 | `stage-protocol-construction.md` | Construction routing, policy changes, the autonomy choice, halt-and-ask, the shipped per-unit walk, receipts, team-owned Units, and Grouped Plan Approval | On the first Construction directive of the session and every invoke-swarm |

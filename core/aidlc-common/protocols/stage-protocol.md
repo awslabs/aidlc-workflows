@@ -1191,7 +1191,7 @@ Load it when `directive.mode` is `subagent`, `pipeline`, or `mob`, or when the s
 
 Reviewer dispatch, receipts, and terminal ordering live in
 `{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-reviewer.md`; a Unit's review rules (read scope, dispatch record) in
-`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-reviewer-unit.md`, and the NOT-READY repair loop, re-dispatch context and
+`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-reviewer-unit.md`, and the NOT-READY repair loop and
 stale-receipt recovery in `{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-reviewer-repair.md`, each named on the reviews that take it.
 Load it when the directive names a reviewer with an effective review class other than `none` (the engine lists it in `directive.protocol_modules`).
 ## 13. Learnings Ritual

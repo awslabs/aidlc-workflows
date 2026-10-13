@@ -397,15 +397,15 @@ describe("t302 conditional protocol modules", () => {
   });
 
   // The repair loop, re-dispatch context and stale-receipt recovery come with a
-  // review that can repair: an adversarial one, a revision, or Guard Policy
-  // strict. A first advisory pass under relaxed or off reads none of them.
+  // review that can repair: an adversarial one or Guard Policy strict. A
+  // first advisory pass or its revision under relaxed or off reads none of them.
   test("an adversarial review names reviewer-repair", () => {
     const adversarial = directiveFor("functional-design", "feature");
     expect(adversarial.review_class).toBe("adversarial");
     expect(moduleList(adversarial)).toContain("reviewer-repair");
   });
 
-  test("an advisory review names reviewer-repair on a revision or under Guard Policy strict only", () => {
+  test("an advisory review names reviewer-repair under Guard Policy strict only", () => {
     const reviewStep = (mark: string, policy: string): Record<string, unknown> => {
       if (project) cleanupTestProject(project);
       project = createOrchestrationTestProject();
@@ -430,7 +430,7 @@ describe("t302 conditional protocol modules", () => {
     expect(first).toContain("reviewer");
     expect(first).not.toContain("reviewer-repair");
     expect(first).not.toContain("reviewer-unit");
-    expect(moduleList(reviewStep("[R]", "off (from scope feature)"))).toContain("reviewer-repair");
+    expect(moduleList(reviewStep("[R]", "off (from scope feature)"))).not.toContain("reviewer-repair");
     expect(moduleList(reviewStep("[-]", "strict (set by you)"))).toContain("reviewer-repair");
   });
 
@@ -475,6 +475,11 @@ describe("t302 construction branches live in their own modules", () => {
     ["reviewer-unit", "**Reviewer read scope.**"],
     ["reviewer-repair", "**On an `adversarial` review**, branch on the verdict:"],
     ["swarm", "If an autonomous Unit invalidates its one recovery receipt"],
+    // A re-review runs on the step already held (Request Changes, a review the
+    // person asks for), so its context stays with the reviewer module.
+    ["reviewer", "aidlc-review-brief.ts context --stage"],
+    ["reviewer", "`Prior findings:` followed by the review-context output verbatim"],
+    ["reviewer", "The reviewer also re-runs on the Part 0 revision path"],
   ];
   const roots = [join(REPO_ROOT, "core"), ...HARNESS_MATRIX.map((harness) => harness.engineRoot)];
   test.each(roots)("each moved section is in exactly one protocol file under %s", (root) => {
