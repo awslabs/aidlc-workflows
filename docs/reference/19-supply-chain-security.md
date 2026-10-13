@@ -266,7 +266,9 @@ publication permission before the environment gate.
 1. Merge a release-preparation PR that updates:
    - `core/tools/aidlc-version.ts`;
    - the README version badge;
-   - the matching `CHANGELOG.md` heading.
+   - the matching `CHANGELOG.md` heading, with its `Compatibility:` line right
+     under it (`refresh only`, `refresh plus a step`, or `breaking for scripts`;
+     the Release Metadata Policy in `AGENTS.md` says what each means).
 2. Confirm that the release-preparation PR passed its required branch checks and
    select its exact merged commit on `main`. A successful preview of that
    commit, or a manual `full-suite.yml` dispatch on `main` with `ref=<sha>`,

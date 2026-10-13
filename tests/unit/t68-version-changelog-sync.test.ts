@@ -69,6 +69,8 @@
 //     protected (a rebase that duplicates a `## [N.N.N]` block).
 //   - NET-NEW test 7: the link-ref policy guard — NO version link references may
 //     reappear, and no repository host URL may leak into the changelog.
+//   - NET-NEW test 8 (#636): every entry newer than 2.11.0 opens with one of
+//     three `Compatibility:` lines (the Release Metadata Policy in AGENTS.md).
 // (.test.ts has no TAP `plan`, so changing case bodies does not drift t55 — see
 // t55's header; the "plan 6" provenance above describes the .sh ancestor.)
 
@@ -118,6 +120,31 @@ function changelogLinkRefs(): string[] {
     .split("\n")
     .filter((l) => /^\[[0-9]+\.[0-9]+\.[0-9]+\]:/.test(l))
     .map((l) => (l.match(SEMVER) as RegExpMatchArray)[0]);
+}
+
+const COMPATIBILITY_LINES = [
+  "Compatibility: refresh only",
+  "Compatibility: refresh plus a step",
+  "Compatibility: breaking for scripts",
+];
+
+/** What is wrong with each release entry newer than 2.11.0: the first line
+ *  under its heading is not one of the three Compatibility lines, or it has a
+ *  bullet starting `Breaking for scripts:` and does not say so. */
+function compatibilityProblems(changelog: string): string[] {
+  const problems: string[] = [];
+  for (const entry of changelog.split(/^(?=## \[)/m)) {
+    const version = entry.match(/^## \[([0-9]+\.[0-9]+\.[0-9]+)\]/)?.[1];
+    if (!version || Bun.semver.order(version, "2.11.0") <= 0) continue;
+    const lines = entry.split(/\r?\n/).slice(1).map((l) => l.trimEnd());
+    const line = lines.find((l) => l !== "") ?? "";
+    if (!COMPATIBILITY_LINES.includes(line)) {
+      problems.push(`${version}: the line under the heading is "${line}"; it must be one of: ${COMPATIBILITY_LINES.join(" | ")}`);
+    } else if (lines.some((l) => /^[*-] Breaking for scripts:/.test(l)) && line !== COMPATIBILITY_LINES[2]) {
+      problems.push(`${version}: has a "Breaking for scripts:" bullet, so it must say "${COMPATIBILITY_LINES[2]}", not "${line}"`);
+    }
+  }
+  return problems;
 }
 
 describe("t68 version/CHANGELOG/README sync (migrated from t68-version-changelog-sync.sh, plan 6)", () => {
@@ -200,5 +227,45 @@ describe("t68 version/CHANGELOG/README sync (migrated from t68-version-changelog
     ];
     const hits = banned.filter((b) => src.includes(b));
     expect(hits).toEqual([]);
+  });
+
+  // NET-NEW test 8 (#636): an entry newer than 2.11.0 says, right under its
+  // heading, what the upgrade asks of each project, in one of three fixed
+  // lines. Entries up to and including 2.11.0 stay as they shipped.
+  test("every release entry newer than 2.11.0 carries its Compatibility line", () => {
+    expect(compatibilityProblems(readFileSync(CHANGELOG, "utf-8"))).toEqual([]);
+  });
+
+  const changelog = (...entries: string[]) => `# Changelog\n\n${entries.join("\n")}`;
+  const entry = (version: string, ...lines: string[]) =>
+    `## [${version}] - 2026-10-20\n\n${lines.join("\n\n")}\n\n* \`aidlc version\` reports \`${version}\`.\n`;
+  const summary = "AI-DLC rolls up the changes since the last release.";
+  const breaking = "* Breaking for scripts: a retired flag now fails.";
+
+  test("an entry newer than 2.11.0 with no Compatibility line, or a fourth value, fails", () => {
+    expect(compatibilityProblems(changelog(entry("2.12.0", summary)))).toEqual([
+      expect.stringContaining("2.12.0"),
+    ]);
+    expect(
+      compatibilityProblems(changelog(entry("2.12.0", "Compatibility: config-compatible", summary))),
+    ).toEqual([expect.stringContaining("2.12.0")]);
+  });
+
+  test("an entry with a `Breaking for scripts:` bullet must say breaking for scripts", () => {
+    expect(
+      compatibilityProblems(changelog(entry("2.12.0", "Compatibility: refresh only", summary, breaking))),
+    ).toEqual([expect.stringContaining("Breaking for scripts")]);
+    expect(
+      compatibilityProblems(changelog(entry("2.12.0", "Compatibility: breaking for scripts", summary, breaking))),
+    ).toEqual([]);
+  });
+
+  test("each of the three lines passes, and entries up to 2.11.0 need none", () => {
+    for (const line of COMPATIBILITY_LINES) {
+      expect(compatibilityProblems(changelog(entry("2.12.0", line, summary)))).toEqual([]);
+    }
+    expect(
+      compatibilityProblems(changelog(entry("2.11.0", summary, breaking), entry("2.8.6", summary))),
+    ).toEqual([]);
   });
 });
