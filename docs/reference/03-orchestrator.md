@@ -607,8 +607,10 @@ Unit DAG has two or more Units and the state records no `Unit Ownership`, `next`
 returns `ask_type: construction-staffing` instead: **Just me** runs `state
 set-unit-ownership solo`, **Several teams** runs `state set-unit-ownership team`
 (which switches a stage-major plan to unit-major, a swarm execution to serial
-first, with the setters' own records and notices). A jump into Construction
-meets the same rule. Showing the question notes an engine ask mark; once a
+first, with the setters' own records and notices), and the first team step
+says how team approvals go. A jump into Construction meets the same rule, and
+a line waits past the step that settles the walking skeleton's stance, which
+the agent passes through without speaking. Showing the question notes an engine ask mark; once a
 human turn is on record after it with no answer recorded, the question is not
 put again and the first step carries one line that this session builds the
 Units and how to ask for teams. Work with recorded repos is never asked: the

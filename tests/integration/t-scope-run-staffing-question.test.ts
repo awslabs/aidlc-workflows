@@ -11,11 +11,11 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanupTestProject } from "../harness/fixtures.ts";
 import { composedCell, installComposed } from "../harness/guard-matrix.ts";
 import {
   activeRecord,
   auditEvents,
+  cleanupScopeProjects,
   field,
   runScope,
   SCOPE_RUN_TIMEOUT_MS,
@@ -23,15 +23,11 @@ import {
   scopeScratchDir,
 } from "../harness/scope-run.ts";
 
-const projects: string[] = [];
-afterAll(() => {
-  for (const proj of projects) cleanupTestProject(proj);
-});
+afterAll(cleanupScopeProjects);
 
 const CONSTRUCTION = ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation"];
 
 function asksOnceBeforeTheBuild(run: ScopeRun): void {
-  projects.push(run.proj);
   expect(run.final.kind).toBe("done");
   const staffing = run.agent.asked.filter((q) => q.what === "staffing");
   expect(staffing).toHaveLength(1);

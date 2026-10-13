@@ -127,7 +127,6 @@ import {
   recordGuardStoodAside,
   unattendedHumanPresenceHint,
   intentRepos,
-  addPendingPersonLines,
   teamsAcrossReposLine,
   isGitRepoDir,
   isValidRepoName,
@@ -1612,33 +1611,20 @@ function handleSetUnitOwnership(args: string[]): void {
     emitAudit(pd, "UNIT_OWNERSHIP_SET", { Mode: value });
     writeStateFile(pd, content);
     if (switches.length > 0) keepPlanQuestionOver(pd, before, content);
-    // What the person hears: each switch's own line, and how team approvals
-    // go while nobody has said otherwise. They ride the next step the agent
-    // speaks from; with no chat to hold them, this output carries them.
-    const lines = switches
+    // Each switch's own line, as the two setters print it. How team approvals
+    // go is said by the first team step the agent speaks from; the command
+    // that changes it is here for the agent.
+    const notice = switches
       .map((change) => constructionPolicyNotice(change.from, change.to, change.field).notice)
-      .filter((line): line is string => typeof line === "string");
-    const teamsNow = value === "team" && current !== "team";
-    if (teamsNow && getField(content, "Unit Gate Rhythm") === null) {
-      lines.push(
-        "Each team approves its Unit after every stage. To approve once at the end of each Unit instead, " +
-          "say so before the first Unit is built.",
-      );
-    }
-    let notice: string | undefined = lines.length > 0 ? lines.join(" ") : undefined;
-    if (notice !== undefined) {
-      try {
-        const session = resolveWorkflowSelection(pd).sessionId;
-        if (session && addPendingPersonLines(pd, session, lines)) notice = undefined;
-      } catch {
-        // No chat to hold them: the output carries them.
-      }
-    }
+      .filter((line): line is string => typeof line === "string")
+      .join(" ");
     console.log(JSON.stringify({
       updated: true,
       unit_ownership: value,
-      ...(notice !== undefined ? { notice } : {}),
-      ...(teamsNow ? { unit_end_gates_command: `${aidlcToolInvocation("state")} set-unit-gate-rhythm unit-end` } : {}),
+      ...(notice !== "" ? { notice } : {}),
+      ...(value === "team" && current !== "team"
+        ? { unit_end_gates_command: `${aidlcToolInvocation("state")} set-unit-gate-rhythm unit-end` }
+        : {}),
     }));
   });
 }

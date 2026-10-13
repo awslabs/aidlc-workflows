@@ -3481,7 +3481,8 @@ function projectTypeAskDirective(
 // Ownership, which a resume, a second chat and a teammate's clone read. Once
 // the question was shown and the person spoke without a pick, this session
 // builds the Units and the step says so; work with recorded repos gets that
-// line instead of a choice the setter refuses. Null when the step goes on.
+// line instead of a choice the setter refuses, and teams hear how their
+// approvals go. Null when the step goes on.
 function constructionStaffingAsk(
   projectDir: string,
   stateContent: string | null,
@@ -3491,23 +3492,41 @@ function constructionStaffingAsk(
   const node = nodeForSlug(slug);
   if (stateContent === null || !node || node.phase !== "construction" || !isPerUnit(node)) return null;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return null;
-  if ((getField(stateContent, UNIT_OWNERSHIP_FIELD) ?? "").trim() !== "") return null;
   if (constructionHasStarted(stateContent, recordDir(projectDir))) return null;
   const dag = resolveBoltBatches(projectDir, routingEvidenceFor(projectDir, stateContent));
   if (dag.state !== "ok" || dag.units.length < 2) return null;
   const units = dag.units.length;
+  // The skeleton's stance is settled first, on a step the agent passes
+  // through without speaking: a line waits for the step after it.
+  const speaks = !(isSkeletonGateStage(node, scope, stateContent) && readSkeletonStance(stateContent) === null);
+  const ownership = (getField(stateContent, UNIT_OWNERSHIP_FIELD) ?? "").trim();
+  if (ownership !== "") {
+    if (
+      speaks && ownership === "team" && getField(stateContent, "Unit Gate Rhythm") === null &&
+      readApplicableTeamUnitScopeStamp(projectDir, stateContent) === null && !existsSync(unitParticipantPath(projectDir))
+    ) {
+      sayWithStepOnce(
+        projectDir,
+        "Each team builds its Unit start to finish and approves it after every stage. To approve once at the " +
+          "end of each Unit instead, say so before the first Unit is built.",
+      );
+    }
+    return null;
+  }
   const order = readConstructionIteration(stateContent) === "unit-major" ? "one after another" : "stage by stage";
   const repos = intentRepos(projectDir);
   if (repos.length > 0) {
-    sayWithStepOnce(projectDir, teamsAcrossReposLine(repos.length, units));
+    if (speaks) sayWithStepOnce(projectDir, teamsAcrossReposLine(repos.length, units));
     return null;
   }
   if (constructionStaffingPassedOver(projectDir)) {
-    sayWithStepOnce(
-      projectDir,
-      `This session builds the ${units} Units ${order}. To have several teams each own a Unit instead, ` +
-        "say so before the first Unit is built.",
-    );
+    if (speaks) {
+      sayWithStepOnce(
+        projectDir,
+        `This session builds the ${units} Units ${order}. To have several teams each own a Unit instead, ` +
+          "say so before the first Unit is built.",
+      );
+    }
     return null;
   }
   if (!isReadOnlyEngineProbe()) noteConstructionStaffingAsked(projectDir);

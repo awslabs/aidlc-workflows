@@ -57,8 +57,8 @@ const CHAT = chat("01995000-7a11-7000-8000-000000001395");
 const QUESTION = "Inception is done, and the plan has 2 Units. Who builds them?";
 const DEFAULT_LINE = "This session builds the 2 Units one after another. To have several teams each own a Unit " +
   "instead, say so before the first Unit is built.";
-const APPROVALS_LINE = "Each team approves its Unit after every stage. To approve once at the end of each Unit " +
-  "instead, say so before the first Unit is built.";
+const APPROVALS_LINE = "Each team builds its Unit start to finish and approves it after every stage. To approve " +
+  "once at the end of each Unit instead, say so before the first Unit is built.";
 const REPOS_LINE = "This work spans 2 repos, so this session builds its 2 Units: teams each owning a Unit is " +
   "not available yet for work across repos.";
 
@@ -85,6 +85,8 @@ interface Shape {
   iteration?: "unit-major" | "stage-major";
   execution?: "serial" | "swarm";
   ownership?: "solo" | "team";
+  /** The walking skeleton's stance, or null when the first step still has to settle it. */
+  stance?: string | null;
 }
 
 // The Stage Progress separator the state file uses.
@@ -96,7 +98,7 @@ const D = String.fromCharCode(0x2014);
 function stateFile(shape: Shape): string {
   const runtime = [
     "- **Revision Count**: 0",
-    "- **Skeleton Stance**: off",
+    ...(shape.stance === null ? [] : [`- **Skeleton Stance**: ${shape.stance ?? "off"}`]),
     "- **Construction Checkpoints**: enabled",
     `- **Construction Iteration**: ${shape.iteration ?? "unit-major"}`,
     `- **Construction Execution**: ${shape.execution ?? "serial"}`,
@@ -319,8 +321,25 @@ describe("who builds the Units is asked once as Inception ends", () => {
     const step = next(proj, [], CHAT);
     expect(isStaffingAsk(step)).toBe(false);
     expect(step.kind, JSON.stringify(step)).not.toBe("ask");
-    // The line rides the next step the agent speaks from.
-    expect(String(step.narration), JSON.stringify(step)).toContain(APPROVALS_LINE);
+    expect(step.change_notices ?? [], JSON.stringify(step)).toContain(APPROVALS_LINE);
+    expect(next(proj, [], CHAT).change_notices ?? []).not.toContain(APPROVALS_LINE);
+  });
+
+  // Seen live on Claude Code: the line rode the step that settles the walking
+  // skeleton's stance, which the agent passes through without speaking.
+  test("a line waits past the skeleton step the agent passes through", () => {
+    const proj = project({ stance: null });
+    const ran = pick(proj, next(proj, [], CHAT), "Several teams", CHAT);
+    expect(ran.rc, ran.out).toBe(0);
+    const settle = next(proj, [], CHAT);
+    expect(settle.gate, JSON.stringify(settle)).toBe("unresolved");
+    expect(settle.change_notices ?? []).not.toContain(APPROVALS_LINE);
+    const report = spawnSync(BUN, [ORCH, "report", "--skeleton-stance", "off", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHAT,
+    });
+    expect(report.status, `${report.stdout}${report.stderr}`).toBe(0);
+    const work = next(proj, [], CHAT);
+    expect(work.change_notices ?? [], JSON.stringify(work)).toContain(APPROVALS_LINE);
   });
 
   test("Several teams on a stage-by-stage plan with parallel builds is one pick: the order switches with it", () => {
