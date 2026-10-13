@@ -18,7 +18,7 @@
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import { HOOKS_OFF_RERUN, hooksHealthDir, unattendedHumanPresenceHint } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -554,6 +554,21 @@ describe("the request the first next stopped with carries on after the restart",
     expect(picked.message ?? "").toContain("intent create --scope bugfix");
   });
 
+  test("words beside its id drop the same-chat copy, so a request they cancel never comes back", () => {
+    const proj = installed(OPENCODE);
+    const stop = next(proj, OPENCODE, {}, ["--", REQUEST]);
+    expect(isStop(stop)).toBe(true);
+    const id = (stop.message ?? "").match(/ --request ([0-9a-f]{8})\b/)?.[1] ?? "";
+    expect(existsSync(kept(proj))).toBe(true);
+    beat(proj, "record-human-turn");
+    const beside = next(proj, OPENCODE, {}, ["--request", id, "--", "never mind that"]);
+    expect(beside.message ?? "", JSON.stringify(beside)).toStartWith("Nothing ran.");
+    // Shown whole when the step can carry it.
+    expect(beside.message ?? "").toContain(JSON.stringify(`/aidlc -- ${REQUEST}`));
+    expect(existsSync(kept(proj))).toBe(false);
+    expect(noWorkflow(next(proj, OPENCODE))).toBe(true);
+  });
+
   test("their new words win: the earlier request is dropped and never comes back", () => {
     const proj = installed(OPENCODE);
     expect(isStop(next(proj, OPENCODE, {}, ["--", REQUEST]))).toBe(true);
@@ -679,7 +694,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     expect(picked.message ?? "").toContain("report --result resumed");
   });
 
-  test("long stopped words reach the print whole, or cut with the request file that holds them whole", () => {
+  test("long stopped words reach the print whole; only words no step can carry are cut, and said so", () => {
     const words = "take me back to requirements analysis and keep the old layout ".repeat(60).trim();
     const proj = installed(OPENCODE);
     intentCreate(proj, OPENCODE);
@@ -688,7 +703,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     const picked = next(proj, OPENCODE, {}, ["--request", id]);
     expect(picked.kind, JSON.stringify(picked).slice(0, 300)).toBe("print");
     expect(picked.message ?? "").toContain(JSON.stringify(words));
-    // Longer than any step can carry: shown cut, and whole in a request file the agent passes on.
+    // Longer than any step can carry: cut, still a print, and a step that passes them on tells the person.
     // Quotes and line breaks cost more once the step is written out: measured there.
     const huge = 'keep the "old" layout\nand the old colours '.repeat(1200).trim();
     const big = installed(OPENCODE);
@@ -697,47 +712,9 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     beat(big, "reviewer-scope");
     const cut = next(big, OPENCODE, {}, ["--request", bigId]);
     expect(cut.kind, JSON.stringify(cut).slice(0, 300)).toBe("print");
-    const file = `aidlc/.aidlc-request-text/kept-${bigId}.txt`;
-    expect(cut.message ?? "").toContain(`(cut to fit this step; they are whole in ${file}: wherever this step has you pass their words to \`next\`, pass \`--request-file ${file}\``);
+    expect(cut.message ?? "").toContain("(cut to fit this step: if this step has you pass their words on, tell the person in one line that their request was too long to carry on whole");
     expect(cut.message ?? "").not.toContain(JSON.stringify(huge));
-    // The line break `--request-file` drops is added, so the words read back exactly.
-    expect(readFileSync(join(big, file), "utf-8")).toBe(`${huge}\n`);
-    // `next --request-file` reads that file, whole, and removes it.
-    const passed = next(big, OPENCODE, {}, ["--request-file", file]);
-    expect(passed.kind, JSON.stringify(passed).slice(0, 300)).not.toBe("error");
-    // The engine kept their words, whole, for the question it asks.
-    const question = (passed.message ?? "").match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
-    const stored = readFileSync(join(big, "aidlc", ".aidlc-sessions", "questions", `${question}.json`), "utf-8");
-    expect(JSON.stringify(JSON.parse(stored))).toContain(JSON.stringify(huge));
-    expect(existsSync(join(big, file))).toBe(false);
-    // Longer than `--request-file` reads: shown cut, and no file it would refuse.
-    const over = "keep the old layout ".repeat(4000).trim();
-    const overProj = installed(OPENCODE);
-    intentCreate(overProj, OPENCODE);
-    const overId = idIn(next(overProj, OPENCODE, {}, ["--", over]));
-    beat(overProj, "reviewer-scope");
-    const overCut = next(overProj, OPENCODE, {}, ["--request", overId]);
-    expect(overCut.message ?? "").toContain("(cut to fit this step, and too long to pass on whole: if this step has you pass their words on, tell the person");
-    expect(existsSync(join(overProj, "aidlc", ".aidlc-request-text", `kept-${overId}.txt`))).toBe(false);
-  });
-
-  test("the request file a kept stop's words went to expires by its own age", () => {
-    const huge = 'keep the "old" layout\nand the old colours '.repeat(1200).trim();
-    const proj = installed(OPENCODE);
-    intentCreate(proj, OPENCODE);
-    const id = idIn(next(proj, OPENCODE, {}, ["--", huge]));
-    beat(proj, "reviewer-scope");
-    next(proj, OPENCODE, {}, ["--request", id]);
-    const file = join(proj, "aidlc", ".aidlc-request-text", `kept-${id}.txt`);
-    expect(existsSync(file)).toBe(true);
-    // Its kept stop may be older: the file is kept for its own retention period.
-    const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
-    utimesSync(join(proj, "aidlc", ".aidlc-sessions", "restarts", `${id}.json`), old, old);
-    next(proj, OPENCODE, { AIDLC_QUESTION_RETENTION_DAYS: "1" }, JUMP);
-    expect(existsSync(file)).toBe(true);
-    utimesSync(file, old, old);
-    next(proj, OPENCODE, { AIDLC_QUESTION_RETENTION_DAYS: "1" }, JUMP);
-    expect(existsSync(file)).toBe(false);
+    expect(existsSync(join(big, "aidlc", ".aidlc-request-text"))).toBe(false);
   });
 
   test("it runs in the work it was stopped in, never in work selected since", () => {
@@ -780,7 +757,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
   });
 
-  test("anything beside the id runs nothing: the agent runs the id alone first, then what was beside it", () => {
+  test("anything beside the id runs nothing: the agent reads the kept request with it, then runs the id alone or not at all", () => {
     const proj = installed(OPENCODE);
     intentCreate(proj, OPENCODE);
     const id = idIn(next(proj, OPENCODE, {}, JUMP));
@@ -796,7 +773,9 @@ describe("a next stopped inside a workflow is named in the restart line and runs
       expect(step.kind, JSON.stringify(step)).toBe("print");
       expect(step.message ?? "").toStartWith("Nothing ran.");
       expect(step.message ?? "").toContain(`next --request ${id}\` with nothing beside it first`);
-      expect(step.message ?? "").toContain("once its step is done, run it as its own `next`");
+      expect(step.message ?? "").toContain('kept before the restart, is "/aidlc --stage requirements-analysis"');
+      expect(step.message ?? "").toContain("If the person's words beside it change or cancel that request, follow them and do not run the id.");
+      expect(step.message ?? "").toContain("then run what was beside it as its own `next`");
       expect(step.message ?? "").toContain("send what they typed beside the id again in the new chat");
     }
     // Nothing was used or changed: the id alone still runs the kept command as it was kept.

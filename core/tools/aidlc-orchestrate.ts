@@ -114,7 +114,6 @@ import {
   type StoredQuestion,
   keptRestartLine,
   keptRestartRun,
-  restartWordsRel,
   readRestartRequest,
   type RestartRequest,
   restartRequestTaken,
@@ -319,7 +318,6 @@ import {
   readNextLine,
   READ_ONLY_FLAGS,
   REQUEST_TEXT_DIR,
-  writeRecordFileNoFollow,
   readKiroIdeLegacyPlanApprovalHost,
   readAllAuditShards,
   QUESTION_TURN_REPLY,
@@ -1000,9 +998,9 @@ function namedRestartRequest(
   })[0];
   if (kept === undefined) return null;
   const { id } = kept;
-  // Anything beside the id runs nothing, whether or not it ran: the agent runs
-  // the id alone, and what was beside it after that, as a request of its own
-  // (the person's words stay in this chat, so they are never asked for again).
+  // Anything beside the id runs nothing, whether or not it ran: the agent reads
+  // the kept request with what was beside it, and runs the id alone or not at
+  // all (the person's words stay in this chat, so they are never asked for again).
   const alone = keptRestartLine(args) === id;
   if (kept.ran || kept.request === null) {
     if (alone) return { directive: restartRequestRanDirective() };
@@ -1013,18 +1011,27 @@ function namedRestartRequest(
       ),
     };
   }
+  // The kept request is shown, whole when the step can carry it, and the agent
+  // reads which way the person meant it with what was beside it: the engine
+  // sets no order between them. Its same-chat copy goes, so a request their
+  // words cancel does not come back on a bare `next`.
   if (!alone) {
-    return {
-      directive: printDirective(
-        `Nothing ran. Run \`${aidlcToolInvocation("orchestrate")} next --request ${id}\` with nothing beside it ` +
-          "first and follow what it returns: it carries the request kept before the restart. What was typed beside " +
-          "it is not part of that request: once its step is done, run it as its own `next`, the way you pass on any " +
-          "request of the person's (their words are in this chat, or in the request file named beside the id: pass " +
-          "that file on before you write another request to it). If that step stops again and asks the person to " +
-          "restart, tell them in the same " +
-          "message to send what they typed beside the id again in the new chat.",
-      ),
-    };
+    const keptArgs = kept.request.args;
+    if (!isReadOnlyEngineProbe() && keptRequest(projectDir, kept.request.space)?.restart === id) {
+      dropKeptRequest(projectDir);
+    }
+    const besideStep = (line: string): PrintDirective => printDirective(
+      `Nothing ran. The request \`--request ${id}\` names, kept before the restart, is ${line}, and more was given ` +
+        "beside its id. Read both. If the person's words beside it change or cancel that request, follow them and do " +
+        `not run the id. Otherwise run \`${aidlcToolInvocation("orchestrate")} next --request ${id}\` with nothing ` +
+        "beside it first and follow what it returns, then run what was beside it as its own `next`, the way you pass " +
+        "on any request of the person's (their words are in this chat, or in the request file named beside the id: " +
+        "pass that file on before you write another request to it). If that step stops again and asks the person to " +
+        "restart, tell them in the same message to send what they typed beside the id again in the new chat.",
+    );
+    const whole = besideStep(JSON.stringify([entrySkillInvocation(), ...keptArgs].join(" ")));
+    const fits = Buffer.byteLength(JSON.stringify(whole), "utf-8") <= directiveMaxBytes() - RESTART_WORDS_MARGIN_BYTES;
+    return { directive: fits ? whole : besideStep(`${keptRequestLine(keptArgs)} (cut to fit this step)`) };
   }
   const request = keptRestartRun(projectDir, args);
   if (request === null) return { directive: restartRequestRanDirective() };
@@ -1087,20 +1094,6 @@ function namedRestartRequest(
   }
 }
 
-// The kept words, whole, in a request file `next --request-file` reads (and
-// removes); null when there is no project, they are longer than that reader
-// takes, or it cannot be written. The line break the reader drops is added.
-function restartWordsFile(id: string | null, words: string): string | null {
-  if (id === null || !engineProjectDir || Buffer.byteLength(`${words}\n`, "utf-8") > REQUEST_TEXT_MAX_BYTES) return null;
-  const file = restartWordsRel(id);
-  try {
-    writeRecordFileNoFollow(engineProjectDir, file, `${words}\n`);
-    return file;
-  } catch {
-    return null;
-  }
-}
-
 // A kept stop runs once: the same line again carries on where the work stands.
 function restartRequestRanDirective(): PrintDirective {
   return printDirective(
@@ -1113,25 +1106,28 @@ function restartRequestRanDirective(): PrintDirective {
 // The words a kept stop carried, which the new chat never saw: said first on
 // the print it leads to, so the agent can read them.
 let activeRestartWords: string | null = null;
-// The kept stop's id, for the request file its words go to when the step cannot hold them.
-let activeRestartId: string | null = null;
 // The kept stop as the person can ask for it again, shown when its step refuses it.
 let activeRestartAsked: string | null = null;
 
-// `newChatId`: the kept stop's id when the chat running it never saw the
-// words, so its first print starts with them. A refusal shows the kept line
-// once, quoted and cut to a length any directive can carry.
+// `newChat`: the chat running it never saw the words, so its first print starts
+// with them. A refusal shows the kept line once, quoted and cut to a length any
+// directive can carry.
 const RESTART_ASKED_MAX_CHARS = 600;
 // What a step still adds after the kept words (a selection notice, kept
 // replies, notes): the words are measured in the finished step, with this left.
 const RESTART_WORDS_MARGIN_BYTES = 2048;
-function noteRestartRequest(args: readonly string[], newChatId: string | null): void {
-  activeRestartWords = newChatId !== null ? parseNextFlags([...args]).intent ?? null : null;
-  activeRestartId = newChatId;
+function noteRestartRequest(args: readonly string[], newChat: boolean): void {
+  activeRestartWords = newChat ? parseNextFlags([...args]).intent ?? null : null;
+  activeRestartAsked = keptRequestLine(args);
+}
+
+// The kept stop as the person can ask for it again, quoted and cut.
+function keptRequestLine(args: readonly string[]): string {
   const line = [entrySkillInvocation(), ...args].join(" ");
-  activeRestartAsked = JSON.stringify(
-    line.length > RESTART_ASKED_MAX_CHARS ? `${line.slice(0, RESTART_ASKED_MAX_CHARS)}...` : line,
-  );
+  if (line.length <= RESTART_ASKED_MAX_CHARS) return JSON.stringify(line);
+  // Never half of a character written as two.
+  const cut = line.slice(0, RESTART_ASKED_MAX_CHARS);
+  return JSON.stringify(`${/[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut}...`);
 }
 // A kept stop is marked as run before any of it runs, and the mark stays
 // whatever the step it leads to says, so the same line never runs it twice; a
@@ -1384,9 +1380,8 @@ function prepareEmission(directive: Directive): PreparedEmission {
   }
   if (activeRestartWords !== null) {
     if (directive.kind === "print") {
-      // Whole, as long as the finished step can still be sent. Longer words are
-      // shown cut, and go whole into a request file the agent passes on with
-      // `--request-file` in their place, so it never types a part of them.
+      // Whole, as long as the finished step can still be sent; longer words are
+      // shown cut, and a step that passes them on says so to the person.
       const message = directive.message;
       const lead = "The person's words, typed before the restart and kept by AI-DLC (this chat never saw them): ";
       const fits = (text: string): boolean =>
@@ -1396,12 +1391,8 @@ function prepareEmission(directive: Directive): PreparedEmission {
       if (fits(whole)) {
         directive.message = whole;
       } else {
-        const file = restartWordsFile(activeRestartId, activeRestartWords);
-        const where = file === null
-          ? ", and too long to pass on whole: if this step has you pass their words on, tell the person in one line " +
-            "that their request was too long to carry on whole and ask them to send it in parts"
-          : `; they are whole in ${file}: wherever this step has you pass their words to \`next\`, pass ` +
-            `\`--request-file ${file}\` in place of \`-- <their words>\` instead of typing them`;
+        const where = ": if this step has you pass their words on, tell the person in one line that their request " +
+          "was too long to carry on whole and ask them to send it in parts";
         const withWords = (words: string): string =>
           `${lead}${JSON.stringify(words)} (cut to fit this step${where}). ${message}`;
         let words = activeRestartWords;
@@ -1416,7 +1407,6 @@ function prepareEmission(directive: Directive): PreparedEmission {
       }
     }
     activeRestartWords = null;
-    activeRestartId = null;
   }
   // A refusal has used the kept stop, a publication that fails after the step
   // included: the person sees what to ask for again.
@@ -8550,7 +8540,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         // Kept for a new chat too: whichever way the person carries on, it runs once.
         if (kept.restart === null || takeRestartForCommand(pdKept, kept.restart)) {
           if (kept.restart === null) activeKeptRequestLine = KEPT_REQUEST_LINE;
-          else noteRestartRequest(kept.args, null);
+          else noteRestartRequest(kept.args, false);
           routeNext(kept.args, projectDir);
           return;
         }
@@ -17456,7 +17446,7 @@ export function main(argv: string[]): void {
       return;
     }
     if (keptRequest(resolvedProjectDir, restart.space)?.restart === restart.id) dropKeptRequest(resolvedProjectDir);
-    noteRestartRequest(subArgs, restart.id);
+    noteRestartRequest(subArgs, true);
   }
   spendRequestFile();
   if (commandKind) engineInvocation = {
@@ -17512,7 +17502,6 @@ export function main(argv: string[]): void {
     activeKeptRequestLine = null;
     activeRestartWords = null;
     activeRestartAsked = null;
-    activeRestartId = null;
     restartUnmarkedNotice = false;
     routingAnsweredAsActiveWork = false;
     routingAnsweredWords = null;
