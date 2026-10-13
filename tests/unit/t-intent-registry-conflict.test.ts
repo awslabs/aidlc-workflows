@@ -3,7 +3,8 @@
 // Two clones of one shared workspace each start work in one space and the
 // second pulls: git leaves intents.json conflicted. The list of work then reads
 // every row of both sides, any write keeps them all, and the person hears once
-// that git still shows the file as conflicted. Their git is never touched.
+// that every row was kept, in words still true if they ran git add before the
+// line is said. Their git is never touched.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -21,7 +22,7 @@ import { cleanupTestProject, createTestProject, DEFAULT_INTENT_UUID } from "../h
 const SESSION = "01995100-0000-7000-8000-00000000c0f1";
 const LINE =
   "Your list of work, aidlc/spaces/default/intents/intents.json, had a git conflict: every piece of work " +
-  "from both sides was kept, and git still shows the file as conflicted until you add it with git add.";
+  "from both sides was kept. If git still shows the file as conflicted, git add marks it resolved.";
 
 const roots: string[] = [];
 let seed = "";
@@ -144,7 +145,7 @@ describe("a list of work git left conflicted", () => {
     expect(registryText(blair)).not.toContain("<<<<<<<");
   });
 
-  test("the person hears once that git still shows the file as conflicted", () => {
+  test("the person hears once that every row was kept, in words true after their own git add", () => {
     const blair = conflictedClone("merge", "--no-rebase");
     const saved = { override: process.env.AIDLC_SESSION_OVERRIDE, source: process.env.AIDLC_SESSION_OVERRIDE_SOURCE };
     process.env.AIDLC_SESSION_OVERRIDE = SESSION;

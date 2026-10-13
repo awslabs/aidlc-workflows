@@ -4274,7 +4274,7 @@ export function writeIntentRegistry(projectDir: string, list: IntentRegistryEntr
     if (session) {
       addPendingPersonLines(projectDir, session, [
         `Your list of work, ${toPosix(relative(projectDir, path))}, had a git conflict: every piece of work ` +
-          "from both sides was kept, and git still shows the file as conflicted until you add it with git add.",
+          "from both sides was kept. If git still shows the file as conflicted, git add marks it resolved.",
       ]);
     }
   } catch {
