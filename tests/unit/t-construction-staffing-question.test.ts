@@ -334,6 +334,11 @@ describe("who builds the Units is asked once as Inception ends", () => {
     const settle = next(proj, [], CHAT);
     expect(settle.gate, JSON.stringify(settle)).toBe("unresolved");
     expect(settle.change_notices ?? []).not.toContain(APPROVALS_LINE);
+    // With learnings on, that step's diary is already written: nothing of a
+    // Unit is built yet, so the line still waits for the next step.
+    const diary = join(seededRecordDir(proj), "construction", "functional-design");
+    mkdirSync(diary, { recursive: true });
+    writeFileSync(join(diary, "memory.md"), "# Functional Design diary\n");
     const report = spawnSync(BUN, [ORCH, "report", "--skeleton-stance", "off", "--project-dir", proj], {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHAT,
     });
@@ -383,6 +388,9 @@ describe("who builds the Units is asked once as Inception ends", () => {
     const again = next(proj, [], CHAT);
     expect(again.kind).toBe("run-stage");
     expect(again.change_notices ?? []).not.toContain(DEFAULT_LINE);
+    // Once a Unit's work has started, another chat is not told it either.
+    appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "alpha", "Run floor": "unstarted#0" }, proj);
+    expect(next(proj, [], chat("01995000-7a11-7000-8000-000000001396")).change_notices ?? []).not.toContain(DEFAULT_LINE);
   });
 
   test("shown, and the person has not spoken yet: it is still the open question", () => {

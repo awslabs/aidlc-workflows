@@ -3482,7 +3482,8 @@ function projectTypeAskDirective(
 // the question was shown and the person spoke without a pick, this session
 // builds the Units and the step says so; work with recorded repos gets that
 // line instead of a choice the setter refuses, and teams hear how their
-// approvals go. Null when the step goes on.
+// approvals go. Each line holds until a Unit's work starts. Null when the
+// step goes on.
 function constructionStaffingAsk(
   projectDir: string,
   stateContent: string | null,
@@ -3492,18 +3493,21 @@ function constructionStaffingAsk(
   const node = nodeForSlug(slug);
   if (stateContent === null || !node || node.phase !== "construction" || !isPerUnit(node)) return null;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return null;
-  if (constructionHasStarted(stateContent, recordDir(projectDir))) return null;
-  const dag = resolveBoltBatches(projectDir, routingEvidenceFor(projectDir, stateContent));
+  const ownership = (getField(stateContent, UNIT_OWNERSHIP_FIELD) ?? "").trim();
+  const teams = ownership === "team" && getField(stateContent, "Unit Gate Rhythm") === null;
+  if (ownership !== "" && !teams) return null;
+  const evidence = routingEvidenceFor(projectDir, stateContent);
+  const dag = resolveBoltBatches(projectDir, evidence);
   if (dag.state !== "ok" || dag.units.length < 2) return null;
+  if ((evidence?.allRows ?? readAuditShardEvents(projectDir)).some((row) => row.event === "UNIT_STARTED")) return null;
   const units = dag.units.length;
   // The skeleton's stance is settled first, on a step the agent passes
   // through without speaking: a line waits for the step after it.
   const speaks = !(isSkeletonGateStage(node, scope, stateContent) && readSkeletonStance(stateContent) === null);
-  const ownership = (getField(stateContent, UNIT_OWNERSHIP_FIELD) ?? "").trim();
-  if (ownership !== "") {
+  if (teams) {
     if (
-      speaks && ownership === "team" && getField(stateContent, "Unit Gate Rhythm") === null &&
-      readApplicableTeamUnitScopeStamp(projectDir, stateContent) === null && !existsSync(unitParticipantPath(projectDir))
+      speaks && readApplicableTeamUnitScopeStamp(projectDir, stateContent) === null &&
+      !existsSync(unitParticipantPath(projectDir))
     ) {
       sayWithStepOnce(
         projectDir,
@@ -3529,6 +3533,8 @@ function constructionStaffingAsk(
     }
     return null;
   }
+  // Work already under way when this question arrived is never asked.
+  if (constructionHasStarted(stateContent, recordDir(projectDir))) return null;
   if (!isReadOnlyEngineProbe()) noteConstructionStaffingAsked(projectDir);
   const state = aidlcToolInvocation("state");
   return {
