@@ -5,7 +5,8 @@
 // it." A stage the person asked to skip is not one that does not apply: the
 // step that skips it already gives the one line ("Skipped <stage>. It can
 // still be run on its own with ..."), so the next step says no reason of its
-// own.
+// own. Reverse Engineering kept on the existing code knowledge base applies
+// too: the step says it reused that knowledge base and skipped the scan.
 //
 // Mechanism: cli - spawns the shipped tools against temp projects created via
 // intent-create.
@@ -110,6 +111,29 @@ describe("the line after a skip says why the stage was skipped", () => {
     expect(done.kind, skipped.out).toBe("done");
     expect(done.workflow_continues, skipped.out).not.toBe(true);
     expect(skipped.out).not.toContain("does not apply");
+  });
+
+  test("Reverse Engineering kept on the existing code knowledge base says so, not that it does not apply", () => {
+    const proj = startedProject();
+    // The person picked "Reuse existing knowledge base"; the agent records it
+    // and reports the skip as the stage's Step 1 says.
+    const store = run(proj, "aidlc-utility.ts", ["codekb-path"]);
+    expect(store.status, store.out).toBe(0);
+    const kept = run(proj, "aidlc-state.ts", [
+      "reuse-artifact", "reverse-engineering", "--decision", "keep", "--artifacts", store.stdout.trim(),
+    ]);
+    expect(kept.status, kept.out).toBe(0);
+    const skipped = run(proj, "aidlc-orchestrate.ts", [
+      "report", "--stage", "reverse-engineering", "--result", "skipped",
+      "--reason", "codekb reuse: all resolved stores CURRENT, human chose reuse",
+    ]);
+    expect(skipped.status, skipped.out).toBe(0);
+    const after = next(proj);
+    expect(after.kind, JSON.stringify(after)).toBe("run-stage");
+    expect(after.stage).toBe("requirements-analysis");
+    expect(String(after.narration)).toMatch(
+      /^Reverse Engineering reused the existing code knowledge base, so I skipped the scan\. Now working on Requirements Analysis\b/,
+    );
   });
 
   test("a stage the agent found does not apply still says so", () => {

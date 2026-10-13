@@ -15630,6 +15630,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
 
+    // Read before the skip, while this attempt is open: the person's keep
+    // choice covers every repository the stage reads and no scan ran.
+    const evidence = node.mode === "pipeline" ? pipelineLinkEvidence(pd, node) : null;
+    const reusedStore = evidence !== null && evidence.missing.length === 0 && evidence.receipts.length === 0;
     const res = spawnState(pd, [
       "skip",
       slug,
@@ -15646,7 +15650,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // straight on. The agent's reason stays in the audit; it is the agent's
     // own words, so it never becomes a line the engine says. A stage the
     // person asked to skip does apply: the step that named this report has
-    // already said the skip in one line, so no reason is added here.
+    // already said the skip in one line, so no reason is added here. Reverse
+    // Engineering kept on the existing code knowledge base applies too, so its
+    // line says that knowledge base was reused instead of a scan.
     const personAsked = reason === PERSON_ASKED_SKIP_REASON;
     const skipped: Directive = {
       kind: "done",
@@ -15657,7 +15663,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ...(personAsked ? {} : {
         narration: unitsDone.length > 0
           ? `${node.name} is not part of the ${scope} plan; what the Units already did for it stays as it is.`
-          : `${node.name} does not apply here, so I skipped it.`,
+          : reusedStore
+            ? `${node.name} reused the existing code knowledge base, so I skipped the scan.`
+            : `${node.name} does not apply here, so I skipped it.`,
       }),
     };
     // Carried only while the work goes on; the last stage's skip is said here.
