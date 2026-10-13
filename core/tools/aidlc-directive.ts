@@ -3091,10 +3091,9 @@ function checkSelectCommands(
 
 // A required array of `{ <key>: string, command: string }` rows.
 // The choices of a question: a label each, a detail and a command when it has
-// one. Required on a scope offer, whose answers are its two commands.
-// `required`: the field itself must be present (the plan offer always carries
-// its choices). A choice's command is optional everywhere: a pick without one
-// needs one more answer (the plan offer's "Use a different plan").
+// one. `required`: the field itself must be present (the plan offer always
+// carries its choices). A choice's command is optional everywhere: a pick
+// without one needs one more answer (the plan offer's "Use a different plan").
 function checkChoices(o: Record<string, unknown>, kind: DirectiveKind, errors: string[], required: boolean): void {
   if (!("choices" in o)) {
     if (required) errors.push(`${kind}: missing required field: choices`);
