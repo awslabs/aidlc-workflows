@@ -701,6 +701,14 @@ describe("t27 aidlc-utility init", () => {
     expect(readFileSync(statePath(p), "utf-8")).toContain("workspace-scaffold");
   });
 
+  test("33b: a new record's Construction phase has no never-filled per-unit line", () => {
+    const p = emptyDir();
+    util(["intent-create", "--scope", "feature"], p);
+    const state = readFileSync(statePath(p), "utf-8");
+    expect(state).toContain("### CONSTRUCTION PHASE\n- [ ] functional-design");
+    expect(state).not.toMatch(/^Per unit:/m);
+  });
+
   test("45: init with --depth overrides bugfix default (Standard)", () => {
     const p = emptyDir();
     util(["intent-create", "--scope", "bugfix", "--depth", "standard"], p);
@@ -755,6 +763,12 @@ describe("t27 aidlc-utility scope-change", () => {
     const p = pocStateAuditProj();
     util(["scope-change", "--scope", "mvp"], p);
     expect(readFileSync(statePath(p), "utf-8")).toContain("Stages to Execute");
+  });
+
+  test("17b: a record made with a per-unit line keeps it through a scope change", () => {
+    const p = pocStateAuditProj();
+    util(["scope-change", "--scope", "mvp"], p);
+    expect(readFileSync(statePath(p), "utf-8")).toContain("### CONSTRUCTION PHASE\nPer unit: todo-core\n- [ ] functional-design");
   });
 
   test("18: scope-change poc->mvp updates Depth to Standard for mvp", () => {
