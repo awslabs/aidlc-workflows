@@ -337,7 +337,7 @@ describe("next takes the person's own /aidlc line when the agent's command carri
 // Feasibility) and the person types new work after the entry word.
 const NEW_WORK = "build a standalone Python CLI that scrapes NOAA weather data and writes it to a SQLite database";
 const NEW_LINE = `/aidlc "${NEW_WORK}"`;
-const READING = "Work is in progress, and the person's words may ask to redo";
+const READING = "the person's words may ask to redo";
 
 /** A project with work open: the corpus's work-open state (a bug fix at Requirements Analysis). */
 async function workOpen(): Promise<string> {
@@ -484,4 +484,96 @@ describe("with work open, the agent's first step after `/aidlc <words>` reads th
       expect(third.directive.message ?? "", `second: ${second.out}`).not.toBe(first.directive.message ?? "");
     });
   }
+});
+
+// The entry word alone over work in hand: the chat-start context no longer
+// tells the agent to turn it into `next --resume`, so the agent runs `next`
+// with what was typed (nothing), and the recorded line decides: it picks the
+// work back up, as `--resume` does, whichever the agent sent.
+const PICK_UP = "Picking up where we left off, at ";
+
+/** `next` as the agent runs it, its rules parts continued to the step they lead to. */
+async function stepAfter(proj: string, harness: Harness, args: string[]): Promise<{ directive: Directive; out: string }> {
+  let step = await next(proj, harness, args);
+  const tool = harness === "claude"
+    ? ORCHESTRATE
+    : join(proj, harness === "copilot" ? ".aidlc" : harness === "codex" ? ".codex" : ".kiro", "tools", "aidlc-orchestrate.ts");
+  for (let parts = 0; parts < 20 && step.directive.kind === "load-steering" && typeof step.directive.receipt === "string"; parts++) {
+    const res = await exec([process.execPath, tool, "continue", step.directive.receipt, "--project-dir", proj], { cwd: proj, env: env(proj) });
+    const out = `${res.stdout}${res.stderr}`;
+    let directive: Directive = {};
+    try {
+      directive = JSON.parse(res.stdout.trim()) as Directive;
+    } catch {
+      // The caller reports the raw output.
+    }
+    step = { directive, out };
+  }
+  return step;
+}
+
+describe("the entry word alone over work in hand picks the work back up, whichever first next the agent sends", () => {
+  for (const harness of ["claude", "codex", "kiro", "kiro-ide", "copilot"] as Harness[]) {
+    test(`${harness}: "/aidlc" alone, then a bare next, picks the work up as --resume does`, async () => {
+      const proj = await workOpen();
+      const line = harness === "codex" ? "$aidlc" : harness === "copilot" ? copilotSkillPrompt(proj, "") : "/aidlc";
+      const said = await say(proj, line, harness);
+      expect(said.status, `${said.stdout}${said.stderr}`).toBe(0);
+      const { directive, out } = await stepAfter(proj, harness, []);
+      expect(directive.kind, out).toBe("run-stage");
+      expect(directive.narration ?? "", out).toStartWith(PICK_UP);
+    });
+  }
+
+  test("claude: \"/aidlc\" alone, then next --resume, is the same pick-up", async () => {
+    const proj = await workOpen();
+    await say(proj, "/aidlc", "claude");
+    const { directive, out } = await stepAfter(proj, "claude", ["--resume"]);
+    expect(directive.kind, out).toBe("run-stage");
+    expect(directive.narration ?? "", out).toStartWith(PICK_UP);
+  });
+
+  test("claude: once something is recorded after \"/aidlc\", a bare next is the work's own step with no pick-up line", async () => {
+    const proj = await workOpen();
+    await say(proj, "/aidlc", "claude");
+    const logged = await exec([
+      process.execPath, join(AIDLC_SRC, "tools", "aidlc-log.ts"), "decision", "--project-dir", proj,
+      "--stage", "requirements-analysis", "--decision", "How should the questions be answered?", "--options", "Guide me,Chat",
+    ], { cwd: proj, env: env(proj) });
+    expect(logged.status, `${logged.stdout}${logged.stderr}`).toBe(0);
+    const { directive, out } = await stepAfter(proj, "claude", []);
+    expect(directive.kind, out).toBe("run-stage");
+    expect(directive.narration ?? "", out).not.toContain(PICK_UP);
+  });
+
+  test("claude: \"/aidlc\" alone with no work yet leaves today's answer", async () => {
+    const proj = fresh();
+    await say(proj, "/aidlc", "claude");
+    const { directive, out } = await next(proj, "claude", []);
+    expect(directive.kind, out).toBe("error");
+    expect(directive.message ?? "").toContain(NO_STATE);
+  });
+});
+
+// The reading of the person's words over one piece of open work names that
+// work, so the agent compares their words with what is open instead of
+// guessing: measured on Claude Code (2 of 40 runs), the agent took new work for
+// the open work's subject and carried it on.
+describe("the reading of words over one piece of open work names it", () => {
+  test("claude: the agent passes the words: the reading names the open work", async () => {
+    const proj = await workOpen();
+    await say(proj, NEW_LINE, "claude");
+    const { directive, out } = await next(proj, "claude", [NEW_WORK]);
+    expect(directive.kind, out).toBe("print");
+    expect(directive.message ?? "", out).toStartWith('Work is in progress on "Todo app bug fix", and the person\'s words may ask to redo');
+  });
+
+  test("claude: the agent sends next --resume: the line it reads gets the same reading, naming the open work", async () => {
+    const proj = fresh();
+    writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8"), "utf-8");
+    await say(proj, NEW_LINE, "claude");
+    const { directive, out } = await next(proj, "claude", ["--resume"]);
+    expect(directive.kind, out).toBe("print");
+    expect(directive.message ?? "", out).toContain('Work is in progress on "Test widget feature for e-commerce platform"');
+  });
 });
