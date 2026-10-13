@@ -33,6 +33,10 @@ nav = [
       "guide/09-rules-and-the-learning-loop.md",
       "guide/13-customization.md",
     ] },
+    { "Writing Inputs" = [
+      "guide/writing-inputs/vision-document-guide.md",
+      "guide/writing-inputs/technical-environment-guide.md",
+    ] },
     { "Agent Deep Dives" = [
       { "Overview" = "guide/agents/README.md" },
       "guide/agents/product-agent.md",

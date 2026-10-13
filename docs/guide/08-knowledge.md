@@ -55,15 +55,18 @@ Ships with the framework. Contains shared principles and per-agent methodology r
 |   +-- audit-format.md             # 118-event audit taxonomy
 |   +-- brownfield.md               # Brownfield safeguards and reverse-engineering guidance
 |   +-- knowledge-readme-template.md # Optional README template a team can copy into Tier 2
+|   +-- memory-template.md          # The per-stage diary template
+|   +-- rules-reading.md            # How an agent reads the space's rule files
 |   +-- state-template.md           # State file contract
-|   `-- verification.md             # Phase boundary verification rules
+|   +-- verification.md             # Phase boundary verification rules
+|   `-- worktree-info-schema.md     # Worktree output contract (Construction)
 +-- aidlc-architect-agent/                 # Loaded when aidlc-architect-agent is active
 +-- aidlc-developer-agent/                 # Loaded when aidlc-developer-agent is active
 +-- aidlc-product-agent/                   # Loaded when aidlc-product-agent is active
 `-- ...                              # One directory per agent
 ```
 
-The format references in `aidlc-shared/` (the audit taxonomy and the state, memory, worktree and README templates) are not loaded with the agent. The step that needs one names it, and the agent reads it then.
+The format references in `aidlc-shared/` (the audit taxonomy and the state, memory, worktree and README templates) are left out of what an inline stage loads: the step that needs one names it, and the agent reads it then. An agent dispatched on its own (a reviewer, or a stage that runs as a subagent) reads every Markdown file in the folder before it starts, these included.
 
 > **Do NOT edit Tier 1 files to inject your team's knowledge.** `.claude/knowledge/` and `.claude/agents/*.md` are framework files — they are overwritten on every upgrade, and your changes will disappear. If you want to add company standards, architectural preferences, or domain context, add them to **Tier 2** (below). If you want to constrain agent behavior, add a **rule** (see [Rules and the Learning Loop](09-rules-and-the-learning-loop.md)).
 
@@ -106,13 +109,24 @@ The ownership split is deliberate:
 | `aidlc/spaces/<space>/knowledge/documentkb/` | AI-DLC | Derived index, metadata, and extracted text |
 
 Use `/aidlc knowledge onboard [path]` to add one document or sweep the folder.
+For example, `/aidlc knowledge onboard docs/inventory-vision.md` in a Claude
+Code chat ends with this line from AI-DLC, which the agent passes on:
+
+```text
+Copied inventory-vision.md into AI-DLC's documents as
+aidlc/spaces/default/knowledge/documents/inventory-vision.md and added it. The
+knowledge base reads that copy from now on, not your own inventory-vision.md.
+```
+
 You can name a file or folder anywhere in your project: one that is not already
 under `documents/` is copied in for you, keeping its name and a folder's layout,
 and the result says where the copy is. From then on the knowledge base reads
 that copy, so edit it under `documents/` and run `sync` to pick changes up.
 Inside a folder you name, files git ignores are left where they are and the
 line says how many (name one of them directly and it is added, since you asked
-for it by name). A folder holding more documents than the batch cap, or a
+for it by name). A folder that git ignores as a whole is copied whole when you
+name it, and the line says the copy is not ignored, so it is committed unless
+you keep it out of git there too. A folder holding more documents than the batch cap, or a
 document over the per-document cap, is refused before anything is copied, so
 nothing is left behind to duplicate. A path outside the project is refused, and
 the folder is created if it is missing, so a sweep of an empty space adds
@@ -185,12 +199,12 @@ The team creates them. On your first `/aidlc` the engine creates the empty space
 
 Say your team uses Amazon API Gateway with a specific pattern — authorizer Lambdas in front of every route, a request-validation JSON schema, and a standard response envelope. You want the aidlc-architect-agent to default to that pattern whenever it designs a new API.
 
-**Step 1 — Create the knowledge directory you need.** On your first `/aidlc` the engine creates an empty `aidlc/knowledge/` directory. There is no per-agent scaffold and no seeded READMEs, so create the agent subdirectory yourself — here, `aidlc/knowledge/aidlc-architect-agent/`. Match the agent slug exactly.
+**Step 1 - Create the knowledge directory you need.** On your first `/aidlc` the engine creates an empty `aidlc/spaces/default/knowledge/` directory (in a project on the default space). There is no per-agent scaffold and no seeded READMEs, so create the agent subdirectory yourself - here, `aidlc/spaces/default/knowledge/aidlc-architect-agent/`. Match the agent slug exactly.
 
 **Step 2 — Create a focused knowledge file in the right agent directory:**
 
 ```
-aidlc/knowledge/aidlc-architect-agent/api-gateway-standards.md
+aidlc/spaces/default/knowledge/aidlc-architect-agent/api-gateway-standards.md
 ```
 
 Filename rules:
@@ -245,7 +259,17 @@ Before a team rolls knowledge out, confirm the agent is actually seeing the file
 What team knowledge are you using for this stage?
 ```
 
-The agent lists the Tier 2 files it loaded. If your file is missing, check the filename extension is `.md` and the directory matches the agent name exactly (e.g. `aidlc-architect-agent/`, not `architect/`).
+The agent lists the Tier 2 files it loaded. In a Claude Code run at the Intent Capture gate, with one file under `aidlc/spaces/default/knowledge/aidlc-product-agent/`, the answer began (shortened):
+
+```text
+For this stage I used one team knowledge file:
+aidlc/spaces/default/knowledge/aidlc-product-agent/inventory-terms.md. It has two rules:
+- A stock item is a SKU. Say "SKU", never "product".
+- A SKU is retired, never deleted. Retired SKUs keep their history.
+I followed the first one throughout the documents.
+```
+
+The approval question stays open while you ask. If your file is missing, check the filename extension is `.md` and the directory matches the agent name exactly (e.g. `aidlc-architect-agent/`, not `architect/`).
 
 **Option 2 — Check the audit trail for the agent.** Every stage start emits a `STAGE_STARTED` audit event recording the stage and its lead agent. After running a stage, inspect:
 
@@ -258,10 +282,10 @@ Find the most recent `STAGE_STARTED` entry for your stage and confirm the **Agen
 **Option 3 — Run a fast workflow to smoke-test.** For a lightweight end-to-end check, use a small scope that exercises the target agent:
 
 ```
-/aidlc poc Prototype a new inventory API
+/aidlc-mvp Prototype a new inventory API
 ```
 
-The aidlc-architect-agent runs during Domain Design; any Tier 2 file it loaded will influence its output visibly (in our example, the generated architecture should reference API Gateway with a Lambda authorizer).
+The aidlc-architect-agent leads Feasibility, the second stage of the mvp plan, and Domain Design later in it; any Tier 2 file it loaded will influence its output visibly (in our example, its design should reference API Gateway with a Lambda authorizer). A plan without a stage the agent leads never loads its folder: `poc`, for example, runs no architect stage.
 
 ---
 
@@ -329,7 +353,7 @@ For the full rule model — file locations, the five-layer chain, the learning l
 
 ## Knowledge Loading Order
 
-When a stage begins, the conductor loads knowledge in a strict 6-step order:
+When an agent is dispatched for a stage (a reviewer, or a stage that runs as a subagent), its knowledge loads in this 6-step order. On inline stages and for a mob stage's lead, your team's knowledge (steps 4-5) comes before the shipped methodology (steps 2-3), as the key points below say:
 
 ```mermaid
 sequenceDiagram

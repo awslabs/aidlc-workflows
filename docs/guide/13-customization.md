@@ -99,13 +99,13 @@ With this set, implicit scope resolution uses `feature`. Alternatively, record a
 
 **Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `workshop`, `express`. An invalid value errors at invocation time with a clear message. Teams can define additional scopes by dropping a `.claude/scopes/aidlc-<name>.md` file and tagging the member stages' `scopes:` lists — see [Contributing: Adding a Scope](../reference/11-contributing.md#adding-a-scope). Teams can also define additional agents in `.claude/agents/` — see [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
 
-**Verifying the config:** run `/aidlc --doctor` to confirm the configured default scope is valid (environment and recorded defaults share this check):
+**Verifying the config:** run `/aidlc --doctor` to confirm the configured default scope is valid (environment and recorded defaults share this check). With the shipped value, its verbose list includes:
 
-```
-✓  AWS_AIDLC_DEFAULT_SCOPE=classic (valid)
+```text
+  ok    AWS_AIDLC_DEFAULT_SCOPE=classic (valid)
 ```
 
-**Init notice:** when the env default is applied, the orchestrator prints a one-line notice at workflow start (`Using scope=<value> from AWS_AIDLC_DEFAULT_SCOPE (.claude/settings.json)`) so the scope source is visible at the moment it takes effect.
+`aidlc doctor` in a terminal outside Claude Code does not get the `env` block from `.claude/settings.json`, so there the same line reads `AWS_AIDLC_DEFAULT_SCOPE (unset - no project default)`. The scope a piece of work runs on shows on the `Scope:` line of `/aidlc --status`.
 
 Why only scope and not depth or test-strategy? Each scope declares a depth, and test strategy inherits that depth unless the scope overrides it. `classic` therefore starts at Standard/Standard, `workshop` at Standard/Minimal, and `express` at Minimal/Minimal. If you need to override either, pass `--depth` or `--test-strategy` on the CLI.
 
@@ -123,7 +123,7 @@ Specify explicitly or let the agent propose one from your words:
 
 ```
 /aidlc enterprise       # Explicit scope
-/aidlc Build a payments API  # No keyword: offers composition; resolver fallback is "classic"
+/aidlc Build a payments API  # The agent proposes a plan, or offers to tailor one
 /aidlc Fix the login bug     # The agent proposes "bugfix"; you confirm
 ```
 
@@ -188,10 +188,15 @@ The typed forms `/aidlc config set guard-policy relaxed --intent <name> --space 
 and `/aidlc --guard-policy relaxed --intent <name> --space <name> ...` name the
 intent and space the agent's setter applies the switch to.
 The trailing `...` in the flags form stands for an optional task description.
-A nonexistent named intent is refused. Without a state file, Guard Policy
-`relaxed` or `off` and plan approval `off` are kept for the piece of work this
-chat starts next, and any other fence switch says to create the piece of work
-and type it again.
+A nonexistent named intent is refused. Without a state file, every setting on
+the line (Guard Policy, plan approval, a fence switch, the ceremonies,
+collaborators, depth, test strategy and review) is kept for the piece of work
+this chat starts next, and the agent says so in one line. Typed in a Claude
+Code chat before any work existed, `/aidlc --test-strategy minimal` got:
+
+```text
+Test strategy will be minimal for the piece of work you start now (set by you).
+```
 
 Selectors target the same intent for state, memory policy, and audit without
 switching the active cursors. All supplied values are validated before mutation;
@@ -258,7 +263,7 @@ turn: run by the agent, it is refused with a message asking you to type it. On a
 Changing scope updates scope-sourced settings while keeping your overrides;
 an absent or malformed field falls back to the scope instead of blocking the run.
 
-The composer proposes these four, plus the scope's `review_cap`, at the compose
+The composer proposes these five, plus the scope's `review_cap`, at the compose
 gate, and you can change any of them before approving. Plan approval is the
 one the composer never turns off itself: say "skip plan approval for this work"
 at the gate and the work is created with it off, set by you. The values apply to this piece of work only, stock
@@ -349,8 +354,8 @@ and `off` continue with one line (see [Guard Policy](#guard-policy)).
 **Changing scope** follows the new scope's value: moving from feature to express
 turns plan approval off, and from express to feature turns it on. A value you
 set yourself for this piece of work stays, and the memory lock still wins. This
-differs from Guard Policy, where a lower scope default keeps the stricter value
-until you ask for the lower value.
+differs from Guard Policy, where a lower scope default follows only when you
+asked for the scope change yourself, and otherwise the stricter value stays.
 
 **Team mode.** Each Unit's plan is approved by that Unit's owner, in their own
 checkout. With plan approval off it is built there without asking, and the
@@ -414,7 +419,7 @@ different policy words, strict applies and status shows
 `strict (from conflicting state lines)`; memory-held strict still takes precedence.
 If both agree, the `Guard Policy` line is used. Any write of the policy line removes
 the retired line, leaving one setting. Until a conflict is resolved, `next` carries
-this notice with `<a>` and `<b>` replaced by the raw line values:
+this notice:
 
 > This work has two settings for how closely AI-DLC checks changes, and they disagree, so AI-DLC checks everything for now. Do you want it to keep checking everything, carry on with a note when something you approved changes, or also skip some of its own checks? I'll ask again until you choose.
 
@@ -422,7 +427,7 @@ this notice with `<a>` and `<b>` replaced by the raw line values:
 
 Every old spelling still works in this release and is removed in the next minor version: the scope key `change_control`, the state field `Change Control`, the memory heading `## Change Control`, the flag `--change-control`, and the config key `change-control`. Typing the retired flag or config key prints one line naming the new spellings; a retired scope key or memory heading is read without comment. Nothing writes an old name again: any write of the policy line removes the retired `Change Control` line, whether it was the only line or appeared beside `Guard Policy`. The `CHANGE_CONTROL_SET` audit event stays readable in older ledgers; new rows are `GUARD_POLICY_SET`.
 
-While a piece of work carries only the retired `Change Control: relaxed` or `Change Control: off` line, every `/aidlc` run carries a notice in the directive's `change_notices`; displaying this notice does not automatically rewrite the line. For example: `This work still has an old setting that lets AI-DLC skip some of its checks (it asks you to confirm less often). Do you want to keep that, or have AI-DLC check everything again? I'll ask again until you choose.` Type `/aidlc config set guard-policy relaxed` or `guard policy relaxed` to have the human-turn hook keep that value and rewrite the line as `Guard Policy`, or request strict to have the conductor raise the fences through the setter; either write stops the notice. A retired strict line alone gets no notice and is rewritten the next time any Guard Policy setting is written.
+A piece of work that carries only the retired `Change Control: relaxed` or `Change Control: off` line is renamed at your next message: AI-DLC keeps the value, writes the line as `Guard Policy`, and writes no policy audit row. Where that rename has not happened, every `/aidlc` run carries a notice in the directive's `change_notices`, and displaying it does not rewrite the line. For example: `This work still has an old setting that lets AI-DLC skip some of its checks (it asks you to confirm less often). Do you want to keep that, or have AI-DLC check everything again? I'll ask again until you choose.` Type `/aidlc config set guard-policy relaxed` or `guard policy relaxed` and the agent's setter keeps that value and rewrites the line as `Guard Policy`, or request strict to have the conductor raise the fences through the setter; either write stops the notice. A retired strict line alone gets no notice and is rewritten the next time any Guard Policy setting is written.
 
 ### The five fences
 
@@ -441,13 +446,13 @@ A fence is a guard that refuses an action nothing asked for: no step the workflo
 /aidlc config set guard.review-freeze on
 ```
 
-Lowering a fence or the policy word is the person's call. Ask in your own words and the agent runs the setter (asking for the guards as a whole to be off, such as "turn the guards off", sets Guard Policy `off`), or type `/aidlc config set guard.<fence> off`, `/aidlc --guard-policy relaxed|off`, or the confirmation words `guard policy relaxed|off`, choosing one value. The agent's setter applies a typed switch to the piece of work selected by `--intent <name>` and `--space <name>`, or by the chat's workflow selection when those selectors are omitted, and writes the state and audit row. It reports `AIDLC Guard Policy: ...` as hook context on harnesses that inject it. A nonexistent named intent is refused. A Guard Policy `relaxed` or `off` switch typed before the work exists is for the piece of work this chat starts next (`Guard Policy relaxed for the piece of work you start now (set by you).`). Typed in the same message as a request, it goes with that request (`Guard Policy relaxed for the work you are asking for (set by you).`): new work takes it when it is created, and if you choose to continue the open work instead, it is applied there; the message alone never changes the open work. A fence switch such as `/aidlc --guard.review-freeze off fix the parser` works the same way (`The review freeze check is off for the work you are asking for (set by you).`). The one exception is while the code plan question is open and you are not editing the plan files: then a setting typed with words (`/aidlc --guard-policy off approve the plan`, or `strict` with your choice) is for this work, and the words are your reply to that question. Words after an unquoted `--` still describe new work. Plan approval `off` and a fence switch typed before the work exists are kept the same way, for the piece of work this chat starts next. No other switch is saved for later, and an unrelated reply opens nothing.
+Lowering a fence or the policy word is the person's call. Ask in your own words and the agent runs the setter (asking for the guards as a whole to be off, such as "turn the guards off", sets Guard Policy `off`), or type `/aidlc config set guard.<fence> off`, `/aidlc --guard-policy relaxed|off`, or the confirmation words `guard policy relaxed|off`, choosing one value. The agent's setter applies a typed switch to the piece of work selected by `--intent <name>` and `--space <name>`, or by the chat's workflow selection when those selectors are omitted, and writes the state and audit row. It reports `AIDLC Guard Policy: ...` as hook context on harnesses that inject it. A nonexistent named intent is refused. A Guard Policy `relaxed` or `off` switch typed before the work exists is for the piece of work this chat starts next (`Guard Policy relaxed for the piece of work you start now (set by you).`). Typed in the same message as a request, it goes with that request (`Guard Policy relaxed for the work you are asking for (set by you).`): new work takes it when it is created, and if you choose to continue the open work instead, it is applied there; the message alone never changes the open work. A fence switch such as `/aidlc --guard.review-freeze off fix the parser` works the same way (`The review freeze check is off for the work you are asking for (set by you).`). The one exception is while the code plan question is open and you are not editing the plan files: then a setting typed with words (`/aidlc --guard-policy off approve the plan`, or `strict` with your choice) is for this work, and the words are your reply to that question. Words after an unquoted `--` still describe new work. Plan approval `off`, a fence switch, and every other setting typed before the work exists (the ceremonies, collaborators, depth, test strategy and review) are kept the same way, for the piece of work this chat starts next. An unrelated reply opens nothing.
 
 The CLI setters lower only when a reply from you has arrived since the last decision, and perform no switch-authority session lookup. An approval you give in the same message leaves the rest of it standing: "approve, and turn plan approval off" approves, then turns it off, and "approve the plan, and run Construction on its own from here" does both. The answer you give the agent's own question in that message leaves it standing too (the option you pick when the agent offers a change is your request for it); any other decision recorded after your message uses it up, and an approval always needs its own reply. Hooks run on Windows too, so the typed switch works on every harness that forwards the prompt. An already-off fence or an identical policy word already marked `set by you` needs no key because the CLI update is a no-op.
 
 When a guard question offers "turn the check off for this piece of work", choosing it is enough: the agent turns it off for you and says in one line that it is off for this piece of work, comes back on for the next one, and that you can ask to turn it back on. On Codex the skill is `$aidlc`.
 
-What counts as typing the switch: a message that begins with `/aidlc` (or `$aidlc`, or `aidlc`) and carries the flags first, such as `/aidlc --guard-policy relaxed`, `/aidlc --guard-policy off --guard.state-transition off`, or `/aidlc --guard-policy relaxed build the auth service` (the description follows the flags and is not read); `config set guard-policy relaxed|off` or `config set guard.<fence> off` after the same command head, followed only by optional `--intent <name>` and `--space <name>` pairs, each at most once and in either order; or the confirmation words `guard policy relaxed|off` on their own. Any other extra token in the config form applies no switch. Case and a trailing period do not matter. A question or remark that mentions a switch is not a switch: `/aidlc why was config set guard.plan-approval off suggested?` changes nothing, and neither does a flag placed after the description.
+What counts as typing the switch: a message that begins with `/aidlc` (or `$aidlc`, or `aidlc`) and carries the flags first, such as `/aidlc --guard-policy relaxed`, `/aidlc --guard-policy off --guard.state-transition off`, or `/aidlc --guard-policy relaxed build the auth service` (the description follows the flags and is not read); `config set guard-policy relaxed|off` or `config set guard.<fence> off` after the same command head, optionally followed by other settings (`--depth minimal --sensors off`) and `--intent <name>` and `--space <name>` pairs; or the confirmation words `guard policy relaxed|off` on their own. An unknown flag or invalid value refuses the whole line, naming it. Case and a trailing period do not matter. A question or remark that mentions a switch is not a switch: `/aidlc why was config set guard.plan-approval off suggested?` changes nothing, and neither does a flag placed after the description.
 
 Direct `intent create --guard-policy relaxed|off` from chat is refused when the value is below the selected scope's default (`relaxed` on an `off` scope is a raise and applies): create the piece of work, and the agent runs the setter when you ask for the lower value. A value you typed before the work existed, or with the new work, is recorded as `set by you` for the work you asked for. Direct `scope change --guard-policy relaxed|off` follows the same lowering rule as `config-change`; a lower scope default applies when the person asked for the scope change; any other scope change keeps the running workflow's stricter value and says so in one line. `AIDLC_UNATTENDED=1` suppresses prompt-time application and refuses CLI lowering. After memory-strict and unattended checks, a CLI setter lowers without the person's prompt only when you typed it at your own terminal (your own act), or when `fenceKeyBypassed` recognizes the fixture or harness-launch presence bypass, not an inline environment assignment. The session-start hook keeps its `presence-bypass-<session>` stamp in the Plan Approval runtime directory for an attended harness launched with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`.
 
@@ -457,7 +462,7 @@ If a memory file holds Guard Policy strict, `/aidlc config set guard.<fence> off
 
 Memory-held strict also overrides a fence you lowered earlier. The persisted `Guards Off` entry stays in the intent, but `/aidlc --status` then leaves that fence off its `Checks off:` line; the entry takes effect again only after the memory line no longer holds strict. A machine-wide kill switch still takes precedence.
 
-Switching one off writes `- **Guards Off**: review-freeze (set by you)` into `aidlc-state.md` and one `GUARD_DISABLED` audit row; switching it back on removes it from that list and writes `GUARD_RESTORED`. Setting `on` also raises a policy-lowered fence, records `- **Guards On**: review-freeze (set by you)`, and writes `GUARD_RESTORED`. The lines name only the switchable fences (a `plan-approval` entry written before plan approval became its own setting is still read); a persisted human-presence entry is ignored. `/aidlc --status` prints a `Fences:` line with all five and where each setting came from; the plan approval fence shows there as `plan re-approval`, the check on a plan edited after approval. Precedence is the machine-wide kill switch, then per-work off unless memory holds strict, then per-work on, then the Guard Policy word, then on by default. Setting the Guard Policy word yourself covers every check in its own direction (each change written as `GUARD_DISABLED` or `GUARD_RESTORED`): `off` clears the checks this work kept on, so none is left on, `strict` clears the checks it turned off, so none is left off, and `relaxed` clears neither, so it never turns a check back on or off. A memory-held strict still wins, and a single check you switch after it still applies.
+Switching one off writes `- **Guards Off**: review-freeze (set by you)` into `aidlc-state.md` and one `GUARD_DISABLED` audit row; switching it back on removes it from that list and writes `GUARD_RESTORED`. Setting `on` also raises a policy-lowered fence, records `- **Guards On**: review-freeze (set by you)`, and writes `GUARD_RESTORED`. The lines name only the switchable fences (a `plan-approval` entry written before plan approval became its own setting is still read); a persisted human-presence entry is ignored. `/aidlc --status` prints a `Checks off:` line naming each check that someone switched off (you for this work, or this machine's environment) and where that came from; the plan approval fence shows there as `plan re-approval`, the check on a plan edited after approval. The checks a lower Guard Policy turns off are not listed there: they go with the `Guard Policy:` line, which says where the policy came from. Precedence is the machine-wide kill switch, then per-work off unless memory holds strict, then per-work on, then the Guard Policy word, then on by default. Setting the Guard Policy word yourself covers every check in its own direction (each change written as `GUARD_DISABLED` or `GUARD_RESTORED`): `off` clears the checks this work kept on, so none is left on, `strict` clears the checks it turned off, so none is left off, and `relaxed` clears neither, so it never turns a check back on or off. A memory-held strict still wins, and a single check you switch after it still applies.
 
 The reviewer-scope setting governs the dispatched reviewer's read/search bound. A checkout stamped as owning one team Unit still cannot write another Unit's `construction/` subtree; that ownership boundary is not switchable by Guard Policy, a per-work fence setting, or `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK`.
 
@@ -473,7 +478,7 @@ A setter that would change the policy to `relaxed`, run when no reply from you h
 
 > Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
-Creation with an explicit `relaxed` flag, run with no message of yours on record in that chat, says the same:
+Creation with an explicit `relaxed` flag below the scope's default (on `enterprise`), run with no message of yours on record in that chat, says the same:
 
 > Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
 
@@ -535,20 +540,25 @@ You can override depth at any approval gate by requesting a different level.
 
 On **Claude Code** and **Codex CLI**, AI-DLC can show where the work stands in the status line at the bottom of your terminal. It takes the place of the status line you set up yourself, so it is your choice: first-run setup asks once, and you can switch it any time. The other harnesses have no status line; they show workflow position through `/aidlc --status` and the progress line at each gate.
 
-On Claude Code it looks like this:
+On Claude Code it looks like this, from a run on the `mvp` plan (drawing characters shown as plain text; the model, context and cost follow on the right):
 
-```
-[AIDLC] IDEATION [▓▓▓▓▓░░░░░] 4/7 > Intent Capture -- Product Agent
+```text
+[AIDLC] inventory-api - IDEATION [##--------] 1/4 > Feasibility -- Architect Agent
 ```
 
-This shows, in order: current phase, phase progress (as a bar and a ratio — both scoped to the current phase), stage display name, and lead agent. Context usage appears on the right (e.g., `ctx:15%`), color-coded as the remaining context drops. When the Claude usage ledger has data, `↑<in> ↓<out> $<usd>` follows for the active workflow and current transcript/session only; prior workflows and sessions are excluded. Setting `AIDLC_DISABLE_USAGE_TRACKING=1` turns usage tracking off entirely and removes this segment.
+This shows, in order: the piece of work, the current phase, phase progress (as a bar and a ratio, both scoped to the current phase), stage display name, and lead agent. Before any work is selected it reads `[AIDLC] ready`. On the right come Claude Code's model, then `ctx:N%`, how much of the context window is used. When the Claude usage ledger has data, the tokens in and out and `$<usd>` follow for the active workflow and current transcript/session only; prior workflows and sessions are excluded. Setting `AIDLC_DISABLE_USAGE_TRACKING=1` turns usage tracking off entirely and removes this segment. [Your First Workflow](02-your-first-workflow.md) explains each segment.
 
 The `$<usd>` value is a local estimate priced from **public list prices**, not a bill. When Amazon Bedrock is the recorded provider (`CLAUDE_CODE_USE_BEDROCK=1`), what Bedrock actually charges depends on your inference profile, region, service tier, and any negotiated or subscription pricing, so the figure may not match your invoice. Most of the token volume in a long workflow is cache reads — billed, at the reduced cache-read rate — so the counts and the estimate grow steadily; that is real usage, not inflation. To price new usage at your own rates, point `AIDLC_MODEL_RATES` at a rates file (see [Rate table and overrides](../reference/06-hooks-and-tools.md#rate-table-and-overrides)); totals already recorded keep the rates they were priced at. If you'd rather not show the estimate — while presenting, screen-sharing, or recording — set `AIDLC_DISABLE_USAGE_TRACKING=1` (see [Troubleshooting](15-troubleshooting.md#statusline-shows-a-cost-segment-you-dont-want-or-usage-tracking-concerns)).
 
 ### Turning it on or off
 
 - At first-run setup (`aidlc config` in a project with no AI-DLC yet), AI-DLC asks: "Show AI-DLC's progress in your status line? It takes the place of your own while you work in this project." When you already have a status line of your own, the recommended answer is "No, keep mine"; when you have none, it is "Yes".
-- Any time later: `/aidlc --statusline on` or `/aidlc --statusline off` in the chat (`$aidlc --statusline on|off` on Codex), or `aidlc config --statusline on|off` in the terminal. It asks nothing and prints one line: what changed and how to switch back.
+- Any time later: `/aidlc --statusline on` or `/aidlc --statusline off` in the chat (`$aidlc --statusline on|off` on Codex), or `aidlc config --statusline on|off` in the terminal. It asks nothing and prints one line: what changed and how to switch back. For example:
+
+  ```text
+  $ aidlc config --statusline on
+  AI-DLC's status line shows in this project; /aidlc --statusline off turns it off.
+  ```
 - A setup that asks nothing (`--yes`, CI, a script, the copy channel, a teammate's clone at its first chat) adds no status line.
 - A project that already showed AI-DLC's status line before this release keeps it, with no question. If it covers a status line of your own, the next refresh (or your first chat in a teammate's clone) says so once: "AI-DLC's status line replaces yours here; /aidlc --statusline off gives yours back."
 
@@ -574,32 +584,60 @@ status_line = ["model-with-reasoning", "git-branch", "task-progress", "context-u
 
 ### Customizing the format
 
-Edit `.claude/hooks/aidlc-statusline.ts` directly. The output format is defined in the `main()` function near the end of the file. The hook reads phase, stage, and agent from `aidlc-state.md`, maps stage slugs to display names, and builds both the unicode progress bar and the `n/m` ratio from the same phase-local checkbox parse.
+Edit `.claude/hooks/aidlc-statusline.ts` directly; the status line runs the project's copy, also on a native install. The output format is defined in the `main()` function near the end of the file. The hook reads phase, stage, and agent from `aidlc-state.md`, maps stage slugs to display names, and builds both the unicode progress bar and the `n/m` ratio from the same phase-local checkbox parse.
+
+The file is AI-DLC's, so the next `aidlc config` in the project stops at your edit instead of replacing it:
+
+```text
+$ aidlc config --harness claude --yes
+error: 1 config conflict(s): .claude/hooks/aidlc-statusline.ts (locally modified or unowned)
+fix: to keep your version, move .claude/hooks/aidlc-statusline.ts somewhere else and run the same command again; to take the shipped version over it, run it again with --force. `aidlc config --dry-run --verbose` lists every change first.
+```
+
+Keep a copy of your version before you take the shipped one with `--force`.
 
 ---
 
 ## Tool Permissions
 
-The `permissions.allow` list in `.claude/settings.json` pre-approves Claude Code tools so workflows run without per-call permission prompts:
+The `permissions.allow` list in `.claude/settings.json` pre-approves Claude Code tools so workflows run without per-call permission prompts. In a project set up with a native install, it begins (45 entries in all):
 
 ```json
 "permissions": {
   "allow": [
     "Edit(/**)",
-    "Bash(bun .claude/tools/aidlc.ts engine *)",
-    "Bash(bun .claude/tools/aidlc.ts doctor)", "Bash(bun .claude/tools/aidlc.ts --doctor)",
-    "Bash(bun .claude/tools/aidlc.ts config models --show --json)", "...",
-    "Bash(bun .claude/tools/aidlc-log.ts)", "Bash(bun .claude/tools/aidlc-log.ts *)", "...",
-    "Task", "WebSearch"
+    "Task",
+    "WebSearch",
+    "Bash(aidlc engine *)",
+    "Bash(aidlc doctor)",
+    "Bash(aidlc doctor --verbose)",
+    "Bash(aidlc version)",
+    "Bash(aidlc --doctor)",
+    "..."
   ]
 }
+```
+
+Claude Code 2.1.296 names them when it first asks whether you trust the folder (shortened, drawing characters shown as plain text):
+
+```text
+ Accessing workspace:
+ /home/you/inventory-api
+ ...
+ ! This folder pre-approves 45 tool permissions in .claude/settings.json:
+   WebSearch, Edit(/**), Bash(aidlc engine *), Bash(aidlc doctor), Bash(aidlc doctor --verbose),
+ Bash(aidlc version), Bash(aidlc --doctor), Bash(aidlc --doctor --verbose), and 37 more
+ These will apply without asking. Only proceed if you trust this configuration.
+ Security guide
+ > No, exit
+   Yes, I trust this folder
 ```
 
 `Edit(/**)` covers creating and changing files anywhere in the project: in project settings Claude Code anchors a leading `/` at the project root. Writes outside the project ask, as they do in Claude Code by default. Reading and searching inside the project needs no entry. The copy channel pre-approves only AI-DLC's own workflow commands, each listed as AI-DLC runs it: its engine commands, `doctor`, `version`, `--doctor`, `status`, the read-only `config <section> --show --json` and `--help` forms, and its `aidlc-*.ts` tools; the native release rewrites them to `Bash(aidlc engine *)`. A `config` change, the commands that change the machine's AI-DLC install (`use`, `update`, `rollback`, `uninstall`, `system`), and the tool scripts behind them match no entry, so you approve them in Claude Code's own prompt. There is no bare `Bash`: Claude Code matches every subcommand of a compound command on its own and strips only a fixed set of known-safe environment variables, so an engine command stays pre-approved only when it runs bare. A `cd ... &&` prefix, an absolute `$CLAUDE_PROJECT_DIR` path, a `VAR=1` prefix, a pipe into `jq`, or a `$(...)` capture all prompt. A project's own build and test commands sit outside the list and prompt once; answering "Yes, and don't ask again" saves a rule for them in `.claude/settings.local.json`.
 
 ### How permissions work
 
-- **Project-wide ceiling**: The `settings.json` allow list is the maximum set of tools available
+- **Pre-approval, not a ceiling**: The `settings.json` allow list decides what runs without asking; a tool or command it does not list still runs once you approve Claude Code's prompt
 - **Claude Code agents inherit the full session toolset** by default; `disallowedTools: Task` blocks nested subagent spawning on this harness
 - **Optional per-agent narrowing**: An agent can be narrowed by adding a `tools:` allowlist to its frontmatter — omit it to inherit everything. Listing `tools:` drops inherited MCP tools unless the fully-qualified `mcp__<server>__<tool>` ids are also listed
 
