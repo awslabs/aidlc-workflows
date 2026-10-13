@@ -277,9 +277,10 @@ describe("t190 validate-grid CLI - fixture graph (TRUE orphan, conditional_on)",
 
 // ===========================================================================
 // --keywords: the gate-time collision check (composed-scope keyword grants).
-// Compares against loadScopeMapping's keywords - the same data inference
-// reads - so a granted keyword that would shadow an existing scope is a hard
-// ERROR naming the incumbent, never a silent write.
+// Compares against loadScopeMapping's keywords. Nothing picks a plan by a
+// hint any more (the plan proposal lists every plan's hints for the agent), so
+// a granted hint another plan has is a note naming that plan, and the grid
+// still validates.
 // ===========================================================================
 describe("t190 validate-grid --keywords - collision check", () => {
   // A mapping fixture with two scopes claiming known keywords, riding the
@@ -299,7 +300,7 @@ describe("t190 validate-grid --keywords - collision check", () => {
     return { AIDLC_SCOPE_MAPPING: mappingPath };
   }
 
-  test("a colliding keyword is a hard error naming both the keyword and the incumbent scope", () => {
+  test("a hint another plan already has is a note naming that plan, and the grid still validates", () => {
     const { graphPath, dir } = writeFixture();
     const proposal = join(dir, "p.json");
     writeFileSync(
@@ -311,17 +312,16 @@ describe("t190 validate-grid --keywords - collision check", () => {
       AIDLC_STAGE_GRAPH: graphPath,
       ...seamEnv(dir),
     });
-    expect(r.rc).toBe(1);
-    const body = JSON.parse(r.out) as { valid: boolean; errors: string[] };
-    expect(body.valid).toBe(false);
-    const collision = body.errors.find((e) => e.includes('Keyword "fix"'));
-    expect(collision).toBeDefined();
-    expect(collision).toContain("bugfix");
-    // The non-colliding keyword in the same grant raises no error.
-    expect(body.errors.some((e) => e.includes('"tune-up"'))).toBe(false);
+    expect(r.rc).toBe(0);
+    const body = JSON.parse(r.out) as { valid: boolean; errors: string[]; advisories: string[] };
+    expect(body.valid).toBe(true);
+    expect(body.errors).toEqual([]);
+    expect(body.advisories).toContain('The hint "fix" is also bugfix\'s; the plan proposal lists it under both.');
+    // The hint no other plan has gets no note.
+    expect(body.advisories.some((e) => e.includes('"tune-up"'))).toBe(false);
   });
 
-  test("collision matching is case-insensitive (matches findScopeByKeyword)", () => {
+  test("a shared hint is found whatever its case", () => {
     const { graphPath, dir } = writeFixture();
     const proposal = join(dir, "p.json");
     writeFileSync(
@@ -333,8 +333,8 @@ describe("t190 validate-grid --keywords - collision check", () => {
       AIDLC_STAGE_GRAPH: graphPath,
       ...seamEnv(dir),
     });
-    expect(r.rc).toBe(1);
-    expect(r.out).toContain("bugfix");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { advisories: string[] }).advisories.some((e) => e.includes("bugfix"))).toBe(true);
   });
 
   test("non-colliding keywords pass (exit 0, valid:true, no errors)", () => {
@@ -388,7 +388,7 @@ describe("t190 validate-grid --keywords - collision check", () => {
     expect(r.out).toContain("--keywords requires");
   });
 
-  test("keyword collision composes with grid validation (both error families in one result)", () => {
+  test("a shared hint's note rides beside the grid's own errors", () => {
     const { graphPath, dir } = writeFixture();
     // beta requires ghost-artifact (TRUE orphan) AND the grant collides.
     const proposal = join(dir, "p.json");
@@ -402,8 +402,9 @@ describe("t190 validate-grid --keywords - collision check", () => {
       ...seamEnv(dir),
     });
     expect(r.rc).toBe(1);
-    const body = JSON.parse(r.out) as { errors: string[] };
+    const body = JSON.parse(r.out) as { errors: string[]; advisories: string[] };
     expect(body.errors.some((e) => e.includes("no stage in the graph produces it"))).toBe(true);
-    expect(body.errors.some((e) => e.includes('Keyword "bug"'))).toBe(true);
+    expect(body.errors.some((e) => e.includes('"bug"'))).toBe(false);
+    expect(body.advisories.some((e) => e.includes('The hint "bug" is also bugfix'))).toBe(true);
   });
 });

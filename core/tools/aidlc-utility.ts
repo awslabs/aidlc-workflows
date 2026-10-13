@@ -6835,10 +6835,9 @@ export async function collectDoctorReport(
     });
   }
 
-  // Keyword overlap — no keyword should be claimed by >1 scope. A conflict
-  // means /aidlc "<freeform>" has ambiguous scope routing, which silently
-  // burns artifacts. findScopeByKeyword (exported from this file) resolves
-  // the other direction; this check inverts it to scan for collisions.
+  // Keyword overlap: a hint more than one plan has. Nothing picks a plan by a
+  // hint any more (the plan proposal lists every plan's hints for the agent to
+  // weigh), so a shared one is a warning, not a failure.
   try {
     const keywordToScopes = new Map<string, string[]>();
     const mapping = loadScopeMapping();
@@ -6854,13 +6853,13 @@ export async function collectDoctorReport(
     );
     results.push({
       pass: conflicts.length === 0,
+      ...(conflicts.length > 0 ? { severity: "warn" as const } : {}),
       label: conflicts.length === 0
         ? "Keyword overlap: no conflicts"
-        : `Keyword overlap: ${conflicts.length} conflict(s)`,
+        : `Keyword overlap: ${conflicts.length} shared hint${conflicts.length === 1 ? "" : "s"}`,
       fix: conflicts.length > 0
-        ? conflicts
-            .map(([kw, scopes]) => `"${kw}" claimed by ${scopes.join(", ")}`)
-            .join("; ")
+        ? `${conflicts.map(([kw, scopes]) => `"${kw}" is a hint of ${scopes.join(", ")}`).join("; ")}; ` +
+          "the plan proposal lists each under every plan that has it"
         : undefined,
     });
   } catch (e) {
@@ -12291,8 +12290,8 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
     );
   }
   // Keywords make the saved scope inferable from a request's words, so each
-  // is one plain word and must not shadow a scope that claims it (checked
-  // under the lock below, so two saves cannot claim the same one).
+  // is one plain word (one another plan already has is noted under the lock
+  // below).
   const keywords = splitSlugList(flags.keywords).map((word) => word.toLowerCase());
   const badKeyword = keywords.find((word) => !/^[a-z0-9][a-z0-9-]{0,39}$/.test(word));
   if (badKeyword !== undefined) {
@@ -12311,8 +12310,8 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
       Object.hasOwn(loadScopeMetadataAll(), name) || Object.hasOwn(loadScopeGrid(), name) ||
       Object.hasOwn(loadComposedScopeRecords(), name);
     if (taken) die(`A scope named ${name} already exists. Pick another name.`);
-    const collisions = keywordCollisions(keywords);
-    if (collisions.length > 0) die(collisions.join(" "));
+    // A hint another plan already has is saved as asked and said once.
+    const sharedHints = keywordCollisions(keywords);
 
     // The plan as it stands: each stage's suffix, else its scope grid. A
     // greenfield scan skips reverse-engineering for this run only (Stages to
@@ -12384,7 +12383,8 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
     ].join(", ");
     process.stdout.write(
       `Saved as scope ${name} (${running} stages, ${settings}).\n` +
-        `Next time: ${entrySkillInvocation()} --scope ${scopeArg(name)} "<what to build>"\n`,
+        `Next time: ${entrySkillInvocation()} --scope ${scopeArg(name)} "<what to build>"\n` +
+        sharedHints.map((note) => `${note}\n`).join(""),
     );
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }

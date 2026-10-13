@@ -2004,15 +2004,14 @@ export function killSwitchAdvisories(
 }
 
 /** Check proposed (granted-at-the-gate) keywords against the keywords the
- *  existing scopes already claim - the same loadScopeMapping data the plan
- *  proposal step (where the agent reads them as hints) and findScopeByKeyword
- *  read. A shared keyword would list one hint under two plans, where it no
- *  longer tells them apart; a collision is a hard error naming the colliding
- *  scope, never an advisory. Comparison is case-insensitive exact equality,
- *  matching findScopeByKeyword. */
+ *  existing scopes already have - the same loadScopeMapping data the plan
+ *  proposal step lists as each plan's hints for the agent to weigh. Nothing
+ *  picks a plan by a hint any more, so a shared one is a note naming the other
+ *  plans, never a refusal: one line per shared hint. Comparison is
+ *  case-insensitive exact equality. */
 export function keywordCollisions(granted: string[]): string[] {
   const mapping = loadScopeMapping();
-  const errors: string[] = [];
+  const notes: string[] = [];
   for (const kw of granted) {
     const holders = Object.keys(mapping)
       .filter((scope) =>
@@ -2021,15 +2020,14 @@ export function keywordCollisions(granted: string[]): string[] {
         )
       )
       .sort();
-    if (holders.length > 0) {
-      errors.push(
-        `Keyword "${kw}" is already claimed by scope${holders.length > 1 ? "s" : ""} ` +
-          `[${holders.join(", ")}] - granting it would list one hint under two plans in ` +
-          `the plan proposal step, where it would no longer tell them apart. Pick a keyword no existing scope claims.`
-      );
+    if (holders.length === 1) {
+      notes.push(`The hint "${kw}" is also ${holders[0]}'s; the plan proposal lists it under both.`);
+    } else if (holders.length > 1) {
+      const named = `${holders.slice(0, -1).join(", ")} and ${holders[holders.length - 1]}`;
+      notes.push(`The hint "${kw}" is also a hint of ${named}; the plan proposal lists it under each.`);
     }
   }
-  return errors;
+  return notes;
 }
 
 /** Union of produces[] and optional_produces[] across all stages. */
@@ -3648,11 +3646,10 @@ const COMMANDS: Record<string, Handler> = {
   // composer writes, composerProposalPath. Lenient mode mirrors validate-scope
   // (off-path producer of a required consume = advisory); --strict is the
   // recompose mode that REJECTS a starved required input. --keywords checks
-  // each granted keyword against the keywords already claimed by existing
-  // scopes (the same loadScopeMapping data inference reads): a collision is
-  // a hard ERROR naming the colliding scope, because inference takes the
-  // first alphabetical keyword match and a duplicate would permanently
-  // shadow the incumbent. Prints a JSON ScopeValidation on stdout; exit 1
+  // each granted keyword against the keywords existing scopes already have
+  // (the same loadScopeMapping data the plan proposal step lists as hints): a
+  // shared one is an advisory naming the other plans, and the grid still
+  // validates. Prints a JSON ScopeValidation on stdout; exit 1
   // iff invalid - callers branch on the exit code and read the reasons off
   // stdout.
   "validate-grid": (args) => {
@@ -3738,7 +3735,8 @@ const COMMANDS: Record<string, Handler> = {
     }
     if (kwRaw !== undefined) {
       const granted = kwRaw.split(",").map((k) => k.trim()).filter(Boolean);
-      for (const err of keywordCollisions(granted)) r.errors.push(err);
+      // A hint another plan already has is a note; the grid still validates.
+      for (const note of keywordCollisions(granted)) r.advisories.push(note);
     }
     // The composer's Guard Policy proposal rides with the grid: `--guard-policy
     // <value>` (retired spelling `--change-control`) or a `guardPolicy` member
