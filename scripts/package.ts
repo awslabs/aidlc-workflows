@@ -63,6 +63,7 @@ import type { HarnessManifest } from "./manifest-types.ts";
 import {
   absorbReviewerKnowledge,
   agentNameFromPath,
+  inlineAgentSet,
   injectDelegatedKnowledgePreflight,
   reviewerAgentSet,
 } from "./agent-knowledge.ts";
@@ -870,6 +871,14 @@ function buildTree(
       }
       const fmLines = fmAdditions.get(harnessRel);
       if (fmLines) {
+        // The additions are for the harness's dispatch (Kiro IDE: about 32 KB
+        // of tool permissions); the lead reading the persona in its own chat
+        // gets the persona without them, from the copy the roster names.
+        if (harnessRel.startsWith("agents/") && inlineAgentSet(CORE_ROOT).has(basename(outPath, ".md"))) {
+          const copy = join(treeRoot, "aidlc-common", "personas", basename(outPath));
+          mkdirSync(dirname(copy), { recursive: true });
+          writeFileSync(copy, out);
+        }
         out = Buffer.from(
           applyFrontmatterAdditions(out.toString("utf-8"), fmLines, harnessRel),
           "utf-8",

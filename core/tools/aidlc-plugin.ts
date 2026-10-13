@@ -1171,12 +1171,14 @@ export function cutPluginFragment(content: string, start: number, end: number): 
 // The harness-native twins compose keeps in step with a core persona, as
 // project-relative paths: the files a harness's own dispatch reads instead of
 // the Markdown persona (the Codex agent TOML, the opencode and Copilot native
-// agents). Kiro CLI's agent JSON loads its prompt from the Markdown persona,
-// and the other harnesses dispatch from it directly.
+// agents), and the Kiro IDE persona without its tool permissions, which the
+// inline lead reads. Kiro CLI's agent JSON loads its prompt from the Markdown
+// persona, and the other harnesses dispatch from it directly.
 export function personaTwinRels(harness: string, harnessDir: string, slug: string): string[] {
   if (harness === "codex") return [`${harnessDir}/agents/${slug}.toml`];
   if (harness === "opencode") return [`.opencode/agents/${slug}.md`];
   if (harness === "copilot") return [`.github/agents/${slug}.md`];
+  if (harness === "kiro-ide") return [`${harnessDir}/aidlc-common/personas/${slug}.md`];
   return [];
 }
 

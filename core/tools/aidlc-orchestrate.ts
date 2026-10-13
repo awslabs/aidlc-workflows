@@ -6670,7 +6670,7 @@ function inlineContextEntries(
   // the roster in order reaches it second, and the roster cap trims shipped
   // knowledge before it.
   let personas = 0;
-  while (personas < shipped.length && /\/agents\/[^/]+\.md$/.test(shipped[personas].rel)) personas++;
+  while (personas < shipped.length && shipped[personas].persona) personas++;
   const entries: InlineContextEntry[] = shipped.slice(0, personas);
 
   if (codekbCtx) {

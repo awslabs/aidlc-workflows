@@ -2596,7 +2596,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   // Every file a harness's own dispatch reads a core persona's instructions
   // from: the Markdown persona, plus the native twin the harness builds from it
   // (the Codex agent TOML's developer_instructions, the opencode and Copilot
-  // native agents). Kiro CLI's agent JSON loads its prompt from the Markdown
+  // native agents, the Kiro IDE persona without its tool permissions that the
+  // inline lead reads). Kiro CLI's agent JSON loads its prompt from the Markdown
   // persona, so its instructions are that file's.
   function personaInstructionSurfaces(
     harness: ShippedHarnessName,
@@ -2618,6 +2619,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     }
     if (harness === "opencode") surfaces.push(markdown(`.opencode/agents/${agent}.md`));
     if (harness === "copilot") surfaces.push(markdown(`.github/agents/${agent}.md`));
+    if (harness === "kiro-ide") surfaces.push(markdown(`${leaf}/aidlc-common/personas/${agent}.md`));
     if (harness === "kiro") {
       const rel = `${leaf}/agents/${agent}.json`;
       surfaces.push({
@@ -2692,7 +2694,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   });
 
   test("doctor names a native persona twin that lost its fragment", () => {
-    for (const name of ["codex", "opencode", "copilot"] as const) {
+    for (const name of ["codex", "opencode", "copilot", "kiro-ide"] as const) {
       const projectDir = composePluginFixture({
         plugin: PLUGIN,
         harness: name,
