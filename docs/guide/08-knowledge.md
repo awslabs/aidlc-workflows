@@ -66,7 +66,7 @@ Ships with the framework. Contains shared principles and per-agent methodology r
 `-- ...                              # One directory per agent
 ```
 
-The format references in `aidlc-shared/` (the audit taxonomy and the state, memory, worktree and README templates) are left out of what an inline stage loads: the step that needs one names it, and the agent reads it then. An agent dispatched on its own (a reviewer, or a stage that runs as a subagent) reads every Markdown file in the folder before it starts, these included.
+The format references in `aidlc-shared/` (the audit taxonomy and the state, memory, worktree and README templates) are left out of what an agent loads, inline or dispatched on its own (a reviewer, or a stage that runs as a subagent): the step that needs one names it, and the agent reads it then.
 
 > **Do NOT edit Tier 1 files to inject your team's knowledge.** `.claude/knowledge/` and `.claude/agents/*.md` are framework files — they are overwritten on every upgrade, and your changes will disappear. If you want to add company standards, architectural preferences, or domain context, add them to **Tier 2** (below). If you want to constrain agent behavior, add a **rule** (see [Rules and the Learning Loop](09-rules-and-the-learning-loop.md)).
 
