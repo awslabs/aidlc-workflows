@@ -648,6 +648,22 @@ the gate can reopen. Bypass with `AIDLC_SKIP_REVISION_BACKSTOP=1`.
 
 A park the person comes back to carries on. Once they have spoken after it (a `HUMAN_TURN` after the latest `WORKFLOW_PARKED`), a bare `next`, such as a bare `/aidlc` in the same chat, names the unpark and carries on instead of re-emitting `parked`, and words passed to `next` are read as on active work; the agent's own loop, whose stop came from the reply before the park, and the Stop hook's probe still get `parked`.
 
+### Construction checkpoint verification timeout
+
+`aidlc engine bolt checkpoint --unit <unit> --kind unit --action verify --timeout-ms <milliseconds>`
+sets the execution budget for this invocation. The
+default is 1,800,000 milliseconds (30 minutes). The override must be an integer
+from 1 through 2,147,483,647 and applies to each execution when verification
+reruns a check that updated its own evidence. It is accepted only with
+`--action verify`; it does not change the approved command or evidence identity.
+
+On timeout, verification kills its owned process group on POSIX, or its process
+tree using `taskkill /T /F` on Windows, and waits for bounded cleanup before
+reading output and recording the failed proof. It reports completed cleanup or
+explicitly reports incomplete cleanup; neither outcome counts as a passing
+verification. Independently detached processes are outside the POSIX process
+group. Cleanup can add up to four seconds beyond the execution budget.
+
 ### Revision loop
 
 ```

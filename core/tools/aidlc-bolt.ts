@@ -1328,13 +1328,16 @@ const CHECKPOINT_KINDS: readonly ConstructionCheckpointKind[] = ["unit", "skelet
 const CHECKPOINT_ACTIONS: readonly string[] = ["status", "ask", "verify", "approve", "reject"];
 const SWARM_CHECKPOINT_ACTIONS: readonly string[] = ["status", "ask", "approve", "reject"];
 
-function handleCheckpoint(args: string[]): void {
+async function handleCheckpoint(args: string[]): Promise<void> {
   // The person said to approve the Unit as it is over a review that did not
   // finish; verify reads it, and the engine checks their words are on record.
   const overUnfinishedReview = args.includes("--over-unfinished-review");
   const flags = parseFlags(args.filter((arg) => arg !== "--over-unfinished-review"));
   if (overUnfinishedReview && flags.action !== "verify") {
     error("checkpoint --over-unfinished-review goes with --action verify.");
+  }
+  if (flags["timeout-ms"] !== undefined && flags.action !== "verify") {
+    error("checkpoint --timeout-ms goes with --action verify.");
   }
   if (flags["check-cmd"] !== undefined) {
     error("checkpoint no longer accepts --check-cmd. " + verificationCommandRecovery() + " Run checkpoint --action verify without --check-cmd.");
@@ -1355,8 +1358,8 @@ function handleCheckpoint(args: string[]): void {
       result = askConstructionCheckpoint(pd, flags.unit, checkpointKind, checkpointSession(pd, flags.session, true));
       break;
     case "verify":
-      result = verifyConstructionCheckpoint(
-        pd, flags.unit, checkpointKind, { overUnfinishedReview },
+      result = await verifyConstructionCheckpoint(
+        pd, flags.unit, checkpointKind, { overUnfinishedReview, timeoutMs: flags["timeout-ms"] === undefined ? undefined : Number(flags["timeout-ms"]) },
       );
       break;
     case "approve":
@@ -1473,7 +1476,7 @@ function boltUsage(subcommand: string | undefined): string {
 
 let projectDir: string | undefined;
 
-export function main(argv: string[]): void {
+export async function main(argv: string[]): Promise<void> {
   const rawArgs = argv;
 
   const filteredArgs: string[] = [];
@@ -1508,7 +1511,7 @@ export function main(argv: string[]): void {
         handleSetAutonomy(filteredArgs.slice(1));
         break;
       case "checkpoint":
-        handleCheckpoint(filteredArgs.slice(1));
+        await handleCheckpoint(filteredArgs.slice(1));
         break;
       case "swarm-checkpoint":
         handleSwarmCheckpoint(filteredArgs.slice(1));
@@ -1586,5 +1589,5 @@ function failJson(
 }
 
 if (import.meta.main) {
-  main(process.argv.slice(2));
+  await main(process.argv.slice(2));
 }
