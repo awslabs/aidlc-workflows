@@ -13,6 +13,7 @@ nav = [
       "guide/onboarding.md",
       "guide/workflow-profiles.md",
       "guide/02-your-first-workflow.md",
+      "guide/18-install-and-lifecycle.md",
     ] },
     { "Core Concepts" = [
       "guide/03-spaces-and-intents.md",

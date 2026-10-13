@@ -51,8 +51,8 @@ failure and prints the command above; it never runs `apk` or installs system
 packages. The upstream Bun tracking includes `oven-sh/bun#15829` and
 `oven-sh/bun#29681`.
 
-The installer includes `claude`, `kiro`, `kiro-ide`, `codex`, and `opencode`
-together:
+The installer includes every harness runtime (`claude`, `codex`, `copilot`,
+`cursor`, `kiro`, `kiro-ide`, and `opencode`) together:
 
 ```bash
 tmp="$(mktemp -d)"
@@ -80,7 +80,8 @@ GitHub CLI is optional and used only when it supports the release's required
 attestation flags.
 It installs
 versions under `${XDG_DATA_HOME:-$HOME/.local/share}/aidlc/versions/` and
-links `$HOME/.local/bin/aidlc` to the active version by default.
+writes `$HOME/.local/bin/aidlc`, a small launcher that runs the active version,
+by default.
 
 The installer does not edit a shell startup file unless
 `--profile <absolute-path-under-$HOME>` is explicit. That option writes or
@@ -294,21 +295,27 @@ an explicit empty `AIDLC_BIN_DIR`.
 
 ## Configure or Refresh a Project
 
-Run config before opening the harness:
+Run config before opening the harness. [Getting Started](01-getting-started.md#2-set-up-your-project)
+shows each screen of a first setup:
 
 ```bash
 cd your-project
-aidlc config --dry-run --json
+aidlc config --harness claude --dry-run
 aidlc config
 aidlc doctor
 ```
 
-`aidlc config` is local-only and transactional. It creates the selected harness
+`aidlc config` is transactional and works from the release already on this
+machine; it downloads a release the project needs only when you agree at the
+prompt or pass `--download`. It creates the selected harness
 tree, the `aidlc/` workspace shell, root integrations, a projection stamp, and
 an ownership baseline. It does not create a workflow intent.
 
-When more than one harness is present, every `aidlc config` invocation must
-include `--harness <name>`, including previews and refreshes. The one exception
+Every harness runtime is installed, so outside a terminal a first setup or a
+preview names its harness with `--harness <name>`; at a terminal, config uses
+the one harness it detects or asks which one.
+When the project has more than one harness, a command that sets up, previews,
+or refreshes one of them names it with `--harness <name>`. The one exception
 is recording or clearing a bypass with `aidlc config flags --bypass` or
 `--clear-bypass` and nothing else to change: a bypass belongs to the project,
 not to one harness. See
@@ -341,7 +348,9 @@ item no AI-DLC command gives: its line names the step in Codex instead (type
 one outstanding-actions line when follow-up is required, plus one `Warning:`
 line for each ignore rule that hides committed records.
 
-On a human TTY, a bare first run starts with detection rather than questions:
+On a human TTY, a bare first run (`aidlc config` with no flag; a flag such as
+`--harness`, `--dry-run`, `--yes`, or `--json` skips the wizard) starts with
+detection rather than questions:
 installed harness CLIs on `PATH`, project state, local AWS credentials and
 regions, and the non-interactive hook runtime. With one detected harness, the
 wizard names it and offers three choices: recommended defaults, six-step
@@ -374,7 +383,7 @@ last, after every AI-DLC step. Under Kiro auto, recommended defaults ask that
 one model question; see
 [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
 For the `kiro-ide` row, see [First run](harnesses/kiro-ide.md#first-run).
-Every numbered prompt has
+Every numbered prompt but that complete picker has
 a bracketed default, invalid input re-asks in place, and each answer is echoed.
 A check-your-answers table accepts Enter to apply or a step number to edit. No
 files are written before that final gate. After apply, gerund receipts name the
