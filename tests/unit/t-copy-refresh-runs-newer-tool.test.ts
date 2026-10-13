@@ -64,19 +64,21 @@ function env(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
 function codexRelease(
   root: string,
   version: string,
-  options: { pointer?: boolean; mark?: boolean; stampOnly?: boolean } = {},
+  options: { pointer?: boolean; mark?: boolean; stampOnly?: boolean; harness?: "codex" | "claude" } = {},
 ): string {
-  cpSync(join(DIST, "codex"), root, { recursive: true });
-  const stamp = join(root, ".codex", "tools", "data", "aidlc-stamp.json");
+  const harness = options.harness ?? "codex";
+  const dir = `.${harness}`;
+  cpSync(join(DIST, harness), root, { recursive: true });
+  const stamp = join(root, dir, "tools", "data", "aidlc-stamp.json");
   writeFileSync(stamp, `${JSON.stringify({ ...JSON.parse(readFileSync(stamp, "utf-8")), frameworkVersion: version }, null, 2)}\n`);
-  const own = join(root, ".codex", "tools", "aidlc-version.ts");
+  const own = join(root, dir, "tools", "aidlc-version.ts");
   if (!options.stampOnly) writeFileSync(own, readFileSync(own, "utf-8").replace(`"${AIDLC_VERSION}"`, `"${version}"`));
   if (options.pointer) {
     const config = join(root, ".codex", "config.toml");
     writeFileSync(config, readFileSync(config, "utf-8").replace("[sandbox_workspace_write]", `${POINTER}[sandbox_workspace_write]`));
   }
   if (options.mark) {
-    const tool = join(root, ".codex", "tools", "aidlc.ts");
+    const tool = join(root, dir, "tools", "aidlc.ts");
     const [shebang, ...rest] = readFileSync(tool, "utf-8").split("\n");
     writeFileSync(tool, [
       shebang,
@@ -89,10 +91,10 @@ function codexRelease(
 }
 
 // The copy runtime's layout: one projection per harness under runtime/.
-function runtimeAt(version: string, options: { mark?: boolean; stampOnly?: boolean } = {}): string {
+function runtimeAt(version: string, options: { mark?: boolean; stampOnly?: boolean; harness?: "codex" | "claude" } = {}): string {
   const root = temp("aidlc-t-copy-newer-runtime-");
   mkdirSync(join(root, "runtime"));
-  codexRelease(join(root, "runtime", "codex"), version, options);
+  codexRelease(join(root, "runtime", options.harness ?? "codex"), version, options);
   return join(root, "runtime");
 }
 
@@ -276,6 +278,17 @@ describe("a copied project's refresh from a newer release runs that release's ow
       expect(line).toContain("bun .codex/tools/aidlc.ts config");
       expect(line).not.toContain(basename(dirname(runtime)));
     }
+  });
+
+  test("adding another harness: a question left open names the tool the person ran, not the one not yet added", () => {
+    const project = copiedAt2110();
+    const runtime = runtimeAt(NEWER, { harness: "claude" });
+    // At a terminal, Claude Code's MCP question finds the input closed.
+    const result = own(project, ["config", "--from", runtime, "--harness", "claude"], { AIDLC_TEST_CONFIG_TTY: "1" });
+    expect(result.out).toContain(ranLine(NEWER));
+    expect(existsSync(join(project, ".claude")), result.out).toBe(false);
+    expect(result.out).toContain("Run bun .codex/tools/aidlc.ts config --from");
+    expect(result.out).not.toContain(".claude/tools/aidlc.ts");
   });
 
   test("--json prints the newer tool's one result and nothing else", () => {
