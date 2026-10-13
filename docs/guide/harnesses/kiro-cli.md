@@ -230,15 +230,16 @@ does not start with a dot. Their writes into `.kiro/` (apart from the `aidlc` ag
 `.kiro/sensors/` files), `.git/`, or any other
 top-level dot entry, and anything outside the project, still ask. Your
 project's own test and build commands (`bun test`, `npm test`, `pytest`, and so
-on) still ask, so you see each one before it runs.
+on), a `git push` and a recursive delete still ask, so you see each one before
+it runs.
 
 **Sessions with no approver stall rather than prompt.** Anything outside the
 pre-approved set needs an interactive answer. Under `kiro-cli chat
 --no-interactive` there is nobody to ask, so Kiro refuses the command outright
 with `non-interactive mode (no user to approve)`. Over ACP, your client must
 answer `session/request_permission`; a client that ignores those requests looks
-exactly like a permission failure. `--trust-all-tools` bypasses both the allow
-and deny lists, including the recursive-`rm` and `git push` denials. Use it only
+exactly like a permission failure. `--trust-all-tools` runs every command
+without asking, a `git push` and a recursive delete included. Use it only
 inside a disposable sandbox where blanket shell access is acceptable.
 
 **The hooks run on Kiro CLI's v2 engine, including over ACP.** This

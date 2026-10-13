@@ -2259,21 +2259,30 @@ function writeTerminalLatch(
 // the work's own continuation), so words typed while this chat's workflow
 // has a record are left to the agent as today: the aidlc agent's skill
 // passes them to `next` itself. A bare `/aidlc` is the resume gesture on
-// any path. On the aidlc agent the line repeats what its skill already says.
+// any path. A plan's name typed alone (`/aidlc bugfix`) is a line the bare
+// `next` does not read, so the step names the plan (nextArgsNameOnlyAPlan):
+// `next <plan>` asks what the work is for. On the aidlc agent the line
+// repeats what its skill already says.
 async function firstStepLine(prompt: string, pd: string, sessionId: string): Promise<string> {
   const text = prompt.trim();
-  const run = `Run \`${aidlcInvocation()} engine orchestrate next\` now and do only what it prints.`;
+  let step = "next";
   const words = aidlcEntryWords(text);
   if (words === null) return "";
   if (words !== "") {
     if (workflowRecordSelected(pd, sessionId)) return "";
     try {
-      const { nextArgsAreOnlyWords } = await import("../tools/aidlc-orchestrate.ts");
-      if (!nextArgsAreOnlyWords(splitKiroCommandArgs(words))) return "";
+      const { nextArgsAreOnlyWords, nextArgsNameOnlyAPlan } = await import("../tools/aidlc-orchestrate.ts");
+      const args = splitKiroCommandArgs(words);
+      if (!nextArgsAreOnlyWords(args)) {
+        const plan = nextArgsNameOnlyAPlan(args);
+        if (plan === null) return "";
+        step = `next ${plan}`;
+      }
     } catch {
       return "";
     }
   }
+  const run = `Run \`${aidlcInvocation()} engine orchestrate ${step}\` now and do only what it prints.`;
   return `AI-DLC: this message is an AI-DLC request and AI-DLC has it on record. ${run}`;
 }
 

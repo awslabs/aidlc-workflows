@@ -3219,7 +3219,10 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
             command: `Set-Location -LiteralPath '${dir}'; aidlc engine orchestrate next`,
             code: toolName === "execute_pwsh" ? 0 : 2,
           },
-          { command: "aidlc engine state advance", code: 2 },
+          // A plain native engine command is the engine's own to judge: the
+          // state tool refuses a bare advance itself. A completion report
+          // waits for the plan: the report tool does not check it.
+          { command: "aidlc engine state advance", code: 0 },
           {
             command: "aidlc engine orchestrate report --stage code-generation --result completed",
             code: 2,
@@ -8028,6 +8031,35 @@ describe("t218 the person-message card names the first engine step on an /aidlc 
         expect(r.code, r.stderr).toBe(0);
         expect(r.stdout, line).toContain(FIRST_STEP);
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A plan's name typed alone is the person's pick with nothing said yet about
+  // the work. A bare `next` reads no such line, so the card names `next <plan>`,
+  // which asks what the work is for and creates nothing (#2378).
+  test("a plan's name typed alone names next <plan> before work exists, and nothing once it does", () => {
+    const fresh = scratchProject(false);
+    try {
+      for (const plan of ["bugfix", "workshop"]) {
+        const r = card(fresh, `/aidlc ${plan}`, `sess_first_step_plan_${plan}`);
+        expect(r.code, r.stderr).toBe(0);
+        expect(r.stdout, plan).toContain(`engine orchestrate next ${plan}\` now and do only what it prints.`);
+        expect(r.stdout.split("do only what it prints").length, plan).toBe(2);
+      }
+      // Something else typed beside the plan is the agent's to pass on whole.
+      const untaken = card(fresh, "/aidlc bugfix --verbose", "sess_first_step_plan_untaken");
+      expect(untaken.code, untaken.stderr).toBe(0);
+      expect(untaken.stdout).not.toContain("do only what it prints");
+    } finally {
+      rmSync(fresh, { recursive: true, force: true });
+    }
+    const dir = scratchProject(true);
+    try {
+      const r = card(dir, "/aidlc bugfix", "sess_first_step_plan_active");
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).not.toContain("do only what it prints");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

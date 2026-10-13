@@ -699,7 +699,10 @@ describe("t148 dist/kiro file structure", () => {
     const fm = frontmatter(join(KI, "agents", "aidlc-aidlc.md"));
     expect(fm).toContain(`tools: ["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent"]`);
     expect(fm).toContain("    - capability: shell");
-    expect(fm).toContain("      effect: deny");
+    // The conductor refuses no command: a push or a recursive delete the
+    // person asks for gets Kiro's own card, where their Always allow decides
+    // (an AI-DLC ask takes Always allow off that card, measured on 1.2.37).
+    expect(fm).not.toContain("    - capability: shell\n      effect: deny");
     // Settings changes and the per-harness hook entry ask the person even
     // though the tool grant allows the rest (ask outranks allow in Kiro IDE).
     expect(fm).toContain(
@@ -764,6 +767,11 @@ describe("t148 dist/kiro file structure", () => {
     "echo $HOME",
     "git log --oneline -3 | cat",
     "cat README.md",
+    // A push and a recursive delete the person asks the agent for.
+    "git push",
+    "git push -u origin greet-by-name",
+    "cd web && git push",
+    "rm -rf scratch",
   ];
   // A command that would run, expand, or redirect more than the allowed one,
   // on POSIX shells and PowerShell, after each allowed prefix.

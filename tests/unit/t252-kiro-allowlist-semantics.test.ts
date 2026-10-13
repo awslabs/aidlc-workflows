@@ -316,8 +316,10 @@ const MUST_ASK_OUTSIDE_THE_WORKFLOW = [
   "bun .kiro/tools/aidlc-log.ts.bak run",
 ];
 
-// Destructive forms must be denied outright, not merely sent to an approver.
-const MUST_DENY = [
+// A push and a recursive delete go to the person: Kiro asks once, and the
+// person's own trust holds. Never denied (a refusal with no way past, measured
+// live on 2.29.0), and never run unasked.
+const PERSON_DECIDES = [
   "git push origin main",
   "git push",
   "git -C . push origin main",
@@ -330,6 +332,22 @@ const MUST_DENY = [
   "rm -r -f /tmp/target",
   "/bin/rm -rf /tmp/target",
   "rm --recursive --force /tmp/target",
+];
+
+// The same commands behind an allowed AI-DLC command: no allow entry carries
+// one through.
+const PERSON_DECIDES_CHAINED = [
+  "bun .kiro/tools/aidlc.ts engine now && git push origin main",
+  "bun .kiro/tools/aidlc-utility.ts status; rm -rf build",
+  "bun .kiro/tools/aidlc-state.ts get | rm -rf /",
+  "bun .kiro/tools/aidlc.ts engine now\ngit push",
+  'bun .kiro/tools/aidlc-log.ts decision --text "x" && rm -r -f /tmp/target',
+];
+const NATIVE_PERSON_DECIDES_CHAINED = [
+  "aidlc engine now && git push origin main",
+  "aidlc engine orchestrate next; rm -rf ~/work",
+  "aidlc status | rm -rf /",
+  "aidlc engine now\nrm -rf build",
 ];
 
 // Engine commands from one Kiro CLI bugfix run, first as the engine printed
@@ -512,12 +530,11 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
       }
     });
 
-    test(`${harness}: destructive commands are denied, not approvable`, () => {
+    test(`${harness}: a push and a recursive delete ask the person`, () => {
       for (const agent of agents) {
         const eb = execBash(harness, agent);
-        for (const cmd of MUST_DENY) {
-          expect(evaluate(eb, cmd), `${harness}/${agent}: should deny \`${cmd}\``)
-            .toBe("deny");
+        for (const cmd of [...PERSON_DECIDES, ...PERSON_DECIDES_CHAINED]) {
+          expect(evaluate(eb, cmd), `${harness}/${agent}: should ask for \`${cmd}\``).toBe("ask");
         }
       }
     });
@@ -630,6 +647,15 @@ describe("t252 Kiro native release allowlist", () => {
         ...RECORDABLE_PROJECT_BYPASSES.map((name) => `aidlc config flags --clear-bypass ${name} --yes`),
       ]) {
         expect(evaluate(eb, command), `${agent}: should allow \`${command}\``).toBe("allow");
+      }
+    }
+  });
+
+  test("a push and a recursive delete ask the person, alone or behind an allowed aidlc command", () => {
+    for (const agent of agents) {
+      const eb = nativeBash(agent);
+      for (const command of [...PERSON_DECIDES, ...NATIVE_PERSON_DECIDES_CHAINED]) {
+        expect(evaluate(eb, command), `${agent}: should ask for \`${command}\``).toBe("ask");
       }
     }
   });

@@ -23,6 +23,7 @@ import {
   absorbReviewerKnowledge,
   injectDelegatedKnowledgePreflight,
 } from "../../scripts/agent-knowledge.ts";
+import { copyChannelToolScripts } from "../../core/tools/aidlc.ts";
 import { codexHookTrustHash } from "../../core/tools/aidlc-command.ts";
 import type { Tier } from "../../core/tools/aidlc-tiers.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
@@ -175,11 +176,25 @@ export function emitDefaultRules(
   const trustedPattern = ["aidlc", trustedNamespace]
     .map((token) => JSON.stringify(token))
     .join(", ");
+  // Codex compares whole words, so the copy channel names the dispatcher's
+  // engine namespace and each tool script a copy channel pre-approves
+  // (copyChannelToolScripts), as AI-DLC runs them. An allowed command also runs
+  // outside the sandbox; a config change and a script behind a machine-changing
+  // command stay in it and get Codex's own ask.
+  const enginePattern = ["bun", `${harnessDir}/tools/aidlc.ts`, trustedNamespace]
+    .map((token) => JSON.stringify(token))
+    .join(", ");
+  const scripts = copyChannelToolScripts()
+    .map((script) => `    ${JSON.stringify(`${harnessDir}/tools/${script}`)}`)
+    .join(",\n");
   const runtimeRules = invoke === "aidlc"
     ? `# Native runtime allowlist: framework commands invoke the self-contained binary.
 prefix_rule(pattern = [${trustedPattern}], decision = "allow")`
-    : `# Bun copy-channel allowlist: deterministic framework tools stay under the harness tree.
-prefix_rule(pattern = ["bun", "${harnessDir}/tools/"], decision = "allow")`;
+    : `# Bun copy-channel allowlist: AI-DLC's engine commands and its tool scripts.
+prefix_rule(pattern = [${enginePattern}], decision = "allow")
+prefix_rule(pattern = ["bun", [
+${scripts}
+]], decision = "allow")`;
   return `# dist/codex shipped permission rules (Starlark) — ${harnessDir}/rules/ is
 # Codex's NATIVE rules dir (this file), distinct from the AIDLC markdown rule
 # layers at ${harnessDir}/aidlc-rules/ (D-10 rename).

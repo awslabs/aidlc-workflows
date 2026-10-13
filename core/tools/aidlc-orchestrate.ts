@@ -94,7 +94,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   deleteQuestion,
@@ -169,6 +169,7 @@ import {
   attemptEventIsCrossShardTied,
   artifactFilename,
   auditBlockField,
+  auditFilePath,
   REDO_REUSE_SOURCE,
   boltSlugForUnit,
   composeMarkerPath,
@@ -5008,6 +5009,16 @@ export function nextArgsAreOnlyWords(args: string[]): boolean {
   return typeof parsed.intent === "string" && read.length === 1;
 }
 
+// The plan a line names when it says nothing else ("/aidlc bugfix"), by the
+// same one reading; null for any other line. Unlike a reply, a token typed
+// beside the plan, a flag `next` does not take included, is more than the plan.
+export function nextArgsNameOnlyAPlan(args: string[]): string | null {
+  const parsed = parseNextFlags(args);
+  return Object.keys(parsed).length === 1 && typeof parsed.positionalScope === "string"
+    ? parsed.positionalScope
+    : null;
+}
+
 // Appended to the `done` reason emitted when the ACTIVE intent has no in-scope
 // stage left (a completed workflow). Without this, a scope-runner's forwarding
 // loop ("repeat until done") dead-ends here with no cue that new, unrelated
@@ -5276,11 +5287,13 @@ function createPrintDirective(
 // named here, which creates on that plan with their words as its request and
 // the settings typed with the plan. Their words have a placeholder, never quotes
 // of this engine's: a single quote is no quote on Kiro IDE's cmd shell (#2167).
-function planNamedAloneStep(plan: string, flags: ParsedFlags): PrintDirective {
+// Asked as new work beside work in progress (`/aidlc-init --scope bugfix`), the
+// answer starts it beside that work.
+function planNamedAloneStep(plan: string, flags: ParsedFlags, besideWork = false): PrintDirective {
   // The settings and the stage changes typed with the plan ride the answer, as
   // they ride a routing question's new-work answer.
   const carried = carriedRoutingFlags(flags);
-  const command = `${aidlcToolInvocation("orchestrate")} next --scope ${scopeArg(plan)}${carried.newWork}${carried.planChanges} -- <their words>`;
+  const command = `${aidlcToolInvocation("orchestrate")} next --scope ${scopeArg(plan)}${besideWork ? " --new-intent" : ""}${carried.newWork}${carried.planChanges} -- <their words>`;
   const step = turnEndingPrint(
     `The person picked the \`${plan}\` plan and has not said what the work is for, so nothing is created yet. ` +
       "Say the line above, then wait: when they say what to work on, run " +
@@ -7949,41 +7962,50 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 // creation for a plan they named, their own settings carried. A scope the agent
 // named on its own is not theirs and gives way. Nothing here reads meaning: the
 // entry word, the words and the flags are the engine's own parse of their text,
-// and which plan fits stays their call at the question. Nothing happens without a
-// chat identity (no record is read), on a read-only probe (an observer learns the
-// directive and never asks), with work selected, or with any other message last
-// (a reply in plain words, a bare `/aidlc`, a utility).
-function takePersonsOwnLine(flags: ParsedFlags, pd: string): void {
-  if (engineSessionId === undefined || isReadOnlyEngineProbe()) return;
-  if (flags.intent !== undefined || flags.request !== undefined) return;
+// and which plan fits stays their call at the question. With work selected the
+// same holds for the agent's first step after their line, a bare `next` or the
+// `next --resume` a re-entry sends (measured on Claude Code: the open stage came
+// back and their new work was gone): `--resume` is the agent's, never theirs. A
+// later bare `next` is the work in hand. Nothing happens without a chat identity
+// (no record is read), on a read-only probe (an observer learns the directive and
+// never asks), once anything is recorded after their line, or with any other
+// message last (a reply in plain words, a bare `/aidlc`, a utility). Returns
+// their line's arguments when it took them, for the readings that look at the
+// command as typed.
+function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
+  if (engineSessionId === undefined || isReadOnlyEngineProbe()) return null;
+  if (flags.intent !== undefined || flags.request !== undefined) return null;
   const carriesNothing = Object.entries(flags).every(([key, value]) =>
-    key === "scope" || key === "positionalScope" || value === undefined || value === false);
-  if (!carriesNothing) return;
+    key === "scope" || key === "positionalScope" || key === "resume" || value === undefined || value === false);
+  if (!carriesNothing) return null;
   const message = latestMessage(pd, engineSessionId);
-  if (message === null || message.source !== "prompt") return;
+  if (message === null || message.source !== "prompt") return null;
   const stateContent = loadStateFileIfPresent(pd);
   if (message.words !== null) {
-    // Their words name work; with work selected, the agent's bare `next` is
-    // the work in hand.
-    if (stateContent !== null) return;
+    // Their words name work; with work selected, only while their turn is
+    // still the latest row: after that the agent's bare `next` is the work in
+    // hand.
+    if (stateContent !== null && !turnIsLatestRow(pd, message.id)) return null;
   } else {
     // A line of settings alone ("/aidlc --plan-approval off"): `next` names the
     // setter for it, with or without work, once. After the setter has run (its
     // rows follow the turn, or its record is newer than the message) a bare
     // `next` is the work's again.
-    if (message.settings.length === 0) return;
-    if (lineHandedOut(pd, engineSessionId, message.id)) return;
-    if (stateContent !== null ? !turnIsLatestRow(pd, message.id) : settingsKeptSince(pd, engineSessionId, message.at)) return;
+    if (message.settings.length === 0) return null;
+    if (lineHandedOut(pd, engineSessionId, message.id)) return null;
+    if (stateContent !== null ? !turnIsLatestRow(pd, message.id) : settingsKeptSince(pd, engineSessionId, message.at)) return null;
   }
   const typed = aidlcEntryWords(message.text);
-  if (typed === null || typed.length === 0) return;
-  const own = parseNextFlags(splitKiroCommandArgs(typed));
+  if (typed === null || typed.length === 0) return null;
+  const argv = splitKiroCommandArgs(typed);
+  const own = parseNextFlags(argv);
   // A line `next` already read for this chat (the reading step over work nobody
   // has selected kept its words as a question) is not read again: the bare
   // `next` the agent runs after that step asks which work to pick up.
-  if (own.intent !== undefined && wordsAlreadyRead(pd, own.intent, message.at)) return;
+  if (own.intent !== undefined && wordsAlreadyRead(pd, own.intent, message.at)) return null;
   for (const key of Object.keys(flags)) delete (flags as unknown as Record<string, unknown>)[key];
   Object.assign(flags, own);
+  return argv;
 }
 
 // A settings-only line is handed out once, and `next`, which hands it out,
@@ -8024,10 +8046,13 @@ function markLineHandedOut(pd: string, session: string, messageId: string): void
 }
 
 // The latest row of the chat's record is the person's turn that carries this
-// message: nothing has run since they spoke.
+// message: nothing has run since they spoke. This clone's own shard holds it
+// (each clone appends to its own; shards are read in filename order, so a
+// teammate's can come after it).
 function turnIsLatestRow(pd: string, messageId: string): boolean {
   try {
-    const rows = readAuditShardEvents(pd);
+    const own = basename(auditFilePath(pd));
+    const rows = readAuditShardEvents(pd).filter((row) => basename(row.shard) === own);
     const last = rows[rows.length - 1];
     return last !== undefined && last.event === "HUMAN_TURN" && auditBlockField(last.block, "Message Id") === messageId;
   } catch {
@@ -8043,11 +8068,11 @@ function turnIsLatestRow(pd: string, messageId: string): boolean {
 // `--single` adds only its synthetic audit start and cannot move the main
 // workflow pointer. Typed config commands execute their requested operation;
 // observers only describe that command and never execute it.
-function routeNext(args: string[], projectDir: string | undefined): void {
+function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   activeStageValidityAdvisory = undefined;
   activeRetiredGuardPolicyNotice = null;
-  const flags = parseNextFlags(args);
-  takePersonsOwnLine(flags, resolveProjectDir(projectDir));
+  const flags = parseNextFlags(agentArgs);
+  const args = takePersonsOwnLine(flags, resolveProjectDir(projectDir)) ?? agentArgs;
   handOutSettingsLine(flags, resolveProjectDir(projectDir));
   pickingUp = flags.resume === true;
 
@@ -9240,6 +9265,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // rides in flags.intent (the same slot Branch 9a threads as the description).
   if (flags.newIntent) {
     const description = flags.intent?.trim();
+    // A plan with nothing said about the work (`/aidlc-init --scope bugfix`)
+    // takes the step a plan typed alone takes.
+    if (!description && flags.scope) {
+      emit(planNamedAloneStep(flags.scope, flags, stateContent !== null || unselectedRecords(pd) !== null));
+      return;
+    }
     if (!description) {
       emit(errorDirective(
         "`next --new-intent` requires a nonblank new-work description after the confirmed scope.",

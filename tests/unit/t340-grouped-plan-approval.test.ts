@@ -336,17 +336,18 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       }
       if (condition === "missing all") {
         for (const entry of ["aidlc", "bun .claude/tools/aidlc.ts"]) {
-          // An ad-hoc discard is not a published recovery selection (#1149);
-          // only the exact guard-recovery abort invocation passes without one.
+          // A bolt command is the engine's own: an ad-hoc discard, the recovery
+          // abort and a generation start are all judged by the bolt tool, not
+          // by this guard, which holds only the build (the developer, the code).
           const abort = guard(pd,
             `${entry} engine bolt abort --name alpha --slug alpha --reason "Human Retry" --discard --project-dir "${pd}"`);
-          expect(abort.code, `${entry}: ad-hoc discard\n${abort.out}\n${abort.err}`).toBe(2);
+          expect(abort.code, `${entry}: ad-hoc discard\n${abort.out}\n${abort.err}`).toBe(0);
           const recovery = guard(pd,
             `${entry} engine bolt abort --name alpha --slug alpha --reason "stale review recovery exhausted" --discard`);
           expect(recovery.code, `${entry}: recovery abort\n${recovery.out}\n${recovery.err}`).toBe(0);
           const start = guard(pd,
             `${entry} engine bolt start --name alpha --slug alpha --batch 1 --worktree --project-dir "${pd}"`);
-          expect(start.code, `${entry}: generation start\n${start.out}\n${start.err}`).toBe(2);
+          expect(start.code, `${entry}: generation start\n${start.out}\n${start.err}`).toBe(0);
           for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(false);
         }
       }
@@ -360,42 +361,59 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
           `check ${checkedUnit} --check-cmd "git diff --check"`,
           `finalize --batch 1 --units ${units} --claimed ${units} --check-cmd "git diff --check"`,
         ]) {
+          // The swarm tool binds each Unit's approval itself (swarm prepare
+          // refuses a Unit without one); the guard passes its plain spelling.
           const command = `${entry} engine swarm ${route} --project-dir "${targetProject}"`;
           const result = guard(pd, command);
-          expect(result.code, `${condition}: ${command}\n${result.out}\n${result.err}`).toBe(2);
+          expect(result.code, `${condition}: ${command}\n${result.out}\n${result.err}`).toBe(0);
         }
       }
       expect(git(pd, ["worktree", "list", "--porcelain"])).toBe(worktrees);
     },
   );
 
-  test("approved swarm admission excludes compound commands, redirections, preloads and project environment prefixes", () => {
+  test("a swarm command under a preload or a launcher waits; a project folder in the environment is the engine's own; beside it, a write is judged by where it lands", () => {
     const pd = fixture();
     const foreign = join(pd, "foreign-project");
     const route = `engine swarm prepare --batch 1 --units alpha,beta --base main --project-dir "${pd}"`;
-    const commands: string[] = [];
+    const refused: string[] = [];
+    const judgedByTheirWrites: string[] = [];
     for (const entry of ["aidlc", "bun .claude/tools/aidlc.ts"]) {
       const command = `${entry} ${route}`;
-      commands.push(
+      // A readable second command or a pipe writes nothing of the build: the
+      // guard has nothing to hold. A redirection lands a file in the parent
+      // checkout, which a parallel batch never writes: that door stays shut.
+      judgedByTheirWrites.push(
         `${command} && printf done`,
         `${command}; printf done`,
         `${command} | cat`,
+      );
+      refused.push(
         `${command} > swarm-output.txt`,
         `${command} 2> swarm-error.txt`,
+      );
+      // A project folder named in the shell's own environment is the engine's to
+      // judge (its --project-dir is on the line); a launcher such as `env` is a
+      // wrapper, and the installed engine is not run as it is.
+      judgedByTheirWrites.push(
         `AIDLC_PROJECT_DIR="${foreign}" ${command}`,
         `CLAUDE_PROJECT_DIR="${foreign}" ${command}`,
-        `env AIDLC_PROJECT_DIR="${foreign}" ${command}`,
       );
+      refused.push(`env AIDLC_PROJECT_DIR="${foreign}" ${command}`);
     }
-    commands.push(
+    refused.push(
       `bun --preload .claude/hooks/aidlc-record-human-turn.ts .claude/tools/aidlc.ts ${route}`,
       `bun -r .claude/hooks/aidlc-record-human-turn.ts .claude/tools/aidlc.ts ${route}`,
     );
     for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
     const worktrees = git(pd, ["worktree", "list", "--porcelain"]);
-    for (const command of commands) {
+    for (const command of refused) {
       const result = guard(pd, command);
       expect(result.code, `${command}\n${result.out}\n${result.err}`).toBe(2);
+    }
+    for (const command of judgedByTheirWrites) {
+      const result = guard(pd, command);
+      expect(result.code, `${command}\n${result.out}\n${result.err}`).toBe(0);
     }
     expect(git(pd, ["worktree", "list", "--porcelain"])).toBe(worktrees);
     for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
@@ -515,6 +533,7 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       });
       publish(pd, "run-stage");
       for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(false);
+      // A completion report waits for the plan: the report tool does not check it.
       const report = guard(pd, "aidlc engine orchestrate report --stage code-generation --result completed --approved");
       expect(report.code, `${report.out}\n${report.err}`).toBe(2);
       const checkpoint = guard(pd, "aidlc engine bolt swarm-checkpoint --action status --batch 1 --units alpha,beta");

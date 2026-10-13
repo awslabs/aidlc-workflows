@@ -204,6 +204,23 @@ export function planApprovalAskState(projectDir: string): "unanswered" | "editin
   return (record.results?.length ?? 0) > 0 ? "answered" : "unanswered";
 }
 
+/**
+ * While the person edits the plan files themselves and has replied since they
+ * started, the step that records their reply: the plan handed back to the agent
+ * (Request Changes, their words kept as the change) or the files finished
+ * (Approve Plan). Which it is, the agent reads. Null until they reply, and for
+ * a question about several Units, where a reply can be about some of them.
+ */
+export function planApprovalEditingReplyStep(projectDir: string): string | null {
+  const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
+  if (record?.mode !== "editing" || !record.replies?.length || record.targets.length > 1) return null;
+  const answer = (choice: string | undefined): string =>
+    `\`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval --details "${choice}"\``;
+  return `record their answer: ${answer(record.choices[1])} when they handed the plan back to you (their words are ` +
+    `kept as the change), or ${answer(record.choices[0])} when they finished it. When their reply is neither, ` +
+    "answer it and leave the files to them";
+}
+
 function writePlanApprovalAsk(projectDir: string, record: PlanApprovalAskRecord): void {
   writePlanApprovalRuntimeRecord(
     projectDir,
@@ -808,18 +825,21 @@ export function routeCodeGenerationPlanApproval(projectDir: string, directive: D
   const intentId = intentIdFor(projectDir);
   const record = readPlanApprovalAsk(projectDir, intentId);
   // The person is editing the files: show the same question, in edit mode,
-  // until they say done. Nothing is recomputed from half-edited files.
+  // until they say done, and once they reply, how to record it. Nothing is
+  // recomputed from half-edited files.
   if (
     record?.mode === "editing" &&
     record.results === undefined &&
     record.targets.length === units.length &&
     record.targets.every((target) => units.includes(target.unit))
   ) {
+    const replied = planApprovalEditingReplyStep(projectDir);
     return planApprovalAskDirective(projectDir, record.targets.map((target) => target.unit), {
       question: record.question,
       editing: true,
-      note: record.lastNotice ??
-        "The person is editing the files. Wait for them to say done; do not change those files yourself.",
+      note: record.lastNotice ?? (replied
+        ? `The person replied while editing the files: ${replied}. Then run next.`
+        : "The person is editing the files. Wait for them to say done; do not change those files yourself."),
     });
   }
   const setting = planApprovalSettingFor(projectDir);

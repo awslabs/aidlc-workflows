@@ -178,6 +178,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the method include read aidlc/active-memory/
           // (the engine's copy of the active space's method).
           "sha256:2a818c7c6a39421df576d70829d4d2c960809df3d60b32ca1a0659965c56433a",
+          // The variant whose onboarding said the init runner with a scope
+          // always creates the work in one step (a scope alone now asks first).
+          "sha256:0274b7bd2c26f8fc6158aafd6632a99aced247305d2aa09d1c60312283de7e69",
         ],
       },
     },

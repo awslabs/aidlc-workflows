@@ -13,14 +13,29 @@
 // reading while a plan question is open. Nothing reads meaning: the entry word,
 // the words and the flags are the engine's own parse of the person's text.
 //
+// With work open, the same line is read by the agent's first step after it
+// when that step carries none of it: measured on Claude Code (t176, 2 of 20 on
+// main b9c3e9000f), the agent's first command after `/aidlc "<new work>"` was
+// `next --resume`, and the open work's stage came back with their request gone.
+//
 // Spawns the real engine and each host's own human-turn hook (the Kiro IDE
-// adapter and the Claude Code dispatcher), as tests/unit/t-message-record does.
+// adapter, the Kiro CLI and Codex adapters and the Claude Code dispatcher), as
+// tests/unit/t-message-record does.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanupTestProject, createOrchestrationTestProject, proposalFollowUp } from "../harness/fixtures.ts";
 import {
+  AIDLC_SRC,
+  cleanupTestProject,
+  createOrchestrationTestProject,
+  FIXTURES_DIR,
+  proposalFollowUp,
+  seededRecordDir,
+  seededStateFile,
+} from "../harness/fixtures.ts";
+import {
+  buildState,
   copilotSkillPrompt,
   type Directive,
   env,
@@ -70,7 +85,7 @@ async function next(
 ): Promise<{ directive: Directive; out: string }> {
   const tool = harness === "claude"
     ? ORCHESTRATE
-    : join(proj, harness === "copilot" ? ".aidlc" : ".kiro", "tools", "aidlc-orchestrate.ts");
+    : join(proj, harness === "copilot" ? ".aidlc" : harness === "codex" ? ".codex" : ".kiro", "tools", "aidlc-orchestrate.ts");
   const runEnv = env(proj, opts);
   if (opts.noSession) delete runEnv.AIDLC_SESSION_OVERRIDE;
   const res = await exec([process.execPath, tool, "next", "--project-dir", proj, ...args], { cwd: proj, env: runEnv });
@@ -298,6 +313,15 @@ describe("next takes the person's own /aidlc line when the agent's command carri
     expect(directive.message ?? "").toContain(NO_STATE);
   });
 
+  test("claude: a next --resume the agent sends on a workspace with no work asks the plan question for the words", async () => {
+    const proj = fresh();
+    await say(proj, LINE, "claude");
+    const { directive, out } = await next(proj, "claude", ["--resume"]);
+    expect(directive.kind, out).toBe("ask");
+    expect(directive.ask_type).toBe("scope-confirm");
+    expect(directive.question ?? "").toContain(WORDS);
+  });
+
   test("claude: with no chat identity no record is read", async () => {
     const proj = fresh();
     await say(proj, LINE, "claude");
@@ -307,4 +331,157 @@ describe("next takes the person's own /aidlc line when the agent's command carri
     expect(directive.kind, out).toBe("error");
     expect(directive.message ?? "").toContain(NO_STATE);
   });
+});
+
+// Work is open (a bug fix at Requirements Analysis, or t176's widget feature at
+// Feasibility) and the person types new work after the entry word.
+const NEW_WORK = "build a standalone Python CLI that scrapes NOAA weather data and writes it to a SQLite database";
+const NEW_LINE = `/aidlc "${NEW_WORK}"`;
+const READING = "Work is in progress, and the person's words may ask to redo";
+
+/** A project with work open: the corpus's work-open state (a bug fix at Requirements Analysis). */
+async function workOpen(): Promise<string> {
+  const proj = fresh();
+  await buildState(proj, "work-open");
+  return proj;
+}
+
+function questionTexts(proj: string): string[] {
+  const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+  return questionFiles(proj).map((name) => (JSON.parse(readFileSync(join(dir, name), "utf-8")) as { text: string }).text);
+}
+
+/** The open work's own step: its rules part or its stage, never a reading of words. */
+function isTheWorksStep(directive: Directive): boolean {
+  return directive.kind === "load-steering" || directive.kind === "run-stage";
+}
+
+describe("with work open, the agent's first step after `/aidlc <words>` reads the line when it carries none of it", () => {
+  for (const harness of ["claude", "codex", "kiro", "kiro-ide"] as Harness[]) {
+    test(`${harness}: next --resume after "/aidlc <new work>" gets the reading of their words, not the open stage`, async () => {
+      const proj = await workOpen();
+      const said = await say(proj, harness === "codex" ? NEW_LINE.replace(/^\/aidlc/, "$aidlc") : NEW_LINE, harness);
+      expect(said.status, `${said.stdout}${said.stderr}`).toBe(0);
+      const { directive, out } = await next(proj, harness, ["--resume"]);
+      expect(directive.kind, out).toBe("print");
+      expect(directive.message ?? "", out).toContain(READING);
+      expect(questionTexts(proj)).toEqual([NEW_WORK]);
+    });
+  }
+
+  // A team clone: each clone writes its own committed audit shard, and the
+  // shards are read in filename order, so a teammate's shard can sort after
+  // this clone's. Their turn is still the latest row of this clone's shard.
+  test("claude: in a team clone whose teammate's shard sorts after this clone's, next --resume still reads the line", async () => {
+    const proj = await workOpen();
+    const audit = join(seededRecordDir(proj), "audit");
+    mkdirSync(audit, { recursive: true });
+    writeFileSync(join(audit, "zz-teammate-0123456789abcdef.md"), [
+      "# AI-DLC Audit Log", "", "## Session Start", "**Timestamp**: 2026-10-01T09:00:00Z", "**Event**: SESSION_STARTED",
+      "**Source**: startup", "**Session**: 01995000-7a11-7000-8000-00000000d0ff", "", "---", "",
+    ].join("\n"), "utf-8");
+    await say(proj, NEW_LINE, "claude");
+    const { directive, out } = await next(proj, "claude", ["--resume"]);
+    expect(directive.kind, out).toBe("print");
+    expect(directive.message ?? "", out).toContain(READING);
+    expect(questionTexts(proj)).toEqual([NEW_WORK]);
+  });
+
+  test("claude: a bare next as the first step reads the line the same way", async () => {
+    const proj = await workOpen();
+    await say(proj, NEW_LINE, "claude");
+    const { directive, out } = await next(proj, "claude", []);
+    expect(directive.kind, out).toBe("print");
+    expect(directive.message ?? "", out).toContain(READING);
+    expect(questionTexts(proj)).toEqual([NEW_WORK]);
+  });
+
+  // The recorded miss (t176 run 8 on main b9c3e9000f), replayed: the widget
+  // feature at Feasibility, the line exactly as Claude Code delivered it, the
+  // agent's `next --resume`, then the step the reading names for new work.
+  test("claude: the t176 miss replayed: next --resume, then the reading's own step, asks where the new work belongs", async () => {
+    const proj = fresh();
+    writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8"), "utf-8");
+    await say(proj, NEW_LINE, "claude");
+    const read = await next(proj, "claude", ["--resume"]);
+    expect(read.directive.kind, read.out).toBe("print");
+    const id = requestId(String(read.directive.message ?? ""));
+    expect(id, read.out).toBeDefined();
+    const { directive, out } = await next(proj, "claude", ["--request", id!, "--propose", "classic"]);
+    expect(directive.kind, out).toBe("ask");
+    expect(directive.ask_type).toBe("new-work-routing");
+    expect(directive.question ?? "").toContain(NEW_WORK);
+  });
+
+  test("claude: a bare /aidlc re-entry still resumes the open work", async () => {
+    const proj = await workOpen();
+    await say(proj, "/aidlc", "claude");
+    const { directive, out } = await next(proj, "claude", ["--resume"]);
+    expect(isTheWorksStep(directive), out).toBe(true);
+    expect(questionFiles(proj)).toHaveLength(0);
+  });
+
+  test("claude: after the agent passed the words itself, a bare next or next --resume is the work's own step", async () => {
+    const proj = await workOpen();
+    await say(proj, NEW_LINE, "claude");
+    const passed = await next(proj, "claude", [NEW_WORK]);
+    expect(passed.directive.message ?? "", passed.out).toContain(READING);
+    for (const args of [[], ["--resume"]]) {
+      const { directive, out } = await next(proj, "claude", args);
+      expect(isTheWorksStep(directive), `${args.join(" ")}: ${out}`).toBe(true);
+    }
+    expect(questionTexts(proj)).toEqual([NEW_WORK]);
+  });
+
+  test("claude: a line taken once is not taken again: \"carry on\", then the bare next the reading names, is the work's own step", async () => {
+    const proj = await workOpen();
+    await say(proj, "/aidlc carry on", "claude");
+    const taken = await next(proj, "claude", ["--resume"]);
+    expect(taken.directive.message ?? "", taken.out).toContain(READING);
+    const { directive, out } = await next(proj, "claude", []);
+    expect(isTheWorksStep(directive), out).toBe(true);
+    expect(questionTexts(proj)).toEqual(["carry on"]);
+  });
+
+  test("claude: once something is recorded after their line, a bare next is the work's own step", async () => {
+    const proj = await workOpen();
+    await say(proj, NEW_LINE, "claude");
+    const logged = await exec([
+      process.execPath, join(AIDLC_SRC, "tools", "aidlc-log.ts"), "decision", "--project-dir", proj,
+      "--stage", "requirements-analysis", "--decision", "Where does the new work go?", "--options", "Here,Separate",
+    ], { cwd: proj, env: env(proj) });
+    expect(logged.status, `${logged.stdout}${logged.stderr}`).toBe(0);
+    const { directive, out } = await next(proj, "claude", []);
+    expect(isTheWorksStep(directive), out).toBe(true);
+    expect(questionFiles(proj)).toHaveLength(0);
+  });
+
+  test("claude: a line of settings alone, then next --resume, names the setter as a bare next does", async () => {
+    const proj = await workOpen();
+    await say(proj, "/aidlc --depth minimal", "claude");
+    const bare = await next(proj, "claude", []);
+    expect(bare.directive.kind, bare.out).toBe("print");
+    const proj2 = await workOpen();
+    await say(proj2, "/aidlc --depth minimal", "claude");
+    const resumed = await next(proj2, "claude", ["--resume"]);
+    expect(resumed.directive.kind, resumed.out).toBe("print");
+    expect(resumed.directive.message, resumed.out).toBe(bare.directive.message);
+  });
+
+  // The code plan answered by an exact pick in the line: the hook records the
+  // answer, `next` with their words says so and names a bare `next`, and that
+  // bare `next` carries the answer out instead of reading the line again.
+  for (const pick of ["Approve Plan", "1"]) {
+    test(`claude: "/aidlc ${pick}" at the plan question: the bare next after the engine's print is not the same print`, async () => {
+      const proj = fresh();
+      await buildState(proj, "plan-question-open");
+      await Bun.sleep(1100);
+      await say(proj, `/aidlc ${pick}`, "claude");
+      const first = await next(proj, "claude", [pick]);
+      const second = await next(proj, "claude", []);
+      expect(second.out, `first: ${first.out}`).not.toBe(first.out);
+      const third = await next(proj, "claude", []);
+      expect(third.directive.message ?? "", `second: ${second.out}`).not.toBe(first.directive.message ?? "");
+    });
+  }
 });
