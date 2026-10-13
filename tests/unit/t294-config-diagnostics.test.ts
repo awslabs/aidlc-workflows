@@ -6603,6 +6603,35 @@ process.exit(0);
     expect(agent.allowedTools).toEqual(shippedAgent.allowedTools);
     expect(readFileSync(personalMcp)).toEqual(personalBefore);
 
+    // The agent file travels with the project, so a teammate's config run
+    // keeps the servers named for someone else and adds their own.
+    const teammateHome = temp("aidlc-t294-kiro-home-teammate-");
+    mkdirSync(join(teammateHome, "settings"), { recursive: true });
+    writeFileSync(
+      join(teammateHome, "settings", "mcp.json"),
+      `${JSON.stringify({ mcpServers: { "their-docs": { command: "their-docs-server" } } }, null, 2)}\n`,
+    );
+    const teammate = run(args, project, { KIRO_HOME: teammateHome });
+    expect(teammate.status, teammate.stdout + teammate.stderr).toBe(0);
+    agent = JSON.parse(readFileSync(agentPath, "utf-8")) as Agent;
+    expect(agent.tools).toEqual([
+      ...shippedAgent.tools,
+      ...[...shippedServers, "team-docs", "their-docs", "my-docs"].map((name) => `@${name}`),
+    ]);
+
+    // A personal file kept as a link (a dotfiles folder) is read through it.
+    const linkedHome = temp("aidlc-t294-kiro-home-linked-");
+    const dotfiles = temp("aidlc-t294-kiro-dotfiles-");
+    mkdirSync(join(linkedHome, "settings"), { recursive: true });
+    writeFileSync(
+      join(dotfiles, "mcp.json"),
+      `${JSON.stringify({ mcpServers: { "linked-docs": { command: "linked-docs-server" } } }, null, 2)}\n`,
+    );
+    symlinkSync(join(dotfiles, "mcp.json"), join(linkedHome, "settings", "mcp.json"), "file");
+    const linked = run(args, project, { KIRO_HOME: linkedHome });
+    expect(linked.status, linked.stdout + linked.stderr).toBe(0);
+    expect((JSON.parse(readFileSync(agentPath, "utf-8")) as Agent).tools).toContain("@linked-docs");
+
     // A copy install puts the runtime's files in the project before config
     // runs: the agent file as shipped is AI-DLC's, so setup names the servers
     // in it rather than stopping on it. A hand edit to it still stops config.
@@ -6614,11 +6643,15 @@ process.exit(0);
     const copiedAgentPath = join(copied, ".kiro", "agents", "aidlc.json");
     expect((JSON.parse(readFileSync(copiedAgentPath, "utf-8")) as Agent).tools)
       .toEqual([...shippedAgent.tools, ...shippedServers.map((name) => `@${name}`), "@my-docs"]);
+    // A grant added by hand stays named like any other; another hand edit, such
+    // as a built-in tool, stops config and keeps the person's bytes.
     const edited = JSON.parse(readFileSync(copiedAgentPath, "utf-8")) as Agent;
-    edited.tools.push("@my-own-grant");
-    writeFileSync(copiedAgentPath, `${JSON.stringify(edited, null, 2)}\n`);
+    edited.tools.push("web_fetch");
+    const editedText = `${JSON.stringify(edited, null, 2)}\n`;
+    writeFileSync(copiedAgentPath, editedText);
     const editedRun = run([...args.slice(0, 2), copied, ...args.slice(3)], copied, env);
     expect(editedRun.status).not.toBe(0);
+    expect(readFileSync(copiedAgentPath, "utf-8")).toBe(editedText);
     expect(editedRun.stdout + editedRun.stderr).toContain(".kiro/agents/aidlc.json (locally modified");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

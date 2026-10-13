@@ -6330,13 +6330,32 @@ function grantKiroMcpServers(projectDir: string, sourceRoot: string, stagedRoot:
   const rel = `${harnessDir}/agents/aidlc.json`;
   const agentPath = join(stagedRoot, rel);
   const names = new Set<string>();
-  for (const path of [join(stagedRoot, harnessDir, "settings", "mcp.json"), personalKiroMcpPath()]) {
-    if (path === null || !regularFile(path)) continue;
+  const personal = personalKiroMcpPath();
+  for (const path of [join(stagedRoot, harnessDir, "settings", "mcp.json"), personal]) {
+    // The person's own file may be a link (a dotfiles folder): follow it.
+    const file = path === personal
+      ? path !== null && statSync(path, { throwIfNoEntry: false })?.isFile() === true
+      : path !== null && regularFile(path);
+    if (path === null || !file) continue;
     try {
       const servers = (readJsonFile(path) as Record<string, unknown>).mcpServers;
       if (isRecord(servers)) for (const name of Object.keys(servers)) names.add(name);
     } catch {
       // A file Kiro cannot read names no server.
+    }
+  }
+  // The agent file travels with the project (a team's clone), so a server it
+  // already names stays named: a teammate's run adds theirs and keeps yours.
+  // Kiro ignores a grant for a server it does not have.
+  const current = join(projectDir, rel);
+  if (regularFile(current)) {
+    try {
+      const tools = (JSON.parse(withoutBom(readFileSync(current, "utf-8"))) as Record<string, unknown>).tools;
+      if (Array.isArray(tools)) {
+        for (const tool of tools) if (typeof tool === "string" && tool.startsWith("@")) names.add(tool.slice(1));
+      }
+    } catch {
+      // A copy config cannot read keeps no grant; the ownership check reports it.
     }
   }
   if (!regularFile(agentPath)) return false;
@@ -6354,7 +6373,6 @@ function grantKiroMcpServers(projectDir: string, sourceRoot: string, stagedRoot:
   ];
   if (canonical(tools) === canonical(agent.tools)) return false;
   writeFileSync(agentPath, jsonFileText({ ...agent, tools }, agentText));
-  const current = join(projectDir, rel);
   const release = join(sourceRoot, rel);
   if (!regularFile(current) || !regularFile(release)) return false;
   const releaseHash = sha256File(release);
