@@ -2150,6 +2150,27 @@ describe("one question for several ready Units", () => {
     expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
   });
 
+  // A reply while the person edits several Units' plans can be about some of
+  // them ("alpha is finished; you finish beta"), so no answer for all of them is
+  // named: the files stay theirs, in today's words, and Request Changes or
+  // Approve Plan for the Units they name is the agent's to record.
+  test("edit mode on a grouped question: a reply names no answer for every Unit, and the files stay the person's", () => {
+    const { pd } = groupedProject();
+    reply(pd, "I'll edit the files");
+    const editing = answer(pd, "I'll edit the files");
+    expect(editing.code, editing.message).toBe(0);
+    reply(pd, "alpha is finished; you finish beta");
+    const plan = join(codeGenerationRecordDir(pd, "beta"), "code-generation-plan.md");
+    const refused = guardWrite(pd, plan);
+    expect(refused.code).toBe(2);
+    expect(refused.stderr).toContain("When they say they are done");
+    expect(refused.stderr).not.toContain("--checkpoint plan-approval");
+    const asked = swarmState(pd);
+    expect(asked.plan_approval.editing).toBe(true);
+    expect(String(asked.plan_approval.note)).not.toContain("--checkpoint plan-approval");
+    for (const unit of GROUP) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(false);
+  });
+
   test("a change naming one Unit: the agent sends only that Unit back and approves the rest", () => {
     const { pd } = groupedProject();
     reply(pd, "change beta: use a lookup table");

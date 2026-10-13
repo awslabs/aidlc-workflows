@@ -1676,10 +1676,12 @@ since the question was shown, and a plan changed under an open question is asked
 about again. One exception: while the person is editing the plan files
 themselves (they answered "I'll edit the files"), the asked plans' own plan and
 test-instruction files are theirs, and a write to one is refused with the
-sentence that says so until they say they are done. Once they reply, the
-refusal and the edit-mode question name the answer to record (Request Changes
-when they handed the plan back, with their words as the change, or Approve
-Plan when they finished it), so the agent never goes round.
+sentence that says so until they say they are done. Once they reply about one
+plan, the refusal and the edit-mode question name the answer to record (Request
+Changes when they handed the plan back, with their words as the change, or
+Approve Plan when they finished it), so the agent never goes round; a question
+about several Units keeps today's words, since a reply there can be about some
+of them.
 
 **AI-DLC's records.** A file-tool or shell write whose every target is a stage's
 record output under `aidlc/spaces` passes in every Plan Approval state: a stage's

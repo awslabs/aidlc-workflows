@@ -208,11 +208,12 @@ export function planApprovalAskState(projectDir: string): "unanswered" | "editin
  * While the person edits the plan files themselves and has replied since they
  * started, the step that records their reply: the plan handed back to the agent
  * (Request Changes, their words kept as the change) or the files finished
- * (Approve Plan). Which it is, the agent reads. Null until they reply.
+ * (Approve Plan). Which it is, the agent reads. Null until they reply, and for
+ * a question about several Units, where a reply can be about some of them.
  */
 export function planApprovalEditingReplyStep(projectDir: string): string | null {
   const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
-  if (record?.mode !== "editing" || !record.replies?.length) return null;
+  if (record?.mode !== "editing" || !record.replies?.length || record.targets.length > 1) return null;
   const answer = (choice: string | undefined): string =>
     `\`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval --details "${choice}"\``;
   return `record their answer: ${answer(record.choices[1])} when they handed the plan back to you (their words are ` +
