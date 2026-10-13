@@ -562,6 +562,26 @@ entry takes precedence over `exclude`, and other ignored files still inside
 the boundary retain the refusal. Exact-file claims must still name admissible
 source; an exclusion does not make ignored output review evidence.
 
+### An exact source-manifest file is refused because Git ignores it
+
+**Symptom**: An exact file already listed in `source-manifest.json` answers
+with `is ignored by Git and cannot be source-review evidence`.
+
+An ignored exact file is admitted when HEAD already tracks it or when it is
+explicitly registered as source. Adding it only to the Git index (including
+force-add) or tracking it with jj alone does not establish HEAD membership.
+For a file intended as reviewed source, merge a registration such as
+`{"version":1,"paths":["src/runtime.js"]}` into `.aidlc-source-paths.json`
+in that source repository's root, then retry the review. Keep existing entries.
+A registered path takes precedence over `exclude`.
+Files under folders AI-DLC never treats as source, such as `node_modules/`
+or sensor caches, cannot be registered: omit their exact claims instead.
+
+For output that is not source, omit the exact claim; use the registry's
+`exclude` list to leave the output outside the source boundary instead of
+registering it as source. Directory claims ending with `/` have a separate
+ignored-descendant check; exact-file admission does not change that check.
+
 ### Code Generation cannot complete because files changed that no Unit covers
 
 **Symptom**: Approving Code Generation answers with "N changes made during Code
