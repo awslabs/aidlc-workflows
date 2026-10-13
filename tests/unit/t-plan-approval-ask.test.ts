@@ -264,8 +264,11 @@ function guardBash(proj: string, command: string): { code: number; stderr: strin
 // Runs an engine command the way the conductor would, after the guard let it
 // through: the installed tools in the project, as the engine spelled them.
 function runInstalled(proj: string, command: string): string {
-  expect(command).toMatch(/^bun \.claude\/tools\/[\w.-]+\.ts( [\w-]+)+$/);
-  const [, ...args] = command.split(" ");
+  expect(command).toMatch(/^bun \.claude\/tools\/[\w.-]+\.ts( [\w-]+)+( --reason '[^']*')?$/);
+  // The engine's own reason for the person's skip is one quoted argument.
+  const reason = /--reason '([^']*)'$/.exec(command)?.[1];
+  const [, ...args] = command.replace(/ --reason '[^']*'$/, "").split(" ");
+  if (reason !== undefined) args.push("--reason", reason);
   const result = spawnSync(BUN, args, {
     cwd: proj,
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },

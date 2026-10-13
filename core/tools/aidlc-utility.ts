@@ -426,6 +426,7 @@ import {
   carryPendingPersonLines,
   isKiroConductorAgentFile,
   KIRO_CONDUCTOR_AGENT_FILE,
+  PERSON_ASKED_SKIP_REASON,
 } from "./aidlc-lib.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
@@ -12187,7 +12188,10 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       label,
     });
     const newErrors = validation.errors.filter((e) => !baseErrors.has(e));
-    if (newErrors.length > 0) {
+    // A stage the person named is skipped as they asked (the engine's skip
+    // step passes its own reason for that): the stages after it run from what
+    // there is, as they do after a stage skipped where it stood.
+    if (newErrors.length > 0 && reason !== PERSON_ASKED_SKIP_REASON) {
       die(
         `Recompose rejected by the strict validator:\n${newErrors.map((e) => `  - ${e}`).join("\n")}\n` +
           "To make the change, also add a stage that produces what is missing, or also skip the stage that needs it." +

@@ -7782,6 +7782,9 @@ function handleSkip(args: string[]): void {
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
+    // A Unit's step the person asked to skip spends what they typed for it:
+    // their words were the skip. The agent's own skip leaves them kept.
+    if (reason === PERSON_ASKED_SKIP_REASON) clearGateWords(pd);
     if (approvedBehind) {
       console.log(JSON.stringify({ slug, unit, new_state: "unit-skipped", stage_state: "completed" }));
       return;

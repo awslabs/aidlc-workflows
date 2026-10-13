@@ -231,12 +231,15 @@ Under `Construction Iteration: unit-major` (solo Unit ownership), `Current
 Stage` stays on the first per-unit block stage while the walk directs one
 `(stage, unit)` beat at a time, and a stage's condition is judged for that
 unit. While the walk is on a beat, a skip must name that beat's stage and unit
-(`--unit` is required), under the same CONDITIONAL and reason rules, and it
-covers that unit only. The internal `skip --unit` transition emits one
-`UNIT_SKIPPED` receipt at the unit's `Run floor`, so the unit owes the stage
-nothing in this attempt (outputs, review, summary, and its Construction
-checkpoint alike, as for a kind-vacuous unit), the walk moves on, and every
-other unit still gets the stage. Once a unit has finished work, a forward jump
+(`--unit` is required), under the same CONDITIONAL and reason rules (a stage
+of any kind when the person asked to skip it), and it covers that unit only.
+The internal `skip --unit` transition emits one `UNIT_SKIPPED` receipt at the
+unit's `Run floor`, so the unit owes the stage nothing in this attempt
+(outputs, review, summary, and its Construction checkpoint alike, as for a
+kind-vacuous unit), the walk moves on, and every other unit still gets the
+stage. A unit that skipped every step that writes its code owes no
+Construction checkpoint at all: the walk goes on to the next unit, and no
+stage approval waits on it. Once a unit has finished work, a forward jump
 inside the per-unit steps moves only the unit in flight on the same way: `aidlc-jump.ts execute --units`
 runs this transition for each step the walk would stop that unit at before the
 target, also for a step reopened behind its stage approval, whose checkbox and

@@ -12756,6 +12756,17 @@ export function isConstructionSwarmEnabled(stateContent: string | null): boolean
 
 // An approved skeleton Unit was deliberately built before a stage-major swarm.
 // Its per-Unit source binding survives unrelated Units changing the workspace.
+// A Unit the person skipped every code-writing step for (UNIT_SKIPPED in that
+// step's current attempt) has nothing a checkpoint could verify, so it owes
+// none: the walk goes on to the next Unit and nothing waits on its approval,
+// as when the plan does not run Code Generation at all.
+export function unitSkippedItsCode(projectDir: string, stateContent: string, unit: string): boolean {
+  const code = unitMajorConstructionStageSlugs(getField(stateContent, "Scope") ?? "", stateContent, true)
+    .filter((slug) => findStageBySlug(slug)?.workspace_requires === true);
+  return code.length > 0 &&
+    code.every((slug) => unitSkippedUnits(projectDir, slug, undefined, stateContent).has(unit));
+}
+
 export function approvedConstructionUnits(
   projectDir: string,
   stateContent: string,
@@ -12777,6 +12788,11 @@ export function approvedConstructionUnits(
   if (dag.state !== "ok") return approved;
   const skeleton = constructionSkeletonOn(stateContent) ? dag.batches.flat()[0] : null;
   for (const unit of dag.units) {
+    // It owes no checkpoint, so it stands where an approved one does.
+    if (unitSkippedItsCode(projectDir, stateContent, unit)) {
+      approved.add(unit);
+      continue;
+    }
     const kind = unit === skeleton
       ? "skeleton"
       : "unit";

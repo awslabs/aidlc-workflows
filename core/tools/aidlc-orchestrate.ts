@@ -440,6 +440,8 @@ import {
   findStageBySlug,
   withPersonsWordsFirst,
   PERSON_ASKED_SKIP_REASON,
+  unitPlainName,
+  unitSkippedItsCode,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -3406,7 +3408,8 @@ function openQuestionReplyDirective(stage: string, block: string, requestId: str
   return printDirective(
     `Stage "${stage}" has a question you asked that the person has not answered yet. Read their reply. ` +
       `If it answers that question, ${answer}, then carry on with "${stage}" from where you asked and run bare ` +
-      `\`${orchestrate} next\` the next time you need the engine. If it is about something else, such as new work ` +
+      `\`${orchestrate} next\` the next time you need the engine. If it asks to skip this stage, run ` +
+      `\`${orchestrate} next --skip ${shellArg(stage)}\` and follow what it returns. If it is about something else, such as new work ` +
       `or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the ` +
       "engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
       "person in one short question and follow their answer.",
@@ -3438,7 +3441,8 @@ function openPlanQuestionReplyDirective(
       `they made with \`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval ` +
       `--details "<their choice>"\`, then run bare \`${orchestrate} next\`.${typed}`;
   return printDirective(
-    `${undo}${answer} If it is about something else, such as new work or a change to the plan, run ` +
+    `${undo}${answer} If it asks to skip Code Generation, run \`${orchestrate} next --skip code-generation\` and ` +
+      "follow what it returns. If it is about something else, such as new work or a change to the plan, run " +
       `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words and asks ` +
       "them where that work belongs. If you cannot tell which it is, ask the person in one short question and follow " +
       "their answer.",
@@ -9553,7 +9557,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // workflow's scope. Otherwise state remains authoritative and any supplied
     // settings still take the config-only path below.
     const currentStateScope = getField(stateContent, "Scope") ?? "";
-    const plan = { scope: currentStateScope, stateContent };
+    const plan = {
+      scope: currentStateScope,
+      stateContent,
+      walk: planChanges ? planChangeWalk(pd, currentStateScope, stateContent) : null,
+    };
     // Words typed with a differing scope may be new work or the reason for
     // the change: Branch 9c asks which, so they are never dropped.
     const scopeWithWords = Boolean(flags.intent) && !planChanges && !flags.resume;
@@ -12723,7 +12731,7 @@ function unitMajorWalkStep(
       const stop = unitStageStop(projectDir, stateContent, k, u, kinds?.get(u) ?? null, recordPrefix, codekbCtx, ledger);
       if (stop) return stop;
     }
-    if (checkpoints && stateContent) {
+    if (checkpoints && stateContent && !unitSkippedItsCode(projectDir, stateContent, u)) {
       const kind = constructionCheckpointKind(stateContent, u, allUnits);
       const checkpoint = resolveConstructionCheckpoint(projectDir, u, kind, stateContent, routingEvidenceFor(projectDir, stateContent));
       if (!checkpoint.approved) return { kind: "checkpoint", unit: u, checkpoint };
@@ -12831,6 +12839,23 @@ function unitMajorFinishedWalk(
   const last = block.at(-1);
   if (!last || at(currentSlug) <= at(last.slug)) return null;
   return { step: { kind: "covered" }, block, context };
+}
+
+// The step the solo Unit walk has a Unit on, for a plan change the person
+// typed: that Unit, the walk's steps in order, and whether another Unit still
+// owes the step (so "this Unit" and "every Unit from here" differ). Null when
+// the walk is not on a Unit's step.
+type PlanChangeWalk = { stage: string; unit: string; steps: string[]; others: boolean };
+function planChangeWalk(projectDir: string, scope: string, stateContent: string): PlanChangeWalk | null {
+  const current = (getField(stateContent, "Current Stage") ?? "").trim();
+  const walk = current === "" ? null : unitMajorWalkBeat(projectDir, scope, stateContent, current);
+  if (walk === null || walk.step.kind !== "work") return null;
+  const { stage, unit } = walk.step;
+  const done = new Set(unitsWithStageWork(projectDir, stage, walk.context));
+  const skipped = unitSkippedUnits(projectDir, stage.slug, undefined, stateContent);
+  const others = walk.context.units.some((u) => u !== unit && !done.has(u) && !skipped.has(u) &&
+    !kindVacuous(stage, walk.context.kinds?.get(u) ?? null));
+  return { stage: stage.slug, unit, steps: walk.block.map((step) => step.slug), others };
 }
 
 // What the stage-work check needs about the Unit DAG, resolved once per call.
@@ -13694,7 +13719,7 @@ function keptWhilePlanWaits<T extends Directive>(directive: T, planWaits: boolea
 function planChangeDirective(
   changes: PlanChanges,
   before: string | null,
-  plan: { scope: string; stateContent: string } | null,
+  plan: { scope: string; stateContent: string; walk?: PlanChangeWalk | null } | null,
   // The code plan's question is open: it stays the open step, so what the
   // person says next is kept as their answer to it.
   planWaits = false,
@@ -13739,42 +13764,107 @@ function planChangeDirective(
     ? current
     : null;
   const gateOpen = currentState === "awaiting-approval" && !skip.includes(current) ? current : null;
-  const planSkip = skip.filter((slug) => slug !== started);
+  // On the Unit walk Current Stage stays on the walk's first step while a
+  // Unit is on a later one: the step the Unit is on is skipped for that Unit
+  // where it stands, or, when the person means every Unit from here, taken
+  // off the plan; another step of the walk named here is a plan change, which
+  // covers every Unit.
+  const walk = plan?.walk ?? null;
+  const unitStep = walk !== null && skip.includes(walk.stage) && walk.stage !== started ? walk : null;
+  const everyUnit = walk === null ? [] : skip.filter((slug) =>
+    slug !== started && walk.steps.includes(slug) && (slug !== walk.stage || walk.others));
+  const ahead = walk === null ? [] : everyUnit.filter((slug) =>
+    walk.steps.indexOf(slug) > walk.steps.indexOf(walk.stage));
+  const unitName = walk === null ? "" : unitPlainName(walk.unit);
+  const planSkip = skip.filter((slug) => slug !== started && (unitStep === null || slug !== unitStep.stage || unitStep.others));
   const flips = (skipped: string[], added: string[]): string => [
     ...(skipped.length > 0 ? [`--skip ${skipped.join(",")}`] : []),
     ...(added.length > 0 ? [`--add ${added.join(",")}`] : []),
   ].join(" ");
+  // The person's own skip: recompose carries it out over its check that later
+  // stages keep what they read, as a stage skipped where it stands is.
+  const replan = (skipped: string[]): string =>
+    `${aidlcDispatcherInvocation("recompose")} ${flips(skipped, add)}` +
+    (skipped.length > 0 ? ` --reason ${shellArg(PERSON_ASKED_SKIP_REASON)}` : "");
+  const skipName = (slug: string): string =>
+    unitStep !== null && !unitStep.others && slug === unitStep.stage
+      ? `${name(slug)} for the ${unitName} Unit`
+      : everyUnit.includes(slug) ? `${name(slug)} for every Unit from here` : name(slug);
+  const listed = (names: string[]): string =>
+    names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
   const summary = [
-    ...(skip.length > 0 ? [`skipped ${named(skip)}`] : []),
+    ...(skip.length > 0 ? [`skipped ${listed(skip.map(skipName))}`] : []),
     ...(add.length > 0 ? [`added ${named(add)}`] : []),
   ].join(" and ");
+  const startedSkip = started === null ? null
+    : `${aidlcToolInvocation("orchestrate")} report --stage ${started} --result skipped ` +
+      `--reason ${shellArg(PERSON_ASKED_SKIP_REASON)}`;
+  const unitSkip = unitStep === null ? null
+    : `${aidlcToolInvocation("orchestrate")} report --stage ${unitStep.stage} --unit ${unitStep.unit} --result skipped ` +
+      `--reason ${shellArg(PERSON_ASKED_SKIP_REASON)}`;
+  const forTheUnit = unitStep === null ? ""
+    : `It can still be run for that Unit with \`${entrySkillInvocation()} --stage ${unitStep.stage} --unit ${unitStep.unit}\`.`;
+  // The Unit's own step named while another Unit still owes it: the agent
+  // reads from the person's words whether they mean that Unit only or every
+  // Unit from here, and asks once only when their words do not say.
+  if (unitStep?.others) {
+    const runs = (list: (string | null)[]): string =>
+      list.filter((c): c is string => c !== null).map((c) => `\`${c}\``).join(", then ");
+    const rest = planSkip.filter((slug) => slug !== unitStep.stage);
+    const onlyUnit = runs([unitSkip, rest.length > 0 || add.length > 0 ? replan(rest) : null, startedSkip]);
+    const fromHere = runs([replan(planSkip), startedSkip]);
+    const step = name(unitStep.stage);
+    return kept(turnEndingPrint(
+      `${before === null ? "" : `Run \`${before}\` and print its output verbatim. `}` +
+        `The person asked to skip ${step}, which the ${unitName} Unit is on now. ` +
+        `If their words mean the ${unitName} Unit only, run ${onlyUnit}, then tell the person in one line: ` +
+        `"Skipped ${step} for the ${unitName} Unit; the other Units still get it. ${forTheUnit}${parkedTail}" ` +
+        "and re-run `next` to carry on with the work. " +
+        `If they mean every Unit from here, the ${unitName} Unit included, run ${fromHere}, then tell the person ` +
+        `in one line: "Skipped ${step} for every Unit from here. You can undo that any time.${parkedTail}" and stop. ` +
+        `If their words do not say which, ask them once: "Skip ${step} for the ${unitName} Unit only, or for every ` +
+        "Unit from here?\" and stop. Do not show a command's output. If a command refuses, tell the person in plain " +
+        "words why it could not, and the way it names to do it instead, then stop. If they later ask to undo " +
+        `skipping it for every Unit, run \`${aidlcDispatcherInvocation("recompose")} ${flips(add, planSkip)}\`.${resume}`,
+    ));
+  }
   const commands: { command: string; why: string }[] = [];
+  if (unitSkip !== null) {
+    commands.push({ command: unitSkip, why: `to skip ${name(unitStep!.stage)} for the ${unitName} Unit` });
+  }
   if (planSkip.length > 0 || add.length > 0) {
     commands.push({
-      command: `${aidlcDispatcherInvocation("recompose")} ${flips(planSkip, add)}`,
+      command: replan(planSkip),
       why: "to change this workflow's remaining stages as the person asked",
     });
   }
-  if (started !== null) {
-    commands.push({
-      command: `${aidlcToolInvocation("orchestrate")} report --stage ${started} --result skipped ` +
-        `--reason ${shellArg(PERSON_ASKED_SKIP_REASON)}`,
-      why: `to skip ${name(started)}, which has already started`,
-    });
+  if (startedSkip !== null) {
+    commands.push({ command: startedSkip, why: `to skip ${name(started!)}, which has already started` });
   }
   const run = commands
     .map(({ command, why }, at) => `${at === 0 && before === null ? "Run" : "then run"} \`${command}\` ${why}`)
     .join(", ");
-  const lead = before === null ? run : `Run \`${before}\` and print its output verbatim, ${run}`;
+  // A step of the walk the Unit has not reached yet: the plan change covers
+  // every Unit, so a request for one Unit is answered, not carried out as all.
+  const aheadNote = ahead.length === 0 ? ""
+    : `${listed(ahead.map(name))} ${ahead.length === 1 ? "is a step" : "are steps"} each Unit takes, and the ` +
+      `${unitName} Unit has not reached ${ahead.length === 1 ? "it" : "them"} yet, so this change covers every Unit. ` +
+      `If the person's words mean one Unit only, run nothing and tell them in one line: "${listed(ahead.map(name))} ` +
+      `can be skipped for one Unit when that Unit gets to it; the ${unitName} Unit is on ${name(walk!.stage)} now." ` +
+      "and stop. Otherwise: ";
+  const lead = `${aheadNote}${before === null ? run : `Run \`${before}\` and print its output verbatim, ${run}`}`;
   // The way back: a plan flip is undone by the opposite flip while the work
   // runs; a stage skipped where it stood is run on its own, the route
-  // recompose itself names for a skipped stage. A way back after the person's
-  // own action is a plain fact that names the command, never a line telling
-  // them to type it (t-offers-are-plain-questions).
+  // recompose itself names for a skipped stage, and a Unit's step skipped for
+  // that Unit is reopened for it. A way back after the person's own action is
+  // a plain fact that names the command, never a line telling them to type it
+  // (t-offers-are-plain-questions).
   const onItsOwn = `${entrySkillInvocation()} --stage <stage> --single`;
-  const wayBack = started === null
-    ? "You can undo that any time."
-    : `${skip.length === 1 ? "It" : "Either one"} can still be run on its own with \`${onItsOwn}\`.`;
+  const wayBack = unitStep !== null
+    ? forTheUnit
+    : started === null
+      ? "You can undo that any time."
+      : `${skip.length === 1 ? "It" : "Either one"} can still be run on its own with \`${onItsOwn}\`.`;
   const line = `"${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ${wayBack}${noted ? ` ${noted}` : ""}${parkedTail}"`;
   const undo = `If they later ask to undo it, run \`${aidlcDispatcherInvocation("recompose")} ${flips(add, planSkip)}\`.`;
   const message =
@@ -13782,7 +13872,7 @@ function planChangeDirective(
     "If a command refuses, tell the person in plain words why it could not, and the way it names to do it " +
     "instead, then stop. " +
     `Otherwise tell the person in one line: ${line}`;
-  if (started !== null) {
+  if (started !== null || unitStep !== null) {
     // Parked work stays parked: the line already says so and asks whether to
     // pick it back up, so the turn ends on that question instead of carrying
     // on with the work the person paused.
@@ -15988,8 +16078,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // reading still needs a CONDITIONAL stage.
     const personAsked = reason === PERSON_ASKED_SKIP_REASON;
     if (node.execution !== "CONDITIONAL" && planAction !== "SKIP" && !personAsked) {
+      // The person's own skip goes through the step that names this report
+      // with the engine's reason, so the refusal names that step.
       emit(errorDirective(
-        `Stage "${slug}" is execution: ${node.execution}; only a CONDITIONAL stage can report skipped.`,
+        `Stage "${slug}" is execution: ${node.execution}; only a CONDITIONAL stage can report skipped. ` +
+          `If the person asked to skip it, run \`${aidlcToolInvocation("orchestrate")} next --skip ${slug}\`: ` +
+          `its step skips it the way they asked${readConstructionIteration(stateContent) === "unit-major" && isPerUnit(node)
+            ? ", for one Unit only or for every Unit"
+            : ""}.`,
       ));
       return;
     }
@@ -16014,8 +16110,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         return;
       }
       // Files already written for this unit are its work for the stage;
-      // skipping would drop them from the stage's approval.
-      if (unitsWithStageWork(pd, beat.stage, beat.context).includes(beat.unit)) {
+      // skipping would drop them from the stage's approval, so only the
+      // person's own skip does that.
+      if (!personAsked && unitsWithStageWork(pd, beat.stage, beat.context).includes(beat.unit)) {
         emit(errorDirective(
           `Cannot skip "${slug}" for unit "${beat.unit}": that unit's files for this step are ` +
             "already written. Finish the step for that unit instead, then continue with " +
