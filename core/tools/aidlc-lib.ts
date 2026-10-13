@@ -431,6 +431,10 @@ interface ShippedHarnessData {
   documentExtractors: ReadonlyMap<string, DocumentExtractorSpec> | null;
   runnerFrontmatterAdditions: readonly string[];
   hookActivation: HookActivation | null;
+  /** The host variables of a host whose own stop event records every
+   *  dispatched agent's finish before the agent that dispatched it sees the
+   *  result (agentFinishRecorded), or null. */
+  agentFinishRecorded: readonly string[] | null;
 }
 
 let _shippedHarnessData: ShippedHarnessData | null = null;
@@ -608,12 +612,20 @@ function readShippedHarnessData(): ShippedHarnessData {
           ...(typeof activation.agentStepEdits === "string" ? { agentStepEdits: activation.agentStepEdits } : {}),
         }
         : null;
+    // agentFinishRecorded is evidence the engine relies on to say no reviewer
+    // finished, so anything but a list of variable names reads as undeclared.
+    const finish = (parsed as { agentFinishRecorded?: { env?: unknown } | null }).agentFinishRecorded?.env;
+    const agentFinishRecorded = Array.isArray(finish) && finish.length > 0 &&
+        finish.every((name) => typeof name === "string" && name !== "")
+      ? [...finish as string[]]
+      : null;
     _shippedHarnessData = {
       rulesSubdir,
       plugins,
       documentExtractors,
       runnerFrontmatterAdditions,
       hookActivation,
+      agentFinishRecorded,
     };
     return _shippedHarnessData;
   } catch (err) {
@@ -626,6 +638,7 @@ function readShippedHarnessData(): ShippedHarnessData {
     documentExtractors: null,
     runnerFrontmatterAdditions: [],
     hookActivation: null,
+    agentFinishRecorded: null,
   };
   return _shippedHarnessData;
 }
@@ -4250,17 +4263,64 @@ export function appendIntentToRegistry(
   entry: IntentRegistryEntry,
   space?: string,
 ): void {
-  const path = intentsRegistryPath(projectDir, space);
-  let list: IntentRegistryEntry[] = [];
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
-    if (Array.isArray(parsed)) list = parsed as IntentRegistryEntry[];
-  } catch {
-    // absent / malformed → start a fresh list
-  }
+  const list = readIntentRegistry(projectDir, space);
   list.push(entry);
+  writeIntentRegistry(projectDir, list, space);
+}
+
+// Write a space's registry. A file git left conflicted was read as every row of
+// both sides, so this write keeps them all; the person hears once that git
+// still shows the file as conflicted. Their git is theirs: nothing is staged.
+export function writeIntentRegistry(projectDir: string, list: IntentRegistryEntry[], space?: string): void {
+  const path = intentsRegistryPath(projectDir, space);
+  let conflicted = false;
+  try {
+    conflicted = CONFLICT_START.test(readFileSync(path, "utf-8"));
+  } catch {
+    // absent → a new list
+  }
   mkdirSync(dirname(path), { recursive: true });
   writeFileAtomic(path, `${JSON.stringify(list, null, 2)}\n`);
+  if (!conflicted) return;
+  try {
+    const session = resolveInvokingSessionId(projectDir);
+    if (session) {
+      addPendingPersonLines(projectDir, session, [
+        `Your list of work, ${toPosix(relative(projectDir, path))}, had a git conflict: every piece of work ` +
+          "from both sides was kept. If git still shows the file as conflicted, git add marks it resolved.",
+      ]);
+    }
+  } catch {
+    // A line the person may miss never undoes the write.
+  }
+}
+
+// Git's conflict markers. No line of JSON starts with one, so in intents.json
+// they split the text into its two sides exactly.
+const CONFLICT_START = /^<{7}/m;
+
+// One side of a file git left conflicted: the lines outside every conflict plus
+// that side's own lines (a diff3 or zdiff3 base section belongs to neither).
+function conflictSide(text: string, side: "ours" | "theirs"): string {
+  const kept: string[] = [];
+  let zone: "both" | "ours" | "base" | "theirs" = "both";
+  for (const line of text.split(/\r?\n/)) {
+    if (line.startsWith("<<<<<<<")) zone = "ours";
+    else if (zone !== "both" && line.startsWith("|||||||")) zone = "base";
+    else if (zone !== "both" && line.startsWith("=======")) zone = "theirs";
+    else if (zone !== "both" && line.startsWith(">>>>>>>")) zone = "both";
+    else if (zone === "both" || zone === side) kept.push(line);
+  }
+  return kept.join("\n");
+}
+
+function registryList(text: string): IntentRegistryEntry[] | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return Array.isArray(parsed) ? (parsed as IntentRegistryEntry[]) : null;
+  } catch {
+    return null;
+  }
 }
 
 // The `aidlc/spaces` root — the parent of every space dir. Sole helper so the
@@ -4270,20 +4330,35 @@ export function spacesRoot(projectDir: string): string {
 }
 
 // Read a space's intents.json registry as a typed list. Returns [] when the
-// file is absent or malformed (same tolerance as appendIntentToRegistry). The
+// file is absent or malformed. A file git left conflicted (two clones started
+// work in one space) reads as every row of both sides, once per uuid. The
 // canonical "what intents exist" record for humans/ordering/status — the cheap
 // on-disk listIntentDirs() scan is the path-resolver's record-presence signal,
 // but the registry carries the uuid/status/scope/repos a human or the --json
 // consumer needs.
 export function readIntentRegistry(projectDir: string, space?: string): IntentRegistryEntry[] {
-  const path = intentsRegistryPath(projectDir, space);
+  let text: string;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
-    if (Array.isArray(parsed)) return parsed as IntentRegistryEntry[];
+    text = readFileSync(intentsRegistryPath(projectDir, space), "utf-8");
   } catch {
-    // absent / malformed → empty
+    return [];
   }
-  return [];
+  const whole = registryList(text);
+  if (whole !== null) return whole;
+  if (!CONFLICT_START.test(text)) return [];
+  // ponytail: a row both sides changed keeps the first side's copy (every row
+  // is still kept); a side that is not JSON (a hand edit) adds nothing.
+  const rows: IntentRegistryEntry[] = [];
+  const seen = new Set<string>();
+  for (const side of ["ours", "theirs"] as const) {
+    for (const entry of registryList(conflictSide(text, side)) ?? []) {
+      const key = typeof entry?.uuid === "string" ? entry.uuid : JSON.stringify(entry);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push(entry);
+    }
+  }
+  return rows;
 }
 
 // --- The deterministic query layer: "what exists" (one source, two modes) ----
@@ -6483,6 +6558,35 @@ export function personLineHeard(projectDir: string, sessionId: string, line: str
   return readPendingPersonLines(path, turn, work).said.includes(line);
 }
 
+// What the person asked to leave out of a build (#1342): the `Deferred` items
+// in these traceability.json files, at most ten by id and then a count, or
+// null when there are none or a file cannot be read.
+export function leftOutLine(paths: readonly string[]): string | null {
+  const LEFT_OUT_IDS = 10;
+  const ID_MAX_CHARS = 64;
+  const ids: string[] = [];
+  try {
+    for (const path of paths) {
+      if (!existsSync(path)) continue;
+      const coverage = (JSON.parse(readFileSync(path, "utf-8")) as { coverage?: unknown }).coverage;
+      if (!Array.isArray(coverage)) continue;
+      for (const entry of coverage as Array<{ id?: unknown; status?: unknown }>) {
+        const id = typeof entry?.id === "string" ? entry.id.trim() : "";
+        if (entry?.status === "Deferred" && id !== "" && id.length <= ID_MAX_CHARS && !ids.includes(id)) ids.push(id);
+      }
+    }
+  } catch {
+    return null;
+  }
+  if (ids.length === 0) return null;
+  const shown = ids.slice(0, LEFT_OUT_IDS);
+  const more = ids.length - shown.length;
+  const list = more > 0
+    ? `${shown.join(", ")} and ${more} more`
+    : shown.length === 1 ? shown[0] : `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`;
+  return `Left out of this build: ${list}.`;
+}
+
 // What the person hears about a finished stage that is behind something it
 // used: the work carries on, and the redo is offered as a plain question.
 export function staleStageLine(name: string): string {
@@ -7977,7 +8081,6 @@ function updateIntentRow(
   space?: string,
 ): boolean {
   const sp = space ?? activeSpace(projectDir);
-  const path = intentsRegistryPath(projectDir, sp);
   const list = readIntentRegistry(projectDir, sp);
   let changed = false;
   for (const entry of list) {
@@ -7989,10 +8092,7 @@ function updateIntentRow(
     }
     break;
   }
-  if (changed) {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileAtomic(path, `${JSON.stringify(list, null, 2)}\n`);
-  }
+  if (changed) writeIntentRegistry(projectDir, list, sp);
   return changed;
 }
 
@@ -9949,6 +10049,21 @@ export function readActiveDirectiveMarker(
   try {
     const marker = readActiveDirectiveMarkerRaw(activeDirectiveMarkerPath(projectDir));
     return marker?.state_sha256 === stateDigest(stateContent) ? marker : null;
+  } catch {
+    return null;
+  }
+}
+
+// The Code Generation step the engine issued last for this work, even when a
+// state write since then made it out of date: the write retired the step, not
+// the work it named. Only a Code Generation step of the current intent; null
+// for any other.
+export function readIssuedDirectiveMarker(projectDir: string): ActiveDirectiveMarker | null {
+  try {
+    const target = resolveActiveDirectiveTarget(projectDir);
+    const marker = readActiveDirectiveMarkerRaw(target.markerPath);
+    return marker?.stage === "code-generation" && (marker.intent_uuid ?? null) === target.intentUuid
+      ? marker : null;
   } catch {
     return null;
   }
@@ -15676,6 +15791,10 @@ export interface FreshReviewReceipts {
    *  records the verdict its dispatch dictated (reviewCompletionDictated).
    *  Read only beside stageVerdict / unitVerdicts, for the one line the gate says. */
   dictatedVerdicts?: Set<string>;
+  /** Scopes ("" for the stage, else the Unit) whose fresh terminal verdict
+   *  records that no reviewer had finished (reviewCompletionWithoutReviewer).
+   *  Read only beside stageVerdict / unitVerdicts, for the one line the gate says. */
+  noReviewerVerdicts?: Set<string>;
   /**
    * Units with a merge-confirmed Bolt attempt. A name-only attempt is
    * confirmed by its BOLT_COMPLETED row; a slug-backed (worktree) attempt is
@@ -18200,6 +18319,78 @@ export function dictatedReviewNotice(stageName: string, unit?: string | null): s
   return `The reviewer for ${stageName}${unit ? ` (${unit})` : ""} was told what to conclude before it looked.`;
 }
 
+/** The REVIEW_COMPLETED field the logger writes, as `no`, when the verdict was
+ *  recorded before any agent had finished since its review was requested, on
+ *  a host where that absence is evidence (noAgentFinishedSinceReview). True
+ *  when written, even if an agent finishes later; distinct from
+ *  REVIEW_FINISHED_FIELD, the NOT-READY fallback with no review at all. */
+export const REVIEWER_FINISHED_FIELD = "Reviewer Finished Before Verdict";
+
+/** Whether a REVIEW_COMPLETED row records a verdict no reviewer had finished.
+ *  Read for what the person is told; it changes no readiness and no fingerprint. */
+export function reviewCompletionWithoutReviewer(completionBlock: string): boolean {
+  return auditBlockField(completionBlock, REVIEWER_FINISHED_FIELD) === "no";
+}
+
+/** The one line the person hears with the verdict, and at the gate under
+ *  strict, when no reviewer finished the review they are deciding on. */
+export function noReviewerNotice(stageName: string, unit?: string | null): string {
+  return `No reviewer finished the review for ${stageName}${unit ? ` (${unit})` : ""}; its verdict was recorded without a reviewer.`;
+}
+
+/** Whether the agent's shell is in a host whose own stop event records every
+ *  dispatched agent's finish before the agent that dispatched it sees the
+ *  result: the harness declares it (harness.json `agentFinishRecorded`) with
+ *  the variables that host sets in its agent's shell. */
+export function hostRecordsAgentFinishes(): boolean {
+  try {
+    return inHostShell(readShippedHarnessData().agentFinishRecorded ?? undefined);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the record shows that no agent finished after `request`, on a host
+ * where a missing completion row means that. Every doubt reads as false, so a
+ * lost or late row can never put a wrong line in front of the person: another
+ * host, a delegated worktree (its reviewers' rows land in the parent's ledger),
+ * a chat whose hooks do not write into this record (the check log-subagent
+ * makes), a background agent sent or finished since the request (the in-flight
+ * ledger written since, or an entry still fresh), a completion hook that ran
+ * since (its heartbeat), or any SUBAGENT_COMPLETED row, of any agent, not
+ * definitely before the request. The caller holds the audit lock, so neither
+ * the rows nor the ledger move while this reads.
+ */
+export function noAgentFinishedSinceReview(
+  projectDir: string,
+  events: ReadonlyArray<AuditShardEvent>,
+  request: AuditShardEvent,
+  selection: WorkflowSelection,
+): boolean {
+  try {
+    if (!hostRecordsAgentFinishes()) return false;
+    if (delegatedWorktreeIntent(projectDir) !== null) return false;
+    if (selection.intent === null || workflowParticipation(projectDir, selection) !== "participant") return false;
+    const requested = Date.parse(request.timestamp);
+    if (!Number.isFinite(requested)) return false;
+    const ledger = subagentInflightMarkerPath(projectDir);
+    if (existsSync(ledger)) {
+      if (lstatSync(ledger).mtimeMs >= requested) return false;
+      const inflight = inspectSubagentInflight(projectDir);
+      if (inflight.malformed || inflight.freshCount > 0) return false;
+    }
+    const heartbeat = join(hooksHealthReadDir(projectDir, selection.intent, selection.space), "log-subagent.last");
+    if (existsSync(heartbeat)) {
+      const beat = Date.parse(readFileSync(heartbeat, "utf-8").trim());
+      if (!Number.isFinite(beat) || beat >= requested) return false;
+    }
+    return !events.some((row) => row.event === "SUBAGENT_COMPLETED" && !attemptEventDefinitelyBefore(row, request));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The review each scope of a stage most recently recorded, in the stage's
  * whole history: the record the newest PAIRED REVIEW_COMPLETED row names (null
@@ -20112,6 +20303,7 @@ export function freshReviewReceipts(
     unfinishedVerdicts: new Set(),
     editedVerdicts: new Set(),
     dictatedVerdicts: new Set(),
+    noReviewerVerdicts: new Set(),
     mergedBoltUnits: new Set(),
     openBoltUnits: new Set(),
     acceptedChanges: [],
@@ -20216,11 +20408,13 @@ export function freshReviewReceipts(
   const recordedRepos = new Set(intentRepos(projectDir));
   const unitVerdicts = new Map<string, ReviewVerdict>();
   // Read beside the verdicts above: which of them no reviewer gave, which
-  // record a review edited after the reviewer finished, and which record the
-  // verdict the reviewer's dispatch dictated.
+  // record a review edited after the reviewer finished, which record the
+  // verdict the reviewer's dispatch dictated, and which were recorded before
+  // any reviewer finished.
   const unfinishedVerdicts = new Set<string>();
   const editedVerdicts = new Set<string>();
   const dictatedVerdicts = new Set<string>();
+  const noReviewerVerdicts = new Set<string>();
   const unitStale = new Set<string>();
   const unitStaleProgress = new Map<string, StaleReviewProgress>();
   const unitIterations = new Map<string, number>();
@@ -20652,6 +20846,8 @@ export function freshReviewReceipts(
     else editedVerdicts.delete(unit ?? "");
     if (reviewCompletionDictated(e.block)) dictatedVerdicts.add(unit ?? "");
     else dictatedVerdicts.delete(unit ?? "");
+    if (reviewCompletionWithoutReviewer(e.block)) noReviewerVerdicts.add(unit ?? "");
+    else noReviewerVerdicts.delete(unit ?? "");
     if (unit) {
       unitVerdicts.set(unit, terminalVerdict);
       unitStale.delete(unit);
@@ -21119,6 +21315,7 @@ export function freshReviewReceipts(
     unfinishedVerdicts,
     editedVerdicts,
     dictatedVerdicts,
+    noReviewerVerdicts,
     mergedBoltUnits,
     openBoltUnits,
     acceptedChanges: [
@@ -29296,6 +29493,23 @@ export function claimAttemptFields(
   const stamp = applicableTeamUnitScopeStamp(projectDir);
   if (!stamp || (unit !== undefined && stamp.unit !== unit)) return {};
   return { "Attempt Generation": String(stamp.generation) };
+}
+
+// The BOLT_FAILED row that closes a Bolt as aborted: `bolt abort`, and the
+// switch to building the Units one after another. It leaves the worktree as it is.
+export function boltAbortedFields(
+  projectDir: string,
+  name: string,
+  slug: string,
+  reason: string,
+): Record<string, string> {
+  return {
+    "Failed Bolt": name,
+    "Bolt slug": slug,
+    "Error summary": `aborted: ${reason}`,
+    Reason: "aborted",
+    ...claimAttemptFields(projectDir, slug),
+  };
 }
 
 export function eventMatchesClaimAttempt(
@@ -39870,15 +40084,19 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
     }
     if (colon && plans.has(colon[1].toLowerCase())) return { kind: "exact" };
     // A plan's name is a pick only where it can be nothing else: the whole line
-    // (`next bugfix`), or its own argument with the request in one more, which
-    // is what the orchestrator skill asks the agent for (`next classic 'Build a
-    // notes app'`). Any other line that opens with one is the person's own
-    // sentence, whose first word may be theirs: loose words after it (`bugfix
+    // (`next bugfix`), or its own argument with the request quoted into one more,
+    // which is what the orchestrator skill asks the agent for (`next classic
+    // 'Build a notes app'`). Any other line that opens with one is the person's
+    // own sentence, whose first word may be theirs: loose words after it (`bugfix
     // Fix duplicate todos`), or the whole line in one argument, as Kiro IDE's
     // PowerShell hands it over (`classic car rental website`). Both read the
     // same way, at any length, and only the agent can tell whether that word is
-    // their plan or their own (#2359).
-    if (plans.has(plan) && words.length <= 2) return { kind: "exact" };
+    // their plan or their own (#2359). A single word after the plan's name is
+    // that sentence too: `/aidlc feature flags` passed through as typed arrives
+    // as the same two arguments as a plan the agent read with a one-word request.
+    if (plans.has(plan) && (words.length === 1 || (words.length === 2 && /\s/.test(words[1].trim())))) {
+      return { kind: "exact" };
+    }
     const opening = plan.split(/\s+/)[0];
     return plans.has(opening) ? { kind: "plan-word", scope: opening } : { kind: "words" };
   }

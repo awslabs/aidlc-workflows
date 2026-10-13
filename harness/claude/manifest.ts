@@ -25,6 +25,11 @@ const manifest: HarnessManifest = {
     type: "command",
     command: 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline',
   },
+  // SubagentStop runs before a foreground agent's result comes back (it can
+  // keep the agent running), and a background dispatch is counted in the
+  // in-flight ledger until its SubagentStop. Claude Code sets
+  // CLAUDE_CODE_SESSION_ID in its agent's shell.
+  agentFinishRecorded: { env: ["CLAUDE_CODE_SESSION_ID"] },
   // A Claude Code session open before setup has no /aidlc and runs none of
   // its hooks until it starts again.
   configNextStep:

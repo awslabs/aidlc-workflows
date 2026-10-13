@@ -467,11 +467,19 @@ describe("a stage step carries its instructions, not the fields to branch on", (
     expect(notes(runStage()).brief_note).toBeUndefined();
   });
 
-  test("the summary confirmation is one sentence when it is on, and nothing when off", () => {
+  test("the summary confirmation is one sentence either way: confirm when on, skip when off", () => {
     const on = runStage({ ceremony: { ...(runStage().ceremony as Json), summary_confirmation: "on" } });
     expect(str(notes(on).ceremony_note)).toContain("confirm the summary of the answers with the person");
-    expect(notes(runStage()).ceremony_note).toBeUndefined();
+    // Off is said, not left as an absence: a stage file's own declaration ("summary_confirmation: required", a
+    // "MANDATORY PRE-GENERATION STOP when enabled") otherwise reads as the ask (seen live on Kiro CLI, twice in one run).
+    const off = str(notes(runStage()).ceremony_note);
+    expect(off.startsWith("Summary confirmation is off for this work:")).toBe(true);
+    expect(off).toContain("skip the stage file's Consolidated Summary step and record nothing for it");
+    expect(off).not.toContain("confirm the summary");
     expect(notes({ ...on, gate_only: true }).ceremony_note).toBeUndefined();
+    expect(notes({ ...runStage(), gate_only: true }).ceremony_note).toBeUndefined();
+    const { ceremony: _ceremony, ...noCeremony } = runStage();
+    expect(notes(noCeremony).ceremony_note).toBeUndefined();
   });
 
   test("no instruction names a JSON field", () => {
@@ -486,6 +494,7 @@ describe("a stage step carries its instructions, not the fields to branch on", (
         plan_approval: { status: "approved", skipped: true, notice: "Plan approval is off." },
       })),
       notes(runStage({ answer_mode: REUSED_MODE, gate_only: true })),
+      notes(runStage()),
       ...ASK_TYPES.map((type) => notes(ask(type))),
       notes(routingAsk(true)),
     ];

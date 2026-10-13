@@ -75,7 +75,7 @@ the six to be skipped. No release workflow consumes it, even after the
 candidate merges.
 
 Manual verification can additionally select `verification_family` as
-`claude-sdk`, `claude-tui`, `codex`, or `opencode`; its default is `all`.
+`claude-sdk`, `claude-tui`, `codex`, `copilot`, or `opencode`; its default is `all`.
 Scoped runs keep the same exact-head authorization, run only the chosen
 family's existing shards, and require Windows release-contract coverage to be
 explicitly skipped. The result records `verificationFamily` and its omissions.
@@ -273,7 +273,10 @@ publication permission before the environment gate.
    select its exact merged commit on `main`. A successful preview of that
    commit, or a manual `full-suite.yml` dispatch on `main` with `ref=<sha>`,
    leaves a `full-suite-result` the release reuses. Without one, the release
-   runs the Full Suite itself and takes hours longer.
+   runs the Full Suite itself and takes hours longer. On the selected commit,
+   run the Kiro CLI release journey on a machine with a signed-in Kiro CLI and
+   post its one-line result as a comment on the release-preparation PR
+   ([Testing](09-testing.md)).
 3. Create and push the matching tag from the selected commit. The commit may no
    longer be the tip of `main`, but it must still be contained in `main`:
 

@@ -170,7 +170,7 @@ Start a new workflow with one of the enabled scopes. Core ships 11 named scopes;
 /aidlc express
 ```
 
-**Behavior:** The framework recognizes the scope keyword and asks what you want to build (nothing is created until you say), then runs the Initialization phase on that plan with your words as the request and begins the first domain stage. If a workflow is already active, a scope keyword on its own carries on with that work, and one followed by a description asks whether the description is new work. A keyword that is also the first word of a longer description (`/aidlc classic car rental website`) is read, not assumed: the assistant works out which you meant and may ask you once, so the word is never spent on a plan you did not choose. A keyword and one word (`/aidlc bugfix typo`) is still the plan and that description, because it is also exactly what the assistant sends when you did name the plan. A colon says it is the plan and nothing else does (`/aidlc bugfix: Fix duplicate todos`), and `--scope` says the same (`/aidlc --scope bugfix Fix duplicate todos`). See [Workflow Profiles](workflow-profiles.md) for a practical comparison of all 11 choices.
+**Behavior:** The framework recognizes the scope keyword and asks what you want to build (nothing is created until you say), then runs the Initialization phase on that plan with your words as the request and begins the first domain stage. If a workflow is already active, a scope keyword on its own carries on with that work, and one followed by a description asks whether the description is new work. A keyword that is also the first word of a longer description (`/aidlc classic car rental website`) is read, not assumed: the assistant works out which you meant and may ask you once, so the word is never spent on a plan you did not choose. A keyword and one word (`/aidlc feature flags`, `/aidlc bugfix typo`) is read the same way, so `feature flags` stays your request and `bugfix typo` still starts bugfix work on the typo. A colon says it is the plan and nothing else does (`/aidlc bugfix: Fix duplicate todos`), and `--scope` says the same (`/aidlc --scope bugfix Fix duplicate todos`). See [Workflow Profiles](workflow-profiles.md) for a practical comparison of all 11 choices.
 
 **Example:**
 
@@ -1892,6 +1892,11 @@ back, or turning checkpoints off while stage-major), keeps them too. A Unit you
 reopened before the switch (a jump back, Redo, or a checkpoint's Request Changes)
 still gets its redo, and keeps it once it is done.
 
+Switching to serial after a side-by-side build was prepared (for example "build them
+one at a time instead" after the parallel start stopped) keeps the plans you approved:
+each Unit is built from its plan in the project itself, with no new plan question. The
+worktrees that build prepared stay where they are; their Bolts are recorded as closed.
+
 Execution is separate from approval: swarm works with guided (`gated`) or
 automatic (`autonomous`) completion. Unit-major stays serial and refuses a
 contradictory swarm setting; run `aidlc engine state set-construction-execution serial` before
@@ -2068,7 +2073,9 @@ while the Unit's review ran: their words typed after the review was asked for
 and before any other question was asked (such as the learnings question) are
 this question's reply.
 Read them and run the action they chose, with no question shown; when they
-answer nothing, present the question and wait as below.
+answer nothing, present the question and wait as below. When `ask` returns
+`left_out`, what the person asked to leave out of the Unit's build, it is said just
+before the question, for example "Left out of this build: AC2.1.1 and AC2.2.1."
 
 Wait for the human's **Approve** / **Request Changes** reply in that
 session, to this checkpoint question. It authorizes only the matching action;

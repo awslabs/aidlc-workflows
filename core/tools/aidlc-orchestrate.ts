@@ -432,6 +432,7 @@ import {
   resolveStageAnswerMode,
   editedReviewNotice,
   dictatedReviewNotice,
+  noReviewerNotice,
   findStageBySlug,
   withPersonsWordsFirst,
 } from "./aidlc-lib.ts";
@@ -540,6 +541,7 @@ import {
   type GuardPreflightResult,
   failedCheckNotices,
   guardPreflight as stateGuardPreflight,
+  leftOutNotice,
   parkWorkflow,
 } from "./aidlc-state.ts";
 import { inspectStageValidity, stageLabel, staleStageNote } from "./aidlc-validity.ts";
@@ -8159,12 +8161,19 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
     if (step.kind === "plan-word") {
+      // The documented way to pick a plan is its name and then the task, so
+      // that reading carries on with the plan; asking is left for a line that
+      // reads both ways. The examples are quoted, not backticked: a backticked
+      // span in a directive is a command to run.
       emit(printDirective(
         `\`${step.scope}\` is the name of a plan and also the first word of what the person typed, ` +
         `and \`next\` cannot tell which they meant, so it took nothing from the line. ` +
-        `If they named the plan, run \`${next} --scope ${step.scope} -- ` +
+        `A plan's name and then the task ("${entrySkillInvocation()} ${step.scope} <the task>") is how ` +
+        `AI-DLC's guide tells people to pick a plan: when the rest of the line reads as the task for that ` +
+        `plan, they named it, so run \`${next} --scope ${step.scope} -- ` +
         `${quoteCommandArgument(said.slice(step.scope.length).trim())}\`. ` +
-        `If \`${step.scope}\` is their own word, ${theirs}. ${ask}`,
+        `When the whole line reads as one phrase with that word in it ("classic car rental website"), ` +
+        `it is their own words: ${theirs}. Ask them once in plain words only when it reads both ways.`,
       ));
       return;
     }
@@ -10296,11 +10305,15 @@ function applyGateOnlyShape(
   if (gateNode) {
     const scope = getField(stateContent, "Scope")?.trim() ?? "";
     const unitFolders = isPerUnit(gateNode) && !usesStageLevelPerUnitArtifacts(scope, stateContent);
-    const line = producedLine(gateNode, directive.unit ?? null, unitFolders, projectDir);
-    // A check that still fails on a declared output is said with the gate, on
-    // its own line after what the stage produced: the narration is the
-    // person's line, and the produced sentence stays whole.
-    const narration = [line, failedCheckNotices(projectDir, gateNode, directive.unit ?? null).join(" ")].filter(Boolean).join("\n");
+    const unit = directive.unit ?? null;
+    const line = producedLine(gateNode, unit, unitFolders, projectDir);
+    // What the person left out of the build, and a check that still fails on
+    // a declared output, are said with the gate, each on its own line after
+    // what the stage produced: the narration is the person's line, and the
+    // produced sentence stays whole.
+    const narration = [
+      line, leftOutNotice(projectDir, gateNode, unit), failedCheckNotices(projectDir, gateNode, unit).join(" "),
+    ].filter(Boolean).join("\n");
     if (narration) directive.narration = narration;
   }
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(
@@ -10400,14 +10413,17 @@ function applyConstructionCheckpointShape(
   if (directive.construction_policy) {
     directive.construction_policy.human_completion_required = checkpoint.human_required;
   }
-  // A review edited after the reviewer finished, or a verdict the reviewer's
-  // dispatch dictated, is said once, before the person is asked, in the line
-  // every other accepted change uses.
+  // A review edited after the reviewer finished, a verdict the reviewer's
+  // dispatch dictated, or a verdict recorded before any reviewer finished, is
+  // said once, before the person is asked, in the line every other accepted
+  // change uses.
   const reviewLines = [
     ...(checkpoint.review_edited?.stages ?? []).map((slug) =>
       editedReviewNotice(findStageBySlug(slug)?.name ?? slug, checkpoint.unit)),
     ...(checkpoint.review_dictated?.stages ?? []).map((slug) =>
       dictatedReviewNotice(findStageBySlug(slug)?.name ?? slug, checkpoint.unit)),
+    ...(checkpoint.review_no_reviewer?.stages ?? []).map((slug) =>
+      noReviewerNotice(findStageBySlug(slug)?.name ?? slug, checkpoint.unit)),
   ];
   if (reviewLines.length > 0) {
     const noticed = directive as RunStageDirective & Pick<Directive, "change_notices">;
@@ -16132,11 +16148,12 @@ function handleReport(args: string[], projectDir: string | undefined): void {
               : `Recorded ${flags.result} for unit "${unit}" of "${slug}".` +
                 personsFeedbackSentence(personsFeedback),
           );
-      // A check that still fails on a declared output is said with the gate,
-      // as the person's line beside the question, never as a change line.
+      // What the person left out of the Unit's build, and a check that still
+      // fails on a declared output, are said with the gate, as the person's
+      // lines beside the question, never as a change line.
       if (unitReply.kind === "print" && (flags.result === "awaiting-approval" || flags.result === "revised")) {
-        const checks = failedCheckNotices(pd, node, unit);
-        if (checks.length > 0) unitReply.narration = checks.join(" ");
+        const lines = [leftOutNotice(pd, node, unit), failedCheckNotices(pd, node, unit).join(" ")].filter(Boolean);
+        if (lines.length > 0) unitReply.narration = lines.join("\n");
       }
       emit(withChangeNotices(unitReply, changeNotices));
       return;
@@ -16391,11 +16408,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         const gateState = loadStateFileIfPresent(pd);
         const unitFolders = isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, gateState);
         const line = producedLine(node, unit, unitFolders, pd);
-        // A check that still fails on a declared output is said with the gate,
-        // on its own line after what the stage produced: the narration is the
-        // person's line (the produced sentence stays whole), and the change
-        // lines stay what changed.
-        const narration = [line, failedCheckNotices(pd, node, unit).join(" ")].filter(Boolean).join("\n");
+        // What the person left out of the build, and a check that still fails
+        // on a declared output, are said with the gate, each on its own line
+        // after what the stage produced: the narration is the person's line
+        // (the produced sentence stays whole), and the change lines stay what
+        // changed.
+        const narration = [line, leftOutNotice(pd, node, unit), failedCheckNotices(pd, node, unit).join(" ")]
+          .filter(Boolean).join("\n");
         if (narration) gateReply.narration = narration;
       }
     }

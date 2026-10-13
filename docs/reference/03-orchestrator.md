@@ -116,10 +116,15 @@ untaken token:
 - the person's own sentence opening with a word that is also a plan's name, in
   either form a harness hands it over: as tokens (`bugfix Fix duplicate todos`)
   or as one argument (`classic car rental website`). A plan named in its own
-  argument with the request in one more (`next classic 'Build a notes app'`,
-  which is what the orchestrator skill asks the conductor for) and a plan named
-  with a colon are readings already made, and act. No count of words decides
-  it: a plan's name and one more word in one argument is the same reading step;
+  argument with the request quoted into one more (`next classic 'Build a notes
+  app'`, which is what the orchestrator skill asks the conductor for) and a plan
+  named with a colon are readings already made, and act. No count of words
+  decides it: a plan's name and one more word is the same reading step in one
+  argument or in two (`feature flags` passed through as typed is the same two
+  arguments as a plan read with a one-word request). The step names the guide's
+  own form (`/aidlc <plan> <the task>`): a rest that reads as the task for that
+  plan carries on with the plan, a line that reads as one phrase is their words,
+  and the agent asks once only when it reads both ways;
 - a reply typed while the engine's own plan question is open and nothing has
   been started from it: the print names that question's own commands, so "yes"
   after the offer answers it instead of becoming work called "yes". Words behind
@@ -684,7 +689,9 @@ Then present **Approve** / **Request Changes** and wait, unless `ask` returns
 `earlier_reply`: the person's words in that session after the Unit's review was
 asked for, and before any other question was asked, are the reply, so run the
 action they chose without presenting the
-question (or present it when they answer nothing). The human's exact reply
+question (or present it when they answer nothing). When `ask` returns
+`left_out` (the Unit's `Deferred` traceability items: what the person asked to
+leave out of its build), say that line just before the question. The human's exact reply
 in that session, to this checkpoint question, authorizes the matching action;
 an unrelated reply, another session's reply, or a reply to a different question
 does not. These commands find their own session; never pass `--user-input`

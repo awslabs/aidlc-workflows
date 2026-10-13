@@ -92,7 +92,10 @@ candidate.
 
 Stable releases start from pushed version tags in `.github/workflows/release.yml`.
 Before tagging, merge the release-preparation PR and confirm its required branch
-checks. Stable publication validates the exact tag source and release assets and
+checks, then run the Kiro CLI release journey on the commit to be tagged and post
+its one-line result as a comment on that PR ([Testing](09-testing.md); Kiro needs
+a signed-in identity, so it has no hosted lane). Stable publication validates the
+exact tag source and release assets and
 requires a passing Full Suite for the tagged commit: `release.yml` reuses a
 passing `full-suite-result` or calls `full-suite.yml` itself.
 The isolated `.github/workflows/preview-release.yml` workflow schedules or

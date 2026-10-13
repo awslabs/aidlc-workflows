@@ -194,11 +194,13 @@ function buildCase(next: () => number): Case {
     // asks the agent for.
     case "plan-word-split": {
       const plan = pick([...SCOPES]);
-      // With one word after the plan's name the line is two arguments: the
-      // plan in its own, the description in one more.
-      return tail.length > 1
-        ? { shape, argv: [plan, ...tail], tail: [plan, ...tail] }
-        : { shape, argv: [plan, ...tail], tail, plan };
+      // With one word after the plan's name the line is the same two arguments
+      // as a plan the agent read with a one-word request, so it is both readings
+      // too, every word kept. One token holding several words is the request
+      // quoted into its own argument, the named form below.
+      return tail.length === 1 && /\s/.test(tail[0].trim())
+        ? { shape, argv: [plan, ...tail], tail, plan }
+        : { shape, argv: [plan, ...tail], tail: [plan, ...tail] };
     }
     case "plan-word-quoted": {
       // One argument holding the whole line: the engine never splits their
@@ -209,7 +211,12 @@ function buildCase(next: () => number): Case {
     }
     case "plan-word-named": {
       const plan = pick([...SCOPES]);
-      return { shape, argv: [plan, tail.join(" ")], tail: [tail.join(" ")], plan };
+      const request = tail.join(" ");
+      // The request quoted into its own argument is the reading already made;
+      // a request of one word there is the split line above.
+      return /\s/.test(request.trim())
+        ? { shape, argv: [plan, request], tail: [request], plan }
+        : { shape, argv: [plan, request], tail: [plan, request] };
     }
     case "valued-flag": {
       const entry = pick(VALUED_FLAGS);

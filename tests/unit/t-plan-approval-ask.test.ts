@@ -28,8 +28,9 @@
 //     one approval still starts the build, and editing, changes, and review
 //     (even said while the parts arrive) still ask again; nothing is built or
 //     handed to a worker until the build step itself has arrived;
-//   - when the chat compacts, a guard-recovery question comes up, or the work
-//     is paused after the approval, the approved plan is built and not asked
+//   - when the chat compacts, a guard-recovery question comes up, the work is
+//     paused, or the person asks to build the Units one at a time after the
+//     approval, the approved plan is built and not asked
 //     about again, and editing, changes, review, a rejected gate, a new
 //     attempt, and another Unit still ask; "review the plan first" said then
 //     asks again; an answer typed after the chat compacts still counts;
@@ -1986,6 +1987,49 @@ describe("after approval, whatever the engine said last", () => {
     expect((routed as unknown as Emitted).plan_approval).toEqual({ status: "approved" });
   });
 
+  // "Build them one at a time" after one approval for several Units: the
+  // switch's state write retires the step the engine issued, not the person's
+  // approval, so each Unit is built from its approved plan.
+  test("one approval for several Units, then 'build them one at a time': each Unit is built, not asked about again", () => {
+    const { pd } = groupedProject();
+    reply(pd, "approve all");
+    expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
+    reply(pd, "build them one at a time instead");
+    for (const setter of [["set-construction-execution", "serial"], ["set-construction-iteration", "unit-major"]]) {
+      const set = spawnSync(BUN, [STATE, ...setter, "--project-dir", pd], {
+        cwd: pd,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: pd, AIDLC_PROJECT_DIR: pd, AIDLC_UNATTENDED: "0" },
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(set.status, `${set.stdout}${set.stderr}`).toBe(0);
+    }
+    for (const unit of GROUP) {
+      const routed = routeCodeGenerationPlanApproval(pd, {
+        kind: "run-stage", stage: "code-generation", unit,
+      } as Parameters<typeof routeCodeGenerationPlanApproval>[1]) as unknown as Emitted;
+      expect(routed.plan_approval, JSON.stringify(routed)).toEqual({ status: "approved" });
+    }
+  });
+
+  // Only this work's own Code Generation step stands in when it is out of date.
+  test("an out-of-date step of another stage or another piece of work is not read for the approval", () => {
+    const { pd } = groupedProject();
+    reply(pd, "approve all");
+    expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
+    const file = join(activeDirectiveStorageDir(pd), "active-directive.json");
+    const issued = JSON.parse(readFileSync(file, "utf-8")) as Record<string, unknown>;
+    const route = (change: Record<string, unknown>) => {
+      writeFileSync(file, JSON.stringify({ ...issued, state_sha256: stateDigest("# an earlier state\n"), ...change }));
+      return routeCodeGenerationPlanApproval(pd, {
+        kind: "run-stage", stage: "code-generation", unit: "alpha",
+      } as Parameters<typeof routeCodeGenerationPlanApproval>[1]) as unknown as Emitted;
+    };
+    expect(route({}).plan_approval).toEqual({ status: "approved" });
+    expect(route({ stage: "functional-design" }).kind).toBe("ask");
+    expect(route({ intent_uuid: "01995000-7a11-7000-8000-00000000ffff" }).kind).toBe("ask");
+  });
+
   // "Review the plan first" is the person's own request, whatever the engine
   // said last: the plan is shown for approval again before anything is built.
   for (const how of INTERRUPTIONS) {
@@ -2692,6 +2736,50 @@ describe("what the engine names while a plan waits", () => {
     expect(planApprovalAskIsOpen(proj)).toBe(true);
     reply(proj, "approve");
     const said = answer(proj, "Approve Plan");
+    expect(said.code, said.message).toBe(0);
+    expect(said.recorded).toBe("approve");
+  });
+
+  // "Use bun test to check each Unit" while the plans wait: the person approves
+  // the command in the agent's question box, the agent records and applies it,
+  // and the plan question is still the open step, so their next "approve both
+  // plans" is kept as their answer to it.
+  test("a verification command approved while the plans wait keeps the plan question open", () => {
+    const { pd } = groupedProject();
+    const tool = (name: string, args: string[]): void => {
+      const run = spawnSync(BUN, [join(AIDLC_SRC, "tools", name), ...args, "--project-dir", pd], {
+        cwd: pd,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: pd, AIDLC_PROJECT_DIR: pd, AIDLC_UNATTENDED: "0" },
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(run.status, `${name} ${args.join(" ")}\n${run.stdout}${run.stderr}`).toBe(0);
+    };
+    reply(pd, "before you build anything, use bun test as the verification command");
+    const question = "Use this command to verify each completed Unit?";
+    const route = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "bun test", "--session", SESSION];
+    tool("aidlc-log.ts", ["decision", ...route, "--decision", question, "--options", "Approve,Request Changes"]);
+    const asked = [{
+      question, header: "Command", multiSelect: false,
+      options: [{ label: "Approve", description: "" }, { label: "Request Changes", description: "" }],
+    }];
+    const picked = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: pd,
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse", session_id: SESSION, tool_name: "AskUserQuestion",
+        tool_input: { questions: asked },
+        tool_response: { questions: asked, answers: { [question]: "Approve" } },
+      }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: pd, AIDLC_PROJECT_DIR: pd, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(picked.status, picked.stderr).toBe(0);
+    tool("aidlc-log.ts", ["answer", ...route, "--details", "Approve"]);
+    tool("aidlc-state.ts", ["set-construction-verification-command", "bun test"]);
+    expect(planApprovalAskIsOpen(pd)).toBe(true);
+    reply(pd, "approve both plans");
+    const said = answer(pd, "Approve all");
     expect(said.code, said.message).toBe(0);
     expect(said.recorded).toBe("approve");
   });

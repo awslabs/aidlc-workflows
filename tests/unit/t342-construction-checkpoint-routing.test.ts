@@ -2532,6 +2532,39 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A side-by-side build was prepared (a Bolt opened per Unit) and the person
+  // asked to build the Units one at a time instead: each Unit is then built,
+  // reviewed and checked in the project itself. The prepared Bolts are closed
+  // (their worktrees left as they are), so the Unit's checkpoint reads its build.
+  test("after a side-by-side build was prepared, 'build them one at a time' reaches each Unit's checkpoint", () => {
+    const p = fixture({ scope: "classic", iteration: "stage-major", execution: "swarm", current: "code-generation" });
+    writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
+      .replace("- **Review Override**: none", "- **Review Override**: advisory")
+      .replace("- **Change Control**: strict", "- **Guard Policy**: strict (set by you)"));
+    for (const unit of ["alpha", "beta"]) {
+      appendAuditEntry("BOLT_STARTED", {
+        "Bolt names": unit, "Batch number": "1", "Walking skeleton": "false", "Bolt slug": unit,
+      }, p);
+    }
+    policyHuman(p, "build them one at a time instead");
+    for (const args of [["set-construction-execution", "serial"], ["set-construction-iteration", "unit-major"]]) {
+      const changed = policyCli(p, "state", args);
+      expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
+    }
+    for (const slug of stages) {
+      cover(p, "alpha", [slug], false);
+      const reviewed = reviewThroughLog(p, [
+        "review", "--stage", slug, "--reviewer", findStageBySlug(slug)!.reviewer!, "--unit", "alpha", "--iteration", "1",
+      ]);
+      expect(reviewed.status, reviewed.out).toBe(0);
+      cover(p, "alpha", [slug]);
+    }
+    approve(p, "alpha");
+    const closed = readAuditShardEvents(p).filter((row) => row.event === "BOLT_FAILED");
+    expect(closed.map((row) => auditBlockField(row.block, "Bolt slug")).sort()).toEqual(["alpha", "beta"]);
+    expect(closed.map((row) => auditBlockField(row.block, "Reason"))).toEqual(["aborted", "aborted"]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // Guard Policy off, reviews advisory (one review pass a stage): alpha's
   // design document is deleted after alpha was approved, while beta builds.
   // The engine hands Functional Design back for alpha to make again. That

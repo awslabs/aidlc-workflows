@@ -494,7 +494,11 @@ Create
 `<code-generation-record>/traceability.json`.
 Enumerate every assigned AC, detailed `NFRx.y`, and `BRx.y` (or direct `FR` /
 `NFR` IDs when incremental scope skipped the design chain). Every `OK` target
-must be one existing workspace-relative implementation or test file:
+must be one existing workspace-relative implementation or test file. When the
+person asks to leave planned work out of this build (for example "skip the
+remaining stories"), do it: list each item they left out as `Deferred` (not
+built in this Unit), with their words as its `target`, and carry on; the
+approved plan stays as it is, and the approval says what was left out:
 
 ```json
 {

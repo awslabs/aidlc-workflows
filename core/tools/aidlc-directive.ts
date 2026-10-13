@@ -297,7 +297,7 @@ export interface RunStageDirective {
   plan_note?: string;
   // briefNote(): the lines every agent brief carries on a dispatched topology.
   brief_note?: string;
-  // ceremonyNote(): the summary confirmation, only when it is on.
+  // ceremonyNote(): the summary confirmation, confirm when on, skip when off.
   ceremony_note?: string;
   // Present only for team-owned unit-major approval beats. The stage body is
   // already settled; the conductor opens/reports this unit gate with --unit.
@@ -1276,9 +1276,16 @@ export function briefNote(ceremony: Record<string, unknown>, modules: readonly s
     `${switches.join(" ")} Protocol modules: ${modules.length > 0 ? modules.join(", ") : "none"}.`;
 }
 
-export function ceremonyNote(): string {
-  return "After this stage's questions are answered and before writing anything, confirm the summary of the answers " +
-    "with the person (stage-protocol.md, Consolidated summary before generation).";
+// Both states are said: off left as an absence read as the ask on Kiro CLI,
+// where the agent quoted the stage file's own "summary_confirmation: required"
+// and ran the checkpoint twice on a bugfix (the plan-approval-off note has the
+// same shape).
+export function ceremonyNote(state: "on" | "off"): string {
+  return state === "on"
+    ? "After this stage's questions are answered and before writing anything, confirm the summary of the answers " +
+      "with the person (stage-protocol.md, Consolidated summary before generation)."
+    : "Summary confirmation is off for this work: once the answers are written to the questions file, write the " +
+      "stage's outputs; skip the stage file's Consolidated Summary step and record nothing for it.";
 }
 
 // --- The numbered rendering of a question ---
@@ -1453,7 +1460,9 @@ export function withAgentNotes<T extends object>(
       const paths = Array.isArray(d.inline_context_paths) ? d.inline_context_paths.filter((p): p is string => typeof p === "string") : [];
       const consumes = Array.isArray(d.consumes) ? d.consumes.filter((p): p is string => typeof p === "string") : [];
       notes.context_note = contextNote(paths, consumes);
-      if (isPlainObject(d.ceremony) && d.ceremony.summary_confirmation === "on") notes.ceremony_note = ceremonyNote();
+      if (isPlainObject(d.ceremony) && (d.ceremony.summary_confirmation === "on" || d.ceremony.summary_confirmation === "off")) {
+        notes.ceremony_note = ceremonyNote(d.ceremony.summary_confirmation);
+      }
       if (isPlainObject(d.answer_mode) && typeof d.stage === "string") {
         notes.answer_mode_note = answerModeNote(d.answer_mode as unknown as StageAnswerMode, d.stage, logInvocation);
       }

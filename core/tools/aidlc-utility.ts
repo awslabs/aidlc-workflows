@@ -269,6 +269,7 @@ import {
   recordDirMatches,
   updateIntentScope,
   updateIntentStatus,
+  writeIntentRegistry,
   type IntentInfo,
   type IntentLifecycleVerb,
   type IntentRegistryEntry,
@@ -347,7 +348,6 @@ import {
   setStageSuffix,
   intentRepos,
   discoverSiblingRepos,
-  intentsRegistryPath,
   INTENT_SELECTOR_REGEX,
   SPACE_NAME_REGEX,
   scopeGridPath,
@@ -9402,7 +9402,7 @@ function handleIntentRepos(
         space,
       );
       row.repos = next;
-      writeFileAtomic(intentsRegistryPath(projectDir, space), `${JSON.stringify(list, null, 2)}\n`);
+      writeIntentRegistry(projectDir, list, space);
       const reAction = parseStateStageSuffixes(state).get("reverse-engineering") ??
         loadScopeMapping()[getField(state, "Scope") ?? ""]?.stages["reverse-engineering"];
       return { kind: "changed" as const, reState: boxes.get("reverse-engineering"), reAction };
@@ -11176,7 +11176,7 @@ function recordDiscoveredRepos(projectDir: string, dirName: string, repos: strin
   const row = list.find((entry) => recordDirMatches(entry, dirName));
   if (!row || (row.repos?.length ?? 0) > 0) return false;
   row.repos = repos;
-  writeFileAtomic(intentsRegistryPath(projectDir, space), `${JSON.stringify(list, null, 2)}\n`);
+  writeIntentRegistry(projectDir, list, space);
   return true;
 }
 
@@ -11409,8 +11409,9 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
 }
 
 // `/aidlc space create <name>` (legacy `/aidlc space-create <name>`) - seed a NEW space's memory. org.md is copied
-// from spaces/default/memory/org.md (the always-present SEED baseline), plus
-// fresh empty team.md/project.md/phases stubs + the templates/ floor. A new team
+// from spaces/default/memory/org.md (the always-present SEED baseline), the
+// phases/<phase>.md rules from the engine's framework seed, plus fresh empty
+// team.md/project.md stubs + the templates/ floor. A new team
 // starts at the framework baseline and earns its OWN practices — it does NOT
 // inherit another space's learnings. (A new INTENT, by contrast, seeds nothing:
 // it reads its space's live memory — handled in createIntent.)
@@ -11437,6 +11438,11 @@ function handleSpaceCreate(projectDir: string, positional: string[], _flags: Rec
   const memoryDest = join(dest, "memory");
   mkdirSync(memoryDest, { recursive: true });
   mkdirSync(join(memoryDest, "phases"), { recursive: true });
+  // Every stage after Initialization reads its phase's rule file, so the space
+  // gets the framework's copies from the engine seed, never default's, which
+  // may carry the default team's own edits.
+  const seedPhases = join(frameworkMemorySeedDir(), "phases");
+  if (existsSync(seedPhases)) cpSync(seedPhases, join(memoryDest, "phases"), { recursive: true });
   mkdirSync(join(memoryDest, "templates"), { recursive: true });
   mkdirSync(join(dest, "intents"), { recursive: true });
   // #5 — a new space gets the FULL space shape so it matches default's

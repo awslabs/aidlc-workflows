@@ -1575,7 +1575,7 @@ gh workflow run full-suite.yml --ref '<candidate-branch>' \
 
 To repeat only one family while other coverage is already running, add
 `-f verification_family=codex`. The manual choices are `all` (default),
-`claude-sdk`, `claude-tui`, `codex`, and `opencode`. A family other than `all`
+`claude-sdk`, `claude-tui`, `codex`, `copilot`, and `opencode`. A family other than `all`
 requires live-verification mode and the same manual event/exact-head checks.
 It selects only that family's rows on Linux/macOS/Windows, retaining the
 original per-platform N/M shard numbers. The separate Windows release-contract
@@ -1654,13 +1654,20 @@ The declared coverage is:
 - Source-bound native terminal obligations on Linux arm64/Bun and tmux,
   macOS arm64/Bun (`macos-15`), and Windows/Bun. Hosted Windows supplies Node
   for other tooling; Bun installs the pinned dependencies.
-- Claude SDK, Claude TUI, Codex, opencode and release-endpoint contracts on
+- Claude SDK, Claude TUI, Codex, Copilot CLI, opencode and release-endpoint contracts on
   hosted Linux/macOS/Windows, including Claude plugin invocation in the strict SDK leg.
+  Copilot CLI runs in its own-model (BYOK) mode against the credential broker, on
+  the Mantle model Codex uses, so no GitHub sign-in, Copilot seat or token is
+  involved. Its release journey (`tests/e2e/t-exec-copilot-release-journey.serial.test.ts`)
+  is what a person does on day one: set up through the copy channel, doctor, the
+  documented first step, the plan question, and Reverse Engineering approved, with a
+  message record for every line typed; a second case leaves the folder untrusted
+  and requires doctor to name the trust fix.
 - Kiro ACP, TUI and IDE are declared exclusions pending a dedicated isolated
   Windows desktop host; local live runs remain their coverage path.
 - Cursor is excluded: no credential separation is available because its vendor
-  CLI reads the API key from the agent environment. Copilot remains excluded by
-  account policy; neither exclusion is reported as successful coverage.
+  CLI reads the API key from the agent environment. No exclusion is reported as
+  successful coverage.
 
 `scripts/ci-live-filter.ts --list` prints the discovered family partition.
 After authorization and dependency installation, the plan emits `--matrix
@@ -1668,7 +1675,7 @@ linux`, `--matrix macos` and `--matrix windows` as the dynamic matrices of the
 `live_linux`, `live_macos` and `live_windows` jobs. Each row's `shard: N/M`
 selects a duration-balanced group for its family/platform. Each OS has two Claude
 SDK (four on Linux, which alone runs the golden journeys), three Claude TUI, one
-Codex and one opencode shard: 23 live harness jobs in all. Timing weights in
+Codex, one Copilot and one opencode shard: 26 live harness jobs in all. Timing weights in
 `tests/live-shard-weights.json` are scheduling hints;
 discovery still assigns every eligible file exactly once per platform. Each OS
 has its own concurrency cap: four Linux, two macOS and three Windows live jobs.
@@ -1764,7 +1771,7 @@ sorted `excluded` list. For `purpose: "release"` under `required-hosted-live-sha
 `production_guards` omitted and skipped, and every other declared job, `scope_runs` included, successful.
 Missing, failed, cancelled or unexpectedly skipped required jobs fail. `disabledLegs` is retained so the Full Suite result policy can reject
 historical disabled-live reports. `complete` additionally requires
-no excluded families; it remains false with the documented Kiro/Cursor/Copilot
+no excluded families; it remains false with the documented Kiro and Cursor
 exclusions and is not the preview-publication predicate. Those exclusions warn
 without failing the suite; disabled required jobs fail it.
 The stable gate, `scripts/ci-full-suite-evidence.ts check`, accepts a result only
@@ -1795,6 +1802,25 @@ Local runs with `AIDLC_KIRO_ACP_LIVE=1`, `AIDLC_KIRO_TUI_LIVE=1` or
 `AIDLC_KIRO_IDE_LIVE=1` remain the coverage path. A follow-up issue tracks the
 hosted lane.
 
+Before each stable release, a maintainer runs the Kiro CLI release journey
+(`tests/e2e/t-tui-kiro-release-journey.serial.test.ts`, the same journey as the
+Copilot lane's, in the interactive `kiro-cli chat` terminal) on the exact commit
+to be tagged, on a machine with a signed-in Kiro CLI:
+
+```bash
+bun scripts/package.ts
+AIDLC_KIRO_TUI_LIVE=1 AIDLC_TUI_LIVE=1 bun tests/run-tests.ts --e2e --production-guards \
+  --filter t-tui-kiro-release-journey
+```
+
+On Linux it gives Kiro a scratch home and keeps the machine's sign-in, so
+`~/.kiro` is not touched. It takes about five minutes and about eleven Kiro
+credits, and prints one line, for example `Kiro CLI 2.29.0 release journey on
+<commit>: PASS (4.7 min of turns, 10.46 credits, 0 permission prompts)`, that
+goes into a comment on the release-preparation PR. Nothing in the workflows reads
+that comment: a failed pass means a fix on `main` and a new release-preparation
+PR, or a maintainer who releases anyway and says so in the comment.
+
 The live jobs use the existing `ai-pr-review` environment and role. Verify these
 prerequisites before running Full Suite:
 
@@ -1813,14 +1839,15 @@ prerequisites before running Full Suite:
 - The role needs Bedrock invoke/stream access to the CI-only model table in
   `scripts/ci-credential-broker.ts`: Claude Fable 5, Opus 4.8, Sonnet 4.6 and
   Haiku 4.5 inference profiles in `us-east-1`, opencode's Sonnet 4.6 default in
-  that region, and Codex `openai.gpt-5.5` through Bedrock Mantle in `us-east-2`.
+  that region, and Codex `openai.gpt-5.5` through Bedrock Mantle in `us-east-2`,
+  which Copilot CLI's own-model mode uses too.
   The table pins the broker allowlist and Claude client aliases; shipped user
   settings remain provider-neutral.
 
 Missing environment access, role trust, model permissions, or required live
 substrates fails readiness; the workflow does not create a new environment or role.
 
-Claude Code and opencode npm versions are pinned in the workflow; update those
+Claude Code, Copilot CLI and opencode npm versions are pinned in the workflow; update those
 pins deliberately after verifying the registry and compatibility. CLI/authentication preflights fail
 loudly rather than letting absent substrates masquerade as passing live tests.
 

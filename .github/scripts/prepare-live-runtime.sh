@@ -94,7 +94,7 @@ active_live_processes() {
 }
 
 if [[ "$mode" == prepare ]]; then
-  case "$family" in claude-sdk|claude-tui|codex|opencode|release-contract|isolation) ;; *) exit 2 ;; esac
+  case "$family" in claude-sdk|claude-tui|codex|copilot|opencode|release-contract|isolation) ;; *) exit 2 ;; esac
   if id "$live_user" >/dev/null 2>&1; then
     echo 'Refusing to reuse an existing live runtime identity' >&2
     exit 1
@@ -141,6 +141,7 @@ if [[ "$mode" == prepare ]]; then
   case "$family" in
     claude-*) cli=claude ;;
     codex) cli=codex ;;
+    copilot) cli=copilot ;;
     opencode) cli=opencode ;;
     *) cli='' ;;
   esac

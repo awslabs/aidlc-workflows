@@ -51,6 +51,7 @@ import {
   constructionPolicyChangeAuthority,
   CONSTRUCTION_POLICY_RECOVERY,
   latestPersonTurn,
+  leftOutLine,
   auditShardName,
   appendSlug,
   appendUnderHeading,
@@ -66,11 +67,14 @@ import {
   guardPolicyAcceptsChanges,
   editedReviewNotice,
   dictatedReviewNotice,
+  noReviewerNotice,
   recordAcceptedChanges,
   inertPath,
   resolveChangeControl,
   resolveCeremony,
   claimAttemptFields,
+  boltAbortedFields,
+  reviewAttemptWindow,
   codekbDir,
   codekbRepoName,
   codekbStoreIsCurrent,
@@ -222,6 +226,7 @@ import {
   writeUnitScopeStamp,
   writeFileAtomic,
   answerModeStageStartedFields,
+  keepActiveDirectiveOverSettingWrite,
   keepPlanApprovalAskOverStateWrite,
   recordHookDrop,
   engineDir,
@@ -274,6 +279,11 @@ const HARNESS_DOC_DIRS = new Set([
   ".cursor",
   ".git",
 ]);
+
+// The review lines sayEditedReview has said in this command, so the second of
+// gate-start's two admissions does not say them again. At module top for the
+// same reason as HARNESS_DOC_DIRS.
+const saidAtGate = new Set<string>();
 
 // KNOWN_CODEKB_STAGES now lives in aidlc-lib.ts (imported above) beside the
 // shared produces-artifact matchers, so the review-freeze hook and this tool
@@ -1195,6 +1205,13 @@ function handleSetConstructionVerificationCommand(args: string[]): void {
       error("No current VERIFICATION_COMMAND_RECORDED with matching Command SHA-256 and User Input: Approve authorizes this command. " + verificationCommandRecovery());
     }
     writeStateFile(pd, updated);
+    // The command sets how each Unit is checked, not which step it is: the plan
+    // question, or the build the person approved, stays the open step.
+    try {
+      keepActiveDirectiveOverSettingWrite(pd, content, updated);
+    } catch (e) {
+      recordHookDrop(pd, "active-directive", errorMessage(e));
+    }
     // A new command checks the Units and batches still to be approved; the
     // ones already approved keep their approval.
     const previous = getField(content, VERIFICATION_COMMAND_CHECKPOINT);
@@ -1233,11 +1250,25 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
     if (updated !== content) {
       const words = requireHumanConstructionPolicyChange(pd, content, field, args[0]);
       emitConstructionPolicySet(pd, content, updated, field, args[0], words);
+      if (field === "Construction Execution" && args[0] === "serial") closePreparedBolts(pd, updated);
     }
     writeStateFile(pd, updated);
     keepPlanQuestionOver(pd, content, updated);
     console.log(JSON.stringify({ updated: true, field, value: args[0], ...constructionPolicyNotice(content, updated, field) }));
   });
+}
+
+// Built one after another, each Unit is built in the project itself: the Bolts
+// a side-by-side build prepared and never landed are closed, their worktrees
+// left as they are, so each Unit's checkpoint reads its own build.
+function closePreparedBolts(pd: string, state: string): void {
+  const view = reviewAttemptWindow(pd, state, findStageBySlug("code-generation")!);
+  for (const unit of view.openBoltUnits) {
+    const started = view.events.findLast((row) => row.event === "BOLT_STARTED" &&
+      (auditBlockField(row.block, "Bolt names") ?? "").split(",").map((name) => name.trim()).includes(unit));
+    const slug = started ? auditBlockField(started.block, "Bolt slug") : null;
+    if (slug) emitAudit(pd, "BOLT_FAILED", boltAbortedFields(pd, unit, slug, "the Units are built one after another now"));
+  }
 }
 
 // Asked for while the code plan's question waits, a change to how Construction
@@ -4002,10 +4033,13 @@ function verifyGateOpeningGuards(
 
 // The gate tells the person, once and in one line, when the review it stands
 // on records a review edited after the reviewer finished (Review Edited After
-// Reviewer on the fresh terminal receipt) or a verdict the reviewer's dispatch
-// dictated (Review Verdict Dictated). Strict only: relaxed and off said it when
-// the verdict was recorded. The verdict and the gate are unchanged: the person
-// approves as today or has the reviewer run again.
+// Reviewer on the fresh terminal receipt), a verdict the reviewer's dispatch
+// dictated (Review Verdict Dictated), or a verdict recorded before any reviewer
+// finished (Reviewer Finished Before Verdict). Strict only: relaxed and off
+// said it when the verdict was recorded. The verdict and the gate are
+// unchanged: the person approves as today or has the reviewer run again.
+// gate-start admits the gate twice (once before its lock, once under it), so a
+// line already said in this command is not said again (saidAtGate).
 function sayEditedReview(
   pd: string,
   content: string,
@@ -4021,6 +4055,7 @@ function sayEditedReview(
     const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
     const edited = receipts.editedVerdicts ?? new Set<string>();
     const dictated = receipts.dictatedVerdicts ?? new Set<string>();
+    const noReviewer = receipts.noReviewerVerdicts ?? new Set<string>();
     // The stage gate speaks for every review it stands on: the stage's own, or
     // one per Unit of a per-unit stage; a Unit gate speaks for its Unit only.
     const scopes = unit === undefined
@@ -4031,8 +4066,12 @@ function sayEditedReview(
         .map((scope) => editedReviewNotice(stage.name, scope === "" ? undefined : scope)),
       ...scopes.filter((scope) => dictated.has(scope))
         .map((scope) => dictatedReviewNotice(stage.name, scope === "" ? undefined : scope)),
+      ...scopes.filter((scope) => noReviewer.has(scope))
+        .map((scope) => noReviewerNotice(stage.name, scope === "" ? undefined : scope)),
     ];
-    if (lines.length > 0) console.log(JSON.stringify({ change_notices: lines }));
+    const unsaid = lines.filter((line) => !saidAtGate.has(line));
+    for (const line of unsaid) saidAtGate.add(line);
+    if (unsaid.length > 0) console.log(JSON.stringify({ change_notices: unsaid }));
   } catch {
     // The line is for the person; a scan that cannot run leaves the gate as it was.
   }
@@ -6304,6 +6343,20 @@ export function failedCheckNotices(pd: string, stage: GateStage, unit: string | 
   const more = failed.length - lines.length;
   if (more > 0) lines.push(`${more} more check${more === 1 ? " reports" : "s report"} findings on this stage's outputs.`);
   return lines;
+}
+
+// What the person asked to leave out of a build (#1342), said once with the
+// approval: the `Deferred` items in the gate's traceability.json files (the
+// stage writes one per Unit, a Unit's gate reads its own). A stage that builds
+// no code says nothing (its `Deferred` means a later stage covers the item).
+// Said with Sensors off too: it is the record, not a check.
+export function leftOutNotice(pd: string, stage: GateStage, unit: string | null = null): string | null {
+  if (stage.workspace_requires !== true) return null;
+  try {
+    return leftOutLine(declaredOutputsForGate(pd, stage, unit).filter((path) => basename(path) === "traceability.json"));
+  } catch {
+    return null;
+  }
 }
 
 // A stage artifact may list the decisions only the person can make in a fenced
