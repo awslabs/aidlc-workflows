@@ -445,6 +445,7 @@ import {
   type Consume,
   type GraphStage,
   loadGraph,
+  memoryDirFor,
   producersOf,
   subgraphForScope,
 } from "./aidlc-graph.ts";
@@ -540,6 +541,7 @@ import { markSwitchOffNoticesSaid, switchOffNotices } from "./aidlc-recorded-swi
 import { kiroHooksOffNotices, markKiroHooksOffSaid } from "./aidlc-kiro-hooks-off.ts";
 import {
   readRuleBundle,
+  restoreSpacePhaseRules,
   rulesContentEntries,
   type RuleContent,
 } from "./aidlc-steering.ts";
@@ -1002,6 +1004,42 @@ function withPickUpLine(transported: Directive): Directive {
   return transported;
 }
 
+// The framework's phase rules this command just added to the active space
+// (restoreSpacePhaseRules): new files in the person's project, said once with
+// the step that starts on them.
+let phaseRulesAdded: string | null = null;
+function phaseRulesAddedLine(space: string, names: readonly string[]): string | null {
+  if (names.length === 0) return null;
+  const order = (phase: string): number => {
+    const index = (PHASES as readonly string[]).indexOf(phase);
+    return index < 0 ? PHASES.length : index;
+  };
+  const phases = names.map((name) => name.replace(/\.md$/, ""))
+    .sort((a, b) => order(a) - order(b) || a.localeCompare(b));
+  const folder = `aidlc/spaces/${space}/memory/phases/`;
+  if (phases.length === 1) {
+    return `Space ${space} had no rules for the ${phases[0]} phase, so I added the framework's to ` +
+      `${folder}${names[0]}; edit that file to change them.`;
+  }
+  return `Space ${space} had no rules for the ${phases.slice(0, -1).join(", ")} and ${phases[phases.length - 1]} ` +
+    `phases, so I added the framework's to ${folder}; edit those files to change them.`;
+}
+function withPhaseRulesAddedLine(transported: Directive): Directive {
+  const line = phaseRulesAdded;
+  phaseRulesAdded = null;
+  if (line === null) return transported;
+  const own = transported.narration;
+  if (transported.kind === "run-stage" || transported.kind === "ask") {
+    transported.narration = own ? `${line} ${own}` : line;
+    if (Buffer.byteLength(JSON.stringify(transported), "utf-8") <= directiveMaxBytes()) return transported;
+    if (own) transported.narration = own;
+    else delete transported.narration;
+  }
+  // A rules part, or a step with no room: the next step the agent speaks from.
+  if (engineProjectDir && engineSessionId) addPendingPersonLines(engineProjectDir, engineSessionId, [line]);
+  return transported;
+}
+
 // Person lines kept from steps the agent passed through this turn are said,
 // in order and once, with the step it speaks from. One that would push the
 // step over its size limit waits for the next one. They count as said only
@@ -1176,6 +1214,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
     }
   }
   transported = withPickUpLine(transported);
+  transported = withPhaseRulesAddedLine(transported);
   // Again for what was added after transport (a rebind notice).
   transported = withAgentNotes(transported, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"));
   const personLinesSaid = sayPendingPersonLines(requested, transported);
@@ -7449,13 +7488,13 @@ function transportRunStage(
   directive: RunStageDirective,
   route: RunStageRoute,
 ): Directive {
-  const loaded = readRuleBundle(
-    rulesContentEntries(
-      route.node,
-      route.codekbCtx.projectDir,
-      route.codekbCtx.space,
-    ),
-  );
+  const { projectDir, space } = route.codekbCtx;
+  const entries = rulesContentEntries(route.node, projectDir, space);
+  // An observer writes nothing: it reads the framework's copies in their place.
+  if (!isReadOnlyEngineProbe()) {
+    phaseRulesAdded = phaseRulesAddedLine(space, restoreSpacePhaseRules(entries, memoryDirFor(projectDir, space)));
+  }
+  const loaded = readRuleBundle(entries);
   if (loaded.error) return errorDirective(loaded.error);
 
   directive.rules_in_context = [

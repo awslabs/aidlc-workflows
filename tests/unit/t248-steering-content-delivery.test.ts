@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue,
-// function:activeDirectiveStorageDir, hook:aidlc-deliver-stage-rules
+// function:activeDirectiveStorageDir, function:copyFrameworkPhaseRules, hook:aidlc-deliver-stage-rules
 //
 // Deterministic stage-rule delivery. Rules ride inside the run-stage directive
 // (rules_content) whenever run-stage plus rules fit the transport cap; a bundle

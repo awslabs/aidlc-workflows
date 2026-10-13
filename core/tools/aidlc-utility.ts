@@ -95,6 +95,7 @@ import {
 import {
   artifactsRegistryFor,
   consumedArtifactProducerCollisions,
+  copyFrameworkPhaseRules,
   findCycles,
   frameworkMemorySeedDir,
   loadComposedScopeRecords,
@@ -11441,8 +11442,7 @@ function handleSpaceCreate(projectDir: string, positional: string[], _flags: Rec
   // Every stage after Initialization reads its phase's rule file, so the space
   // gets the framework's copies from the engine seed, never default's, which
   // may carry the default team's own edits.
-  const seedPhases = join(frameworkMemorySeedDir(), "phases");
-  if (existsSync(seedPhases)) cpSync(seedPhases, join(memoryDest, "phases"), { recursive: true });
+  copyFrameworkPhaseRules(memoryDest);
   mkdirSync(join(memoryDest, "templates"), { recursive: true });
   mkdirSync(join(dest, "intents"), { recursive: true });
   // #5 — a new space gets the FULL space shape so it matches default's

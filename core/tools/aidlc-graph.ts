@@ -43,7 +43,7 @@
 //
 // See docs/reference/16-artifact-vocabulary.md for artifact naming.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { constants as fsConstants, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -465,6 +465,29 @@ export function frameworkTemplatesDir(): string {
  *  AIDLC_MEMORY_SEED_DIR is a test/relocation seam mirroring AIDLC_FRAMEWORK_TEMPLATES_DIR. */
 export function frameworkMemorySeedDir(): string {
   return process.env.AIDLC_MEMORY_SEED_DIR ?? join(resolveDataDir(), "memory-seed");
+}
+
+/** The framework's phase rule files (the seed's phases/), copied into a space's
+ *  memory wherever it has no file of that name, never over one the team wrote.
+ *  `space create` gives a new space all of them, and the engine gives them to a
+ *  space made before they shipped when a stage needs one (restoreSpacePhaseRules
+ *  in aidlc-steering.ts). Returns the names it wrote. */
+export function copyFrameworkPhaseRules(memoryDir: string): string[] {
+  const seed = join(frameworkMemorySeedDir(), "phases");
+  if (!existsSync(seed)) return [];
+  const phases = join(memoryDir, "phases");
+  mkdirSync(phases, { recursive: true });
+  const written: string[] = [];
+  for (const entry of readdirSync(seed, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    try {
+      copyFileSync(join(seed, entry.name), join(phases, entry.name), fsConstants.COPYFILE_EXCL);
+      written.push(entry.name);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+  return written.sort();
 }
 
 /** Resolve the sensors directory. AIDLC_SENSORS_DIR env-var seam mirrors
