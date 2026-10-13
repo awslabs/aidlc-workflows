@@ -468,11 +468,11 @@ describe("t-plan-proposed-by-the-agent: a line that opens with a plan's name kee
     expect(parse([`bugfix: ${rest}`])).toEqual({ plan: "bugfix", intent: rest, step: undefined });
     expect(parse(["bugfix:", ...LINE])).toEqual({ plan: "bugfix", intent: rest, step: undefined });
     expect(parse(["--scope", "bugfix", ...LINE])).toEqual({ plan: "bugfix", intent: rest, step: undefined });
-    // A plan's name and one word, split, is the plan in its own argument.
-    expect(parse(["bugfix", "login"])).toEqual({ plan: "bugfix", intent: "login", step: undefined });
     // The rest keep every word for the agent's reading, with no count of words: two
-    // in one argument as much as nine.
-    for (const argv of [["bugfix", ...LINE], [`bugfix ${rest}`], splitKiroCommandArgs(`bugfix ${rest}`), ["bugfix login"]]) {
+    // in one argument as much as nine, and a plan's name and one word split, which
+    // is the person's two-word line passed through as typed as much as a plan the
+    // agent read with a one-word request.
+    for (const argv of [["bugfix", ...LINE], [`bugfix ${rest}`], splitKiroCommandArgs(`bugfix ${rest}`), ["bugfix login"], ["bugfix", "login"]]) {
       expect(parse(argv), JSON.stringify(argv)).toEqual({ plan: undefined, intent: argv.join(" "), step: "plan-word" });
     }
   });

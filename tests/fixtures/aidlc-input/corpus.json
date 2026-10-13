@@ -3760,6 +3760,64 @@
     "after": "pending"
   },
   {
+    "id": "sl12-f",
+    "category": "scope-led-sentence",
+    "input": "feature flags",
+    "state": "fresh",
+    "meaning": "the person means: new work on feature flags; they did not pick the feature plan (a plan's name and one word of theirs, passed through as typed)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "feature flags",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "--scope feature -- flags",
+          "-- 'feature flags'"
+        ],
+        "never": [
+          "engine intent create --scope feature"
+        ]
+      },
+      "end": {
+        "asks": 1,
+        "work": {
+          "words": "feature flags"
+        }
+      }
+    }
+  },
+  {
+    "id": "sl12-w",
+    "category": "scope-led-sentence",
+    "input": "feature flags",
+    "state": "work-open",
+    "meaning": "the person means: new work on feature flags; they did not pick the feature plan (a plan's name and one word of theirs, passed through as typed)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print"
+        ],
+        "words": "feature flags",
+        "settings": [],
+        "no_ask": false,
+        "names": [
+          "feature flags"
+        ],
+        "never": [
+          "engine intent create --scope feature"
+        ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    }
+  },
+  {
     "id": "rt01-f",
     "category": "retired",
     "input": "--init",
@@ -17201,10 +17259,10 @@
         "kinds": [
           "print"
         ],
-        "words": "auth",
+        "words": "bugfix auth",
         "settings": [],
         "names": [
-          "engine intent create --scope bugfix"
+          "--scope bugfix -- auth"
         ],
         "no_ask": true
       },
@@ -17230,10 +17288,10 @@
         "kinds": [
           "print"
         ],
-        "words": "auth",
+        "words": "express auth",
         "settings": [],
         "names": [
-          "engine intent create --scope express"
+          "--scope express -- auth"
         ],
         "no_ask": true
       },

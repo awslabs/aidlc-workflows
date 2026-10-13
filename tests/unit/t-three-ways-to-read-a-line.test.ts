@@ -200,6 +200,30 @@ describe("a plan word at the start of their sentence", () => {
     expect(String(asked.d.question)).toContain("classic car rental website");
   });
 
+  // `/aidlc feature flags` passed through as typed is two arguments, the shape
+  // the agent also sends for a plan it read with a one-word request. Live, Codex
+  // passed it so 5 of 5 times and the feature plan started for work called
+  // "flags"; the engine cannot tell the two apart, so the agent reads it.
+  test("a plan's name and one word in two arguments is their sentence too, and that plan is never said", () => {
+    const proj = emptyProject();
+    const { d, out } = next(proj, ["feature", "flags"]);
+    expect(d.kind, out).toBe("print");
+    expect(d.narration, out).toBeUndefined();
+    expect(String(d.message), out).toContain("--scope feature -- flags");
+    expect(String(d.message), out).toContain("-- 'feature flags'");
+    // The step names the guide's own form, so a plan's name and then the task
+    // carries on with that plan and only a line that reads both ways is asked.
+    expect(String(d.message), out).toContain("/aidlc feature <the task>");
+    expect(activeIntent(proj)).toBe("");
+    expect(questions(proj).length).toBe(0);
+    // Their words, as the agent re-runs them: the plan question is about the
+    // whole line, and nothing of a feature workflow is said with it.
+    const asked = next(proj, ["--", "feature flags"]);
+    expect(asked.d.kind, asked.out).toBe("ask");
+    expect(String(asked.d.question)).toContain("feature flags");
+    expect(String(asked.d.narration ?? ""), asked.out).not.toContain("feature workflow");
+  });
+
   test("a plan word alone still acts, and so does the colon form", () => {
     // A plan word alone acts: the engine's own way of acting on it is the print
     // that names the creation command for that plan, never a reading step.
@@ -233,6 +257,16 @@ describe("a plan word at the start of their sentence", () => {
     expect(named.readingStep).toBeUndefined();
     expect(named.positionalScope).toBe("classic");
     expect(named.intent).toBe("car rental website");
+    // A plan's name and one word reads the same in both forms: one word after
+    // the plan is no request the agent quoted on its own.
+    for (const argv of [splitKiroCommandArgs("feature flags"), ["feature flags"]]) {
+      const parsed = parseNextFlags([...argv]);
+      expect(parsed.readingStep?.kind, JSON.stringify(argv)).toBe("plan-word");
+      expect(parsed.intent, JSON.stringify(argv)).toBe("feature flags");
+      expect(parsed.positionalScope, JSON.stringify(argv)).toBeUndefined();
+      expect(classifyTerminalCommand([...argv]), JSON.stringify(argv)).toBeNull();
+      expect(isReadOnlyNextArgv(argv), JSON.stringify(argv)).toBe(false);
+    }
   });
 
   test("a plan named by its flag with a clean tail of their words still acts", () => {

@@ -7877,12 +7877,19 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
     if (step.kind === "plan-word") {
+      // The documented way to pick a plan is its name and then the task, so
+      // that reading carries on with the plan; asking is left for a line that
+      // reads both ways. The examples are quoted, not backticked: a backticked
+      // span in a directive is a command to run.
       emit(printDirective(
         `\`${step.scope}\` is the name of a plan and also the first word of what the person typed, ` +
         `and \`next\` cannot tell which they meant, so it took nothing from the line. ` +
-        `If they named the plan, run \`${next} --scope ${step.scope} -- ` +
+        `A plan's name and then the task ("${entrySkillInvocation()} ${step.scope} <the task>") is how ` +
+        `AI-DLC's guide tells people to pick a plan: when the rest of the line reads as the task for that ` +
+        `plan, they named it, so run \`${next} --scope ${step.scope} -- ` +
         `${quoteCommandArgument(said.slice(step.scope.length).trim())}\`. ` +
-        `If \`${step.scope}\` is their own word, ${theirs}. ${ask}`,
+        `When the whole line reads as one phrase with that word in it ("classic car rental website"), ` +
+        `it is their own words: ${theirs}. Ask them once in plain words only when it reads both ways.`,
       ));
       return;
     }

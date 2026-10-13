@@ -39864,15 +39864,19 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
     }
     if (colon && plans.has(colon[1].toLowerCase())) return { kind: "exact" };
     // A plan's name is a pick only where it can be nothing else: the whole line
-    // (`next bugfix`), or its own argument with the request in one more, which
-    // is what the orchestrator skill asks the agent for (`next classic 'Build a
-    // notes app'`). Any other line that opens with one is the person's own
-    // sentence, whose first word may be theirs: loose words after it (`bugfix
+    // (`next bugfix`), or its own argument with the request quoted into one more,
+    // which is what the orchestrator skill asks the agent for (`next classic
+    // 'Build a notes app'`). Any other line that opens with one is the person's
+    // own sentence, whose first word may be theirs: loose words after it (`bugfix
     // Fix duplicate todos`), or the whole line in one argument, as Kiro IDE's
     // PowerShell hands it over (`classic car rental website`). Both read the
     // same way, at any length, and only the agent can tell whether that word is
-    // their plan or their own (#2359).
-    if (plans.has(plan) && words.length <= 2) return { kind: "exact" };
+    // their plan or their own (#2359). A single word after the plan's name is
+    // that sentence too: `/aidlc feature flags` passed through as typed arrives
+    // as the same two arguments as a plan the agent read with a one-word request.
+    if (plans.has(plan) && (words.length === 1 || (words.length === 2 && /\s/.test(words[1].trim())))) {
+      return { kind: "exact" };
+    }
     const opening = plan.split(/\s+/)[0];
     return plans.has(opening) ? { kind: "plan-word", scope: opening } : { kind: "words" };
   }
