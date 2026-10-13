@@ -35,9 +35,11 @@ frontmatter and recompile a JSON artifact. No TypeScript changes. The one
 boundary to keep in mind — if the graph *compiler itself* needs new behavior
 (a new frontmatter key it doesn't yet understand, a new traversal rule), that
 is a Developer Reference concern, not harness work. The reserved keys the spec
-already knows about (`when`, `on_failure`, `blocks_on`, and the rest) are listed
-in [Stage Definition](../reference/15-stage-definition.md); reaching for one not
-yet implemented means you've crossed the line into code.
+already knows about (`on_failure`, `blocks_on`, `timeout`, `retry`) are listed
+in [Stage Definition](../reference/15-stage-definition.md) and rejected today;
+reaching for one means you've crossed the line into code. `when:` is different:
+the schema accepts and checks it, but nothing acts on it yet, so a stage with
+`when:` runs under its `scopes:` as if it were not there.
 
 ---
 
@@ -86,6 +88,58 @@ fields that carry the structural weight:
 | `for_each` | Optional — names an artifact whose instances drive iteration |
 | `summary_confirmation` | Optional — `required` for stages that always collect file-backed answers, `if-present` for conditional question flows |
 | `reviewer` / `review_artifact` | Optional pair — the review agent and the required Markdown `produces` entry the review is about (its review record is keyed to that artifact) |
+
+A complete small stage, a glossary step after Requirements Analysis that runs
+only under `feature`, looks like this (it compiles as it stands):
+
+```markdown
+---
+slug: glossary-capture
+phase: inception
+execution: CONDITIONAL
+condition: Execute when the requirements use domain terms the team must agree on. Skip when every term is already defined.
+lead_agent: aidlc-product-agent
+support_agents: []
+mode: inline
+produces:
+  - glossary
+consumes:
+  - artifact: requirements
+    required: true
+requires_stage:
+  - requirements-analysis
+sensors:
+  - required-sections
+scopes:
+  - feature
+inputs: <record>/inception/requirements-analysis/requirements.md
+outputs: glossary.md (under this stage's record dir, engine-resolved)
+---
+
+# Glossary Capture
+
+Collect the domain terms the requirements use and agree one meaning for each.
+
+## Steps
+
+1. Read `<record>/inception/requirements-analysis/requirements.md` and list every domain term it uses.
+2. For each term, write one plain definition and the requirement IDs that use it.
+3. Write `glossary.md` with `## Terms` and `## Open Terms` sections.
+4. Follow stage-protocol.md for the approval gate.
+
+## Sensors
+
+This stage's output is a markdown artefact under `<record>/inception/glossary-capture/`.
+
+Imports: `required-sections`.
+
+## Learn
+
+When `directive.protocol_modules` lists `learnings`, follow
+`stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
+working and run the ritual before the approval gate. When the module is absent,
+skip both the diary and the ritual.
+```
 
 The body opens with `## Steps` — the imperative prose the lead agent follows.
 The `## Sensors` compartment then summarizes output location, exact frontmatter
@@ -175,6 +229,32 @@ aidlc engine graph scope <scope-name>
 # Dependency sanity for a scope
 aidlc engine graph validate-scope <scope-name>
 ```
+
+For the glossary stage above, dropped into an installed Claude Code tree as
+`.claude/aidlc-common/stages/inception/glossary-capture.md` and compiled with
+`aidlc engine graph compile`, the feature path now includes it (shortened):
+
+```text
+$ aidlc engine graph scope feature
+...
+requirements-analysis
+user-stories
+refined-mockups
+domain-design
+units-generation
+contract-design
+delivery-planning
+glossary-capture
+functional-design
+...
+$ aidlc engine graph producers glossary
+glossary-capture
+```
+
+It lands at the end of Inception, not right after Requirements Analysis: its
+only edge is `requires_stage: [requirements-analysis]`, and nothing orders it
+before User Stories. That is the presentation-order edge from step 3 at work;
+to place it earlier, a later stage would name it in its own `requires_stage`.
 
 A brand-new stage does **not** automatically run in any scope. Scope
 membership now lives on the stage itself: its frontmatter `scopes:` list names
@@ -267,10 +347,13 @@ the Developer Reference.
   slug (the conductor itself, used on the bootstrap initialization stages) is
   exempt — it has no agent file. Pipeline stages also reject duplicate chain
   identities across `lead_agent` and `support_agents`.
-- **CI drift guard.** `aidlc engine graph compile --check` exits
-  `0` on a clean tree and exits `1` if any stage YAML was edited without
-  recompiling the JSON. CI runs this, so a forgotten `compile` blocks the merge
-  with a clear message rather than shipping a stale graph.
+- **Drift checks.** In the source checkout, CI builds every tree from `core/`
+  and `bun scripts/package.ts --check` builds twice and byte-compares, so no
+  generated file is an input and there is nothing to forget to commit. In an
+  installed tree, `aidlc engine graph compile --check` exits `0` when the graph
+  matches the stage files, and `1` when a stage was edited without
+  recompiling, printing ``stage-graph.json is out of date. Run `aidlc engine
+  graph compile` to regenerate.``
 - **Phase rule attachment.** Because the stage declares its phase by directory,
   the matching `phases/<phase>.md` rule layer attaches at compile time —
   you don't wire that edge yourself.
