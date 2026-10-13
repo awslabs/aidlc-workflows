@@ -356,7 +356,7 @@ legacy name and require the selected intent's exact `WORKTREE_DISCARDED`
 | Lead Agent        | aidlc-architect-agent                                                                                   |
 | support_agents    | aidlc-developer-agent                                                                                   |
 | mode              | inline                                                                                            |
-| Inputs            | unit-of-work.md, unit-of-work-story-map.md, requirements.md, domain design artifacts         |
+| Inputs            | unit-of-work.md, unit-of-work-story-map.md, stories.md (if produced), requirements.md, domain design artifacts |
 | Outputs           | `<record>/construction/{unit-name}/functional-design/` -- functional-spec.md, rules.md, entities.md, traceability.json, CONDITIONAL: frontend-components.md (per Unit kind) |
 
 ### Purpose
@@ -369,13 +369,14 @@ feasibility input.
 
 - Unit definition from `<record>/inception/units-generation/unit-of-work.md`
 - Assigned stories from `<record>/inception/units-generation/unit-of-work-story-map.md`
+- Acceptance criteria of those stories from `<record>/inception/user-stories/stories.md` (if produced)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md`
 - Domain design artifacts from `<record>/inception/domain-design/`
 
 ### Steps
 
-1. **Read Unit Context** -- Read the unit definition, assigned stories,
-   requirements, and domain design artifacts.
+1. **Read Unit Context** -- Read the unit definition, assigned stories and
+   their acceptance criteria, requirements, and domain design artifacts.
 
 2. **Create Functional Design Plan** -- Analyze the unit's scope and create a
    questions file at
@@ -429,7 +430,7 @@ feasibility input.
 | rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
 | entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
 | frontend-components.md   | (CONDITIONAL) Component hierarchy, props/state, interaction flows, form validation, API integration |
-| traceability.json        | Every acceptance criterion assigned to the Unit mapped to the `BRx.y` rules in rules.md |
+| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR), each `OK` to `BRx.y` rules in rules.md, `N/A` or `Deferred` with its reason, or `GAP` |
 
 Which files a Unit gets follows its kind: a `ui` Unit gets no entities.md or
 rules.md, only a `ui` Unit gets frontend-components.md, and a `packaging`
