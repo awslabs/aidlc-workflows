@@ -464,12 +464,12 @@ if [ -n "$requested_version" ] && [ "$requested_version" != "$candidate_version"
   fail 4 failed "release endpoint returned $candidate_version, not requested $requested_version"
 fi
 VERSION=$candidate_version
-# A root install must be removable by the release it activates. Releases that
-# predate --allow-root refuse root uninstall, so they are not installed as root.
+# A release from before --allow-root refuses root uninstall. The person chose
+# it, so it is installed, with the way to remove it later: its own `update`
+# runs as root and reaches a release that can.
 if [ "$ROOT_INSTALL" -eq 1 ] && ! grep -Fq '"root-lifecycle"' "$TMP/version.json"; then
-  fail 4 failed \
-    "AI-DLC $VERSION cannot be uninstalled as root, so it is not installed as root" \
-    "install a release that supports --allow-root, such as the latest: sh install.sh --allow-root"
+  printf '%s\n' \
+    "WARN AI-DLC $VERSION cannot uninstall itself as root; to remove it later, run aidlc update, then aidlc uninstall --allow-root" >&2
 fi
 BINARY="aidlc-$TARGET"
 RUNTIME_ASSET="aidlc-runtime-$VERSION.tar.gz"

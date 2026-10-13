@@ -5874,7 +5874,7 @@ describe("t243 release lifecycle", () => {
     expect(parsed(inside).message).toContain("offline source is not a directory");
   });
 
-  test("Unix installer installs as root only a release that can also be uninstalled as root", async () => {
+  test("Unix installer warns, then installs, a root release that cannot uninstall itself as root", async () => {
     if (process.platform === "win32") return;
     const shims = temp("aidlc-t243-installer-root-release-shim-");
     writeFileSync(
@@ -5938,17 +5938,18 @@ describe("t243 release lifecycle", () => {
       return { status, output: `${stdout}${stderr}` };
     };
 
+    // The person chose the release: it proceeds to the release binary, with
+    // the way to remove it later.
     writeRelease(undefined);
     const legacy = await install();
-    expect(legacy.status, legacy.output).toBe(4);
-    expect(legacy.output).toContain("cannot be uninstalled as root, so it is not installed as root");
-    expect(legacy.output).toContain("install a release that supports --allow-root");
-    expect(existsSync(sentinel)).toBe(false);
-    expect(existsSync(join(machine, "versions"))).toBe(false);
+    expect(existsSync(sentinel), legacy.output).toBe(true);
+    expect(legacy.output).toContain("cannot uninstall itself as root");
+    expect(legacy.output).toContain("run aidlc update, then aidlc uninstall --allow-root");
 
     writeRelease(["root-lifecycle"]);
     const capable = await install();
     expect(existsSync(sentinel), capable.output).toBe(true);
+    expect(capable.output).not.toContain("cannot uninstall itself as root");
   });
 
   test("Unix installer rejects an authenticated version mismatch before acquiring or invoking assets", async () => {

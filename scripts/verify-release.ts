@@ -13,6 +13,7 @@ import {
   digest,
   releaseCopyRuntimeAsset,
   releaseRuntimeAsset,
+  ROOT_LIFECYCLE_CAPABILITY,
   verifyReleaseDirectory,
 } from "../core/tools/aidlc-release.ts";
 
@@ -104,9 +105,13 @@ function verifyCandidate(args: string[]): void {
       "sourceDigest",
       "distributions",
       "assets",
+      "capabilities",
     ],
     "version.json",
   );
+  if (!sameStrings(rawManifest.capabilities, [ROOT_LIFECYCLE_CAPABILITY])) {
+    throw new Error(`version.json capabilities must be ["${ROOT_LIFECYCLE_CAPABILITY}"]`);
+  }
   if (typeof rawManifest.version !== "string") {
     throw new Error("version.json version must be a release id");
   }

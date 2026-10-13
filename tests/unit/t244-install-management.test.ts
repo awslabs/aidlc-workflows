@@ -42,7 +42,7 @@ import {
   previousWindowsShimHelpers,
   previousWindowsShimHelperState,
   replacePreviousWindowsShimHelper,
-  rootActivationRefusal,
+  rootActivationWarning,
   rootDestinationRefusal,
   rootUninstallRefusal,
   validatePublicLifecycleArgs,
@@ -203,6 +203,7 @@ function writeVerifierCandidate(root: string): void {
   });
   const manifest = {
     schemaVersion: 1,
+    capabilities: [ROOT_LIFECYCLE_CAPABILITY],
     version: AIDLC_VERSION,
     date: "2026-08-28",
     sourceRef: `refs/tags/v${AIDLC_VERSION}`,
@@ -1796,13 +1797,21 @@ describe("t244 management lifecycle", () => {
       expect(rootDestinationRefusal(home, [{ name: "AIDLC_BIN_DIR", path: outside }]))
         .toContain("AIDLC_BIN_DIR outside root's home");
     }
+    // Compared as written, like install.sh: a .local that links to mounted
+    // storage outside the home is still the home's own destination, so what
+    // the installer accepted, uninstall can remove.
+    const storage = temp("aidlc-t244-root-mounted-storage-");
+    symlinkSync(storage, join(home, ".local"));
+    expect(rootDestinationRefusal(home, inside)).toBeNull();
   });
 
-  test("as root, only a release that can uninstall as root is activated", () => {
+  test("as root, activating a release that cannot uninstall as root warns with the way to remove it", () => {
     const supports = (version: string) => version === "9.9.9";
-    expect(rootActivationRefusal("1.0.0", 501, supports)).toBeNull();
-    expect(rootActivationRefusal("9.9.9", 0, supports)).toBeNull();
-    expect(rootActivationRefusal("1.0.0", 0, supports)).toContain("cannot be uninstalled as root");
+    expect(rootActivationWarning("1.0.0", 501, supports)).toBeNull();
+    expect(rootActivationWarning("9.9.9", 0, supports)).toBeNull();
+    const warning = rootActivationWarning("1.0.0", 0, supports);
+    expect(warning).toContain("1.0.0 cannot uninstall itself as root");
+    expect(warning).toContain("aidlc update, then aidlc uninstall --allow-root");
   });
 
   test("the release manifest marks root lifecycle support and rejects malformed capabilities", () => {
@@ -3394,6 +3403,31 @@ describe("t244 Windows and completion release surfaces", () => {
     ], REPO_ROOT);
     expect(extraFieldResult.status).toBe(1);
     expect(extraFieldResult.stderr).toContain("has unexpected fields");
+
+    // A candidate must declare the root-lifecycle capability its installer and
+    // lifecycle rely on; one without it never reaches publication.
+    for (const capabilities of [undefined, [], ["other"]]) {
+      const candidate = temp("aidlc-t244-release-capabilities-");
+      writeVerifierCandidate(candidate);
+      const manifestPath = join(candidate, "version.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+      if (capabilities === undefined) delete manifest.capabilities;
+      else manifest.capabilities = capabilities;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const checksumsPath = join(candidate, "checksums.txt");
+      writeFileSync(
+        checksumsPath,
+        readFileSync(checksumsPath, "utf-8").replace(
+          /^[a-f0-9]{64} {2}version\.json$/m,
+          `${createHash("sha256").update(readFileSync(manifestPath)).digest("hex")}  version.json`,
+        ),
+      );
+      const result = run(RELEASE_VERIFIER, [
+        "candidate", "--directory", candidate, "--tag", `v${AIDLC_VERSION}`,
+      ], REPO_ROOT);
+      expect(result.status, JSON.stringify(capabilities)).toBe(1);
+      expect(result.stderr).toMatch(/has unexpected fields|capabilities must be/);
+    }
 
     const extra = temp("aidlc-t244-release-extra-");
     writeVerifierCandidate(extra);

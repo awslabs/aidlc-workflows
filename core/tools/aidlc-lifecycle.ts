@@ -64,8 +64,9 @@ import {
   installedExecutablePath,
   inspectProjectPinTarget,
   inspectInstalledVersion,
-  binRoot,
   installRoot,
+  lexicalBinRoot,
+  lexicalInstallRoot,
   machineTransactionRoot,
   packageManagerForExecutable,
   projectPinTargetPath,
@@ -1215,8 +1216,8 @@ export function activate(
   version: string,
   options: { failAfter?: number; replaceLauncher?: LauncherReplacement } = {},
 ): void {
-  const rootRefusal = rootActivationRefusal(version, currentUid(), retainedReleaseSupportsRootLifecycle);
-  if (rootRefusal) throw new Error(rootRefusal);
+  const rootWarning = rootActivationWarning(version, currentUid(), retainedReleaseSupportsRootLifecycle);
+  if (rootWarning) process.stderr.write(`WARN ${rootWarning}\n`);
   const releaseReservation = reserveVersion(version);
   try {
     // The person's file moves only now, and comes back if activation fails.
@@ -2043,14 +2044,16 @@ export function rootUninstallRefusal(
 }
 
 // A root install stays per-user (#722): its command and install directories
-// must sit under root's own home, never in a shared system directory.
+// must sit under root's own home, never in a shared system directory. Paths are
+// compared as written, the way install.sh accepted them, so a home whose
+// .local links to mounted storage is removable by the uninstall that follows.
 export function rootDestinationRefusal(
   home: string,
   destinations: ReadonlyArray<{ name: string; path: string }>,
 ): string | null {
-  const base = canonicalPolicyPath(home);
+  const base = resolve(home);
   for (const { name, path } of destinations) {
-    const rel = relative(base, canonicalPolicyPath(path));
+    const rel = relative(base, resolve(path));
     if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
       return `refusing a root lifecycle operation with ${name} outside root's home: ${path}`;
     }
@@ -2060,20 +2063,21 @@ export function rootDestinationRefusal(
 
 function rootDestinations(): Array<{ name: string; path: string }> {
   return [
-    { name: "AIDLC_BIN_DIR", path: binRoot() },
-    { name: "AIDLC_INSTALL_ROOT", path: installRoot() },
+    { name: "AIDLC_BIN_DIR", path: lexicalBinRoot() },
+    { name: "AIDLC_INSTALL_ROOT", path: lexicalInstallRoot() },
   ];
 }
 
-// Under root, a release is activated only if it can also remove itself as
-// root. Releases from before --allow-root refuse root uninstall.
-export function rootActivationRefusal(
+// Under root, a release from before --allow-root refuses root uninstall. The
+// person chose it, so it is activated with the way to remove it later: its own
+// `update` runs as root and reaches a release that can.
+export function rootActivationWarning(
   version: string,
   uid: number | undefined,
   supportsRootLifecycle: (version: string) => boolean,
 ): string | null {
   if (uid !== 0 || supportsRootLifecycle(version)) return null;
-  return `refusing to activate AI-DLC ${version} as root: that release cannot be uninstalled as root`;
+  return `AI-DLC ${version} cannot uninstall itself as root; to remove it later, run aidlc update, then aidlc uninstall --allow-root`;
 }
 
 function retainedReleaseSupportsRootLifecycle(version: string): boolean {
