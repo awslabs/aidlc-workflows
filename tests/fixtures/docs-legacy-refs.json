@@ -44,7 +44,7 @@
     },
     {
       "file": "docs/reference/07-sensor-system.md",
-      "text": "matches: \"**/{aidlc-docs,intents,codekb}/**\"           # optional capability filter",
+      "text": "matches: \"**/{aidlc-docs,intents,codekb}/**\"",
       "why": "sensor manifest frontmatter example (the shipped glob)"
     },
     {
