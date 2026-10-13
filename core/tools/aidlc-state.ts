@@ -224,6 +224,7 @@ import {
   writeUnitScopeStamp,
   writeFileAtomic,
   answerModeStageStartedFields,
+  keepActiveDirectiveOverSettingWrite,
   keepPlanApprovalAskOverStateWrite,
   recordHookDrop,
   engineDir,
@@ -1197,6 +1198,13 @@ function handleSetConstructionVerificationCommand(args: string[]): void {
       error("No current VERIFICATION_COMMAND_RECORDED with matching Command SHA-256 and User Input: Approve authorizes this command. " + verificationCommandRecovery());
     }
     writeStateFile(pd, updated);
+    // The command sets how each Unit is checked, not which step it is: the plan
+    // question, or the build the person approved, stays the open step.
+    try {
+      keepActiveDirectiveOverSettingWrite(pd, content, updated);
+    } catch (e) {
+      recordHookDrop(pd, "active-directive", errorMessage(e));
+    }
     // A new command checks the Units and batches still to be approved; the
     // ones already approved keep their approval.
     const previous = getField(content, VERIFICATION_COMMAND_CHECKPOINT);
