@@ -31,6 +31,7 @@ import {
   createOrchestrationTestProject,
   FIXTURES_DIR,
   proposalFollowUp,
+  seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
 import {
@@ -367,6 +368,24 @@ describe("with work open, the agent's first step after `/aidlc <words>` reads th
       expect(questionTexts(proj)).toEqual([NEW_WORK]);
     });
   }
+
+  // A team clone: each clone writes its own committed audit shard, and the
+  // shards are read in filename order, so a teammate's shard can sort after
+  // this clone's. Their turn is still the latest row of this clone's shard.
+  test("claude: in a team clone whose teammate's shard sorts after this clone's, next --resume still reads the line", async () => {
+    const proj = await workOpen();
+    const audit = join(seededRecordDir(proj), "audit");
+    mkdirSync(audit, { recursive: true });
+    writeFileSync(join(audit, "zz-teammate-0123456789abcdef.md"), [
+      "# AI-DLC Audit Log", "", "## Session Start", "**Timestamp**: 2026-10-01T09:00:00Z", "**Event**: SESSION_STARTED",
+      "**Source**: startup", "**Session**: 01995000-7a11-7000-8000-00000000d0ff", "", "---", "",
+    ].join("\n"), "utf-8");
+    await say(proj, NEW_LINE, "claude");
+    const { directive, out } = await next(proj, "claude", ["--resume"]);
+    expect(directive.kind, out).toBe("print");
+    expect(directive.message ?? "", out).toContain(READING);
+    expect(questionTexts(proj)).toEqual([NEW_WORK]);
+  });
 
   test("claude: a bare next as the first step reads the line the same way", async () => {
     const proj = await workOpen();
