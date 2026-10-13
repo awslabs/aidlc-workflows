@@ -2,9 +2,11 @@
 //
 // The first Construction step's line. "Starting the first Bolt now: one build
 // pass over the code, tests and checks for a piece of the work." is said where
-// the plan builds code. A plan whose Construction builds no code (stock infra,
-// or a plan made for an analysis that skips Code Generation) is not starting
-// a build pass, so its first Construction step gets the ordinary line instead.
+// the plan builds code in Units. A plan whose Construction builds no code
+// (stock infra, or a plan made for an analysis that skips Code Generation) is
+// not starting a build pass, and a plan with no Units (refactor,
+// security-patch) has no Bolt, so their first Construction step gets the
+// ordinary line instead.
 //
 // Mechanism: cli - spawns the shipped tools against temp projects created via
 // intent-create, then a forward jump to the first Construction stage.
@@ -84,8 +86,15 @@ describe("the first Construction step names a Bolt only where code is built", ()
       .toBe(`${BOLT_LINE} First step is Functional Design.`);
   });
 
-  test("a plan that builds code without Units keeps the same line", () => {
-    expect(firstConstructionLine(["--scope", "security-patch"], "nfr-requirements"))
-      .toBe(`${BOLT_LINE} First step is NFR Requirements.`);
+  test("a plan that builds code without Units starts no Bolt: security-patch gets the ordinary line", () => {
+    const line = firstConstructionLine(["--scope", "security-patch"], "nfr-requirements");
+    expect(line).not.toContain("Bolt");
+    expect(line).toBe("Now working on NFR Requirements, wearing the architect hat.");
+  });
+
+  test("refactor, Code Generation without Units, gets the ordinary line too", () => {
+    const line = firstConstructionLine(["--scope", "refactor"], "functional-design");
+    expect(line).not.toContain("Bolt");
+    expect(line).toBe("Now working on Functional Design, wearing the architect hat.");
   });
 });

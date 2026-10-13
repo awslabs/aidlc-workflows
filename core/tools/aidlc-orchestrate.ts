@@ -2210,11 +2210,13 @@ function narrateStageEntry(
   // definition is delivery-planning's own, said the way a colleague would say
   // it. Said once, on the phase boundary, and only on a plan that builds code:
   // one with no Code Generation (stock infra, a plan made for an analysis)
-  // starts no build pass. Later Construction stages, and a plan that builds
-  // no code, get the ordinary per-stage line.
+  // starts no build pass. A Bolt is a slice of Units, so a plan with no Units
+  // (refactor, security-patch) has none. Later Construction stages, and those
+  // plans, get the ordinary per-stage line.
   if (
     isFirstConstructionStage(node, scope, stateContent) &&
-    effectivePlanAction("code-generation", scope, stateContent) === "EXECUTE"
+    effectivePlanAction("code-generation", scope, stateContent) === "EXECUTE" &&
+    !usesStageLevelPerUnitArtifacts(scope, stateContent)
   ) {
     return (
       `Starting the first Bolt now: one build pass over the code, tests and ` +
