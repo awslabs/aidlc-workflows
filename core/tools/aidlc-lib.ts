@@ -3900,6 +3900,38 @@ export function aidlcOwnedSourceKey(projectDir: string): (pathKey: string) => bo
   };
 }
 
+// The paths that changed between two source listings, AI-DLC's own files left
+// out: an AI-DLC update the person took moves only those, and it is nobody's
+// change to their source. Rendered `repo/path`, sorted.
+export function sourceChangedOutsideAidlc(
+  projectDir: string,
+  before: ReadonlyMap<string, string>,
+  after: ReadonlyMap<string, string>,
+): string[] {
+  const owned = aidlcOwnedSourceKey(projectDir);
+  const theirs = (listing: ReadonlyMap<string, string>) => new Map([...listing].filter(([key]) => !owned(key)));
+  return sourceListingChangedPaths(theirs(before), theirs(after));
+}
+
+// Whether the main checkout moved from the listing a landing kept (its
+// `Source Listing`) only in AI-DLC's own files. False when no listing was kept
+// or it does not read back exactly: the caller then compares fingerprints.
+export function onlyAidlcFilesChangedSince(
+  projectDir: string,
+  stageSlug: string,
+  listing: string | undefined,
+  current: WorkspaceSourceState,
+  intent?: string,
+  space?: string,
+): boolean {
+  const recorded = listing === undefined ? null : readBaselineSourceSnapshot(projectDir, stageSlug, listing, intent, space);
+  return recorded !== null && sourceChangedOutsideAidlc(
+    projectDir,
+    recordedSourceListingUnderCurrentBoundary(recorded, current.listing),
+    current.listing,
+  ).length === 0;
+}
+
 function generatedRunnerSkill(skillDir: string): boolean {
   try {
     const skillMd = join(skillDir, "SKILL.md");
@@ -26315,7 +26347,7 @@ function writeSourceSnapshot(recordRoot: string, path: string, serialized: strin
   return `sha256:${hash}`;
 }
 
-/** Write a content-addressed stage-entry baseline listing snapshot. */
+/** Write a content-addressed listing snapshot: a stage-entry baseline, or what a swarm landing left. */
 export function writeBaselineSourceSnapshot(
   projectDir: string,
   stageSlug: string,
@@ -36080,6 +36112,9 @@ export type SwarmSourceMergeChain =
   | {
       state: "ready";
       fingerprint: string;
+      // The listing that landing kept (`Source Listing`), absent on rows an
+      // earlier release wrote.
+      listing?: string;
       units: Set<string>;
     };
 
@@ -36264,6 +36299,7 @@ export function currentSwarmSourceMergeChain(
   const units = new Set<string>();
   const lastMerge = new Map<string, AuditShardEvent>();
   let priorFingerprint: string | null = null;
+  let priorListing: string | undefined;
   let openingPrevious: string | null = null;
   let openingRow: AuditShardEvent | null = null;
   // A link may start from a main checkout the person changed during the build
@@ -36399,6 +36435,7 @@ export function currentSwarmSourceMergeChain(
       if (rejections.some((rejection) => attemptEventDefinitelyBefore(row, rejection))) units.delete(unit);
       else units.add(unit);
       priorFingerprint = fingerprint;
+      priorListing = auditBlockField(row.block, "Source Listing") ?? undefined;
     }
     start = end;
   }
@@ -36423,7 +36460,7 @@ export function currentSwarmSourceMergeChain(
   }
   return priorFingerprint === null
     ? { state: "none" }
-    : { state: "ready", fingerprint: priorFingerprint, units };
+    : { state: "ready", fingerprint: priorFingerprint, listing: priorListing, units };
 }
 
 // The set of units the CURRENT attempt of an INLINE per-unit stage has

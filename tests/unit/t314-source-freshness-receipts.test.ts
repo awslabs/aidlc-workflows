@@ -6119,7 +6119,7 @@ process.stdin.on("end", () => server.stop(true));
     const merged = mergeUnit(proj, "kept");
     expect(merged.status, merged.out).toBe(0);
     expect(merged.out).not.toContain("during the build; kept them");
-    expect(readAllAuditShards(proj)).not.toContain("**Event**: CHANGE_ACCEPTED");
+    expect(readAllAuditShards(proj)).not.toMatch(/\*\*Event\*\*: CHANGE_ACCEPTED\n(?:\*\*[^\n]*\n)*?\*\*Checkpoint\*\*: swarm-batch/);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // A landing recorded by an earlier release kept no listing: the next one

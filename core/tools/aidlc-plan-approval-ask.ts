@@ -52,7 +52,7 @@ import {
   recordedSourceListingUnderCurrentBoundary,
   removePlanApprovalRuntimeRecord,
   renderChangedPaths,
-  sourceListingChangedPaths,
+  sourceChangedOutsideAidlc,
   stalePlanApprovalReceiptsForTarget,
   stateFilePath,
   steeringPayloadAuthenticAt,
@@ -483,7 +483,8 @@ function targetView(projectDir: string, unit: string | null, changed: string | n
  * approval), so a later Unit's question does not repeat what the person saw
  * when they approved the earlier one, and a unit-major run's first question
  * does not reach back into earlier stages. The files the plans approved since
- * that start name are their own build, not something that ran ahead. Nothing
+ * that start name are their own build, not something that ran ahead, and
+ * AI-DLC's own files (an update the person took) are nobody's. Nothing
  * is said when the start is not on record or cannot be read, or nothing changed.
  */
 function changedBeforeApprovalLine(projectDir: string): string | null {
@@ -525,7 +526,7 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
     const theirBuild = (path: string): boolean =>
       named.some((entry) =>
         path === entry || path.startsWith(`${entry}/`) || (!entry.includes("/") && path.split("/").at(-1) === entry));
-    const changed = sourceListingChangedPaths(start, current.listing).filter((path) => !theirBuild(path));
+    const changed = sourceChangedOutsideAidlc(projectDir, start, current.listing).filter((path) => !theirBuild(path));
     if (changed.length === 0) return null;
     return changed.length === 1
       ? `Already changed before you approved: ${renderChangedPaths(changed)}.`
