@@ -47,6 +47,7 @@ import {
   readBaselineSourceSnapshot,
   readPlanApprovalReceipt,
   readPlanApprovalRuntimeRecord,
+  readProtectedQuestion,
   readWorkspaceSourceSnapshot,
   recordedSourceListingUnderCurrentBoundary,
   removePlanApprovalRuntimeRecord,
@@ -158,6 +159,7 @@ export interface PlanApprovalAskRecord {
   mode: "ask" | "editing";
   /** True until the first reply after the question is shown: only then does a bare yes answer it. */
   bound: boolean;
+  /** When the question was last shown: showing it again moves it. */
   issuedAt: string;
   /** What the engine has to tell the conductor about the last answer (a repair, say). */
   lastNotice?: string;
@@ -962,7 +964,7 @@ export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprov
     }
     const existing = readPlanApprovalAsk(projectDir, intentId);
     if (directive.plan_approval.editing && existing?.mode === "editing") {
-      writePlanApprovalAsk(projectDir, { ...existing, bound: true });
+      writePlanApprovalAsk(projectDir, { ...existing, bound: true, issuedAt: isoTimestamp() });
       return;
     }
     const source = workspaceSourceState(projectDir);
@@ -986,7 +988,7 @@ export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprov
       existing.targets.every((target) =>
         targets.some((current) => current.unit === target.unit && current.fingerprint === target.fingerprint));
     const record: PlanApprovalAskRecord = same && existing
-      ? { ...existing, bound: true }
+      ? { ...existing, bound: true, issuedAt: isoTimestamp() }
       : {
           version: 1,
           askId: randomBytes(16).toString("hex"),
@@ -996,7 +998,7 @@ export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprov
           choices: directive.plan_approval.choices,
           mode: "ask",
           bound: true,
-          issuedAt: new Date().toISOString(),
+          issuedAt: isoTimestamp(),
           repliesFrom: auditMark(projectDir),
         };
     writePlanApprovalAsk(projectDir, record);
@@ -1479,6 +1481,10 @@ export function notePlanApprovalAskReply(
       record.targets.every((target) => record.results?.some((result) => result.unit === target.unit));
     if (answeredAll && !record.results?.some((result) => result.choice === "request-changes")) return false;
     if (picker && !pickerAsksThisQuestion(picker, record)) return false;
+    // A typed reply in a chat where the agent has since asked a question of
+    // its own, still open (the verification command, say), answers that one.
+    if (picker === undefined && session && readProtectedQuestion(projectDir, session) !== null &&
+      askedAfter(projectDir, record.issuedAt, session)) return false;
     const reply = text.trim();
     if (!reply || isNonAnswer(reply)) return true;
     const replies = [
@@ -1730,6 +1736,17 @@ interface OpenEngineQuestion {
 
 const LATER_QUESTION_EVENTS = new Set(["DECISION_RECORDED", "STAGE_AWAITING_APPROVAL"]);
 
+// Whether a question was asked after `since`, the second the one in hand was
+// shown (in `session` alone, when one is named): that later question owns the
+// person's reply. A routing answer can only follow its question, so the same
+// second counts for it.
+function askedAfter(projectDir: string, since: string, session?: string): boolean {
+  return readAuditShardEvents(projectDir).some((row) =>
+    (session === undefined || auditBlockField(row.block, "Session") === session) &&
+    (LATER_QUESTION_EVENTS.has(row.event) ? row.timestamp > since
+      : row.event === "REQUEST_ROUTED" && row.timestamp >= since));
+}
+
 function openEngineQuestionPath(projectDir: string): string {
   return planApprovalRuntimeFile(projectDir, "open-engine-question.json");
 }
@@ -1758,10 +1775,7 @@ export function engineQuestionHoldsReplies(projectDir: string): boolean {
     }
     const noted = readPlanApprovalRuntimeRecord<OpenEngineQuestion>(openEngineQuestionPath(projectDir), "Open engine question");
     if (noted?.version !== 1 || noted.askType !== marker.ask_type || noted.stateSha256 !== marker.state_sha256) return true;
-    // A routing answer can only follow its question, so the same second counts.
-    return !readAuditShardEvents(projectDir).some((row) =>
-      (LATER_QUESTION_EVENTS.has(row.event) && row.timestamp > noted.askedAt) ||
-      (row.event === "REQUEST_ROUTED" && row.timestamp >= noted.askedAt));
+    return !askedAfter(projectDir, noted.askedAt);
   } catch {
     return false;
   }
