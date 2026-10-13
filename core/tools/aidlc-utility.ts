@@ -8627,9 +8627,6 @@ function handleIntentCreateStateBuild(
   for (const phase of PHASES) {
     const stages = phaseMap[phase] || [];
     stageProgress += `\n### ${phaseHeaders[phase]}\n`;
-    if (phase === "construction") {
-      stageProgress += "Per unit: [TBD]\n";
-    }
     for (const stage of stages) {
       const action =
         adjustedMapping[stage.slug] || scopeDef.stages[stage.slug] || "SKIP";
