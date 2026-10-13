@@ -217,9 +217,8 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    `Review: not finished`. The person hears that the review did not finish,
    never that the reviewer found the work not ready. Proceed as that NOT-READY verdict directs for the
    effective review class - on `advisory` it is terminal (present the gate using
-   the required Review brief below, with
-   `--fallback-finding "review did not complete within its turn budget"` so the
-   recorded finding uses the normal table shape); on `adversarial` with
+   the required Review brief below, which names the review that did not finish
+   in the normal table shape); on `adversarial` with
    iterations remaining, skip the lead re-invoke (the artifact itself was never
    reviewed, so there is nothing for the builder to act on) and go directly
    back to step 1 with a fresh iteration and a fresh request; on `adversarial`
@@ -283,9 +282,9 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    stage, plain-language outcome, path-specific reason, every review artifact
    and derived findings table, and the two decision effects without exposing
    the raw verdict token. On the
-   terminal incomplete-attempt fallback, add
-   `--fallback-finding "review did not complete within its turn budget"` so the
-   same table shape names the recorded finding.
+   terminal incomplete-attempt fallback the brief names the review that did not
+   finish; when what the reviewer returned says why it stopped (for example that
+   it had no tool to write files), add `--fallback-finding "<why, in one plain sentence>"`.
 
    This tool output is the opening of the reviewer-backed gate presentation;
    the `**Review:**` artifact-path line and structured approval question follow
