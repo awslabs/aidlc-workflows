@@ -3017,11 +3017,11 @@ describe("stopping for now at Code Generation", () => {
     cpSync(join(AIDLC_SRC, "tools"), join(proj, ".claude", "tools"), { recursive: true });
     askFor(proj);
     const source = workspaceSourceFingerprint(proj);
-    let park = "bun .claude/tools/aidlc.ts engine orchestrate park";
+    let park = "bun .claude/tools/aidlc.ts engine orchestrate park --person-asked";
     if (how === "typed") {
       const named = next(proj, ["park"]);
       expect(named.kind, JSON.stringify(named)).toBe("print");
-      park = /Run `([^`]+ park)`/.exec(named.message ?? "")?.[1] ?? "";
+      park = /Run `([^`]+ park --person-asked)`/.exec(named.message ?? "")?.[1] ?? "";
     }
     const parkAdmitted = guardBash(proj, park);
     expect(parkAdmitted.code, `${park}\n${parkAdmitted.stderr}`).toBe(0);

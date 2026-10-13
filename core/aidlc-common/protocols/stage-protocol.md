@@ -330,7 +330,7 @@ recovery protocol's Session resume says, never as Request Changes.
   `--on-instruction-file` for their words that left a choice to you); the
   engine reads the file and removes it.
 - **They also asked to stop for now:** record their choice with `--park`, or run
-  park, and tell them how to resume.
+  `park --person-asked`, and tell them how to resume.
 
 A record is refused only when the person has not replied since the question
 was shown (end the turn and wait for them), or when it contradicts an option

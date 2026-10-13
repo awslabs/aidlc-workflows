@@ -2225,9 +2225,9 @@ function handleSyncUnitScopeStage(args: string[]): void {
 // tool refusal closes a path #365 did not have.)
 //
 // `attended` is the one exception: a person asked to stop, so their stop wins
-// over the autonomous grant (#1411). It is set when a person has typed since the
-// last gate resolution (the conductor read their reply and ran park, or
-// reported their approval with --park after a gate they answered).
+// over the autonomous grant (#1411). It is set when the conductor says they
+// asked (park --person-asked, or --park on their approval or answer) and a reply
+// of theirs is on record since the last gate resolution.
 export interface ParkResult {
   parked: true;
   stage?: string;
@@ -2236,23 +2236,34 @@ export interface ParkResult {
   checkout_local?: true;
 }
 
-// A park the person asked for, in their own words, is theirs: when a person
-// has typed since the last gate resolution, the stop wins over the autonomous
-// grant and is recorded as theirs. On a host whose hooks can miss a reply
-// (its hookActivation says so), an attended session's stop under the
-// autonomous grant is theirs too, with a note that no reply was on record. A
-// park no person stands behind still never stops an unattended autonomous run:
+// A park the person asked for, in their own words, is theirs. Who asked is the
+// conductor's reading of those words (--person-asked); the tool proves only that
+// a reply of theirs is on record since the last gate resolution. Their stop wins
+// over the autonomous grant and is recorded as theirs. On a host whose hooks can
+// miss a reply (its hookActivation says so), a stop they asked for in an
+// attended session under the autonomous grant is theirs too, with a note that no
+// reply was on record. The conductor's own park is never theirs: gated work
+// pauses unmarked, and a run set to go on by itself goes on (the answer is the
+// conductor's next step, not a refusal for the person). A park no person stands
+// behind still never stops an unattended autonomous run:
 // AIDLC_UNATTENDED is never attended, and a reply means a HUMAN_TURN on record
 // (an empty ledger is not one).
-function handlePark(_args: string[]): void {
+function handlePark(args: string[]): void {
   const pd = resolveProjectDir(projectDir);
+  const asked = args.includes("--person-asked");
   const attendedSession = humanTurnMintAllowed();
+  const autonomous = () => getField(readStateFile(pd), "Construction Autonomy Mode")?.trim() === "autonomous";
+  if (!asked && attendedSession && autonomous()) {
+    const message = "Not parked: Construction Autonomy Mode is autonomous, as the person chose, so the work goes on. " +
+      `If the person asked to stop, run \`${aidlcToolInvocation("orchestrate")} park --person-asked\`; if not, run ` +
+      `\`${aidlcToolInvocation("orchestrate")} next\` and carry on.`;
+    exitWithError({ message, auditMessage: message, agentGuidance: "person-decided" });
+  }
   // Their stop outlives the run's own approvals after it (personSpokeSinceGate).
-  const replied = attendedSession && personSpokeSinceGate(pd, { outlivesApproval: true });
+  const replied = asked && attendedSession && personSpokeSinceGate(pd, { outlivesApproval: true });
   const activation = hookActivation();
-  const missedReply = attendedSession && !replied &&
-    (activation?.missedReply !== undefined || activation?.missesReplies === true) &&
-    getField(readStateFile(pd), "Construction Autonomy Mode")?.trim() === "autonomous";
+  const missedReply = asked && attendedSession && !replied &&
+    (activation?.missedReply !== undefined || activation?.missesReplies === true) && autonomous();
   const result = parkWorkflow(pd, { attended: replied || missedReply });
   console.log(JSON.stringify(missedReply
     ? {
@@ -2351,7 +2362,9 @@ export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): Par
       error("State file has no Current Stage - cannot park.");
     }
     const timestamp = isoTimestamp();
-    const words = parkedWords(pd);
+    // The conductor's own park after a reply that asked for something else
+    // keeps none of it: the step that resumes here calls these words their stop.
+    const words = opts.attended === true ? parkedWords(pd) : null;
     emitAudit(pd, "WORKFLOW_PARKED", {
       Stage: currentSlug,
       ...(words ? { [PERSONS_WORDS_FIELD]: words } : {}),

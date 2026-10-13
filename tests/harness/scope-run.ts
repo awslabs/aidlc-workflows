@@ -1318,7 +1318,7 @@ export class AgentStandIn {
    */
   stopForTheDay(meanwhile?: () => void): void {
     this.person.say("let's stop here for today");
-    const parked = this.must("orchestrate", "park");
+    const parked = this.must("orchestrate", "park", "--person-asked");
     this.parks.push(parked as Directive);
     meanwhile?.();
     this.host.newSession();

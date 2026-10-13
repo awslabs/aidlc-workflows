@@ -8462,7 +8462,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // in `park`.
   if (flags.orchestratorVerb === "park") {
     emit(turnEndingPrint(
-      `Run \`${aidlcToolInvocation("orchestrate")} park\`. It prints a \`parked\` directive: act on it exactly as the directive table says (tell the user the workflow is parked and how to resume with ${entrySkillInvocation()} --resume), then stop. This is a deliberate park, NOT new work: do NOT run \`next\` and do NOT advance or run any workflow stage.`,
+      `Run \`${aidlcToolInvocation("orchestrate")} park --person-asked\`. It prints a \`parked\` directive: act on it exactly as the directive table says (tell the user the workflow is parked and how to resume with ${entrySkillInvocation()} --resume), then stop. This is a deliberate park, NOT new work: do NOT run \`next\` and do NOT advance or run any workflow stage.`,
     ));
     return;
   }
@@ -15209,7 +15209,7 @@ function emitTypedResumeChoice(
   const stopThere = `${flags.park === true
     ? " The person also asked to stop there for now: make"
     : " If the person also asked to stop there for now, make"} the move, following each print up to where it says ` +
-    `to re-run \`next\`, then run \`${aidlcToolInvocation("orchestrate")} park\` in place of that \`next\` and act on its \`parked\` directive.`;
+    `to re-run \`next\`, then run \`${aidlcToolInvocation("orchestrate")} park --person-asked\` in place of that \`next\` and act on its \`parked\` directive.`;
   const move = (directive: PrintDirective | ErrorDirective): PrintDirective | ErrorDirective =>
     directive.kind === "print" ? printDirective(`${directive.message}${stopThere}`) : directive;
   if (choice === "resume") {
@@ -16399,13 +16399,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
 // subcommand - the engine itself writes nothing, mirroring report's discipline.
 // A non-zero exit (e.g. the autonomy refusal, or an already-completed workflow)
 // is relayed as an error directive in the refusal's own words.
-function handlePark(_args: string[], projectDir: string | undefined): void {
+function handlePark(args: string[], projectDir: string | undefined): void {
   const pd = resolveProjectDir(projectDir);
   // Turn-shape marker: a `park` mutates workflow state, so it is engagement. See
   // touchEngineMarker. (The `parked` directive is a terminal allow in the Stop
   // hook anyway, so this is belt-and-braces rather than load-bearing.)
   touchEngineMarker(projectDir);
-  const res = spawnState(pd, ["park"]);
+  // --person-asked: the conductor read the person asking to stop.
+  const res = spawnState(pd, ["park", ...(args.includes("--person-asked") ? ["--person-asked"] : [])]);
   if (res.exitCode !== 0) {
     // The state tool's refusal arrives as its JSON envelope: say its words.
     emit(stateRefusalDirective("Cannot park the workflow", "this step", (res.stderr || res.stdout).trim()));

@@ -182,21 +182,30 @@ describe("the park row keeps the words that stopped the work", () => {
     expect(existsSync(keptWordsFile(proj))).toBe(false);
     // A store a day old has been pruned too: nothing of the turn is left but the rows.
     rmSync(join(seededRecordDir(proj), ".aidlc-engine", "sessions"), { recursive: true, force: true });
-    const r = state(proj, ["park"]);
+    const r = state(proj, ["park", "--person-asked"]);
     expect(r.rc, r.out).toBe(0);
     expect(parkedWords(proj)).toBe(WORDS);
   });
 
   test("a stop said with no gate open: the park row carries the words the hook kept", () => {
     says(proj, "let's stop for today");
-    const r = state(proj, ["park"]);
+    const r = state(proj, ["park", "--person-asked"]);
     expect(r.rc, r.out).toBe(0);
     expect(parkedWords(proj)).toBe("let's stop for today");
   });
 
+  // The agent's own park after a reply that asked for something else: the
+  // words were no stop, so the step that resumes there never says they were.
+  test("the agent's own park after the person's reply keeps none of their words", () => {
+    says(proj, "1");
+    const r = state(proj, ["park"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(parkedWords(proj)).toBeNull();
+  });
+
   test("a turn that kept no words (a picker, a no-text line) leaves the row as it was", () => {
     appendAuditEntry("HUMAN_TURN", {}, proj);
-    const r = state(proj, ["park"]);
+    const r = state(proj, ["park", "--person-asked"]);
     expect(r.rc, r.out).toBe(0);
     expect(parkedWords(proj)).toBeNull();
   });
@@ -206,7 +215,7 @@ describe("the park row keeps the words that stopped the work", () => {
   // stopped, and the step that resumes there carries it.
   test("a cancellation word typed in chat is their words, and the park row keeps it", () => {
     says(proj, "Cancelled");
-    const r = state(proj, ["park"]);
+    const r = state(proj, ["park", "--person-asked"]);
     expect(r.rc, r.out).toBe(0);
     expect(parkedWords(proj)).toBe("Cancelled");
   });
@@ -228,7 +237,7 @@ describe("the park row keeps the words that stopped the work", () => {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(result.status, result.stderr).toBe(0);
-    const r = state(proj, ["park"]);
+    const r = state(proj, ["park", "--person-asked"]);
     expect(r.rc, r.out).toBe(0);
     expect(parkedWords(proj)).toBe("cancel");
   });
@@ -241,7 +250,7 @@ describe("the park row keeps the words that stopped the work", () => {
     appendAuditEntry("QUESTION_ANSWERED", {
       Stage: STAGE, Checkpoint: SUMMARY_CONFIRMATION_CHECKPOINT, Details: "Looks correct",
     }, proj);
-    const r = state(proj, ["park"]);
+    const r = state(proj, ["park", "--person-asked"]);
     expect(r.rc, r.out).toBe(0);
     expect(parkedWords(proj), rowOrder(proj)).toBeNull();
   });
@@ -252,7 +261,7 @@ describe("the park row keeps the words that stopped the work", () => {
   test("a reply that answered the agent's question and asked to stop keeps its words", () => {
     says(proj, "B, and let's stop here for today");
     appendAuditEntry("QUESTION_ANSWERED", { Stage: STAGE, Details: "B" }, proj);
-    const r = state(proj, ["park"]);
+    const r = state(proj, ["park", "--person-asked"]);
     expect(r.rc, r.out).toBe(0);
     expect(parkedWords(proj), rowOrder(proj)).toBe("B, and let's stop here for today");
   });
@@ -322,7 +331,7 @@ describe("the step that resumes where the work was parked carries them", () => {
 
   test("a park whose row kept no words hands nothing", () => {
     appendAuditEntry("HUMAN_TURN", {}, proj);
-    expect(state(proj, ["park"]).rc).toBe(0);
+    expect(state(proj, ["park", "--person-asked"]).rc).toBe(0);
     unpark(proj);
     const directive = resumed(proj, []);
     expect(directive.stage).toBe(STAGE);
@@ -395,7 +404,7 @@ describe("a Unit's step never carries them", () => {
 
   test("the park row keeps the words, and the resumed Unit step carries none", () => {
     says(proj, "let's stop here for today");
-    expect(state(proj, ["park"]).rc).toBe(0);
+    expect(state(proj, ["park", "--person-asked"]).rc).toBe(0);
     expect(parkedWords(proj)).toBe("let's stop here for today");
     unpark(proj);
     const directive = resumed(proj, []);

@@ -1087,9 +1087,11 @@ export async function run(
     if (commandKind === "continue" && subArgs.length > 1) {
       return { status: "unsupported", reason: `\`continue\` takes only the receipt from the last step, so this did not run. Run \`${form("next")}\` to get the current step again.` };
     }
-    if (commandKind === "park" && subArgs.length !== 0) {
-      const extra = /^[A-Za-z0-9_.:=+-]+$/.test(subArgs[0]) ? `, and this one has \`${subArgs[0]}\`` : "";
-      return { status: "unsupported", reason: `\`park\` takes no options${extra}, so it did not run. Run \`${form("park")}\`.` };
+    // --person-asked (the person asked to stop) is the one park option.
+    const other = commandKind === "park" ? subArgs.find((arg) => arg !== "--person-asked") : undefined;
+    if (commandKind === "park" && (other !== undefined || subArgs.length > 1)) {
+      const extra = other !== undefined && /^[A-Za-z0-9_.:=+-]+$/.test(other) ? `, and this one has \`${other}\`` : "";
+      return { status: "unsupported", reason: `\`park\` takes no options but \`--person-asked\`${extra}, so it did not run. Run \`${form("park")} --person-asked\` when the person asked to stop, or \`${form("park")}\`.` };
     }
     const digest = createHash("sha256").update(JSON.stringify([commandKind, ...subArgs])).digest("hex");
     const flagValue = (name: string): string => subArgs[subArgs.lastIndexOf(name) + 1] ?? "";
