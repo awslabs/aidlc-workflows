@@ -286,6 +286,7 @@ import {
   parseGuardPolicy,
   PERSON_WORDS_FILL,
   PERSON_WORDS_SLOT,
+  plannedStages,
   resolveGuardPolicy,
   guardPolicyAcceptsChanges,
   type GuardPolicy,
@@ -15992,17 +15993,6 @@ function approvalProgressLine(stateContent: string, approvedSlug: string, scope:
   const phase = `${inPhase.filter((stage) => finished(stage.slug)).length}/${inPhase.length} ${approved.phase.toUpperCase()}`;
   return `Progress: ${planned.filter((stage) => finished(stage.slug)).length}/${planned.length} in-scope stages complete ` +
     `(${overall} overall) | ${phase}. Next: ${next.name}`;
-}
-
-// The stages the plan runs after Initialization, in run order: every one that
-// finished, and every one not skipped that the plan executes. The progress line
-// and each stage's start line count from this one list.
-function plannedStages(stateContent: string, scope: string): GraphStage[] {
-  const boxes = parseCheckboxes(stateContent);
-  const runs = (slug: string) =>
-    checkboxStateOf(boxes, slug) === "completed" ||
-    (checkboxStateOf(boxes, slug) !== "skipped" && effectivePlanAction(slug, scope, stateContent) === "EXECUTE");
-  return loadGraph().filter((stage) => stage.enabled !== false && stage.phase !== "initialization" && runs(stage.slug));
 }
 
 // " (stage 3 of 9)" for a stage the plan runs, "" for one it does not.

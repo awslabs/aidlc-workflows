@@ -306,6 +306,7 @@ import {
   removeField,
   PLAN_FIELD,
   type PlanChanges,
+  plannedStages,
   planWithChanges,
   composedPlanLabel,
   PLAN_NAME_PATTERN,
@@ -2110,28 +2111,23 @@ To get started:
     statusLine = `${statusLine} (${currentName} skipped)`;
   }
 
-  // Checkbox counts - filter to the EFFECTIVE plan when scope is known: the
-  // state file's per-stage EXECUTE/SKIP suffixes (a recomposed plan) override
-  // the static grid, so status counts against what the router will actually
-  // run, not the pre-recompose column.
+  // The count is the stages the plan runs after Initialization: the count the
+  // plan offer gave, each stage's start says and the progress line uses, from
+  // the one list they read. A stage the person skipped is not work left to do:
+  // it is counted out and named, the way a stage a plan change dropped already
+  // is. Initialization's setup, done when the work was created, keeps its row
+  // below and stays out of the count.
   const checkboxes = parseCheckboxes(content);
-  const suffixOverrides = parseStateStageSuffixes(content);
-  const inScopeInfo = stagesInScope(scope);
-  const inScopeSlugs = new Set(
-    inScopeInfo
-      .filter((s) => (suffixOverrides.get(s.slug) ?? s.action) === "EXECUTE")
-      .map((s) => s.slug)
-  );
-  const scopedCheckboxes =
-    scope !== "Unknown" && inScopeSlugs.size > 0
-      ? checkboxes.filter((c) => inScopeSlugs.has(c.slug))
-      : checkboxes;
-  // A stage the person skipped is not work left to do: it is counted out of
-  // the total and named, the way a stage a plan change dropped already is.
-  const completed = scopedCheckboxes.filter((c) => c.state === "completed").length;
-  const skippedSlugs = scopedCheckboxes.filter((c) => c.state === "skipped").map((c) => c.slug);
-  const total = scopedCheckboxes.length - skippedSlugs.length;
-  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const planned = new Set(plannedStages(content, scope).map((s) => s.slug));
+  const setup = new Set(graph.filter((s) => s.phase === "initialization").map((s) => s.slug));
+  const scopedCheckboxes = checkboxes.filter((c) =>
+    planned.has(c.slug) ||
+    ((setup.has(c.slug) || c.state === "skipped") && effectivePlanAction(c.slug, scope, content) === "EXECUTE"));
+  const completed = scopedCheckboxes.filter((c) => planned.has(c.slug) && c.state === "completed").length;
+  const skippedSlugs = scopedCheckboxes.filter((c) => !planned.has(c.slug) && !setup.has(c.slug)).map((c) => c.slug);
+  const total = planned.size;
+  // Every stage the plan runs skipped leaves nothing to do.
+  const pct = total > 0 ? Math.round((completed / total) * 100) : 100;
   const skippedNote = skippedSlugs.length > 0 ? `, skipped: ${stageNames(skippedSlugs)}` : "";
 
   // Build phase progress bars
