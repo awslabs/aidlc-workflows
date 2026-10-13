@@ -135,7 +135,9 @@ The integration lead completes Inception, including:
 
 When the scope records `skeleton: on`, the first DAG Unit is the walking
 skeleton. It runs on unscoped main before claims open and needs no merge-back
-gate. With `skeleton: off`, dependency-ready Units open immediately.
+gate; claims open once its Unit Progress row on the pushed main is complete.
+With `skeleton: off`, or `Skeleton Stance: off` recorded in the work's state,
+dependency-ready Units open immediately.
 
 Publish the approved Inception state and artifacts before teams claim:
 
@@ -417,7 +419,8 @@ registry.
 ### Day 1
 
 1. The facilitator runs Inception with the group.
-2. If enabled, the facilitator builds and gates the walking skeleton on main.
+2. If enabled, the facilitator builds and gates the walking skeleton on main,
+   then pushes main.
 3. Alice claims `billing`; Bob claims `notifications`.
 4. Each team runs its scoped 3.1-3.5 chain and team gates.
 5. Each team commits and runs `aidlc unit publish`.

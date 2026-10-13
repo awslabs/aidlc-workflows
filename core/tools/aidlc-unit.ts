@@ -39,7 +39,6 @@ import {
   isReadOnlyEngineProbe,
   isTeamUnitOwnership,
   isoTimestamp,
-  loadScopeMetadata,
   loadStageGraphAll,
   parseArgs,
   parseBoltDag,
@@ -60,6 +59,7 @@ import {
   resolveProjectDir,
   resolveReviewClass,
   selfAttributedDecisionMarker,
+  teamSkeletonOn,
   type UnitMergeEvidence,
   type UnitMergeTransaction,
   UNIT_MERGE_DIR,
@@ -569,7 +569,7 @@ function stateAtOid(projectDir: string, oid: string): string {
   return shown.stdout;
 }
 
-function dependencyEdgesAtOid(projectDir: string, oid: string): ReturnType<typeof parseBoltDag> {
+function dependencyBodyAtOid(projectDir: string, oid: string): string {
   const relative = relativeRecordDir(projectDir);
   if (!relative) fail("Cannot resolve the active intent record path.");
   const shown = git(
@@ -577,7 +577,7 @@ function dependencyEdgesAtOid(projectDir: string, oid: string): ReturnType<typeo
     ["show", `${oid}:${relative}/inception/units-generation/unit-of-work-dependency.md`, "--"],
   );
   if (!shown.ok) fail("The fetched integration ref has no Unit dependency artifact.");
-  return parseBoltDag(shown.stdout);
+  return shown.stdout;
 }
 
 function completedUnits(state: string): Set<string> {
@@ -619,113 +619,44 @@ function completedUnits(state: string): Set<string> {
   return done;
 }
 
-function skeletonCompletedAtOid(projectDir: string, oid: string): boolean {
-  const relative = relativeRecordDir(projectDir);
-  if (!relative) return false;
-  const listed = git(projectDir, [
-    "ls-tree",
-    "-r",
-    "--name-only",
-    oid,
-    `${relative}/audit`,
-  ]);
-  if (!listed.ok) return false;
-  const events: Array<{
-    event: string;
-    names: string;
-    timestamp: string;
-    skeleton: boolean;
-    position: number;
-  }> = [];
-  let position = 0;
-  for (const path of listed.stdout.split(/\r?\n/).filter(Boolean)) {
-    const shown = git(projectDir, ["show", `${oid}:${path}`, "--"]);
-    if (!shown.ok) continue;
-    for (const block of shown.stdout.split(/\n---\n/)) {
-      const event = /^\*\*Event\*\*:[ \t]*(.+)$/m.exec(block)?.[1]?.trim();
-      const names =
-        /^\*\*Bolt names\*\*:[ \t]*(.+)$/m.exec(block)?.[1]?.trim() ?? "";
-      if (!event) continue;
-      events.push({
-        event,
-        names,
-        timestamp: /^\*\*Timestamp\*\*:\s*(.+)$/m.exec(block)?.[1]?.trim() ?? "",
-        skeleton: /^\*\*Walking skeleton\*\*:\s*true\s*$/m.test(block),
-        position: position++,
-      });
-    }
-  }
-  events.sort((a, b) =>
-    a.timestamp !== b.timestamp
-      ? (a.timestamp < b.timestamp ? -1 : 1)
-      : a.position - b.position
+type OpeningStatus = {
+  units: string[];
+  blockers: Map<string, string[]>;
+  completed: Set<string>;
+  skeleton: string;
+};
+
+function openingStatus(projectDir: string, baseOid: string): OpeningStatus {
+  return openingStatusFrom(
+    stateAtOid(projectDir, baseOid),
+    dependencyBodyAtOid(projectDir, baseOid),
   );
-  const started = new Set<string>();
-  for (const event of events) {
-    if (event.event === "WORKFLOW_STARTED" || event.event === "STAGE_JUMPED") {
-      started.clear();
-      continue;
-    }
-    if (event.event === "BOLT_STARTED" && event.skeleton) {
-      started.add(event.names);
-      continue;
-    }
-    if (event.event === "BOLT_COMPLETED" && started.has(event.names)) {
-      return true;
-    }
-  }
-  return false;
 }
 
-function openingStatus(
-  projectDir: string,
-  baseOid: string,
-): { units: string[]; blockers: Map<string, string[]>; completed: Set<string> } {
-  const state = stateAtOid(projectDir, baseOid);
-  if (!isTeamUnitOwnership(state)) fail("Unit claims require Unit Ownership: team.");
-  const parsed = dependencyEdgesAtOid(projectDir, baseOid);
-  if (!parsed.ok) fail(`Cannot resolve Unit dependencies: ${parsed.reason}: ${parsed.detail}`);
-  const completed = completedUnits(state);
-  const scope = getField(state, "Scope") ?? "";
-  const skeletonOn = loadScopeMetadata()[scope]?.skeleton === true;
-  const skeletonBlocked =
-    skeletonOn && !skeletonCompletedAtOid(projectDir, baseOid);
-  const blockers = new Map<string, string[]>();
-  for (const edge of parsed.units) {
-    const waiting = edge.depends_on.filter((dep) => !completed.has(dep));
-    if (skeletonBlocked) waiting.unshift("walking-skeleton");
-    blockers.set(edge.name, [...new Set(waiting)]);
-  }
-  return { units: parsed.units.map((edge) => edge.name), blockers, completed };
-}
-
-function localOpeningStatus(
-  projectDir: string,
-): { units: string[]; blockers: Map<string, string[]>; completed: Set<string> } {
+function localOpeningStatus(projectDir: string): OpeningStatus {
   const state = readStateFile(projectDir);
   const dependencyBody = readFileSync(unitDependencyPath(projectDir), "utf-8");
-  return localOpeningStatusFrom(state, dependencyBody);
+  return openingStatusFrom(state, dependencyBody);
 }
 
-function localOpeningStatusFrom(
-  state: string,
-  dependencyBody: string,
-): { units: string[]; blockers: Map<string, string[]>; completed: Set<string> } {
+// The one opening rule for the claim, status, release, the picker and the
+// board. The walking skeleton is the first DAG Unit, built on main; while it is
+// on, every Unit waits until its Unit Progress row is complete, the same
+// evidence a dependency is read from.
+function openingStatusFrom(state: string, dependencyBody: string): OpeningStatus {
   if (!isTeamUnitOwnership(state)) fail("Unit claims require Unit Ownership: team.");
   const parsed = parseBoltDag(dependencyBody);
   if (!parsed.ok) fail(`Cannot resolve Unit dependencies: ${parsed.reason}: ${parsed.detail}`);
   const completed = completedUnits(state);
-  const scope = getField(state, "Scope") ?? "";
-  const skeletonBlocked =
-    loadScopeMetadata()[scope]?.skeleton === true &&
-    !completed.has(parsed.units[0]?.name ?? "");
+  const skeleton = parsed.batches[0][0];
+  const skeletonBlocked = teamSkeletonOn(state) && !completed.has(skeleton);
   const blockers = new Map<string, string[]>();
   for (const edge of parsed.units) {
     const waiting = edge.depends_on.filter((dep) => !completed.has(dep));
     if (skeletonBlocked) waiting.unshift("walking-skeleton");
     blockers.set(edge.name, [...new Set(waiting)]);
   }
-  return { units: parsed.units.map((edge) => edge.name), blockers, completed };
+  return { units: parsed.units.map((edge) => edge.name), blockers, completed, skeleton };
 }
 
 function allClaims(
@@ -956,7 +887,7 @@ export function localUnitClaimOverviewForIntent(
   if (!isTeamUnitOwnership(selector.stateContent)) {
     return { claimable: [], claimed: [], waiting: [], claims: new Map() };
   }
-  const opening = localOpeningStatusFrom(
+  const opening = openingStatusFrom(
     selector.stateContent,
     selector.dependencyBody,
   );
@@ -1476,8 +1407,8 @@ function candidateEvidence(
     baseState,
     true,
   );
-  const baseDag = dependencyEdgesAtOid(projectDir, candidateBaseOid);
-  const dag = dependencyEdgesAtOid(projectDir, liveIntegrationOid);
+  const baseDag = parseBoltDag(dependencyBodyAtOid(projectDir, candidateBaseOid));
+  const dag = parseBoltDag(dependencyBodyAtOid(projectDir, liveIntegrationOid));
   if (!baseDag.ok) {
     fail(`Pinned candidate base Unit DAG is ${baseDag.reason}: ${baseDag.detail}.`);
   }
@@ -3459,9 +3390,10 @@ function claimUnit(args: string[], projectDir?: string): void {
   }
   const blockers = opening.blockers.get(unit) ?? [];
   if (blockers.length > 0) {
+    const where = integration.remote ? `${integration.remote}/${integration.branch}` : integration.branch;
     const named = blockers.map((dep) =>
       dep === "walking-skeleton"
-        ? "walking skeleton Bolt is not complete"
+        ? `the walking skeleton, Unit "${opening.skeleton}", is not complete on ${where} yet`
         : `${unit} waits on ${dep}`
     );
     fail(named.join("; "));

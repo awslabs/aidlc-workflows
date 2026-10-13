@@ -12429,6 +12429,15 @@ export function constructionSkeletonOn(stateContent: string): boolean {
   return loadScopeMetadata()[getField(stateContent, "Scope") ?? ""]?.skeleton === true;
 }
 
+// Team Units wait on the walking skeleton, the first DAG Unit built on main,
+// when the scope runs one and the work has not recorded `Skeleton Stance: off`.
+// Unrecorded keeps the scope's answer: the stance is recorded only at the first
+// Construction stage, after claims could already open.
+export function teamSkeletonOn(stateContent: string): boolean {
+  return getField(stateContent, "Skeleton Stance") !== "off" &&
+    loadScopeMetadata()[getField(stateContent, "Scope") ?? ""]?.skeleton === true;
+}
+
 export function constructionCheckpointsApply(stateContent: string): boolean {
   if (
     getField(stateContent, "Construction Checkpoints") !== "enabled" ||
@@ -29168,8 +29177,7 @@ export function isWalkingSkeletonUnitOnMain(
   ) {
     return false;
   }
-  const scope = getField(state, "Scope") ?? "";
-  if (loadScopeMetadata()[scope]?.skeleton !== true) return false;
+  if (!teamSkeletonOn(state)) return false;
   const dag = resolveBoltDag(pd);
   if (dag.state !== "ok" || dag.batches[0]?.[0] !== unit) return false;
   const top = claimRegistryGit(

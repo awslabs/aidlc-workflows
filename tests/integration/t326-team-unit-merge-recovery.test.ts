@@ -548,7 +548,7 @@ describe("t326 pinned team Unit merge", () => {
     );
     const skeletonShard = join(
       seededAuditDir(shardCandidate.checkout),
-      "skeleton.md",
+      "main-built-skeleton.md",
     );
     writeFileSync(
       skeletonShard,
