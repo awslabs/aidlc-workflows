@@ -18,6 +18,7 @@ import {
   activeIntentUuid,
   delegatedWorktreeIntent,
   decideFence,
+  aidlcOwnedSourceKey,
   attemptEventDefinitelyBefore,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
@@ -39,6 +40,7 @@ import {
   legacyBoltName,
   legacyWorktreePath,
   maximalAttemptEvents,
+  onlyAidlcFilesChangedInSwarmStage,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
   clearPlanApprovalChallenge,
   clearPlanApprovalLegacyOffer,
@@ -393,7 +395,8 @@ export function planSourceMovedNotice(paths: string[] | null, unit: string | nul
  * behind the dispatch guard and `next` does not. An invalid memory value is
  * the resolver's validation error under both. After a real approval, a verified
  * lowered plan-approval fence also permits drift under a strict policy; this
- * changes execution provenance, never the recorded human approval.
+ * changes execution provenance, never the recorded human approval. After
+ * approval the paths leave AI-DLC's own files out (an update the person took).
  */
 function judgePlanSourceDrift(
   projectDir: string,
@@ -404,7 +407,7 @@ function judgePlanSourceDrift(
   loweredFence = false,
   afterApproval = false,
 ): { accepted: AcceptedChange } | { refusal: PlanApprovalSourceDriftError } {
-  const paths = workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, recorded, current);
+  const paths = workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, recorded, current, afterApproval);
   const unbound = current === null;
   const resolution = trace ? governedChangeControl(projectDir) : resolveChangeControl(projectDir);
   // Once the human approved the plan, source that moved elsewhere is never a
@@ -434,6 +437,19 @@ function judgePlanSourceDrift(
           : planSourceDriftRelaxedNotice(paths, unbound),
     },
   };
+}
+
+// Files moved since the approval, and every one of them is AI-DLC's own (an
+// update the person took): nothing of theirs changed, so the start records no
+// change and says nothing. Read from the listing kept for the approved source.
+function onlyAidlcFilesMovedSinceApproval(
+  projectDir: string,
+  certified: string,
+  current: WorkspaceSourceState,
+): boolean {
+  const moved = workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, certified, current);
+  return moved !== null && moved.length > 0 &&
+    workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, certified, current, true)?.length === 0;
 }
 
 /** Keep the listing behind the current fingerprint so a later drift can name paths. */
@@ -2957,7 +2973,10 @@ function continuationMaterial(
     // builds without the comparison (generation start says so in one line).
     const current = workspaceSourceState(projectDir);
     if (current === null) return { artifacts };
-    if (!sameWorkspaceSource(receipt.certifiedSourceSha256, current.fingerprint)) {
+    if (
+      !sameWorkspaceSource(receipt.certifiedSourceSha256, current.fingerprint) &&
+      !onlyAidlcFilesMovedSinceApproval(projectDir, receipt.certifiedSourceSha256, current)
+    ) {
       const judged = judgePlanSourceDrift(
         projectDir, authority.unit, receipt.certifiedSourceSha256, current, false, true, true,
       );
@@ -4599,26 +4618,34 @@ function approvedWorktreeSource(
     if (!parentSource || hashObject(approved.receipt) !== discarded.parentReceiptSha256) {
       throw new Error("Discarded worktree Plan Approval changed or current parent source cannot be bound.");
     }
-    return { parentSource, expectedBytes: discarded.expectedBytes };
+    return { parentSource, expectedBytes: discarded.expectedBytes, theirs: serializeSourceListing };
   }
   // Worktrees are made from the parent's files, so they must be readable even
   // when a single-checkout build could go ahead without that record.
   if (!parentSource) throw new Error(generationSourceUnavailableMessage());
   // Under a relaxed or off Guard Policy, parent source that moved after Plan
   // Approval is kept, as on the single-agent path: generation start records it
-  // and says it in one line.
+  // and says it in one line. An AI-DLC update the person took moves only
+  // AI-DLC's own files, which is no reason to approve the plan again.
   if (
     !approved.continuing &&
     !sameWorkspaceSource(approved.receipt.certifiedSourceSha256, parentSource.fingerprint) &&
-    !guardPolicyAcceptsChanges(parent)
+    !guardPolicyAcceptsChanges(parent) &&
+    !onlyAidlcFilesChangedInSwarmStage(parent, CODE_GENERATION_STAGE, parentSource)
   ) {
     throw new Error("Parent source has changed since Plan Approval or cannot be bound. Re-present and approve the plan against the current parent source.");
   }
+  // AI-DLC's own files are no Unit's source: a worktree need not reproduce
+  // them, so an update the person took need not be committed first.
+  const owned = aidlcOwnedSourceKey(parent);
+  const theirs = (listing: ReadonlyMap<string, string>): string => serializeSourceListing(
+    new Map([...listing].filter(([key]) => !owned(`${repo.repo ?? ""}${key}`))),
+  );
   const prefix = `${repo.repo ?? ""}\0`;
   const expected = new Map([...parentSource.listing]
     .filter(([key]) => key.startsWith(prefix))
     .map(([key, value]) => [key.slice(prefix.length - 1), value]));
-  return { parentSource, expectedBytes: serializeSourceListing(expected) };
+  return { parentSource, expectedBytes: theirs(expected), theirs };
 }
 
 /**
@@ -4639,7 +4666,7 @@ export function validateCodeGenerationForkApproval(
   }
   const discarded = discardedSha256 === undefined
     ? null : discardedWorktreeApproval(parent, unit, repoCwd, repoName, discardedSha256);
-  const { expectedBytes } = approvedWorktreeSource(parent, approved, repo, discarded);
+  const { expectedBytes, theirs } = approvedWorktreeSource(parent, approved, repo, discarded);
   if (discarded) {
     const base = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "--end-of-options", `${baseCommit}^{commit}`]);
     if (base !== discarded.commit) {
@@ -4649,13 +4676,13 @@ export function validateCodeGenerationForkApproval(
   }
   const parentHead = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "HEAD^{commit}"]);
   const committed = gitCommitSourceListing(repo.cwd, parentHead, repo.repo === null);
-  if (!committed || serializeSourceListing(committed) !== expectedBytes) {
+  if (!committed || theirs(committed) !== expectedBytes) {
     throw new Error("Approved parent source is not committed. Commit the already-approved parent source before prepare, then retry. No child was created and no parent commit was made.");
   }
   const base = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "--end-of-options", `${baseCommit}^{commit}`]);
   const baseSource = gitCommitSourceListing(repo.cwd, base, repo.repo === null);
   if (!baseSource) throw new Error("Selected worktree base source cannot be reproduced. Choose a committed base before prepare.");
-  if (serializeSourceListing(baseSource) === expectedBytes) return;
+  if (theirs(baseSource) === expectedBytes) return;
   try {
     worktreeApprovalGit(repo.cwd, ["merge-base", "--is-ancestor", base, parentHead]);
   } catch {
@@ -4669,11 +4696,11 @@ function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: str
   const discarded = discardedSha256 === undefined ? null : discardedWorktreeApproval(
     provenance.parent, unit, provenance.repo.cwd, provenance.repo.repo, discardedSha256,
   );
-  const { parentSource, expectedBytes } = approvedWorktreeSource(provenance.parent, approved, provenance.repo, discarded);
+  const { parentSource, expectedBytes, theirs } = approvedWorktreeSource(provenance.parent, approved, provenance.repo, discarded);
   const childSource = workspaceSourceState(provenance.child);
   if (!childSource) throw new Error("Worktree source cannot be bound. Repair its source boundary before retrying.");
   let syncCommit: string | null = null;
-  if (serializeSourceListing(childSource.listing) !== expectedBytes) {
+  if (theirs(childSource.listing) !== expectedBytes) {
     if (discarded) {
       throw new Error("Recreated worktree source differs from the discarded approval's immutable baseline. Nothing was changed.");
     }
@@ -4684,7 +4711,7 @@ function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: str
     }
     const parentHead = worktreeApprovalGit(provenance.repo.cwd, ["rev-parse", "HEAD"]);
     const committed = gitCommitSourceListing(provenance.repo.cwd, parentHead, provenance.repo.repo === null);
-    if (!committed || serializeSourceListing(committed) !== expectedBytes) {
+    if (!committed || theirs(committed) !== expectedBytes) {
       throw new Error("Clean worktree needs approved parent source that is not committed. Commit the already-approved parent source, then retry; the worktree was preserved.");
     }
     try {
@@ -4740,7 +4767,9 @@ export function bindCodeGenerationWorktreeApproval(
     // Some preserved, approved source is dirty relative to the child's HEAD.
     // Such a delegation remains valid but cannot furnish an immutable discard
     // recovery base; capture will simply return no optional approval fields.
-    const baselineCommit = committed && serializeSourceListing(committed) === current.expectedBytes
+    // The baseline is the child's own listing, AI-DLC's files included.
+    const baselineCommit = committed &&
+      serializeSourceListing(committed) === serializeSourceListing(current.childSource.listing)
       ? childHead : undefined;
     const archive = join(recordDir(current.child)!, ".aidlc-plan-transfers", randomUUID());
     mkdirSync(archive, { recursive: true });
@@ -5119,7 +5148,15 @@ function publishCodeGenerationStart(
     });
     return [...changeNotices, buildWithoutSourceNotice()];
   }
-  if (!sameWorkspaceSource(receipt.certifiedSourceSha256, sourceBefore)) {
+  const moved = !sameWorkspaceSource(receipt.certifiedSourceSha256, sourceBefore);
+  if (
+    moved && stateBefore !== null &&
+    onlyAidlcFilesMovedSinceApproval(projectDir, receipt.certifiedSourceSha256, stateBefore)
+  ) {
+    // An AI-DLC update the person took moved only AI-DLC's own files: no change
+    // to record or say. The source certified below keeps its listing.
+    keepWorkspaceSourceSnapshot(projectDir, stateBefore);
+  } else if (moved) {
     // A raised strict fence refuses and KEEPS the receipt: deleting the human's recorded
     // decision because the workspace moved turned a recoverable drift into
     // a state with no way back, and a fresh approval re-baselines the

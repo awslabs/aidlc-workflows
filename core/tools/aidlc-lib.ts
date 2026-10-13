@@ -26866,21 +26866,23 @@ export function sourceListingChangedPaths(
 /**
  * The changed paths between a recorded workspace fingerprint and the current
  * state, when the recorded listing was kept; null when only the digests can
- * be compared.
+ * be compared. `outsideAidlc` leaves AI-DLC's own files out: an update the
+ * person took is nobody's change.
  */
 export function workspaceSourceChangedPaths(
   projectDir: string,
   stageSlug: string,
   recordedFingerprint: string,
   current: WorkspaceSourceState | null,
+  outsideAidlc = false,
 ): string[] | null {
   if (current === null) return null;
   const recorded = readWorkspaceSourceSnapshot(projectDir, stageSlug, recordedFingerprint);
   if (recorded === null) return null;
-  return sourceListingChangedPaths(
-    recordedSourceListingUnderCurrentBoundary(recorded, current.listing),
-    current.listing,
-  );
+  const before = recordedSourceListingUnderCurrentBoundary(recorded, current.listing);
+  return outsideAidlc
+    ? sourceChangedOutsideAidlc(projectDir, before, current.listing)
+    : sourceListingChangedPaths(before, current.listing);
 }
 
 export function currentStageSourceBaseline(
@@ -36765,6 +36767,30 @@ export function currentSwarmSourceMergeChain(
   return priorFingerprint === null
     ? { state: "none" }
     : { state: "ready", fingerprint: priorFingerprint, listing: priorListing, units };
+}
+
+// Whether the main checkout moved, since the build's last verified source (the
+// last landing's listing, else the stage's opening listing), only in AI-DLC's
+// own files: the comparison a landing makes. False when no listing reads back
+// or the evidence cannot be read; the caller then keeps its fingerprint compare.
+export function onlyAidlcFilesChangedInSwarmStage(
+  projectDir: string,
+  slug: string,
+  current: WorkspaceSourceState,
+): boolean {
+  try {
+    const chain = currentSwarmSourceMergeChain(projectDir, slug);
+    if (chain.state === "ready") return onlyAidlcFilesChangedSince(projectDir, slug, chain.listing, current);
+    if (chain.state !== "none") return false;
+    const opening = currentSwarmSourceOpeningFingerprint(projectDir, slug);
+    return opening.state === "ready" && opening.listing !== undefined && sourceChangedOutsideAidlc(
+      projectDir,
+      recordedSourceListingUnderCurrentBoundary(opening.listing, current.listing),
+      current.listing,
+    ).length === 0;
+  } catch {
+    return false;
+  }
 }
 
 // The set of units the CURRENT attempt of an INLINE per-unit stage has
