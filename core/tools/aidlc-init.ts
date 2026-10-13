@@ -302,6 +302,7 @@ import {
   readPluginSelection,
   readConfigDiagnosticRecords,
   reconcileProviderActions,
+  runtimeFixesNeeded,
   runtimeIssues,
   stripLegacyClaudeModelAliases,
   trustStatus,
@@ -7863,7 +7864,7 @@ function detectFirstRun(
   }
   const first = candidates[0];
   const runtime = first
-    ? runtimeIssues(probeRuntime(
+    ? runtimeFixesNeeded(probeRuntime(
         first.root,
         first.descriptor.harnessDir,
         modelHarness(first.stamp.distribution),
