@@ -105,11 +105,14 @@ After the per-unit work:
 
 **Route checkpoints before bodies.** A `construction_checkpoint` directive
 verifies and approves existing Unit work; it does not rerun Code Generation.
-When it carries `rereview`, the Unit's code or documents changed since their review: run that
-request at once, without asking, then verify and ask the one approval question.
-Only Guard Policy `strict` re-checks: under `relaxed` and `off` there is no
-`rereview`, a change to the Unit's code or documents is accepted with one line,
-and the Unit's approval stands. The same holds with reviews off: the line comes
+When it carries `rereview`, run that review request at once, without asking,
+then verify and ask the one approval question. `rereview` names one of three
+cases: the Unit's code or documents changed since a finished review; the Unit's
+own review has not finished (`unfinished`: no verdict yet, or NOT-READY with a
+pass left); or it was never asked for in this run of the Unit's work (`first`).
+Only Guard Policy `strict` re-checks a change after a finished review: under
+`relaxed` and `off` that change is accepted with one line and the Unit's
+approval stands, while an unfinished or never-asked review is still named. The same holds with reviews off: the line comes
 from the next checkpoint's `verify` or the Construction stage's own check, or,
 for a change made between the approval question and the person's answer, from
 their `approve`.
@@ -125,7 +128,11 @@ Only after `verify` reports `verified: true` and the current checkpoint has
 `ask` refuses an unready or unverified checkpoint. For a human batch question,
 only after status reports `ready: true`, run
 `aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>"`.
-Then present **Approve** / **Request Changes** and wait. The human's exact reply
+When the Unit `ask` returns `earlier_reply`, the person already answered in
+this chat while the Unit's review ran: do not show the question, and run
+`approve` or `reject` as their words chose; when their words answer nothing,
+show the question and wait. Otherwise present **Approve** / **Request
+Changes** and wait. The human's exact reply
 to this checkpoint question authorizes the matching action, in that chat or a
 new one: with no question of its own, a new chat's reply is kept for the
 checkpoint question another chat asked, while it is the newest question asked
@@ -166,8 +173,8 @@ proof file cannot verify a Unit. On a checkout with no proof file at all (a
 fresh clone, another machine), that receipt stands in for the proof of a Unit
 already approved whose evidence is unchanged, so nothing runs again.
 
-Code Generation's Plan Approval remains a human stop before generation for every
-Unit. Grouped Plan Approval may present the exact live swarm Unit set together,
+While `plan_approval` is on, Code Generation's Plan Approval remains a human
+stop before generation for every Unit. Grouped Plan Approval may present the exact live swarm Unit set together,
 but still records individual receipts. Pre-generation summary confirmation is
 required only when `directive.ceremony.summary_confirmation === "on"`. See
 [Construction commands](../../guide/12-cli-commands.md#construction-order-and-execution)
@@ -350,7 +357,7 @@ legacy name and require the selected intent's exact `WORKTREE_DISCARDED`
 | support_agents    | aidlc-developer-agent                                                                                   |
 | mode              | inline                                                                                            |
 | Inputs            | unit-of-work.md, unit-of-work-story-map.md, requirements.md, domain design artifacts         |
-| Outputs           | `<record>/construction/{unit-name}/functional-design/` -- functional-spec.md, rules.md, entities.md, CONDITIONAL: frontend-components.md |
+| Outputs           | `<record>/construction/{unit-name}/functional-design/` -- functional-spec.md, rules.md, entities.md, traceability.json, CONDITIONAL: frontend-components.md (per Unit kind) |
 
 ### Purpose
 
@@ -422,6 +429,11 @@ feasibility input.
 | rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
 | entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
 | frontend-components.md   | (CONDITIONAL) Component hierarchy, props/state, interaction flows, form validation, API integration |
+| traceability.json        | Every acceptance criterion assigned to the Unit mapped to the `BRx.y` rules in rules.md |
+
+Which files a Unit gets follows its kind: a `ui` Unit gets no entities.md or
+rules.md, only a `ui` Unit gets frontend-components.md, and a `packaging`
+Unit gets none of them.
 
 ### Approval Gate
 
@@ -453,7 +465,7 @@ Strictly 2-option: Approve / Request Changes.
 | support_agents    | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent                                       |
 | mode              | inline                                                                                            |
 | Inputs            | functional design artifacts, requirements.md, RE artifacts                                        |
-| Outputs           | `<record>/construction/{unit-name}/nfr-requirements/` -- performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, observability-requirements.md, tech-stack-decisions.md |
+| Outputs           | `<record>/construction/{unit-name}/nfr-requirements/` -- performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, observability-requirements.md, tech-stack-decisions.md, traceability.json (per Unit kind) |
 
 ### Purpose
 
@@ -531,6 +543,11 @@ providing testability and measurability input.
 | reliability-requirements.md  | Availability targets (SLA/SLO), fault tolerance, backup/recovery           |
 | observability-requirements.md | Monitoring, logging, tracing, alerting, dashboards, SLI/SLO definitions    |
 | tech-stack-decisions.md      | Technology selections with rationale for each choice                       |
+| traceability.json            | Every inception `NFR{n}` that applies to the Unit mapped to its `NFRx.y` IDs |
+
+Which files a Unit gets follows its kind: scalability, reliability and
+observability requirements are for `service` Units, and performance for
+`service` and `ui` Units.
 
 ### Approval Gate
 
@@ -538,9 +555,9 @@ Strictly 2-option: Approve / Request Changes.
 
 ### Notes -- NFR Granularity Expansion
 
-This stage produces **6 artifact files**, expanded from the upstream reference
-which defines only 2 files for NFR Requirements. This is a deliberate deviation
-documented in SKILL.md ("Deliberate Deviations from Reference"). The finer
+This stage produces **6 Markdown artifacts** plus `traceability.json`,
+expanded from the upstream reference which defines only 2 files for NFR
+Requirements. The finer
 granularity improves traceability and allows per-concern review without
 overloading a single document. The six files separate performance, security,
 scalability, reliability, and observability into dedicated artifacts, and add
@@ -563,7 +580,7 @@ a dedicated tech-stack-decisions.md for technology selection rationale.
 | support_agents    | aidlc-aws-platform-agent                                                                                |
 | mode              | inline                                                                                            |
 | Inputs            | NFR requirements artifacts, functional design artifacts                                           |
-| Outputs           | `<record>/construction/{unit-name}/nfr-design/` -- performance-design.md, security-design.md, scalability-design.md, reliability-design.md, observability-design.md, logical-components.md |
+| Outputs           | `<record>/construction/{unit-name}/nfr-design/` -- performance-design.md, security-design.md, scalability-design.md, reliability-design.md, observability-design.md, logical-components.md, traceability.json (per Unit kind) |
 
 ### Purpose
 
@@ -657,6 +674,10 @@ infrastructure and platform input.
 | reliability-design.md  | Resilience patterns, circuit breakers, retry policies, failover procedures      |
 | observability-design.md | Metrics, structured logs, tracing, alerts, dashboards, SLI/SLO definitions      |
 | logical-components.md  | Component inventory, service boundaries, failure domains, blast radius mapping  |
+| traceability.json      | Every `NFRx.y` from the Unit's NFR requirements mapped to its design solution   |
+
+Which files a Unit gets follows its kind, as in NFR Requirements; `spec` and
+`packaging` Units get no logical-components.md.
 
 ### Approval Gate
 
@@ -664,10 +685,9 @@ Strictly 2-option: Approve / Request Changes.
 
 ### Notes -- NFR Design Granularity
 
-This stage produces **6 artifact files** (5 NFR-specific designs plus
-logical-components.md), expanded from the upstream reference which defines only
-2 files for NFR Design. This is a deliberate deviation documented in SKILL.md
-("Deliberate Deviations from Reference"). The logical-components.md artifact
+This stage produces **6 Markdown artifacts** (5 NFR-specific designs plus
+logical-components.md) and `traceability.json`, expanded from the upstream
+reference which defines only 2 files for NFR Design. The logical-components.md artifact
 serves as a bridge between NFR design and Infrastructure Design (Stage 3.4)
 by mapping where NFR patterns apply at the component level.
 
@@ -688,7 +708,7 @@ by mapping where NFR patterns apply at the component level.
 | support_agents    | aidlc-devsecops-agent, aidlc-compliance-agent                                                           |
 | mode              | inline                                                                                            |
 | Inputs            | NFR design artifacts, domain design, functional design                                       |
-| Outputs           | `<record>/construction/{unit-name}/infrastructure-design/` -- infrastructure-specification.md (deployment + services + CONDITIONAL shared), monitoring-design.md, cicd-pipeline.md |
+| Outputs           | `<record>/construction/{unit-name}/infrastructure-design/` -- infrastructure-specification.md (deployment + services + CONDITIONAL shared), monitoring-design.md, cicd-pipeline.md, traceability.json (per Unit kind) |
 
 ### Purpose
 
@@ -773,6 +793,10 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
 | infrastructure-specification.md | Deployment (compute/networking/storage/environments/IaC), infrastructure services, and CONDITIONAL shared resources — tabular |
 | monitoring-design.md           | Metrics, alerts, SLIs/SLOs, logs, tracing, dashboards — tabular where possible |
 | cicd-pipeline.md               | Pipeline stages, build config, deployment strategy, rollback procedures   |
+| traceability.json              | Every `NFRx.y` design decision that needs infrastructure mapped to its resource or configuration |
+
+Which files a Unit gets follows its kind: a `spec` Unit gets none of them,
+and a `library` Unit only cicd-pipeline.md and traceability.json.
 
 ### Approval Gate
 
@@ -780,7 +804,7 @@ Strictly 2-option: Approve / Request Changes.
 
 ### Notes -- Infrastructure Design Consolidation
 
-This stage produces **3 artifact files**. Deployment, infrastructure services,
+This stage produces **3 Markdown artifacts** plus `traceability.json`. Deployment, infrastructure services,
 and shared resources were consolidated into a single tabular
 `infrastructure-specification.md` (closer to the upstream reference's single
 infra doc), while `monitoring-design.md` and `cicd-pipeline.md` stay dedicated
@@ -811,8 +835,27 @@ present only when multiple units share resources.
 ### Purpose
 
 Generate all application code, tests, and configuration for a single unit of
-work. This is the only stage that always executes for every unit regardless of
-the execution plan. Code is written to the workspace root, never to
+work. It runs for every Unit in every scope that includes it; infra runs no
+Code Generation and no Build and Test, as its compiled plan shows:
+
+```text
+$ aidlc engine graph scope infra
+workspace-scaffold
+workspace-detection
+state-init
+practices-discovery
+requirements-analysis
+nfr-requirements
+nfr-design
+infrastructure-design
+ci-pipeline
+deployment-pipeline
+environment-provisioning
+deployment-execution
+observability-setup
+```
+
+Code is written to the workspace root, never to
 `<record>/`.
 
 ### Critical Rules
@@ -1041,9 +1084,6 @@ This stage has a **two-part structure**: planning followed by generation.
      is `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the current plan. With
      its fence on, the dispatch guard rejects missing, different, or stale
      hashes. Contextual dependencies do not receive additional target markers.
-   - The lead agent's persona from `agents/aidlc-developer-agent.md` and knowledge
-     from `.claude/knowledge/aidlc-developer-agent/` (included in the prompt
-     since subagents cannot access conversation history)
    - Design artifacts for the CURRENT UNIT ONLY (not all units)
    - A 1-2 line summary of each inception-phase artifact with its file path
      (requirements summary, stories summary, app design summary) -- the
@@ -1115,10 +1155,26 @@ This stage has a **two-part structure**: planning followed by generation.
    entry names its recorded `repo`; inside the worktree hosting the Bolt, paths are relative
    to that selected repo and omit `repo`.
 
+   The stage file gives this shape:
+
+   ```json
+   {
+     "stage": "code-generation",
+     "unit": "u1-auth",
+     "version": 1,
+     "writes": [
+       { "path": "src/auth/login.ts" },
+       { "path": "src/auth/generated/" },
+       { "repo": "repo-a", "path": "src/api/routes.ts" }
+     ]
+   }
+   ```
+
    The engine validates this schema and refuses to record a terminal per-unit
-   review without it. Its bytes and claims join the `Unit Source Fingerprint`;
-   changed stage-source paths outside all fresh reviewed manifests block
-   completion.
+   review without it. Its bytes and claims join the `Unit Source Fingerprint`.
+   Under Guard Policy strict, changed stage-source paths outside all fresh
+   reviewed manifests block completion; under relaxed or off they are kept and
+   the person is told once which files changed outside the Units.
 
    A zero-Unit directive (`directive.unit` absent) writes no
    `source-manifest.json` and creates no Unit directory for one: the engine
@@ -1164,10 +1220,8 @@ Strictly 2-option: Approve / Request Changes.
   Construction stages which run entirely inline.
 - **Developer-agent subagent**: Code generation uses `subagent_type="aidlc-developer-agent"`
   (delegated via Task tool), not inline execution. This is the only
-  Construction stage that uses a subagent. The subagent inherits the full
-  session toolset (the aidlc-developer-agent declares no `tools:` allowlist),
-  so it reaches Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion, and the
-  inherited MCP tools.
+  Construction stage that uses a subagent. The aidlc-developer-agent declares
+  no `tools:` allowlist and denies `Task`.
 - **Context budget**: Only the current unit's design artifacts are passed to
   the subagent. Inception-phase artifacts are summarized in 1-2 lines with
   file paths so the subagent can selectively Read what it needs.
@@ -1177,8 +1231,9 @@ Strictly 2-option: Approve / Request Changes.
 - **Source-manifest enforcement** (Unit work only): `source-manifest.json` is engine-validated,
   not a Markdown `required-sections` target. Its strict schema and
   `Unit Source Fingerprint` bind every exact/directory source claim; the engine
-  refuses the terminal review when it is absent or invalid and refuses stage
-  completion for changed source outside the fresh reviewed claims union.
+  refuses the terminal review when it is absent or invalid and, under Guard
+  Policy strict, refuses stage completion for changed source outside the fresh
+  reviewed claims union.
 - **Unit-scoped execution**: Each per-unit test instruction file uses exact
   test paths or an exact unit filter so the cross-unit execution stage does
   not rerun the project-wide suite for every unit.
@@ -1280,7 +1335,9 @@ with the aidlc-devsecops-agent providing security testing expertise.
 
     a. **Build**: Run the build commands from build-instructions.md via Bash.
        Capture output.
-    b. **Unit tests**: Collect commands from every per-unit
+    b. **Unit tests**: Collect commands from the stage-level
+       `<record>/construction/code-generation/unit-test-instructions.md` (when
+       present, including Express) and every per-unit
        `code-generation/unit-test-instructions.md`, deduplicate identical
        commands, and run each distinct command once. Commands should be
        unit-scoped; if a file contains a project-wide command, run it once,
@@ -1389,10 +1446,18 @@ with the aidlc-devsecops-agent providing security testing expertise.
     pass and every applicable target to be `Met`, or the single explanatory
     `N/A` row when no target applies.
 
-10. **Prepare Completion** -- Verify the build/test evidence. Do not edit
+10. **Cross-Unit Final Coverage Gate** -- Enumerate every `FR` and `NFR` in
+    `requirements.md` and every `AC` in `stories.md` (when User Stories ran),
+    read the stage-level and every per-unit Code Generation
+    `traceability.json`, and check each ID is covered `OK` with an existing
+    target file. Write `cross-unit-traceability.md` with the verdict, per-ID
+    coverage and every uncovered ID; an uncovered ID is a finding shown at the
+    approval gate.
+
+11. **Prepare Completion** -- Verify the build/test evidence. Do not edit
     stage or phase state; the reported gate outcome owns the transition.
 
-11. **Completion** -- Present completion message and approval gate.
+12. **Completion** -- Present completion message and approval gate.
 
 ### Outputs
 
@@ -1407,6 +1472,7 @@ with the aidlc-devsecops-agent providing security testing expertise.
 | accessibility-test-instructions.md| WCAG compliance, screen reader, keyboard nav                    | If user-facing UI  |
 | build-and-test-summary.md         | Overall status, test inventory, coverage, readiness assessment  | Always             |
 | test-results.md                   | Actual build/test execution results, pass/fail, coverage        | Always             |
+| cross-unit-traceability.md        | FR/NFR/AC coverage across all Units, verdict, uncovered IDs     | Always             |
 
 ### Approval Gate
 
@@ -1428,8 +1494,9 @@ Strictly 2-option: Approve / Request Changes.
   append-only `## Loop-Back Log` in test-results.md) or presents the impact-estimated
   halt-and-ask question. See the construction protocol module
   (`aidlc-common/protocols/stage-protocol-construction.md`),
-  "Build-and-Test failure loop-back". Re-entry is settlement-aware, preserves
-  the approved plan, and cannot reach its gate until every applicable Code
+  "Build-and-Test failure loop-back". Re-entry is settlement-aware, asks for
+  Plan Approval again on the repaired plan (the earlier approval belongs to
+  the previous attempt), and cannot reach its gate until every applicable Code
   Generation Unit has a fresh current-attempt review.
 - **Conditional test types**: Performance tests, security tests, contract
   tests, E2E tests, and accessibility tests are only generated when relevant
@@ -1529,8 +1596,9 @@ Strictly 2-option: Approve / Request Changes.
   to code and code traces to tests. Results are written to
   `<record>/verification/phase-check-construction.md`.
 - **Conditional execution**: This stage is skipped if the project already has
-  an adequate CI pipeline. The execution plan from Delivery Planning determines
-  whether it runs.
+  an adequate CI pipeline. The plan (the scope, plus any skip or add the person
+  makes) decides whether it runs; Delivery Planning plans the Bolts, not the
+  stages.
 - **Post-unit execution**: Like Stage 3.6, this stage runs once after all
   per-unit work is complete, not per-unit.
 
@@ -1558,15 +1626,16 @@ through a phased construction flow:
   (pipeline-deploy-led)
 
 **Key characteristics:**
-- Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 ALWAYS execute; 3.7 is CONDITIONAL
-- All conditional stages follow the execution plan from Delivery Planning
+- Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 run in every scope that includes them (infra has neither); 3.7 is CONDITIONAL
+- Which conditional stages run comes from the plan (the scope, plus any skip or add the person makes), not from Delivery Planning
 - New source-producing solo Unit workflows default to unit-major, serial
   execution and verified Unit checkpoints. Preserve explicit iteration choices
   and the existing legacy, design-only, no-Unit, and team-owned paths.
-- NFR artifacts use expanded granularity (6 files for requirements, 6 for
-  design) compared to the upstream reference
-- Infrastructure Design is expanded to 5 artifacts with dedicated monitoring
-  and CI/CD files
+- NFR artifacts use expanded granularity (6 Markdown files for requirements,
+  6 for design, each with a `traceability.json`) compared to the upstream
+  reference
+- Infrastructure Design produces 3 Markdown artifacts (with dedicated
+  monitoring and CI/CD files) plus `traceability.json`
 - Code generation uses the aidlc-developer-agent subagent with context budget controls
 - Build and Test performs actual command execution and automated failure
   diagnosis
@@ -1574,10 +1643,10 @@ through a phased construction flow:
   Operation
 
 **Deliberate deviations from upstream reference:**
-- NFR Requirements: 6 files (expanded from 2 in reference)
-- NFR Design: 6 files including logical-components.md (expanded from 2 in
-  reference)
-- Infrastructure Design: 3 files — a consolidated infrastructure-specification.md
+- NFR Requirements: 6 Markdown files plus traceability.json (expanded from 2 in reference)
+- NFR Design: 6 Markdown files including logical-components.md, plus
+  traceability.json (expanded from 2 in reference)
+- Infrastructure Design: 3 Markdown files plus traceability.json: a consolidated infrastructure-specification.md
   (deployment + services + shared) plus dedicated monitoring-design.md and
   cicd-pipeline.md
 - Plan/question file co-location with stage artifacts
