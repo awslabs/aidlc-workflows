@@ -1495,8 +1495,8 @@ Strictly 2-option: Approve / Request Changes.
   halt-and-ask question. See the construction protocol module
   (`aidlc-common/protocols/stage-protocol-construction.md`),
   "Build-and-Test failure loop-back". Re-entry is settlement-aware, asks for
-  Plan Approval again on the repaired plan (the earlier approval belongs to
-  the previous attempt), and cannot reach its gate until every applicable Code
+  Plan Approval again on the repaired plan while `plan_approval` is on (the
+  earlier approval belongs to the previous attempt), and cannot reach its gate until every applicable Code
   Generation Unit has a fresh current-attempt review.
 - **Conditional test types**: Performance tests, security tests, contract
   tests, E2E tests, and accessibility tests are only generated when relevant
@@ -1597,8 +1597,8 @@ Strictly 2-option: Approve / Request Changes.
   `<record>/verification/phase-check-construction.md`.
 - **Conditional execution**: This stage is skipped if the project already has
   an adequate CI pipeline. The plan (the scope, plus any skip or add the person
-  makes) decides whether it runs; Delivery Planning plans the Bolts, not the
-  stages.
+  makes) decides whether it is reached, and the stage still applies its own
+  condition; Delivery Planning plans the Bolts, not the stages.
 - **Post-unit execution**: Like Stage 3.6, this stage runs once after all
   per-unit work is complete, not per-unit.
 
@@ -1627,7 +1627,7 @@ through a phased construction flow:
 
 **Key characteristics:**
 - Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 run in every scope that includes them (infra has neither); 3.7 is CONDITIONAL
-- Which conditional stages run comes from the plan (the scope, plus any skip or add the person makes), not from Delivery Planning
+- Which conditional stages are reached comes from the plan (the scope, plus any skip or add the person makes), not from Delivery Planning; each still applies its own condition
 - New source-producing solo Unit workflows default to unit-major, serial
   execution and verified Unit checkpoints. Preserve explicit iteration choices
   and the existing legacy, design-only, no-Unit, and team-owned paths.
