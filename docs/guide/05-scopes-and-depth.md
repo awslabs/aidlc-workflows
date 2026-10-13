@@ -237,15 +237,18 @@ the line says 6 stages and 6 approval gates:
  gates; no learnings ritual or summary confirmation; lead agent only. Do you want me to go ahead
  with it, use a different plan, or tailor one to this task?
  > 1. Go ahead with the "bugfix" plan
-      5 stages, 5 approval gates
-   2. Tailor a plan to this task
-      Build a plan shaped to this specific fix
-   3. Type something.
-   4. Chat about this
+      5 stages focused on fixing this specific bug.
+   2. Use a different plan
+      Pick another ready-made plan.
+   3. Tailor a plan to this task
+      Have a plan composed specifically for this fix.
+   4. Type something.
+   5. Chat about this
 ```
 
-Go ahead to proceed, type the name of a different plan, or tailor one to
-course-correct before the workflow starts. When no ready-made plan fits what you described, the
+Go ahead to proceed, use a different plan (the agent lists the others with
+their length; you pick one or type its name), or tailor one to course-correct
+before the workflow starts. When no ready-made plan fits what you described, the
 agent offers to tailor one instead ("None of the ready-made plans is an obvious
 fit for ..."), with the plans you can pick directly listed beside it. Settings
 you typed with the request (`--depth minimal`, `--learnings off`) ride the
