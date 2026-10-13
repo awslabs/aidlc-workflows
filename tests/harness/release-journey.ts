@@ -223,6 +223,22 @@ export function writeReleaseJourneyReport(report: ReleaseJourneyReport): string 
   return line;
 }
 
+/**
+ * Run a journey and write its report, also when a step throws: the step that
+ * stopped it becomes a problem first, so the pasted line never says PASS for
+ * a journey that ended before its checks ran.
+ */
+export function runReleaseJourney(report: ReleaseJourneyReport, journey: () => void): void {
+  try {
+    journey();
+  } catch (error) {
+    report.problems.push(`the journey stopped: ${(error instanceof Error ? error.message : String(error)).split("\n")[0]}`);
+    throw error;
+  } finally {
+    writeReleaseJourneyReport(report);
+  }
+}
+
 // The commit the journey's AI-DLC tree was built from. A CI live leg runs in a
 // snapshot of the checkout whose HEAD is not the tested commit (the run names
 // that), so the line leaves it out there.

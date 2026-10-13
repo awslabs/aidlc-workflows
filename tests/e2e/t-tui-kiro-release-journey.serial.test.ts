@@ -40,8 +40,8 @@ import {
   type ReleaseJourneyReport,
   releaseJourneyEvidence,
   releaseJourneyProblems,
+  runReleaseJourney,
   setupReleaseJourneyProject,
-  writeReleaseJourneyReport,
 } from "../harness/release-journey.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
@@ -119,42 +119,43 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
       const report: ReleaseJourneyReport = { harness: "kiro", toolVersion: kiroVersion() ?? "?", turns: [], extra: {}, problems: [] };
       let prompts = 0;
       try {
-        expect(drive(["start", "--session", session, "--cwd", project.proj, "--width", "200", "--height", "50", "--", ...launch]).rc).toBe(0);
-        // The shipped settings make the aidlc agent the default; its name is in the status bar.
-        expect(waitFor(session, "aidlc", remainingWorkMs(), 400)).toBe(true);
-        expect(waitFor(session, IDLE, remainingWorkMs(), 600)).toBe(true);
-        for (const [index, line] of RELEASE_JOURNEY_TURNS.entries()) {
-          const before = sessionCredits(screen(session)) ?? 0;
-          const started = Date.now();
-          type(session, line);
-          // The turn ends when Kiro prints its credits line again and waits for the person.
-          let ended = false;
-          while (!ended && Date.now() < caseDeadlineMs) {
-            if (!waitFor(session, `${IDLE}|requires approval`, remainingWorkMs(), 1500)) continue;
-            const now = screen(session);
-            const bottom = now.split("\n").slice(-14).join("\n");
-            if (bottom.includes("requires approval") && !bottom.includes(IDLE)) {
-              prompts++;
-              drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
-              continue;
+        runReleaseJourney(report, () => {
+          expect(drive(["start", "--session", session, "--cwd", project.proj, "--width", "200", "--height", "50", "--", ...launch]).rc).toBe(0);
+          // The shipped settings make the aidlc agent the default; its name is in the status bar.
+          expect(waitFor(session, "aidlc", remainingWorkMs(), 400)).toBe(true);
+          expect(waitFor(session, IDLE, remainingWorkMs(), 600)).toBe(true);
+          for (const [index, line] of RELEASE_JOURNEY_TURNS.entries()) {
+            const before = sessionCredits(screen(session)) ?? 0;
+            const started = Date.now();
+            type(session, line);
+            // The turn ends when Kiro prints its credits line again and waits for the person.
+            let ended = false;
+            while (!ended && Date.now() < caseDeadlineMs) {
+              if (!waitFor(session, `${IDLE}|requires approval`, remainingWorkMs(), 1500)) continue;
+              const now = screen(session);
+              const bottom = now.split("\n").slice(-14).join("\n");
+              if (bottom.includes("requires approval") && !bottom.includes(IDLE)) {
+                prompts++;
+                drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
+                continue;
+              }
+              ended = (sessionCredits(now) ?? 0) > before;
             }
-            ended = (sessionCredits(now) ?? 0) > before;
+            if (!ended) report.problems.push(`"${line}" was still running when the journey's time ran out`);
+            report.turns.push({ line, seconds: Math.round((Date.now() - started) / 1000) });
+            if (ended) report.problems.push(...releaseJourneyProblems(project.proj, index + 1).map((problem) => `after "${line}": ${problem}`));
+            if (report.problems.length) break;
           }
-          if (!ended) report.problems.push(`"${line}" was still running when the journey's time ran out`);
-          report.turns.push({ line, seconds: Math.round((Date.now() - started) / 1000) });
-          if (ended) report.problems.push(...releaseJourneyProblems(project.proj, index + 1).map((problem) => `after "${line}": ${problem}`));
-          if (report.problems.length) break;
-        }
-        if (!report.problems.length) {
-          report.problems.push(...hooksRanProblems(doctorChecks(project, { ...process.env, ...(process.platform === "linux" ? { HOME: kiroHome } : {}) })));
-        }
-        const last = screen(session);
-        report.extra = { credits: sessionCredits(last) ?? 0, "permission prompts": prompts };
-        if (report.problems.length) {
-          report.extra.evidence = { ...releaseJourneyEvidence(project.proj), screen: last.split("\n").slice(-60).join("\n") };
-        }
+          if (!report.problems.length) {
+            report.problems.push(...hooksRanProblems(doctorChecks(project, { ...process.env, ...(process.platform === "linux" ? { HOME: kiroHome } : {}) })));
+          }
+          const last = screen(session);
+          report.extra = { credits: sessionCredits(last) ?? 0, "permission prompts": prompts };
+          if (report.problems.length) {
+            report.extra.evidence = { ...releaseJourneyEvidence(project.proj), screen: last.split("\n").slice(-60).join("\n") };
+          }
+        });
       } finally {
-        writeReleaseJourneyReport(report);
         drive(["kill", "--session", session]);
       }
       expect(report.problems).toEqual([]);

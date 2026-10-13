@@ -43,8 +43,8 @@ import {
   recordedPersonLines,
   releaseJourneyEvidence,
   releaseJourneyProblems,
+  runReleaseJourney,
   setupReleaseJourneyProject,
-  writeReleaseJourneyReport,
 } from "../harness/release-journey.ts";
 
 const COPILOT_BIN = process.env.AIDLC_COPILOT_BIN ?? "copilot";
@@ -129,7 +129,7 @@ describe("t-exec-copilot-release-journey: a person's first day on Copilot CLI, b
         harness: "copilot", toolVersion: copilotVersion() ?? "?", turns: [], extra: {}, problems: [],
       };
       let lastOut = "";
-      try {
+      runReleaseJourney(report, () => {
         for (const [index, line] of RELEASE_JOURNEY_TURNS.entries()) {
           const started = Date.now();
           const turn = copilotTurn(project.proj, line, {
@@ -145,9 +145,7 @@ describe("t-exec-copilot-release-journey: a person's first day on Copilot CLI, b
         const runs = hookRuns(copilotHome);
         report.extra = { "hook runs": Object.values(runs).reduce((sum, count) => sum + count, 0), ...tokens(usageFile), hooksByKind: runs };
         if (report.problems.length) report.extra.evidence = { ...releaseJourneyEvidence(project.proj), output: lastOut.slice(-4000) };
-      } finally {
-        writeReleaseJourneyReport(report);
-      }
+      });
       expect(report.problems).toEqual([]);
       rmSync(project.root, { recursive: true, force: true });
     },
