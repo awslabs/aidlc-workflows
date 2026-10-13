@@ -2740,6 +2740,50 @@ describe("what the engine names while a plan waits", () => {
     expect(said.recorded).toBe("approve");
   });
 
+  // "Use bun test to check each Unit" while the plans wait: the person approves
+  // the command in the agent's question box, the agent records and applies it,
+  // and the plan question is still the open step, so their next "approve both
+  // plans" is kept as their answer to it.
+  test("a verification command approved while the plans wait keeps the plan question open", () => {
+    const { pd } = groupedProject();
+    const tool = (name: string, args: string[]): void => {
+      const run = spawnSync(BUN, [join(AIDLC_SRC, "tools", name), ...args, "--project-dir", pd], {
+        cwd: pd,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: pd, AIDLC_PROJECT_DIR: pd, AIDLC_UNATTENDED: "0" },
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(run.status, `${name} ${args.join(" ")}\n${run.stdout}${run.stderr}`).toBe(0);
+    };
+    reply(pd, "before you build anything, use bun test as the verification command");
+    const question = "Use this command to verify each completed Unit?";
+    const route = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "bun test", "--session", SESSION];
+    tool("aidlc-log.ts", ["decision", ...route, "--decision", question, "--options", "Approve,Request Changes"]);
+    const asked = [{
+      question, header: "Command", multiSelect: false,
+      options: [{ label: "Approve", description: "" }, { label: "Request Changes", description: "" }],
+    }];
+    const picked = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: pd,
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse", session_id: SESSION, tool_name: "AskUserQuestion",
+        tool_input: { questions: asked },
+        tool_response: { questions: asked, answers: { [question]: "Approve" } },
+      }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: pd, AIDLC_PROJECT_DIR: pd, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(picked.status, picked.stderr).toBe(0);
+    tool("aidlc-log.ts", ["answer", ...route, "--details", "Approve"]);
+    tool("aidlc-state.ts", ["set-construction-verification-command", "bun test"]);
+    expect(planApprovalAskIsOpen(pd)).toBe(true);
+    reply(pd, "approve both plans");
+    const said = answer(pd, "Approve all");
+    expect(said.code, said.message).toBe(0);
+    expect(said.recorded).toBe("approve");
+  });
+
   // Only the skip's own write keeps the plan question open: any other change
   // to the work's state still leaves it out of date, and the engine asks again.
   test("a state change from anything but the skip still leaves the plan question out of date", () => {
