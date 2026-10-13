@@ -97,6 +97,7 @@ Follow the Arrange-Act-Assert (AAA) pattern:
 | Middleware | Pass-through behavior, rejection conditions, header manipulation |
 
 ### Test Data Strategy
+- Build test data from the project's own types, schemas or contracts (model types, JSON Schema, OpenAPI, migrations, sample data): type each fixture or check it against the schema, so it fails when the real shape changes; a stub or mock returns the shape the real dependency returns, and data for an error-path test starts from a valid value and changes only the field under test
 - Use factories/builders for complex objects (avoid raw JSON literals)
 - Isolate test data per test (no shared mutable fixtures)
 - Use meaningful test data that reflects real scenarios
