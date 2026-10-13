@@ -32,7 +32,7 @@ that qualifies. Evidence counts only from those reviewed workflows on `main`:
 runs on other branches or events, verification artifacts, and results for
 another commit or run never qualify. When none qualifies, the release calls
 `full-suite.yml` for the tagged commit with `contents: read`,
-`id-token: write` and `secrets: inherit`, as the preview does. A failed search
+`id-token: write` and `secrets: inherit`. A failed search
 falls back to running the suite. `Require a passing Full Suite` then downloads
 the result and runs `scripts/ci-full-suite-evidence.ts check`, which requires the
 tagged `sha`, the producing `runId`, `purpose: "release"`,

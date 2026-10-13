@@ -279,9 +279,8 @@ No edit to this chapter required — the registry is derived.
 
 1. Edit the producing stage's `.md` file and add the canonical name to
    its `produces:` list.
-2. Recompile the graph (`bun scripts/package.ts` in the source checkout, or
-   `aidlc engine graph compile` in an installed tree): `artifacts` reads the
-   compiled graph, not the stage file.
+2. Recompile the graph (`aidlc engine graph compile` in the installed project
+   you check): `artifacts` reads the compiled graph, not the stage file.
 3. Run `aidlc engine graph artifacts` to confirm it appears.
 4. Run `/aidlc --doctor` to confirm no consumer references a name that no
    longer exists (the "Graph references" check).
