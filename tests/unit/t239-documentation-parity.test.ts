@@ -5,6 +5,7 @@ import codexOnboardingFills from "../../harness/codex/onboarding.fills.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import { type Tier, TIER_PROJECTIONS, TIERS } from "../../core/tools/aidlc-tiers.ts";
 import { parseStageFrontmatter } from "../../core/tools/aidlc-lib.ts";
+import { compareVersions } from "../../core/tools/aidlc-channel.ts";
 import { validateStageFrontmatter } from "../../core/tools/aidlc-stage-schema.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -236,7 +237,7 @@ describe("documentation parity derives current behavior from authored implementa
   });
 
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(117);
+    expect(eventTypes.length).toBe(118);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -597,6 +598,17 @@ describe("documentation parity derives current behavior from authored implementa
     const copies = [...filesBelow(at("docs"), ".md"), ...filesBelow(at("core", "aidlc-common", "protocols"), ".md")]
       .filter((file) => stale.test(readFileSync(file, "utf8").replace(/\s+/g, " ")));
     expect(copies).toEqual([]);
+  });
+
+  test("no copy says headless copilot -p runs need GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS", () => {
+    // Trust alone runs the hooks in `copilot -p` on Copilot CLI 1.0.74 and 1.0.96, and `=1` does nothing.
+    const copies = [...filesBelow(at("docs"), ".md"), at("README.md")]
+      .filter((file) => readFileSync(file, "utf8").includes("GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS"));
+    expect(copies).toEqual([]);
+    expect(normalized(read("docs", "guide", "15-troubleshooting.md"))).toContain(
+      'A headless `copilot -p` run never asks: start `copilot` in the folder once and choose "Yes, and remember ' +
+        'this folder for future sessions".',
+    );
   });
 
   test("a review the person asks for is recorded under every Guard Policy, and no copy reads as needing strict", () => {
@@ -1104,5 +1116,20 @@ describe("documentation parity derives current behavior from authored implementa
     expect(onboarding).not.toContain("None is a bug");
     expect(read("docs", "reference", "06-hooks-and-tools.md")).not.toContain("can never trap the session");
     expect(read("docs", "guide", "harnesses", "copilot.md")).not.toContain("the doctor pins the floor");
+  });
+
+  test("every version a page tells you to switch or pin to is one the native install can select", () => {
+    // 2.8.0 is the first release published with native binaries; `aidlc use`
+    // and `aidlc config --pin` stop with "No published native release" on one
+    // before it.
+    const pages = [...filesBelow(at("docs"), ".md"), at("README.md")];
+    const named: string[] = [];
+    for (const page of pages) {
+      for (const match of readFileSync(page, "utf8").matchAll(/(?:aidlc use|--pin) (\d+\.\d+\.\d+(?:-preview\.\d{8}\.\d+)?)/g)) {
+        named.push(match[1]);
+        expect(compareVersions(match[1], "2.8.0"), `${basename(page)} names ${match[0]}`).toBeGreaterThanOrEqual(0);
+      }
+    }
+    expect(named.length).toBeGreaterThan(0);
   });
 });

@@ -17,12 +17,14 @@ import {
   constructionSkeletonOn,
   auditBlockField,
   authorizedVerificationCommand,
-  VERIFICATION_COMMAND_RECOVERY,
+  verificationCommandRecovery,
   type VerificationCommand,
   claimAttemptFields,
   completionCarriesVerifiedReview,
   reviewCompletionDidNotFinish,
+  reviewCompletionDictated,
   reviewCompletionEdited,
+  reviewCompletionWithoutReviewer,
   reviewRecordNotHere,
   effectivePlanAction,
   eventMatchesClaimAttempt,
@@ -49,6 +51,8 @@ import {
   isNonAnswer,
   latestMainWorkflowStageRunFloorForProject,
   latestPersonTurn,
+  leftOutLine,
+  reviewCheckOffer,
   loadStageGraph,
   maximalAttemptEvents,
   personMayApproveOverUnfinishedReview,
@@ -180,12 +184,27 @@ export interface ConstructionCheckpoint {
    *  reviewer finished (strict; relaxed and off said it with the verdict). The
    *  checkpoint says so in one line before the person is asked. */
   review_edited?: { stages: string[] };
+  /** The stages whose fresh review records the verdict its dispatch dictated
+   *  (strict; relaxed and off said it with the verdict). The checkpoint says so
+   *  in one line before the person is asked. */
+  review_dictated?: { stages: string[] };
+  /** The stages whose fresh review records that no reviewer had finished when
+   *  its verdict was recorded (strict; relaxed and off said it with the
+   *  verdict). The checkpoint says so in one line before the person is asked. */
+  review_no_reviewer?: { stages: string[] };
   /** From verify: the one line for each change to this Unit's reviewed work
    *  its Guard Policy accepted, said before the person is asked. */
   change_notices?: string[];
   /** The person was asked to approve this Unit since its last checkpoint
    *  decision, so its learnings question, asked first, is behind them. */
   asked?: true;
+  /** From ask: what the person left out of this Unit's build, said once just
+   *  before the question. */
+  left_out?: string;
+  /** From ask: the one check offered when a stage's review passes are spent
+   *  and its reviewed work changed after the last review, said with
+   *  `left_out` just before the question. */
+  check_offer?: string;
   /** From ask: what the person typed in this chat while the Unit's review ran,
    *  before the question was asked, kept as its reply. The conductor reads it:
    *  an answer is recorded with no question shown; anything else leaves the
@@ -716,8 +735,12 @@ function snapshot(
   // Stages whose review ended in the NOT-READY fallback no reviewer gave:
   // ready as before, and asked about and approved as not finished.
   const endedUnfinished: string[] = [];
-  // Stages whose fresh review was edited after the reviewer finished.
+  // Stages whose fresh review was edited after the reviewer finished, whose
+  // fresh review records the verdict its dispatch dictated, and whose verdict
+  // was recorded before any reviewer finished.
   const editedReviews: string[] = [];
+  const dictatedReviews: string[] = [];
+  const noReviewerReviews: string[] = [];
   let mayGoOn: boolean | null = null;
   const overAllowed = (): boolean => (mayGoOn ??= personMayApproveOverUnfinishedReview(projectDir, state));
   // The unfinished review `rereview` names is one the person may go on without.
@@ -990,6 +1013,8 @@ function snapshot(
       }
     }
     if (review && reviewCompletionEdited(review.block) && !acceptsChanges()) editedReviews.push(slug);
+    if (review && reviewCompletionDictated(review.block) && !acceptsChanges()) dictatedReviews.push(slug);
+    if (review && reviewCompletionWithoutReviewer(review.block) && !acceptsChanges()) noReviewerReviews.push(slug);
     if (reviewClass === "none" || waived) {
       // No review re-checks this stage (or the person let the Unit go on
       // without it): a later change to the work the person approved, which
@@ -1144,6 +1169,8 @@ function snapshot(
           : { stages: unfinishedStages, question: `Approve ${unit}? Its ${reviewsNamed(unfinishedStages)} did not finish.` },
       } : {}),
       ...(editedReviews.length > 0 ? { review_edited: { stages: editedReviews } } : {}),
+      ...(dictatedReviews.length > 0 ? { review_dictated: { stages: dictatedReviews } } : {}),
+      ...(noReviewerReviews.length > 0 ? { review_no_reviewer: { stages: noReviewerReviews } } : {}),
       run_floor: floors[stages.at(-1)!] ?? "unstarted#0",
       run_floors: floors, proof_path: `${root}/${proofPath}`, verification: proof ?? restored,
       rereview, rechecked,
@@ -1302,7 +1329,7 @@ function verifyOnce(
     const notices = recordAcceptedChanges(projectDir, changes);
     const authorization = current.verificationCommand;
     if (!authorization) {
-      throw new Error("Construction verification requires the state's command and a matching current VERIFICATION_COMMAND_RECORDED receipt. " + VERIFICATION_COMMAND_RECOVERY);
+      throw new Error("Construction verification requires the state's command and a matching current VERIFICATION_COMMAND_RECORDED receipt. " + verificationCommandRecovery());
     }
     const proof: ConstructionCheckpointProof = {
       version: 4, id: randomUUID(), kind, unit, fingerprint: current.result.fingerprint,
@@ -1483,7 +1510,17 @@ export function askConstructionCheckpoint(
     const question = mintProtectedQuestion(projectDir, {
       kind: "checkpoint-approval", session, target: approvalTarget(current),
     });
-    if (earlier === null) return current.result;
+    const leftOut = leftOutLine(current.result.stages
+      .filter((slug) => findStageBySlug(slug)?.workspace_requires === true)
+      .map((slug) => join(current.root, "construction", unit, slug, "traceability.json")));
+    const offer = current.result.stages.map((slug) => findStageBySlug(slug))
+      .map((stage) => stage ? reviewCheckOffer(projectDir, stage, unit) : null).find((found) => found !== null) ?? null;
+    const result = {
+      ...current.result,
+      ...(leftOut === null ? {} : { left_out: leftOut }),
+      ...(offer === null ? {} : { check_offer: offer.offer }),
+    };
+    if (earlier === null) return result;
     const words = earlier.join("\n").slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
     const pick = exactOptionPick(earlier.at(-1), APPROVAL_GATE_CHOICES);
     markProtectedQuestionReplied(projectDir, question);
@@ -1493,7 +1530,7 @@ export function askConstructionCheckpoint(
       responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
       words,
     });
-    return { ...current.result, earlier_reply: words };
+    return { ...result, earlier_reply: words };
   });
 }
 

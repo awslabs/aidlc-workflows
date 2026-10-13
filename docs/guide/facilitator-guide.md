@@ -116,12 +116,11 @@ vision note.
 
 ## Keep side tasks small: name the scope
 
-A plain `/aidlc <description>` suggests a scope from its words or offers to
-compose a plan, and `classic`, the default, runs 18 of 33 stages. A
-description longer than five words is offered `bugfix` only when it asks for
-the fix ("Fix the export that drops rows", "please fix it"). Other bug reports
-get the offer to compose a plan, which lists `bugfix` first; picking the
-default there runs a much larger workflow. Name the scope as the first word:
+A plain `/aidlc <description>` has the agent propose a plan from its words, or
+offer to compose one, and `classic`, the default, runs 18 of 33 stages. A bug
+report in plain words is usually proposed `bugfix`; when the agent offers to
+compose instead, the list beside the offer names `bugfix` first, and picking
+the default runs a much larger workflow. Name the scope as the first word:
 
 | The side task is... | Type | Stages |
 |---|---|---|
@@ -297,8 +296,8 @@ following its instructions, and a failure is easier to miss.
 | Harness | How questions appear | Can AI-DLC refuse an agent's action? | At the end of a turn | Hooks run only when | Gaps to know |
 |---|---|---|---|---|---|
 | Claude Code | Native picker; picker answers count as your turn | Yes, every check | Keeps the workflow going until the step is reported | Claude Code was started in the folder after setup, and no `"disableAllHooks": true` setting or organization policy stops them (the doctor checks) | None noted |
-| Codex CLI | Picker, with numbered prose as the fallback; picker answers count | Yes, every check | Keeps the workflow going | The project's hooks are trusted (one interactive trust pass, or the shipped trust seed) | No custom status line |
-| GitHub Copilot (CLI and VS Code) | Numbered prose; type your answer. Pickers are refused while a workflow runs, because their answers do not count | Yes, through Copilot's deny channel. Live-verified on the CLI; on VS Code documented but not yet verified live | Keeps the workflow going | In VS Code, the workspace is trusted and Chat: Use Hooks is on (an organization can switch it off). For the Copilot CLI, the folder is in `trustedFolders`; headless `copilot -p` also needs `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`. `aidlc` must be on the PATH the host starts with | No status line. The doctor warns until a Copilot chat has started in the folder, and when no hook has run for your message, the chat says so; a real stage and your reply are still the full readiness check |
+| Codex CLI | Picker, with numbered prose as the fallback; picker answers count | Yes, every check | Keeps the workflow going | The project's hooks are trusted (one interactive trust pass, or the shipped trust seed) | AI-DLC's status line is the project's choice, for everyone in it (`$aidlc --statusline on`) |
+| GitHub Copilot (CLI and VS Code) | Numbered prose; type your answer. Pickers are refused while a workflow runs, because their answers do not count | Yes, through Copilot's deny channel. Live-verified on the CLI; on VS Code documented but not yet verified live | Keeps the workflow going | In VS Code, the workspace is trusted and Chat: Use Hooks is on (an organization can switch it off). For the Copilot CLI, the folder is in `trustedFolders`. `aidlc` must be on the PATH the host starts with | No status line. The doctor warns until a Copilot chat has started in the folder, and when no hook has run for your message, the chat says so; a real stage and your reply are still the full readiness check |
 | Cursor | Numbered prose | Yes | Cannot hold the turn; the reminder arrives as a follow-up message | The project is in a git repository and the folder is trusted (the doctor checks the repository) | Headless `agent -p` runs cannot pass approval gates. No status line |
 | Kiro CLI | Numbered prose | Yes | Keeps the workflow going in interactive sessions, not in `--no-interactive` runs | The `aidlc` agent is active | No status line; no session-end or pre-compaction hooks |
 | Kiro IDE | Numbered prose | Partly: the approval floor, Plan Approval, review-freeze, the state-transition check, and the terminal command check. No reviewer read-scope check | Cannot hold the turn; the agent's own instructions keep the workflow going | The folder is trusted, the window was reloaded, and the `aidlc` agent is chosen (the doctor warns until hooks have run) | No status line |

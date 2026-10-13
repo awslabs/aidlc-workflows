@@ -337,8 +337,8 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       "report",
       "--result",
       "resumed",
-      "--user-input",
-      "Resume from last checkpoint",
+      "--choice",
+      "resume",
       "--project-dir",
       p,
     ]);
@@ -348,66 +348,31 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
 
-  test("SP4c: every resume-menu choice routes to its own move; garbage errors; state untouched", () => {
+  test("SP4c: a re-entry report with no --choice routes nothing: one print names the typed form; state untouched", () => {
     const p = projWithState("state-jumped.md");
     const before = readFileSync(statePath(p), "utf-8");
-    const report = (answer: string) =>
-      directive(run(ORCHESTRATE, [
-        "report",
-        "--result",
-        "resumed",
-        "--user-input",
-        answer,
-        "--project-dir",
-        p,
-      ]));
+    const report = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
 
-    const redo = report("Redo the current stage");
-    expect(redo.kind).toBe("print");
-    expect(redo.message).toContain("aidlc-jump.ts execute");
-    expect(redo.message).toContain("--direction redo");
-
-    const jump = report("Jump to a stage");
-    expect(jump.kind).toBe("print");
-    expect(jump.message).toContain("next --stage");
-    // A stage the person already named is never asked for again.
-    expect(jump.message).toContain("for the stage the person named");
-    expect(jump.message).not.toContain("Ask the human which stage to jump to");
-
-    const fresh = report("Start fresh");
-    expect(fresh.kind).toBe("print");
-    expect(fresh.message).toContain("--new-intent");
-
-    const garbage = report("something unrecognizable");
-    expect(garbage.kind).toBe("error");
-    expect(garbage.message).toContain("Unrecognized resume choice");
+    // The person's words, or the old menu's numbers and labels, are never read
+    // here: the conductor reads them and reports the typed choice.
+    for (const words of [
+      "1", "2", "3", "4", "5",
+      "Resume from last checkpoint", "Redo the current stage", "Jump to a stage", "Start fresh",
+      "redo the current stage", "something unrecognizable",
+    ]) {
+      const d = report("--user-input", words);
+      expect(d.kind, words).toBe("print");
+      expect(d.message, words).toContain("--choice <resume|redo|jump|fresh>");
+      for (const routed of ["--direction redo", "next --stage", "--new-intent", "Re-run `next`", "Unrecognized"]) {
+        expect(d.message, words).not.toContain(routed);
+      }
+    }
+    const bare = report();
+    expect(bare.kind).toBe("print");
+    expect(bare.message).toContain("--choice <resume|redo|jump|fresh>");
 
     // Every round-trip above is read-only: report routes, the conductor acts.
-    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
-  });
-
-  test("SP4d: exact numbered resume-menu answers map to the four semantic choices", () => {
-    const p = projWithState("state-jumped.md");
-    const before = readFileSync(statePath(p), "utf-8");
-    const report = (answer: string) =>
-      directive(run(ORCHESTRATE, [
-        "report",
-        "--result",
-        "resumed",
-        "--user-input",
-        answer,
-        "--project-dir",
-        p,
-      ]));
-
-    expect(report("1").message).toContain("Re-run `next`");
-    expect(report("2").message).toContain("--direction redo");
-    expect(report("3").message).toContain("next --stage");
-    expect(report("4").message).toContain("--new-intent");
-
-    const outOfRange = report("5");
-    expect(outOfRange.kind).toBe("error");
-    expect(outOfRange.message).toContain("Accepted choices: 1/resume");
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
 
@@ -418,26 +383,22 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
     writeFileSync(statePath(p), state.replace(/^- \*\*Scope\*\*: .*$/m, "- **Scope**: feature; touch pwned"), "utf-8");
     // A saved scope that is not a scope name prints no command, as everywhere.
-    for (const extra of [["--choice", "redo"], ["--user-input", "2"]]) {
-      const r = run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]);
-      expect(r.status).not.toBe(0);
-      expect(r.stdout).toBe("");
-      expect(r.out).toContain("is not a scope name, so no command was printed");
-      expect(r.out).not.toContain("touch pwned");
-    }
+    const unsafe = run(ORCHESTRATE, ["report", "--result", "resumed", "--choice", "redo", "--project-dir", p]);
+    expect(unsafe.status).not.toBe(0);
+    expect(unsafe.stdout).toBe("");
+    expect(unsafe.out).toContain("is not a scope name, so no command was printed");
+    expect(unsafe.out).not.toContain("touch pwned");
     // A blank or unknown saved scope gets no redo command either, never a default plan.
     for (const saved of ["", "nosuchscope"]) {
       writeFileSync(statePath(p), state.replace(/^- \*\*Scope\*\*: .*$/m, `- **Scope**: ${saved}`), "utf-8");
-      for (const r of [report("--choice", "redo"), report("--user-input", "2")]) {
-        expect(r.kind, saved).toBe("error");
-        expect(r.message).toContain("cannot be redone from here");
-        expect(r.message).not.toContain("--direction redo");
-      }
+      const r = report("--choice", "redo");
+      expect(r.kind, saved).toBe("error");
+      expect(r.message).toContain("cannot be redone from here");
+      expect(r.message).not.toContain("--direction redo");
     }
     writeFileSync(statePath(p), state.replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation$(touch pwned)"), "utf-8");
     for (const r of [
       report("--choice", "redo"),
-      report("--user-input", "2"),
       report("--choice", "redo", "--unit", "beta"),
       report("--choice", "redo", "--every-unit"),
     ]) {
@@ -670,7 +631,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const report = (...extra: string[]) =>
       directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
     const stopAsked = "The person also asked to stop there for now: make the move";
-    const parkInstead = " park` in place of that `next` and act on its `parked` directive.";
+    const parkInstead = " park --person-asked` in place of that `next` and act on its `parked` directive.";
     // Every move a re-entry request names keeps the stop the person asked for,
     // and without --park the conductor still checks their words for one.
     for (const extra of [
@@ -686,7 +647,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       expect(stopped.message, extra.join(" ")).toContain(stopAsked);
       expect(stopped.message, extra.join(" ")).toContain(parkInstead);
       // The engine's own park, which every tool runs without asking.
-      expect(stopped.message, extra.join(" ")).toMatch(/orchestrate(\.ts)? park` in place of that `next`/);
+      expect(stopped.message, extra.join(" ")).toMatch(/orchestrate(\.ts)? park --person-asked` in place of that `next`/);
       const plain = report(...extra);
       expect(plain.message, extra.join(" ")).not.toContain(stopAsked);
       expect(plain.message, extra.join(" ")).toContain("If the person also asked to stop there for now, make the move");
@@ -717,14 +678,17 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   // workspace prints the intent-create move + creates NO state; (b) a named scope
   // over existing state is a resume/scope-change, NOT a creation.
   // ============================================================
-  test("SP5a: named scope (clean) -> print naming intent-create, next creates NO state (read-only)", () => {
+  test("SP5a: named scope (clean) with a description -> print naming intent-create, next creates NO state (read-only)", () => {
     const p = cleanProj();
+    // Named alone, the scope first asks what the work is for (#2355).
     const r = run(ORCHESTRATE, [
       "next",
       "--scope",
       "poc",
       "--project-dir",
       p,
+      "--",
+      "prove the importer reads the old files",
     ]);
     expect(directive(r).kind).toBe("print");
     expect(directive(r).message).toContain("intent create");
@@ -732,25 +696,30 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(existsSync(statePath(p))).toBe(false);
   });
 
-  test("SP5a positional scope + description -> creation preserves the request and does not ask", () => {
+  test("SP5a positional scope + loose words -> both readings, nothing created, nothing asked", () => {
+    // A plan's name at the start of their own sentence is ambiguous with their
+    // first word, so the engine takes nothing from the line and names both
+    // readings (t-three-ways-to-read-a-line): their words are kept whole, no
+    // question is stored, and no state is written.
     const p = cleanProj();
     const r = run(ORCHESTRATE, [
+      // Ahead of their words, as every caller builds it.
       "next",
+      "--project-dir",
+      p,
       "bugfix",
       "Fix",
       "duplicate",
       "todo",
       "persistence",
-      "--project-dir",
-      p,
     ]);
     const d = directive(r);
     expect(d.kind).toBe("print");
-    expect(d.message).toContain("intent create --scope bugfix");
-    const id = String(d.message).match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
-    expect(id).toMatch(/^[0-9a-f]{8}$/);
-    const stored = JSON.parse(readFileSync(join(p, "aidlc", ".aidlc-sessions", "questions", `${id}.json`), "utf-8"));
-    expect(stored.text).toBe("Fix duplicate todo persistence");
+    expect(d.message).not.toContain("intent create --scope bugfix");
+    expect(d.message).toContain("--scope bugfix -- 'Fix duplicate todo persistence'");
+    expect(d.message).toContain("'bugfix Fix duplicate todo persistence'");
+    expect(String(d.message)).not.toMatch(/--request [0-9a-f]{8}/);
+    expect(existsSync(join(p, "aidlc", ".aidlc-sessions", "questions"))).toBe(false);
     expect(d.kind).not.toBe("ask");
     expect(existsSync(statePath(p))).toBe(false);
   });

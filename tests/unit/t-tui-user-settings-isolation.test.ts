@@ -210,17 +210,17 @@ describe("TUI user-settings journey guards", () => {
     const project = setupTuiProject({ noAidlcDocs: true });
     const command = [
       "env", "-u", "AIDLC_SKIP_REVISION_BACKSTOP", "claude",
-      "--setting-sources", "project", "--dangerously-skip-permissions",
+      "--setting-sources", "project,local", "--dangerously-skip-permissions",
     ];
     try {
       expect(claudeFixtureCwd(project, command)).toBe(project);
       expect(normalizeTuiCommand(command, {})).toEqual(command);
-      const implicit = command.filter((arg) => arg !== "--setting-sources" && arg !== "project");
+      const implicit = command.filter((arg) => arg !== "--setting-sources" && arg !== "project,local");
       expect(normalizeTuiCommand(implicit, {})).toEqual(command);
       const repeatedUnset = ["/usr/bin/env", "-u", "FIRST", "-u", "SECOND", "/usr/local/bin/claude"];
       expect(claudeFixtureCwd(project, repeatedUnset)).toBe(project);
       expect(normalizeTuiCommand(repeatedUnset, {})).toEqual([
-        ...repeatedUnset, "--setting-sources", "project",
+        ...repeatedUnset, "--setting-sources", "project,local",
       ]);
       rmSync(join(project, TUI_TEST_FIXTURE_MARKER));
       expect(claudeFixtureCwd(project, command)).toBeNull();

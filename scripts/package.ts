@@ -101,6 +101,7 @@ import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
 import { copyStartsWithout, sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
 import { kiroIdeSteering } from "../core/tools/aidlc-includes.ts";
+import { SHIPPED_FORMAT_DOCS } from "../core/tools/aidlc-inline-context.ts";
 import { AIDLC_SETTINGS_SCHEMA } from "../core/tools/aidlc-settings.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -339,6 +340,21 @@ function projectKiroAgentJson(srcPath: string, content: Buffer): Buffer {
     writeKiroAgentSurface(content.toString("utf-8"), effective),
     "utf-8",
   );
+}
+
+// The authored Kiro agent JSONs preload the shared knowledge with a glob; a
+// dispatched agent gets the shared methodology files only, as every other
+// harness's preflight names them (SHIPPED_FORMAT_DOCS is the one list).
+function projectKiroSharedKnowledge(content: Buffer): Buffer {
+  const parsed = JSON.parse(content.toString("utf-8")) as { resources?: unknown };
+  const glob = "file://.kiro/knowledge/aidlc-shared/*.md";
+  if (!Array.isArray(parsed.resources) || !parsed.resources.includes(glob)) return content;
+  const files = readdirSync(join(CORE_ROOT, "knowledge", "aidlc-shared"))
+    .filter((file) => file.endsWith(".md") && !SHIPPED_FORMAT_DOCS.has(file))
+    .sort()
+    .map((file) => `file://.kiro/knowledge/aidlc-shared/${file}`);
+  parsed.resources = parsed.resources.flatMap((entry) => (entry === glob ? files : [entry]));
+  return Buffer.from(`${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
 }
 
 // Merge the tier-derived chat.modelDefaults entries into an authored Kiro
@@ -588,6 +604,10 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
   if (m.kiroLayout) data.kiroLayout = m.kiroLayout;
   // And only a host that cuts a shell result below the engine's cap.
   if (m.directiveMaxBytes) data.directiveMaxBytes = m.directiveMaxBytes;
+  // And only a host where AI-DLC can show its progress in the status line.
+  if (m.statusLine) data.statusLine = m.statusLine;
+  // And only a host whose stop event records an agent's finish before its result.
+  if (m.agentFinishRecorded) data.agentFinishRecorded = m.agentFinishRecorded;
   const dst = join(treeRoot, HARNESS_DATA);
   mkdirSync(dirname(dst), { recursive: true });
   writeFileSync(dst, `${JSON.stringify(data, null, 2)}\n`);
@@ -888,7 +908,7 @@ function buildTree(
     );
     if (harnessKind === "kiro") {
       if (src.startsWith("agents/") && src.endsWith(".json")) {
-        out = projectKiroAgentJson(srcPath, out);
+        out = projectKiroSharedKnowledge(projectKiroAgentJson(srcPath, out));
       } else if (src === "settings/cli.json") {
         out = projectKiroCliJson(out);
       }
@@ -1205,7 +1225,7 @@ function expandKiroToolAllows(treeRoot: string, m: HarnessManifest): void {
   if (expanded === 0) throw new Error("[kiro] no agent names the tools-folder pattern to expand");
 }
 
-// Kiro IDE's authored conductor (agents/aidlc.md) allows AI-DLC's tool
+// Kiro IDE's authored conductor (agents/aidlc-aidlc.md) allows AI-DLC's tool
 // scripts and the dispatcher's engine namespace. Both trees add, after the
 // engine line, each dispatcher command every install pre-approves exactly as
 // AI-DLC runs it (copyChannelDispatcherCommands): through the project's
@@ -1215,11 +1235,11 @@ function expandKiroToolAllows(treeRoot: string, m: HarnessManifest): void {
 // commands (delegate-shell-deny.ts).
 function expandKiroIdeConductorAllows(treeRoot: string, m: HarnessManifest, invoke: string): void {
   if (m.name !== "kiro-ide") return;
-  const conductor = join(treeRoot, "agents", "aidlc.md");
+  const conductor = join(treeRoot, "agents", "aidlc-aidlc.md");
   const engine = `        - "${invoke} engine *"\n`;
   const value = readFileSync(conductor, "utf-8");
   if (value.split(engine).length !== 2) {
-    throw new Error(`[kiro-ide] agents/aidlc.md must allow ${invoke} engine * exactly once`);
+    throw new Error(`[kiro-ide] agents/aidlc-aidlc.md must allow ${invoke} engine * exactly once`);
   }
   const exact = copyChannelDispatcherCommands().map((command) => `        - "${invoke} ${command}"\n`);
   writeFileSync(conductor, value.replace(engine, `${engine}${exact.join("")}`));
@@ -1302,10 +1322,6 @@ function rewriteNativeOnboarding(value: string, exactReads = false): string {
     .replace(
       /pre-approves ONLY `bun \.kiro\/tools\/\*` shell commands/g,
       `pre-approves only \`${TRUSTED_COMMAND_PREFIX}\` shell commands`,
-    )
-    .replace(
-      /pre-allows the deterministic core's exact command prefixes — `bun \.codex\/tools\/`, `bun \.codex\/hooks\/`, and/g,
-      `pre-allows the deterministic core's \`${TRUSTED_COMMAND_PREFIX}\` command prefix and`,
     )
     .replace(
       /^\*\*CWD drift warning\*\*: If a stage runs `cd` in Bash.*$/gm,

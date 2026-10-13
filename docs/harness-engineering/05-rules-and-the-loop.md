@@ -6,7 +6,7 @@ run. As a harness engineer you author them in two ways: by editing a rule file
 directly, or by letting the **learning loop** promote an in-workflow correction
 into a durable rule for you. This chapter is the authoring-side companion to the
 [Rules and the Learning Loop](../guide/09-rules-and-the-learning-loop.md) chapter
-in the User Guide, which covers the loop conceptually and walks the ANZ banking
+in the User Guide, which covers the loop conceptually and walks the banking
 example end to end. Here the focus is operational: which file you edit for what,
 how the strict-additive model behaves when you stack a rule, and how to run the
 loop so a one-time fix becomes a standing rule.
@@ -71,7 +71,7 @@ plan was approved is recorded and continued under every value. And which authori
 `human-presence` is never lowered by the word. By default each intent takes its
 scope's value. To lower it from chat, a person asks in their own words and the
 conductor runs the setter, or types the switch (`/aidlc --guard-policy relaxed`
-or `guard policy off`) for the hook to apply. To hold `strict` for everyone, put one line under the
+or `guard policy off`) and the agent runs the same setter for that line. To hold `strict` for everyone, put one line under the
 heading in `team.md` (or `org.md`, or `project.md` for one project):
 
 ```markdown
@@ -84,8 +84,10 @@ A `Mode: strict` in any layer wins over the scope default and over the intent's
 own line; a chat or flag flip to `relaxed` or `off` is then refused with a
 sentence naming this file, and the next governed check on a running intent records
 the change as a `GUARD_POLICY_SET` row naming the file as its source. `Mode:
-relaxed` and `Mode: off` here have no effect (the scope default or the person's
-exact typed switch can relax an intent), and so does leaving the section empty. Any other value is a
+relaxed` and `Mode: off` set the policy for every intent whose value came from
+its scope, the narrowest layer that declares one winning (`project.md`, then
+`team.md`, then `org.md`); a value the person set for one intent keeps it.
+Leaving the section empty changes nothing. Any other value is a
 validation error naming the file and the three allowed values. The line is read
 with the same `Field: value` grammar as `## Testing Posture`, commented-out lines
 included: a `Mode:` inside an HTML comment declares nothing.
@@ -104,19 +106,20 @@ heading wins when a file carries both.
 
 ## Strict-additive: layers stack, none silently overrides
 
-The chain resolves through five layers at the start of every workflow:
+The chain resolves through four layers today, with a fifth reserved:
 
 ```
-org → team → project → phase → stage
+org -> team -> project -> phase      (stage: reserved, not authorable yet)
 ```
 
 The model is **strict-additive**. Every applicable rule appears in the agent's
 context at once — nothing is dropped or suppressed at runtime. Org defaults, team
 practices, and project specialization concatenate; the matching phase rule
 attaches because the stage already declares its `phase:` in frontmatter (the same
-pull-authoring direction a stage uses to import everything else). The resolved
-chain is baked into each stage node once, at workflow start — the runtime never
-re-walks it. See
+pull-authoring direction a stage uses to import everything else). Which files apply
+to each stage is baked into its graph node when the graph is compiled, and the
+runtime never re-walks the chain; the selected files' current text is read
+before each stage delivery (see [Learnings apply from the next stage delivery](#learnings-apply-from-the-next-stage-delivery)). See
 [Rule System § Strict-additive runtime model](../reference/08-rule-system.md#strict-additive-runtime-model)
 and [§ Five-layer inheritance](../reference/08-rule-system.md#five-layer-inheritance).
 
@@ -177,9 +180,11 @@ harness-engineer view is what the loop produces and where it lands:
    Candidate extraction and final writes are deterministic tooling; selections
    and conflict disposition are your explicit choices at the gate.
 2. **The gate surfaces candidates.** Before the approval gate the learning gate
-   reads `memory.md` and shows each non-blank diary line verbatim as a candidate,
-   plus a free-text "anything to add for next time?" channel where you type an
-   observation and pick which of the four headings it belongs under.
+   reads `memory.md` and shows each Interpretation, Deviation and Tradeoff entry
+   verbatim as a candidate (each entry is one line; Open questions are never
+   offered), then always asks "Anything to add for next time?", where you can
+   add a note in your own words and pick which of the four headings it belongs
+   under. The User Guide shows [what it looks like](../guide/09-rules-and-the-learning-loop.md).
 3. **You confirm what to keep, and it writes.** A confirmed learning lands as a
    dated entry — you never pick a file path; the heading determines the
    destination.
@@ -220,19 +225,25 @@ grows; the stage body is never touched. From there you flesh out the manifest by
 hand using [Sensors](06-sensors.md) — the loop scaffolds the binding; you author
 the check.
 
-### Learnings apply on the next workflow, not the one in flight
+### Learnings apply from the next stage delivery
 
-A learning captured at a gate does **not** change the rules for the rest of the
-current run. You already corrected the agent in conversation for this workflow;
-the rule is for next time. The new line is on disk, but the in-flight workflow
-keeps the compiled view it started with. The *next* `/aidlc` you run recompiles,
-the directory walk picks up the new file, and the rule applies from stage one
-onward.
+A learning captured at a gate lands in an already-selected rule file
+(`project.md` or `team.md`), and the engine re-reads the selected files' text
+before each stage delivery. So the rule reaches the agent at the next
+applicable stage of the current run, and every later workflow. What waits is
+the selection itself: a brand-new rule file enters the directory walk, and a
+new Sensor binds, only when the stage graph is next compiled.
 
-This matters when you author by hand too: editing `team.md` mid-workflow
-will not retroactively change the run in progress. Rules take effect at the next
-compile boundary. If you need a change to bite immediately, finish or restart the
-workflow so the compile re-reads your edit.
+The same holds when you author by hand: editing `team.md` mid-workflow reaches
+the next stage delivery of the run in progress (it does not retroactively
+change stages already run). Sensor configuration is different from rule text:
+part of it lives in the compiled graph and part is read again at fire time, and
+the split differs between the write hook, the gate path, and install forms. To
+make a Sensor edit — a new Sensor or a change to an already-bound one — take
+effect predictably, recompile the stage graph. One exception no recompile can
+reach: on a native install the bundled Sensors' workers are selected by id, so
+editing a bundled manifest's `command` runs nothing different — a changed check
+there needs its own Sensor id.
 
 ---
 

@@ -1253,12 +1253,10 @@ All Inception phase artifacts:
    If no runnable check exists yet (greenfield), the human may defer; the first
    checkpoint then asks before verification. See the
    [exact recording commands](../../guide/12-cli-commands.md#construction-verification-command-record-human-authorization).
-   Then ask whether one session or several teams own Units;
-   team ownership records `set-unit-ownership team` (unit-major and serial
-   required) and asks whether approvals happen after every stage
-   (`set-unit-gate-rhythm per-stage`, default) or once after the Unit chain
-   (`unit-end`). The user-facing questions explain those choices without
-   exposing field/enum names.
+   Who builds the Units is not this stage's question: with two or more Units,
+   the engine asks it once at the first step into Construction, after this
+   stage's approval (see
+   [Construction Execution](../03-orchestrator.md#construction-execution)).
 
 7. **Present Completion & Request Approval** -- Display completion message
    with :calendar: emoji. Approval gate: Approve (proceed to Construction) /

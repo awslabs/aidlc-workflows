@@ -23,9 +23,18 @@ Every agent is one flat file at `core/agents/<slug>-agent.md`: YAML
 frontmatter on top, a Markdown body below. The shipped files all carry the
 `aidlc-` prefix (`aidlc-architect-agent.md`, `aidlc-developer-agent.md`); a file
 you add is yours and need not use that prefix. Treat the shipped 14 as
-framework files — they get overwritten on upgrade, so customize *what an
-existing agent knows* through team knowledge rather than editing the file (see
-[Team knowledge](07-team-knowledge.md)). A genuinely new persona is a different
+framework files: in an installed project, a local edit to one stops the next
+`aidlc config` refresh until you move your copy away or take the shipped one
+with `--force`, so customize *what an existing agent knows* through team
+knowledge rather than editing the file (see
+[Team knowledge](07-team-knowledge.md)). The refresh says so:
+
+```text
+$ aidlc config --harness claude --yes
+error: 1 config conflict(s): .claude/agents/aidlc-architect-agent.md (locally modified or unowned)
+fix: to keep your version, move .claude/agents/aidlc-architect-agent.md somewhere else and run the same command again; to take the shipped version over it, run it again with --force. `aidlc config --dry-run --verbose` lists every change first.
+```
+ A genuinely new persona is a different
 move: a new file, owned by you, that survives upgrades.
 
 The frontmatter is the part the framework parses. The body is prose the agent
@@ -46,8 +55,9 @@ examples:
   - tech-stack.md
   - infrastructure-preferences.md
 description: >
-  Solutions architect responsible for domain design, contract design,
-  NFR patterns, and component decomposition.
+  Solutions architect responsible for domain design, contract design, NFR patterns, and component decomposition.
+  Leads Feasibility, Domain Design, Units Generation, Contract Design, Functional Design, NFR Requirements, and NFR Design stages,
+  and serves as the dispatched final link of the Reverse Engineering pipeline.
 disallowedTools: Task
 tier: judgment
 ---
@@ -181,8 +191,9 @@ Mirroring the reference recipe, here is the workflow end to end.
    methodology the persona should load on activation.
 3. **Wire it into stages** — add the slug to the `lead_agent` /
    `support_agents` frontmatter of each stage file (`core/aidlc-common/stages/<phase>/<slug>.md`)
-   where it leads or supports, then recompile (`aidlc engine graph compile`)
-   so `stage-graph.json` regenerates. Never hand-edit `stage-graph.json` — it is
+   where it leads or supports, then regenerate with `bun scripts/package.ts`
+   (or, in an installed tree, `aidlc engine graph compile`) so
+   `stage-graph.json` regenerates. Never hand-edit `stage-graph.json`: it is
    a build artifact, and the next compile overwrites a manual change (see
    [Adding a Stage](02-adding-a-stage.md#4-regenerate-the-harnesses-so-stage-graphjson-recompiles)).
    This is the step that makes it active.

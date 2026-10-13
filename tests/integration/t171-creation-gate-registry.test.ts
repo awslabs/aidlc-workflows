@@ -22,6 +22,8 @@ import { basename, join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
+  proposalFollowUp,
+  proposePlanLikeTheAgent,
   removeWorkspaceRecord,
   seedAidlcMemory,
 } from "../harness/fixtures.ts";
@@ -65,13 +67,13 @@ interface Run {
   stdout: string;
   out: string;
 }
-function runTool(tool: string, args: string[], p = proj): Run {
+function runToolArgv(tool: string, argv: string[]): Run {
   const env = { ...process.env };
   delete env.AWS_AIDLC_DEFAULT_SCOPE;
   delete env.AIDLC_HARNESS_DIR;
   delete env.AIDLC_HARNESS_NAME;
   const r = Bun.spawnSync({
-    cmd: [BUN, tool, ...args, "--project-dir", p],
+    cmd: [BUN, tool, ...argv],
     stdout: "pipe",
     stderr: "pipe",
     env,
@@ -79,11 +81,64 @@ function runTool(tool: string, args: string[], p = proj): Run {
   const stdout = r.stdout.toString();
   return { status: r.exitCode, stdout, out: `${stdout}${r.stderr.toString()}` };
 }
+function runTool(tool: string, args: string[], p = proj): Run {
+  // This engine's own option rides ahead of the person's words on a `next`
+  // line, which is where every caller of it puts it.
+  const argv = args[0] === "next"
+    ? ["next", "--project-dir", p, ...args.slice(1)]
+    : [...args, "--project-dir", p];
+  return runToolArgv(tool, argv);
+}
 function util(args: string[], p = proj): Run {
   return runTool(UTIL, args, p);
 }
-function next(args: string[], p = proj, orchestrator = ORCH): Run {
-  return runTool(orchestrator, ["next", ...args], p);
+function next(args: string[], p = proj, orchestrator = ORCH, plan?: string): Run {
+  const words = args.filter((arg) => !arg.startsWith("--")).join(" ");
+  return followTheAgentsReading(runTool(orchestrator, ["next", ...args], p), words, (argv) => runTool(orchestrator, ["next", ...argv], p), plan);
+}
+// A `next` line run as the agent runs it (a command the engine handed out, or
+// one spelled with ORCH_SH), followed the same way, in the same environment.
+function emittedNext(command: string, words: string, extraEnv: Record<string, string> = {}): Run {
+  return followTheAgentsReading(
+    runEmittedCommand(command, proj, extraEnv),
+    words,
+    (argv) => runEmittedCommand(`${ORCH_SH} next ${argv.join(" ")}`, proj, extraEnv),
+  );
+}
+// The plan the agent proposes for a request, in these cases: the stand-in
+// reading, with the general plan where it would tailor one, so the cases about
+// the plan question's shape (its other plans, a pick of another) keep their ask.
+function planFor(words: string): string {
+  const plan = proposePlanLikeTheAgent(words);
+  return plan === "compose" ? "feature" : plan;
+}
+// Words alone where work is here but none is selected first reach the agent
+// (one print naming the pieces, a bare `next`, `intent switch` and
+// `next --request <id>`; t-carry-on-continues-the-work pins it), and words
+// that describe new work with no plan named reach it as the plan proposal step
+// (t-plan-proposed-by-the-agent). The cases here are about the ask those
+// readings then get, so each is followed as the agent follows it: one more
+// engine call per step, with the plan the stand-in reading proposes.
+function followTheAgentsReading(run: Run, words: string, rerun: (argv: string[]) => Run, plan = planFor(words)): Run {
+  let printed: { kind?: string; message?: string } | null = null;
+  try {
+    printed = JSON.parse(run.stdout.trim()) as { kind?: string; message?: string };
+  } catch {
+    return run;
+  }
+  if (printed?.kind !== "print" || typeof printed.message !== "string") return run;
+  const proposal = proposalFollowUp(printed, plan);
+  if (proposal !== null) return rerun(proposal);
+  if (!printed.message.startsWith("Work is in progress here (")) return run;
+  const id = /--request ([0-9a-f]{8})/.exec(printed.message)?.[1];
+  return id === undefined ? run : rerun(["--request", id, "--propose", plan]);
+}
+// The same request, marked with the delimiter as the person's own words. With a
+// question of ours already open, a bare words line is read as a possible reply
+// to it (t-three-ways-to-read-a-line), so a case about a fresh REQUEST says so.
+// `--project-dir` goes ahead of the mark, or it would land in their words.
+function markedNext(text: string, p = proj, orchestrator = ORCH): Run {
+  return followTheAgentsReading(runToolArgv(orchestrator, ["next", "--project-dir", p, "--", text]), text, (argv) => runTool(orchestrator, ["next", ...argv], p));
 }
 function runEmittedCommand(command: string, p = proj, extraEnv: Record<string, string> = {}): Run {
   const env: NodeJS.ProcessEnv = {
@@ -125,7 +180,7 @@ function asWork(words: string) {
   expect(read.kind, JSON.stringify(read).slice(0, 300)).toBe("print");
   const request = /`([^`]* next --request [0-9a-f]{8})`/.exec(read.message)?.[1];
   expect(request, read.message).toBeDefined();
-  return JSON.parse(runEmittedCommand(request!).stdout.trim());
+  return JSON.parse(runEmittedCommand(`${request!} --propose ${planFor(words)}`).stdout.trim());
 }
 
 function printedCommand(message: string): string {
@@ -308,10 +363,16 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(routing.ask_type, JSON.stringify(routing).slice(0, 300)).toBe("new-work-routing");
       for (const text of [routing.question, routing.numbered_prose_question]) {
         expect(text).toContain("This project already has 1 piece of work in progress, and none is currently selected:");
+        expect(text).not.toContain("New work routing");
         expect(text).toContain(here);
         expect(text).not.toContain(elsewhere);
       }
       expect(routing.available_intents).toEqual([here]);
+      // One piece listed: the continue and reshape choices carry that piece's own commands, so the person is
+      // never asked which of one; the separate-work choice carries the new-intent command as always.
+      expect(routing.choices.map((c: { command?: string }) => c.command)).toEqual([
+        routing.select_commands[0].command, routing.new_intent_command, routing.reshape_commands[0].command,
+      ]);
       expect(recordDirs(proj)).toEqual([here]); // read-only
     });
 
@@ -829,7 +890,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const ask = asWork("rename the settings page");
         expect(ask.ask_type).toBe("new-work-routing");
         expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent archive ${asked}`).status).toBe(0);
-        const again = JSON.parse(runEmittedCommand(ask[route]).stdout.trim());
+        const again = JSON.parse(emittedNext(ask[route], "rename the settings page").stdout.trim());
         expect(again.kind, JSON.stringify(again).slice(0, 300)).toBe("ask");
         expect(["scope-confirm", "compose-offer"]).toContain(again.ask_type);
         expect(recordDirs(proj), "no work is created unasked").toEqual([asked]);
@@ -888,11 +949,23 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const reply = (ask: { numbered_prose_question: string }, text: string): string =>
         text.startsWith("<line ") ? numberedLine(ask, Number(text[6])) : text;
       const directive = (text: string) => JSON.parse(next([text]).stdout.trim());
+      // The same line marked as a request of their own. With a question of ours
+      // already open, a bare words line is read as a possible reply to it
+      // (t-three-ways-to-read-a-line), so a case about a REQUEST says so.
+      const asked = (text: string) => JSON.parse(markedNext(text).stdout.trim());
       const emitted = (command: string) => JSON.parse(runEmittedCommand(command).stdout.trim());
       // A command as one conversation runs it.
       const emittedIn = (session: string, command: string) =>
         JSON.parse(runEmittedCommand(command, proj, { AIDLC_SESSION_OVERRIDE: session }).stdout.trim());
-      const inSession = (session: string, text: string) => emittedIn(session, `${ORCH_SH} next '${text}'`);
+      // Words alone first reach the agent (the none-selected reading print); its "new work" reading is followed in
+      // the same conversation, as the agent follows it.
+      const inSession = (session: string, text: string) => {
+        const first = emittedIn(session, `${ORCH_SH} next '${text}'`);
+        const id = first.kind === "print" && String(first.message).startsWith("Work is in progress here (")
+          ? /--request ([0-9a-f]{8})/.exec(String(first.message))?.[1]
+          : undefined;
+        return id === undefined ? first : emittedIn(session, `${ORCH_SH} next --request ${id} --propose ${planFor(text)}`);
+      };
       const questionCount = () => readdirSync(join(proj, "aidlc", ".aidlc-sessions", "questions")).length;
       const seedOneIntentNoCursor = (): string => {
         expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
@@ -1152,7 +1225,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(created.status, created.out).toBe(0);
         rmSync(cursorPath(proj), { force: true });
         for (const text of ["2", "Separate new piece of work", "Part of existing work"]) {
-          const d = directive(text);
+          const d = asked(text);
           expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("ask");
           expect(JSON.stringify(d)).not.toContain("Already started");
           expect(d.message ?? "").not.toContain("but not which piece of work");
@@ -1163,7 +1236,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       test("control: an option with no routing question asked is asked about, never acted on", () => {
         seedTwoIntentsNoCursor();
         for (const text of ["1", "Part of existing work"]) {
-          const d = directive(text);
+          const d = asked(text);
           expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("ask");
           expect(d.message ?? "").not.toContain("but not which piece of work");
         }
@@ -1312,7 +1385,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
 
     test("compose-offer resolves its stored request and can select another scope", () => {
       const intentText = "build an onboarding portal for new engineers with SSO";
-      const directive = JSON.parse(next([intentText]).stdout.trim());
+      const directive = JSON.parse(next([intentText], proj, ORCH, "compose").stdout.trim());
       expect(directive.ask_type).toBe("compose-offer");
       const composed = runEmittedCommand(directive.compose_command);
       expect(composed.status, composed.out).toBe(0);
@@ -1332,7 +1405,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
     test("concurrent requests keep independent ids and each creates its own request", () => {
       // Two sessions in one clone: the second request must not invalidate the first.
       const first = JSON.parse(next(["fix the first bug"]).stdout.trim());
-      const second = JSON.parse(next(["fix the second bug"]).stdout.trim());
+      const second = JSON.parse(markedNext("fix the second bug").stdout.trim());
       const firstId = first.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1];
       const secondId = second.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1];
       expect(firstId).toBeDefined();
@@ -1352,7 +1425,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
 
     test("asking again mints a fresh id and the earlier id stays valid", () => {
       const once = JSON.parse(next(["fix the login bug"]).stdout.trim());
-      const twice = JSON.parse(next(["fix the login bug"]).stdout.trim());
+      const twice = JSON.parse(markedNext("fix the login bug").stdout.trim());
       expect(twice.confirm_command).not.toBe(once.confirm_command);
       expect(twice.question).toBe(once.question);
       const confirmed = JSON.parse(runEmittedCommand(once.confirm_command).stdout.trim());
@@ -1513,7 +1586,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
 
     test("a late new-plan answer composes that new work even after other work became active", () => {
       const intentText = "build an onboarding portal for new engineers with SSO";
-      const offer = JSON.parse(next([intentText]).stdout.trim());
+      const offer = JSON.parse(next([intentText], proj, ORCH, "compose").stdout.trim());
       expect(offer.ask_type).toBe("compose-offer");
       expect(util(["intent-create", "--scope", "feature", "--arguments", "add search", "--label", "search"]).status).toBe(0);
       const [other] = recordDirs(proj);
@@ -1567,7 +1640,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       writeFileSync(mappingPath, JSON.stringify(mapping));
       try {
         const env = { AIDLC_SCOPE_MAPPING: mappingPath };
-        const ask = JSON.parse(runEmittedCommand(`${ORCH_SH} next 'fix the login bug'`, proj, env).stdout.trim());
+        const ask = JSON.parse(emittedNext(`${ORCH_SH} next 'fix the login bug'`, "fix the login bug", env).stdout.trim());
         expect(ask.ask_type).toBe("scope-confirm");
         const id: string = ask.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
         const rows = ask.scope_commands as Array<{ scope: string; command: string }>;
@@ -1601,12 +1674,12 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       }
       const id: string = ask.compose_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
       expect(JSON.parse(readFileSync(questionFile(id), "utf-8")).text, "the store keeps the document as data").toBe(request);
-      const unclosed = JSON.parse(next(["summarize <document>unterminated"]).stdout.trim());
+      const unclosed = JSON.parse(markedNext("summarize <document>unterminated").stdout.trim());
       expect(unclosed.kind).toBe("ask");
       expect(unclosed.question).toContain('"summarize"');
       expect(unclosed.question).toContain("Your <document> has no closing </document>");
       expect(JSON.stringify(unclosed)).not.toContain("unterminated");
-      const only = JSON.parse(next(["<document>only data</document>"]).stdout.trim());
+      const only = JSON.parse(markedNext("<document>only data</document>").stdout.trim());
       expect(only.kind).toBe("ask");
       expect(only.question).toContain('"Build what the pasted document describes."');
       expect(only.question).toContain("There are no words outside it, so I took the request as");
@@ -1658,7 +1731,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const ask = JSON.parse(next(["fix the login bug"]).stdout.trim());
       const id: string = ask.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
       ageQuestion(id, 400);
-      expect(JSON.parse(next(["fix the signup bug"]).stdout.trim()).ask_type).toBe("scope-confirm");
+      expect(JSON.parse(markedNext("fix the signup bug").stdout.trim()).ask_type).toBe("scope-confirm");
       expect(existsSync(questionFile(id)), "asking again prunes nothing by default").toBe(true);
       expect(JSON.parse(runEmittedCommand(ask.confirm_command).stdout.trim()).kind).toBe("print");
     });
@@ -1666,11 +1739,11 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
     test("question-retention-days removes this account's older unanswered questions", () => {
       const old = JSON.parse(next(["fix the login bug"]).stdout.trim());
       const oldId: string = old.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
-      const recent = JSON.parse(next(["fix the signup bug"]).stdout.trim());
+      const recent = JSON.parse(markedNext("fix the signup bug").stdout.trim());
       const recentId: string = recent.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
       ageQuestion(oldId, 3);
       const env = { AIDLC_QUESTION_RETENTION_DAYS: "2" };
-      expect(JSON.parse(runEmittedCommand(`${ORCH_SH} next 'fix the dashboard bug'`, proj, env).stdout.trim()).ask_type).toBe("scope-confirm");
+      expect(JSON.parse(emittedNext(`${ORCH_SH} next -- 'fix the dashboard bug'`, "fix the dashboard bug", env).stdout.trim()).ask_type).toBe("scope-confirm");
       expect(existsSync(questionFile(oldId)), "older than the retention period").toBe(false);
       expect(existsSync(questionFile(recentId)), "within the retention period").toBe(true);
       expect(JSON.parse(runEmittedCommand(old.confirm_command).stdout.trim()).message).toBe(
@@ -1690,8 +1763,9 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
     test("a set retention removes expired copies on the next run, with no new question asked", () => {
       const old = JSON.parse(next(["fix the login bug"]).stdout.trim());
       const oldId: string = old.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
-      ageQuestion(oldId, 3);
       const questions = join(proj, "aidlc", ".aidlc-sessions", "questions");
+      // The proposal step's question and the plan question were asked together and age together.
+      for (const file of readdirSync(questions)) ageQuestion(file.slice(0, 8), 3);
       const run = runEmittedCommand(`${ORCH_SH} next`, proj, { AIDLC_QUESTION_RETENTION_DAYS: "2" });
       expect(run.status, run.out).toBe(0);
       expect(existsSync(questionFile(oldId)), "older than the retention period").toBe(false);
@@ -1825,7 +1899,8 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
     });
 
     test("Branch 9a creates on zero intents", () => {
-      const r = next(["--scope", "poc"]);
+      // With a description: named alone, the scope first asks what the work is for (#2355).
+      const r = next(["--scope", "poc", "--", "prove the importer reads the old files"]);
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("print");
       expect(d.message).toContain("intent create --scope poc");
@@ -1833,8 +1908,8 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(existsSync(intentsDir(proj))).toBe(false);
     });
 
-    test("Branch 7b creates on zero intents (bare valid-scope positional)", () => {
-      const r = next(["poc"]);
+    test("Branch 7b creates on zero intents (valid-scope positional with a description)", () => {
+      const r = next(["poc", "prove the importer reads the old files"]);
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("print");
       expect(d.message).toContain("intent create --scope poc");
@@ -1889,7 +1964,7 @@ describe("t171 archived intents never block or appear in the creation gate (issu
     for (const name of inFlight) {
       expect(util(["intent", "archive", name]).status).toBe(0);
     }
-    const created = JSON.parse(next(["--scope", "poc"]).stdout.trim());
+    const created = JSON.parse(next(["--scope", "poc", "--", "prove the importer reads the old files"]).stdout.trim());
     expect(created.kind).toBe("print");
     expect(created.message).toContain("intent create --scope poc");
     // Read-only throughout: three records remain, all archived, no cursor.

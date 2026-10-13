@@ -184,9 +184,15 @@ describe("t231 config get/list/set handlers", () => {
     expect(utility(["config-get", "test-strategy"], project).stdout).toBe("Standard\n");
   });
 
-  test("a typed hook switch and config-change expose all thirteen settings through get and both list formats", () => {
+  test("a setting typed in chat and config-change expose all thirteen settings through get and both list formats", () => {
     const project = stateProject();
+    // The hook records their line and applies nothing; the agent runs the setter
+    // the engine names, and the settings are theirs.
     recordHumanPrompt(project, "/aidlc --guard-policy relaxed --guard.state-transition off --summary-confirmation off");
+    const typed = utility([
+      "config-change", "--guard-policy", "relaxed", "--guard.state-transition", "off", "--summary-confirmation", "off",
+    ], project, FENCE_ENV_CLEAR);
+    expect(typed.status, typed.stderr).toBe(0);
     expect(stateField(project, "Guard Policy")).toBe("relaxed (set by you)");
     expect(stateField(project, "Guards Off")).toBe("state-transition (set by you)");
     expect(stateField(project, "Summary Confirmation")).toBe("off (set by you)");
@@ -196,8 +202,8 @@ describe("t231 config get/list/set handlers", () => {
       "--learnings", "off", "--summary-confirmation", "off", "--guard.state-transition", "off",
     ], project, FENCE_ENV_CLEAR);
     expect(changed.status, changed.stderr).toBe(0);
-    // The hook applied the policy as this turn arrived: the setter says what changed.
-    expect(changed.stdout).toMatch(/Guard Policy changed: \w+ to relaxed \(set by you\)/);
+    // Their setter already landed the policy, so this run says it stands.
+    expect(changed.stdout).toContain("Guard Policy is already relaxed (set by you)");
     expect(changed.stdout).toContain("The state transition check is already off");
     expect(renameNotices(changed.stderr)).toBe(0);
     // The eight settings the human names, collaborators reading its scope
@@ -308,9 +314,11 @@ describe("t231 config get/list/set handlers", () => {
     expect(utility(["config-get", key], project).stdout).toBe(`${expected}\n`);
   });
 
-  test("guard.plan-approval is the plan approval switch: the hook applies it and engine config set can repeat or restore it", () => {
+  test("guard.plan-approval is the plan approval switch: the setter the agent runs applies it, and engine config set can repeat or restore it", () => {
     const project = stateProject();
     recordHumanPrompt(project, "/aidlc config set guard.plan-approval off");
+    const typed = dispatcher(["engine", "config", "set", "guard.plan-approval", "off"], project, FENCE_ENV_CLEAR);
+    expect(typed.status, typed.stderr).toBe(0);
     expect(stateField(project, "Plan Approval")).toBe("off (set by you)");
     expect(stateField(project, "Guards Off")).not.toContain("plan-approval");
     const before = readFileSync(seededStateFile(project), "utf-8");
@@ -326,11 +334,13 @@ describe("t231 config get/list/set handlers", () => {
   });
 
   test.each(["review-freeze", "state-transition", "reviewer-scope"])(
-    "the hook applies guard.%s and engine config set can repeat or restore it",
+    "the setter the agent runs applies guard.%s, and engine config set can repeat or restore it",
     (fence) => {
       const project = stateProject();
       const key = `guard.${fence}`;
       recordHumanPrompt(project, `/aidlc config set ${key} off`);
+      const typed = dispatcher(["engine", "config", "set", key, "off"], project, FENCE_ENV_CLEAR);
+      expect(typed.status, typed.stderr).toBe(0);
       expect(stateField(project, "Guards Off")).toBe(`${fence} (set by you)`);
       const before = readFileSync(seededStateFile(project), "utf-8");
       const unchanged = dispatcher(["engine", "config", "set", key, "off"], project, FENCE_ENV_CLEAR);

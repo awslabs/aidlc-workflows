@@ -900,6 +900,14 @@ Pre-seeded construction phase output for tests that jump to mid-construction sta
 
 Contents: 1 minimal .md file (functional-design) describing the todo-core unit's component specs and state management.
 
+### Input Corpus: `tests/fixtures/aidlc-input/corpus.json`
+
+What people type after `/aidlc`, and in plain chat once work is under way: one item per typed line at one workspace state (`fresh`, `work-open`, `plan-question-open`, `gate-open`, `two-similar-records`), with `meaning` (what the person means, in plain words) and `expected.engine` (what the engine's first step must do: the directive kinds allowed, the command or words it must name, the message record's words and settings, whether a question may reach the person). Seeded from every `/aidlc` example the docs, skills, stage prose and help text ship (`source` and `documented` carry the origin), from the input-forms audit, and from variations: typos, word order, quoting per shell, CRLF and unicode, replies at gates and plan questions, workspace words, settings in plain words, retired flags, empty lines, ambiguous lines. Items whose expectation needs a change not merged yet carry `after` and are skipped until that change is in the source. The shared mechanics live in `tests/harness/aidlc-input-corpus.ts`; `tests/unit/t-aidlc-input-corpus.test.ts` runs every item through the Claude Code human-turn hook and `next`, and a fixed sample of two items per category through the Codex, Kiro CLI and Kiro IDE hooks as well (`AIDLC_INPUT_ONLY=<ids>` narrows a run, `AIDLC_INPUT_PARALLEL` sets the fixture pool). `tests/e2e/t-live-aidlc-input-corpus.serial.test.ts` drives a sample through real agents on demand (`AIDLC_INPUT_LIVE=1`): what happened on disk is judged by the script against each item's `expected.end` (the work, the setting set by the person, the record switched, the gate or plan answered, questions asked), what the agent told the person is judged by a model against the item's `meaning` and a short rubric (plain words, the product's own names, no engine internals, a question only where the item is `ambiguous`), and a report with a score per category and every miss with its transcript excerpt lands under `AIDLC_INPUT_REPORT_DIR`.
+
+### Answers Corpus: `tests/fixtures/aidlc-answers/corpus.json`
+
+What people reply to every question AI-DLC asks them: one item per reply at the state where that question is open (the stage gate, the gate with Accept as-is, a blocking-sensor question, the code plan question, the Unit and batch checkpoints, the verification command, a Construction policy change, the summary confirmation, a stage question the agent asked, the interaction-mode question, the routing question, the plan offer and scope confirmation, the record pick, the project-type question, a paused Unit, a guard-recovery ask, re-entry, a reopened stage, the learnings question, a jump target), with `meaning` (what the person means), `reader` (`tool` when the reply is an exact pick as the options were shown, `agent` otherwise), `expected.engine` (the choice a tool may record from the reply alone, the words that must be kept, the engine's step) and `expected.end` (what the person ends with after a real agent acted, for the live check). Replies are typed in plain chat, typed after `/aidlc` or `$aidlc`, or picked in the question box. Items whose expectation needs a change not merged yet carry `after` and are skipped until it lands. The shared mechanics live in `tests/harness/aidlc-answers-corpus.ts`; `tests/unit/t-aidlc-answers-corpus.test.ts` runs every item through each host's human-turn hook, then the engine's step and the agent's answer command (`AIDLC_ANSWERS_ONLY=<ids>` narrows a run, `AIDLC_ANSWERS_PARALLEL` sets the pool). `tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts` drives a sample through real agents on demand (`AIDLC_ANSWERS_LIVE=1`): the real agent shows the question first (a bare `/aidlc` at the fixture's state), then the person replies in chat, after `/aidlc`, or in the question box; the script judges what is on disk against `expected.end` (the choice recorded with the person's words beside it, the message record, a question asked twice), a model judges what the agent told the person against `meaning` and `says`, and a report with a score per question and every miss with its transcript excerpt lands under `AIDLC_ANSWERS_REPORT_DIR`. The two live checks share `tests/harness/live-corpus.ts` (gates, the seeded sample, scratch projects and homes, the home digests, the model judge, the report).
+
 ## State Fixtures
 
 | Fixture | Project Type | Scope | State | Used By |
@@ -957,9 +965,20 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 | `AIDLC_TEST_GUARD_PROFILE` | `fixture` (runner-set) | Runner-provided diagnostic for tests: `fixture` or `production`, selected by the runner CLI. An inherited value does not select the profile; the runner replaces it in every test child. |
 | `AIDLC_TEST_COMPILED_DIR` | `<runner log dir>/compiled` (runner-set) | Run-owned handoff from t238 to t249: the verified native `aidlc` / `aidlc.exe` plus adjacent `runtime/`. The runner replaces inherited values in every child, keeping the artifact outside per-file temp cleanup and isolated from other runs. |
 | `AIDLC_TEST_COMPILED_EXECUTABLE` | unset | Optional existing executable for direct, non-sharded t249 invocations without a runner handoff. Never a build destination; it cannot replace a missing sharded handoff. |
-| `AIDLC_TUI_SETTING_SOURCES` | `project` | Setting sources injected into live `claude` TUI launches. Use `default` or an empty value only for focused calibration that intentionally includes user/local Claude settings. |
+| `AIDLC_TUI_SETTING_SOURCES` | `project,local` | Setting sources injected into live `claude` TUI launches: the project's settings and its own `.claude/settings.local.json` (where AI-DLC's status line is the person's choice), never user settings. Use `default` or an empty value only for focused calibration that intentionally includes user Claude settings. |
 | `AIDLC_TUI_TRACE_POLL_MS` | `10000` | Minimum interval between `answer_gate_poll` snapshots in TUI NDJSON traces while a long journey is waiting for the next menu or disk terminator. |
 | `AIDLC_ACP_DIAGNOSTIC_TRACE` | unset | Set to `1` with ACP debug tracing to write a private `<trace>.protocol.ndjson` sidecar containing tool input/chunk events, session/turn identity, cancellation requests and aggregate input shapes. Excludes agent-prose events, prompt/auth RPC bodies and process environment. Tool inputs remain private diagnostic data. Limits: 1 MiB per event and 64 MiB per file; `diagnostic_incomplete` or `json_parse_error` means the capture cannot establish complete protocol evidence. |
+| `AIDLC_INPUT_LIVE` | unset | Set to `1` to drive a sample of the `/aidlc` input corpus through real agents (`tests/e2e/t-live-aidlc-input-corpus.serial.test.ts`); each harness keeps its own gate (`AIDLC_CODEX_EXEC_LIVE`, `AIDLC_KIRO_ACP_LIVE`, the `claude` binary). |
+| `AIDLC_INPUT_HARNESSES` | `claude,codex,kiro` | Which agents the live input check drives. |
+| `AIDLC_INPUT_SAMPLE` | `3` | Items per corpus category for the live input check, or a comma list of item ids. |
+| `AIDLC_INPUT_SEED` | `1` | Seed of the live input check's sample, so a re-run drives the same items. |
+| `AIDLC_ANSWERS_LIVE` | unset | Set to `1` to drive a sample of the answers corpus through real agents (`tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts`); each harness keeps its own gate (`AIDLC_CODEX_EXEC_LIVE`, `AIDLC_KIRO_ACP_LIVE`, the `claude` binary). |
+| `AIDLC_ANSWERS_HARNESSES` | `claude,codex,kiro` | Which agents the live answers check drives. |
+| `AIDLC_ANSWERS_SAMPLE` | `2` | Items per question for the live answers check, or a comma list of item ids. |
+| `AIDLC_ANSWERS_SEED` | `1` | Seed of the live answers check's sample, so a re-run drives the same items. |
+| `AIDLC_INPUT_REPORT_DIR` | `tests/logs/aidlc-input-live` | Where the live input check writes its report (a score per category and every miss with its transcript excerpt). |
+| `AIDLC_INPUT_ONLY` | unset | Comma list of corpus item ids that narrows the unit input check (`tests/unit/t-aidlc-input-corpus.test.ts`). |
+| `AIDLC_INPUT_PARALLEL` | `6` | Fixture pool size of the unit input check. |
 | `AIDLC_KIRO_IDE_LIVE` | unset | Set to `1` to run the signed-in Kiro IDE desktop journey on macOS or Windows. |
 | `AIDLC_KIRO_IDE_BIN` | platform default | Override the Kiro IDE executable. Defaults to `/Applications/Kiro.app/Contents/MacOS/Electron` on macOS and `%LOCALAPPDATA%\Programs\Kiro\Kiro.exe` on Windows. |
 | `AIDLC_KIRO_IDE_SEED` | generated seed | Optional Kiro user-data directory. The test copies it to a disposable temp directory before launch and never mutates the source profile. |
@@ -1019,9 +1038,11 @@ substrate preflight. This gives CI a full-tier deterministic profile without
 live-model cost or flakiness, even when CLIs are installed and live variables
 were inherited as `1`.
 
-Live SDK and TUI harness drivers default to project-only Claude setting sources.
-That means they load the copied test `.claude/` project settings and hooks while
-excluding developer user-level hooks/settings. This mirrors the installed
+Live SDK and TUI harness drivers default to the project's own Claude setting
+sources: the SDK driver loads the copied test `.claude/` project settings and
+hooks, and the TUI driver also loads that project's `.claude/settings.local.json`,
+where the person's choice of AI-DLC's status line lives. Both exclude developer
+user-level hooks/settings. This mirrors the installed
 framework surface and prevents local interactive preferences from changing test
 behavior; explicit driver options or `AIDLC_TUI_SETTING_SOURCES` remain the
 escape hatch for calibration.
@@ -1556,7 +1577,7 @@ gh workflow run full-suite.yml --ref '<candidate-branch>' \
 
 To repeat only one family while other coverage is already running, add
 `-f verification_family=codex`. The manual choices are `all` (default),
-`claude-sdk`, `claude-tui`, `codex`, and `opencode`. A family other than `all`
+`claude-sdk`, `claude-tui`, `codex`, `copilot`, and `opencode`. A family other than `all`
 requires live-verification mode and the same manual event/exact-head checks.
 It selects only that family's rows on Linux/macOS/Windows, retaining the
 original per-platform N/M shard numbers. The separate Windows release-contract
@@ -1635,13 +1656,20 @@ The declared coverage is:
 - Source-bound native terminal obligations on Linux arm64/Bun and tmux,
   macOS arm64/Bun (`macos-15`), and Windows/Bun. Hosted Windows supplies Node
   for other tooling; Bun installs the pinned dependencies.
-- Claude SDK, Claude TUI, Codex, opencode and release-endpoint contracts on
+- Claude SDK, Claude TUI, Codex, Copilot CLI, opencode and release-endpoint contracts on
   hosted Linux/macOS/Windows, including Claude plugin invocation in the strict SDK leg.
+  Copilot CLI runs in its own-model (BYOK) mode against the credential broker, on
+  the Mantle model Codex uses, so no GitHub sign-in, Copilot seat or token is
+  involved. Its release journey (`tests/e2e/t-exec-copilot-release-journey.serial.test.ts`)
+  is what a person does on day one: set up through the copy channel, doctor, the
+  documented first step, the plan question, and Reverse Engineering approved, with a
+  message record for every line typed; a second case leaves the folder untrusted
+  and requires doctor to name the trust fix.
 - Kiro ACP, TUI and IDE are declared exclusions pending a dedicated isolated
   Windows desktop host; local live runs remain their coverage path.
 - Cursor is excluded: no credential separation is available because its vendor
-  CLI reads the API key from the agent environment. Copilot remains excluded by
-  account policy; neither exclusion is reported as successful coverage.
+  CLI reads the API key from the agent environment. No exclusion is reported as
+  successful coverage.
 
 `scripts/ci-live-filter.ts --list` prints the discovered family partition.
 After authorization and dependency installation, the plan emits `--matrix
@@ -1649,7 +1677,7 @@ linux`, `--matrix macos` and `--matrix windows` as the dynamic matrices of the
 `live_linux`, `live_macos` and `live_windows` jobs. Each row's `shard: N/M`
 selects a duration-balanced group for its family/platform. Each OS has two Claude
 SDK (four on Linux, which alone runs the golden journeys), three Claude TUI, one
-Codex and one opencode shard: 23 live harness jobs in all. Timing weights in
+Codex, one Copilot and one opencode shard: 26 live harness jobs in all. Timing weights in
 `tests/live-shard-weights.json` are scheduling hints;
 discovery still assigns every eligible file exactly once per platform. Each OS
 has its own concurrency cap: four Linux, two macOS and three Windows live jobs.
@@ -1694,8 +1722,10 @@ runner filter. Discovery uses each file's own integration/e2e live gate variable
 the derived Claude substrate list, and the unit release-contract opt-in; using a
 generic plugin helper does not claim coverage for every provider it supports.
 Unit gate-fixture tests are deterministic, not live families. `PLATFORM_ONLY`
-declares separately selectable Windows-only files; it never hides a skipped case
-inside a selected file. All live provider legs use `--require-coverage`;
+names the files that run on some platforms only, and, with no platform, the
+on-demand checks that open only with a switch of their own that no live job sets
+(the input and answers corpus checks); it never hides a skipped case inside a
+selected file. All live provider legs use `--require-coverage`;
 release-contract files retain platform-conditional cases and do not use that flag.
 
 Outside the native profile, deterministic and release-contract results are job
@@ -1743,7 +1773,7 @@ sorted `excluded` list. For `purpose: "release"` under `required-hosted-live-sha
 `production_guards` omitted and skipped, and every other declared job, `scope_runs` included, successful.
 Missing, failed, cancelled or unexpectedly skipped required jobs fail. `disabledLegs` is retained so the Full Suite result policy can reject
 historical disabled-live reports. `complete` additionally requires
-no excluded families; it remains false with the documented Kiro/Cursor/Copilot
+no excluded families; it remains false with the documented Kiro and Cursor
 exclusions and is not the preview-publication predicate. Those exclusions warn
 without failing the suite; disabled required jobs fail it.
 The stable gate, `scripts/ci-full-suite-evidence.ts check`, accepts a result only
@@ -1774,6 +1804,25 @@ Local runs with `AIDLC_KIRO_ACP_LIVE=1`, `AIDLC_KIRO_TUI_LIVE=1` or
 `AIDLC_KIRO_IDE_LIVE=1` remain the coverage path. A follow-up issue tracks the
 hosted lane.
 
+Before each stable release, a maintainer runs the Kiro CLI release journey
+(`tests/e2e/t-tui-kiro-release-journey.serial.test.ts`, the same journey as the
+Copilot lane's, in the interactive `kiro-cli chat` terminal) on the exact commit
+to be tagged, on a machine with a signed-in Kiro CLI:
+
+```bash
+bun scripts/package.ts
+AIDLC_KIRO_TUI_LIVE=1 AIDLC_TUI_LIVE=1 bun tests/run-tests.ts --e2e --production-guards \
+  --filter t-tui-kiro-release-journey
+```
+
+On Linux it gives Kiro a scratch home and keeps the machine's sign-in, so
+`~/.kiro` is not touched. It takes about five minutes and about eleven Kiro
+credits, and prints one line, for example `Kiro CLI 2.29.0 release journey on
+<commit>: PASS (4.7 min of turns, 10.46 credits, 0 permission prompts)`, that
+goes into a comment on the release-preparation PR. Nothing in the workflows reads
+that comment: a failed pass means a fix on `main` and a new release-preparation
+PR, or a maintainer who releases anyway and says so in the comment.
+
 The live jobs use the existing `ai-pr-review` environment and role. Verify these
 prerequisites before running Full Suite:
 
@@ -1792,14 +1841,15 @@ prerequisites before running Full Suite:
 - The role needs Bedrock invoke/stream access to the CI-only model table in
   `scripts/ci-credential-broker.ts`: Claude Fable 5, Opus 4.8, Sonnet 4.6 and
   Haiku 4.5 inference profiles in `us-east-1`, opencode's Sonnet 4.6 default in
-  that region, and Codex `openai.gpt-5.5` through Bedrock Mantle in `us-east-2`.
+  that region, and Codex `openai.gpt-5.5` through Bedrock Mantle in `us-east-2`,
+  which Copilot CLI's own-model mode uses too.
   The table pins the broker allowlist and Claude client aliases; shipped user
   settings remain provider-neutral.
 
 Missing environment access, role trust, model permissions, or required live
 substrates fails readiness; the workflow does not create a new environment or role.
 
-Claude Code and opencode npm versions are pinned in the workflow; update those
+Claude Code, Copilot CLI and opencode npm versions are pinned in the workflow; update those
 pins deliberately after verifying the registry and compatibility. CLI/authentication preflights fail
 loudly rather than letting absent substrates masquerade as passing live tests.
 
@@ -1966,7 +2016,10 @@ UTF-8 pre-dispatch packet, including its explanatory text, before injecting a
 non-steering directive. Oversized packets and every `load-steering` directive
 use the existing exact-argument forwarding latch so the engine's full JSON is
 returned through the actual tool call. `--single` skips hook pre-dispatch
-entirely, leaving its first issuance to that tool call.
+entirely, leaving its first issuance to that tool call. Only a line the engine
+reads exactly is pre-dispatched at all (`readNextLine`): anything it would hand
+to the agent goes to the agent untouched, so this seam never acts on the
+person's words before anyone has read them.
 
 `t147-kiro-hook-adapter.test.ts` checks the 10 KiB boundary with multibyte
 content, native shell aliases, retained terminal guards, and a real multipart

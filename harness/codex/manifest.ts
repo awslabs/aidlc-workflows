@@ -21,6 +21,11 @@ import onboardingFills from "./onboarding.fills.ts";
 const manifest: HarnessManifest = {
   name: "codex",
   productName: "Codex CLI",
+  // AI-DLC's status line items (Codex's own built-ins; task-progress is the
+  // update_plan progress the skill keeps current). They ship here, not in
+  // .codex/config.toml: Codex has no per-person project file, so the line goes
+  // into the shared config only when someone in the project chooses it (#1407).
+  statusLine: { items: ["model-with-reasoning", "git-branch", "task-progress", "context-used"] },
   configNextStep: "run `codex` (when it asks about hooks, choose Trust all and continue), then `$aidlc --doctor`",
   // Its matcher-free PreToolUse group beats in the record before each engine
   // command. Codex runs a project's hooks only once the person trusts them in

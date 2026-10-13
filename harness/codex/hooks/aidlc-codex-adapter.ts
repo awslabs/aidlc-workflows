@@ -31,7 +31,8 @@
 //      brief as `prompt` under the root session id. Spawned subagents carry
 //      agent_id; internal reviewers carry a transcript_path naming their own
 //      thread. record-human-turn never counts either as the person's turn
-//      (#1411).
+//      (#1411), and the preamble maps either thread to this chat so an engine
+//      command run in it acts on this chat's work.
 //
 // Output contracts:
 //   - session-start: the core hook prints
@@ -66,12 +67,12 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   emptyPickerResult,
   isNonAnswer,
+  noteHelperSession,
   sessionsDir,
   stateFilePath,
   validSessionId,
@@ -169,15 +170,22 @@ export function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unk
   });
 }
 
+// The thread a Codex rollout file is for (rollout-<timestamp>-<thread id>[_<rollout
+// id>].jsonl), or null for a path in any other form.
+function rolloutThread(transcriptPath: unknown): string | null {
+  if (typeof transcriptPath !== "string") return null;
+  const name = transcriptPath.split(/[\\/]/).pop() ?? "";
+  return name.match(
+    /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:_[0-9a-f-]+)?\.jsonl(?:\.[a-z0-9]+)?$/i,
+  )?.[1]?.toLowerCase() ?? null;
+}
+
 // True when transcript_path is a Codex rollout file for a thread other than
 // the session's root thread (whose id is the session id).
 function otherThreadInput(transcriptPath: unknown, sessionId: unknown): boolean {
-  if (typeof transcriptPath !== "string" || typeof sessionId !== "string" || !sessionId) return false;
-  const name = transcriptPath.split(/[\\/]/).pop() ?? "";
-  const thread = name.match(
-    /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:_[0-9a-f-]+)?\.jsonl(?:\.[a-z0-9]+)?$/i,
-  )?.[1];
-  return thread !== undefined && thread.toLowerCase() !== sessionId.trim().toLowerCase();
+  if (typeof sessionId !== "string" || !sessionId) return false;
+  const thread = rolloutThread(transcriptPath);
+  return thread !== null && thread.toLowerCase() !== sessionId.trim().toLowerCase();
 }
 
 function explicitHumanSelectionText(toolResponse: unknown): string {
@@ -222,6 +230,15 @@ const payloadSessionId = validSessionId(codex.session_id);
 if (payloadSessionId) {
   process.env.AIDLC_SESSION_OVERRIDE = payloadSessionId;
   process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+  // A spawned agent's payloads carry agent_id = its own thread id, the one its
+  // shell gets as CODEX_THREAD_ID; Codex's own review thread carries no
+  // agent_id, and only its transcript_path names its thread (the root chat's
+  // rollout names the root itself, which noteHelperSession ignores). Note the
+  // pair once, from the thread's first event, so an engine command run in that
+  // thread resolves to this chat and not to whatever the shared cursor names
+  // (aidlc-lib resolveInvokingSessionId reads it).
+  const ownThread = typeof codex.agent_id === "string" ? codex.agent_id : rolloutThread(codex.transcript_path);
+  if (ownThread !== null) noteHelperSession(projectDir, payloadSessionId, ownThread);
 }
 const projectEnv = {
   ...process.env,
@@ -236,8 +253,12 @@ const projectEnv = {
 // stop_hook_active / tool_use_id change). First delivery takes the slot via
 // atomic mkdir (the audit-lock idiom), runs, and persists its response;
 // the duplicate waits briefly for that response and replays it byte-for-byte.
-// Entries are pruned after 30 minutes. Failure anywhere → fail open (run or
-// allow), never trap the turn.
+// The cache lives in the project's own gitignored scratch folder
+// (aidlc/.aidlc-sessions/codex-dedupe), never in the OS temp folder, and every
+// delivery prunes it: a slot is kept for 5 minutes at most (the duplicate waits
+// 2 seconds; the bound outlasts any hook's run) and at most 64 slots stay, so a
+// long session never piles up folders. Failure anywhere fails open (run or
+// allow), never trapping the turn.
 //
 // Compact-source SessionStart is EXEMPT: Codex SessionStart input carries no
 // turn_id, so two DISTINCT compactions in one session produce byte-identical
@@ -246,27 +267,38 @@ const projectEnv = {
 // re-running a true duplicate is harmless while replaying a stale one is not.
 const bypassReplay = target === "session-start" && codex.source === "compact";
 
-const DEDUPE_ROOT = join(
-  tmpdir(),
-  `aidlc-codex-dedupe-${createHash("sha256").update(projectDir).digest("hex").slice(0, 16)}`,
-);
+const DEDUPE_ROOT = join(sessionsDir(projectDir), "codex-dedupe");
 const dedupeKey = createHash("sha256").update(`${target}\n${rawInput}`).digest("hex").slice(0, 32);
 const slotDir = join(DEDUPE_ROOT, dedupeKey);
 const responseFile = join(slotDir, "response.json");
+const SLOT_MAX_AGE_MS = 5 * 60 * 1000;
+const SLOT_MAX_COUNT = 64;
 
 function pruneStale(): void {
   try {
-    const cutoff = Date.now() - 30 * 60 * 1000;
+    const cutoff = Date.now() - SLOT_MAX_AGE_MS;
+    const slots: { full: string; mtime: number }[] = [];
     for (const entry of readdirSync(DEDUPE_ROOT)) {
       const full = join(DEDUPE_ROOT, entry);
       try {
-        if (statSync(full).mtimeMs < cutoff) rmSync(full, { recursive: true, force: true });
+        slots.push({ full, mtime: statSync(full).mtimeMs });
       } catch {
-        // racing prune — ignore
+        // racing prune - ignore
       }
     }
+    // Newest first: a slot past the age bound goes, and so does any beyond the
+    // newest SLOT_MAX_COUNT.
+    slots.sort((a, b) => b.mtime - a.mtime);
+    slots.forEach(({ full, mtime }, index) => {
+      if (mtime >= cutoff && index < SLOT_MAX_COUNT) return;
+      try {
+        rmSync(full, { recursive: true, force: true });
+      } catch {
+        // racing prune - ignore
+      }
+    });
   } catch {
-    // no dedupe root yet — nothing to prune
+    // no dedupe root yet - nothing to prune
   }
 }
 

@@ -89,15 +89,15 @@ the framework deliberately removed it. A stage decides what fires on its
 outputs by naming the sensor in its own frontmatter:
 
 ```yaml
-# core/aidlc-common/stages/construction/ci-pipeline.md
+# core/aidlc-common/stages/construction/ci-pipeline.md (frontmatter, other keys left out)
 ---
-slug: ci-pipeline
-phase: construction
+...
 sensors:
   - required-sections
   - upstream-coverage
   - linter
   - type-check
+...
 ---
 ```
 
@@ -114,13 +114,17 @@ compartment is described from the stage's side in
 [Anatomy of a Stage](01-anatomy-of-a-stage.md); here we are looking at it from
 the sensor's side.
 
-At workflow start the compile resolver walks `.claude/sensors/`, indexes every
-manifest by id, and for each stage looks up each declared import — throwing
+When the graph compiles, the resolver walks `.claude/sensors/`, indexes every
+manifest by id, and for each stage looks up each declared import, throwing
 loudly at compile time if an id has no manifest, rather than failing silently
-when the stage runs. The resolved per-stage view is baked onto the stage graph
-node, and the hook reads it from there at fire time. One consequence to keep in
-mind: editing a manifest mid-workflow does **not** change what fires for the
-in-flight run. The compile snapshot holds until the next workflow starts. The
+when the stage runs. Which sensors a stage imports is baked onto its graph
+node, and so is each manifest's `matches`, which the write hook uses to decide
+whether a sensor fires. The dispatcher reads the manifest again each time a
+sensor fires, so a changed `command` or `timeout_seconds` applies from the next
+fire, while a changed `matches` and a new import wait for the next compile.
+Recompile after any sensor edit for predictable behaviour. On a native install the six shipped sensors' workers are
+picked by id, so editing a shipped manifest's `command` runs nothing different;
+a different check needs its own id. The
 full resolver mechanics are in
 [How stages import sensors](../reference/07-sensor-system.md#how-stages-import-sensors).
 
@@ -173,6 +177,115 @@ manifests with `SENSOR_FILE_REGEX = /^aidlc-([a-z][a-z0-9-]*)\.md$/` and silentl
 skips any file without the prefix, so it is never discovered and never binds to a
 stage. Name your sensor `core/sensors/aidlc-<id>.md` and set `id: <id>`; the
 filename-to-id rule applies to the stem after the prefix.
+
+### A complete example
+
+A gate sensor that fails while a document still says TBD. The manifest,
+`aidlc-no-tbd.md` in the sensors folder:
+
+```markdown
+---
+id: no-tbd
+kind: deterministic
+command: bun .claude/tools/aidlc-sensor-no-tbd.ts
+default_severity: advisory
+description: The document has no TBD left in it
+category: document-shape
+fire_on: gate
+matches: "**/intents/**"
+input_schema:
+  output_path: string
+  stage_slug: string
+output_schema:
+  pass: boolean
+  findings: string[]
+  findings_count: number
+timeout_seconds: 60
+---
+
+# no-tbd
+
+Fails when a stage output still says TBD, listing each line that does.
+```
+
+and its worker, `aidlc-sensor-no-tbd.ts` in the tools folder. A worker exports
+`main(argv)` (the native engine imports the file and calls it; the last line
+runs it under Bun), reads the path after `--output-path`, and prints one JSON
+line with `pass`, its findings, and `findings_count`, the number the audit row
+records (without it the row says 0); it exits 0 whatever it finds:
+
+```ts
+// no-tbd sensor: print {"pass", "findings", "findings_count"} for the file after --output-path.
+import { readFileSync } from "node:fs";
+
+export function main(argv: string[]): void {
+  const file = argv[argv.indexOf("--output-path") + 1];
+  const lines = readFileSync(file, "utf-8").split("\n");
+  const findings = lines.flatMap((line, i) => (/\bTBD\b/.test(line) ? [`line ${i + 1}: ${line.trim()}`] : []));
+  console.log(JSON.stringify({ pass: findings.length === 0, findings, findings_count: findings.length }));
+}
+
+if (import.meta.main) main(process.argv.slice(2));
+```
+
+Add `no-tbd` to a stage's `sensors:` list and recompile. In an installed Claude
+Code tree (the two files in `.claude/sensors/` and `.claude/tools/`, bound to
+the glossary stage from [Adding a Stage](02-adding-a-stage.md)), the engine
+describes it:
+
+```text
+$ aidlc engine sensor describe no-tbd
+id: no-tbd
+kind: deterministic
+command: bun .claude/tools/aidlc-sensor-no-tbd.ts
+default_severity: advisory
+description: The document has no TBD left in it
+category: document-shape
+matches: **/intents/**
+timeout_seconds: 60
+path: .claude/sensors/aidlc-no-tbd.md
+```
+
+and fires it by hand against a file with a TBD line (`fire` prints one line):
+
+```text
+$ aidlc engine sensor fire no-tbd --stage glossary-capture --output-path aidlc/spaces/default/intents/261013-lab/inception/glossary-capture/glossary.md
+{"fire_id":"cd665332","sensor_id":"no-tbd","stage":"glossary-capture","output_path":"aidlc/spaces/default/intents/261013-lab/inception/glossary-capture/glossary.md","result":"failed","detail_path":"aidlc/spaces/default/intents/.aidlc-engine/sensors/glossary-capture/no-tbd-cd665332.md"}
+```
+
+The detail file lists the finding the worker printed (its JSON block shown
+here without the fence):
+
+```text
+## Findings
+
+{
+  "pass": false,
+  "findings": [
+    "line 6: - Reorder level: TBD"
+  ],
+  "findings_count": 1
+}
+```
+
+and the audit shard gets the failed row:
+
+```text
+## Sensor Failed
+...
+**Event**: SENSOR_FAILED
+**Fire id**: cd665332
+**Sensor ID**: no-tbd
+**Stage slug**: glossary-capture
+**Output path**: aidlc/spaces/default/intents/261013-lab/inception/glossary-capture/glossary.md
+**Detail path**: aidlc/spaces/default/intents/.aidlc-engine/sensors/glossary-capture/no-tbd-cd665332.md
+**Findings count**: 1
+```
+
+After the line is fixed, the next fire reports `"result":"passed"` and the
+earlier detail file is removed. A worker that exits non-zero is recorded as a
+pass with a note such as `"note":"script-error: exit-1"`, so check that note
+when a new sensor never fails.
 
 ---
 

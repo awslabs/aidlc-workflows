@@ -219,11 +219,10 @@ describe("intent add-repo / remove-repo", () => {
   });
 
   // In Code Generation, before a plan is approved, the plan-approval guard holds
-  // the agent's shell commands. The person's own repo change is not the agent
-  // writing code: once they have spoken, the engine command passes; with no
-  // person on record it stays held. (The native `aidlc engine ...` spelling is
-  // judged here; the per-tool spelling is judged by the same admission once the
-  // installed tools exist, which this bare fixture does not ship.)
+  // the build: the developer and the code. A repo change is AI-DLC's own
+  // command, and the engine owns its judgement (whose folder, which flags), so
+  // the guard passes it in its plain native spelling whether or not a person
+  // has spoken yet.
   test("the plan-approval guard lets the person's repo change through while a plan waits", () => {
     const statePath = seededStateFile(proj);
     writeFileSync(
@@ -237,15 +236,15 @@ describe("intent add-repo / remove-repo", () => {
       stage: "code-generation",
       state_sha256: stateDigest(readFileSync(statePath, "utf-8")),
     });
-    const held = guardBash("aidlc engine intent add-repo app-b");
-    expect(held.code, held.stderr).not.toBe(0);
+    const unasked = guardBash("aidlc engine intent add-repo app-b");
+    expect(unasked.code, unasked.stderr).toBe(0);
     personSays("the consent banner also needs a change in app-b, add that repo to this piece of work");
     const addition = guardBash("aidlc engine intent add-repo app-b");
     expect(addition.code, addition.stderr).toBe(0);
     const removal = guardBash("aidlc engine intent remove-repo app-b");
     expect(removal.code, removal.stderr).toBe(0);
-    // Anything more than the one change on the line is not this admission.
-    expect(guardBash("aidlc engine intent add-repo app-b --project-dir /elsewhere").code).not.toBe(0);
+    // Another folder on the line is the engine's own to refuse.
+    expect(guardBash("aidlc engine intent add-repo app-b --project-dir /elsewhere").code).toBe(0);
   });
 
   test("the line says what Reverse Engineering will do for the new repo", () => {

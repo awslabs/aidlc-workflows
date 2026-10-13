@@ -614,17 +614,19 @@ describe("t238 build-binaries release builder", () => {
         join(nativeRoot, "runtime", "claude", ".claude", "settings.json"),
         "utf-8",
       );
-      const copySettings = JSON.parse(copySettingsText) as {
-        statusLine: { command: string };
-      };
-      const nativeSettings = JSON.parse(nativeSettingsText) as {
-        statusLine: { command: string };
-      };
-      expect(copySettings.statusLine.command).toBe(
+      // AI-DLC's status line ships in harness.json, never in a settings file
+      // Claude Code reads (#1407); each channel carries its own command there.
+      const shippedStatusLine = (root: string) => (JSON.parse(readFileSync(
+        join(root, "runtime", "claude", ".claude", "tools", "data", "harness.json"),
+        "utf-8",
+      )) as { statusLine: { command: string } }).statusLine;
+      expect(JSON.parse(copySettingsText).statusLine).toBeUndefined();
+      expect(JSON.parse(nativeSettingsText).statusLine).toBeUndefined();
+      expect(shippedStatusLine(copyRoot).command).toBe(
         'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline',
       );
       expect(copySettingsText).not.toContain('"command": "aidlc engine');
-      expect(nativeSettings.statusLine.command).toBe("aidlc engine statusline");
+      expect(shippedStatusLine(nativeRoot).command).toBe("aidlc engine statusline");
       expect(nativeSettingsText).not.toContain('"command": "bun ');
       // A copy-channel user copies runtime/<harness>/ over the project, so the
       // copy runtime carries no file the team's editor owns. Config merges the

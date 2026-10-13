@@ -27,10 +27,19 @@ A live 1.0.165 PostToolUse capture, field-verbatim:
 
 The adapter uses a non-empty `USER_PROMPT` immediately (the 0.12 channel,
 whose stdin never closes). When that variable is empty, it reads stdin for the
-1.x channel, raced against a broken-channel timeout. The production default is
-2s; a positive `AIDLC_IDE_STDIN_TIMEOUT_MS` value overrides the ceiling in
-milliseconds for diagnostics and deterministic latency tests. Both field
-spellings are accepted. Acquisition is gated to the payload-dependent targets,
+1.x channel until Kiro closes it, so a message Kiro hands over late (a busy
+machine) is still read whole. A safety limit of 60 s, Kiro's own default
+budget for a command hook, ends only a channel that never closes; a positive
+`AIDLC_IDE_STDIN_TIMEOUT_MS` value overrides it in milliseconds for
+diagnostics and tests. When the limit passes with nothing on either channel,
+`record-human-turn` records no turn and no message (nothing on record says the
+person typed nothing, and no presence is minted for a message that may have
+been Kiro's own): a `kiro-adapter.drops` line names it for `doctor`, and the
+agent gets one line to say to the person: "The last message in this chat did
+not reach AI-DLC's record, so if it answered one of its questions, you will be
+asked that question again" (true whoever sent it: with no payload, nobody
+knows whether it was the person's or one Kiro made). Both field spellings are
+accepted. Acquisition is gated to the payload-dependent targets,
 including `plan-approval-guard`, `review-freeze`, `state-transition-guard`, the per-tool-call approval floor
 (`enforce-approval-gate`, which on 1.x reads the invoking chat's `session_id` so
 that concurrent chats are held by their own gates), the two terminal-command
@@ -77,7 +86,8 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 | PostToolUse (write) — append | `fs_append` | `{}` (empty) | `Appended the text to the <PATH> file.` | path: from the result prose only |
 | PostToolUse (shell) | `execute_bash` | `{}` (empty) | `Output:\n<stdout>\n\nExit Code: 0` | command: **not** recoverable (only stdout) |
 
-When UserPromptSubmit carries a typed fence or Guard Policy switch, the adapter forwards it to the core human-turn hook, which applies it at prompt time under the payload session and returns an `AIDLC Guard Policy:` note; shell setters are not run inside the adapter.
+When UserPromptSubmit carries a typed fence or Guard Policy switch, the adapter forwards it to the core human-turn hook, which records the message under the payload session and applies nothing; the agent runs the setter `next` names, and shell setters are not run inside the adapter.
+When the person's line is `/aidlc` alone, or `/aidlc` followed by words only (no flag or verb the engine takes) while this chat's workflow has no record yet, the `verb-intercept` member prints one context line naming the first step, `engine orchestrate next`, so Kiro's Default agent, which loads the aidlc skill on its own judgement only, starts AI-DLC instead of answering the line itself; the engine's `next` reads the recorded line (takePersonsOwnLine). A plan's name typed alone (`/aidlc bugfix`) gets the same line naming `engine orchestrate next <plan>`, the step the aidlc agent's skill takes for it, because a bare `next` does not read a plan named alone; that step asks what the work is for. A utility the member runs itself (`/aidlc --status`), a line with flags, a `/aidlc-<runner>` entry, plain words, and words typed while the chat's workflow is on record (a bare `next` would then be the work's continuation and read no recorded line; the aidlc agent's skill passes the words itself) get no such line.
 A prompt Kiro made is not the person's turn: a message Kiro's own chat record (`~/.kiro/sessions/<workspace>/<session>/messages.jsonl`, the payload's session) marks with `_meta.kiro.syntheticUserMessageReason`, or one of the two workflow sentences whole and anchored (a Workflows step's brief opens with one), is forwarded with `origin: {kind: "host"}`: the core hook records `HOST_TURN` and nothing of the person's, and the adapter starts no session, remembers no chat and opens no turn for it; once the chat's turn has closed, it ends a terminal command's same-turn hold (see below). A message the record tags `_meta.kiro.userMessageTag` is the person's whatever its words, and so is anything unknown, including a payload `session_id` other than the chat's `KIRO_SESSION_ID` on its own (that variable named the chat even for a step's prompt, so it may not name the tab a message came from).
 On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations and summary confirmation `off`, and `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update to a prompt-capable IDE or start new work from a lower-default scope; for summary confirmation and for plan approval both also name the person's project-wide terminal command `<invoke> config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` or `--bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD` (`--clear-bypass` undoes it), which also works while the work runs. Raising to `strict` or turning a fence or summary confirmation `on` remains available.
 Before forwarding an empty prompt, the adapter renames a sole retired
@@ -272,8 +282,9 @@ cards doing the work, and the guard notes nothing for them.
   `[Planned Source]` (the legacy channel cannot run the fingerprint command, so
   the adapter owns both tags; `unbindable` when the workspace has no source
   fingerprint), and invokes the reserved decision or answer tool itself. A
-  write of the stage's learnings diary, the composer's proposal, or a person's
-  answer text (the record files the shared guard admits while the plan waits)
+  write of the stage's learnings diary, the composer's proposal, a person's
+  answer text, or a person's request directly in `aidlc/.aidlc-request-text/`
+  (the record files the shared guard admits while the plan waits)
   is not a planning write: the adapter clears its write window and records no
   violation. Kiro discards PostToolUse stdout, so a successful write hook remains silent; when
   the decision or answer step is refused, the hook exits 2 with the refusal on
@@ -405,7 +416,25 @@ cards doing the work, and the guard notes nothing for them.
   and so does a pair whose name would start or end with a space, such as the
   one in `10% and 20%`). The reason is a fixed sentence that names the flag
   whose value is at fault (or "A value") and the character or "a %NAME% pair",
-  and never repeats the value, so text in a value cannot add lines to it. It
+  and never repeats the value, so text in a value cannot add lines to it.
+  Text after `orchestrate next` is never told to change: when it holds such a
+  character, a `%NAME%` pair, a double or typographic quote, a line break, or
+  a trailing backslash in a value with a space, the reason names the request
+  file instead, which the agent writes with its file tool for `next
+  --request-file`, and says that a flag's value cannot go through the file
+  (the agent writes a one-word value holding a metacharacter in double quotes
+  inside the single quotes, leaves other characters out of a value it wrote,
+  and asks the person about one they gave). That one form passes: one word in
+  double quotes with no `%`, double or typographic quote, or trailing backslash
+  (`--report '"scan&review.json"'`) after a flag `next` takes with any value
+  (`nextTokenKind`), while the words the engine gets after `next` (or a leading
+  `compose`) are flags and their values; the `--` mark, a word, a leading noun,
+  a flag the engine does not take, a variable, or a value the engine would not
+  take as the flag's (empty, starting with `--`, or not one the flag lists)
+  ends that; `--request-file`, `--project-dir` and `--aidlc-attempt-id`, which
+  the engine takes off the line first, are passed over with their value.
+  Which of the other words is the request is the agent's to know;
+  the hook does not read it. It
   simulates PowerShell 5.1's argument passing (an empty argument dropped, a
   value with a space or tab wrapped in double quotes) and cmd.exe's quote
   toggling, reading past a `#` comment and a closed `<# ... #>` block comment,

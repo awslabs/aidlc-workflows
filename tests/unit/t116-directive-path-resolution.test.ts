@@ -730,9 +730,16 @@ describe("t116 inline context roster", () => {
     expect(directive.inline_context_paths[1]).toBe(own);
   });
 
-  test("19: fully-dispatched modes carry no inline context", () => {
-    const directive = emitFor("state-construction.md", "code-generation");
-    expect(directive.mode).toBe("subagent");
-    expect(directive.inline_context_paths).toEqual([]);
+  test("19: fully-dispatched modes carry no inline context; the code plan step is the conductor's own, with nothing to read", () => {
+    // Reverse Engineering is dispatched end to end (pipeline): nothing is read inline.
+    const dispatched = emitFor("state-brownfield-feature.md", "reverse-engineering");
+    expect(dispatched.mode).toBe("pipeline");
+    expect(dispatched.inline_context_paths).toEqual([]);
+    // Code Generation's graph mode is subagent, but the step before the person's
+    // approval is the conductor's own plan: it says inline, and its context list
+    // stays as the dispatched node built it, so nothing new is read.
+    const planning = emitFor("state-construction.md", "code-generation");
+    expect(planning.mode).toBe("inline");
+    expect(planning.inline_context_paths).toEqual([]);
   });
 });

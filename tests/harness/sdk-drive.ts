@@ -160,6 +160,11 @@ export interface DriveResult {
    * rendering, non-deterministic. Provided for debugging only — do not assert.
    */
   assistantText: string;
+  /**
+   * The assistant's prose up to its first AskUserQuestion call: what the person had read when the question appeared.
+   * The whole prose when it asked nothing. Same DANGER as assistantText; for judging words, never for asserting bytes.
+   */
+  assistantTextBeforeFirstAsk?: string;
   /** The SDK's terminal result event, or undefined if the stream never ended. */
   resultEvent: ResultEvent | undefined;
   /** Contents of aidlc-docs/aidlc-state.md after the run, if it exists. */
@@ -262,7 +267,7 @@ function resolveSpec(item: AskUserQuestionItem, spec: AnswerSpec): string | stri
  * 0-based index of this menu within the whole run, produce the `answers`
  * object: question-text -> chosen label (or label[] for multi-select).
  */
-function buildAnswers(
+export function buildAnswers(
   questions: AskUserQuestionItem[],
   script: AnswerScript,
   menuIndex: number,
@@ -284,6 +289,26 @@ function buildAnswers(
     answers[q.question] = resolveSpec(q, spec);
   }
   return answers;
+}
+
+/**
+ * The option for separate new work in a routing menu, as the agent worded it:
+ * a label leading with "Yes" (the skill's own offer), "separate" in the label
+ * (the engine's "Separate new piece of work"), or, when the agent reworded the
+ * label ("Set up alongside", "Start it alongside", Full Suite 10-08 and 10-10),
+ * the route named in the description it kept for that option. A description
+ * that negates the route ("not a separate piece of work" on another option)
+ * does not count; "do not change the active work" beside the route does. The
+ * options may come in any order. -1 when no option is for separate work.
+ */
+export function separateWorkOptionIndex(options: AskUserQuestionItem["options"]): number {
+  let at = options.findIndex((o) => /^yes\b/i.test(o.label));
+  if (at < 0) at = options.findIndex((o) => /separate/i.test(o.label));
+  if (at < 0) {
+    at = options.findIndex((o) =>
+      /\bseparate\b/i.test(o.description ?? "") && !/\bnot (?:a |the )?separate\b/i.test(o.description ?? ""));
+  }
+  return at;
 }
 
 // ---------------------------------------------------------------------------
@@ -510,6 +535,8 @@ export interface DriveTurnEnd {
   askedQuestions: number;
   toolResults: number;
   stopHooks: number;
+  /** The assistant's prose so far (a prefix of DriveResult.assistantText): what the person had read when this turn ended. */
+  assistantText: string;
 }
 
 /** One Stop hook run, from the SDK's hook_response event. */
@@ -723,6 +750,7 @@ export async function driveAidlc(
   >();
   const permissionToolInputs = new Map<string, Record<string, unknown>>();
   let assistantText = "";
+  let assistantTextBeforeFirstAsk: string | undefined;
   let resultEvent: ResultEvent | undefined;
   let askMenuIndex = 0;
   let turn = 1;
@@ -768,6 +796,7 @@ export async function driveAidlc(
       askedQuestions: askedQuestions.length,
       toolResults: toolResults.length,
       stopHooks: stopHooks.length,
+      assistantText,
     };
     turns.push(ended);
     const next = resultEvent?.is_error ? undefined : opts.nextMessage?.(ended);
@@ -957,6 +986,7 @@ export async function driveAidlc(
                 block.name === "AskUserQuestion"
               ) {
                 askUserQuestionToolUseIndex++;
+                assistantTextBeforeFirstAsk ??= assistantText;
                 if (
                   askUserQuestionToolUseIndex ===
                     stopAfterAskUserQuestionAt &&
@@ -1162,6 +1192,7 @@ export async function driveAidlc(
   const result: DriveResult = {
     toolResults,
     assistantText,
+    assistantTextBeforeFirstAsk: assistantTextBeforeFirstAsk ?? assistantText,
     resultEvent,
     askedQuestions,
     timedOut,

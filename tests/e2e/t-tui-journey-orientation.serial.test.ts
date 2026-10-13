@@ -24,8 +24,8 @@
 //
 // HARNESS MATRIX — Claude TUI ONLY, by surface limitation (stated, not faked):
 //   The orientation prefix is the aidlc-statusline.ts hook, wired ONLY through
-//   Claude Code's settings.json `statusLine` key (dist/claude/.claude/
-//   settings.json). Kiro has NO statusline surface at all — dist/kiro/AGENTS.md
+//   Claude Code's `statusLine` key, in the person's own .claude/settings.local.json
+//   once they choose AI-DLC's status line (#1407; the fixture's person has). Kiro has NO statusline surface at all: dist/kiro/AGENTS.md
 //   and harness/kiro/skills/aidlc/SKILL.md both state "there is no statusline;
 //   use /aidlc --status and the progress lines at gates", and dist/kiro ships
 //   aidlc-statusline.ts but nothing invokes it as a status row. Codex likewise
@@ -63,7 +63,7 @@ const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
   : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
 
 const DRIVER = join(import.meta.dir, "../harness/tui-drive.ts");
-const ABSENT_REASON = absentReason({ command: ["claude", "--dangerously-skip-permissions"] });
+const ABSENT_REASON = absentReason({ command: ["claude", "--setting-sources", "project,local", "--dangerously-skip-permissions"] });
 
 describe("t-tui-journey-orientation (live Claude TUI — the render-half 'you are here')", () => {
   const sampleCount = process.platform === "win32" ? 3 : 1;
@@ -76,7 +76,7 @@ describe("t-tui-journey-orientation (live Claude TUI — the render-half 'you ar
         { length: sampleCount },
         (_, index) => captureOrientationStatusline(index + 1, {
           driver: DRIVER,
-          command: ["claude", "--dangerously-skip-permissions"],
+          command: ["claude", "--setting-sources", "project,local", "--dangerously-skip-permissions"],
           deadlineMs,
           reserveMs,
         }),

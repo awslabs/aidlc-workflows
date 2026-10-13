@@ -25,8 +25,6 @@ const OWNED_FILES = new Set(["aidlc-guard-switch.ts", "aidlc-recorded-switches.t
 const OWNED = [
   "off\\` yourself ",
 ];
-// A break-glass override the person must type in their own words on purpose.
-const KEPT = ["Last resort, human only: type "];
 
 // What a person-facing template must never carry, as it reads in the source.
 const FORBIDDEN: Array<[string, RegExp]> = [
@@ -51,7 +49,7 @@ describe("t-offers-are-plain-questions: no line tells the person to type exact w
       for (const { file, text } of files) {
         text.split("\n").forEach((line, index) => {
           if (/^\s*(\/\/|\*)/.test(line)) return;
-          if ([...OWNED, ...KEPT].some((phrase) => line.includes(phrase))) return;
+          if (OWNED.some((phrase) => line.includes(phrase))) return;
           if (pattern.test(line)) hits.push(`${file}:${index + 1}: ${line.trim()}`);
         });
       }

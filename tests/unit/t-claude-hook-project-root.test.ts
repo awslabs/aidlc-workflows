@@ -30,9 +30,12 @@ interface Settings {
 }
 
 function settings(channel: "dist" | "dist-release"): Settings {
-  return JSON.parse(
-    readFileSync(join(REPO_ROOT, channel, "claude", ".claude", "settings.json"), "utf-8"),
-  );
+  const root = join(REPO_ROOT, channel, "claude", ".claude");
+  const shared = JSON.parse(readFileSync(join(root, "settings.json"), "utf-8")) as Omit<Settings, "statusLine">;
+  // AI-DLC's status line ships in harness.json; the person's yes puts it in
+  // their own settings.local.json with the same command (#1407).
+  const { statusLine } = JSON.parse(readFileSync(join(root, "tools", "data", "harness.json"), "utf-8")) as Settings;
+  return { ...shared, statusLine };
 }
 
 const SOURCE_ENTRY = 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts"';
@@ -121,7 +124,7 @@ describe("Claude hook project-root anchoring", () => {
       const blocked = run("printf changed > source.ts");
       expect(blocked.error).toBeUndefined();
       expect(blocked.status, blocked.stderr).toBe(2);
-      expect(blocked.stderr).toContain("the engine asks the person to approve it");
+      expect(blocked.stderr).toContain("plan approval is off for this work, so it starts the build without asking anyone");
       expect(blocked.stderr).toContain("Code generation cannot modify workspace paths");
       // Claude Code's own deny comes first, with the same reason: the person
       // reads only the reason, never the hook command in front of it.

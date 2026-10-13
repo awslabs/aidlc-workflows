@@ -33,8 +33,21 @@ for how each one is read and what happens when the name matches more than one
 file.
 
 The workflow treats the document as data, not as instructions: it plans from
-it, and you still approve every stage. Intent Capture asks its questions
-anyway; the ones your document already answers are quick to confirm.
+it, and every approval stays yours to give. Intent Capture asks its questions
+anyway; the ones your document already answers are quick to confirm, and its
+open questions come up early. In a Claude Code run on a short vision document
+whose only open question was about per-warehouse counts, Intent Capture added a
+question of its own for it (shortened, drawing characters shown as plain text):
+
+```text
+ Warehouses
+ Q9. Do the internal tools need stock counts per warehouse, or one total per SKU? The vision doc
+ leaves this open, and it changes what a "count" means for every SKU.
+ > 1. One total per SKU
+   2. Per warehouse per SKU
+   3. One total now; per-warehouse later
+   4. Not yet defined
+```
 
 ---
 

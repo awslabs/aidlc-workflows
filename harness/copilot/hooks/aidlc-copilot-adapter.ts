@@ -63,6 +63,13 @@
 //      qualify. The Copilot CLI gets no decision, so the team's own
 //      --allow-tool/--deny-tool rules apply, and every other shell call follows
 //      the host's own approval settings.
+//  10. A skill the person invokes by its slash name (`/aidlc fix the greeter`)
+//      reaches UserPromptSubmit as Copilot's sentence plus the installed
+//      SKILL.md body with every `$ARGUMENTS` replaced by the typed words; the
+//      typed line is in no field (live-captured on the CLI, 1.0.83 and 1.0.95).
+//      The shim hands the core hook the line rebuilt from that structure, and
+//      only when the installed file with those words equals the prompt's body
+//      byte for byte (copilotSkillInvocationLine).
 //
 // Wiring (.github/hooks/aidlc.json, emitted by harness/copilot/emit.ts) is
 // matcher-FREE by design: VS Code parses but IGNORES matchers, so a matcher
@@ -106,6 +113,7 @@ import {
   recordHookDrop,
   recordPreWorkflowHeartbeat,
   resolveWorkflowSelection,
+  noteHelperSession,
   settleCopilotCommand,
   settleCopilotIntentBoundary,
   stateFilePath,
@@ -145,6 +153,68 @@ interface CopilotHookInput {
   message?: string;
 }
 
+// Copilot delivers a skill the person invoked by its slash name (`/aidlc fix the
+// greeter`) as ONE prompt: its own sentence naming the skill, then a
+// <skill-context> block holding the installed SKILL.md body with every
+// `$ARGUMENTS` replaced by the typed words (live-captured on the CLI, 1.0.83 and
+// 1.0.95). The typed line is in no field, so read as it came the prompt put
+// 90,000 characters of our own skill text on the record and nothing of what the
+// person asked for, and a bare `next` had no line of theirs to read. The line is
+// rebuilt from the structure instead. The install's own
+// `.github/skills/<name>/SKILL.md` is located inside the prompt by our own
+// literal chunks (the body's text before the first `$ARGUMENTS` and after the
+// last), the arguments' length follows from the two lengths, and the rebuild is
+// accepted only when the body with every `$ARGUMENTS` replaced by those
+// arguments equals the prompt's region byte for byte; once more with CRLF folded
+// to LF on both sides, for a host that folds a team clone's line endings.
+// Copilot's sentence only names which skill file to read and proves nothing.
+// Anything else (no skill named, no file, no `$ARGUMENTS`, a region that is not
+// our file) returns the prompt unchanged, today's path. The record's text is then
+// a rebuilt "/aidlc <args>", not the person's keystrokes: the slash and the name
+// are the skill they invoked, the arguments are the host's verbatim substitution.
+// Nothing here reads meaning.
+const ARGUMENTS_TOKEN = "$ARGUMENTS";
+const SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function copilotSkillInvocationLine(prompt: string, projectDir: string): string {
+  const named = /<skill-context name="([^"]+)">/.exec(prompt)?.[1] ??
+    /^The user explicitly invoked the "\/([^"]+)" skill\./.exec(prompt)?.[1];
+  if (named === undefined || !SKILL_NAME.test(named)) return prompt;
+  let body: string;
+  try {
+    const file = join(projectDir, ".github", "skills", named, "SKILL.md");
+    if (!existsSync(file)) return prompt;
+    body = readFileSync(file, "utf-8").replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
+  } catch {
+    return prompt;
+  }
+  const foldCrlf = (text: string): string => text.replace(/\r\n/g, "\n");
+  const args = skillArguments(body, prompt) ?? skillArguments(foldCrlf(body), foldCrlf(prompt));
+  if (args === null) return prompt;
+  return args.length > 0 ? `/${named} ${args}` : `/${named}`;
+}
+
+// The arguments the host put in place of every `$ARGUMENTS`, or null when the
+// prompt does not carry the installed body with one and the same text there.
+function skillArguments(body: string, prompt: string): string | null {
+  const text = body.trim();
+  const pieces = text.split(ARGUMENTS_TOKEN);
+  const count = pieces.length - 1;
+  if (count === 0) return null;
+  const prefix = pieces[0];
+  const suffix = pieces[count];
+  if (prefix.length === 0 || suffix.length === 0) return null;
+  const start = prompt.indexOf(prefix);
+  if (start < 0) return null;
+  const suffixAt = prompt.lastIndexOf(suffix);
+  if (suffixAt < start + prefix.length) return null;
+  const region = prompt.slice(start, suffixAt + suffix.length);
+  const spread = region.length - (text.length - count * ARGUMENTS_TOKEN.length);
+  if (spread < 0 || spread % count !== 0) return null;
+  const args = prompt.slice(start + prefix.length, start + prefix.length + spread / count);
+  return pieces.join(args) === region ? args : null;
+}
+
 export async function run(
   target: string,
   input: string,
@@ -166,6 +236,11 @@ export async function run(
     ? projectDirRaw
     : resolve(process.cwd(), projectDirRaw);
   const sessionId = copilot.session_id ?? copilot.sessionId ?? "";
+  // The session the core hooks are told about. The CLI puts a per-call toolu_
+  // id where VS Code puts the chat's session: a per-call id is no chat, so the
+  // engine is told nothing and treats the call as it treats a command with no
+  // chat, instead of binding a new "chat" for every tool call.
+  const coreSessionId = sessionId.startsWith("toolu_") ? "" : sessionId;
   const projectEnv = {
     ...process.env,
     AIDLC_PROJECT_DIR: projectDir,
@@ -1012,9 +1087,11 @@ export async function run(
     if (commandKind === "continue" && subArgs.length > 1) {
       return { status: "unsupported", reason: `\`continue\` takes only the receipt from the last step, so this did not run. Run \`${form("next")}\` to get the current step again.` };
     }
-    if (commandKind === "park" && subArgs.length !== 0) {
-      const extra = /^[A-Za-z0-9_.:=+-]+$/.test(subArgs[0]) ? `, and this one has \`${subArgs[0]}\`` : "";
-      return { status: "unsupported", reason: `\`park\` takes no options${extra}, so it did not run. Run \`${form("park")}\`.` };
+    // --person-asked (the person asked to stop) is the one park option.
+    const other = commandKind === "park" ? subArgs.find((arg) => arg !== "--person-asked") : undefined;
+    if (commandKind === "park" && (other !== undefined || subArgs.length > 1)) {
+      const extra = other !== undefined && /^[A-Za-z0-9_.:=+-]+$/.test(other) ? `, and this one has \`${other}\`` : "";
+      return { status: "unsupported", reason: `\`park\` takes no options but \`--person-asked\`${extra}, so it did not run. Run \`${form("park")} --person-asked\` when the person asked to stop, or \`${form("park")}\`.` };
     }
     const digest = createHash("sha256").update(JSON.stringify([commandKind, ...subArgs])).digest("hex");
     const flagValue = (name: string): string => subArgs[subArgs.lastIndexOf(name) + 1] ?? "";
@@ -1695,7 +1772,7 @@ export async function run(
       const fwd = JSON.stringify({
         hook_event_name: "SessionStart",
         source: rawSource === "new" ? "startup" : rawSource,
-        ...(sessionId ? { session_id: sessionId } : {}),
+        ...(coreSessionId ? { session_id: coreSessionId } : {}),
       });
       const r = runCore("aidlc-session-start.ts", fwd);
       // The heartbeat doctor's "have not run in this project yet" warning
@@ -1724,7 +1801,10 @@ export async function run(
     }
 
     case "record-human-turn": {
-      const prompt = copilot.prompt ?? copilot.user_prompt ?? copilot.message ?? "";
+      // A skill the person invoked by its slash name is read as their own line
+      // (copilotSkillInvocationLine) before anything else looks at the prompt.
+      const delivered = copilot.prompt ?? copilot.user_prompt ?? copilot.message ?? "";
+      const prompt = copilotSkillInvocationLine(delivered, projectDir);
       // A subagent's briefing is the agent speaking (difference #8): no
       // HUMAN_TURN, no kept words, no answer, no typed switch, no human
       // sequence. A different prompt typed while the subagent runs still
@@ -1747,7 +1827,7 @@ export async function run(
         "aidlc-record-human-turn.ts",
         JSON.stringify({
           hook_event_name: "UserPromptSubmit",
-          ...(sessionId ? { session_id: sessionId } : {}),
+          ...(coreSessionId ? { session_id: coreSessionId } : {}),
           prompt,
         }),
       );
@@ -1808,7 +1888,7 @@ export async function run(
             try {
               return JSON.stringify({ ...(JSON.parse(canonicalInput) as Record<string, unknown>), tool_name: "Agent", tool_input: coreInput });
             } catch {
-              return JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: coreInput, ...(sessionId ? { session_id: sessionId } : {}) });
+              return JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: coreInput, ...(coreSessionId ? { session_id: coreSessionId } : {}) });
             }
           })(),
         );
@@ -1842,7 +1922,7 @@ export async function run(
               ...dispatchInput,
               subagent_type: dispatchTarget,
             },
-            ...(sessionId ? { session_id: sessionId } : {}),
+            ...(coreSessionId ? { session_id: coreSessionId } : {}),
           }),
         );
         if (planApproval.code === 2) {
@@ -2073,7 +2153,7 @@ export async function run(
                 hook_event_name: "PreToolUse",
                 tool_name: call.toolName,
                 tool_input: call.toolInput,
-                ...(sessionId ? { session_id: sessionId } : {}),
+                ...(coreSessionId ? { session_id: coreSessionId } : {}),
               }),
             );
             if (planApproval.code === 2) {
@@ -2144,6 +2224,10 @@ export async function run(
           hostCorrelated,
           ts: Date.now(),
         };
+        // The subagent's id beside the chat's session is the one fact the engine
+        // cannot learn by itself: noted once, a payload or shell carrying the
+        // subagent's id resolves to the chat that started it.
+        if (hostCorrelated && coreSessionId) noteHelperSession(projectDir, coreSessionId, explicitSubagentId);
         const updated = updateLedger((entries) => {
           if (hostCorrelated) {
             const existing = entries.findIndex(
@@ -2197,7 +2281,7 @@ export async function run(
         "aidlc-log-subagent.ts",
         JSON.stringify({
           hook_event_name: "SubagentStop",
-          ...(sessionId ? { session_id: sessionId } : {}),
+          ...(coreSessionId ? { session_id: coreSessionId } : {}),
           agent_type: subagentName || "unknown",
           agent_id: subagentId,
         }),
@@ -2290,7 +2374,7 @@ export async function run(
       mkdirSync(dirname(heartbeatFile), { recursive: true });
       writeFileSync(
         heartbeatFile,
-        JSON.stringify({ session_id: sessionId || "unknown", ts: new Date().toISOString() }),
+        JSON.stringify({ session_id: coreSessionId || "unknown", ts: new Date().toISOString() }),
         "utf-8",
       );
     } catch {

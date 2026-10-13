@@ -18,7 +18,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { cpSync } from "node:fs";
 import { join } from "node:path";
-import { cleanupTestProject, createTestProject, REPO_ROOT } from "../harness/fixtures.ts";
+import { cleanupTestProject, createTestProject, proposalFollowUp, REPO_ROOT } from "../harness/fixtures.ts";
 
 const HARNESS_DIR: Record<string, string> = {
   kiro: ".kiro",
@@ -60,9 +60,10 @@ async function composeDispatch(harness: string): Promise<string> {
     expect(code, `${argv.join(" ")}: ${stderr}`).toBe(0);
     return stdout;
   };
-  const offer = JSON.parse(
-    await run(["next", "Build a tiny tool for counting late invoices by region"]),
-  ) as { ask_type?: string; compose_command?: string };
+  const read = JSON.parse(await run(["next", "Build a tiny tool for counting late invoices by region"])) as Record<string, unknown>;
+  // The agent's proposal step: no ready-made plan fits, so it proposes compose.
+  const proposal = proposalFollowUp(read, "compose");
+  const offer = (proposal === null ? read : JSON.parse(await run(["next", ...proposal]))) as { ask_type?: string; compose_command?: string };
   expect(offer.ask_type).toBe("compose-offer");
   const request = (offer.compose_command ?? "").split("--request ")[1]?.trim() ?? "";
   expect(request).toMatch(/^[0-9a-f]{8}$/);

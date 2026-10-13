@@ -214,6 +214,7 @@ function constructionState(current: string, skeletonStance?: string): string {
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **State Version**: 8
+- **Unit Ownership**: solo
 ${stanceLine}
 ## Scope Configuration
 - **Stages to Execute**: all

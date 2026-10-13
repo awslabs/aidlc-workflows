@@ -234,7 +234,8 @@ describe("t145 packager contract regressions", () => {
       ).toBe(true);
 
       const rules = readFileSync(join(generated, "rules", "default.rules"), "utf-8");
-      expect(rules).toContain('pattern = ["bun", ".foo/tools/"]');
+      expect(rules).toContain('pattern = ["bun", ".foo/tools/aidlc.ts", "engine"]');
+      expect(rules).toContain('    ".foo/tools/aidlc-orchestrate.ts"');
       expect(rules).not.toContain('pattern = ["aidlc"]');
       expect(rules).not.toContain('["bun", ".codex/');
 

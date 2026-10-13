@@ -181,7 +181,8 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     expect(orchestrator).toContain("numbered prose");
     expect(orchestrator).toContain("picker results do not fire");
     expect(orchestrator).toContain("| `load-steering` |");
-    expect(orchestrator).toContain("directive.receipt");
+    // The rules part names the command that fetches the next part; the row says to run it as given.
+    expect(orchestrator).toContain("Run the command the part names (copy it as given)");
     expect(orchestrator).toContain("The orchestration engine emits nine kinds today");
     expect(orchestrator).toContain("stage-protocol-ensemble.md");
     const ensembleProtocol = readFileSync(
@@ -194,7 +195,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
       "utf-8",
     );
     expect(ensembleProtocol).toContain(
-      "rules as the accumulated `load-steering` bundle",
+      'rules per `stage-protocol.md` § "For subagent stages" step 2',
     );
     expect(existsSync(join(ENGINE, "hooks", "aidlc-deliver-stage-rules.ts"))).toBe(true);
     const questionRendering = readFileSync(
@@ -421,6 +422,24 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     // A headless `copilot -p` run hands a typed runner line to the agent as text.
     expect(readFileSync(join(COPILOT_ROOT, "AGENTS.md"), "utf-8")).toContain(
       "when a message starts with `/<name>` and `.github/skills/<name>/SKILL.md` exists, the person typed that skill",
+    );
+  });
+
+  test("10: no shipped Copilot line tells a person to set GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS", () => {
+    // Measured live on Copilot CLI 1.0.74 (the floor) and 1.0.96: a headless
+    // `copilot -p` run in a trusted folder runs the hooks with no variable, and
+    // the `=1` this install used to ask for does nothing in either case.
+    const naming = [...walk(COPILOT_ROOT)]
+      .filter((file) => readFileSync(file, "utf-8").includes("GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS"))
+      .map((file) => relative(COPILOT_ROOT, file).split(sep).join("/"));
+    expect(naming).toEqual([]);
+    // Where a headless run's hooks did not run, the agent gives the step that works.
+    const activation = (JSON.parse(readFileSync(join(ENGINE, "tools", "data", "harness.json"), "utf-8")) as {
+      hookActivation: { agentStep: string };
+    }).hookActivation;
+    expect(activation.agentStep).toContain(
+      'In a headless `copilot -p` run, show this line instead: "Start copilot in this folder once, trust the folder ' +
+        'when it asks and choose to remember it, then run copilot -p again."',
     );
   });
 });

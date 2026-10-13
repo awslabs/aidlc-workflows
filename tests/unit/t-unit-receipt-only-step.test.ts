@@ -55,6 +55,7 @@ const CONSTRUCTION_STATE = `# AI-DLC State Tracking
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **State Version**: 8
+- **Unit Ownership**: solo
 - **Skeleton Stance**: on
 - **Construction Iteration**: unit-major
 

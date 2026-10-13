@@ -43,7 +43,7 @@
 //
 // See docs/reference/16-artifact-vocabulary.md for artifact naming.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { constants as fsConstants, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -465,6 +465,29 @@ export function frameworkTemplatesDir(): string {
  *  AIDLC_MEMORY_SEED_DIR is a test/relocation seam mirroring AIDLC_FRAMEWORK_TEMPLATES_DIR. */
 export function frameworkMemorySeedDir(): string {
   return process.env.AIDLC_MEMORY_SEED_DIR ?? join(resolveDataDir(), "memory-seed");
+}
+
+/** The framework's phase rule files (the seed's phases/), copied into a space's
+ *  memory wherever it has no file of that name, never over one the team wrote.
+ *  `space create` gives a new space all of them, and the engine gives them to a
+ *  space made before they shipped when a stage needs one (restoreSpacePhaseRules
+ *  in aidlc-steering.ts). Returns the names it wrote. */
+export function copyFrameworkPhaseRules(memoryDir: string): string[] {
+  const seed = join(frameworkMemorySeedDir(), "phases");
+  if (!existsSync(seed)) return [];
+  const phases = join(memoryDir, "phases");
+  mkdirSync(phases, { recursive: true });
+  const written: string[] = [];
+  for (const entry of readdirSync(seed, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    try {
+      copyFileSync(join(seed, entry.name), join(phases, entry.name), fsConstants.COPYFILE_EXCL);
+      written.push(entry.name);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+  return written.sort();
 }
 
 /** Resolve the sensors directory. AIDLC_SENSORS_DIR env-var seam mirrors
@@ -1981,13 +2004,12 @@ export function killSwitchAdvisories(
 }
 
 /** Check proposed (granted-at-the-gate) keywords against the keywords the
- *  existing scopes already claim - the same loadScopeMapping data both
- *  inference (inferScopeFromText) and findScopeByKeyword read. Inference
- *  takes the FIRST ALPHABETICAL keyword match, so a duplicate keyword would
- *  permanently shadow the incumbent scope on every future cold start; a
- *  collision is therefore a hard error naming the colliding scope, never an
- *  advisory. Comparison is case-insensitive exact equality, matching
- *  findScopeByKeyword. */
+ *  existing scopes already claim - the same loadScopeMapping data the plan
+ *  proposal step (where the agent reads them as hints) and findScopeByKeyword
+ *  read. A shared keyword would list one hint under two plans, where it no
+ *  longer tells them apart; a collision is a hard error naming the colliding
+ *  scope, never an advisory. Comparison is case-insensitive exact equality,
+ *  matching findScopeByKeyword. */
 export function keywordCollisions(granted: string[]): string[] {
   const mapping = loadScopeMapping();
   const errors: string[] = [];
@@ -2002,8 +2024,8 @@ export function keywordCollisions(granted: string[]): string[] {
     if (holders.length > 0) {
       errors.push(
         `Keyword "${kw}" is already claimed by scope${holders.length > 1 ? "s" : ""} ` +
-          `[${holders.join(", ")}] - granting it would shadow that scope in ` +
-          `keyword inference. Pick a keyword no existing scope claims.`
+          `[${holders.join(", ")}] - granting it would list one hint under two plans in ` +
+          `the plan proposal step, where it would no longer tell them apart. Pick a keyword no existing scope claims.`
       );
     }
   }

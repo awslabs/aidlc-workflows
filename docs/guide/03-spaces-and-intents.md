@@ -16,10 +16,12 @@ how that works and where everything lives.
 
 ## One workspace, organized by what you're working on
 
-When you run `aidlc config`, it projects the selected engine into one
-harness-specific directory (`.claude/` on Claude Code, `.kiro/` on Kiro,
-`.codex/` on Codex, `.aidlc/` on opencode and GitHub Copilot). That directory is the *only* part of the layout that
-differs by harness. From then on, everything AI-DLC produces lives under one
+When you run `aidlc config`, it projects the selected engine into your
+harness's own directory (`.claude/` on Claude Code, `.kiro/` on Kiro, `.codex/`
+on Codex, `.cursor/` on Cursor, `.aidlc/` on opencode and GitHub Copilot), plus
+the folders that harness itself reads (`.agents/skills/` on Codex, `.opencode/`
+on opencode, `.github/` on GitHub Copilot). Those are the *only* parts of the
+layout that differ by harness. From then on, everything AI-DLC produces lives under one
 neutral `aidlc/` directory at your project root — organized by *what you're
 working on*, not by which harness you happen to run. You browse `aidlc/`; you
 never need to open the engine directory.
@@ -42,8 +44,8 @@ my-project/
 │       ├── default/              ★ the only space most people ever see
 │       │   ├── memory/           THE METHOD — how this team works (committed)
 │       │   │   ├── org.md          framework defaults
-│       │   │   ├── team.md         your team's practices  (overrides org)
-│       │   │   ├── project.md      project-specific practices (overrides team)
+│       │   │   ├── team.md         your team's practices  (adds to org)
+│       │   │   ├── project.md      project-specific practices (adds to org and team)
 │       │   │   ├── phases/         phase-scoped rules
 │       │   │   └── templates/      your output-format overrides, one per artifact
 │       │   │
@@ -112,15 +114,16 @@ any Bolt worktrees stay put, the default listing just stops showing the row
 puts it back the way it was, in flight or complete.
 
 You never create an intent with a special command. The first time you describe
-work, the engine **auto-creates** an intent for you:
+work, the agent proposes a plan for it:
 
 ```
 /aidlc Build a REST API for inventory management
 ```
 
-On a fresh workspace this mints the intent, creates its record dir at
-`aidlc/spaces/default/intents/260624-inventory-api/`, makes it the active intent,
-and starts the first stage — exactly the run you saw in the previous chapter.
+Once you confirm the plan, AI-DLC creates the intent and its record dir (in the
+[Getting Started](01-getting-started.md) run,
+`aidlc/spaces/default/intents/261013-inventory-rest-api/`), makes it the active
+intent, and starts the first stage, as in the previous chapter.
 
 ### Starting a second piece of work
 
@@ -136,35 +139,47 @@ When an intent is already active, AI-DLC recognizes that this may be *new,
 unrelated* work rather than a continuation of the current feature, and **asks**
 before starting a second intent alongside the first:
 
-```
-Work is already in progress on: "inventory-api". You said: "Fix the timeout on
-the export endpoint". What should I do?
-1. Part of the active work: continue the current workflow
-2. Separate new piece of work: set it up alongside the current one as "bugfix" work
-3. Reshape the active work: change how the remaining plan is shaped
+```text
+ New request
+ Work is already in progress on: "Build a REST API for inventory management". You said: "Fix the
+ timeout on the export endpoint". What should I do?
+ > 1. Part of the active work
+      Continue the current workflow
+   2. Separate new piece of work
+      Yes, set it up alongside the current one without changing it; you pick its plan next
+   3. Reshape the active work
+      Change how the remaining plan is shaped
+   4. Type something.
+   5. Chat about this
 ```
 
-- Choose **2** and AI-DLC creates a second intent (here, a `bugfix`). Your
-  inventory-api intent is untouched: its record dir, state, and progress are all
-  preserved exactly where you left them.
+- Choose **2** and you pick the new work's plan next (here the agent proposed
+  `bugfix`); then AI-DLC creates a second intent beside the first. In that run
+  the agent said: "I've set up the export timeout fix as a separate piece of
+  work using the bug-fix plan, and it's waiting at Requirements Analysis. Your
+  inventory API work is unchanged at the feasibility stage." The first intent's
+  record dir, state, and progress are all preserved exactly where you left them.
 - Choose **1** and AI-DLC treats your message as part of the active intent.
 - Choose **3** and AI-DLC works out how to reshape the active intent's
   remaining plan with you.
 
-Saying only that the work should go on (`/aidlc carry on`, "continue", "keep
-going", "go on" or "resume", with or without "please") asks nothing: AI-DLC
-carries on with the active work. With work in the project but none selected
-yet, it asks which piece to pick up.
+Saying only that the work should go on (`/aidlc carry on`, "proceed", "keep
+going", in your own words) asks nothing: AI-DLC reads your words and carries on
+with the active work. With work in the project but none selected yet, it asks
+which piece to pick up; name the piece with your words (`/aidlc continue auth`)
+and it picks that piece up and carries on with it at once.
 
 Settings you type with the new work go with the work you choose.
 `/aidlc --depth minimal --learnings off Fix the timeout on the export endpoint`
 asks the same question: choose **2** and the new intent starts with that depth
 and learnings off; choose **1** or **3** and they apply to the active intent
-(for **3**, before its plan is reshaped). A Guard Policy you lower this way,
-and any other setting typed in the same message, applies to the active intent
-as you send the message; the new intent starts at the default Guard Policy, and
-AI-DLC says so when it creates it. Naming the plan first
+(for **3**, before its plan is reshaped). A Guard Policy you lower this way goes
+with the work you choose too, and AI-DLC says so once; when your team holds
+Guard Policy strict, the new intent is created at strict. Naming the plan first
 (`/aidlc bugfix Fix the timeout`) asks the same question, proposing that plan.
+When a plan's name is also your own first word (`classic car rental website`),
+the assistant reads which you meant and may ask you once, so your word is never
+spent on a plan you did not choose.
 So does a scope that differs from the active intent's, typed with a
 description (`/aidlc --scope express "add a health endpoint"`), with new work
 first: choose **1** and the description starts new express work, the active
@@ -178,12 +193,20 @@ distinct.
 
 ### Switching between intents
 
-List the intents in your space, then switch to one by name (its slug):
+List the intents in your space, then switch to one by name (its slug). From the
+same run, with the export fix active:
 
+```text
+> /aidlc intent
+Intents in space "default":
+  261013-inventory-rest-api  [in-flight]
+* 261013-export-timeout-fix  [in-flight]
+
+> /aidlc intent inventory-rest-api
+Now working on inventory-rest-api. You were on export-timeout-fix: /aidlc intent export-timeout-fix goes back.
 ```
-/aidlc intent                     List all intents in the active space
-/aidlc intent export-bug          Switch the active intent to "export-bug"
-```
+
+The `*` marks the active intent.
 
 Switching updates the invoking session's binding and writes through to the
 `active-intent` cursor. The next `/aidlc` in that session resumes the intent
@@ -207,7 +230,11 @@ as joining it: in a fresh clone, where a teammate's intent record is committed b
 your `active-intent` cursor is not, the lone record resolves but no session has
 joined it. The first `/aidlc` asks which intent to work on, and AI-DLC's hooks leave
 that record alone until the session runs `/aidlc intent <slug>` (or creates its own
-intent). A session bound by an earlier version keeps working its intent when your
+intent), or until this machine chooses that record (your `active-intent` cursor
+names it, from another chat or your terminal): then the chat joins it on its next
+turn, silently, as a chat opened after the choice would. What you type in a chat
+that has not joined is still kept, on that chat's own message record outside the
+intent record. A session bound by an earlier version keeps working its intent when your
 cursor names the same record; otherwise it is offered a rebind to that intent. A
 session an earlier version stamped but never bound follows its stamp when it
 resumes, so a chat left open across an upgrade continues its own intent.
@@ -221,9 +248,30 @@ Session identity follows one order:
 
 1. The host session id delivered to a hook.
 2. A valid `AIDLC_SESSION_OVERRIDE` inherited from the harness process.
-3. On Codex, the `CODEX_THREAD_ID` Codex gives every command it runs.
+3. The chat the host names in the agent's own shell: Codex's `CODEX_THREAD_ID`,
+   Claude Code's `CLAUDE_CODE_SESSION_ID` while the process its `CLAUDE_PID`
+   names is alive, or Kiro CLI's `KIRO_SESSION_ID`. A shell kept open after its
+   chat ended still carries the variable, which is why Claude Code's id is read
+   only while that chat's process is alive; a dead or absent pid leaves it
+   unread. Kiro CLI puts no pid in the shell, so its id stands on its own, as
+   Codex's does. Other harnesses name no chat there.
 4. The nearest live PID ancestry entry.
 5. No session identity.
+
+Every id found this way, and every hook payload's session id, passes through one
+door before any chat or work record is read. A helper's own id (a spawned Codex
+agent's or review thread's, a Kiro CLI delegation's, a Copilot subagent's) maps
+to the chat it belongs to: the adapter notes the pair from the first hook payload
+that shows both, the one fact the engine cannot learn by itself. That chat's
+binding is then read, and a chat with no binding yet (a host that never ran
+SessionStart for it, or hooks installed after the chat opened) is bound at first
+contact by the same rule SessionStart applies to a new chat: to the work the
+shared cursor names when this machine has joined it, else to no record, silently.
+From then on the chat stays on that work; a switch typed in another window moves
+the cursor, not the chat. A chat bound to no record only because the lone record
+here had not been chosen yet is read again at every entry: once the cursor names
+a record, it joins that work the same way, silently. A command with no session
+identity at all (your own terminal) keeps following the cursor.
 
 Once identity is known, an explicit space or intent selector wins, followed by
 that session's binding, then the shared `active-space` and `active-intent`
@@ -299,14 +347,24 @@ Create, list, and switch spaces with verbs that mirror the intent verbs exactly:
 
 ```
 /aidlc space                      List all spaces
-/aidlc space create payments-team Create a new space, seeded from the framework baseline
+/aidlc space create payments-team Create a new space, seeded from the default space's method
 /aidlc space switch payments-team Switch the active space to "payments-team"
 ```
 
-The older `/aidlc space-create <name>` and bare `/aidlc space <name>` forms are
-still accepted.
+Creating one prints what it set up:
 
-A newly created space starts with the framework's default method (`org.md`) and
+```text
+> /aidlc space create payments-team
+Space created: payments-team
+  memory/org.md (copied from default), team.md, project.md, phases/, templates/, codekb/, knowledge/
+Switch to it with /aidlc space payments-team.
+```
+
+The shorter `/aidlc space-create <name>` and bare `/aidlc space <name>` forms
+work too.
+
+A newly created space starts with a copy of the default space's method
+(`aidlc/spaces/default/memory/org.md`, with any changes your team made there) and
 fresh, empty `team.md` / `project.md` practice files — a new team earns its own
 practices rather than inheriting another team's. Its `knowledge/` and `codekb/`
 start empty too.
@@ -330,10 +388,18 @@ stays bound.
 
 ### Knowing which space you're in
 
-When more than one space exists, the status line shows the active `space · intent`
-as a persistent "you are here" — the same way a shell prompt shows your current
-directory — so work never lands in the wrong space. A single-team user, having
-only `default`, sees no space token at all.
+On Claude Code with AI-DLC's status line on, the line starts with the piece of
+work you are in, and once more than one space exists, with the space before it,
+as a persistent "you are here", the same way a shell prompt shows your current
+directory (the bar and the separator dot shown in plain text; the line is cut at
+the window's edge):
+
+```text
+[AIDLC] default - inventory-rest-api - IDEATION [##--------] 1/4 > Feasibility -- Architect Age...
+```
+
+A single-team user, having only `default`, sees no space name at all. On any
+harness, `/aidlc space` and `/aidlc intent` list where you are, marked with `*`.
 
 ---
 

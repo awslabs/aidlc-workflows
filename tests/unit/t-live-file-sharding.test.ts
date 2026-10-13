@@ -5,12 +5,15 @@ import {
 } from "../harness/test-budget.ts";
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   classifyLiveFiles, FAMILIES, LIVE_PLATFORM_SHARD_COUNTS, LIVE_SHARD_COUNTS, LIVE_MATRICES, liveShardCount, LIVE_RUN_CEILING_SECONDS as LIVE_RUN_CEILING, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand,
   PLATFORM_ONLY, selectedLiveFiles, VERIFICATION_FAMILIES, type LiveFamily, type LiveMatrixKind, type VerificationFamily,
 } from "../../scripts/ci-live-filter.ts";
 import { sandboxCommand } from "../../scripts/ci-live-sandbox.ts";
+import { codeView } from "../gen-coverage-registry.ts";
+import { TEST_MATRIX_LIVE_GATES } from "../lib/test-matrix.ts";
 import { parseRunnerArgs } from "../harness/runner-profile.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -144,9 +147,9 @@ describe("bounded live file sharding", () => {
   });
 
   test("the live matrix stays bounded as files accumulate", () => {
-    expect(LIVE_SHARD_COUNTS).toEqual({ "claude-sdk": 2, "claude-tui": 3, codex: 1, opencode: 1, "release-contract": 1 });
+    expect(LIVE_SHARD_COUNTS).toEqual({ "claude-sdk": 2, "claude-tui": 3, codex: 1, copilot: 1, opencode: 1, "release-contract": 1 });
     expect(LIVE_PLATFORM_SHARD_COUNTS).toEqual({ "claude-sdk": { linux: 4 } });
-    expect(kinds.flatMap(kind => liveMatrix(kind).include).filter(row => row.family !== "release-contract")).toHaveLength(23);
+    expect(kinds.flatMap(kind => liveMatrix(kind).include).filter(row => row.family !== "release-contract")).toHaveLength(26);
     expect(selectedLiveFiles("claude-sdk", "linux", "1/4").length).toBeGreaterThan(1);
     expect(selectedLiveFiles("codex", "linux", "1/1")).toHaveLength(6);
     const file = selectedLiveFiles("claude-sdk", "linux", "2/4")[0];
@@ -179,7 +182,7 @@ describe("bounded live file sharding", () => {
     for (const kind of ["other", "hosted", "toString", "__proto__"]) {
       expect(() => liveMatrix(kind as LiveMatrixKind)).toThrow("unknown live matrix");
     }
-    for (const family of ["", "unknown", "release-contract", "copilot", "kiro-tui", "codex\n"]) {
+    for (const family of ["", "unknown", "release-contract", "cursor", "kiro-tui", "codex\n"]) {
       for (const kind of kinds) {
         expect(() => liveMatrix(kind, family as VerificationFamily)).toThrow("unknown verification family");
       }
@@ -200,6 +203,26 @@ describe("bounded live file sharding", () => {
         if (prior[index] === undefined) delete PLATFORM_ONLY[file];
         else PLATFORM_ONLY[file] = prior[index];
       });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A file that opens only with a live switch of its own, one no live job sets
+  // (the input and answers corpus checks), would run with every case skipped
+  // and fail as "executed no test cases": no hosted family selects it.
+  test("a file gated on a live switch no live job sets is selected nowhere", () => {
+    const gates: readonly string[] = TEST_MATRIX_LIVE_GATES;
+    const onDemand = [...partition.values()].flat().filter((file) =>
+      (codeView(readFileSync(join(ROOT, file), "utf8")).match(/\bAIDLC_[A-Z_]+_LIVE\b/g) ?? [])
+        .some((gate) => !gates.includes(gate)));
+    expect(onDemand).toContain("tests/e2e/t-live-aidlc-input-corpus.serial.test.ts");
+    expect(onDemand).toContain("tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts");
+    for (const family of Object.keys(FAMILIES) as LiveFamily[]) {
+      const spec = FAMILIES[family];
+      if (spec.hosting !== "hosted") continue;
+      for (const platform of spec.platforms) {
+        const selected = selectedLiveFiles(family, platform);
+        for (const file of onDemand) expect(selected, `${family}/${platform}`).not.toContain(file);
+      }
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -330,7 +353,7 @@ describe("bounded live file sharding", () => {
       ["codex", "--shard", "1/999", "--run", "--", "--e2e-plan"],
       ["codex", "--shard", "1/1", "--shard", "2/5"],
       ["codex", "--run", "--", "--unit", "--e2e-plan"],
-      ["copilot"], ["missing"], ["codex", "--platform", "aix"],
+      ["cursor"], ["missing"], ["codex", "--platform", "aix"],
     ]) {
       const result = cli(args);
       expect(result.status, `${JSON.stringify(args)}: ${result.stderr}`).toBe(2);

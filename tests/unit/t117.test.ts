@@ -84,6 +84,7 @@ import { join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
+  proposalFollowUp,
   removeWorkspaceRecord,
   resetAidlcEnv,
   runOrchestrateNext,
@@ -159,7 +160,12 @@ function run(
   if (!("AWS_AIDLC_DEFAULT_SCOPE" in env)) {
     delete childEnv.AWS_AIDLC_DEFAULT_SCOPE;
   }
-  const res = spawnSync(BUN, [tool, ...args, "--project-dir", p], {
+  // On a `next` line this engine's own option rides ahead of the person's
+  // words, which is where every caller of it puts it.
+  const argv = args[0] === "next"
+    ? ["next", "--project-dir", p, ...args.slice(1)]
+    : [...args, "--project-dir", p];
+  const res = spawnSync(BUN, [tool, ...argv], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: childEnv,
@@ -343,7 +349,13 @@ describe("t117 creation branch (P4: --init retired, engine names intent-create)"
   // it; `next` itself must create NO state (mutation stays conductor-side).
   test("8: named scope on a clean workspace → print naming intent-create AND no state created", () => {
     const p = cleanProj(); // genuinely empty workspace (seeded record stripped)
-    const r = next(["--scope", "poc"], p);
+    // Named alone, the scope is the person's pick with nothing described yet:
+    // the step asks what the work is for and names no creation (#2355).
+    const alone = directive(next(["--scope", "poc"], p).stdout);
+    expect(alone.kind).toBe("print");
+    expect(alone.message).not.toContain("intent create");
+    expect(alone.message).toContain("next --scope poc -- <their words>");
+    const r = next(["--scope", "poc", "--", "prove the importer reads the old files"], p);
     expect(r.out).toContain('"kind":"print"');
     const d = directive(r.stdout);
     expect(d.kind).toBe("print");
@@ -417,7 +429,11 @@ describe("t117 flag-validation, env-scope, scope/config change, phase jump, free
   // --- Test 14: freeform intent with no workflow → ask (scope confirmation) ---
   test("14: freeform intent with no workflow → ask directive (scope confirmation)", () => {
     const p = cleanProj(); // genuinely no workflow (seeded record stripped)
-    const r = next(["add a login form to the app"], p);
+    // The words first reach the agent as the plan proposal step; its plan
+    // (the test's stand-in reading) returns the plan question.
+    const first = next(["add a login form to the app"], p);
+    const proposal = proposalFollowUp(directive(first.stdout));
+    const r = proposal === null ? first : next(proposal, p);
     expect(r.out).toContain('"kind":"ask"');
     expect(directive(r.stdout).kind).toBe("ask");
   });

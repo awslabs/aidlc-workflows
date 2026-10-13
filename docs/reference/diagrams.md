@@ -399,7 +399,7 @@ flowchart TD
     STATUS_DISPLAY["Display read-only\nstatus summary"]
     SCOPE_DETECT{"Known scope\nor freeform text?"}
     KNOWN_SCOPE["Use explicit scope"]
-    FREEFORM["Auto-detect scope\nfrom keywords"]
+    FREEFORM["Agent proposes\nthe plan"]
     CONFIRM_SCOPE["Confirm scope\nwith user"]
     CREATE["Create the intent:\nmint record dir,\nstate + audit, begin\nfirst stage"]
 

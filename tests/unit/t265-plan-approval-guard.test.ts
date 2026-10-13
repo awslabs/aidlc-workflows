@@ -37,6 +37,7 @@ import { renderGuardOperation } from "../../core/tools/aidlc-guard-operation.ts"
 import {
   evaluatePlanApprovalDispatch,
   blockReason,
+  handoffBlockReason,
   mutationBlockReason,
   promptStageMarkers,
   promptUnitMarkers,
@@ -79,7 +80,7 @@ import {
   workspaceSourceFingerprint,
   personCheckSwitchAllowed,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { AIDLC_SRC, FIXTURE_CLONE_ID } from "../harness/fixtures.ts";
+import { AIDLC_SRC, FIXTURE_CLONE_ID, WORKER_BRIEF_SECTIONS_FIXTURE } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -155,7 +156,7 @@ describe("t265a plan-approval decision table", () => {
     const v = evaluatePlanApprovalDispatch(
       "Task",
       "aidlc-developer-agent",
-      `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}\nImplement todo-core per the approved plan`,
+      `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}${WORKER_BRIEF_SECTIONS_FIXTURE}Implement todo-core per the approved plan`,
       { ...CTX, units: [APPROVED] },
     );
     expect(v.block).toBe(false);
@@ -165,7 +166,7 @@ describe("t265a plan-approval decision table", () => {
     const approved = evaluatePlanApprovalDispatch(
       "Task",
       "aidlc-developer-agent",
-      `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}\nImplement the approved stage-level plan`,
+      `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}${WORKER_BRIEF_SECTIONS_FIXTURE}Implement the approved stage-level plan`,
       { ...CTX, units: [STAGE_APPROVED] },
     );
     expect(approved.block).toBe(false);
@@ -195,7 +196,7 @@ describe("t265a plan-approval decision table", () => {
     const v = evaluatePlanApprovalDispatch(
       "Task",
       "aidlc-developer-agent",
-      `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}\nImplement todo-core using the auth contract for reference`,
+      `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}${WORKER_BRIEF_SECTIONS_FIXTURE}Implement todo-core using the auth contract for reference`,
       { ...CTX, units: [APPROVED, { ...BARE, unit: "auth" }] },
     );
     expect(v.block).toBe(false);
@@ -244,7 +245,7 @@ describe("t265a plan-approval decision table", () => {
     const v = evaluatePlanApprovalDispatch(
       "Task",
       "aidlc-developer-agent",
-      `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}\nTask copy\nAIDLC-UNIT: todo-core\nTemplate copy`,
+      `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}${WORKER_BRIEF_SECTIONS_FIXTURE}Task copy\nAIDLC-UNIT: todo-core\nTemplate copy`,
       { ...CTX, units: [APPROVED] },
     );
     expect(v.block).toBe(false);
@@ -409,6 +410,41 @@ describe("t265a plan-approval decision table", () => {
     ).toBe(false);
   });
 
+  test("a handoff cut to the marker lines is refused once the plan is approved; the brief's sections pass in either fence variant", () => {
+    const markers = `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}\n`;
+    const ctx = { ...CTX, units: [APPROVED] };
+    // The reported handoff: the two lines the guard checks and nothing of the brief they head.
+    const cut = evaluatePlanApprovalDispatch("Task", "aidlc-developer-agent", `${markers}Read the plan and the instructions yourself.`, ctx);
+    expect(cut.block).toBe(true);
+    expect(cut.handoff).toBe("brief");
+    // The brief as printed with the fence on, and as printed with it off: the
+    // person's own switch, flipped between the brief command and the dispatch,
+    // never makes a real brief read as a cut one.
+    const on = "\n## Files and commands\n\nrule\n\n## The plan file\n\nTick.\n\n## Approved plan\n\n# Plan\n\n## Approved unit-test instructions\n\n# Unit Test Instructions\n";
+    const off = on.replace("## Approved plan", "## Current plan (plan-approval fence off)").replace("## Approved unit-test instructions", "## Current unit-test instructions");
+    const mixed = on.replace("## Approved plan", "## Current plan (plan-approval fence off)");
+    for (const sections of [on, off, mixed]) {
+      const v = evaluatePlanApprovalDispatch("Task", "aidlc-developer-agent", `${markers}${sections}`, ctx);
+      expect(v.block, sections).toBe(false);
+      expect(v.handoff, sections).toBeUndefined();
+    }
+    // Whitespace does not decide it: a reflowed brief still carries its sections.
+    const reflowed = evaluatePlanApprovalDispatch("Task", "aidlc-developer-agent", `${markers}${on.replace(/\n/g, " ").replace(/ +/g, "  ")}`, ctx);
+    expect(reflowed.block).toBe(false);
+    // Three of four sections is still a cut brief.
+    const partial = evaluatePlanApprovalDispatch("Task", "aidlc-developer-agent", `${markers}${on.replace("## The plan file", "")}`, ctx);
+    expect(partial.handoff).toBe("brief");
+    // Before approval the refusal is the approval's, not the handoff's.
+    const unapproved = evaluatePlanApprovalDispatch("Task", "aidlc-developer-agent", `${markers}cut`, { ...CTX, units: [PLANNED_ONLY] });
+    expect(unapproved.block).toBe(true);
+    expect(unapproved.handoff).toBeUndefined();
+    // The refusal says what the handoff lacks and names the brief command as the step.
+    const reason = handoffBlockReason(["todo-core"], "brief");
+    expect(reason).toContain("Code generation cannot start: the developer handoff carries the marker lines without the brief they head.");
+    expect(reason).toContain("brief --unit");
+    expect(reason).toContain("exactly as printed");
+  });
+
   test("blockReason names the scope and what happens next", () => {
     const reason = blockReason(["todo-core"]);
     expect(reason).toContain("todo-core");
@@ -438,6 +474,48 @@ describe("t265a plan-approval decision table", () => {
       }
     }
     expect(mutationBlockReason(null, false)).toContain("Code generation cannot modify workspace paths");
+  });
+
+  // With plan approval off, `next` records the plan as built and starts the
+  // build without asking anyone, so a refusal that says the person will be
+  // asked is a wrong line the agent repeats to them. The clause names what
+  // next does and no switch (a refusal never offers to flip a setting).
+  test("with plan approval off, both refusals say next starts the build without asking, never that the person is asked", () => {
+    for (const reason of [mutationBlockReason(null, false, null, true), blockReason(["todo-core"], null, null, true)]) {
+      expect(reason).toContain("plan approval is off for this work, so it starts the build without asking anyone");
+      expect(reason).toContain("do not ask the person to approve the plan");
+      expect(reason).not.toContain("asks the person");
+      expect(reason).not.toContain("plan-approval off");
+    }
+    expect(mutationBlockReason(null, false)).toContain("the engine asks the person to approve it before any code is written");
+    expect(blockReason(["todo-core"])).toContain("the engine asks the person to approve the plan");
+  });
+
+  test("the shipped hook under plan approval off: a code write or a developer dispatch before next gets the off clause", () => {
+    for (const plan of [false, true]) {
+      const proj = scratchProject();
+      try {
+        seedState(proj, { planApproval: "off" });
+        seedUnit(proj, null, { plan, answer: null });
+        const refused = runHook(proj, WRITE(join(proj, "src", "x.ts")));
+        expect(refused.code, `plan=${plan}: ${refused.stderr}`).toBe(2);
+        expect(refused.stderr).toContain("plan approval is off for this work, so it starts the build without asking anyone");
+        expect(refused.stderr).not.toContain("asks the person");
+        expect(refused.stderr).not.toContain("ask the person to approve it");
+        if (plan) {
+          // The evaluator's reason on the same line says what to do and nothing false.
+          expect(refused.stderr).toContain("the plan is not approved yet; run next.");
+          const dispatched = runHook(proj, STAGE_DISPATCH(proj, "Build it."));
+          expect(dispatched.code, dispatched.stderr).toBe(2);
+          expect(dispatched.stderr).toContain("plan approval is off for this work, so it starts the build without asking anyone");
+          expect(dispatched.stderr).not.toContain("asks the person");
+        } else {
+          expect(refused.stderr).toContain("code-generation-plan.md is missing or empty");
+        }
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    }
   });
 });
 
@@ -488,7 +566,12 @@ function scratchProject(): string {
     "aidlc-runtime-paths.ts",
     "aidlc-runtime-budget.ts",
     "aidlc-guard-fences.ts",
+    // The hook reads the plan approval setting when it refuses (the setting
+    // decides the refusal's last clause); the setting resolver and what it imports.
     "aidlc-guard-switch.ts",
+    "aidlc-question-store.ts",
+    "aidlc-recorded-switches.ts",
+    "aidlc-model-policy.ts",
     "aidlc-guard-operation.ts",
     "aidlc-reply-reader.ts",
     "aidlc-audit.ts",
@@ -499,6 +582,9 @@ function scratchProject(): string {
     "aidlc-review-brief.ts",
     "aidlc-construction-checkpoints.ts",
     "aidlc-testing-posture.ts",
+    // The config sections the hook sorts while a plan waits, and what that imports.
+    "aidlc-command.ts",
+    "aidlc-color.ts",
   ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));
   }
@@ -525,11 +611,13 @@ function scratchProject(): string {
   return dir;
 }
 
-function seedState(proj: string, fields: { stage?: string; autonomy?: string } = {}): void {
+function seedState(proj: string, fields: { stage?: string; autonomy?: string; planApproval?: "off" } = {}): void {
   const stage = fields.stage ?? "code-generation";
   const autonomy = fields.autonomy
     ? `- **Construction Autonomy Mode**: ${fields.autonomy}\n`
     : "";
+  // The person's setting as the engine writes it: plans build without asking.
+  const planApproval = fields.planApproval ? "- **Plan Approval**: off (from scope poc)\n" : "";
   writeFileSync(
     join(proj, RECORD_REL, "aidlc-state.md"),
     `# AI-DLC State Tracking
@@ -537,7 +625,7 @@ function seedState(proj: string, fields: { stage?: string; autonomy?: string } =
 ## Project Information
 - **Project**: t265 fixture
 - **Scope**: poc
-${autonomy}
+${planApproval}${autonomy}
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION
 - **Current Stage**: ${stage}
@@ -727,6 +815,7 @@ function seedUnit(
   }
 }
 
+// A hand-made handoff: the marker lines, the brief's sections, then the prompt.
 const DISPATCH = (proj: string, prompt: string) => ({
   hook_event_name: "PreToolUse",
   tool_name: "Task",
@@ -735,6 +824,7 @@ const DISPATCH = (proj: string, prompt: string) => ({
     prompt:
       `AIDLC-UNIT: todo-core\n` +
       `AIDLC-TESTING-CONTRACT: ${resolveTestingPosture(proj).contract_sha256}\n` +
+      WORKER_BRIEF_SECTIONS_FIXTURE +
       prompt,
   },
 });
@@ -747,6 +837,7 @@ const STAGE_DISPATCH = (proj: string, prompt: string) => ({
     prompt:
       `AIDLC-STAGE: code-generation\n` +
       `AIDLC-TESTING-CONTRACT: ${resolveTestingPosture(proj).contract_sha256}\n` +
+      WORKER_BRIEF_SECTIONS_FIXTURE +
       prompt,
   },
 });
@@ -810,6 +901,47 @@ function seedTwoBoundIntents(proj: string): void {
 }
 
 describe("t265b hook lifecycle", () => {
+  test("summary confirmation is a planning prerequisite, never Plan Approval (#2265)", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation", "todo-core");
+      for (const prefix of ["aidlc", "bun .claude/tools/aidlc.ts"]) {
+        for (const verb of ["decision", "answer"]) {
+          const command = `${prefix} engine log ${verb} --stage code-generation --checkpoint summary-confirmation --questions-file ${RECORD_REL}/construction/todo-core/code-generation/questions.md --unit todo-core --details 'Looks correct'`;
+          const result = runHook(proj, BASH(command));
+          expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+          // Another stage's or checkpoint's record is the log tool's to judge.
+          for (const other of [
+            command.replace("--stage code-generation", "--stage build-and-test"),
+            command.replace("--checkpoint summary-confirmation", "--checkpoint unrelated"),
+          ]) expect(runHook(proj, BASH(other)).code, other).toBe(0);
+          for (const foreign of [
+            `${command} > src/generated.ts`,
+            `${command}; printf code > src/generated.ts`,
+          ]) expect(runHook(proj, BASH(foreign)).code, foreign).toBe(2);
+        }
+      }
+      // Admission records no approval: source mutation and developer dispatch
+      // still fail, and the log owner refuses missing confirmation evidence.
+      expect(runHook(proj, WRITE(join(proj, "src", "generated.ts"))).code).toBe(2);
+      expect(runHook(proj, {
+        hook_event_name: "PreToolUse", tool_name: "Task",
+        tool_input: { subagent_type: "aidlc-developer-agent", prompt: "AIDLC-UNIT: todo-core\nImplement todo-core" },
+      }).code).toBe(2);
+      const missing = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-log.ts"),
+        "answer", "--stage", "code-generation", "--checkpoint", "summary-confirmation",
+        "--questions-file", join(proj, RECORD_REL, "missing.md"), "--details", "Looks correct",
+        "--unit", "todo-core", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env: { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "0" }, encoding: "utf-8",
+      });
+      expect(missing.status).not.toBe(0);
+      expect(readAllAuditShards(proj)).not.toContain("**Event**: SUMMARY_CONFIRMATION_RECORDED");
+      expect(readAllAuditShards(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    } finally { rmSync(proj, { recursive: true, force: true }); }
+  });
+
   // The bytes the approval excludes must never reach the worker, on either path.
   const APPENDIX =
     "\n## Review\n\n**Verdict:** READY\n**Reviewer:** aidlc-architecture-reviewer-agent\n" +
@@ -999,6 +1131,40 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  test("the shipped hook refuses the marker-lines-only handoff with the brief command, and never a reviewer dispatch", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: "A. Approve Plan" });
+      // The issue's handoff: the two guarded lines, the rest of the brief left out.
+      const cut = runHook(proj, {
+        hook_event_name: "PreToolUse",
+        tool_name: "Task",
+        tool_input: {
+          subagent_type: "aidlc-developer-agent",
+          prompt:
+            `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${resolveTestingPosture(proj).contract_sha256}\n` +
+            "Read the plan and instruction files yourself.",
+        },
+      });
+      expect(cut.code).toBe(2);
+      expect(cut.stderr).toContain("the developer handoff carries the marker lines without the brief they head");
+      expect(cut.stderr).toContain("brief --unit todo-core");
+      // The same handoff with the brief's sections goes through (the fixtures' shape).
+      const whole = runHook(proj, DISPATCH(proj, "Implement todo-core"));
+      expect(whole.code, whole.stderr).toBe(0);
+      // A reviewer dispatch is never this guard's to refuse, whatever its brief says.
+      const reviewer = runHook(proj, {
+        hook_event_name: "PreToolUse",
+        tool_name: "Task",
+        tool_input: { subagent_type: "aidlc-architecture-reviewer-agent", prompt: "Review todo-core.\n\n**Verdict:** READY\n" },
+      });
+      expect(reviewer.code, reviewer.stderr).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   test("blocks the unplanned dispatch with exit 2 + a redirecting reason", () => {
     const proj = scratchProject();
     try {
@@ -1143,9 +1309,12 @@ describe("t265b hook lifecycle", () => {
         const result = runHook(proj, BASH(command));
         expect(result.code, `${command}\n${result.stderr}`).toBe(0);
       }
+      // A direct state advance is the state-transition guard's. A completion
+      // report waits for the plan: the report tool does not check it.
+      expect(runHook(proj, BASH("aidlc engine state advance")).code).toBe(0);
+      expect(runHook(proj, BASH("aidlc engine orchestrate report --stage code-generation --result completed")).code)
+        .toBe(2);
       for (const command of [
-        "aidlc engine orchestrate report --stage code-generation --result completed",
-        "aidlc engine state advance",
         "./aidlc engine orchestrate next",
         "PATH=. aidlc engine orchestrate next",
         "env PATH=. aidlc engine orchestrate next",
@@ -1186,7 +1355,9 @@ describe("t265b hook lifecycle", () => {
         const report = "bun .claude/tools/aidlc.ts engine orchestrate report --stage code-generation";
         const approve = `${report} --result approved --user-input "Approve"`;
         seedUnit(proj, null, { plan: true, answer: null });
-        // Before Plan Approval the answer route is fenced like any other report.
+        // Before Plan Approval, completing Code Generation waits like the build:
+        // `report` would open the gate or complete the stage without checking the
+        // plan's approval, so this guard keeps that one condition.
         expect(runHook(proj, BASH(approve)).code).toBe(2);
 
         seedUnit(proj, null, { plan: true, answer: "Approve Plan" });
@@ -1209,14 +1380,27 @@ describe("t265b hook lifecycle", () => {
           const result = runHook(proj, BASH(command));
           expect(result.code, `${command}\n${result.stderr}`).toBe(0);
         }
+        // At the held gate only the person's answer completes the stage; another
+        // completion report still waits for a current step.
         for (const command of [
           `${report} --result completed`,
           `${report} --result approved --result completed`,
+        ]) {
+          expect(runHook(proj, BASH(command)).code, command).toBe(2);
+        }
+        // Another stage's report is the engine's to refuse, and a direct state
+        // verb is the state-transition guard's and the state tool's.
+        for (const command of [
           'bun .claude/tools/aidlc.ts engine orchestrate report --stage build-and-test --result approved --user-input "Approve"',
+          "bun .claude/tools/aidlc.ts engine state approve code-generation",
+        ]) {
+          expect(runHook(proj, BASH(command)).code, command).toBe(0);
+        }
+        // A write to code beside the answer, a wrapper, or code alone still waits.
+        for (const command of [
           `${approve} > src/inline.ts`,
           `${approve}; printf code > src/inline.ts`,
           `env -C other ${approve}`,
-          "bun .claude/tools/aidlc.ts engine state approve code-generation",
           "printf code > src/inline.ts",
         ]) {
           expect(runHook(proj, BASH(command)).code, command).toBe(2);
@@ -1260,13 +1444,19 @@ describe("t265b hook lifecycle", () => {
         expect(result.code, `${exact}\n${result.stderr}`).toBe(0);
       }
       expect(readActiveDirectiveMarker(proj, state)).toBeNull();
+      // Another engine verb or flag is the engine's to judge.
       for (const changed of [
         `${command} --force`,
         command.replace(" bolt abort ", " bolt merge "),
+        "aidlc engine bolt abort --name alpha-unit --slug alpha-attempt --discard",
+      ]) {
+        expect(runHook(proj, BASH(changed)).code, changed).toBe(0);
+      }
+      // A write to code beside it, or a changed PATH, still waits.
+      for (const changed of [
         `${command}; printf code > src/inline.ts`,
         `${command} > src/inline.ts`,
         `PATH=. ${command}`,
-        "aidlc engine bolt abort --name alpha-unit --slug alpha-attempt --discard",
       ]) {
         expect(runHook(proj, BASH(changed)).code, changed).toBe(2);
       }
@@ -1427,8 +1617,9 @@ describe("t265b hook lifecycle", () => {
         publishAsk(proj, [
           { op: "request-changes", action: "Ask what should change.", interaction: "human-input" },
         ]);
-        // Offered but not answered: the answer's route is not open yet.
-        expect(runHook(proj, BASH(reject)).code).toBe(2);
+        // Offered but not answered: the report is the engine's own command,
+        // and the engine refuses an answer nobody gave.
+        expect(runHook(proj, BASH(reject)).code).toBe(0);
         // With Request Changes the only choice, the person's words are the feedback.
         recordRecoverySelection(proj, "Rework the payload contract.");
         for (const admitted of [
@@ -1441,12 +1632,25 @@ describe("t265b hook lifecycle", () => {
           expect(result.code, `[${checkbox}] ${admitted}\n${result.stderr}`).toBe(0);
         }
         const plan = join(proj, RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
-        for (const refused of [
+        // A completion the person did not pick waits for the plan: the report
+        // tool does not check it.
+        for (const completion of [
           reject.replace("--result rejected", "--result approved"),
           reject.replace("--result rejected", "--result revised"),
+        ]) {
+          const result = runHook(proj, BASH(completion));
+          expect(result.code, `[${checkbox}] ${completion}\n${result.stderr}`).toBe(2);
+        }
+        // Other reports and a direct state verb are the engine's to judge.
+        for (const other of [
           reject.replace("--stage code-generation", "--stage build-and-test"),
           `${reject} --project-dir /elsewhere`,
           "aidlc engine state reject code-generation --reason x",
+        ]) {
+          const result = runHook(proj, BASH(other));
+          expect(result.code, `[${checkbox}] ${other}\n${result.stderr}`).toBe(0);
+        }
+        for (const refused of [
           `${reject}; printf code > src/inline.ts`,
           `${reject} > src/inline.ts`,
           "printf code > src/inline.ts",
@@ -1454,9 +1658,8 @@ describe("t265b hook lifecycle", () => {
           const result = runHook(proj, BASH(refused));
           expect(result.code, `[${checkbox}] ${refused}\n${result.stderr}`).toBe(2);
         }
-        // Request Changes revises after the reject, under the engine's next
-        // directive, so no record-folder edit is needed while the question is open.
-        expect(runHook(proj, WRITE(plan)).code).toBe(2);
+        // The plan file is AI-DLC's record and passes while the question is open.
+        expect(runHook(proj, WRITE(plan)).code).toBe(0);
         const source = runHook(proj, WRITE(join(proj, "src", "inline.ts")));
         expect(source.code).toBe(2);
         expect(source.stderr).toContain("Code changes wait while AI-DLC's recovery question is open");
@@ -1469,11 +1672,11 @@ describe("t265b hook lifecycle", () => {
         ]);
         const revised = "aidlc engine orchestrate report --stage code-generation --result revised";
         expect(runHook(proj, BASH(revised)).code).toBe(2);
-        expect(runHook(proj, WRITE(plan)).code).toBe(2);
+        expect(runHook(proj, WRITE(plan)).code).toBe(0);
         recordRecoverySelection(proj, "1");
         expect(runHook(proj, BASH(revised)).code).toBe(0);
         expect(runHook(proj, WRITE(plan)).code).toBe(0);
-        expect(runHook(proj, BASH(reject)).code).toBe(2);
+        expect(runHook(proj, BASH(reject)).code).toBe(0);
         expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
       } finally {
         rmSync(proj, { recursive: true, force: true });
@@ -1501,10 +1704,13 @@ describe("t265b hook lifecycle", () => {
         ["state unpark", 0],
         // Generation start refuses itself without the receipt-backed approval.
         ["testing-posture begin --unit u1", 0],
-        // Work, lifecycle transitions, and completion wait for an approved plan.
-        ["bolt prepare --unit u1", 2],
-        ["state approve code-generation", 2],
-        // Completing a Unit settles it; before approval only a picked recovery may.
+        // Work and lifecycle transitions are the engine's own commands: each
+        // refuses itself without the approval or the person's reply, and this
+        // guard lets it say so.
+        ["bolt prepare --unit u1", 0],
+        ["state approve code-generation", 0],
+        // A completion waits for the plan: neither tool checks it. Before
+        // approval only a picked recovery may complete a Unit.
         ["state unit complete --stage code-generation --unit u1", 2],
         ["orchestrate report --stage code-generation --result approved --user-input Approve", 2],
         ["orchestrate report --skeleton-stance off --result completed", 2],
@@ -1552,7 +1758,8 @@ describe("t265b hook lifecycle", () => {
         ["env -C other aidlc engine orchestrate next", 2],
         ["aidlc engine config set guard.plan-approval off", 0],
         ["bun .claude/tools/aidlc-utility.ts config-change --guard.plan-approval off", 0],
-        ["bun .claude/tools/aidlc-utility.ts config-change --guard.plan-approval on", 2],
+        // Either direction of a setting is the setter's own to judge.
+        ["bun .claude/tools/aidlc-utility.ts config-change --guard.plan-approval on", 0],
       ] as const) {
         const result = runHook(proj, BASH(command));
         expect(result.code, `${command}\n${result.stderr}`).toBe(code);
@@ -1595,6 +1802,199 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // AI-DLC's status line is a display setting (#1407): showing it or giving the
+  // person's own back lowers no check and builds nothing, so the switch passes
+  // while a plan waits, whoever typed it, on either harness. Another value, flag,
+  // section or folder is the config command's own to refuse; a write beside it
+  // or a wrapper still waits.
+  test("the status line switch passes while the plan waits; nothing else rides along", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "u1", { plan: true, answer: null });
+      const spellings = (args: string) => [`aidlc ${args}`, `bun .claude/tools/aidlc.ts ${args}`];
+      const expectCode = (command: string, code: number) => {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(code);
+      };
+      for (const value of ["on", "off"]) {
+        for (const harness of ["", " --harness claude", " --harness codex"]) {
+          for (const extra of ["", " --yes", " --json", " --dry-run", " --quiet --no-color --verbose", ` --project-dir '${proj}'`]) {
+            for (const command of spellings(`config --statusline ${value}${harness}${extra}`)) expectCode(command, 0);
+          }
+        }
+      }
+      const otherProject = mkdtempSync(join(tmpdir(), "t265-other-project-"));
+      try {
+        for (const args of [
+          "config --statusline maybe",
+          "config --statusline",
+          "config --statusline off --harness kiro",
+          "config --statusline off --frobnicate",
+          "config --statusline off --mcp none",
+          "config --statusline off extra",
+          "config --statusline on --statusline off",
+          "config --statusline off --harness claude --harness codex",
+          `config --statusline off --project-dir '${otherProject}'`,
+          "config --statusline off --project-dir /elsewhere",
+          "config flags --statusline off",
+          "config project --statusline off",
+          "config --harness claude --statusline off --mcp defaults",
+        ]) {
+          for (const command of spellings(args)) expectCode(command, 0);
+        }
+      } finally {
+        rmSync(otherProject, { recursive: true, force: true });
+      }
+      for (const command of [
+        "aidlc config --statusline off; printf code > src/inline.ts",
+        "env -C other aidlc config --statusline off",
+      ]) {
+        expectCode(command, 2);
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  // `/aidlc --config` reads a section and lands each change the person asked
+  // for with one `config <section> ... --yes`. While a plan waits, a read or a
+  // setting passes whoever typed it: none builds anything or changes what the
+  // plan says. Kiro's Workflows on, the sensor timeout and which plugins are on
+  // can take a check away or change the stations, and a release fetched or
+  // applied replaces the engine itself, so they pass once the person asked
+  // ("update AI-DLC"). Another project's folder and the switches with their own
+  // rule are not this.
+  test("a config section change passes while the plan waits; a release once the person asked; another folder is the engine's", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "u1", { plan: true, answer: null });
+      const spellings = (args: string) => [`aidlc ${args}`, `bun .claude/tools/aidlc.ts ${args}`];
+      const expectCode = (command: string, code: number, env: Record<string, string> = {}) => {
+        const result = runHook(proj, BASH(command), env);
+        expect(result.code, `${command}\n${result.stderr}`).toBe(code);
+      };
+      const settings = [
+        "config --help",
+        "config models --show --json",
+        "config models --help",
+        "config runtime --check",
+        "config providers --show",
+        "config trust --show --json",
+        "config flags --show",
+        "config project --show --json",
+        "config models --preset thorough --local --yes",
+        "config models --from balanced --save-as team-default --project --yes",
+        "config models --agent aidlc-developer-agent --effort high --model some-model --yes",
+        "config runtime --record-paths --yes",
+        "config providers --provider amazon-bedrock --region us-east-1 --profile dev --yes",
+        "config trust --acknowledge --yes",
+        "config trust --kiro-workflows off --yes",
+        "config trust --kiro-terminal powershell --yes",
+        "config flags --default-scope feature --swarm on --local --yes",
+        "config flags --hook-debug on --question-retention-days 30 --global --yes",
+        "config flags --reset --local --yes",
+        "config flags --local --yes",
+        "config project --mcp none --completions none --yes",
+        "config models --preset minimal --dry-run",
+        "config models --preset balanced --harness kiro --plan-token abc123 --yes",
+        `config models --preset balanced --project-dir '${proj}' --quiet --no-color --verbose --yes`,
+        `config trust --show --project-dir='${proj}'`,
+      ];
+      for (const args of settings) {
+        for (const command of spellings(args)) expectCode(command, 0);
+      }
+      const asked = [
+        "config trust --kiro-workflows on --yes",
+        "config flags --sensor-timeout-ms 5 --local --yes",
+        "config flags --default-scope feature --sensor-timeout-ms 5 --local --yes",
+        "config project --plugins all --yes",
+        "config project --plugins=test-pro --yes",
+        "config project --reset --yes",
+      ];
+      for (const args of asked) {
+        for (const command of spellings(args)) expectCode(command, 2);
+      }
+      const otherProject = mkdtempSync(join(tmpdir(), "t265-other-project-"));
+      // A release fetched or applied, and a setup run with no section (an unknown
+      // word is one; the config tool refuses that itself), including the refresh
+      // doctor names for a tree that is behind: each waits until the person has
+      // asked, then passes in one step, never on an unattended run.
+      const releases = [
+        "config --yes",
+        "config --pin 2.11.0 --yes",
+        "config bogus --show",
+        "config models --preset thorough --download --yes",
+        "config models --preset thorough --download --release-base-url https://example.invalid --yes",
+        "config trust --acknowledge --download --ca-bundle /tmp/ca.pem --yes",
+        "config providers --provider current --download=1 --yes",
+        "config project --from /tmp/release --yes",
+        "config project --mcp none --from=/tmp/release --yes",
+        "config flags --from /tmp/release --yes",
+        `config --harness kiro --download --project-dir '${proj}'`,
+        `config --harness kiro --project-dir '${proj}'`,
+      ];
+      // A bypass with extra flags is judged whole, whoever asked.
+      const refused = ["config flags --default-scope feature --bypass AIDLC_DISABLE_SENSORS --local --yes"];
+      // A help request, a check turned back on, a repeated or empty --harness and
+      // another project's folder are the config command's own to refuse. The
+      // native update is not a config form: it is AI-DLC's own command.
+      const enginesOwn = [
+        "update",
+        "config --help --yes",
+        "config flags --swarm on --clear-bypass AIDLC_DISABLE_SENSORS --yes",
+        "config models --show --harness claude --harness codex",
+        "config models --show --harness",
+        `config models --show --project-dir '${otherProject}'`,
+        `config models --show --project-dir='${otherProject}'`,
+        "config models --show --project-dir /elsewhere",
+        "config models --show --project-dir",
+      ];
+      // The setup tool's own script is the same command: one verdict for both.
+      cpSync(join(AIDLC_SRC, "tools", "aidlc-init.ts"), join(proj, ".claude", "tools", "aidlc-init.ts"));
+      const script = "bun .claude/tools/aidlc-init.ts";
+      try {
+        for (const args of [...releases, ...refused]) {
+          for (const command of spellings(args)) expectCode(command, 2);
+        }
+        for (const args of enginesOwn) {
+          for (const command of spellings(args)) expectCode(command, 0);
+        }
+        expectCode(`${script} --download --yes`, 2);
+        expectCode(`${script} config models --preset thorough --download --yes`, 2);
+        expectCode(`${script} models --show --json`, 0);
+        expectCode(`${script} project --plugins all --yes`, 2);
+        for (const command of [
+          "aidlc config models --preset thorough --yes; printf code > src/inline.ts",
+          "env -C other aidlc config models --show",
+        ]) {
+          expectCode(command, 2);
+        }
+        // The person asked: the settings that can take a check away and the
+        // releases pass, and an unattended driver, with no person behind it,
+        // never runs them.
+        appendAuditEntry("HUMAN_TURN", { Session: "t265-config" }, proj);
+        for (const args of [...asked, ...releases]) {
+          for (const command of spellings(args)) {
+            expectCode(command, 0);
+            expectCode(command, 2, { AIDLC_UNATTENDED: "1" });
+          }
+        }
+        for (const args of refused) {
+          for (const command of spellings(args)) expectCode(command, 2);
+        }
+        expectCode(`${script} project --plugins all --yes`, 0);
+        expectCode(`${script} --download --yes`, 0);
+        expectCode(`${script} --download --yes`, 2, { AIDLC_UNATTENDED: "1" });
+      } finally {
+        rmSync(otherProject, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   // Switching a check off for the project, or back on, is the person's call,
   // and the engine then tells them which check is off. While a plan waits,
   // turning one back on always passes; turning one off passes once a person
@@ -1623,11 +2023,12 @@ describe("t265b hook lifecycle", () => {
       for (const extra of ["--quiet", "--no-color", "--verbose", `--project-dir '${proj}'`, `--project-dir '${proj}/.'`]) {
         for (const command of spellings(`${on} ${extra}`)) expectCode(command, 0);
       }
-      // Another project's folder, or any other flag, is not this switch alone.
+      // Turning a check back on never waits; another folder or an unknown flag
+      // is the engine's to refuse.
       const otherProject = mkdtempSync(join(tmpdir(), "t265-other-project-"));
       try {
         for (const extra of [`--project-dir '${otherProject}'`, "--project-dir /elsewhere", "--frobnicate", "--harness claude"]) {
-          for (const command of spellings(`${on} ${extra}`)) expectCode(command, 2);
+          for (const command of spellings(`${on} ${extra}`)) expectCode(command, 0);
         }
       } finally {
         rmSync(otherProject, { recursive: true, force: true });
@@ -1643,14 +2044,16 @@ describe("t265b hook lifecycle", () => {
         "aidlc config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --default-scope feature --local --yes",
         "aidlc config flags --bypass NOT_A_SWITCH --local --yes",
         "aidlc config flags --bypass",
-        "aidlc config flags --local --yes",
-        "aidlc config models --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --yes",
         `aidlc ${off} --project-dir /elsewhere`,
         `env -C other aidlc ${on}`,
         `aidlc ${off}; printf code > src/inline.ts`,
       ]) {
         expectCode(command, 2);
       }
+      // A `config flags` call that names no switch, or a `--bypass` on a noun that
+      // takes none, is the engine's own to refuse (the person has spoken here).
+      expectCode("aidlc config flags --local --yes", 0);
+      expectCode("aidlc config models --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --yes", 0);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
@@ -1683,28 +2086,31 @@ describe("t265b hook lifecycle", () => {
       // A fence switch is already the guard-recovery route: the setter decides it.
       const fences = ["config set guard.review-freeze off", "config set guard.reviewer-scope off"];
       for (const args of [...on, ...fences]) for (const command of spellings(args)) expect(code(command), command).toBe(0);
-      for (const args of off) for (const command of spellings(args)) expect(code(command), command).toBe(2);
+      // Turning a check off is the setter's to judge: it refuses a lowering
+      // nobody asked for itself, so this guard lets the command reach it.
+      for (const args of off) for (const command of spellings(args)) expect(code(command), command).toBe(0);
       appendAuditEntry("HUMAN_TURN", { Session: "t265-chat-switch" }, proj);
       for (const args of off) for (const command of spellings(args)) expect(code(command), command).toBe(0);
       // Plan approval off is admitted beside the plan-wait prerequisites; its
       // setter refuses an unattended driver itself.
       for (const args of off.filter((item) => !item.includes("plan-approval"))) {
-        for (const command of spellings(args)) expect(code(command, { AIDLC_UNATTENDED: "1" }), command).toBe(2);
+        for (const command of spellings(args)) expect(code(command, { AIDLC_UNATTENDED: "1" }), command).toBe(0);
       }
       // The shared rule hosts use for their own confirmation reads the same table.
       expect(personCheckSwitchAllowed(proj, "guard.review-freeze", "off")).toBe(true);
       expect(personCheckSwitchAllowed(proj, "plan-approval", "off")).toBe(true);
       expect(personCheckSwitchAllowed(proj, "depth", "Minimal")).toBe(false);
       expect(personCheckSwitchAllowed(proj, "guard.human-presence", "off")).toBe(false);
-      // Only the switch alone: another value, another key, or anything joined to it is not.
+      // Another value, another key or a flag is the setter's to refuse; a write
+      // to code joined to the switch still waits here.
       for (const command of [
         "aidlc engine config set guard.review-freeze off --force",
         "aidlc engine config set guard.human-presence off",
         "aidlc engine config set guard-policy lax",
-        "aidlc engine config set guard.review-freeze off; touch src/x.ts",
       ]) {
-        expect(code(command), command).toBe(2);
+        expect(code(command), command).toBe(0);
       }
+      expect(code("aidlc engine config set guard.review-freeze off; touch src/x.ts")).toBe(2);
       // A setting such as depth is not a check: once the person has spoken it
       // passes as a move they asked for (t-plan-approval-ask), alone.
       expect(code("aidlc engine config set depth Minimal")).toBe(0);
@@ -1824,13 +2230,14 @@ describe("t265b hook lifecycle", () => {
         const result = runHook(proj, BASH(open));
         expect(result.code, `${open}\n${result.stderr}`).toBe(0);
       }
-      // Nothing is changed for them, the plan files included.
+      // Nothing is built for them: the code waits with the person's sentence.
+      // The plan file is AI-DLC's record and passes (a changed plan is asked
+      // about again).
       const plan = join(proj, RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
-      for (const target of [plan, join(proj, "src", "inline.ts")]) {
-        const result = runHook(proj, WRITE(target));
-        expect(result.code, target).toBe(2);
-        expect(result.stderr).toContain("Nothing is built or changed while the plan waits for your approval.");
-      }
+      expect(runHook(proj, WRITE(plan)).code).toBe(0);
+      const result = runHook(proj, WRITE(join(proj, "src", "inline.ts")));
+      expect(result.code).toBe(2);
+      expect(result.stderr).toContain("Nothing is built or changed while the plan waits for your approval.");
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
@@ -1869,14 +2276,16 @@ describe("t265b hook lifecycle", () => {
           const result = runHook(proj, WRITE(doc));
           expect(result.code, `${doc}\n${result.stderr}`).toBe(0);
         }
-        // The build waits as before: code, the plan's own record, AI-DLC's
-        // commands, and the developer.
+        // AI-DLC's records pass: the questions file holds no receipt.
         const record = join(proj, RECORD_REL, "construction", "code-generation");
+        const questions = runHook(proj, WRITE(join(record, "code-generation-questions.md")));
+        expect(questions.code, questions.stderr).toBe(0);
+        // The build waits as before: code, the developer, and a completion
+        // report, which the report tool does not check against the plan.
         for (const payload of [
+          BASH('aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"'),
           WRITE(join(proj, "src", "inline.ts")),
           BASH("echo 'export const x = 1;' > src/inline.ts"),
-          WRITE(join(record, "code-generation-questions.md")),
-          BASH('aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"'),
           STAGE_DISPATCH(proj, "Build the plan."),
         ]) {
           const result = runHook(proj, payload);
@@ -1961,12 +2370,12 @@ describe("t265b hook lifecycle", () => {
               expect(result.code, `${state}: ${JSON.stringify(payload.tool_input)}\n${result.stderr}`).toBe(0);
               expect(result.stderr, `${state}: ${JSON.stringify(payload.tool_input)}`).toBe("");
             }
-            // The build still waits: code, a shell write to code, AI-DLC's own
-            // commands, and the developer.
+            // The build still waits: code, a shell write to code, the developer,
+            // and a completion report, which the report tool does not check.
             for (const payload of [
+              BASH('aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"'),
               WRITE(join(proj, "src", "new.ts")),
               BASH("echo 'export const x = 1;' > src/inline.ts"),
-              BASH('aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"'),
               DISPATCH(proj, "Build the plan."),
             ]) {
               const result = runHook(proj, payload);
@@ -2103,22 +2512,32 @@ describe("t265b hook lifecycle", () => {
           const result = runHook(proj, BASH(command));
           expect(result.code, `${command}\n${result.stderr}`).toBe(0);
         }
+        // A completion report waits for the plan: the report tool does not check it.
+        expect(runHook(proj, BASH(`bun ${entry} engine orchestrate report --stage code-generation --result completed`)).code)
+          .toBe(2);
+        // Every other engine verb through the installed entry point is the
+        // engine's to judge (the checkpoint refuses --check-cmd itself).
         for (const command of [
-          `bun ${entry} engine orchestrate report --stage code-generation --result completed`,
           `bun ${entry} engine state advance`,
           `bun ${entry} engine runtime compile`,
-          `bun ${entry} engine runtime summary --json > src/inline.ts`,
-          `bun ${entry} engine log answers --stage code-generation > src/inline.ts`,
-          `bun ${entry} engine audit history; printf code > src/inline.ts`,
           `bun ${entry} engine bolt checkpoint --action verify --unit todo-core --check-cmd "touch src/inline.ts"`,
           `bun ${entry} engine bolt checkpoint --action`,
           `bun ${entry} engine bolt checkpoint --action status --action verify --unit todo-core`,
           `bun ${entry} engine bolt swarm-checkpoint --action verify --batch 1 --units todo-core,auth`,
+          `bun ${entry} engine log decision --stage code-generation --checkpoint unrelated`,
+          `bun ${entry} engine log answer --stage code-generation --checkpoint plan-approval --checkpoint unrelated`,
+          `bun ${entry} system lifecycle uninstall --yes`,
+        ]) {
+          const result = runHook(proj, BASH(command));
+          expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+        }
+        // A write to code beside the command, a wrapper or an untrusted spelling still waits.
+        for (const command of [
+          `bun ${entry} engine runtime summary --json > src/inline.ts`,
+          `bun ${entry} engine log answers --stage code-generation > src/inline.ts`,
+          `bun ${entry} engine audit history; printf code > src/inline.ts`,
           `bun ${entry} engine bolt swarm-checkpoint --action status > src/inline.ts`,
           `bun ${entry} engine bolt swarm-checkpoint --action status; printf code > src/inline.ts`,
-          `bun ${entry} engine log decision --stage code-generation --checkpoint summary-confirmation`,
-          `bun ${entry} engine log answer --stage code-generation --checkpoint plan-approval --checkpoint summary-confirmation`,
-          `bun ${entry} system lifecycle uninstall --yes`,
           `bun ${entry} engine orchestrate next > src/inline.ts`,
           `bun ${entry} engine orchestrate next; printf code > src/inline.ts`,
           `bun ${entry} engine orchestrate next 2>&1; printf code > src/inline.ts`,
@@ -2486,17 +2905,24 @@ describe("t265b hook lifecycle", () => {
       ]) {
         expect(runHook(proj, BASH(command)).code, command).toBe(0);
       }
+      // Every other engine verb is the engine's to judge.
       for (const command of [
         "aidlc engine runtime fragment-merge --slug todo-core",
         "aidlc engine bolt checkpoint --action verify --unit todo-core --check-cmd 'touch src/inline.ts'",
         "aidlc engine bolt checkpoint --action status --action verify --unit todo-core",
         "aidlc engine bolt start --name todo-core",
-        "aidlc engine bolt swarm-checkpoint --action status > src/inline.ts",
-        "aidlc engine log decision --stage code-generation --checkpoint summary-confirmation",
-        "aidlc engine log decision --stage code-generation --checkpoint plan-approval --checkpoint summary-confirmation",
+        "aidlc engine log decision --stage code-generation --checkpoint unrelated",
+        "aidlc engine log decision --stage code-generation --checkpoint plan-approval --checkpoint unrelated",
         "aidlc engine log review --stage code-generation",
         "aidlc engine state advance",
         "aidlc system lifecycle uninstall --yes",
+      ]) {
+        const admitted = runHook(proj, BASH(command));
+        expect(admitted.code, `${command}\n${admitted.stderr}`).toBe(0);
+      }
+      // A write to code, a wrapper or an untrusted spelling still waits.
+      for (const command of [
+        "aidlc engine bolt swarm-checkpoint --action status > src/inline.ts",
         "./aidlc engine testing-posture render",
         "PATH=. aidlc engine testing-posture render",
         "env PATH=. aidlc engine testing-posture render",
@@ -2980,7 +3406,7 @@ describe("t265b hook lifecycle", () => {
       // The documented numbered form is read; the section note is not printed.
       writeFileSync(questionsPath, `## Q1: Plan Approval\n\n${tags.join("\n")}\n\n[Answer]:\n`);
       expect(evaluateCodeGenerationApproval(proj, { unit: null }).reason).toBe(
-        "the plan is not approved yet; run next to ask the person to approve it",
+        "the plan is not approved yet; run next",
       );
       expect(fingerprint().stderr).not.toContain("no Plan Approval section yet");
 
@@ -3712,8 +4138,8 @@ describe("t265b the stage diary during a per-Unit plan wait", () => {
           const diary = runHook(proj, WRITE(join(stageDir, "memory.md")));
           expect(diary.code, `${state}\n${diary.stderr}`).toBe(0);
           expect(diary.stderr, state).toBe("");
-          // The zero-Unit plan beside the diary is not the diary.
-          expect(runHook(proj, WRITE(join(stageDir, "code-generation-plan.md"))).code, state).toBe(2);
+          // The zero-Unit plan beside the diary is a record too, and passes.
+          expect(runHook(proj, WRITE(join(stageDir, "code-generation-plan.md"))).code, state).toBe(0);
           // A link at the diary's path is not the diary either.
           mkdirSync(stageDir, { recursive: true });
           mkdirSync(join(proj, "src"), { recursive: true });

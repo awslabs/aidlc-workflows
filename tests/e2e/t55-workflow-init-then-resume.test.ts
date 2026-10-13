@@ -127,8 +127,10 @@ describe("t55 /aidlc creation (--scope bugfix) then resume continuity (sdk)", ()
         // the first intent from a resolved scope (the old --init had no scope and
         // now errors directing the user to a scope/description). A named scope on a
         // clean workspace NAMES intent-create, which scaffolds state + marks the 3
-        // init stages [x] - the creation this journey starts from.
-        const r1 = await driveAidlc("/aidlc --scope bugfix", {
+        // init stages [x] - the creation this journey starts from. With a
+        // description: named alone, the scope first asks what the work is for
+        // (#2355). Turn 2 stays a scope named alone: on existing work it resumes.
+        const r1 = await driveAidlc("/aidlc --scope bugfix fix the login: it rejects a correct password", {
           projectDir: proj,
           answerScript: "default",
           timeoutMs: remainingWorkMs(),

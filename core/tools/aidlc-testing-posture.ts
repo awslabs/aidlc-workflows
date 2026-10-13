@@ -34,7 +34,6 @@ import {
   guardStandAsideSpeaks,
   guardStoodAsideLine,
   gitCommitSourceListing,
-  isoTimestamp,
   latestLedgerSession,
   latestMainWorkflowStageRunFloorForProject,
   legacyBoltName,
@@ -43,9 +42,10 @@ import {
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
   clearPlanApprovalChallenge,
   clearPlanApprovalLegacyOffer,
-  clearPlanApprovalOverrideRequest,
+  clearEngineAskMark,
   clearPlanApprovalReceipt,
   readActiveDirectiveMarker,
+  readIssuedDirectiveMarker,
   readAuditShardEvents,
   readBaselineSourceSnapshot,
   readPlanApprovalChallenge,
@@ -53,7 +53,7 @@ import {
   readPlanApprovalLegacyOffer,
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyRecoveryChallenge,
-  readPlanApprovalOverrideRequest,
+  engineAskMark,
   readApprovedPlanCopy,
   readPlanApprovalReceipt,
   readPlanApprovalResponse,
@@ -112,7 +112,11 @@ import {
   writeRecordFileNoFollow,
   writePlanApprovalChallenge,
   writePlanApprovalLegacyRecoveryResponse,
-  writePlanApprovalOverrideRequest,
+  noteEngineAskMark,
+  humanTurnState,
+  latestPersonTurn,
+  personRepliedAfter,
+  unattendedHumanPresenceHint,
   writeApprovedPlanCopy,
   writePlanApprovalReceipt,
   runtimeSessionHint,
@@ -125,7 +129,6 @@ import {
   type GuardRemedyOp,
   type ActiveDirectiveMarker,
   type AuditShardEvent,
-  type PlanApprovalOverrideRequest,
   type PlanApprovalReceiptKey,
   type PlanApprovalBatchMember,
   type PlanApprovalRuntimeBatch,
@@ -268,23 +271,25 @@ export const PLAN_SOURCE_DRIFT_REMEDY =
   "Re-run the fingerprint command and re-present the plan.";
 
 // The break-glass exit. It is always the LAST remedy listed, it is never
-// proposed or initiated by the conductor, and it is opened only by the human
-// typing the phrase below as a prompt (the human-turn hook records that typed
-// prompt; a picked option never counts).
-export const PLAN_APPROVAL_OVERRIDE_PHRASE = "Override Plan Approval: <reason>";
-export const PLAN_APPROVAL_OVERRIDE_PHRASE_RE = /^override plan approval:\s*(\S.*)$/i;
+// proposed or initiated by the conductor, and it is recorded only on the
+// person's own reply after the refusal that offers it was shown, in whatever
+// words they use or a pick (personAskedForPlanApprovalOverride).
 export const PLAN_APPROVAL_BREAK_GLASS_REMEDY =
-  "Break glass (human only): type exactly `Override Plan Approval: <reason>` in chat; " +
-  "the conductor then records it with the break-glass steps in Step 3 of code-generation.md.";
+  "Last resort, only on the person's own word: if they want the plan built anyway, they can say so, " +
+  "and it is recorded as their approval with no check of the project's files.";
 export const PLAN_APPROVAL_OVERRIDE_HUMAN_ONLY =
-  "Plan Approval override is human-only: the human must type exactly " +
-  "`Override Plan Approval: <reason>` in chat; then re-run this command with that reason.";
+  "Building the plan anyway needs the person's own reply after they were shown why the plan cannot be " +
+  "checked, and there is none. Show them what next says, end the turn, and record this only if they then " +
+  "ask to build it anyway.";
 
 export class PlanApprovalSourceDriftError extends Error {
   readonly remedy = PLAN_SOURCE_DRIFT_REMEDY;
-  constructor(message: string) {
+  /** The source cannot be read at all, so the message offers building anyway. */
+  readonly unbound: boolean;
+  constructor(message: string, unbound = false) {
     super(message);
     this.name = "PlanApprovalSourceDriftError";
+    this.unbound = unbound;
   }
 }
 
@@ -411,7 +416,7 @@ function judgePlanSourceDrift(
   // refuses, so nothing written during the approval window rides on it.
   const moved = afterApproval && !unbound;
   if (resolution.value === "strict" && !loweredFence && !moved) {
-    return { refusal: new PlanApprovalSourceDriftError(planSourceDriftStrictMessage(paths, unbound)) };
+    return { refusal: new PlanApprovalSourceDriftError(planSourceDriftStrictMessage(paths, unbound), unbound) };
   }
   return {
     accepted: {
@@ -439,10 +444,11 @@ function keepWorkspaceSourceSnapshot(
   if (state !== null) writeWorkspaceSourceSnapshot(projectDir, CODE_GENERATION_STAGE, state);
 }
 
+// Only an agent that started the build without `next` meets this: `next`
+// says how to go on, building anyway included, so that is the step named.
 function generationSourceUnavailableMessage(): string {
   return `Code Generation cannot start because the workspace source cannot be bound${workspaceSourceFailureSuffix()}. ` +
-    "Repair the source boundary and retry generation; the earlier approval and plan-approval setting are unchanged. " +
-    PLAN_APPROVAL_BREAK_GLASS_REMEDY;
+    "Repair the source boundary, then run next; the earlier approval and plan-approval setting are unchanged.";
 }
 
 /**
@@ -1544,6 +1550,21 @@ export function planReviewAppendix(plan: string): string {
   return plan.slice(body.length);
 }
 
+/**
+ * The `## ` sections every worker brief carries, as `brief` prints them, by
+ * family: the plan and instructions headings say "Approved" with the
+ * plan-approval fence on and "Current" with it off. The plan-approval guard's
+ * handoff check wants one line of each family, so a brief printed under either
+ * fence state passes a dispatch made under the other: the person's own switch,
+ * flipped between the brief command and the dispatch, never reads as a cut brief.
+ */
+export const WORKER_BRIEF_SECTIONS: ReadonlyArray<ReadonlyArray<string>> = [
+  ["## Files and commands"],
+  ["## The plan file"],
+  ["## Approved plan", "## Current plan (plan-approval fence off)"],
+  ["## Approved unit-test instructions", "## Current unit-test instructions"],
+];
+
 export function workerBrief(
   projectDir: string,
   target: CodeGenerationTarget,
@@ -1589,16 +1610,17 @@ export function workerBrief(
   // The worker's ticks are what a pick-up reads, so it is told where the plan
   // file is and that ticking is its one change to it.
   const planFile = toPosix(relative(projectDir, join(stageDir, "code-generation-plan.md")));
+  const [[files], [planFileSection], planHeadings, instructionHeadings] = WORKER_BRIEF_SECTIONS;
   const brief =
     `${marker}\n` +
     `AIDLC-TESTING-CONTRACT: ${contractHash}\n` +
     (resume ? progressSection(resume) : "") +
-    `\n## Files and commands\n\n${FILE_TOOLS_RULE}\n` +
-    `\n## The plan file\n\nTick each step's box in \`${planFile}\` as you finish the step. ` +
+    `\n${files}\n\n${FILE_TOOLS_RULE}\n` +
+    `\n${planFileSection}\n\nTick each step's box in \`${planFile}\` as you finish the step. ` +
     "That is the only change you make to that file.\n" +
-    (continuation ? "\n## Current plan (plan-approval fence off)\n\n" : "\n## Approved plan\n\n") +
+    `\n${continuation ? planHeadings[1] : planHeadings[0]}\n\n` +
     `${projectedPlan}\n` +
-    (continuation ? "\n## Current unit-test instructions\n\n" : "\n## Approved unit-test instructions\n\n") +
+    `\n${continuation ? instructionHeadings[1] : instructionHeadings[0]}\n\n` +
     projectInstructionsContent(instructions);
   return {
     unit: approval.unit,
@@ -2591,7 +2613,12 @@ function codeGenerationAuthority(
     throw new Error("Code Generation approval authority requires an active workflow state");
   }
   const state = readFileSync(statePath, "utf-8");
-  const marker = readActiveDirectiveMarker(projectDir, state);
+  // While `next` asks about the step it is about to issue, a state write since
+  // the engine's last step (a Construction setting, the walking-skeleton
+  // stance, the verification command) made that step out of date, not the
+  // person's approval: it binds the plan, the Unit and the attempt, below.
+  const marker = readActiveDirectiveMarker(projectDir, state) ??
+    (issued ? readIssuedDirectiveMarker(projectDir) : null);
   if (marker?.version !== 2) {
     throw new Error(
       "Code Generation approval authority is unavailable because the active directive is missing, stale, or legacy; run a fresh `next`",
@@ -3233,7 +3260,7 @@ function runtimeIdentityMatches(
 
 export const PLAN_APPROVAL_BATCH_FALLBACK =
   "Use decision/answer --stage code-generation --checkpoint plan-approval " +
-  "--unit <unit> --questions-file <path> --session <id> separately for each unit.";
+  "--unit <unit> --questions-file <path> separately for each unit.";
 
 interface PlanApprovalBatchSelection {
   batch: string;
@@ -3847,41 +3874,49 @@ export function recordProtectedHumanResponse(
   });
 }
 
-export interface PlanApprovalOverrideRequestResult {
-  recorded: boolean;
+// When the engine first offered building the plan anyway (a refusal that says
+// the project's files cannot be checked), kept in the work's own record. The
+// person's reply after it is what lets the conductor record the override.
+const PLAN_APPROVAL_OVERRIDE_OFFERED = "plan-approval-override-offered.json";
+
+/** A command that hands the agent a refusal offering building anyway keeps when it was first shown. */
+export function notePlanApprovalOverrideOffered(projectDir: string): void {
+  noteEngineAskMark(projectDir, PLAN_APPROVAL_OVERRIDE_OFFERED);
+}
+
+export function clearPlanApprovalOverrideOffered(projectDir: string): void {
+  clearEngineAskMark(projectDir, PLAN_APPROVAL_OVERRIDE_OFFERED);
+}
+
+/** Whether `error` is a refusal whose remedies offer building the plan anyway. */
+export function offersPlanApprovalOverride(error: unknown): boolean {
+  return error instanceof PlanApprovalUnbindableError ||
+    (error instanceof PlanApprovalSourceDriftError && error.unbound);
 }
 
 /**
- * Half A of the break-glass pairing. Called by the human-turn hook ONLY for a
- * typed prompt (the UserPromptSubmit text), never for a picked option arriving
- * through a tool response. The whole trimmed prompt must be the single line
- * `Override Plan Approval: <reason>`; the reason is kept verbatim (trimmed) and
- * its sha256 is what `answer --override-file` (or `--override`) must match for the same session.
+ * The person asked for the plan to be built anyway: they replied after the
+ * refusal offering it was shown, and no approval or other decision has used
+ * that reply since (an answer they gave in the same message leaves it
+ * standing). A pick counts as a reply; a command to AIDLC does not; an
+ * unattended run mints no turn. The conductor reads what they meant.
  */
-export function recordPlanApprovalOverrideRequest(
-  projectDir: string,
-  session: string,
-  promptText: string,
-): PlanApprovalOverrideRequestResult {
-  if (!session.trim()) return { recorded: false };
-  const match = PLAN_APPROVAL_OVERRIDE_PHRASE_RE.exec(promptText.trim());
-  if (!match) return { recorded: false };
-  const reason = match[1].trim();
-  if (!reason) return { recorded: false };
-  const request: PlanApprovalOverrideRequest = {
-    version: 1,
-    session,
-    reason,
-    reasonSha256: planApprovalOverrideReasonSha256(reason),
-    requestedAt: isoTimestamp(),
-    intentId: activeIntentUuid(projectDir) ?? "bare-space",
-  };
-  writePlanApprovalOverrideRequest(projectDir, request);
-  return { recorded: true };
+export function personAskedForPlanApprovalOverride(projectDir: string): boolean {
+  const offered = engineAskMark(projectDir, PLAN_APPROVAL_OVERRIDE_OFFERED);
+  if (offered === null || !personRepliedAfter(projectDir, offered)) return false;
+  const state = humanTurnState(projectDir, { replies: true });
+  return state === "acted" || state === "answered";
 }
 
-export function planApprovalOverrideReasonSha256(reason: string): string {
-  return createHash("sha256").update(reason.trim(), "utf-8").digest("hex");
+/** Their words for the record: their latest reply since the offer, when the host passed any. */
+export function planApprovalOverridePersonReply(projectDir: string): string | null {
+  const offered = engineAskMark(projectDir, PLAN_APPROVAL_OVERRIDE_OFFERED);
+  return offered === null ? null : latestPersonTurn(projectDir, { repliesAfter: offered })?.words ?? null;
+}
+
+/** The refusal when no such reply is on record, with the step for an unattended run or a reply not recorded. */
+export function planApprovalOverrideHumanOnly(projectDir: string): string {
+  return `${PLAN_APPROVAL_OVERRIDE_HUMAN_ONLY}${unattendedHumanPresenceHint(projectDir)}`;
 }
 
 export interface PlanApprovalReceiptResult {
@@ -3969,11 +4004,11 @@ function certifyPlanApprovalReceipt(
     // Requesting changes withdraws the decision, so it clears BOTH halves: the
     // challenge AND any receipt for this exact identity. Without the second
     // clear, identical content could be re-approved by rewriting the answer tag,
-    // because nothing else about the identity had moved. A typed break-glass
-    // request is withdrawn with it.
+    // because nothing else about the identity had moved. An offer to build it
+    // anyway is withdrawn with it: the next refusal offers it again.
     clearPlanApprovalChallenge(projectDir, session);
     clearPlanApprovalReceipt(projectDir, identity);
-    clearPlanApprovalOverrideRequest(projectDir, session);
+    clearPlanApprovalOverrideOffered(projectDir);
     return { receipt: null, changeNotices: [] };
   }
   // Certify the source twice, then write. The answer path never unlinks a
@@ -4022,9 +4057,9 @@ function certifyPlanApprovalReceipt(
   keepApprovedPlanCopy(projectDir, evidence.authority, evidence.fingerprint, readFileSync(evidence.questionsPath, "utf-8"));
   keepWorkspaceSourceSnapshot(projectDir, stateBefore);
   clearPlanApprovalChallenge(projectDir, session);
-  // A normal receipt spends any typed break-glass request too: the phrase
-  // authorized at most one run, and that run needed no override.
-  clearPlanApprovalOverrideRequest(projectDir, session);
+  // A normal receipt ends any offer to build it anyway: that run needed no
+  // override.
+  clearPlanApprovalOverrideOffered(projectDir);
   // Sweep this target's receipts from attempts that have ended. Nothing deletes a
   // receipt to invalidate it any more, so the store is tidied here instead.
   collectStalePlanApprovalReceipts(
@@ -4045,47 +4080,25 @@ export interface PlanApprovalOverrideReceiptResult {
 }
 
 export class PlanApprovalOverrideHumanOnlyError extends Error {
-  constructor() {
-    super(PLAN_APPROVAL_OVERRIDE_HUMAN_ONLY);
+  constructor(message = PLAN_APPROVAL_OVERRIDE_HUMAN_ONLY) {
+    super(message);
     this.name = "PlanApprovalOverrideHumanOnlyError";
   }
 }
 
 /**
- * The typed request that authorizes `answer --override-file` for this session and
- * reason, or null. Half A must have written it (the human typed the phrase),
- * its digest must be the digest of the reason given now, its stored reason must
- * hash to its own stored digest (an edited file is not a request), and, once
- * the evidence names the intent, it must have been typed under that intent.
- */
-export function authorizingPlanApprovalOverrideRequest(
-  projectDir: string,
-  session: string,
-  reason: string,
-  intentId: string | null,
-): PlanApprovalOverrideRequest | null {
-  const request = readPlanApprovalOverrideRequest(projectDir, session);
-  if (request === null) return null;
-  const expected = planApprovalOverrideReasonSha256(reason);
-  if (request.reasonSha256 !== expected) return null;
-  if (planApprovalOverrideReasonSha256(request.reason) !== expected) return null;
-  if (intentId !== null && request.intentId !== intentId) return null;
-  return request;
-}
-
-/**
- * Half B of the break-glass pairing. The normal receipt path runs first; when
- * it succeeds there was nothing to override and its receipt stands. When it
- * refuses, its refusal (plus the source-boundary state when the workspace
- * cannot be bound) is kept as the failed checks, the typed request is
- * re-validated and consumed inside this same transaction (a request that
- * vanished or changed since the caller's precheck is not a request), then
- * `recordOverride` is called so the ledger row lands FIRST, and only then is a
- * receipt bound to content and attempt only written: no challenge/response
- * pairing and no source certification. A row that cannot be appended leaves no
- * receipt and spends no request, so the human's phrase is still there for the
- * retry. The certified source is whatever binds now, or `unbindable`;
- * downstream checks skip the source comparison for an override receipt.
+ * The break-glass record. The person's reply after the offer is checked again
+ * inside this transaction (a reply a decision used since the caller's precheck
+ * is not one). The normal receipt path runs first; when it succeeds there was
+ * nothing to override and its receipt stands. When it refuses, its refusal
+ * (plus the source-boundary state when the workspace cannot be bound) is kept
+ * as the failed checks, then `recordOverride` is called so the ledger row lands
+ * FIRST, and only then is a receipt bound to content and attempt only written:
+ * no challenge/response pairing and no source certification. A row that cannot
+ * be appended leaves no receipt and ends no offer, so the person's reply still
+ * stands for the retry. The certified source is whatever binds now, or
+ * `unbindable`; downstream checks skip the source comparison for an override
+ * receipt.
  */
 export function recordPlanApprovalOverrideReceipt(
   projectDir: string,
@@ -4095,15 +4108,8 @@ export function recordPlanApprovalOverrideReceipt(
   recordOverride: (failedChecks: readonly string[]) => void,
 ): PlanApprovalOverrideReceiptResult {
   return withActiveDirectiveLock(projectDir, () => {
-    if (
-      authorizingPlanApprovalOverrideRequest(
-        projectDir,
-        session,
-        reason,
-        evidence.authority.intentId,
-      ) === null
-    ) {
-      throw new PlanApprovalOverrideHumanOnlyError();
+    if (!personAskedForPlanApprovalOverride(projectDir)) {
+      throw new PlanApprovalOverrideHumanOnlyError(planApprovalOverrideHumanOnly(projectDir));
     }
     const failedChecks: string[] = [];
     try {
@@ -4142,7 +4148,7 @@ export function recordPlanApprovalOverrideReceipt(
     writePlanApprovalReceipt(projectDir, receipt);
     keepWorkspaceSourceSnapshot(projectDir, current);
     clearPlanApprovalChallenge(projectDir, session);
-    clearPlanApprovalOverrideRequest(projectDir, session);
+    clearPlanApprovalOverrideOffered(projectDir);
     collectStalePlanApprovalReceipts(
       projectDir,
       identity.intentId,
@@ -4938,9 +4944,13 @@ export function evaluateCodeGenerationApproval(
     }
     if (!empty.approved) {
       // An answered section under the wrong heading reads as unanswered; say so.
+      // Otherwise the step is `next`, whatever it does with the plan: it asks the
+      // person, or with plan approval off for this work it builds without asking.
+      // The refusal that prints this reason says which; the reason itself stays
+      // true under both, so it never tells the agent the person will be asked.
       empty.reason = artifacts.questions.trim() && !latestPlanApproval(artifacts.questions).found
         ? missingPlanApprovalFingerprintReason(artifacts.questions)
-        : "the plan is not approved yet; run next to ask the person to approve it";
+        : "the plan is not approved yet; run next";
       return empty;
     }
     empty.fingerprintValid =

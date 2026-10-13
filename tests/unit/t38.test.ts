@@ -623,4 +623,110 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     sedState(p, /^- \*\*Project Type\*\*: .*$/m, "- **Project Type**: Greenfield");
     expect(status(p).out).toContain("Project Type:   new project (you said so)\n");
   });
+
+  test("9: a stage the person skipped is counted out and named, and finished work that ends on it reads finished", () => {
+    const p = seededProj();
+    const before = status(p).out;
+    const completion = before.match(/^Completion: {5}(\d+)\/(\d+) stages \(\d+%\)\n/m);
+    if (!completion) throw new Error(`no Completion line in:\n${before}`);
+    const done = Number(completion[1]);
+    const total = Number(completion[2]);
+    const ideation = before.match(/^ {2}IDEATION {9}\S+ (\d+)\/(\d+)\n/m);
+    if (!ideation) throw new Error(`no IDEATION line in:\n${before}`);
+    // Skipped after it started (the [S] the engine writes for "skip
+    // deployment" at a gate): it is not work left to do.
+    sedState(p, /^- \[ \] scope-definition/m, "- [S] scope-definition");
+    const skipped = status(p);
+    expect(skipped.status).toBe(0);
+    const pct = Math.round((done / (total - 1)) * 100);
+    expect(skipped.out).toContain(`Completion:     ${done}/${total - 1} stages (${pct}%), skipped: Scope Definition\n`);
+    expect(skipped.out).not.toContain("1 skipped");
+    expect(skipped.out).toMatch(new RegExp(`^ {2}IDEATION {9}\\S+ ${ideation[1]}/${Number(ideation[2]) - 1}\\n`, "m"));
+    // The work finished with that stage skipped: the state says Completed
+    // and the cursor still points at the skipped stage (what the engine
+    // leaves after the last stage is skipped). The person reads finished,
+    // and which stage never ran.
+    sedState(p, /^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: scope-definition");
+    sedState(p, /^- \*\*Status\*\*: .*$/m, "- **Status**: Completed");
+    const finished = status(p);
+    expect(finished.status).toBe(0);
+    expect(finished.out).toContain("Current Stage:  Scope Definition (1.4)\n");
+    expect(finished.out).toContain("Status:         Completed (Scope Definition skipped)\n");
+    expect(finished.out).not.toContain("Status:         Completed\n");
+    // A phase whose every stage was skipped says so instead of 0/0.
+    sedState(p, /^- \[.\] (intent-capture|market-research|feasibility|team-formation|rough-mockups|approval-handoff)/gm, "- [S] $1");
+    expect(status(p).out).toMatch(/^ {2}IDEATION {9}S{7} skipped\n/m);
+  });
+
+  test("10: the reviewers setting is listed with the other settings, as this work's when it was set for it", () => {
+    const p = seededProj();
+    // The feature scope sets no review ceiling: the stages' own reviews run.
+    expect(status(p).out).toContain("Collaborators: off (from scope feature)\nReviewers: adversarial (default)\n");
+    // "turn the reviewers off" stores the override the setter writes.
+    sedState(p, /^- \*\*Test Strategy\*\*: .*$/m, "- **Test Strategy**: Standard\n- **Review Override**: none");
+    expect(status(p).out).toContain("Reviewers: off (set for this piece of work)\n");
+    sedState(p, /^- \*\*Review Override\*\*: .*$/m, "- **Review Override**: advisory");
+    expect(status(p).out).toContain("Reviewers: advisory (set for this piece of work)\n");
+    // With no override, a scope's own ceiling reads as the scope's, and as
+    // the approved plan's when a plan composed for this work runs on it.
+    sedState(p, /^- \*\*Review Override\*\*: .*$/m, "- **Review Override**:");
+    sedState(p, /^- \*\*Scope\*\*: .*$/m, "- **Scope**: bugfix");
+    expect(status(p).out).toContain("Reviewers: advisory (from scope bugfix)\n");
+    sedState(p, /^- \*\*Test Strategy\*\*: .*$/m, "- **Test Strategy**: Standard\n- **Plan**: custom, based on bugfix");
+    expect(status(p).out).toContain("Reviewers: advisory (from the approved plan)\n");
+  });
+
+  // A live run (Claude Code, 2026-10-11) said "approve, and stop here" at the
+  // Build and Test gate, then asked for status: it read "Status: Running" and the
+  // agent had to say the work was paused. The park fields parkWorkflow writes
+  // under Runtime State were never read here.
+  test("11: paused work reads paused with the way back; a stale park and finished work read as before", () => {
+    const p = createTestProject();
+    tempDirs.push(p);
+    seedStateFile(p, join(REPO_ROOT, "tests", "fixtures", "state-operation.md"));
+    expect(status(p).out).toContain("Status:         Running\n");
+    // The person's own stop: parkWorkflow writes these three lines.
+    sedState(
+      p,
+      /^- \*\*Revision Count\*\*: 0$/m,
+      "- **Revision Count**: 0\n- **Parked**: 2026-10-11T08:27:33Z\n- **Parked At Stage**: deployment-pipeline\n- **Parked By**: person",
+    );
+    const paused = status(p);
+    expect(paused.status).toBe(0);
+    expect(paused.out).toContain(
+      "Status:         Paused at Deployment Pipeline (you stopped it); pick it back up with /aidlc --resume\n",
+    );
+    expect(paused.out).not.toContain("Status:         Running");
+    // A park nobody attended (no Parked By) is paused too, without "you stopped it".
+    deleteStateLines(p, /^- \*\*Parked By\*\*:/);
+    expect(status(p).out).toContain("Status:         Paused at Deployment Pipeline; pick it back up with /aidlc --resume\n");
+    // A park the work has since moved past holds nothing (the router's rule).
+    sedState(p, /^- \*\*Parked At Stage\*\*: .*$/m, "- **Parked At Stage**: ci-pipeline");
+    expect(status(p).out).toContain("Status:         Running\n");
+    // Finished work with park lines left behind still reads finished.
+    sedState(p, /^- \*\*Parked At Stage\*\*: .*$/m, "- **Parked At Stage**: deployment-pipeline");
+    sedState(p, /^- \*\*Status\*\*: .*$/m, "- **Status**: Completed");
+    expect(status(p).out).toContain("Status:         Completed\n");
+  });
+
+  // Under a Unit-by-Unit Construction the cursor stays on the block's first
+  // stage while a Unit works through the later ones; the state's Active Unit
+  // and Unit Stage (written as a Unit starts a stage) say where the work is.
+  test("12: paused Unit-by-Unit work names the Unit's own stage", () => {
+    const p = createTestProject();
+    tempDirs.push(p);
+    seedStateFile(p, join(REPO_ROOT, "tests", "fixtures", "state-construction.md"));
+    sedState(
+      p,
+      /^- \*\*Revision Count\*\*: 0$/m,
+      "- **Revision Count**: 0\n- **Parked**: 2026-10-11T08:27:33Z\n- **Parked At Stage**: functional-design\n- **Parked By**: person" +
+        "\n- **Active Unit**: alpha\n- **Unit Stage**: code-generation",
+    );
+    expect(status(p).out).toContain(
+      "Status:         Paused at Code Generation for alpha (you stopped it); pick it back up with /aidlc --resume\n",
+    );
+    // The Unit's stage is the cursor's own: no Unit clause.
+    sedState(p, /^- \*\*Unit Stage\*\*: .*$/m, "- **Unit Stage**: functional-design");
+    expect(status(p).out).toContain("Status:         Paused at Functional Design (you stopped it); pick it back up with /aidlc --resume\n");
+  });
 });

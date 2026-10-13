@@ -142,7 +142,7 @@ describe("t-tui-render statusline COLOUR branch (live turn populates ctx:%, ANSI
       const sandbox = setupTuiProject({ withState: "state-mid-ideation.md" });
       try {
         const destClaude = join(sandbox, ".claude");
-        expect(readFileSync(join(destClaude, "settings.json"), "utf8")).toContain('"statusLine"');
+        expect(readFileSync(join(destClaude, "settings.local.json"), "utf8")).toContain('"statusLine"');
         const ESC = String.fromCharCode(0x1b);
 
         // Prove the product hook's colour branch directly: with a synthetic low
@@ -165,6 +165,10 @@ describe("t-tui-render statusline COLOUR branch (live turn populates ctx:%, ANSI
           "40",
           "--",
           "claude",
+          // AI-DLC's status line is the person's choice, in their own
+          // .claude/settings.local.json (#1407): load it beside the project file.
+          "--setting-sources",
+          "project,local",
           "--dangerously-skip-permissions",
         ]);
         expect(started.rc).toBe(0);

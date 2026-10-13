@@ -41,13 +41,15 @@
 //   (c) a SECOND intent exists on disk — readIntentRegistry has 2 rows.
 // (b)+(c) are airtight: with an intent already active the engine advances it
 // (Branch 10, !stateContent-gated creates), so a 2nd intent can ONLY arise from
-// the conductor's offer→confirm→intent-create. The offer's affirmative option is
-// pinned to "Yes" by the SKILL.md prose, which the answerScript keys on so the
-// confirm is deterministic; a model that ignores that pin fails SAFE (the
-// fallback misses → no creation → (b)+(c) RED), never a false green.
+// the conductor's offer -> confirm -> intent-create. The answerScript takes the option
+// for separate new work wherever the agent shows it (the engine's routing
+// question or the skill's Yes/No offer); a menu with none fails SAFE (option 1,
+// no creation, (b)+(c) RED), never a false green.
 //
 // It SPENDS TOKENS — driveAidlc drives the real /aidlc on Opus/Bedrock. The run
-// stops the instant the creation tool-result lands (stopAfterToolResult), so no
+// stops the instant the creation tool-result lands (stopAfterToolResult), or at
+// the first stage step of the seeded work (stopWhen, so a red ends in about a
+// minute instead of working that intent to the timeout), so no
 // stage body of the new intent is executed. Gated on claude-CLI presence
 // (run-tests.ts:274 — the file calls driveAidlc(), so claude-gate.ts marks it
 // SDK-dependent and the runner skips-with-reason when claude is absent; never a
@@ -65,7 +67,9 @@ import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { driveAidlc } from "../harness/sdk-drive.ts";
+import {
+  type AnswerScript, buildAnswers, type CapturedToolResult, driveAidlc, separateWorkOptionIndex,
+} from "../harness/sdk-drive.ts";
 import { readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 // The case and file own the work budget; each SDK call uses what remains.
@@ -87,19 +91,41 @@ const STOP_AFTER_CREATION = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMA
 const NEW_WORK =
   "build a standalone Python CLI that scrapes NOAA weather data and writes it to a SQLite database";
 
-// Answer the offer affirmatively. The offer prose PINS the affirmative option to
-// lead with "Yes" (SKILL.md: 'lead the affirmative option with the word "Yes"'),
-// so labelContains("Yes") is anchored by the change under test — not a hopeful
-// guess at the model's wording. resolveSpec/pickContains falls back to the first
-// option if no label contains "Yes" (sdk-drive.ts), so a mislabeled affirmative
-// would fail SAFE (no creation → asserts (b)+(c) fail), never a false green. Any
-// non-offer menu (e.g. a continuation approval gate) also takes the fallback —
-// harmless, since (b)+(c) gate on a real creation.
-const CONFIRM_OFFER = {
-  kind: "byHeader" as const,
-  map: {},
-  fallback: { labelContains: "Yes" },
+// Answer the offer affirmatively: the option for separate new work, wherever the
+// agent puts it (separateWorkOptionIndex in sdk-drive.ts). The engine's routing
+// question lists "Part of the active work" first, and the agent may show it in
+// that order. A menu with no such option (a stage question of the seeded work)
+// takes option 1, harmless, since (b)+(c) gate on a real creation.
+const CONFIRM_OFFER: AnswerScript = {
+  kind: "pick",
+  pick: (question) => {
+    const at = separateWorkOptionIndex(question.options);
+    return at < 0 ? undefined : { optionIndex: at };
+  },
 };
+
+// A stage step handed to the agent: the drive stops at the creation, so this is
+// the seeded work going on instead of the offer. The drive ends there.
+const SEEDED_STAGE_STEP = (results: readonly CapturedToolResult[]): boolean =>
+  results.some((r) => r.toolName === "Bash" && /"kind":\s*"run-stage"/.test(r.resultText));
+
+// The engine's routing question in its own order, as the agent showed it in the
+// dev-3 runs of 2026-10-12 (02:18Z and 02:50Z): the separate-work option is the
+// second one, and the person's answer is that option wherever it is shown.
+// Deterministic; the live journey below drives the real picker.
+test("the answer is the separate-work option wherever the agent puts it", () => {
+  const question = "Work is already in progress on the widget feature. What should I do?";
+  const menu = [{
+    header: "Route work",
+    question,
+    options: [
+      { label: "Part of the active work", description: "Continue the current workflow" },
+      { label: "Separate new piece of work", description: "Yes, set it up alongside the current one as \"classic\" work without changing it" },
+      { label: "Reshape the active work", description: "Change how the remaining plan is shaped" },
+    ],
+  }];
+  expect(buildAnswers(menu, CONFIRM_OFFER, 0)).toEqual({ [question]: "Separate new piece of work" });
+});
 
 describe("t176 P4 new-work offer (orchestrator offers a 2nd intent, sdk live)", () => {
   test(
@@ -125,6 +151,7 @@ describe("t176 P4 new-work offer (orchestrator offers a 2nd intent, sdk live)", 
             deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
           }),
           stopAfterToolResult: STOP_AFTER_CREATION,
+          stopWhen: SEEDED_STAGE_STEP,
         });
 
         // (a) A human-gated pause preceded the creation - an AskUserQuestion menu

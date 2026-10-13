@@ -1285,8 +1285,15 @@ describe("t244 management lifecycle", () => {
       ),
       "utf-8",
     );
-    expect(installedClaudeSettings).toContain('"command": "aidlc engine statusline"');
+    // The installed runtime runs native commands. AI-DLC's status line ships in
+    // harness.json, never in the settings Claude Code reads (#1407).
+    expect(installedClaudeSettings).toContain('"command": "aidlc engine hook ');
     expect(installedClaudeSettings).not.toContain('"command": "bun ');
+    expect(JSON.parse(installedClaudeSettings).statusLine).toBeUndefined();
+    expect(JSON.parse(readFileSync(
+      join(machine, "versions", AIDLC_VERSION, "runtime", "claude", ".claude", "tools", "data", "harness.json"),
+      "utf-8",
+    )).statusLine).toEqual({ type: "command", command: "aidlc engine statusline" });
     for (const file of ["aidlc.bash", "_aidlc", "aidlc.fish", "aidlc.ps1"]) {
       expect(existsSync(join(machine, "completions", file)), file).toBe(true);
     }

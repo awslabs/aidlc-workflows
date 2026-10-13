@@ -1,4 +1,4 @@
-// covers: function:applyTypedGuardSwitchPrompt, function:ceremoniesCreationGranted
+// covers: function:keepSettingsForNextWork, function:ceremoniesCreationGranted
 //
 // A setting the person types with their request ("/aidlc --learnings on build
 // the export") is theirs: the work it creates says "set by you", not "set by
@@ -64,6 +64,17 @@ function utility(proj: string, args: string[]): { status: number; stdout: string
   return { status: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
+/** The setter as the agent runs it in the chat: before any work, it keeps the setting for the next work. */
+function configSet(proj: string, args: string[]): { status: number; out: string } {
+  const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", ...args, "--project-dir", proj], {
+    cwd: proj,
+    env: { ...process.env, ...CLEAR, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+}
+
 function next(proj: string, args: string[]): { directive: Record<string, unknown> | null; out: string } {
   const result = runOrchestrateNext(ORCHESTRATE, proj, args, { env: { ...process.env, ...CLEAR } });
   return { directive: result.directive as Record<string, unknown> | null, out: result.out };
@@ -102,6 +113,10 @@ describe("a setting typed with the request is the person's", () => {
   test("typed before the work is described, it is the person's for the next work", () => {
     const proj = emptyProject();
     reply(proj, "/aidlc --learnings on");
+    // The hook records the line; the setter the agent runs keeps it for the next work.
+    const kept = configSet(proj, ["learnings", "on"]);
+    expect(kept.status, kept.out).toBe(0);
+    expect(kept.out).toContain("Learnings will be on for the piece of work you start now (set by you).");
     const asked = next(proj, ["--scope", "feature", "--learnings", "on", "--", "build the export"]);
     const made = utility(proj, ["intent-create", "--request", requestIn(asked.directive?.message, asked.out), "--learnings", "on"]);
     expect(made.status, made.stderr).toBe(0);

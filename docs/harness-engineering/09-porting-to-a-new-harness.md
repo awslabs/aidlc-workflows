@@ -7,8 +7,9 @@ packager (`scripts/package.ts`) materializes each ignored local Bun copy tree
 under `dist/<harness>/` and its native counterpart under
 `dist-release/<harness>/`. Adding another harness is **one directory and one
 manifest row** — the engine, methodology, projection ownership, and
-harness-dir/rules resolution take no `core/` edits at all; the lone optional
-exception is a per-harness `--doctor` arm (see Step 2). This page walks the
+harness-dir/rules resolution take no `core/` edits at all; the two optional
+exceptions are a per-harness `--doctor` arm (see Step 2) and your tool's
+binding subsections in the protocol modules (see the end of Step 4). This page walks the
 contract.
 
 > Three senses of "harness" in this repo: **`harness/`** (top-level — the
@@ -125,13 +126,30 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   (`HOST_LABELS` in `core/tools/aidlc-runtime-paths.ts`), never from the
   project-editable `productName`; add your harness there, or it reads "this
   assistant".
+- `agentFinishRecorded` (optional) - `{ env: [...] }`, only for a host whose own
+  stop event runs the `log-subagent` hook (its `SUBAGENT_COMPLETED` row) before
+  the agent that dispatched a helper sees the helper's result, for every
+  dispatch. `env` names the variables the host sets in its agent's shell. On
+  such a host a review verdict recorded with no agent finished since its
+  request is marked as recorded before any reviewer finished, and the person
+  hears it in one line. Declare it only after a live check shows the row lands
+  first: on a host that writes it later or not at all, the person would be told
+  no reviewer finished a review one did. Only Claude Code declares it
+  (`CLAUDE_CODE_SESSION_ID`).
+- `statusLine` (optional) - only for a host with a status line AI-DLC can show
+  its progress in, in that host's own shape (Claude Code: `{ type, command }`;
+  Codex: `{ items }`). It is emitted into `tools/data/harness.json`, never into a
+  settings file the host reads, because a project file would take the place of
+  each person's own status line: the engine writes it only when someone chooses
+  it (`core/tools/aidlc-statusline-choice.ts` owns where, per host).
 - `rootIntegrations` — every project-root file emitted by the normal projection,
   each with an explicit init merge policy (`managed-block`, `json-map`,
   `json-array`, `whole-file`, `jsonc-settings`, or `json-entries`).
   `json-entries` is for a team's own JSON config file (opencode's
   `opencode.json`): config adds AI-DLC's values and array strings at any depth
-  only where absent, adds a map's `"*"` rule only when the map has none, keeps
-  everything else, and follows or retires only entries still holding the value
+  only where absent, adds a permission rule for the team's own commands first
+  in a map so the team's rules after it decide, keeps everything else, and
+  follows or retires only entries still holding the value
   it wrote; its part ships in root-blocks and the copy runtime leaves the file
   out. `jsonc-settings` is for an
   editor's own JSONC settings file (Copilot's `.vscode/settings.json`): config
@@ -181,16 +199,17 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   shell deny). The packager errors when a `from` is absent from the projection,
   and its projected-invocation check skips the `to` text, which is generated
   from the route table.
-- `rulesRename` — the renamed rules dir (`"steering"` | `"aidlc-rules"` | `null`).
-  The packager applies it to the copied dir AND to in-prose `<harnessDir>/rules/`
-  references AND to the compiled stage-graph rule paths (it sets
-  `AIDLC_RULES_DIR` at compile so `loadRules` finds the renamed dir) AND emits it
-  into a generated `tools/data/harness.json` that records both the manifest
-  name and rules directory. Runtime path resolution uses the name to
+- `rulesRename` - the renamed rules dir (`"steering"` | `"aidlc-rules"` | `null`).
+  The packager applies it to the copied dir and to in-prose `<harnessDir>/rules/`
+  references, and emits it into a generated `tools/data/harness.json` that
+  records both the manifest name and rules directory. The rules themselves come
+  from the space memory layer (`aidlc/spaces/default/memory/`), which the graph
+  compile reads through `AIDLC_RULES_DIR` for every harness; the pass over the
+  compiled rule paths for a renamed dir still runs and changes nothing today. Runtime path resolution uses the name to
   disambiguate harnesses that share an engine directory, while `rulesSubdir()`
   reads the rename — so a real install resolves both facts without hardcoding.
   This is the seam that makes `rulesRename` purely manifest data: set it here and
-  every layer (build prose, compiled paths, runtime) follows, with no `core/` edit.
+  the build prose and the runtime follow, with no `core/` edit.
 - `onboarding: OnboardingSpec` — render neutral guidance from
   `core/templates/onboarding.md` and harness-specific setup from
   `core/templates/onboarding-harness.md` with `harness/<name>/onboarding.fills.ts`.
@@ -238,7 +257,7 @@ with a real core-hook consumer.
 
 Six hooks are flow-altering and need their control channels forwarded, not
 just piped. The Stop hook answers with `{"decision":"block"}` on stdout;
-dispatch-rules rewrites the delegated prompt; and the PreToolUse
+`aidlc-deliver-stage-rules` rewrites the delegated prompt; and the PreToolUse
 reviewer-scope, review-freeze, plan-approval, and state-transition guards
 answer with exit 2 + a reason on stderr (the tool call must be refused when
 the adapter relays that exit code). If the new harness cannot hard-block a

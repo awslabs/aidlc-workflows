@@ -2557,7 +2557,7 @@ describe("t304 engine-owned report replay and compatibility", () => {
     expect(validateReviewAppendix(
       Buffer.from(`${head}**Verdict:** READY\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n`, "utf-8"),
       expected,
-    )).toEqual({ valid: true });
+    )).toEqual({ valid: true, verdictDictated: null });
     expect(validateReviewAppendix(Buffer.from(`${head}**Verdict:** NOT-READY\n`, "utf-8"), expected)).toMatchObject({
       valid: false,
       reason: expect.stringContaining("exactly one canonical verdict line"),

@@ -14,15 +14,17 @@ The direction to preserve is:
   work through the stations and gates the outcome needs. Scope can be small or
   broad, but it must remain explicit, traceable, and bounded by the workflow.
 - The human drives the engine: the first of the four tenets in `AGENTS.md`,
-  and it wins any conflict with the other three. AI-DLC runs on the person's
-  own machine, in their own project; their setup, their project, and their
-  words are theirs. An explicit request is done and reported in one line.
+  and it wins any conflict with the other three. The factory delivers the
+  person's project; what they brought to it and their words are theirs. An
+  explicit request is done and reported in one line on the dashboard, in their
+  tool's words.
 - Tools for determinism, LLM for knowledge, human for judgement (the other
-  three tenets in `AGENTS.md`). The engine and hooks own state, the observed
-  prompt channel and its order, the person's words as the host delivers them,
-  receipts, chains, and the audit trail. The agent owns reading the person,
-  answering, applying instructions, and the station's work. The person owns judgement:
-  what to build, whether it is right, trade-offs, and when to stop.
+  three tenets in `AGENTS.md`). The tools own the bookkeeping: which station
+  is next, what was approved and when, what has run, the person's words whole;
+  they never read meaning. The worker owns the knowledge: reading what the
+  person meant, the station's work, the calls knowledge settles, and asking
+  plainly when a choice is the person's. The person owns judgement: what to
+  build, whether it is right, what to trade off, and when to stop.
 - Guards aim at agent actions, name the exact next step, carry a human key, and
   fail toward the person's last recorded instruction when their own
   coordination bookkeeping is lost (a command claim, a lock, a project-identity
@@ -76,8 +78,9 @@ Trace changes that weaken the intent-to-software chain or the tenets. Look for:
   the person did not waive (a path that needs the agent to deliberately evade a
   guard is out of scope);
 - a guard, check, scrub, or "safe default", justified by security or engine
-  integrity, that overrides the person's own setup or stands between the person
-  and what they asked for (P1 when it refuses, re-asks, or loops their request);
+  integrity, that changes or works around what the person brought, or stands
+  between the person and what they asked for (P1 when it refuses, re-asks, or
+  loops their request);
 - output that stops before producing or validating the software outcome the
   intent requested.
 

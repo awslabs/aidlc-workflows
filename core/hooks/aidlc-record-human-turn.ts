@@ -9,9 +9,9 @@
 //
 // Presence remains the gate signal; the prompt payload also answers the single
 // active protected challenge (plan, verification command, policy, or checkpoint).
-// As the host's channel for the prompt, the hook applies a typed fence switch
-// to this session's selected piece of work at prompt time. There is no request
-// file for a later setter to consume.
+// The hook records the person's message whole and applies nothing: a setting
+// typed as a flag is the agent's to read and the setter's to apply, once the
+// agent runs the command `next` names.
 // appendAuditEntryUnlocked resolves the active intent from the on-disk cursor. No workflow state means nothing
 // to gate, so the hook skips ledger writes (same self-gate as
 // aidlc-session-start.ts) - otherwise every prompt in a project that carries the
@@ -61,7 +61,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CLAUDE_HOST_TEMPLATES,
-  addPendingPersonLines,
   auditBlockField,
   carryPendingPersonLines,
   claudeTranscriptOrigin,
@@ -78,7 +77,6 @@ import {
   protectedQuestionRelativePath,
   withdrawProtectedQuestions,
   COMMAND_TURN_REPLY,
-  QUESTION_TURN_REPLY,
   consumeSharedDirectiveAsk,
   forgetGateWords,
   hookContextLine,
@@ -86,9 +84,7 @@ import {
   hostTemplateOrigin,
   humanTurnMintAllowed,
   isoTimestamp,
-  keepPlanApprovalAskOverStateWrite,
   markHumanTurn,
-  parseTypedGuardSwitchRequest,
   readAuditShardEvents,
   recordGateWords,
   recordPreWorkflowHeartbeat,
@@ -107,90 +103,77 @@ import {
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import {
-  applyTypedGuardSwitchPrompt,
-  isTypedGuardSwitchPrompt,
-  isTypedGuardSwitchQuestion,
-  normalizeRetiredGuardPolicyField,
-} from "../tools/aidlc-guard-switch.ts";
-import {
-  PLAN_APPROVAL_OVERRIDE_PHRASE_RE,
   type PlanApprovalPickerQuestion,
   recordPlanApprovalHumanResponse,
-  recordPlanApprovalOverrideRequest,
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
 import {
   engineQuestionHoldsReplies,
   notePlanApprovalAskReply,
   notePlanApprovalFileAnswer,
-  openPlanApprovalQuestion,
 } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcEntryWords, isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
 import { MESSAGE_PICKER_MAX_CHARS, MESSAGE_TEXT_MAX_CHARS, saveMessage, type StoredMessage } from "../tools/aidlc-message-store.ts";
 
-// "/aidlc approve the code plan" is the person's reply: the engine reads the
-// words after the entry as nothing but words. Any flag, scope, verb or noun
-// keeps it a command. Read only for a prompt that starts with the entry, so
-// other prompts pay nothing; a failed read keeps it a command, as before.
-async function aidlcEntryReply(prompt: string): Promise<string | null> {
-  const words = aidlcEntryWords(prompt);
-  if (words === null || words.length === 0) return null;
-  try {
-    const { nextArgsAreOnlyWords } = await import("../tools/aidlc-orchestrate.ts");
-    return nextArgsAreOnlyWords(splitKiroCommandArgs(words)) ? words : null;
-  } catch {
-    return null;
-  }
+// The one parse of a typed line, for the message record (aidlc-message-store.ts)
+// and for the turn's Reply mark: flags are syntax, read by the engine's own
+// parser, and everything after them is the person's words. A prompt that does
+// not start with the entry word is words only. A line the parser refuses keeps
+// the words and no settings: the record proves what was said; the command
+// itself is refused later, as today. `command` is structure the parse holds: an
+// `/aidlc` line with no words after its flags, with its words behind `--` (the
+// person marked them as the work), or one the parser refused is a command to
+// AIDLC and no reply to an open question; any line with words after the entry
+// ("/aidlc approve the plan", "/aidlc --guard-policy off approve the plan") is a
+// reply the agent may record. Nothing here reads what the words mean.
+interface MessageParse extends Pick<StoredMessage, "words" | "settings" | "route"> {
+  command: boolean;
 }
 
-// The one parse of a typed line, for the message record (aidlc-message-store.ts):
-// flags are syntax, read by the engine's own parser, and everything after them
-// is the person's words. A prompt that does not start with the entry word is
-// words only. A line the parser refuses keeps the words and no settings: the
-// record proves what was said; the command itself is refused later, as today.
-async function messageParse(typedPrompt: string): Promise<Pick<StoredMessage, "words" | "settings" | "route">> {
+async function messageParse(typedPrompt: string): Promise<MessageParse> {
   const route = { scope: null, newIntent: false, skip: [] as string[], add: [] as string[], projectType: null };
   const entryWords = aidlcEntryWords(typedPrompt);
-  if (entryWords === null) return { words: typedPrompt.trim() || null, settings: [], route };
+  // A `/aidlc-<runner>` entry starts a command too; its words are kept whole.
+  if (entryWords === null) {
+    return { words: typedPrompt.trim() || null, settings: [], route, command: isAidlcCommandPrompt(typedPrompt) };
+  }
   const words = entryWords || null;
   try {
     const { parseNextFlags, typedSettingModifiers } = await import("../tools/aidlc-orchestrate.ts");
-    const flags = parseNextFlags(splitKiroCommandArgs(entryWords));
-    if (flags.parseError) return { words, settings: [], route };
+    const argv = splitKiroCommandArgs(entryWords);
+    const flags = parseNextFlags(argv);
+    if (flags.parseError) return { words, settings: [], route, command: true };
+    // What they said, not what the engine acts on: a flag-shaped token `next`
+    // does not take is still one of their words (personWords in the parse).
+    const said = (flags.personWords ?? flags.intent)?.trim() || null;
+    const modifiers = typedSettingModifiers(flags);
+    const routed = {
+      scope: flags.scope ?? flags.positionalScope ?? null,
+      newIntent: flags.newIntent === true,
+      skip: flags.planChanges?.skip ?? [],
+      add: flags.planChanges?.add ?? [],
+      projectType: flags.projectType ?? null,
+    };
+    // A line that routes work (a plan named, new work asked for, a project type,
+    // a change to the plan's stages) is a command to AIDLC and no reply to an
+    // open question, however many words of theirs ride with it: the words are
+    // the work they are asking for. A line of words alone, or words after
+    // settings, may be their reply, and the agent records it.
+    const routes = routed.newIntent || routed.scope !== null || routed.projectType !== null ||
+      routed.skip.length > 0 || routed.add.length > 0;
     return {
-      words: flags.intent?.trim() || null,
-      settings: typedSettingModifiers(flags).map((modifier) => {
+      words: said,
+      settings: modifiers.map((modifier) => {
         const space = modifier.indexOf(" ");
         return { key: modifier.slice(0, space), value: modifier.slice(space + 1) };
       }),
-      route: {
-        scope: flags.scope ?? flags.positionalScope ?? null,
-        newIntent: flags.newIntent === true,
-        skip: flags.planChanges?.skip ?? [],
-        add: flags.planChanges?.add ?? [],
-        projectType: flags.projectType ?? null,
-      },
+      route: routed,
+      command: said === null || flags.markedWords === true || routes,
     };
   } catch {
-    return { words, settings: [], route };
-  }
-}
-
-// Setting flags, then the person's reply to the open code plan question
-// ("/aidlc --guard-policy off approve the plan"): the setting is for the work
-// open now and the words are their reply, one of its choices or their own
-// words. Words after an explicit `--` describe new work. Null for anything else.
-function planAnswerAfterSwitch(projectDir: string, prompt: string): string | null {
-  try {
-    const entry = /^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/i.exec(prompt.trim());
-    if (entry !== null && splitKiroCommandArgs(prompt.trim().slice(entry[0].length)).includes("--")) return null;
-    const parsed = parseTypedGuardSwitchRequest(prompt, { wordsAnswer: true });
-    if (parsed.words === undefined || parsed.error !== null || parsed.settings.length === 0) return null;
-    const question = openPlanApprovalQuestion(projectDir, parsed.words);
-    return question !== null && !question.answered && !question.editing ? parsed.words : null;
-  } catch {
-    return null;
+    return { words, settings: [], route, command: true };
   }
 }
 
@@ -506,10 +489,10 @@ try {
   let promptSubmitted = false;
   let humanResponseText = "";
   let questionText: string | null = null;
-  // The break-glass phrase counts only when the human TYPED it: the prompt
-  // text of a UserPromptSubmit payload that names no tool. A picked option
-  // (AskUserQuestion PostToolUse, Codex request_user_input, any adapter's
-  // picker payload) arrives under tool_response and never opens it.
+  // What the person typed: the prompt text of a UserPromptSubmit payload that
+  // names no tool. A picked option (AskUserQuestion PostToolUse, Codex
+  // request_user_input, any adapter's picker payload) arrives under
+  // tool_response instead.
   let typedPrompt = "";
   // Set when the reply is a picker selection: the question and labels the
   // harness reports it under, so it pairs only with the recorded question.
@@ -601,16 +584,71 @@ try {
     try { clearSessionIntentHandoff(projectDir, sessionId); } catch { /* per-user runtime state */ }
   }
   // A conversation that has not joined the selected workflow is not a human at
-  // its gates: it mints nothing there and its typed switches do not reach it.
+  // its gates: it mints nothing there.
+  // What the person said in it is still theirs: its message record (the chat's
+  // own proof, kept beside the question store and outside every record) is.
   const workflow = enterHookWorkflow(projectDir, sessionId);
-  if (hookStandsOutside(workflow)) {
-    // The record name is repository text, so the notice does not repeat it.
-    if (typedPrompt && isTypedGuardSwitchPrompt(typedPrompt) && workflow.selection?.intent) {
-      notes.push(
-        "AIDLC Guard Policy: the typed switch was not applied because this conversation has not joined the selected workflow; " +
-          "select its intent with the intent command first.",
-      );
+  const outside = hookStandsOutside(workflow);
+  const mintAllowed = humanTurnMintAllowed();
+  // A swarm worker's worktree is the copy the engine made for a worker, and a
+  // prompt that arrives there (the brief of a session started there, such as a
+  // headless `codex exec`) is the conductor's, never a person's turn. No authority row lands
+  // in that record (finalize merges it back, and the merge refuses every
+  // authority row), no words are kept, no switch is applied, and nothing is
+  // said about it: there is no person there to read a line. The heartbeat and
+  // the conversational marker still land, as under AIDLC_UNATTENDED=1.
+  const workerWorktree = swarmWorkerWorktreeMeta(projectDir) !== null;
+  const personHere = mintAllowed && !workerWorktree;
+  // The message record: proof that a person said this in this chat, and
+  // exactly what they said (aidlc-message-store.ts). Written before the
+  // state-file gate so a message before any work exists is kept, and for a
+  // chat that has not joined the work here, under no lock (one atomic file).
+  // It names no question: which question a message answers is the conductor's
+  // call when it records a decision. Keyed on the EVENT, never on the text: a
+  // prompt-submit whose prompt the host left empty is a prompt whose words are
+  // unknown, not a picker reply. Fail-open: a store failure never blocks the
+  // turn, and the row below still records it.
+  // The one parse of a typed line, shared by the record and the turn's Reply
+  // mark below. Null for a picker reply and for a prompt the host left empty.
+  const typedParse = personHere && promptSubmitted && typedPrompt ? await messageParse(typedPrompt) : null;
+  const keepMessage = (): string | null => {
+    if (!personHere || pickerUnanswered || !(promptSubmitted || pickerQuestion !== undefined)) return null;
+    try {
+      const noWords: Pick<StoredMessage, "words" | "settings" | "route"> = {
+        words: null, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+      };
+      const parsed: Pick<StoredMessage, "words" | "settings" | "route"> = typedParse !== null
+        ? { words: typedParse.words, settings: typedParse.settings, route: typedParse.route }
+        : promptSubmitted
+        ? noWords
+        : { ...noWords, words: humanResponseText.trim() || null };
+      const full = promptSubmitted ? typedPrompt : humanResponseText;
+      // Every stored string is cut (AIDA F5 on #2107: uncut words once put a record past the reader's cap).
+      const picker = promptSubmitted ? null : pickerReplies(input, MESSAGE_PICKER_MAX_CHARS);
+      const words = parsed.words !== null && parsed.words.length > MESSAGE_TEXT_MAX_CHARS
+        ? parsed.words.slice(0, MESSAGE_TEXT_MAX_CHARS)
+        : parsed.words;
+      const cut = full.length > MESSAGE_TEXT_MAX_CHARS || words !== parsed.words || picker?.cut === true;
+      return saveMessage(projectDir, {
+        session: sessionId || null,
+        at: isoTimestamp(),
+        source: promptSubmitted ? "prompt" : "picker",
+        text: full.slice(0, MESSAGE_TEXT_MAX_CHARS),
+        ...(cut ? { cut: true as const } : {}),
+        picker: picker === null ? null : picker.entries,
+        ...parsed,
+        words,
+      }).id;
+    } catch {
+      // The record is a convenience here; the turn and its row stand without it.
+      return null;
     }
+  };
+  if (outside) {
+    // A turn the host made (its notice or brief) is nobody's words here either:
+    // kept, it would read as the person's prompt where their message is the
+    // proof before any work exists (intent creation).
+    if (turnOrigin.kind !== "host") keepMessage();
     return 0;
   }
   // A field-only rename preserves the stored and effective value, so it carries
@@ -633,21 +671,6 @@ try {
   // where doctor and `next` look then, so a tool that runs no hooks is known
   // from the person's first message, before any work.
   recordPreWorkflowHeartbeat(projectDir, "record-human-turn");
-  const mintAllowed = humanTurnMintAllowed();
-  if (!mintAllowed && typedPrompt && isTypedGuardSwitchPrompt(typedPrompt)) {
-    notes.push(
-      "AIDLC Guard Policy: the typed switch was not applied because AIDLC_UNATTENDED=1 withholds human authority on this driver; run it from an attended session.",
-    );
-  }
-  // A swarm worker's worktree is the copy the engine made for a worker, and a
-  // prompt that arrives there (a `codex exec` worker's brief, on Codex its own
-  // session) is the conductor's, never a person's turn. No authority row lands
-  // in that record (finalize merges it back, and the merge refuses every
-  // authority row), no words are kept, no switch is applied, and nothing is
-  // said about it: there is no person there to read a line. The heartbeat and
-  // the conversational marker still land, as under AIDLC_UNATTENDED=1.
-  const workerWorktree = swarmWorkerWorktreeMeta(projectDir) !== null;
-  const personHere = mintAllowed && !workerWorktree;
   // A turn the host made (its notice or brief, not the person's words): none of
   // the person's authority rides on it. No turn, no kept words, no reply, no
   // switch, no conversational marker. The record keeps that it happened and why,
@@ -675,81 +698,9 @@ try {
     }
     return 0;
   }
-  // Apply before the state-file gate: Guard Policy relaxed or off and plan
-  // approval off are kept for the piece of work this chat starts next, and any
-  // other first-use fence switch says to create it and type the switch again.
-  const switchAnswer = typedPrompt ? planAnswerAfterSwitch(projectDir, typedPrompt) : null;
-  let applied: string[] = [];
-  if (personHere && sessionId && typedPrompt) {
-    try {
-      // A switch typed before a plan choice keeps the plan question open over
-      // its state write, so the choice after it is still its answer.
-      const before = switchAnswer !== null ? readFileSync(stateFilePath(projectDir), "utf-8") : null;
-      const outcome = applyTypedGuardSwitchPrompt(projectDir, sessionId, typedPrompt, { wordsAnswer: switchAnswer !== null });
-      if (before !== null) {
-        keepPlanApprovalAskOverStateWrite(projectDir, before, readFileSync(stateFilePath(projectDir), "utf-8"));
-      }
-      if (outcome !== null) {
-        const lines = outcome.lines;
-        applied = lines;
-        // Only a switch that went through is already done, and only its line is
-        // the engine's to say next. An outcome that changed nothing (a typo in a
-        // companion flag, a rule the team holds) stays exactly as it was: the
-        // agent reads it and answers the person itself.
-        notes.push(outcome.applied
-          ? `AIDLC Guard Policy: ${lines.join(" ")} Say that line to the person in your reply, in those words; the ` +
-            "switch is already applied, so never run a setter for it."
-          : `AIDLC Guard Policy: ${lines.join(" ")} Say that line to the person in your reply, in those words.`);
-        // Whatever the switch did or did not do, the person hears it from the
-        // engine's next step as well: a switch of theirs that changed nothing
-        // (a word the parser cannot read, a rule their team holds) is exactly
-        // what they must not be left guessing about.
-        const session = sessionId;
-        forThePerson.push(() => addPendingPersonLines(projectDir, session, lines));
-      }
-    } catch {
-      // A switch failure must never block the human's turn.
-    }
-  }
-  // The message record: proof that a person said this in this chat, and
-  // exactly what they said (aidlc-message-store.ts). Written before the
-  // state-file gate so a message before any work exists is kept, under no
-  // lock (one atomic file). It names no question: which question a message
-  // answers is the conductor's call when it records a decision. Keyed on the
-  // EVENT, never on the text: a prompt-submit whose prompt the host left empty
-  // is a prompt whose words are unknown, not a picker reply. Fail-open: a
-  // store failure never blocks the turn, and the row below still records it.
-  let messageId: string | null = null;
-  if (personHere && !pickerUnanswered && (promptSubmitted || pickerQuestion !== undefined)) {
-    try {
-      const noWords: Pick<StoredMessage, "words" | "settings" | "route"> = {
-        words: null, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
-      };
-      const parsed = promptSubmitted
-        ? (typedPrompt ? await messageParse(typedPrompt) : noWords)
-        : { ...noWords, words: humanResponseText.trim() || null };
-      const full = promptSubmitted ? typedPrompt : humanResponseText;
-      // Every stored string is cut (AIDA F5 on #2107: uncut words once put a record past the reader's cap).
-      const picker = promptSubmitted ? null : pickerReplies(input, MESSAGE_PICKER_MAX_CHARS);
-      const words = parsed.words !== null && parsed.words.length > MESSAGE_TEXT_MAX_CHARS
-        ? parsed.words.slice(0, MESSAGE_TEXT_MAX_CHARS)
-        : parsed.words;
-      const cut = full.length > MESSAGE_TEXT_MAX_CHARS || words !== parsed.words || picker?.cut === true;
-      messageId = saveMessage(projectDir, {
-        session: sessionId || null,
-        at: isoTimestamp(),
-        source: promptSubmitted ? "prompt" : "picker",
-        text: full.slice(0, MESSAGE_TEXT_MAX_CHARS),
-        ...(cut ? { cut: true as const } : {}),
-        picker: picker === null ? null : picker.entries,
-        ...parsed,
-        words,
-        applied,
-      }).id;
-    } catch {
-      // The record is a convenience here; the turn and its row stand without it.
-    }
-  }
+  // The message record (keepMessage above). A setting typed on the line is in
+  // it as the engine's own parser read it; nothing is applied here.
+  const messageId = keepMessage();
   if (existsSync(stateFilePath(projectDir))) {
     // Inside a workflow it lands in the record, before the mint branch and
     // apart from it, so a hook that ran but withheld its mint (AIDLC_UNATTENDED=1,
@@ -778,19 +729,18 @@ try {
       return 0;
     }
     if (personHere) {
-      // A typed guard switch or break-glass request is an instruction to the
-      // framework, not an answer to the pending Plan Approval question; a
-      // question about a switch ("skip plan approval?") is for the agent.
-      const switchQuestion = typedPrompt.length > 0 && isTypedGuardSwitchQuestion(typedPrompt);
-      const entryReply = switchAnswer ?? (typedPrompt.length > 0 ? await aidlcEntryReply(typedPrompt) : null);
-      const notAReply = typedPrompt.length > 0 && switchAnswer === null && (
-        (isAidlcCommandPrompt(typedPrompt) && entryReply === null) ||
-        isTypedGuardSwitchPrompt(typedPrompt) ||
-        switchQuestion ||
-        PLAN_APPROVAL_OVERRIDE_PHRASE_RE.test(typedPrompt.trim())
-      );
-      // A reply typed after the entry is the words after it, so "/aidlc 1"
-      // picks the first choice as "1" does.
+      // A command to AIDLC (an `/aidlc` line with no words after its flags, or
+      // with its words behind `--`) is an instruction to the framework, not an
+      // answer to the pending Plan Approval question.
+      // A setting typed as a flag is in the message record; the agent reads the
+      // line and runs the setter the engine names. The words after the entry
+      // and its flags are the reply, so "/aidlc 1" picks the first choice as
+      // "1" does, and "/aidlc --guard-policy off approve the plan" approves it.
+      const commandLine = typedParse?.command === true;
+      const notAReply = typedPrompt.length > 0 && commandLine;
+      const entryReply = typedParse !== null && !commandLine && aidlcEntryWords(typedPrompt) !== null
+        ? typedParse.words
+        : null;
       const replyText = entryReply ?? humanResponseText;
       // Another engine question on top (where the work belongs, which plan)
       // takes this reply: it answers no question beneath it, so no
@@ -802,24 +752,22 @@ try {
         withAuditLock(projectDir, () => {
           // A turn that is only a command to AIDLC is no reply to an open
           // question: the row says so, and decisions on that question skip it.
-          // Words typed after the entry with nothing of a command in them
-          // ("/aidlc use postgres") are a reply.
+          // Words typed after the entry and its flags ("/aidlc use postgres",
+          // "/aidlc --guard-policy off approve the plan") are a reply.
           appendAuditEntryUnlocked("HUMAN_TURN", {
             ...(sessionId ? { Session: sessionId } : {}),
             // Who sent it and how, so a host's turn and a person's are told
             // apart in the record from now on.
             Origin: "person",
             ...(promptSubmitted ? { Source: "typed" } : pickerQuestion !== undefined ? { Source: "picker" } : {}),
-            ...(switchQuestion
-              ? { Reply: QUESTION_TURN_REPLY }
-              : notAReply || answersEngineQuestion ? { Reply: COMMAND_TURN_REPLY } : {}),
+            ...(notAReply || answersEngineQuestion ? { Reply: COMMAND_TURN_REPLY } : {}),
             ...(picked.length > 0 ? { Picked: JSON.stringify(picked) } : {}),
             ...(messageId ? { "Message Id": messageId } : {}),
           }, projectDir);
           // Keep what the person typed in this chat, so a decision at a stage
           // gate records their own words beside the conductor's reading
-          // (recordGateWords in aidlc-lib.ts). A slash command, typed guard
-          // switch, or break-glass phrase instructs the framework; of a picker
+          // (recordGateWords in aidlc-lib.ts). A command to AIDLC instructs
+          // the framework; of a picker
           // reply, free text typed into it counts, and so does a picked gate
           // choice, which is their exact pick. Never blocks the turn.
           const typedWords = answersEngineQuestion ? "" : typedPrompt
@@ -837,9 +785,7 @@ try {
           // person made; nothing here reads meaning into them. The engine's own
           // Plan Approval question takes the reply from whichever chat it
           // arrives in.
-          // A question about a switch ("skip plan approval?") reaches it too, as
-          // words for the conductor to answer.
-          const engineQuestionOwnsReply = replyText !== "" && (!notAReply || switchQuestion) &&
+          const engineQuestionOwnsReply = replyText !== "" && !notAReply &&
             notePlanApprovalAskReply(projectDir, sessionId, replyText, pickerQuestion);
           if (!engineQuestionOwnsReply && sessionId && replyText && !answersEngineQuestion) {
             const plan = existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, sessionId)));
@@ -857,9 +803,6 @@ try {
                 recordPlanApprovalHumanResponse(projectDir, sessionId, replyText, pickerQuestion);
               }
             }
-          }
-          if (sessionId && typedPrompt) {
-            recordPlanApprovalOverrideRequest(projectDir, sessionId, typedPrompt);
           }
           // What the question box carried back goes on the record, question
           // by question, so the person's reply stands even when no answer is

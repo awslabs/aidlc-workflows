@@ -273,8 +273,59 @@ describe("t17 get/set/checkbox/count", () => {
   test("4: get errors on missing field", () => {
     proj = createTestProject();
     seedStateFile(proj, INIT_DONE);
-    // .sh: `... || true` then assert_contains "error"
-    expect(runState(proj, ["get", "Nonexistent Field"]).combined).toContain("error");
+    // A field the work does not set exits 1 with one plain line (#2264).
+    expect(runState(proj, ["get", "Nonexistent Field"])).toMatchObject({ rc: 1, stderr: '"Nonexistent Field" is not set in this work.\n' });
+  });
+
+  test("4b: get without --optional still exits 1 on an absent field, with no ERROR_LOGGED row", () => {
+    proj = createTestProject();
+    seedStateFile(proj, INIT_DONE);
+    const before = countEvent(readAudit(proj), "ERROR_LOGGED");
+    const res = runState(proj, ["get", "Plan"]);
+    expect(res.rc).toBe(1);
+    expect(res.stderr).toBe('"Plan" is not set in this work.\n');
+    expect(countEvent(readAudit(proj), "ERROR_LOGGED")).toBe(before);
+  });
+
+  test("4c: get --optional prints nothing for an absent field, exits 0, and records no ERROR_LOGGED", () => {
+    proj = createTestProject();
+    seedStateFile(proj, INIT_DONE);
+    const before = countEvent(readAudit(proj), "ERROR_LOGGED");
+    const res = runState(proj, ["get", "--optional", "Plan"]);
+    expect(res.rc).toBe(0);
+    expect(res.stdout).toBe("");
+    expect(res.stderr).toBe("");
+    expect(countEvent(readAudit(proj), "ERROR_LOGGED")).toBe(before);
+  });
+
+  test("4d: get --optional reads a present field, wherever the flag is", () => {
+    proj = createTestProject();
+    seedStateFile(proj, INIT_DONE);
+    expect(runState(proj, ["get", "--optional", "Current Stage"]).stdout.trim()).toBe("intent-capture");
+    expect(runState(proj, ["get", "Scope", "--optional"]).stdout.trim()).toBe("feature");
+  });
+
+  test("4e: get --optional still needs a field and a state file", () => {
+    proj = createTestProject();
+    const noState = runState(proj, ["get", "--optional", "Plan"]);
+    expect(noState.rc).toBe(1);
+    expect(noState.stderr).toContain("State file not found");
+    seedStateFile(proj, INIT_DONE);
+    const noField = runState(proj, ["get", "--optional"]);
+    expect(noField.rc).toBe(1);
+    expect(noField.stderr).toContain("Usage: aidlc-state.ts get [--optional] <field>");
+  });
+
+  test("4f: get --optional refuses another flag instead of reading it as part of the field", () => {
+    proj = createTestProject();
+    seedStateFile(proj, INIT_DONE);
+    // The dispatcher passes its global flags (--json) on to the command. Read as
+    // part of the name, "Scope --json" is absent, and --optional would answer
+    // "absent" for a field that is there.
+    const res = runState(proj, ["get", "--optional", "Scope", "--json"]);
+    expect(res.rc).toBe(1);
+    expect(res.stdout).toBe("");
+    expect(res.stderr).toContain("not --json");
   });
 
   test("5: set updates a single field", () => {

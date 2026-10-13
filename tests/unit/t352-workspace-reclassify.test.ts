@@ -48,6 +48,8 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createOrchestrationTestProject,
+  followProposal,
+  proposalFollowUp,
   runOrchestrateNext,
 } from "../harness/fixtures.ts";
 import {
@@ -114,7 +116,13 @@ function reply(r: RunResult): string {
 function run(tool: string, proj: string, args: string[], env?: NodeJS.ProcessEnv): RunResult {
   // What the folder is, is the person's word: here they have just said it.
   if (tool === UTIL && args[0] === "reclassify" && hasWork(proj)) appendAuditEntry("HUMAN_TURN", {}, proj);
-  return spawnTool(tool, proj, args, env);
+  const result = spawnTool(tool, proj, args, env);
+  if (tool !== ORCH || args[0] !== "next") return result;
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  let directive: unknown = null;
+  try { directive = JSON.parse(result.stdout.trim()); } catch { /* the caller reads the raw output */ }
+  const proposal = proposalFollowUp(directive);
+  return proposal === null ? result : run(tool, proj, ["next", ...proposal], env);
 }
 
 function hasWork(proj: string): boolean {
@@ -200,7 +208,8 @@ function registryRow(proj: string): Record<string, unknown> | undefined {
 }
 
 function next(proj: string, args: string[] = []): Record<string, unknown> {
-  const result = runOrchestrateNext(ORCH, proj, args);
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const result = followProposal(runOrchestrateNext(ORCH, proj, args), ORCH, proj);
   expect(result.directive).not.toBeNull();
   return result.directive ?? {};
 }
@@ -327,11 +336,15 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     expect(JSON.stringify(d)).toContain("--project-type brownfield");
   });
 
-  test("a value other than greenfield or brownfield is an error", () => {
+  test("a value other than greenfield or brownfield goes to the agent, naming the two words", () => {
+    // A value this engine's table does not hold is a reading step now
+    // (t-three-ways-to-read-a-line): it names the words it holds, shows theirs
+    // as a quoted string, and applies nothing.
     const proj = project();
     const d = next(proj, ["--project-type", "maybe"]);
-    expect(d.kind).toBe("error");
-    expect(String(d.message)).toContain("--project-type requires <greenfield|brownfield>");
+    expect(d.kind).toBe("print");
+    expect(String(d.message)).toContain("greenfield|brownfield");
+    expect(String(d.message)).toContain('"maybe"');
   });
 
   test("mid-workflow the flag is recorded first, then the rest of the request runs", () => {

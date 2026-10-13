@@ -15,12 +15,13 @@
 
 Every command this implementation ships is a skill under `.claude/skills/`. They all drive the same deterministic engine — they differ only in what they bake in before they start:
 
-- **`/aidlc`** — the full orchestrator. No flags baked in; it detects your scope (or you describe what you want), then drives every stage in your scope to completion. This is the one you reach for most.
-- **Scope-runners** — `/aidlc-bugfix`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch`. Same full workflow, with a scope fixed and scope detection skipped.
-- **Stage-runners** — `/aidlc-domain-design`, `/aidlc-code-generation`, and 27 more. Run one stage in isolation, never touching your main workflow. Plugin-owned stages use their bare plugin-prefixed command name, such as `/test-pro-integration`.
-- **`/aidlc-init`** - start a piece of work. With `--scope <name>` it creates the intent (runs the whole Initialization phase) in one step and stops. With only a description it first shows the same plan offer as `/aidlc`, then continues like `/aidlc`. Unlike `/aidlc`, a description that starts with a scope name ("feature flags for billing") is still read as a description. Work already in progress is left as it is, and the new work starts beside it.
+- **`/aidlc`** - the full orchestrator. No flags baked in: you describe what you want, the agent proposes a plan for it and you confirm it, then it drives every stage in the plan to completion. This is the one you reach for most.
+- **Scope-runners** - `/aidlc-bugfix`, `/aidlc-express`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch`. Same full workflow, with a scope fixed and no plan to propose.
+- **Stage-runners** - `/aidlc-domain-design`, `/aidlc-code-generation`, and 28 more. Run one stage in isolation, never touching your main workflow. Plugin-owned stages use their bare plugin-prefixed command name, such as `/test-pro-integration`.
+- **`/aidlc-init`** - start a piece of work. With `--scope <name>` and a description it creates the intent (runs the whole Initialization phase) in one step and stops. With `--scope <name>` alone it creates nothing yet: it asks what the work is for, and your answer starts it. With only a description it first shows the same plan offer as `/aidlc`, then continues like `/aidlc`. Unlike `/aidlc`, a description that starts with a scope name ("feature flags for billing") is still read as a description. Work already in progress is left as it is, and the new work starts beside it.
 - **Session skills** — `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack`. Read-only views over a workflow; covered in [Session Management](11-session-management.md).
-- **`/aidlc-knowledge`** — the DocumentKB: index the team's own documents (PDFs, Word files, Markdown, plain text) into a per-space catalog agents can cite. Standalone like the session skills, but read-write: it changes the catalog and emits document audit events (never workflow state). Same surface as `/aidlc knowledge <verb>`; see [CLI Commands](12-cli-commands.md) for the verbs.
+- **`/aidlc-compose`** - the adaptive composer: it reads your task, proposes the stages that fit it, and after you approve runs it as a plan of its own. Same as `/aidlc compose`; see [The Adaptive Composer](05-scopes-and-depth.md#the-adaptive-composer).
+- **`/aidlc-knowledge`** - the DocumentKB: index the team's own documents (PDFs, Word files, Markdown, plain text) into a per-space catalog agents can cite. Standalone like the session skills, but read-write: it changes the catalog and emits document audit events (never workflow state). Same surface as `/aidlc knowledge <verb>`; see [CLI Commands](12-cli-commands.md) for the verbs.
 
 Everything a runner does is reachable from `/aidlc` with a flag. The runners are packaging — typing `/aidlc-bugfix` and seeing it in your `/` menu is good ergonomics, nothing more. Delete every runner and the shortcuts go; the capability stays, reachable through `/aidlc` flags.
 
@@ -30,13 +31,14 @@ Generated runners are **explicit-only** wherever the host allows it: on Claude C
 
 ## Scope-runners — a named door per problem class
 
-A scope-runner drives the full workflow with one scope locked in. Use it when you already know what kind of work you're doing and want to skip scope detection.
+A scope-runner drives the full workflow with one scope locked in. Use it when you already know what kind of work you're doing and want to skip the plan proposal.
 
 ```
-/aidlc-bugfix          Fix a specific bug — minimal depth, streamlined path
-/aidlc-feature         Build a new feature — standard depth, all stages
-/aidlc-mvp             Ship the core — skips late operations stages
-/aidlc-security-patch  CVE / vulnerability response
+/aidlc-bugfix          Fix a specific bug
+/aidlc-express         Lightest run: requirements to deploy, no design pass, no reviewers
+/aidlc-feature         Full lifecycle for new features, practical depth
+/aidlc-mvp             Skip operations, ship the core
+/aidlc-security-patch  CVE response
 ```
 
 Each is identical to passing `--scope` to the orchestrator:
@@ -99,7 +101,8 @@ pointer, the engine returns an error instead.
 The three bootstrap **initialization** stages ship no stage-runner - creating half an intent has no standalone meaning. Instead the whole initialization phase is packaged as one command:
 
 ```
-/aidlc-init --scope <name> [description]   create the intent in one step, then stop
+/aidlc-init --scope <name> <description>   create the intent in one step, then stop
+/aidlc-init --scope <name>                 ask what the work is for, then start it
 /aidlc-init <description>                  plan offer first, then continue (a leading scope name is part of the description)
 ```
 
@@ -109,18 +112,33 @@ The three bootstrap **initialization** stages ship no stage-runner - creating ha
 
 | Family | Examples | What it does | Orchestrator equivalent |
 |---|---|---|---|
-| Orchestrator | `/aidlc` | Full workflow, scope detected | — |
-| Scope-runner | `/aidlc-bugfix`, `/aidlc-express`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch` | Full workflow, scope fixed, no detection | `/aidlc --scope <name>` |
-| Stage-runner | `/aidlc-domain-design`, `/aidlc-code-generation`, … (29 total) | One stage in isolation, never advances your workflow | `/aidlc --stage <slug> --single` |
-| Init wrapper | `/aidlc-init` | Start a piece of work: with `--scope`, create it in one step; with only a description, the plan offer first | `/aidlc --scope <name>`, or `/aidlc <description>` on a fresh workspace (except a leading scope name) |
+| Orchestrator | `/aidlc` | Full workflow, the plan proposed for you to confirm | - |
+| Scope-runner | `/aidlc-bugfix`, `/aidlc-express`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch` | Full workflow, scope fixed, no plan to confirm | `/aidlc --scope <name>` |
+| Stage-runner | `/aidlc-domain-design`, `/aidlc-code-generation`, ... (30 total) | One stage in isolation, never advances your workflow | `/aidlc --stage <slug> --single` |
+| Init wrapper | `/aidlc-init` | Start a piece of work: with `--scope` and a description, create it in one step; with `--scope` alone, ask what it is for first; with only a description, the plan offer first | `/aidlc --scope <name>`, or `/aidlc <description>` on a fresh workspace (except a leading scope name) |
 | Session views | `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack` | Read-only workflow reports | see [Session Management](11-session-management.md) |
+| Composer | `/aidlc-compose` | Propose a plan made for your task, then run it after you approve | `/aidlc compose` |
 | Document knowledge | `/aidlc-knowledge` | Index and read the team's own documents (per-space DocumentKB) | `/aidlc knowledge <verb>` |
 
-There's one stage-runner for every runnable stage in the lifecycle. To see the full set, list your skills directory:
+There's one stage-runner for every runnable stage in the lifecycle. To see the full set, list your skills directory. In a project set up for Claude Code with `aidlc config` (shortened):
 
-```bash
-ls .claude/skills/
+```text
+$ ls .claude/skills/
+aidlc
+aidlc-approval-handoff
+aidlc-bugfix
+aidlc-build-and-test
+aidlc-ci-pipeline
+aidlc-code-generation
+aidlc-compose
+...
+aidlc-session-cost
+aidlc-team-formation
+aidlc-units-generation
+aidlc-user-stories
 ```
+
+That is 42 entries: `/aidlc`, the 30 stage-runners, the 5 scope-runners, `/aidlc-init`, `/aidlc-compose`, `/aidlc-knowledge` and the 3 session skills.
 
 ---
 
@@ -147,6 +165,13 @@ aidlc engine gen runners --check             # stage-runner drift
 aidlc engine gen runner-scopes --check       # scope-runner drift
 ```
 
+In a project where nothing has drifted, the stage-runner check prints:
+
+```text
+$ aidlc engine gen runners --check
+stage-runner set is in sync with the compiled stage graph (30 runners).
+```
+
 A stage added to the graph without a regenerated runner — or an orphan runner for a stage that's gone — fails loudly with a diff. Adding a stage file and regenerating is the whole authoring path; the runner follows as a consequence the generator maintains for you.
 
 For the mechanics of writing a stage file, see [Customization](13-customization.md) and [Phases and Stages](04-phases-and-stages.md). For the engine, the directive contract, and how a runner shell drives `next`/`report` under the hood, see the reference chapter on the [Skill System](../reference/17-skill-system.md).
@@ -157,7 +182,7 @@ For the mechanics of writing a stage file, see [Customization](13-customization.
 
 ```
 # Full workflow
-/aidlc                              detect scope, run everything
+/aidlc                              propose a plan, run everything
 /aidlc --scope enterprise           any of the 11 scopes
 
 # Scope-runners (the 5 high-traffic doors)
@@ -167,7 +192,8 @@ For the mechanics of writing a stage file, see [Customization](13-customization.
 /aidlc-code-generation              == /aidlc --stage code-generation --single
 
 # Start a piece of work (Initialization phase)
-/aidlc-init --scope <name>          create it in one step, then stop
+/aidlc-init --scope <name> <desc>   create it in one step, then stop
+/aidlc-init --scope <name>          ask what the work is for, then start it
 /aidlc-init <description>           plan offer first, then continue
 
 # Add your own: write a stage/scope file, then

@@ -98,7 +98,7 @@ gh workflow run full-suite.yml --ref '<candidate-branch>' \
 ```
 
 The family choices are `all` (default), `claude-sdk`, `claude-tui`, `codex`,
-and `opencode`. Scoped verification preserves the selected family's shard
+`copilot`, and `opencode`. Scoped verification preserves the selected family's shard
 identities and skips Windows release contracts. It cannot be requested for an
 ordinary release-purpose run or through a reusable-workflow call.
 
@@ -189,8 +189,9 @@ Each call owns its checkout. Default PR CI includes Linux integration; the merge
 queue and expanded manual CI also run deterministic E2E. Ordinary nightly and
 release Full Suite runs do not repeat those tiers or production-guard jobs.
 
-Hosted live coverage uses 21 jobs: on each existing OS, two Claude SDK shards,
-three Claude TUI shards, one Codex shard and one opencode shard. Each shard runs
+Hosted live coverage uses 26 jobs: on each existing OS, two Claude SDK shards
+(four on Linux), three Claude TUI shards, one Codex shard, one Copilot CLI shard
+and one opencode shard. Each shard runs
 at most two files concurrently, restoring the checkout and application home
 between files and retrying only a failed file after confirmed cleanup. Platform
 preparation is independent, so Linux and Windows do not wait for macOS.
@@ -235,7 +236,10 @@ from that commit; the workflow does not rename or republish preview binaries.
    entry together. Summarize changes since the previous stable release and
    include any upgrade instructions. Review and merge this PR to `main`.
 2. **Confirm the release commit.** Verify that the release-preparation PR passed
-   its required branch checks and select its exact commit on `main`.
+   its required branch checks and select its exact commit on `main`. On that
+   commit, run the Kiro CLI release journey on a machine with a signed-in Kiro
+   CLI and post its one-line result as a comment on the release-preparation PR
+   ([Kiro CLI release pass](docs/reference/09-testing.md)).
 3. **Push the matching stable tag.** Tag that commit as `vX.Y.Z`, matching the
    version in `core/tools/aidlc-version.ts`. The commit must be contained in
    `main`, but it does not need to remain the tip.

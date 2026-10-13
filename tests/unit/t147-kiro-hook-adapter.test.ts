@@ -72,6 +72,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
+import { listMessages } from "../../core/tools/aidlc-message-store.ts";
 import { resolveAction } from "../../core/tools/aidlc.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -327,11 +328,13 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("typed summary confirmation off applies as the person's own switch", () => {
+  test("typed summary confirmation off is recorded by the hook and lowered by the setter the agent runs", () => {
     // The prompt a person types in Kiro CLI chat rides the userPromptSubmit
     // registration into verb-intercept, which forwards it to the core
-    // record-human-turn hook. No resolved session and no presence bypass, so
-    // only the typed turn can lower it; a later command repeat is a no-op.
+    // record-human-turn hook. The hook records the line and applies nothing;
+    // the agent reads it and runs the setter. No resolved session and no
+    // presence bypass, so only the typed turn lets the setter lower it; a
+    // later repeat is a no-op.
     const dir = scratchProject(true);
     const sessionless = {
       AIDLC_SESSION_OVERRIDE: undefined,
@@ -349,15 +352,9 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         prompt: "/aidlc config set summary-confirmation off",
       }, [], sessionless);
       expect(r.code, r.stderr).toBe(0);
-      const content = readFileSync(seededStateFile(dir), "utf-8");
-      expect(content).toContain("- **Summary Confirmation**: off (set by you)");
-      expect(getField(content, "Summary Confirmation")).toBe("off (set by you)");
-      const audit = ceremonyRows();
-      expect(audit).toHaveLength(1);
-      expect(auditBlockField(audit[0].block, "New")).toBe("off");
-      expect(auditBlockField(audit[0].block, "Source")).toBe("you");
-
-      const repeated = spawnSync(
+      expect(getField(readFileSync(seededStateFile(dir), "utf-8"), "Summary Confirmation")).not.toBe("off (set by you)");
+      expect(ceremonyRows()).toHaveLength(0);
+      const setter = () => spawnSync(
         process.execPath,
         [
           join(dir, ".kiro", "tools", "aidlc.ts"),
@@ -371,6 +368,17 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
+      const lowered = setter();
+      expect(lowered.status, lowered.stderr).toBe(0);
+      const content = readFileSync(seededStateFile(dir), "utf-8");
+      expect(content).toContain("- **Summary Confirmation**: off (set by you)");
+      expect(getField(content, "Summary Confirmation")).toBe("off (set by you)");
+      const audit = ceremonyRows();
+      expect(audit).toHaveLength(1);
+      expect(auditBlockField(audit[0].block, "New")).toBe("off");
+      expect(auditBlockField(audit[0].block, "Source")).toBe("you");
+
+      const repeated = setter();
       expect(repeated.status, repeated.stderr).toBe(0);
       expect(repeated.stdout).toContain("Summary Confirmation is already off (set by you)");
       expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(content);
@@ -384,8 +392,8 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     // Kiro Crew drives kiro-cli over ACP and delivers its context blocks and
     // the person's turn as one prompt (captured 2026-10-04 off the Crew
     // dashboard: a 34 KB prompt ending in the request header and "Approve
-    // Plan"). Both the typed switch and the forwarded human turn must see only
-    // the text after the last request header.
+    // Plan"). The forwarded human turn, and the record it keeps for the setter
+    // the agent runs, must hold only the text after the last request header.
     const dir = scratchProject(true);
     const sessionless = {
       AIDLC_SESSION_OVERRIDE: undefined,
@@ -407,9 +415,25 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         prompt: envelope("/aidlc config set summary-confirmation off"),
       }, [], sessionless);
       expect(r.code, r.stderr).toBe(0);
+      expect(readAudit(dir)).toContain("HUMAN_TURN");
+      const [record] = listMessages(dir);
+      // Only the text after the last request header is the person's turn, and
+      // their line is a command to AI-DLC, so it carries no words of their own.
+      expect(record.text).toBe("/aidlc config set summary-confirmation off");
+      expect(record.words).toBeNull();
+      const lowered = spawnSync(
+        process.execPath,
+        [join(dir, ".kiro", "tools", "aidlc.ts"), "engine", "config", "set", "summary-confirmation", "off", "--project-dir", dir],
+        {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_UNATTENDED: undefined, ...sessionless } as NodeJS.ProcessEnv,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        },
+      );
+      expect(lowered.status, lowered.stderr).toBe(0);
       expect(getField(readFileSync(seededStateFile(dir), "utf-8"), "Summary Confirmation"))
         .toBe("off (set by you)");
-      expect(readAudit(dir)).toContain("HUMAN_TURN");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -914,7 +938,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(r.stdout).not.toContain("Cwd=C:\\shell\\noise");
       // Kiro renders the reply as Markdown, which joins single line breaks; a
       // fenced text block keeps doctor and help on their own lines.
-      expect(r.stdout).toContain(`relay that output to the user ${relayAsTextBlock("")}, then STOP.`);
+      expect(r.stdout).toContain(`relay that output to the user ${relayAsTextBlock("")}, then stop.`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -929,6 +953,33 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       });
       expect(r.code).toBe(0);
       expect(r.stdout).not.toContain("relay that output to the user");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A bare name that is no record, or words after a name, are the conductor's
+  // to read (the engine hands them over): the seam runs nothing off-band for
+  // them. A record's own name is still switched to here, deterministically.
+  test("the seam leaves an unknown workspace word and words after a name to the conductor", () => {
+    const dir = scratchProject(true);
+    const slug = DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, "");
+    try {
+      for (const prompt of [
+        "/aidlc intent show",
+        "/aidlc intent switch shwo",
+        `/aidlc intent ${slug} fix the login bug today`,
+        `/aidlc intent ${slug} --guard-policy relaxed`,
+      ]) {
+        const r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+        expect(r.code, prompt).toBe(0);
+        expect(r.stdout, prompt).not.toContain("relay that output to the user");
+        expect(r.stdout, prompt).not.toContain("Unknown intent");
+      }
+      const switched = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: `/aidlc intent ${slug}` });
+      expect(switched.code).toBe(0);
+      expect(switched.stdout).toContain("relay that output to the user");
+      expect(switched.stdout).toContain(`Now working on \`${slug}\`.`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1083,7 +1134,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       const calls = stubNext(dir, empty);
       const first = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
       expect(first.code).toBe(0);
-      expect(first.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
+      expect(first.stdout).toContain("Act on its reply below now");
       const framing = Buffer.byteLength(first.stdout) - Buffer.byteLength(empty);
       expect(framing).toBeGreaterThan(0);
       for (const packetBytes of [10 * 1024 - 1, 10 * 1024, 10 * 1024 + 1]) {
@@ -1102,8 +1153,8 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           expect(result.stdout).toContain(`--- DIRECTIVE ---\n${response}\n--- END DIRECTIVE ---`);
           expect(existsSync(latch)).toBe(false);
         } else {
-          expect(result.stdout).toContain("deterministic argument forwarding");
-          expect(result.stdout).not.toContain("ALREADY");
+          expect(result.stdout).toContain("Your first tool call is exactly the call below");
+          expect(result.stdout).not.toContain("has already run");
           expect(result.stdout).not.toContain(message);
           expect(JSON.parse(readFileSync(latch, "utf8")).args).toEqual(args);
         }
@@ -1111,6 +1162,64 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(readFileSync(calls, "utf8").trim().split("\n").map((line) => JSON.parse(line)))
         .toEqual(Array.from({ length: 4 }, () => ["next", ...args]));
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("3f: a pre-dispatched step leads with the words for the person, then the step", () => {
+    // What the person reads opens the packet (a question's numbered rendering, a step's line and its notices, an
+    // error's message), so the turn opens with it; the step follows, for the agent. Nothing else of the step is
+    // said (engine-words Option 1, Fable's second caution: exact asks and notices only).
+    const dir = scratchProject(false);
+    try {
+      const prompt = "/aidlc --depth Standard";
+      const handOver = "The first `next` for this message has already run";
+      const question = "Which plan?\n\n1. **Go ahead**\n2. **Other** \u2014 describe what you want instead\n\nReply with a number (or just tell me).";
+      stubNext(dir, JSON.stringify({
+        kind: "ask", ask_type: "scope-confirm", response_route: "next", question: "Which plan?",
+        numbered_prose_question: question, choices: [{ label: "Go ahead", command: "x" }],
+      }));
+      let r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+      expect(r.code, r.stderr).toBe(0);
+      const said = r.stdout.indexOf("Say this to the person word for word, then end your turn");
+      expect(said, r.stdout).toBeGreaterThan(-1);
+      expect(r.stdout.indexOf(question)).toBeGreaterThan(said);
+      expect(r.stdout.indexOf(handOver)).toBeGreaterThan(r.stdout.indexOf(question));
+      expect(r.stdout).toContain("--- DIRECTIVE ---");
+      // A step with a line for the person and a notice: the line, then the notice, then the step.
+      stubNext(dir, JSON.stringify({
+        kind: "print", message: "run the thing", narration: "Picking up where we left off.",
+        change_notices: ["Guard Policy is relaxed for this piece of work."],
+      }));
+      r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+      expect(r.stdout).toContain(
+        "Say this to the person first, word for word, with nothing in front of it:\n\nPicking up where we left off.\n\n" +
+          "Guard Policy is relaxed for this piece of work.\n\n",
+      );
+      expect(r.stdout.indexOf("Picking up")).toBeLessThan(r.stdout.indexOf(handOver));
+      // An error: its message is the person's line, then stop.
+      stubNext(dir, JSON.stringify({ kind: "error", message: "No workflow here yet." }));
+      r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+      expect(r.stdout).toContain("Say this to the person word for word, then stop:\n\nNo workflow here yet.\n\n");
+      // A step with nothing for the person is handed over as before.
+      stubNext(dir, JSON.stringify({ kind: "print", message: "" }));
+      r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+      expect(r.stdout).not.toContain("Say this to the person");
+      expect(r.stdout).toContain(`${handOver}, with every argument kept. Act on its reply below now`);
+      // A question that is the agent's own work is no question for the person.
+      stubNext(dir, JSON.stringify({
+        kind: "ask", ask_type: "guard-recovery", response_route: "execute-remedy", question: "q", stage: "s",
+        reason_codes: [], remedies: [], agent_work: true,
+      }));
+      r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+      expect(r.stdout).not.toContain("Say this to the person");
+      // The warning the agent says once per chat is left to its rule, not repeated by the hand-over.
+      stubNext(dir, JSON.stringify({
+        kind: "print", message: "", stage_validity: { warning: "A document changed.", earliest_affected_stage: "x" },
+      }));
+      r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+      expect(r.stdout).not.toContain("Say this to the person");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("3e: steering of any size and incomplete JSON use exact-argv forwarding under every native shell alias", () => {
@@ -1138,7 +1247,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         expect(hook.stdout).toContain(`engine orchestrate next ${raw}`);
         expect(hook.stdout).not.toContain(token);
         expect(hook.stdout).not.toContain("rules_content");
-        expect(hook.stdout).not.toContain("ALREADY");
+        expect(hook.stdout).not.toContain("has already run");
         const guard = (suffix: string) => runAdapter(dir, "guard-tool-call", {
           cwd: dir, tool_name,
           tool_input: { command: `bun .kiro/tools/aidlc.ts engine orchestrate next${suffix}` },
@@ -1158,7 +1267,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         .toEqual(Array.from({ length: 6 }, () => ["next", ...args]));
       writeFileSync(join(dir, "next-response.txt"), '{"kind":"print","message":"incomplete');
       const incomplete = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: `/aidlc ${raw}` });
-      expect(incomplete.stdout).toContain("deterministic argument forwarding");
+      expect(incomplete.stdout).toContain("Your first tool call is exactly the call below");
       expect(incomplete.stdout).not.toContain("--- DIRECTIVE ---");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
@@ -1171,7 +1280,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       const result = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: "/aidlc --config" });
       expect(result.code).toBe(0);
       expect(result.stdout).toContain(response);
-      expect(result.stdout).toContain("deterministic engine pre-dispatch");
+      expect(result.stdout).toContain("Act on its reply below now");
       expect(JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-readonly-latch"), "utf8")).source)
         .toBe("config-alias");
       for (const tool_name of ["execute_bash", "execute_pwsh", "shell"]) {
@@ -1197,7 +1306,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       const hook = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: `/aidlc ${raw}` });
       expect(hook.code).toBe(0);
       expect(hook.stdout).toContain(`engine orchestrate next ${raw}`);
-      expect(hook.stdout).not.toContain("ALREADY");
+      expect(hook.stdout).not.toContain("has already run");
       expect(started()).toBe(before); // No hook-side isolated attempt or issuance.
       expect(existsSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"))).toBe(false);
       const accepted = runAdapter(dir, "guard-tool-call", {
@@ -1255,7 +1364,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         cwd: dir, prompt: "/aidlc --stage reverse-engineering --single",
       }, [], env);
       expect(single.code).toBe(0);
-      expect(single.stdout).toContain("deterministic argument forwarding");
+      expect(single.stdout).toContain("Your first tool call is exactly the call below");
       expect(existsSync(called)).toBe(false);
       const ordinary = runAdapter(dir, "verb-intercept", {
         cwd: dir, prompt: "/aidlc --stage reverse-engineering",
@@ -1661,18 +1770,22 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     try {
       const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
       writeFileSync(workerFile, JSON.stringify({ resources: [] }));
-      const payload = {
+      const dispatch = (session: string) => ({
         cwd: dir,
-        session_id: "11111111-2222-4333-8444-555555555555",
+        session_id: session,
         tool_name: "invoke_sub_agent",
         tool_input: { name: "aidlc-product-agent", prompt: "Inspect the project." },
-      };
-      expect(runAdapter(dir, "deliver-stage-rules", payload).code).toBe(2);
-      // No cursor names the record, so this chat stands outside it.
+      });
+      // A chat that reaches the hook while the cursor names the record joins it,
+      // so its dispatch is held until the worker file is repaired.
+      expect(runAdapter(dir, "deliver-stage-rules", dispatch("11111111-2222-4333-8444-555555555555")).code).toBe(2);
+      // A chat whose first contact finds no cursor naming the record never
+      // joined it, and its dispatch is not held. (A chat that already joined
+      // stays joined when the cursor moves later: that is its own work.)
       const cursor = join(dirname(dirname(seededStateFile(dir))), "active-intent");
       expect(existsSync(cursor)).toBe(true);
       writeFileSync(cursor, "");
-      const outside = runAdapter(dir, "deliver-stage-rules", payload);
+      const outside = runAdapter(dir, "deliver-stage-rules", dispatch("66666666-7777-4888-8999-aaaaaaaaaaaa"));
       expect(outside.code, outside.stderr).toBe(0);
       expect(outside.stderr).toBe("");
     } finally {
@@ -2652,7 +2765,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
     expect(SKILL.indexOf("next --stage <slug>`")).toBeLessThan(anchor);
   });
 
-  test("`/aidlc --guard-policy off` sets Guard Policy off and the line reaches the conversation", () => {
+  test("`/aidlc --guard-policy off` is recorded whole, applies nothing, and the agent's first next carries it", () => {
     const dir = scratchProject(false);
     try {
       const created = spawnSync("bun", [
@@ -2665,10 +2778,14 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       expect(getField(readFileSync(state, "utf-8"), "Guard Policy")).toStartWith("strict");
       const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded("--guard-policy off") }, [], env);
       expect(r.code, r.stderr).toBe(0);
-      expect(getField(readFileSync(state, "utf-8"), "Guard Policy")).toBe("off (set by you)");
+      // The hook records the line and applies nothing: the agent runs the setter
+      // its first `next` names.
+      expect(getField(readFileSync(state, "utf-8"), "Guard Policy")).toStartWith("strict");
       const shards = join(dirname(state), "audit");
-      expect(readdirSync(shards).map((name) => readFileSync(join(shards, name), "utf-8")).join("\n")).toContain("GUARD_POLICY_SET");
-      expect(r.stdout).toContain("AIDLC Guard Policy:");
+      const audit = readdirSync(shards).map((name) => readFileSync(join(shards, name), "utf-8")).join("\n");
+      expect(audit).not.toContain("GUARD_POLICY_SET");
+      expect(audit).toContain("HUMAN_TURN");
+      expect(r.stdout).not.toContain("AIDLC Guard Policy:");
       // The person's own dispatch, never a prose example.
       expect(r.stdout).toContain("engine orchestrate next --guard-policy off");
       expect(r.stdout).not.toContain("<slug>");
@@ -2686,7 +2803,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       const calls = stubNext(dir, JSON.stringify({ kind: "print", message: "" }));
       const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(`--scope classic ${pasted}`) }, [], env);
       expect(r.code, r.stderr).toBe(0);
-      expect(r.stdout).toContain("ALREADY");
+      expect(r.stdout).toContain("has already run");
       expect(readFileSync(calls, "utf8").trim().split("\n").map((line) => JSON.parse(line)))
         .toEqual([["next", "--scope", "classic", ...words]]);
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -2993,5 +3110,60 @@ describe("the forwarded call is accepted as written", () => {
       const exact = guard(`bun .kiro/tools/aidlc.ts engine orchestrate next ${raw}`);
       expect(exact.code, exact.stderr).toBe(0);
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+// Kiro names the chat in the hook's environment (KIRO_SESSION_ID) and the
+// payload names the session the event belongs to. A delegation (subagent) has
+// its own session, so that pair is the one fact the engine cannot learn by
+// itself: noted once, every record the delegate's hooks write lands on the chat
+// that delegated instead of on whatever the shared cursor names. A helper picked
+// in /agent holds the chat's own id, so nothing is noted for it.
+describe("5e3: a delegation's own session is noted as the chat's", () => {
+  const CHAT = "369a3cd4-55a1-4d61-a812-d6b8fe4fba99";
+  const DELEGATION = "81a63708-483d-44a7-8b78-1766b546d0e9";
+  function helperOf(dir: string, id: string): string | null {
+    try {
+      return readFileSync(join(dir, "aidlc", ".aidlc-sessions", `${id}.helper-of`), "utf-8").trim();
+    } catch {
+      return null;
+    }
+  }
+  function passingCall(dir: string, session: string | undefined, chat: string | undefined) {
+    return runAdapter(
+      dir,
+      "state-transition-guard",
+      {
+        cwd: dir,
+        ...(session ? { session_id: session } : {}),
+        tool_name: "execute_bash",
+        tool_input: { command: "echo hi" },
+      },
+      [],
+      { KIRO_SESSION_ID: chat },
+    );
+  }
+
+  test("a delegation maps to the chat that delegated", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = passingCall(dir, DELEGATION, CHAT);
+      expect(r.code, r.stderr).toBe(0);
+      expect(helperOf(dir, DELEGATION)).toBe(CHAT);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the chat's own id, and a payload with no session, note nothing", () => {
+    const dir = scratchProject(true);
+    try {
+      expect(passingCall(dir, CHAT, CHAT).code).toBe(0);
+      expect(passingCall(dir, undefined, CHAT).code).toBe(0);
+      expect(helperOf(dir, CHAT)).toBeNull();
+      expect(helperOf(dir, DELEGATION)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

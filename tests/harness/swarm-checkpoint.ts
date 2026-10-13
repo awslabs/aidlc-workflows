@@ -179,7 +179,7 @@ export function addSubmodule(pd: string): void {
   git(pd, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "vendor/sub"]);
 }
 
-export function fixture(units = ["alpha"], command = CHECK, withSubmodule = false): string {
+export function fixture(units = ["alpha"], command: string | null = CHECK, withSubmodule = false): string {
   const pd = setupWorktreeFixture();
   projects.push(pd);
   // ISOLATED_GIT_ENV drops the global config, so this new repository gets no
@@ -232,7 +232,7 @@ export function fixture(units = ["alpha"], command = CHECK, withSubmodule = fals
   const baseline = writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!);
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
   appendAuditEntry("STAGE_STARTED", { Stage: STAGE, "Source Baseline": baseline }, pd);
-  recordCommand(pd, command);
+  if (command !== null) recordCommand(pd, command);
   publish(pd, units);
   for (const unit of units) plan(pd, unit);
   git(pd, ["add", "-A"]);
@@ -321,11 +321,11 @@ export function starts(pd: string, unit = "alpha") {
     auditBlockField(row.block, "Bolt slug") === boltSlugForUnit(unit));
 }
 
-export function reviewRevisedSource(pd: string, unit = "alpha"): void {
+export function reviewRevisedSource(pd: string, unit = "alpha", writes = [`src/${unit}.ts`]): void {
   const child = wt(pd, unit);
   const dir = codeGenerationRecordDir(child, unit);
   writeFileSync(join(dir, "source-manifest.json"), JSON.stringify({
-    stage: STAGE, unit, version: 1, writes: [{ path: `src/${unit}.ts` }],
+    stage: STAGE, unit, version: 1, writes: writes.map((path) => ({ path })),
   }));
   const planPath = join(dir, "code-generation-plan.md");
   writeFileSync(planPath, readFileSync(planPath, "utf-8").replace("- [ ] Implement", "- [x] Implement"));

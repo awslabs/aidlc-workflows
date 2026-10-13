@@ -157,7 +157,7 @@ describe("t281 Kiro CLI MCP registry integrity", () => {
 });
 
 describe("t281 Kiro CLI dynamic agent grant model", () => {
-  test("all 14 personas opt in with exactly the five grants; conductor gets none", () => {
+  test("all 14 personas opt in with exactly the five grants; the conductor opts in and config grants it", () => {
     const agents = loadAgents();
     const conductor = agents.find(({ doc }) => doc.name === "aidlc");
     const personas = agents.filter(({ doc }) => doc.name !== "aidlc");
@@ -173,10 +173,12 @@ describe("t281 Kiro CLI dynamic agent grant model", () => {
       expect(Object.hasOwn(doc, "$schema"), `${file} schema`).toBe(false);
     }
 
+    // The conductor ships no grant: config names, per project, every server it
+    // finds (t294), since Kiro CLI has no grant for every server.
     const conductorTools = stringTools(conductor!.doc.tools);
-    expect(conductor!.doc.includeMcpJson).toBeUndefined();
+    expect(conductor!.doc.includeMcpJson).toBe(true);
     expect(conductorTools.filter((tool) => tool.startsWith("@"))).toEqual([]);
-    expect(Object.hasOwn(conductor!.doc, "$schema")).toBe(true);
+    expect(Object.hasOwn(conductor!.doc, "$schema")).toBe(false);
   });
 
   test("every @server tool grant names a declared registry server", () => {

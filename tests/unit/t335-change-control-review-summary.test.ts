@@ -65,6 +65,7 @@ import {
   seededRecordDir,
   seededStateFile,
   seedStateFile,
+  WORKER_BRIEF_SECTIONS_FIXTURE,
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 
@@ -319,6 +320,9 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     );
   });
 
+  // Requirements Analysis has one (advisory) review pass, so with it spent and
+  // the document changed after it, the change line ends with the offer to have
+  // the new approach checked (#1189).
   test("the engine's report carries the change line onto its directive", () => {
     const proj = project("relaxed");
     recordReadyReview(proj);
@@ -333,7 +337,8 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(directive).toMatchObject({
       kind: "print",
       change_notices: [
-        `${artifactRelative(proj)} changed after the Requirements Analysis review; carrying on.`,
+        `${artifactRelative(proj)} changed after the Requirements Analysis review; carrying on. ` +
+          "Do you want me to have the new approach checked before you decide?",
       ],
     });
     expect(acceptedRows(proj)).toHaveLength(1);
@@ -1136,7 +1141,7 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
       tool_name: "Task",
       tool_input: {
         subagent_type: "aidlc-developer-agent",
-        prompt: `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${contract.contract_sha256}`,
+        prompt: `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${contract.contract_sha256}${WORKER_BRIEF_SECTIONS_FIXTURE}`,
       },
       cwd: proj,
     }, env);

@@ -99,6 +99,7 @@ function constructionState(current: string, skeletonStance = "on"): string {
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **State Version**: 8
+- **Unit Ownership**: solo
 - **Skeleton Stance**: ${skeletonStance}
 
 ## Scope Configuration
@@ -136,6 +137,7 @@ function inceptionState(current: string): string {
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **State Version**: 8
+- **Unit Ownership**: solo
 
 ## Scope Configuration
 - **Stages to Execute**: all

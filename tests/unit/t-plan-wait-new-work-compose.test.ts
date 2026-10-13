@@ -26,6 +26,7 @@ import {
   cleanupTestProject,
   createOrchestrationTestProject,
   FIXTURES_DIR,
+  followProposal,
   runOrchestrateNext,
   seededRecordDir,
   seededStateFile,
@@ -96,9 +97,9 @@ interface Emitted {
 }
 
 function next(proj: string, args: string[] = []): Emitted {
-  const result = runOrchestrateNext(ORCHESTRATE, proj, args, {
-    env: { ...process.env, AIDLC_UNATTENDED: "0" },
-  });
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const options = { env: { ...process.env, AIDLC_UNATTENDED: "0" } };
+  const result = followProposal(runOrchestrateNext(ORCHESTRATE, proj, args, options), ORCHESTRATE, proj, options);
   expect(result.status, result.out).toBe(0);
   expect(result.directive, result.out).not.toBeNull();
   return result.directive as unknown as Emitted;

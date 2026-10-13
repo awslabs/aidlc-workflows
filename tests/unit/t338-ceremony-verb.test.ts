@@ -15,8 +15,6 @@ import { join } from "node:path";
 import {
   auditBlockField,
   getField,
-  type GuardSwitch,
-  parseTypedGuardSwitchRequest,
   readAuditShardEvents,
   setField,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -56,7 +54,11 @@ afterEach(() => {
 function run(tool: string, args: string[], proj: string, env: NodeJS.ProcessEnv = {}) {
   const result = Bun.spawnSync({
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-    cmd: [process.execPath, tool, ...args, "--project-dir", proj],
+    // On a `next` line this engine's own option rides ahead of the person's
+    // words, which is where every caller of it puts it.
+    cmd: [process.execPath, tool, ...(args[0] === "next"
+      ? ["next", "--project-dir", proj, ...args.slice(1)]
+      : [...args, "--project-dir", proj])],
     cwd: proj,
     env: {
       ...process.env,
@@ -170,6 +172,8 @@ describe("t338 atomic per-intent settings", () => {
       // Summary confirmation off is the person's own switch, so they type it.
       if (key === "summary_confirmation") {
         recordHumanPrompt(proj, "/aidlc config set summary-confirmation off", { [env]: "1" });
+        const lowered = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "off"], proj, { [env]: "1" });
+        expect(lowered.status, lowered.stderr).toBe(0);
       } else {
         const disabled = run(UTILITY, ["config-change", flag, "off"], proj, { [env]: "1" });
         expect(disabled.status, disabled.stderr).toBe(0);
@@ -517,7 +521,13 @@ describe("t338 atomic per-intent settings", () => {
     expect(creation.kind).toBe("print");
     expect(creation.message).toContain("--sensors off");
     expect(directive(run(ORCHESTRATE, ["next", "compose", "--sensors", "off"], proj).stdout).kind).toBe("error");
-    expect(directive(run(ORCHESTRATE, ["next", "--sensors", "invalid"], proj).stdout).kind).toBe("error");
+    // A ceremony value this engine's table does not hold goes to the agent as a
+    // reading step naming the words it does hold (t-three-ways-to-read-a-line);
+    // nothing is applied either way.
+    const unheld = directive(run(ORCHESTRATE, ["next", "--sensors", "invalid"], proj).stdout);
+    expect(unheld.kind).toBe("print");
+    expect(unheld.message).toContain("on|off");
+    expect(unheld.message).toContain('"invalid"');
   });
 
 
@@ -612,10 +622,12 @@ describe("t338 summary confirmation off is the person's switch", () => {
     expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("on (set by a command)");
   });
 
-  test("the person's typed off applies as theirs and a command repeat neither writes nor relabels it", () => {
+  test("the person's typed off, run by the agent's setter, applies as theirs and a command repeat neither writes nor relabels it", () => {
     const { proj, state } = project("feature");
-    const output = recordHumanPrompt(proj, "/aidlc config set summary-confirmation off");
-    expect(output).toContain("Summary Confirmation changed:");
+    expect(recordHumanPrompt(proj, "/aidlc config set summary-confirmation off")).toBe("");
+    const applied = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "off"], proj, SESSIONLESS);
+    expect(applied.status, applied.stderr).toBe(0);
+    expect(applied.stdout).toContain("is off for this piece of work, as you asked in the chat");
     const content = readFileSync(state, "utf-8");
     expect(getField(content, "Summary Confirmation")).toBe("off (set by you)");
     const audit = rows(proj);
@@ -656,49 +668,6 @@ describe("t338 summary confirmation off is the person's switch", () => {
   test("a creation flag records that a command chose it", () => {
     const { state } = project("feature", ["--summary-confirmation", "off"]);
     expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("off (set by a command)");
-  });
-
-  test.each<{ prompt: string; switches: GuardSwitch[] }>([
-    { prompt: "/aidlc config set summary-confirmation off", switches: [{ key: "summary-confirmation", value: "off" }] },
-    { prompt: "/aidlc --summary-confirmation off", switches: [{ key: "summary-confirmation", value: "off" }] },
-    { prompt: "/aidlc --intent a --summary-confirmation off", switches: [{ key: "summary-confirmation", value: "off" }] },
-    { prompt: "/aidlc config set summary-confirmation on", switches: [] },
-    { prompt: "/aidlc --sensors off", switches: [] },
-    // Only a message that carries settings alone switches it: a description
-    // may be new work or a question about the flag.
-    { prompt: "/aidlc --summary-confirmation off build unrelated B", switches: [] },
-    { prompt: "/aidlc build B --summary-confirmation off", switches: [] },
-    { prompt: "/aidlc --summary-confirmation off -- build B", switches: [] },
-    { prompt: "/aidlc should I use --summary-confirmation off?", switches: [] },
-    { prompt: "/aidlc don't set --summary-confirmation off", switches: [] },
-    { prompt: "/aidlc config set summary-confirmation off please", switches: [] },
-    // The last value wins, so a later on drops an earlier off.
-    { prompt: "/aidlc --summary-confirmation off --summary-confirmation on build B", switches: [] },
-    { prompt: "/aidlc --summary-confirmation off --summary-confirmation on", switches: [] },
-  ])("the typed prompt $prompt switches $switches", ({ prompt, switches }) => {
-    expect(parseTypedGuardSwitchRequest(prompt).switches).toEqual(switches);
-  });
-
-  test("a description beside other switches still drops summary confirmation off", () => {
-    const parsed = parseTypedGuardSwitchRequest("/aidlc build B --guard-policy relaxed --summary-confirmation off");
-    expect(parsed.switches.map((wanted) => wanted.key)).not.toContain("summary-confirmation");
-    expect(parsed.settings.map((setting) => setting.key)).not.toContain("summary-confirmation");
-  });
-
-  test("the request's own flags carry no switch, and a flag nobody knows costs them none", () => {
-    const beside = parseTypedGuardSwitchRequest("/aidlc --skip user-stories --project-type brownfield --plan-approval off build B");
-    expect(beside.newWorkPlanApprovalOff).toBe(true);
-    expect(beside.switches).toEqual([]);
-    // A flag-shaped token this parser cannot read is left out and named back to
-    // them; the switch they typed readably is still theirs.
-    const unknown = parseTypedGuardSwitchRequest("/aidlc --bogus x --plan-approval off build B");
-    expect(unknown.newWorkPlanApprovalOff).toBe(true);
-    expect(unknown.unread).toBe("--bogus");
-    // Among their words it is one of their words, with nothing to report.
-    const described = parseTypedGuardSwitchRequest("/aidlc --plan-approval off build B --bogus x");
-    expect(described.newWorkPlanApprovalOff).toBe(true);
-    expect(described.unread).toBeUndefined();
-    expect(described.words).toContain("--bogus");
   });
 
   test.each([

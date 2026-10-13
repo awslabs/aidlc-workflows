@@ -131,6 +131,17 @@ function answer(
   };
 }
 
+/** The setter as the agent runs it after reading the line. */
+function configSet(proj: string, args: string[]): { status: number; out: string } {
+  const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", ...args, "--project-dir", proj], {
+    cwd: proj,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0", AIDLC_SESSION_OVERRIDE: SESSION },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+}
+
 function auditText(proj: string): string {
   const dir = join(seededRecordDir(proj), "audit");
   if (!existsSync(dir)) return "";
@@ -163,16 +174,21 @@ describe("t-plan-switch-with-words: a switch typed with the person's reply to th
     ["$aidlc --guard-policy off looks good, build it", "off"],
     ['/aidlc --guard-policy off "approve -- after checking step 2"', "off"],
   ] as const) {
-    test(`"${typed}": the switch lands on this work and the agent records the choice`, () => {
+    test(`"${typed}": the turn is a reply, the agent records the choice and runs the setter for this work`, () => {
       const proj = project("strict");
       askFor(proj);
       const said = reply(proj, typed);
-      expect(policy(proj)).toBe(`${value} (set by you)`);
-      expect(said).not.toContain("for the work you are asking for");
+      // The hook records the line whole and applies nothing.
+      expect(said).not.toContain("AIDLC Guard Policy");
+      expect(policy(proj)).toBe("strict (from scope poc)");
       expect(lastTurn(proj)).not.toContain("**Reply**: command");
       // Their words are a reply, so the choice they made is recorded at once.
       const recorded = answer(proj, "Approve Plan");
       expect(recorded.code, recorded.message).toBe(0);
+      // The setting typed with it is for this work: the agent runs the setter.
+      const lowered = configSet(proj, ["guard-policy", value]);
+      expect(lowered.status, lowered.out).toBe(0);
+      expect(policy(proj)).toBe(`${value} (set by you)`);
       const build = next(proj);
       expect(build.kind, JSON.stringify(build)).toBe("run-stage");
       expect(build.plan_approval).toEqual({ status: "approved" });
@@ -183,6 +199,7 @@ describe("t-plan-switch-with-words: a switch typed with the person's reply to th
     const proj = project("strict");
     askFor(proj);
     reply(proj, "/aidlc --guard-policy relaxed rename slugify to toSlug first");
+    expect(configSet(proj, ["guard-policy", "relaxed"]).status).toBe(0);
     expect(policy(proj)).toBe("relaxed (set by you)");
     expect(answer(proj, "Request Changes").message).toContain('Recorded "Request Changes"');
     expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "rename slugify to toSlug first" });
@@ -197,6 +214,7 @@ describe("t-plan-switch-with-words: a switch typed with the person's reply to th
       const proj = project(start);
       askFor(proj);
       reply(proj, typed);
+      expect(configSet(proj, ["guard-policy", "strict"]).status).toBe(0);
       expect(policy(proj)).toBe(value);
       expect(lastTurn(proj)).not.toContain("**Reply**: command");
       const recorded = auditText(proj).includes("**Event**: PLAN_APPROVAL_RECORDED") ? { code: 0, message: "" } : answer(proj, "Approve Plan");
@@ -210,6 +228,7 @@ describe("t-plan-switch-with-words: a switch typed with the person's reply to th
     askFor(proj);
     reply(proj, "/aidlc --plan-approval on Approve Plan");
     expect(lastTurn(proj)).not.toContain("**Reply**: command");
+    expect(configSet(proj, ["plan-approval", "on"]).status).toBe(0);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Plan Approval**: on (set by you)");
     const recorded = auditText(proj).includes("**Event**: PLAN_APPROVAL_RECORDED") ? { code: 0, message: "" } : answer(proj, "Approve Plan");
     expect(recorded.code, recorded.message).toBe(0);
@@ -217,7 +236,7 @@ describe("t-plan-switch-with-words: a switch typed with the person's reply to th
   });
 
   // With no plan question open, a setting typed with words changes nothing
-  // at prompt time, as before: the words go to the work they describe.
+  // when the prompt arrives: the words go to the work they describe.
   test("with no plan question open, a raise typed with words leaves this work as it is", () => {
     const proj = project("relaxed");
     writePlan(proj);
@@ -225,12 +244,11 @@ describe("t-plan-switch-with-words: a switch typed with the person's reply to th
     expect(policy(proj)).toBe("relaxed (from scope poc)");
   });
 
-  test("words after an explicit -- still describe new work, and this work keeps its Guard Policy", () => {
+  test("words after an explicit -- still describe new work: the turn is a command, and this work keeps its Guard Policy", () => {
     const proj = project("strict");
     askFor(proj);
-    expect(reply(proj, "/aidlc --guard-policy off -- add a CSV export")).toContain(
-      "Guard Policy (it sets how many checks run) is off for the work you are asking for (set by you).",
-    );
+    expect(reply(proj, "/aidlc --guard-policy off -- add a CSV export")).not.toContain("AIDLC Guard Policy");
+    expect(lastTurn(proj)).toContain("**Reply**: command");
     expect(policy(proj)).toBe("strict (from scope poc)");
   });
 });

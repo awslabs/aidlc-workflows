@@ -353,4 +353,15 @@ describe("t129 stage-runner drift guard (migrated from t129-stage-runner-drift.s
     expect(initSkill.replace(/\s+/g, " ")).toContain("even when the description starts with a scope name");
     expect(initSkill).not.toContain("as the first word");
   });
+
+  // A scope alone goes to the engine, which asks what the work is for (#2355),
+  // never to intent create, which would start it as "[Project description]".
+  // It names no command of its own: Kiro CLI's prompt hook takes a body's one
+  // inline `next` span for the person's typed call and runs it.
+  test("the /aidlc-init runner sends a scope alone to the engine, not to intent create", () => {
+    const initSkill = readFileSync(join(SKILLS_DIR, "aidlc-init", "SKILL.md"), "utf-8");
+    expect(initSkill.replace(/\s+/g, " ")).toContain("When only a scope was supplied, create nothing: run step 3's command");
+    expect(initSkill).not.toContain("falls back to the scope token");
+    expect(initSkill).not.toMatch(/orchestrate(?:\.ts)?\s+next[^`\n]*`/);
+  });
 });

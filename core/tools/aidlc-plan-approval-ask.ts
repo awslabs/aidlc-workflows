@@ -47,11 +47,12 @@ import {
   readBaselineSourceSnapshot,
   readPlanApprovalReceipt,
   readPlanApprovalRuntimeRecord,
+  readProtectedQuestion,
   readWorkspaceSourceSnapshot,
   recordedSourceListingUnderCurrentBoundary,
   removePlanApprovalRuntimeRecord,
   renderChangedPaths,
-  sourceListingChangedPaths,
+  sourceChangedOutsideAidlc,
   stalePlanApprovalReceiptsForTarget,
   stateFilePath,
   steeringPayloadAuthenticAt,
@@ -77,6 +78,7 @@ import {
   approvalFingerprint,
   approvedPlanChangeLine,
   codeGenerationBuildsWithoutSource,
+  clearPlanApprovalOverrideOffered,
   codeGenerationExecutionAllowed,
   codeGenerationRecordDir,
   codeGenerationTargetId,
@@ -157,7 +159,13 @@ export interface PlanApprovalAskRecord {
   mode: "ask" | "editing";
   /** True until the first reply after the question is shown: only then does a bare yes answer it. */
   bound: boolean;
+  /** When the question was last shown: showing it again moves it. */
   issuedAt: string;
+  /**
+   * When it was last shown in each chat, by the engine's session id; "" for a
+   * showing whose chat the engine could not name, which may be any chat.
+   */
+  shownIn?: Record<string, string>;
   /** What the engine has to tell the conductor about the last answer (a repair, say). */
   lastNotice?: string;
   /**
@@ -201,6 +209,23 @@ export function planApprovalAskState(projectDir: string): "unanswered" | "editin
   if (record === null) return null;
   if (record.mode === "editing") return "editing";
   return (record.results?.length ?? 0) > 0 ? "answered" : "unanswered";
+}
+
+/**
+ * While the person edits the plan files themselves and has replied since they
+ * started, the step that records their reply: the plan handed back to the agent
+ * (Request Changes, their words kept as the change) or the files finished
+ * (Approve Plan). Which it is, the agent reads. Null until they reply, and for
+ * a question about several Units, where a reply can be about some of them.
+ */
+export function planApprovalEditingReplyStep(projectDir: string): string | null {
+  const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
+  if (record?.mode !== "editing" || !record.replies?.length || record.targets.length > 1) return null;
+  const answer = (choice: string | undefined): string =>
+    `\`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval --details "${choice}"\``;
+  return `record their answer: ${answer(record.choices[1])} when they handed the plan back to you (their words are ` +
+    `kept as the change), or ${answer(record.choices[0])} when they finished it. When their reply is neither, ` +
+    "answer it and leave the files to them";
 }
 
 function writePlanApprovalAsk(projectDir: string, record: PlanApprovalAskRecord): void {
@@ -463,7 +488,8 @@ function targetView(projectDir: string, unit: string | null, changed: string | n
  * approval), so a later Unit's question does not repeat what the person saw
  * when they approved the earlier one, and a unit-major run's first question
  * does not reach back into earlier stages. The files the plans approved since
- * that start name are their own build, not something that ran ahead. Nothing
+ * that start name are their own build, not something that ran ahead, and
+ * AI-DLC's own files (an update the person took) are nobody's. Nothing
  * is said when the start is not on record or cannot be read, or nothing changed.
  */
 function changedBeforeApprovalLine(projectDir: string): string | null {
@@ -505,7 +531,7 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
     const theirBuild = (path: string): boolean =>
       named.some((entry) =>
         path === entry || path.startsWith(`${entry}/`) || (!entry.includes("/") && path.split("/").at(-1) === entry));
-    const changed = sourceListingChangedPaths(start, current.listing).filter((path) => !theirBuild(path));
+    const changed = sourceChangedOutsideAidlc(projectDir, start, current.listing).filter((path) => !theirBuild(path));
     if (changed.length === 0) return null;
     return changed.length === 1
       ? `Already changed before you approved: ${renderChangedPaths(changed)}.`
@@ -787,6 +813,13 @@ function withPlanState<T extends RunStageDirective | InvokeSwarmDirective>(
 }
 
 /**
+ * The refusals `next` hands out that offer building the plan anyway: `next`
+ * keeps when the first was shown (notePlanApprovalOverrideOffered), outside a
+ * read-only probe.
+ */
+export const planApprovalOverrideOffers = new WeakSet<Directive>();
+
+/**
  * The directive `next` emits in place of a code-generation run-stage or
  * invoke-swarm: the same directive marked plan or build, or the engine's Plan
  * Approval question. Read-only: nothing is written until `publishPlanApprovalAsk`.
@@ -800,18 +833,21 @@ export function routeCodeGenerationPlanApproval(projectDir: string, directive: D
   const intentId = intentIdFor(projectDir);
   const record = readPlanApprovalAsk(projectDir, intentId);
   // The person is editing the files: show the same question, in edit mode,
-  // until they say done. Nothing is recomputed from half-edited files.
+  // until they say done, and once they reply, how to record it. Nothing is
+  // recomputed from half-edited files.
   if (
     record?.mode === "editing" &&
     record.results === undefined &&
     record.targets.length === units.length &&
     record.targets.every((target) => units.includes(target.unit))
   ) {
+    const replied = planApprovalEditingReplyStep(projectDir);
     return planApprovalAskDirective(projectDir, record.targets.map((target) => target.unit), {
       question: record.question,
       editing: true,
-      note: record.lastNotice ??
-        "The person is editing the files. Wait for them to say done; do not change those files yourself.",
+      note: record.lastNotice ?? (replied
+        ? `The person replied while editing the files: ${replied}. Then run next.`
+        : "The person is editing the files. Wait for them to say done; do not change those files yourself."),
     });
   }
   const setting = planApprovalSettingFor(projectDir);
@@ -859,7 +895,9 @@ export function routeCodeGenerationPlanApproval(projectDir: string, directive: D
     workspaceSourceState(projectDir) === null &&
     !units.every((unit) => codeGenerationBuildsWithoutSource(projectDir, { unit }, asking.length === 0))
   ) {
-    return { kind: "error", message: new PlanApprovalUnbindableError("presented").message };
+    const refusal: Directive = { kind: "error", message: new PlanApprovalUnbindableError("presented").message };
+    planApprovalOverrideOffers.add(refusal);
+    return refusal;
   }
   if (asking.length === 0 && setting !== null) {
     const skipped = states.filter((state) => state.kind === "skip").map((state) => state.unit);
@@ -918,7 +956,11 @@ function planApprovalAskDirective(
  * question for the same files keeps its id, so a restart or a new chat shows
  * the question the person was already asked.
  */
-export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprovalAskDirective): void {
+export function publishPlanApprovalAsk(
+  projectDir: string,
+  directive: PlanApprovalAskDirective,
+  session?: string,
+): void {
   withAuditLock(projectDir, () => {
     const units = directive.plan_approval.targets.map((target) => target.unit);
     const authorities = units.map((unit) => resolveCodeGenerationAuthority(projectDir, { unit }));
@@ -932,7 +974,7 @@ export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprov
     }
     const existing = readPlanApprovalAsk(projectDir, intentId);
     if (directive.plan_approval.editing && existing?.mode === "editing") {
-      writePlanApprovalAsk(projectDir, { ...existing, bound: true });
+      writePlanApprovalAsk(projectDir, { ...existing, bound: true, ...shownNow(existing, session) });
       return;
     }
     const source = workspaceSourceState(projectDir);
@@ -956,7 +998,7 @@ export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprov
       existing.targets.every((target) =>
         targets.some((current) => current.unit === target.unit && current.fingerprint === target.fingerprint));
     const record: PlanApprovalAskRecord = same && existing
-      ? { ...existing, bound: true }
+      ? { ...existing, bound: true, ...shownNow(existing, session) }
       : {
           version: 1,
           askId: randomBytes(16).toString("hex"),
@@ -966,7 +1008,7 @@ export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprov
           choices: directive.plan_approval.choices,
           mode: "ask",
           bound: true,
-          issuedAt: new Date().toISOString(),
+          ...shownNow(null, session),
           repliesFrom: auditMark(projectDir),
         };
     writePlanApprovalAsk(projectDir, record);
@@ -1324,6 +1366,8 @@ function approveTarget(
     if (rendered !== null) writeFileAtomic(planPath, plan);
     writeFileAtomic(questionsPath, questions);
     writePlanApprovalReceipt(projectDir, receipt);
+    // Their approval ends any earlier offer to build it anyway.
+    clearPlanApprovalOverrideOffered(projectDir);
     keepApprovedPlanCopy(projectDir, authority, fingerprint, questions);
     if (source !== null) writeWorkspaceSourceSnapshot(projectDir, STAGE, source);
   });
@@ -1447,6 +1491,11 @@ export function notePlanApprovalAskReply(
       record.targets.every((target) => record.results?.some((result) => result.unit === target.unit));
     if (answeredAll && !record.results?.some((result) => result.choice === "request-changes")) return false;
     if (picker && !pickerAsksThisQuestion(picker, record)) return false;
+    // A typed reply in a chat where the agent has asked a question of its own
+    // since the plan question was last shown there, still open (the
+    // verification command, say), answers that one.
+    if (picker === undefined && session && readProtectedQuestion(projectDir, session) !== null &&
+      askedAfter(projectDir, shownInChat(record, session), session)) return false;
     const reply = text.trim();
     if (!reply || isNonAnswer(reply)) return true;
     const replies = [
@@ -1486,7 +1535,8 @@ export function saidDone(words: string): boolean {
 /**
  * The hook's second part while the engine's Plan Approval question is open: the
  * person wrote their answer on the questions file's `[Answer]:` line, as the
- * file invites, and said done. An exact choice there is recorded now, through
+ * file invites, and said done. An exact choice there (its label, its number,
+ * or its letter: the file shows the options lettered) is recorded now, through
  * the same path an exact pick typed in chat takes; anything else they wrote is
  * the agent's to read, and the line says where it is. Null when there is
  * nothing to say. Call after the turn's HUMAN_TURN and kept reply are on
@@ -1514,7 +1564,7 @@ export function notePlanApprovalFileAnswer(
     if (written.length === 0) return null;
     const where = written.map((target) => toPosix(relative(projectDir, target.path))).join(", ");
     const answers = [...new Set(written.map((target) => target.answer))];
-    const pick = answers.length === 1 ? exactOptionPick(answers[0], record.choices) : null;
+    const pick = answers.length === 1 ? exactOptionPick(answers[0], record.choices, true) : null;
     const choice: PlanApprovalAnswerChoice | null = pick === 0 ? "approve"
       : pick === 1 && record.targets.length === 1 ? "request-changes"
       : pick === 2 ? "edit"
@@ -1697,6 +1747,38 @@ interface OpenEngineQuestion {
 
 const LATER_QUESTION_EVENTS = new Set(["DECISION_RECORDED", "STAGE_AWAITING_APPROVAL"]);
 
+// Whether a question was asked after `since`, the second the one in hand was
+// shown (in `session` alone, when one is named): that later question owns the
+// person's reply. A routing answer can only follow its question, so the same
+// second counts for it.
+function askedAfter(projectDir: string, since: string, session?: string): boolean {
+  return readAuditShardEvents(projectDir).some((row) =>
+    (session === undefined || auditBlockField(row.block, "Session") === session) &&
+    (LATER_QUESTION_EVENTS.has(row.event) ? row.timestamp > since
+      : row.event === "REQUEST_ROUTED" && row.timestamp >= since));
+}
+
+// The Plan Approval question is shown now, in `session`'s chat. Showing the
+// same question again keeps when the other chats last saw it; a record from
+// before chats were told apart was last shown in any of them.
+function shownNow(
+  record: PlanApprovalAskRecord | null,
+  session: string | undefined,
+): Pick<PlanApprovalAskRecord, "issuedAt" | "shownIn"> {
+  const issuedAt = isoTimestamp();
+  const earlier = record === null ? {} : record.shownIn ?? { "": record.issuedAt };
+  return { issuedAt, shownIn: { ...earlier, [session || ""]: issuedAt } };
+}
+
+// When the Plan Approval question was last shown in this chat, or in a chat
+// the engine could not name; "" when it never was.
+function shownInChat(record: PlanApprovalAskRecord, session: string): string {
+  const shown = record.shownIn ?? { "": record.issuedAt };
+  const here = shown[session] ?? "";
+  const unnamed = shown[""] ?? "";
+  return here > unnamed ? here : unnamed;
+}
+
 function openEngineQuestionPath(projectDir: string): string {
   return planApprovalRuntimeFile(projectDir, "open-engine-question.json");
 }
@@ -1725,10 +1807,7 @@ export function engineQuestionHoldsReplies(projectDir: string): boolean {
     }
     const noted = readPlanApprovalRuntimeRecord<OpenEngineQuestion>(openEngineQuestionPath(projectDir), "Open engine question");
     if (noted?.version !== 1 || noted.askType !== marker.ask_type || noted.stateSha256 !== marker.state_sha256) return true;
-    // A routing answer can only follow its question, so the same second counts.
-    return !readAuditShardEvents(projectDir).some((row) =>
-      (LATER_QUESTION_EVENTS.has(row.event) && row.timestamp > noted.askedAt) ||
-      (row.event === "REQUEST_ROUTED" && row.timestamp >= noted.askedAt));
+    return !askedAfter(projectDir, noted.askedAt);
   } catch {
     return false;
   }
@@ -2047,8 +2126,6 @@ export function settleBuiltPlanReviews(projectDir: string, directive: Directive)
 // conductor reads that and records it (`answer --checkpoint plan-approval
 // --details "Review the plan"`). The engine keeps the request and honors it:
 // the next `next` asks for approval before that plan is built.
-
-  /\b(?:review|re-?review|re-?approve|look (?:at|over)|see|show me|check|reopen)\b[^.?!]{0,40}\b(?:the |my |this |that )?(?:code )?plan\b/i;
 
 /**
  * A rules part's route, read only when it is the payload its receipt was

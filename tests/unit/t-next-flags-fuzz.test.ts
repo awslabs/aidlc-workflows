@@ -1,0 +1,1146 @@
+// covers: function:parseNextFlags, subcommand:aidlc-orchestrate:next, function:splitKiroCommandArgs
+//
+// A seeded property sweep of the `/aidlc` line. The flag parser is the one
+// reader of that line, so what it does with a line nobody wrote on purpose is
+// the person's problem the moment an agent forwards their words verbatim: a
+// misspelt name, a Windows path, an emoji, a quoted sentence, CRLF from a
+// Windows clone. Every case here is generated from a fixed seed and a fixed
+// count, so CI runs exactly these lines; a failure prints the seed and the line
+// to re-run. The invariants are the ones the engine promises: it never throws,
+// the person's words are never dropped or reordered, a known flag with a valid
+// value is always that flag, a flag-shaped token before their first word is
+// never read as work and never reaches them, one among their words stays their
+// text (#847), and `next` writes no audit record for a line of flags alone.
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  AIDLC_SRC,
+  cleanupTestProject,
+  createOrchestrationTestProject,
+  createTestProject,
+  FIXTURES_DIR,
+  removeWorkspaceRecord,
+  runOrchestrateNext,
+  seededStateFile,
+} from "../harness/fixtures.ts";
+import { testGuardEnvironment } from "../harness/runner-profile.ts";
+import {
+  argumentIsFlagShaped,
+  auditBlockField,
+  classifyTerminalCommand,
+  hooksHealthDir,
+  planApprovalRuntimeFile,
+  isReadOnlyNextArgv,
+  isRefusedModifierNextArgv,
+  isRetiredOnlyNextArgv,
+  readAuditShardEvents,
+  readNextLine,
+  splitKiroCommandArgs,
+  validScopes,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { nextArgsAreOnlyWords, parseNextFlags, typedSettingModifiers } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
+import { listMessages } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
+import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+// Fixed so CI runs these exact lines. Change either and the sweep is a new one:
+// print them in every failure message so a red is reproducible from the log.
+const SEED = 20261010;
+const CASES = 600;
+// Lines routed through the tool itself, and through a host's human-turn hook:
+// each costs a process, so a deterministic slice of the sweep carries them.
+const ROUTED = 24;
+const HOOKED = 8;
+
+const BUN = process.execPath;
+const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
+const SESSION = "01995000-7a11-7000-8000-00000000d001";
+
+/** mulberry32: a seeded generator, so no dependency and no clock. */
+function rng(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const VALUED_FLAGS: Array<{ flag: string; valid: string; field: string }> = [
+  { flag: "--scope", valid: "bugfix", field: "scope" },
+  { flag: "--depth", valid: "minimal", field: "depth" },
+  { flag: "--test-strategy", valid: "standard", field: "testStrategy" },
+  { flag: "--review", valid: "advisory", field: "review" },
+  { flag: "--guard-policy", valid: "relaxed", field: "changeControl" },
+  { flag: "--project-type", valid: "greenfield", field: "projectType" },
+  { flag: "--plan-name", valid: "my-plan", field: "planName" },
+  { flag: "--request", valid: "1a2b3c4d", field: "request" },
+  // The agent's plan for a proposal step: a plan name or `compose`.
+  { flag: "--propose", valid: "bugfix", field: "propose" },
+];
+const CEREMONY_VALUED = ["--sensors", "--learnings", "--summary-confirmation", "--collaborators", "--plan-approval"];
+const FENCE_VALUED = ["--guard.review-freeze", "--guard.state-transition", "--guard.reviewer-scope", "--guard.plan-approval"];
+const BOOLEAN_FLAGS = ["--resume", "--single", "--new-intent", "--continue", "--new-scope", "--change", "--every-unit"];
+// Flags whose values are a closed set the parser checks itself, so a word
+// outside it is a parse error naming what is valid. `--plan-name` takes any
+// kebab word, `--request` and `--scope` any token (the route validates the
+// scope later), so no generated word is invalid for them.
+const CLOSED_VALUE_FLAGS = [
+  "--depth", "--test-strategy", "--review", "--guard-policy", "--project-type", "--propose",
+  ...CEREMONY_VALUED, ...FENCE_VALUED,
+];
+// Flags that read their value only when one follows, so a line ending on one
+// falls through to the untaken rule instead of a parse error.
+const VALUE_OR_UNTAKEN_FLAGS = ["--scope", "--stage", "--phase"];
+const BAD_VALUES = ["banana", "Minimal!", "off-ish", "--scope"];
+const ANSWER_FLAGS = [
+  "--choice", "--details", "--decision", "--answer", "--user-input", "--feedback",
+  "--result", "--verdict", "--mode", "--approve", "--session",
+];
+// One edit away from a flag the engine takes: the person's own slip.
+const MISSPELT = [
+  "--plan-aprroval", "--scpe", "--depht", "--guard-polcy", "--new-intnet",
+  "--sumary-confirmation", "--revew", "--sensores", "--guard.reviewfreeze", "--test-stategy",
+];
+const UNKNOWN = ["--nonsense", "--xyzzy", "--dark-mode", "--enable", "--review-freeze", "--verbose-output"];
+// `--flag=value`: the engine takes no flag in this form, so each is untaken.
+const EQUALS_FORMS = ["--choice=Approve Plan", "--depth=minimal", "--scope=bugfix", "--nonsense=1"];
+// Words a person writes. No scope name, verb or noun of the engine's own, and
+// nothing that opens with the entry word, so each case's words are unambiguous.
+const PLAIN_WORDS = [
+  "add", "the", "export", "button", "to", "settings", "page", "crash", "when", "saving",
+  "please", "also", "update", "docs", "for", "it",
+];
+const EXOTIC_WORDS = [
+  "café", "naïve", "日本語のテキスト", "🚀", "an emoji 🙂 inside", 'he said "hello" loudly',
+  "it's", "C:\\Users\\Dev Tools\\out.txt", "D:\\build\\x y\\z.txt", "tab\there",
+  "crlf\r\nsecond line", "a".repeat(400), "--help flag for the reverser", "100% done",
+  "cost: $5", "a|b", "back\\slash", "semi;colon", "paren(s)", "star*",
+];
+
+type Shape =
+  | "words-only"
+  | "valued-flag"
+  | "ceremony-flag"
+  | "fence-flag"
+  | "boolean-flag"
+  | "bad-value"
+  | "missing-value"
+  | "valueless-positional"
+  | "untaken-answer"
+  | "untaken-misspelt"
+  | "untaken-unknown"
+  | "untaken-equals"
+  | "flag-after-words"
+  | "after-delimiter"
+  | "plan-word-split"
+  | "plan-word-quoted"
+  | "plan-word-named"
+  | "blank";
+
+interface Case {
+  shape: Shape;
+  argv: string[];
+  /** The person's words this line carries, in order, or null when it carries none. */
+  tail: string[] | null;
+  /** The flag-shaped token before their first word, when the shape has one. */
+  untaken?: string;
+  /** For a known flag: what the parse must read. */
+  reads?: { field: string; value: string };
+  /** For a line opening with a plan's name: the plan the parse must pick. */
+  plan?: string;
+}
+
+const SCOPES = new Set([...validScopes()]);
+function safeWords(next: () => number, count: number): string[] {
+  const words: string[] = [];
+  while (words.length < count) {
+    const exotic = next() < 0.3;
+    const pool = exotic ? EXOTIC_WORDS : PLAIN_WORDS;
+    const word = pool[Math.floor(next() * pool.length)];
+    // A leading scope name is positional scope syntax and a leading flag-shaped
+    // token is the untaken case: neither is the plain-words shape under test.
+    if (words.length === 0 && (SCOPES.has(word) || word.startsWith("--") || /^[A-Za-z][\w-]*:/.test(word))) continue;
+    words.push(word);
+  }
+  return words;
+}
+
+function buildCase(next: () => number): Case {
+  const shapes: Shape[] = [
+    "words-only", "valued-flag", "ceremony-flag", "fence-flag", "boolean-flag", "bad-value",
+    "missing-value", "valueless-positional", "untaken-answer", "untaken-misspelt", "untaken-unknown",
+    "untaken-equals", "flag-after-words", "after-delimiter", "blank",
+    "plan-word-split", "plan-word-quoted", "plan-word-named",
+  ];
+  const shape = shapes[Math.floor(next() * shapes.length)];
+  const tailLength = 1 + Math.floor(next() * 3);
+  const tail = safeWords(next, tailLength);
+  const pick = <T,>(pool: readonly T[]): T => pool[Math.floor(next() * pool.length)];
+  switch (shape) {
+    case "words-only":
+      return { shape, argv: [...tail], tail };
+    // The same line, as the three harnesses hand it over: the person's own
+    // sentence opening with a word that is also a plan's name, split into
+    // tokens or quoted whole (both ambiguous, at any length), and the plan
+    // named in its own argument, which is the reading the orchestrator skill
+    // asks the agent for.
+    case "plan-word-split": {
+      const plan = pick([...SCOPES]);
+      // With one word after the plan's name the line is the same two arguments
+      // as a plan the agent read with a one-word request, so it is both readings
+      // too, every word kept. One token holding several words is the request
+      // quoted into its own argument, the named form below.
+      return tail.length === 1 && /\s/.test(tail[0].trim())
+        ? { shape, argv: [plan, ...tail], tail, plan }
+        : { shape, argv: [plan, ...tail], tail: [plan, ...tail] };
+    }
+    case "plan-word-quoted": {
+      // One argument holding the whole line: the engine never splits their
+      // sentence for them, so every word of it is the request.
+      const plan = pick([...SCOPES]);
+      const line = [plan, ...tail].join(" ");
+      return { shape, argv: [line], tail: [line] };
+    }
+    case "plan-word-named": {
+      const plan = pick([...SCOPES]);
+      const request = tail.join(" ");
+      // The request quoted into its own argument is the reading already made;
+      // a request of one word there is the split line above.
+      return /\s/.test(request.trim())
+        ? { shape, argv: [plan, request], tail: [request], plan }
+        : { shape, argv: [plan, request], tail: [plan, request] };
+    }
+    case "valued-flag": {
+      const entry = pick(VALUED_FLAGS);
+      const withTail = next() < 0.6;
+      return {
+        shape,
+        argv: withTail ? [entry.flag, entry.valid, ...tail] : [entry.flag, entry.valid],
+        tail: withTail ? tail : null,
+        reads: { field: entry.field, value: entry.valid },
+      };
+    }
+    case "ceremony-flag": {
+      const flag = pick(CEREMONY_VALUED);
+      const value = next() < 0.5 ? "on" : "off";
+      const withTail = next() < 0.6;
+      return { shape, argv: withTail ? [flag, value, ...tail] : [flag, value], tail: withTail ? tail : null };
+    }
+    case "fence-flag": {
+      const flag = pick(FENCE_VALUED);
+      const value = next() < 0.5 ? "on" : "off";
+      const withTail = next() < 0.6;
+      return { shape, argv: withTail ? [flag, value, ...tail] : [flag, value], tail: withTail ? tail : null };
+    }
+    case "boolean-flag": {
+      const flag = pick(BOOLEAN_FLAGS);
+      // A boolean followed by the person's words: the words are theirs, and no
+      // value is eaten off the front of them.
+      return { shape, argv: [flag, ...tail], tail };
+    }
+    case "bad-value": {
+      const flag = pick(CLOSED_VALUE_FLAGS);
+      return { shape, argv: [flag, pick(BAD_VALUES)], tail: null };
+    }
+    case "missing-value": {
+      const flag = pick(CLOSED_VALUE_FLAGS);
+      return { shape, argv: [flag], tail: null };
+    }
+    case "valueless-positional": {
+      const flag = pick(VALUE_OR_UNTAKEN_FLAGS);
+      return { shape, argv: [flag], tail: null };
+    }
+    case "untaken-answer":
+    case "untaken-misspelt":
+    case "untaken-unknown":
+    case "untaken-equals": {
+      const token = shape === "untaken-answer"
+        ? pick(ANSWER_FLAGS)
+        : shape === "untaken-misspelt"
+          ? pick(MISSPELT)
+          : shape === "untaken-unknown"
+            ? pick(UNKNOWN)
+            : pick(EQUALS_FORMS);
+      const withTail = next() < 0.6;
+      return {
+        shape,
+        argv: withTail ? [token, ...tail] : [token],
+        tail: withTail ? tail : null,
+        untaken: token,
+      };
+    }
+    case "flag-after-words": {
+      // A flag-shaped token at the end of their own sentence: a setting they
+      // misspelt, or a flag they want built. The engine takes neither.
+      const token = pick([...ANSWER_FLAGS, ...MISSPELT, ...UNKNOWN]);
+      return { shape, argv: [...tail, token, "off"], tail, untaken: token };
+    }
+    case "after-delimiter": {
+      const token = pick([...ANSWER_FLAGS, ...MISSPELT, ...UNKNOWN, ...EQUALS_FORMS]);
+      return { shape, argv: ["--", token, ...tail], tail: [token, ...tail] };
+    }
+    case "blank":
+      return { shape, argv: pick([[], [""], ["   "], ["\t"], ["\r\n"]]) as string[], tail: null };
+  }
+}
+
+const cases: Case[] = (() => {
+  const next = rng(SEED);
+  return Array.from({ length: CASES }, () => buildCase(next));
+})();
+
+/** Every failure says how to reproduce itself. */
+function where(testCase: Case): string {
+  return `seed=${SEED} shape=${testCase.shape} argv=${JSON.stringify(testCase.argv)}`;
+}
+
+const created: string[] = [];
+afterEach(() => {
+  while (created.length > 0) cleanupTestProject(created.pop());
+});
+
+describe("the flag parser over a seeded sweep of lines", () => {
+  test(`reads ${CASES} generated lines without throwing, and never swallows a word`, () => {
+    for (const testCase of cases) {
+      const note = where(testCase);
+      let parsed: ReturnType<typeof parseNextFlags>;
+      try {
+        parsed = parseNextFlags(testCase.argv);
+      } catch (error) {
+        throw new Error(`${note} threw ${String(error)}`);
+      }
+      expect(parsed, note).toBeDefined();
+
+      // A flag the engine takes, with a value it accepts, is always that flag.
+      if (testCase.reads) {
+        expect((parsed as Record<string, unknown>)[testCase.reads.field], note).toBe(testCase.reads.value);
+        expect(parsed.untakenFlag, note).toBeUndefined();
+        expect(parsed.parseError, note).toBeUndefined();
+      }
+
+      // A value the flag does not accept is a reading step naming the words it
+      // does: the person meant one of them, and the agent re-runs it. With no
+      // value at all it is still this engine's own refusal, by name. Never a
+      // throw, and never work named after it.
+      if (testCase.argv[0] === "--propose" && (testCase.shape === "missing-value" || (testCase.shape === "bad-value" && testCase.argv[1].startsWith("--")))) {
+        // The agent's own flag with its value missing: said to the agent by
+        // routeNext, never a parse error and never work named after it.
+        expect(parsed.propose, note).toBe("");
+        expect(parsed.parseError, note).toBeUndefined();
+        expect(parsed.intent, note).toBeUndefined();
+      } else if (testCase.shape === "bad-value" || testCase.shape === "missing-value") {
+        const flag = testCase.argv[0].split("=")[0];
+        const step = parsed.readingStep;
+        if (step !== undefined) {
+          expect(step.kind, note).toBe("value");
+          expect(step.kind === "value" ? step.flag : "", note).toBe(flag);
+          expect(parsed.untakenFlag, note).toBeUndefined();
+        } else {
+          expect(typeof parsed.parseError, note).toBe("string");
+          expect(String(parsed.parseError), note).toContain(flag);
+        }
+      }
+
+      // A flag that reads its value only when one follows: a line ending on it
+      // is either a parse error or the untaken rule, never a throw and never
+      // work named after the flag.
+      if (testCase.shape === "valueless-positional") {
+        const named = typeof parsed.parseError === "string" || parsed.untakenFlag === testCase.argv[0];
+        expect(named, `${note} parsed=${JSON.stringify(parsed)}`).toBe(true);
+        expect(parsed.intent, note).toBeUndefined();
+      }
+
+      // A flag-shaped token after their words is untaken too: where it sits says
+      // nothing about what they meant by it. The words before it stand, and the
+      // line is still their words, so a reply of theirs stays a reply.
+      if (testCase.shape === "flag-after-words") {
+        expect(parsed.untakenFlag, note).toBe(testCase.untaken);
+        expect(parsed.untakenFlagValue, note).toBe("off");
+        expect(parsed.intent, note).toBe((testCase.tail ?? []).join(" "));
+      } else if (testCase.untaken !== undefined) {
+        // A flag-shaped token before the person's first word is untaken, whatever
+        // its spelling, and it never becomes the work's description.
+        expect(parsed.untakenFlag, note).toBe(testCase.untaken);
+        expect(parsed.intent ?? "", note).not.toContain(testCase.untaken);
+        // It takes at most one following word as its value, and the print names
+        // that word, so nothing of the line is dropped in silence.
+        if (testCase.tail !== null) {
+          const first = testCase.tail[0];
+          const takesValue = !first.startsWith("--") && !/\s/.test(first);
+          if (takesValue) {
+            expect(parsed.untakenFlagValue, note).toBe(first);
+            const rest = testCase.tail.slice(1);
+            expect(parsed.intent ?? "", note).toBe(rest.join(" "));
+          }
+        } else {
+          expect(parsed.intent, note).toBeUndefined();
+        }
+      }
+
+      // The person's words reach the request whole and in order, for every
+      // shape whose words the engine keeps.
+      if (
+        testCase.tail !== null &&
+        testCase.untaken === undefined &&
+        testCase.shape !== "bad-value" &&
+        testCase.shape !== "missing-value" &&
+        testCase.shape !== "valueless-positional"
+      ) {
+        expect(parsed.intent, note).toBe(testCase.tail.join(" "));
+      }
+
+      // A plan named in its own argument is the pick of that plan; any other
+      // line opening with a plan's name is both readings, every word kept.
+      if (testCase.plan !== undefined) {
+        expect(parsed.positionalScope, note).toBe(testCase.plan);
+        expect(parsed.intent, note).toBe((testCase.tail ?? []).join(" "));
+        expect(parsed.readingStep, note).toBeUndefined();
+      } else if (testCase.shape.startsWith("plan-word")) {
+        expect(parsed.positionalScope, note).toBeUndefined();
+        expect(parsed.readingStep?.kind, note).toBe("plan-word");
+      }
+
+      // After the delimiter every token is theirs, word for word, and nothing
+      // is untaken: that is the lossless way the print names (#847).
+      if (testCase.shape === "after-delimiter") {
+        expect(parsed.untakenFlag, note).toBeUndefined();
+        expect(parsed.intent, note).toBe((testCase.tail ?? []).join(" "));
+      }
+
+      // A blank line asks for nothing and describes nothing.
+      if (testCase.shape === "blank") {
+        expect(parsed.untakenFlag, note).toBeUndefined();
+        expect(parsed.parseError, note).toBeUndefined();
+      }
+
+      // Whatever the engine takes from the line, every word the person typed is
+      // still readable from the parse: `intent` when it holds them all, else
+      // `personWords`. Nothing of theirs is dropped by the reading.
+      if (testCase.tail !== null && parsed.parseError === undefined) {
+        const said = parsed.personWords ?? parsed.intent ?? "";
+        for (const word of testCase.tail) {
+          if (word.trim().length === 0) continue;
+          expect(said, `${note} said=${JSON.stringify(said)}`).toContain(word.trim());
+        }
+      }
+
+      // A typed line that is the person's words stays their words, whatever
+      // flag-shaped token sits among them: the human-turn hook reads this to
+      // decide their `/aidlc` line is a reply, so a token this engine does not
+      // take must never file their reply as a command of its own.
+      if (
+        (testCase.shape === "words-only" || testCase.shape === "flag-after-words") &&
+        parsed.parseError === undefined
+      ) {
+        expect(nextArgsAreOnlyWords(testCase.argv), `${note} parsed=${JSON.stringify(parsed)}`).toBe(true);
+      }
+
+      // Every setting the line carries survives the form the answer commands
+      // carry it in (`--<key> <value>`), so a question asked again keeps it.
+      const modifiers = typedSettingModifiers(parsed);
+      if (modifiers.length > 0 && parsed.parseError === undefined) {
+        const carried = modifiers.flatMap((modifier) => [`--${modifier.split(" ")[0]}`, modifier.split(" ")[1]]);
+        expect(typedSettingModifiers(parseNextFlags(carried)), `${note} carried=${JSON.stringify(carried)}`)
+          .toEqual(modifiers);
+      }
+    }
+  });
+
+  // The Kiro seam splits one command line into the argv the engine reads. For
+  // every generated line whose words need no quoting, the split returns exactly
+  // the tokens, so the two readings of one line never disagree.
+  test("the Kiro command splitter returns the same tokens for a line that needs no quoting", () => {
+    let checked = 0;
+    for (const testCase of cases) {
+      if (testCase.argv.length === 0) continue;
+      if (testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token))) continue;
+      const line = testCase.argv.join(" ");
+      expect(splitKiroCommandArgs(line), `${where(testCase)} line=${JSON.stringify(line)}`).toEqual(testCase.argv);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(50);
+  });
+
+  // One reading per line, and the seams that run before any agent reads take
+  // the same one: a line the engine would hand to the agent is never run from a
+  // seam, and one quoted argument that holds only flags reads as the tokens in
+  // it. This is the invariant row 3 broke, where the two readings of one line
+  // disagreed.
+  test(`reads each of the ${CASES} lines exactly one way, and both seams take that reading`, () => {
+    const kinds = new Set(["exact", "words", "untaken-flag", "value", "plan-word", "noun"]);
+    let exact = 0;
+    let handed = 0;
+    for (const testCase of cases) {
+      const note = where(testCase);
+      const reading = readNextLine(testCase.argv);
+      expect(kinds.has(reading.kind), `${note} kind=${reading.kind}`).toBe(true);
+      if (reading.kind === "exact") exact++;
+      else handed++;
+      // A line the engine hands to the agent is not a terminal command and not
+      // a read-only mode at either seam, save this engine's own refusals, which
+      // carry no workflow work either way.
+      if (reading.kind !== "exact" && !isRefusedModifierNextArgv(testCase.argv)) {
+        expect(classifyTerminalCommand([...testCase.argv]), note).toBeNull();
+        expect(isReadOnlyNextArgv(testCase.argv), note).toBe(isRetiredOnlyNextArgv(testCase.argv));
+      }
+      // The same line as one quoted argument, as a harness that quotes the
+      // whole turn hands it over. Nothing but flags and their values reads as
+      // those tokens; a sentence opening with a plan's name is the same reading
+      // step either way, because it is the same line; any other sentence is
+      // theirs whole.
+      if (testCase.argv.length > 1 && !testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token))) {
+        const line = testCase.argv.join(" ");
+        const quoted = readNextLine([line]);
+        if (argumentIsFlagShaped(line) || reading.kind === "plan-word") {
+          // A sentence opening with a plan's name is the same reading step
+          // either way, because it is the same line.
+          expect(quoted, `quoted ${note}`).toEqual(reading);
+        } else if (SCOPES.has(testCase.argv[0])) {
+          // Split, a plan's name and one word is the plan in its own argument;
+          // quoted whole, the same line is the reading step: no count of words.
+          expect(quoted.kind, `quoted ${note}`).toBe("plan-word");
+        } else {
+          // Otherwise the engine cannot see a flag or a noun inside one
+          // argument of theirs, so the line is their words whole, and never a
+          // reading it would act on differently.
+          expect([reading.kind, "words"], `quoted ${note} -> ${quoted.kind}`).toContain(quoted.kind);
+        }
+        // And the seams stand back from the quoted form exactly as from the
+        // split one: one line, one reading, wherever it is read.
+        // One line, so this engine's own refusal is read off the same tokens.
+        if (quoted.kind !== "exact" && !isRefusedModifierNextArgv(testCase.argv)) {
+          expect(classifyTerminalCommand([line]), `quoted ${note}`).toBeNull();
+          expect(isReadOnlyNextArgv([line]), `quoted ${note}`).toBe(isRetiredOnlyNextArgv([line]));
+        }
+      }
+    }
+    expect(exact, "some of the generated lines act").toBeGreaterThan(50);
+    expect(handed, "some of them go to the agent").toBeGreaterThan(50);
+  });
+});
+
+describe("the engine routes a seeded slice of those lines", () => {
+  /** Shapes whose routing this change owns; the rest are parser-only here. */
+  const routable = cases.filter((testCase) =>
+    ["words-only", "untaken-answer", "untaken-misspelt", "untaken-unknown", "untaken-equals", "after-delimiter", "ceremony-flag", "fence-flag"]
+      .includes(testCase.shape));
+  const slice = Array.from({ length: Math.min(ROUTED, routable.length) }, (_unused, index) =>
+    routable[Math.floor((index * routable.length) / Math.min(ROUTED, routable.length))]);
+
+  function env(proj: string): NodeJS.ProcessEnv {
+    return {
+      ...testGuardEnvironment(process.env, "production"),
+      CLAUDE_PROJECT_DIR: proj,
+      AIDLC_PROJECT_DIR: proj,
+      AIDLC_UNATTENDED: "0",
+      AIDLC_SESSION_OVERRIDE: SESSION,
+    };
+  }
+
+  function openWork(): string {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    writeFileSync(seededStateFile(proj),
+      readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8"), "utf-8");
+    const health = hooksHealthDir(proj);
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "record-human-turn.last"), new Date().toISOString());
+    return proj;
+  }
+
+  const questionDir = (proj: string) => join(proj, "aidlc", ".aidlc-sessions", "questions");
+
+  function questionIds(proj: string): string[] {
+    const dir = questionDir(proj);
+    return existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith(".json")) : [];
+  }
+
+  function newQuestionTexts(proj: string, before: readonly string[]): string {
+    return questionIds(proj)
+      .filter((name) => !before.includes(name))
+      .map((name) => readFileSync(join(questionDir(proj), name), "utf-8"))
+      .join(" ");
+  }
+
+  test(`routes ${slice.length} of them: no crash, no audit record, and nothing reaches the person`, () => {
+    const proj = openWork();
+    const before = readAuditShardEvents(proj).length;
+    for (const testCase of slice) {
+      const note = where(testCase);
+      // The project carries every earlier line of the slice, and a token after
+      // `--` is their text, so only the questions this call adds are its own.
+      const questionsBefore = questionIds(proj);
+      const result = runOrchestrateNext(ORCHESTRATE, proj, testCase.argv, { env: env(proj) });
+      // A line nobody wrote on purpose still returns one directive, never a stack.
+      expect(result.out, note).not.toContain("error: Unhandled");
+      expect(result.directive, `${note} out=${result.out.slice(0, 400)}`).not.toBeNull();
+      const directive = result.directive as Record<string, unknown>;
+      if (testCase.untaken !== undefined) {
+        // The one agent-facing print: no spoken line, no question of any kind,
+        // and the token never said to be the person's words.
+        expect(directive.kind, `${note} directive=${JSON.stringify(directive).slice(0, 300)}`).toBe("print");
+        expect(directive.narration, note).toBeUndefined();
+        expect(directive.ask_type, note).toBeUndefined();
+        expect(String(directive.message), note).toContain(testCase.untaken);
+        expect(result.out, note).not.toContain("I could not read");
+        // No question copy of this call's making says the person asked for it.
+        expect(newQuestionTexts(proj, questionsBefore), note).not.toContain(testCase.untaken);
+      }
+      // `next` reads; it records nothing, whatever the line.
+      expect(readAuditShardEvents(proj).length, note).toBe(before);
+    }
+  });
+});
+
+describe("a host's human-turn hook keeps the same reading of the line", () => {
+  const hookable = cases.filter((testCase) =>
+    testCase.argv.length > 0 && !testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token)));
+  const slice = Array.from({ length: Math.min(HOOKED, hookable.length) }, (_unused, index) =>
+    hookable[Math.floor((index * hookable.length) / Math.min(HOOKED, hookable.length))]);
+
+  test(`records ${slice.length} typed lines with the words the parser read`, () => {
+    for (const testCase of slice) {
+      const note = where(testCase);
+      const proj = createTestProject();
+      created.push(proj);
+      removeWorkspaceRecord(proj);
+      const health = hooksHealthDir(proj);
+      mkdirSync(health, { recursive: true });
+      writeFileSync(join(health, "record-human-turn.last"), new Date().toISOString());
+      const prompt = `/aidlc ${testCase.argv.join(" ")}`;
+      const fired = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+        cwd: proj,
+        input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, cwd: proj, prompt }),
+        env: {
+          ...testGuardEnvironment(process.env, "production"),
+          CLAUDE_PROJECT_DIR: proj,
+          AIDLC_PROJECT_DIR: proj,
+          AIDLC_UNATTENDED: "0",
+          AIDLC_SESSION_OVERRIDE: SESSION,
+        },
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(fired.status, `${note} ${fired.stdout}${fired.stderr}`).toBe(0);
+      const records = listMessages(proj);
+      expect(records.length, note).toBe(1);
+      // One parser: the record's words are exactly what `next` reads as the
+      // request, so the proof kept for the person matches the engine's reading.
+      // A line the parser refuses keeps their words whole instead, since the
+      // record's job is to prove what they said (aidlc-message-store.ts).
+      const parsed = parseNextFlags(testCase.argv);
+      // Their words, not the engine's reading of them: a flag-shaped token
+      // `next` does not take stays in the record (personWords), and a line the
+      // parser refuses keeps the line whole.
+      const expected = parsed.parseError === undefined
+        ? (parsed.personWords ?? parsed.intent)?.trim() || null
+        : testCase.argv.join(" ");
+      expect(records[0].words, `${note} record=${JSON.stringify(records[0])}`).toBe(expected);
+      // Either way the whole line is on record, as the host delivered it.
+      expect(records[0].text, note).toBe(prompt);
+      // The hook applies nothing and says nothing about a setting: no note for
+      // the agent, no row, no record kept for the next work, no `applied` field.
+      expect(fired.stdout, note).not.toContain("AIDLC Guard Policy");
+      expect(readAuditShardEvents(proj), note).toEqual([]);
+      for (const kept of KEPT_RECORDS) expect(existsSync(planApprovalRuntimeFile(proj, kept)), `${note} ${kept}`).toBe(false);
+      expect("applied" in records[0], note).toBe(false);
+      cleanupTestProject(created.pop());
+    }
+  });
+});
+
+const KEPT_RECORDS = [
+  `plan-approval-off-at-creation-${SESSION}.json`,
+  `guard-policy-at-creation-${SESSION}.json`,
+  `fences-off-at-creation-${SESSION}.json`,
+  `ceremonies-at-creation-${SESSION}.json`,
+];
+
+// The setter the agent runs for a flags-only line before any work: `next`
+// names it (never "No workflow state found"), it keeps exactly the record's
+// settings for the piece of work the chat starts next, and the same key typed
+// on or strict withdraws what it kept.
+describe("a flags-only lowering line before any work is kept by the setter the agent runs", () => {
+  const lowering = cases.filter((testCase) =>
+    (testCase.shape === "fence-flag" || testCase.shape === "ceremony-flag") &&
+    (testCase.tail === null || testCase.tail.length === 0) &&
+    !testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token)) &&
+    typedSettingModifiers(parseNextFlags(testCase.argv)).some((modifier) => / off$/.test(modifier) || / (relaxed)$/.test(modifier)));
+  const slice = Array.from({ length: Math.min(6, lowering.length) }, (_unused, index) =>
+    lowering[Math.floor((index * lowering.length) / Math.min(6, lowering.length))]);
+
+  function env(proj: string): NodeJS.ProcessEnv {
+    return {
+      ...testGuardEnvironment(process.env, "production"),
+      CLAUDE_PROJECT_DIR: proj,
+      AIDLC_PROJECT_DIR: proj,
+      AIDLC_UNATTENDED: "0",
+      AIDLC_SESSION_OVERRIDE: SESSION,
+    };
+  }
+
+  function configSet(proj: string, modifiers: readonly string[]): { status: number; out: string } {
+    const [first, ...rest] = modifiers;
+    const args = [...first.split(" "), ...rest.flatMap((modifier) => [`--${modifier.split(" ")[0]}`, modifier.split(" ")[1]])];
+    const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", ...args, "--project-dir", proj], {
+      cwd: proj,
+      env: env(proj),
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  }
+
+  test(`keeps ${slice.length} such lines and withdraws them on the word back`, () => {
+    for (const testCase of slice) {
+      const note = where(testCase);
+      const proj = createTestProject();
+      created.push(proj);
+      removeWorkspaceRecord(proj);
+      const health = hooksHealthDir(proj);
+      mkdirSync(health, { recursive: true });
+      writeFileSync(join(health, "record-human-turn.last"), new Date().toISOString());
+      const prompt = `/aidlc ${testCase.argv.join(" ")}`;
+      const fired = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+        cwd: proj,
+        input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, cwd: proj, prompt }),
+        env: env(proj),
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(fired.status, `${note} ${fired.stderr}`).toBe(0);
+      const [record] = listMessages(proj);
+      const modifiers = typedSettingModifiers(parseNextFlags(testCase.argv));
+      expect(record.settings.map((setting) => `${setting.key} ${setting.value}`), note).toEqual(modifiers);
+      // `next` names the setter; it never answers a setting with the no-state error.
+      const step = runOrchestrateNext(ORCHESTRATE, proj, testCase.argv, { env: env(proj) });
+      expect(step.directive?.kind, `${note} out=${step.out.slice(0, 300)}`).toBe("print");
+      expect(step.out, note).not.toContain("No workflow state found");
+      expect(String((step.directive as { message?: unknown }).message), note).toContain("config set");
+      // The setter keeps exactly the record's settings, said once, and creates nothing.
+      const kept = configSet(proj, record.settings.map((setting) => `${setting.key} ${setting.value}`));
+      expect(kept.status, `${note} ${kept.out}`).toBe(0);
+      expect(kept.out, note).toContain("for the piece of work you start now (set by you)");
+      expect(existsSync(planApprovalRuntimeFile(proj, KEPT_RECORDS[3])), note).toBe(true);
+      expect(readAuditShardEvents(proj), note).toEqual([]);
+      // The word back withdraws it: the dedicated record for that key goes.
+      const back = modifiers.map((modifier) => {
+        const [key, value] = modifier.split(" ");
+        return `${key} ${key === "guard-policy" ? "strict" : value === "off" ? "on" : value}`;
+      });
+      expect(configSet(proj, back).status, note).toBe(0);
+      for (const kept of KEPT_RECORDS.slice(0, 3)) {
+        expect(existsSync(planApprovalRuntimeFile(proj, kept)), `${note} ${kept} still kept after ${back.join(", ")}`).toBe(false);
+      }
+      cleanupTestProject(created.pop());
+    }
+  });
+});
+
+// No chain the agent is told to follow can loop. Over the generated
+// settings-only lines, from the Copilot CLI shape (a bare `next`, no arguments
+// at all): the engine names one command, the agent runs it, and the next bare
+// `next` must move on. Three engine calls at most, no print said twice, and no
+// setting applied twice.
+describe("the chain from a bare next ends, and sets each thing once", () => {
+  const settingsOnly = cases.filter((testCase) =>
+    (testCase.shape === "fence-flag" || testCase.shape === "ceremony-flag" || testCase.shape === "valued-flag") &&
+    (testCase.tail === null || testCase.tail.length === 0) &&
+    !testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token) || token.includes("=")) &&
+    parseNextFlags(testCase.argv).parseError === undefined &&
+    parseNextFlags(testCase.argv).untakenFlag === undefined &&
+    typedSettingModifiers(parseNextFlags(testCase.argv)).length > 0);
+  const slice = Array.from({ length: Math.min(5, settingsOnly.length) }, (_unused, index) =>
+    settingsOnly[Math.floor((index * settingsOnly.length) / Math.min(5, settingsOnly.length))]);
+
+  function env(proj: string): NodeJS.ProcessEnv {
+    return {
+      ...testGuardEnvironment(process.env, "production"),
+      CLAUDE_PROJECT_DIR: proj,
+      AIDLC_PROJECT_DIR: proj,
+      AIDLC_UNATTENDED: "0",
+      AIDLC_SESSION_OVERRIDE: SESSION,
+    };
+  }
+
+  test(`${slice.length} generated settings-only lines each end within three steps`, () => {
+    for (const testCase of slice) {
+      const note = where(testCase);
+      const proj = createTestProject();
+      created.push(proj);
+      removeWorkspaceRecord(proj);
+      const health = hooksHealthDir(proj);
+      mkdirSync(health, { recursive: true });
+      writeFileSync(join(health, "record-human-turn.last"), new Date().toISOString());
+      const fired = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+        cwd: proj,
+        input: JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: SESSION,
+          cwd: proj,
+          prompt: `/aidlc ${testCase.argv.join(" ")}`,
+        }),
+        env: env(proj),
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(fired.status, `${note} ${fired.stderr}`).toBe(0);
+      const prints: string[] = [];
+      const ran: string[] = [];
+      let ended = "unresolved";
+      for (let call = 0; call < 3; call += 1) {
+        const step = runOrchestrateNext(ORCHESTRATE, proj, [], { env: env(proj) });
+        const directive = step.directive as { kind?: string; message?: unknown } | null;
+        if (directive?.kind !== "print") {
+          ended = directive?.kind ?? "none";
+          break;
+        }
+        const message = String(directive.message ?? "");
+        prints.push(message);
+        const command = /Run `([^`]+)`/.exec(message)?.[1];
+        if (command === undefined) {
+          ended = "said";
+          break;
+        }
+        const argv = command.split(/\s+/).map((token) =>
+          /^\.[\\/]?[a-z-]*[\\/]tools[\\/]aidlc[a-z-]*\.ts$/.test(token)
+            ? join(AIDLC_SRC, "tools", token.split(/[\\/]/).pop() as string)
+            : token);
+        const result = spawnSync(argv[0] === "bun" ? BUN : argv[0], argv.slice(1), {
+          cwd: proj,
+          env: env(proj),
+          encoding: "utf-8",
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        expect(result.status, `${note} ${command}: ${result.stdout}${result.stderr}`).toBe(0);
+        ran.push(command);
+      }
+      expect(["ask", "run-stage", "said"], `${note}: ended ${ended} after ${JSON.stringify(prints.map((line) => line.slice(0, 50)))}`)
+        .toContain(ended);
+      expect(new Set(prints).size, `${note}: a print came back twice`).toBe(prints.length);
+      expect(ran.length, `${note}: ran ${JSON.stringify(ran)}`).toBeLessThanOrEqual(1);
+      expect(readAuditShardEvents(proj), note).toEqual([]);
+      cleanupTestProject(created.pop());
+    }
+  });
+});
+
+// A line of settings followed by words while the engine's code plan question
+// is open: the hook keeps it as a reply and applies nothing, `next` records no
+// answer, and only the agent's own `log answer` marks the question answered.
+// Words behind `--` are a command, and `log answer` is refused for want of a reply.
+describe("a line of settings and words at the open code plan question", () => {
+  const replies = cases.filter((testCase) =>
+    (testCase.shape === "fence-flag" || testCase.shape === "ceremony-flag" || testCase.shape === "valued-flag") &&
+    testCase.tail !== null && testCase.tail.length > 0 &&
+    !testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token) || token.startsWith("--") && token.includes("=")) &&
+    parseNextFlags(testCase.argv).parseError === undefined && parseNextFlags(testCase.argv).untakenFlag === undefined &&
+    !["--scope", "--request", "--plan-name"].some((flag) => testCase.argv.includes(flag)));
+  const slice = Array.from({ length: Math.min(4, replies.length) }, (_unused, index) =>
+    replies[Math.floor((index * replies.length) / Math.min(4, replies.length))]);
+  const delimited = cases.find((testCase) => testCase.shape === "after-delimiter" &&
+    !testCase.argv.some((token) => token === "" || /[\s"'\\]/.test(token)));
+
+  function env(proj: string): NodeJS.ProcessEnv {
+    return {
+      ...testGuardEnvironment(process.env, "production"),
+      CLAUDE_PROJECT_DIR: proj,
+      AIDLC_PROJECT_DIR: proj,
+      AIDLC_UNATTENDED: "0",
+      AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0",
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+      AIDLC_SESSION_OVERRIDE: SESSION,
+    };
+  }
+
+  /** A poc workflow at code generation with its plan question open. */
+  function planQuestionOpen(): string {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    const state = readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8")
+      .replace("- **Scope**: feature", "- **Scope**: poc")
+      .replace("- **Change Control**: strict (from scope feature)", "- **Guard Policy**: relaxed (set by you)\n- **Plan Approval**: on (set by you)")
+      .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation");
+    writeFileSync(seededStateFile(proj), state, "utf-8");
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "base.ts"), "export const base = true;\n", "utf-8");
+    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(join(sessions, ".current-session"), `${SESSION}\n`, "utf-8");
+    const stage = join(proj, "aidlc", "spaces", "default", "intents");
+    const record = readFileSync(join(stage, "active-intent"), "utf-8").trim();
+    const dir = join(stage, record, "construction", "code-generation");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "code-generation-plan.md"),
+      "# Code Generation Plan\n\n## Summary\n\n- Builds: slugify for titles\n- Touches: src/slugify.ts\n- Tests: 3 unit tests\n\n## Steps\n\n- [ ] Step 1: write slugify\n\n" +
+        renderTestingContract(resolveTestingPosture(proj)), "utf-8");
+    writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test`.\n", "utf-8");
+    const asked = runOrchestrateNext(ORCHESTRATE, proj, [], { env: env(proj) });
+    expect((asked.directive as { ask_type?: string } | null)?.ask_type, asked.out).toBe("plan-approval");
+    return proj;
+  }
+
+  function hook(proj: string, argv: readonly string[]): void {
+    const fired = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, cwd: proj, prompt: `/aidlc ${argv.join(" ")}` }),
+      env: env(proj),
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(fired.status, fired.stderr).toBe(0);
+    expect(fired.stdout).not.toContain("AIDLC Guard Policy");
+  }
+
+  function answer(proj: string): number {
+    const result = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+      "--details", "Approve Plan", "--project-dir", proj,
+    ], { cwd: proj, env: env(proj), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    return result.status ?? -1;
+  }
+
+  const answered = (proj: string): number =>
+    readAuditShardEvents(proj).filter((row) => row.event === "QUESTION_ANSWERED" || row.event === "PLAN_APPROVAL_RECORDED").length;
+  const lastTurnMark = (proj: string): string | null => {
+    const turns = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN");
+    return auditBlockField(turns[turns.length - 1].block, "Reply");
+  };
+
+  test(`${slice.length} such lines are the person's reply: nothing answers the question but the agent`, () => {
+    for (const testCase of slice) {
+      const note = where(testCase);
+      const proj = planQuestionOpen();
+      const before = readFileSync(seededStateFile(proj), "utf-8");
+      hook(proj, testCase.argv);
+      expect(lastTurnMark(proj), note).toBeNull();
+      expect(readFileSync(seededStateFile(proj), "utf-8"), note).toBe(before);
+      expect(answered(proj), note).toBe(0);
+      const step = runOrchestrateNext(ORCHESTRATE, proj, testCase.argv, { env: env(proj) });
+      expect(step.directive, `${note} out=${step.out.slice(0, 300)}`).not.toBeNull();
+      expect(answered(proj), note).toBe(0);
+      expect(answer(proj), note).toBe(0);
+      expect(answered(proj), note).toBeGreaterThan(0);
+      cleanupTestProject(created.pop());
+    }
+  });
+
+  test("words behind -- are a command: the turn is marked, and no answer is taken from it", () => {
+    if (delimited === undefined) return;
+    const proj = planQuestionOpen();
+    hook(proj, delimited.argv);
+    expect(lastTurnMark(proj), where(delimited)).toBe("command");
+    expect(answer(proj), where(delimited)).not.toBe(0);
+    expect(answered(proj), where(delimited)).toBe(0);
+  });
+});
+
+afterAll(() => {
+  process.stdout.write(`\nt-next-flags-fuzz: seed=${SEED} cases=${CASES} routed=${ROUTED} hooked=${HOOKED}\n`);
+});
+
+// Words that only ask for the work to go on are words like any other: no list in
+// the engine knows them (the five it listed, "carry on", "continue", "keep
+// going", "go on" and "resume", left with WO5), so however the person says it,
+// with "please" before or after, in any case, with a closing mark, split into
+// tokens or quoted whole, the line reads as their words, the seams stand back,
+// and over work in progress it gets the one reading print, which names the bare
+// `next` the agent then runs. Its own seeded stream, so the sweep above keeps
+// its exact lines.
+describe("ways of saying go on over a seeded sweep", () => {
+  const GO_ON_PHRASES = [
+    "carry on", "continue", "keep going", "go on", "resume", "proceed", "ok go", "go ahead", "let's continue",
+    "keep at it", "onwards", "next step please",
+  ];
+  const BEFORE = ["", "please ", "Please, ", "ok ", "yes, "];
+  const AFTER = ["", " please", ", please", ".", "!", " now"];
+  const GO_ON_CASES = 120;
+  const GO_ON_ROUTED = 6;
+  const GO_ON_CLONE = 3;
+
+  interface GoOnCase { argv: string[]; line: string }
+  function buildGoOn(next: () => number): GoOnCase {
+    const pick = <T,>(pool: readonly T[]): T => pool[Math.floor(next() * pool.length)];
+    let line = `${pick(BEFORE)}${pick(GO_ON_PHRASES)}${pick(AFTER)}`;
+    const shape = next();
+    if (shape < 0.2) line = line.toUpperCase();
+    else if (shape < 0.4) line = line.replace(/ /g, "  ");
+    else if (shape < 0.5) line = `${line}\r\n`;
+    // Split into tokens as a shell hands them over, or one quoted argument as
+    // a host that quotes the whole turn does.
+    const argv = next() < 0.5 ? line.trim().split(/\s+/) : [line];
+    return { argv, line: line.replace(/\s+/g, " ").trim() };
+  }
+  const goOnCases: GoOnCase[] = (() => {
+    const next = rng(SEED + 1);
+    return Array.from({ length: GO_ON_CASES }, () => buildGoOn(next));
+  })();
+  const whereGoOn = (c: GoOnCase): string => `seed=${SEED + 1} argv=${JSON.stringify(c.argv)}`;
+
+  test(`reads ${GO_ON_CASES} go-on lines as the person's words, whole, with the seams standing back`, () => {
+    for (const c of goOnCases) {
+      const note = whereGoOn(c);
+      const parsed = parseNextFlags(c.argv);
+      expect(parsed.parseError, note).toBeUndefined();
+      expect(parsed.untakenFlag, note).toBeUndefined();
+      // Their words, whole and in order, with nothing read off them.
+      expect((parsed.intent ?? "").replace(/\s+/g, " ").trim(), note).toBe(c.line);
+      expect(nextArgsAreOnlyWords(c.argv), note).toBe(true);
+      expect(readNextLine(c.argv).kind, note).toBe("words");
+      expect(classifyTerminalCommand([...c.argv]), note).toBeNull();
+      expect(isReadOnlyNextArgv(c.argv), note).toBe(false);
+    }
+  });
+
+  const slice = (count: number, offset: number): GoOnCase[] =>
+    Array.from({ length: count }, (_unused, index) => goOnCases[(offset + Math.floor((index * goOnCases.length) / count)) % goOnCases.length]);
+
+  function production(proj: string): NodeJS.ProcessEnv {
+    return {
+      ...testGuardEnvironment(process.env, "production"),
+      CLAUDE_PROJECT_DIR: proj,
+      AIDLC_PROJECT_DIR: proj,
+      AIDLC_UNATTENDED: "0",
+      AIDLC_SESSION_OVERRIDE: SESSION,
+    };
+  }
+
+  function withHookMarker(proj: string): string {
+    const health = hooksHealthDir(proj);
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "record-human-turn.last"), new Date().toISOString());
+    return proj;
+  }
+
+  test(`routes ${GO_ON_ROUTED} of them over work in progress: the one reading print, then the bare next is the stage step`, () => {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8"), "utf-8");
+    withHookMarker(proj);
+    const env = production(proj);
+    const before = readAuditShardEvents(proj).length;
+    const bare = runOrchestrateNext(ORCHESTRATE, proj, [], { env }).directive as Record<string, unknown>;
+    expect(bare.kind).toBe("run-stage");
+    let reading: string | null = null;
+    for (const c of slice(GO_ON_ROUTED, 0)) {
+      const note = whereGoOn(c);
+      const result = runOrchestrateNext(ORCHESTRATE, proj, c.argv, { env });
+      const directive = result.directive as Record<string, unknown>;
+      expect(directive, `${note} out=${result.out.slice(0, 400)}`).not.toBeNull();
+      // One reading for every words-only line: the same print, up to the id.
+      expect(directive.kind, `${note} directive=${JSON.stringify(directive).slice(0, 300)}`).toBe("print");
+      expect(directive.ask_type, note).toBeUndefined();
+      expect(String(directive.message), note).toMatch(/next` with nothing after it/);
+      const shape = JSON.stringify(directive).replace(/[0-9a-f]{8}/g, "<id>");
+      if (reading === null) reading = shape;
+      expect(shape, note).toBe(reading);
+      // The step the print names is the stage step, never this print again.
+      const after = runOrchestrateNext(ORCHESTRATE, proj, [], { env }).directive as Record<string, unknown>;
+      expect(after.kind, `${note} after=${JSON.stringify(after).slice(0, 300)}`).toBe("run-stage");
+      expect(after.stage, note).toBe(bare.stage);
+      // `next` reads; it records nothing.
+      expect(readAuditShardEvents(proj).length, note).toBe(before);
+    }
+  });
+
+  test(`routes ${GO_ON_CLONE} of them where work is here but none is selected: the reading print, then the pick`, () => {
+    const proj = createTestProject();
+    created.push(proj);
+    removeWorkspaceRecord(proj);
+    for (const scope of ["poc", "feature"]) {
+      const made = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc-utility.ts"), "intent-create", "--scope", scope, "--project-dir", proj], {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env },
+      });
+      expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+    }
+    rmSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), { force: true });
+    withHookMarker(proj);
+    const env = production(proj);
+    const pick = runOrchestrateNext(ORCHESTRATE, proj, [], { env }).directive as Record<string, unknown>;
+    expect(pick.ask_type, JSON.stringify(pick).slice(0, 300)).toBe("intent-pick");
+    for (const c of slice(GO_ON_CLONE, 7)) {
+      const note = whereGoOn(c);
+      const directive = runOrchestrateNext(ORCHESTRATE, proj, c.argv, { env }).directive as Record<string, unknown>;
+      expect(directive.kind, `${note} directive=${JSON.stringify(directive).slice(0, 300)}`).toBe("print");
+      expect(String(directive.message), note).toMatch(/next` with nothing after it/);
+      expect(String(directive.message), note).toContain("intent switch <name>");
+      // Words that name one piece and ask for it to go on get the one-step pick.
+      expect(String(directive.message), note).toContain("next --pick <name>");
+      // Never offered as new work: the words stay out of the print and in the kept question.
+      expect(JSON.stringify(directive), note).not.toContain(c.line);
+      const after = runOrchestrateNext(ORCHESTRATE, proj, [], { env }).directive as Record<string, unknown>;
+      expect(after.ask_type, `${note} after=${JSON.stringify(after).slice(0, 300)}`).toBe("intent-pick");
+      expect(after.question, note).toBe(pick.question);
+    }
+  });
+});
+
+// On a workspace with no plan named, every words-only line is the agent's to
+// read before anything is offered: the engine keeps the request and hands the
+// plans to the agent (the proposal step), the agent answers with one exact
+// flag, and the person gets one question. No keyword in the engine picks the
+// plan, so the sweep's words can say anything. Seeded, deterministic slice.
+describe("the proposal step over a seeded slice of fresh-workspace lines", () => {
+  const FRESH_ROUTED = 6;
+  const wordsOnly = cases.filter((testCase) => testCase.shape === "words-only");
+  const slice = Array.from({ length: Math.min(FRESH_ROUTED, wordsOnly.length) }, (_unused, index) =>
+    wordsOnly[Math.floor((index * wordsOnly.length) / Math.min(FRESH_ROUTED, wordsOnly.length))]);
+  const PROPOSAL = "--propose <plan> --request";
+
+  function freshWorkspace(): string {
+    const proj = createTestProject();
+    created.push(proj);
+    removeWorkspaceRecord(proj);
+    const health = hooksHealthDir(proj);
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "record-human-turn.last"), new Date().toISOString());
+    return proj;
+  }
+
+  test(`routes ${slice.length} of them: the proposal print, then the agent's plan is one question, never the print twice`, () => {
+    const plans = [...validScopes(), "compose"];
+    const pick = rng(SEED + 2);
+    for (const testCase of slice) {
+      const note = where(testCase);
+      const proj = freshWorkspace();
+      const env = {
+        ...testGuardEnvironment(process.env, "production"),
+        CLAUDE_PROJECT_DIR: proj,
+        AIDLC_PROJECT_DIR: proj,
+        AIDLC_UNATTENDED: "0",
+        AIDLC_SESSION_OVERRIDE: SESSION,
+      };
+      const before = readAuditShardEvents(proj).length;
+      const first = runOrchestrateNext(ORCHESTRATE, proj, testCase.argv, { env }).directive as Record<string, unknown>;
+      expect(first?.kind, `${note} first=${JSON.stringify(first).slice(0, 300)}`).toBe("print");
+      expect(first.ask_type, note).toBeUndefined();
+      const message = String(first.message);
+      expect(message, note).toContain(PROPOSAL);
+      expect(message, note).not.toContain("This looks like");
+      const id = /--request ([0-9a-f]{8})/.exec(message)?.[1];
+      expect(id, note).toBeDefined();
+      // The agent's plan, whichever it reads: one question for the person.
+      const plan = plans[Math.floor(pick() * plans.length)];
+      const ask = runOrchestrateNext(ORCHESTRATE, proj, ["--propose", plan, "--request", id!], { env }).directive as Record<string, unknown>;
+      expect(ask?.kind, `${note} plan=${plan} ask=${JSON.stringify(ask).slice(0, 300)}`).toBe("ask");
+      expect(ask.ask_type, note).toBe(plan === "compose" ? "compose-offer" : "scope-confirm");
+      expect(String(ask.question), note).not.toContain(PROPOSAL);
+      // The step re-run with its request is the same step, not a second copy.
+      const again = runOrchestrateNext(ORCHESTRATE, proj, ["--request", id!], { env }).directive as Record<string, unknown>;
+      expect(again, note).toEqual(first);
+      // `next` reads; it records nothing.
+      expect(readAuditShardEvents(proj).length, note).toBe(before);
+      cleanupTestProject(created.pop());
+    }
+  });
+});

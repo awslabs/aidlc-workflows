@@ -3,8 +3,10 @@
 // covers: harness-instrument:kiro-numbered-prose-answering
 //
 // Pins the TUI harness' setting-source isolation. Live TUI journeys drive the
-// real Claude CLI, but should load only the copied project .claude settings by
-// default so developer/user-level hooks cannot contaminate deterministic tests.
+// real Claude CLI, but should load only the copied project .claude settings and
+// the fixture's own .claude/settings.local.json (where the person's status line
+// choice lives, #1407) by default, so developer/user-level hooks cannot
+// contaminate deterministic tests.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -85,13 +87,13 @@ function env(settingSources?: string): NodeJS.ProcessEnv {
 }
 
 describe("tui-drive setting-source isolation", () => {
-  test("bare claude commands default to project-only settings", () => {
+  test("bare claude commands default to project and local settings, never user settings", () => {
     expect(
       normalizeTuiCommand(["claude", "--dangerously-skip-permissions"], env()),
     ).toEqual([
       "claude",
       "--setting-sources",
-      "project",
+      "project,local",
       "--dangerously-skip-permissions",
     ]);
   });
@@ -102,7 +104,7 @@ describe("tui-drive setting-source isolation", () => {
     ).toEqual([
       "/opt/homebrew/bin/claude",
       "--setting-sources",
-      "project",
+      "project,local",
       "--resume",
     ]);
 
@@ -111,7 +113,7 @@ describe("tui-drive setting-source isolation", () => {
     ).toEqual([
       "C:\\Program Files\\nodejs\\claude.exe",
       "--setting-sources",
-      "project",
+      "project,local",
     ]);
   });
 
@@ -121,7 +123,7 @@ describe("tui-drive setting-source isolation", () => {
     ).toEqual([
       "claude.cmd",
       "--setting-sources",
-      "project",
+      "project,local",
       "--dangerously-skip-permissions",
     ]);
 
@@ -130,7 +132,7 @@ describe("tui-drive setting-source isolation", () => {
     ).toEqual([
       "C:\\Users\\dev\\AppData\\Roaming\\npm\\claude.cmd",
       "--setting-sources",
-      "project",
+      "project,local",
     ]);
   });
 
@@ -140,7 +142,7 @@ describe("tui-drive setting-source isolation", () => {
     ).toEqual([
       "claude.ps1",
       "--setting-sources",
-      "project",
+      "project,local",
       "--resume",
     ]);
 
@@ -149,7 +151,7 @@ describe("tui-drive setting-source isolation", () => {
     ).toEqual([
       "C:\\Users\\dev\\AppData\\Roaming\\npm\\claude.ps1",
       "--setting-sources",
-      "project",
+      "project,local",
     ]);
   });
 

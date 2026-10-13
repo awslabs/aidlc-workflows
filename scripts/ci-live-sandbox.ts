@@ -55,6 +55,14 @@ export function sandboxEnvironment(family: LiveFamily, home: string, path: strin
   } else if (family === "codex") {
     // Select the dummy profile written below; the broker alone holds real credentials.
     env.AIDLC_CODEX_AWS_PROFILE = "codex";
+  } else if (family === "copilot") {
+    // Copilot CLI's own-model mode (BYOK) on the broker's Mantle route: a dummy
+    // key, no GitHub sign-in or traffic, and no self-update of the pinned CLI.
+    Object.assign(env, {
+      COPILOT_PROVIDER_TYPE: "openai", COPILOT_PROVIDER_BASE_URL: `${url.origin}/openai/v1`,
+      COPILOT_PROVIDER_WIRE_API: "responses", COPILOT_PROVIDER_API_KEY: "broker", COPILOT_MODEL: CI_BEDROCK_MODELS.copilot,
+      COPILOT_OFFLINE: "true", COPILOT_AUTO_UPDATE: "false",
+    });
   } else if (family === "opencode") {
     env.AWS_PROFILE = "broker";
     env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ provider: { "amazon-bedrock": { options: {
@@ -67,7 +75,7 @@ export function sandboxEnvironment(family: LiveFamily, home: string, path: strin
 if (import.meta.main) {
   try {
     const [family, platform, shard, selectedTest = "", ...extra] = process.argv.slice(2);
-    if (extra.length || !["claude-sdk", "claude-tui", "codex", "opencode", "release-contract"].includes(family) || !["linux", "darwin", "win32"].includes(platform)) {
+    if (extra.length || !["claude-sdk", "claude-tui", "codex", "copilot", "opencode", "release-contract"].includes(family) || !["linux", "darwin", "win32"].includes(platform)) {
       throw new Error("Unsupported sandbox family/platform");
     }
     const command = sandboxCommand(family as LiveFamily, platform as NodeJS.Platform, shard, undefined, selectedTest);

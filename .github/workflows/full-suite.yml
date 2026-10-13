@@ -28,7 +28,7 @@ on:
         type: choice
         required: true
         default: all
-        options: [all, claude-sdk, claude-tui, codex, opencode]
+        options: [all, claude-sdk, claude-tui, codex, copilot, opencode]
       verification_test:
         description: "Optional exact repository test path for one family; uses its declared platforms"
         type: string
@@ -61,6 +61,7 @@ env:
   CLAUDE_CODE_VERSION: 2.1.278 # @anthropic-ai/claude-code npm latest, verified 2026-09-21
   CODEX_VERSION: 0.151.0
   OPENCODE_VERSION: 1.18.31 # opencode-ai npm latest, verified 2026-09-21
+  COPILOT_VERSION: 1.0.96 # @github/copilot npm latest, verified 2026-10-13
   AWS_REGION: us-east-1
   GIT_CONFIG_COUNT: "1"
   GIT_CONFIG_KEY_0: core.autocrlf
@@ -106,7 +107,7 @@ jobs:
             exit 1
           fi
           case "$family" in
-            all|claude-sdk|claude-tui|codex|opencode) ;;
+            all|claude-sdk|claude-tui|codex|copilot|opencode) ;;
             *) echo "::error::invalid verification family"; exit 1 ;;
           esac
           if [ "$family" != all ] && [ "${LIVE_VERIFICATION:-false}" != true ]; then
@@ -524,6 +525,7 @@ jobs:
       # https://code.claude.com/docs/en/env-vars documents Bedrock base URL + skip-auth.
       # Opencode endpoint support: https://opencode.ai/docs/providers/#amazon-bedrock
       # Codex 0.151.0 honors provider base_url for Mantle (verified with a dummy-profile loopback probe).
+      # Copilot CLI 1.0.96 reaches it through its own-model (BYOK) settings: `copilot help providers`.
       - name: "Start credential-isolated Bedrock broker"
         if: "matrix.family != 'release-contract'"
         env:
@@ -541,6 +543,7 @@ jobs:
           case "${{ matrix.family }}" in
             claude-*) claude --version ;;
             codex) codex --version ;;
+            copilot) copilot --version ;;
           esac
           case "${{ matrix.family }}" in
             opencode) opencode --version ;;
@@ -566,6 +569,13 @@ jobs:
           AIDLC_CODEX_EXEC_LIVE: "1"
         run: |
           sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" codex ${{ matrix.platform }} "${{ matrix.shard }}" "${{ matrix.test || '' }}"
+      - name: "Run copilot"
+        timeout-minutes: 70
+        if: "matrix.family == 'copilot'"
+        env:
+          AIDLC_COPILOT_EXEC_LIVE: "1"
+        run: |
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" copilot ${{ matrix.platform }} "${{ matrix.shard }}" "${{ matrix.test || '' }}"
       - name: "Run opencode"
         timeout-minutes: 70
         if: "matrix.family == 'opencode'"
@@ -675,6 +685,7 @@ jobs:
       # https://code.claude.com/docs/en/env-vars documents Bedrock base URL + skip-auth.
       # Opencode endpoint support: https://opencode.ai/docs/providers/#amazon-bedrock
       # Codex 0.151.0 honors provider base_url for Mantle (verified with a dummy-profile loopback probe).
+      # Copilot CLI 1.0.96 reaches it through its own-model (BYOK) settings: `copilot help providers`.
       - name: "Start credential-isolated Bedrock broker"
         if: "matrix.family != 'release-contract'"
         env:
@@ -692,6 +703,7 @@ jobs:
           case "${{ matrix.family }}" in
             claude-*) claude --version ;;
             codex) codex --version ;;
+            copilot) copilot --version ;;
           esac
           case "${{ matrix.family }}" in
             opencode) opencode --version ;;
@@ -717,6 +729,13 @@ jobs:
           AIDLC_CODEX_EXEC_LIVE: "1"
         run: |
           sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" codex ${{ matrix.platform }} "${{ matrix.shard }}" "${{ matrix.test || '' }}"
+      - name: "Run copilot"
+        timeout-minutes: 70
+        if: "matrix.family == 'copilot'"
+        env:
+          AIDLC_COPILOT_EXEC_LIVE: "1"
+        run: |
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" copilot ${{ matrix.platform }} "${{ matrix.shard }}" "${{ matrix.test || '' }}"
       - name: "Run opencode"
         timeout-minutes: 70
         if: "matrix.family == 'opencode'"
@@ -851,6 +870,12 @@ jobs:
         env:
           AIDLC_CODEX_EXEC_LIVE: "1"
         run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family codex -Shard '${{ matrix.shard }}' -Test '${{ matrix.test || '' }}'
+      - name: "Run copilot"
+        timeout-minutes: 70
+        if: "matrix.family == 'copilot'"
+        env:
+          AIDLC_COPILOT_EXEC_LIVE: "1"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family copilot -Shard '${{ matrix.shard }}' -Test '${{ matrix.test || '' }}'
       - name: "Run opencode"
         timeout-minutes: 70
         if: "matrix.family == 'opencode'"

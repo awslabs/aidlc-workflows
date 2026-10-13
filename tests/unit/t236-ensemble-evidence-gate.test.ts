@@ -63,6 +63,8 @@ resetAidlcEnv();
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const SHIPPED_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
+const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 
 // user-stories' declared support agents (verified frontmatter).
 const MOB_SUPPORTS = [
@@ -1188,5 +1190,89 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     expect(eventCount(afterAudit, "STAGE_COMPLETED")).toBe(
       eventCount(before.audit, "STAGE_COMPLETED") + 1,
     );
+  });
+});
+
+// The person approves an ensemble stage and asks for the specialists in the
+// same reply. The setter runs first, and the finished stage is held to the
+// switch it ran under: a lead-only run owes no contribution files to the
+// specialists who join from the next stage. Practices Discovery reads the same
+// seam twice: promotion while the gate is open, then the approval.
+describe("t236 an approval given with the collaborators switch stands", () => {
+  const APPROVE_WORDS = "Approve, and bring the specialists in from here";
+
+  function withCollaboratorsOff(state: string): string {
+    return state.replace("- **Scope**: enterprise", "- **Scope**: enterprise\n- **Collaborators**: off (set by you)");
+  }
+
+  // The setter the agent runs for "bring the specialists in".
+  function setCollaborators(proj: string, value: "on" | "off"): { rc: number; out: string } {
+    const result = spawnSync(
+      BUN,
+      [UTILITY, "config-change", "--collaborators", value, "--project-dir", proj],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", cwd: proj },
+    );
+    return { rc: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  }
+
+  test("User Stories: the gate opened lead-only, the switch turns on, the approval commits with no contribution files", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    writeFileSync(seededStateFile(proj), withCollaboratorsOff(inceptionState("[-]")));
+    recordReview(proj);
+    const opened = runReport(proj, ["--stage", "user-stories", "--result", "awaiting-approval"]);
+    expect(opened.kind, JSON.stringify(opened)).toBe("print");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- [?] user-stories — EXECUTE");
+
+    const switched = setCollaborators(proj, "on");
+    expect(switched.rc, switched.out).toBe(0);
+
+    const before = mutationSnapshot(proj);
+    const approved = runReport(proj, ["--stage", "user-stories", "--result", "approved", "--user-input", APPROVE_WORDS]);
+    expectApprovalCommitted(proj, approved, before);
+    expect(auditText(proj)).toContain(`**User Input**: ${APPROVE_WORDS}`);
+  });
+
+  test("Practices Discovery: the gate opened lead-only, the switch turns on, promotion and the approval both go through", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    seedAidlcMemory(proj);
+    writeFileSync(seededStateFile(proj), withCollaboratorsOff(practicesState("[-]")));
+    appendAuditEvent(proj, "STAGE_STARTED", "2026-07-17T14:01:00Z", {
+      Stage: "practices-discovery",
+      Agent: "aidlc-pipeline-deploy-agent",
+    });
+    const draftDir = join(seededRecordDir(proj), "inception", "practices-discovery");
+    mkdirSync(draftDir, { recursive: true });
+    const teamPractices = join(draftDir, "team-practices.md");
+    const discoveredRules = join(draftDir, "discovered-rules.md");
+    writeFileSync(
+      teamPractices,
+      "# Team Practices\n\n## Testing Posture\n\n- **Methodology**: test-after\n- **Ordering**: one sentence.\n",
+      "utf-8",
+    );
+    writeFileSync(
+      discoveredRules,
+      "# Discovered Rules\n\n## Mandated\n\n- Keep the greeter's output on one line\n\n## Forbidden\n\n- No new dependencies\n",
+      "utf-8",
+    );
+
+    const opened = runReport(proj, ["--stage", "practices-discovery", "--result", "awaiting-approval"]);
+    expect(opened.kind, opened.message).toBe("print");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- [?] practices-discovery — EXECUTE");
+
+    const switched = setCollaborators(proj, "on");
+    expect(switched.rc, switched.out).toBe(0);
+
+    const promote = spawnSync(
+      BUN,
+      [STATE, "practices-promote", "--team-practices", teamPractices, "--discovered-rules", discoveredRules, "--project-dir", proj],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", cwd: proj },
+    );
+    expect(promote.status, `${promote.stdout}${promote.stderr}`).toBe(0);
+
+    const before = mutationSnapshot(proj);
+    const approved = runReport(proj, ["--stage", "practices-discovery", "--result", "approved", "--user-input", APPROVE_WORDS]);
+    expectApprovalCommitted(proj, approved, before, "practices-discovery");
   });
 });

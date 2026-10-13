@@ -109,9 +109,9 @@ export function captureOrientationStatusline(
   let sample: OrientationSample | undefined;
   let launchError: unknown;
   try {
-    // The statusLine key is what wires aidlc-statusline.ts into the TUI; a copy
-    // that dropped it would render no [AIDLC] line at all.
-    expect(readFileSync(join(sandbox, ".claude", "settings.json"), "utf8")).toContain(
+    // The statusLine key is what wires aidlc-statusline.ts into the TUI; it is
+    // the person's own choice, in .claude/settings.local.json (#1407).
+    expect(readFileSync(join(sandbox, ".claude", "settings.local.json"), "utf8")).toContain(
       '"statusLine"',
     );
 

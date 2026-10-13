@@ -16,7 +16,8 @@
 // Subject (three ground-truth sources cross-checked against the doc prose):
 //   A. dist/claude/.claude/hooks/aidlc-*.ts          — the hook scripts on disk
 //   B. dist/claude/.claude/settings.json             — the `hooks` block command
-//        count + the top-level `statusLine` key (1 when present)
+//        count, + the shipped `statusLine` in tools/data/harness.json (1 when
+//        present), which each person's own settings.local.json wires on their yes (#1407)
 //   C. docs/reference/06-hooks-and-tools.md           — the count-words in the
 //        Wave-3-milestone-13 hook-scope sentence:
 //        "This implementation uses twelve TypeScript hook sources ... All twelve are
@@ -98,7 +99,12 @@ function settingsCounts(): SettingsCounts {
       }
     }
   }
-  const statusline = s.statusLine?.command ? 1 : 0;
+  // AI-DLC's status line ships in harness.json; the person's own
+  // settings.local.json wires it once they choose it (#1407).
+  const shipped = JSON.parse(readFileSync(join(AIDLC_SRC, "tools", "data", "harness.json"), "utf-8")) as {
+    statusLine?: { command?: string };
+  };
+  const statusline = !s.statusLine?.command && shipped.statusLine?.command ? 1 : 0;
   return { block: commands.size, statusline, total: commands.size + statusline };
 }
 

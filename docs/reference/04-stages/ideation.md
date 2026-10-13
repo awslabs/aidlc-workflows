@@ -5,13 +5,16 @@
 The Ideation phase is the second of five phases in the AI-DLC lifecycle. It
 establishes the foundation for the entire initiative by capturing intent,
 validating feasibility, defining scope, and securing approval before any
-technical work begins. The phase runs stages 1.1 through 1.7 and concludes
-with a go/no-go gate that controls entry into the Inception phase.
+technical work begins. In enterprise and feature it runs stages 1.1 through
+1.7 and concludes with a go/no-go gate that controls entry into the Inception
+phase.
 
-All seven stages execute inline (no subagent delegation) and follow the
-standard stage-protocol.md for approval gates, question format, and completion
-messages. The orchestrator routes through them sequentially, skipping
-CONDITIONAL stages that do not apply to the current scope.
+All seven stage bodies run inline (the stage's work happens in the
+conversation, with no subagent) and follow the standard stage-protocol.md for
+approval gates, question format, and completion messages. Intent Capture and
+Rough Mockups also name a reviewer, the Product Lead, which runs as a separate
+subagent for one advisory pass before the gate unless reviews are set to
+`none`. The orchestrator routes through the stages the plan runs, in order.
 
 **Key characteristics of the Ideation phase:**
 
@@ -19,18 +22,37 @@ CONDITIONAL stages that do not apply to the current scope.
 - Stages produce artifacts under the intent's record dir at `<record>/ideation/<stage-name>/`, where `<record>` is `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `audit/` shard dir, the per-stage `memory.md`, and the verification reports live under the same record dir).
 - All stages except Stage 1.1 depend on outputs from earlier stages.
 - Stage 1.7 runs a phase boundary verification check before handing off to
-  Inception.
-- The phase is bookended by two ALWAYS stages (1.1 Intent Capture and 1.7
-  Approval & Handoff); the five middle stages are CONDITIONAL and may be
-  skipped depending on scope.
+  Inception, in the scopes that run it (enterprise and feature).
+- Intent Capture, Scope Definition and Approval & Handoff are ALWAYS stages and
+  the other four are CONDITIONAL. ALWAYS holds within a scope that includes the
+  stage: mvp runs no Approval & Handoff, and poc runs only Intent Capture.
 
 **Scope-driven stage inclusion:**
+
+The compiled plan for a scope lists its stages in order. For mvp, Ideation
+ends at Rough Mockups, and its approval, or its skip recorded when it does not
+apply, hands off to Inception (output trimmed):
+
+```text
+$ aidlc engine graph scope mvp
+workspace-scaffold
+workspace-detection
+state-init
+intent-capture
+feasibility
+scope-definition
+rough-mockups
+reverse-engineering
+practices-discovery
+requirements-analysis
+...
+```
 
 | Scope            | Stages Included                             |
 |------------------|---------------------------------------------|
 | enterprise       | All 1.1-1.7                                |
 | feature          | All 1.1-1.7                                |
-| mvp              | 1.1, 1.3 (light), 1.4, 1.6                  |
+| mvp              | 1.1, 1.3, 1.4, 1.6                          |
 | poc              | 1.1 (minimal)                               |
 | bugfix           | None (Ideation skipped entirely)            |
 | refactor         | None (Ideation skipped entirely)            |
@@ -64,7 +86,7 @@ CONDITIONAL stages that do not apply to the current scope.
 |------------------|------------------------------------------------------------------------|
 | Phase            | Ideation                                                               |
 | Stage #          | 1.1                                                                    |
-| Condition        | ALWAYS -- first stage of every workflow; establishes the initiative's foundation |
+| Condition        | ALWAYS -- first stage of every scope that runs Ideation (enterprise, feature, mvp, poc) |
 | Lead Agent       | aidlc-product-agent                                                          |
 | Support Agents   | aidlc-architect-agent (technical context)                                    |
 | Reviewer         | aidlc-product-lead-agent (source-grounding and product-quality review)       |
@@ -73,24 +95,24 @@ CONDITIONAL stages that do not apply to the current scope.
 
 ### Purpose
 
-Intent Capture is the entry point of every AI-DLC workflow. It captures the
-business problem, identifies stakeholders, establishes success metrics, and
-classifies the project type (greenfield, brownfield, or migration). The
-resulting intent statement and stakeholder map become the foundation that all
-downstream stages build upon.
+Intent Capture is the first stage of every scope that runs Ideation. It
+captures the business problem, identifies stakeholders, and establishes success
+metrics; the project type (greenfield or brownfield) was already set by
+Workspace Detection. The resulting intent statement and stakeholder map become
+the foundation that all downstream stages build upon.
 
-If the user provided freeform intent text via `$ARGUMENTS`, that text is passed
-as seed context so the stage does not re-ask "what do you want to build?"
+The person's own description of the work is the seed: the stage reads it with
+the `project-description` utility, so it does not ask for the request again.
 
 ### Inputs
 
-- User's project description from `$ARGUMENTS` or the intent's `audit/` shards
+- The authoritative project description from the `project-description` utility (never rebuilt from `$ARGUMENTS` or an audit `Request`), and any document the person named, read through `document-input`
 - Existing `<record>/` artifacts from prior sessions (if any)
 - Guardrails from `aidlc/spaces/<active-space>/memory/`
 
 ### Steps
 
-1. **Load Prior Context** -- Read user's project description. Check for existing artifacts. Load guardrails.
+1. **Load Prior Context** -- Read the project description from `project-description` (and a named document through `document-input`). Check for existing artifacts. Load guardrails.
 2. **Generate Clarifying Questions** -- Create `<record>/ideation/intent-capture/intent-capture-questions.md` with a `## Sources` register for the initial description, workflow-selected scope, and any active-memory rules used. Ask about the business problem, customer, success metrics, initiative trigger, stakeholders, decision authority, communication needs, and what this first version leaves out (the workflow-selected scope is stated as chosen, never asked again). Uses `[Answer]:` tag format with A-E options plus X (Other). Offers tri-mode question flow.
 3. **Collect and Analyze Answers** -- Confirm all tags filled. Run ambiguity/contradiction analysis.
 4. **Generate Grounded Artifacts** -- Produce the intent statement and stakeholder map. Every substantive paragraph, list item, and table data row carries an inline `[desc]`, `[scope]`, `[Q<n>]`, `[memory:<id>]`, or `[assumption]` tag. Both files include `## Assumptions & Open Questions`.
@@ -109,8 +131,8 @@ as seed context so the stage does not re-ask "what do you want to build?"
 
 ### Notes
 
-- First stage of every workflow. No prior artifacts other than user input.
-- Freeform intent in `$ARGUMENTS` is used as seed context.
+- First stage of every scope that runs Ideation. No prior artifacts other than the person's input.
+- The person's description, read through `project-description`, is the seed context.
 - Unselected options are not exclusions or requirements. Unsupported content is
   omitted, elicited in a follow-up, or retained only as an explicit assumption.
 - The intent statement feeds every subsequent Ideation stage and carries forward into Inception.
@@ -150,8 +172,8 @@ Validates the initiative against the external competitive landscape. Produces co
 
 ### Notes
 
-- Skip conditions: internal tools, bug fixes, refactors, infrastructure-only, security patches, poc scopes.
-- Feeds into Stage 1.3 Feasibility (if executed) and Stage 1.4 Scope Definition.
+- Skip condition: internal tools, bug fixes, refactors. In the shipped scopes it runs only in enterprise and feature.
+- Feeds into Stage 1.3 Feasibility and Stage 1.7 Approval & Handoff.
 
 ---
 
@@ -189,7 +211,7 @@ Evaluates technical viability, identifies constraints, and establishes a RAID lo
 
 ### Notes
 
-- For mvp scope, executes at "light" depth.
+- mvp runs it at the scope's Standard depth, like every other mvp stage.
 - Multi-agent pattern: orchestrator runs lead agent first, then support agents with lead's output as context.
 
 ---
@@ -215,7 +237,7 @@ Establishes the scope boundary. Produces a prioritized intent backlog (proto-uni
 ### Inputs
 
 - Intent statement from Stage 1.1
-- Feasibility assessment from Stage 1.3 (if exists)
+- Feasibility assessment and constraint register from Stage 1.3 (if they exist)
 
 ### Outputs
 
@@ -227,7 +249,7 @@ Establishes the scope boundary. Produces a prioritized intent backlog (proto-uni
 
 ### Notes
 
-- Always executes, depth adapts to scope.
+- Runs in enterprise, feature and mvp; depth follows the scope.
 - The scope document becomes the authoritative boundary for the entire project.
 
 ---
@@ -251,7 +273,7 @@ Assesses team availability, maps skills, identifies gaps, and produces mob compo
 
 ### Inputs
 
-- Scope definition from Stage 1.4
+- Scope document and intent backlog from Stage 1.4
 - Feasibility assessment from Stage 1.3 (if exists)
 
 ### Outputs
@@ -265,7 +287,7 @@ Assesses team availability, maps skills, identifies gaps, and produces mob compo
 
 ### Notes
 
-- Skip conditions: solo developer projects, small teams, poc, bugfix, refactor scopes.
+- Skip condition: solo developer or small team projects. In the shipped scopes it runs only in enterprise and feature.
 - Feeds into Stage 2.9 Delivery Planning.
 
 ---
@@ -281,6 +303,7 @@ Assesses team availability, maps skills, identifies gaps, and produces mob compo
 | Condition        | CONDITIONAL -- skip for non-UI, API-only, or infrastructure-only       |
 | Lead Agent       | aidlc-design-agent                                                           |
 | Support Agents   | aidlc-product-agent (validates against intent)                               |
+| Reviewer         | aidlc-product-lead-agent (advisory)                                    |
 | Mode             | inline                                                                 |
 | Completion Emoji | :pencil2:                                                              |
 
@@ -291,7 +314,7 @@ Produces early concept visualizations. For UI: low-fidelity wireframes and user 
 ### Inputs
 
 - Intent statement from Stage 1.1
-- Scope definition from Stage 1.4
+- Scope document and intent backlog from Stage 1.4
 
 ### Outputs
 
@@ -316,7 +339,7 @@ Produces early concept visualizations. For UI: low-fidelity wireframes and user 
 |------------------|------------------------------------------------------------------------|
 | Phase            | Ideation                                                               |
 | Stage #          | 1.7                                                                    |
-| Condition        | ALWAYS -- final Ideation gate before Inception                         |
+| Condition        | ALWAYS -- final Ideation gate before Inception (enterprise, feature)   |
 | Lead Agent       | aidlc-delivery-agent                                                         |
 | Support Agents   | aidlc-product-agent (validates completeness)                                 |
 | Mode             | inline                                                                 |
@@ -375,7 +398,7 @@ Special 3-option gate:
 
 ### Key Outputs
 
-1. **Intent Statement** (1.1) -- Problem statement, target customer, success metrics, project classification.
+1. **Intent Statement** (1.1) -- Problem statement, target customer, success metrics, initiative trigger, initial scope signal.
 2. **Stakeholder Map** (1.1) -- Key stakeholders, decision-makers, communication requirements.
 3. **Competitive Analysis** (1.2) -- Market positioning, build-vs-buy (when applicable).
 4. **Feasibility Assessment and RAID Log** (1.3) -- Technical viability, risk register, constraints (when applicable).
@@ -387,9 +410,12 @@ Special 3-option gate:
 
 ### Handoff to Inception
 
-Upon approval at Stage 1.7, the framework transitions to the Inception
-phase. Inception begins with Stage 2.1 Reverse Engineering (for brownfield
-projects) or Stage 2.3 Requirements Analysis (for greenfield projects).
+Upon approval of the last Ideation stage the plan runs (1.7 in enterprise and
+feature, 1.6 in mvp, whether approved or recorded as skipped, 1.1 in poc), the framework transitions to the Inception
+phase. Inception begins with Stage 2.1 Reverse Engineering on brownfield work.
+On greenfield work it begins with Stage 2.2 Practices Discovery in enterprise,
+feature and mvp, and with Stage 2.3 Requirements Analysis in poc, which runs no
+Practices Discovery.
 
 ## Cross-References
 

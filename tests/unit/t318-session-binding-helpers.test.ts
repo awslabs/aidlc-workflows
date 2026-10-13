@@ -1,4 +1,4 @@
-// covers: function:readSessionBinding function:writeSessionBinding function:resolveWorkflowSelection function:workflowParticipation function:readActiveIntentCursor function:SessionResolutionConflictError function:validSessionId function:writeSessionPidEntry function:writeSessionPidAncestry function:resolveSessionIdFromAncestry function:hookChildEnv function:windowsSessionProcessIdentity
+// covers: function:clearSessionProcessTable function:resolveInvokingSessionId function:readSessionBinding function:writeSessionBinding function:resolveWorkflowSelection function:workflowParticipation function:readActiveIntentCursor function:SessionResolutionConflictError function:validSessionId function:writeSessionPidEntry function:writeSessionPidAncestry function:resolveSessionIdFromAncestry function:hookChildEnv function:windowsSessionProcessIdentity
 //
 // Deterministic coverage for the per-session binding store and PID ancestry
 // resolver. All writes stay under a fresh project fixture.
@@ -15,12 +15,14 @@ import { join } from "node:path";
 import {
   activeIntent,
   auditFilePath,
+  clearSessionProcessTable,
   createIntent,
   docsRoot,
   hookChildEnv,
   listIntents,
   readActiveIntentCursor,
   readSessionBinding,
+  resolveInvokingSessionId,
   resolveSessionIdFromAncestry,
   resolveWorkflowSelection,
   SessionResolutionConflictError,
@@ -49,8 +51,11 @@ const originalSessionOverrideSource =
   process.env.AIDLC_SESSION_OVERRIDE_SOURCE;
 const originalTestSessionPlatform = process.env.AIDLC_TEST_SESSION_PLATFORM;
 const originalTestPsDenied = process.env.AIDLC_TEST_PS_DENIED;
+// The chat a Claude Code shell names; a test run from a Claude tab inherits it.
+const originalClaudePid = process.env.CLAUDE_PID;
+const originalClaudeSession = process.env.CLAUDE_CODE_SESSION_ID;
 
-function mockMacProcessTree(parents = new Map<number, number>()) {
+function mockMacProcessTree(parents = new Map<number, number>(), msPerPs = 5) {
   let now = 1000;
   const clock = spyOn(Date, "now").mockImplementation(() => now);
   const ps = spyOn(childProcess, "spawnSync").mockImplementation(((
@@ -58,9 +63,13 @@ function mockMacProcessTree(parents = new Map<number, number>()) {
     args: readonly string[],
   ) => {
     expect(command).toBe("ps");
-    now += 5;
-    const pid = Number(args.at(-1));
-    const stdout = `${parents.get(pid) ?? 1} fixture-start-${pid}\n`;
+    now += msPerPs;
+    // `ps -A` lists every process the mocked tree knows; `-p <pid>` one of them.
+    const pids = args.includes("-A")
+      ? [...new Set([process.pid, process.ppid, ...parents.keys(), ...parents.values()])]
+      : [Number(args.at(-1))];
+    const row = (pid: number) => `${args.includes("-A") ? `${pid} ` : ""}${parents.get(pid) ?? 1} fixture-start-${pid}`;
+    const stdout = `${pids.map(row).join("\n")}\n`;
     return { pid: 123, output: [null, stdout, ""], stdout, stderr: "", status: 0, signal: null };
   }) as typeof childProcess.spawnSync);
   process.env.AIDLC_TEST_SESSION_PLATFORM = "darwin";
@@ -76,12 +85,20 @@ function mockMacProcessTree(parents = new Map<number, number>()) {
 beforeEach(() => {
   delete process.env.AIDLC_SESSION_OVERRIDE;
   delete process.env.AIDLC_SESSION_OVERRIDE_SOURCE;
+  delete process.env.CLAUDE_PID;
+  delete process.env.CLAUDE_CODE_SESSION_ID;
   delete process.env.AIDLC_TEST_SESSION_PLATFORM;
   delete process.env.AIDLC_TEST_PS_DENIED;
+  // A table cached under the real clock would look fresh under a mocked one.
+  clearSessionProcessTable();
   proj = createTestProject();
 });
 
 afterEach(() => {
+  for (const [name, value] of [["CLAUDE_PID", originalClaudePid], ["CLAUDE_CODE_SESSION_ID", originalClaudeSession]] as const) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
   if (originalSessionOverride === undefined) {
     delete process.env.AIDLC_SESSION_OVERRIDE;
   } else {
@@ -395,6 +412,147 @@ describe("t318 session binding helpers", () => {
     } finally {
       lookup.restore();
     }
+  });
+
+  test("a deep chain is read with one ps call and its nearest entry found within the budget", () => {
+    // Five hops at 15 ms per ps call: one call per hop reaches the 50 ms
+    // deadline before the fifth hop; one process table reads every hop.
+    const children = Array.from({ length: 4 }, () => Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 60000)"]));
+    try {
+      const [a, b, c, d] = children.map((child) => child.pid);
+      const lookup = mockMacProcessTree(new Map([[process.ppid, a], [a, b], [b, c], [c, d]]), 15);
+      try {
+        writeSessionPidEntry(proj, d, "deep-session", Date.now() + 1000, { ppid: 1, startTime: `fixture-start-${d}` });
+        lookup.ps.mockClear();
+        expect(resolveSessionIdFromAncestry(proj)).toBe("deep-session");
+        expect(lookup.ps).toHaveBeenCalledTimes(1);
+      } finally {
+        lookup.restore();
+      }
+    } finally {
+      for (const child of children) child.kill();
+    }
+  });
+
+  test("one process reads the table once a second, and a SessionStart write reads it anew", () => {
+    const lookup = mockMacProcessTree(new Map([[process.ppid, process.pid]]));
+    try {
+      writeSessionPidAncestry(proj, "table-session");
+      lookup.ps.mockClear();
+      expect(resolveSessionIdFromAncestry(proj)).toBe("table-session");
+      expect(resolveSessionIdFromAncestry(proj)).toBe("table-session");
+      expect(lookup.ps).toHaveBeenCalledTimes(1);
+      writeSessionPidEntry(proj, process.ppid, "near-session");
+      expect(resolveSessionIdFromAncestry(proj)).toBe("near-session");
+      expect(lookup.ps).toHaveBeenCalledTimes(2);
+    } finally {
+      lookup.restore();
+    }
+  });
+
+  test("a SessionStart walk over several hops reads the table once and records each hop", () => {
+    const children = Array.from({ length: 2 }, () => Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 60000)"]));
+    try {
+      const [a, b] = children.map((child) => child.pid);
+      const lookup = mockMacProcessTree(new Map([[process.ppid, a], [a, b]]));
+      try {
+        writeSessionPidAncestry(proj, "walk-session");
+        expect(lookup.ps).toHaveBeenCalledTimes(1);
+        for (const pid of [process.ppid, a, b]) {
+          const entry = JSON.parse(readFileSync(join(sessionPidMapDir(proj), String(pid)), "utf-8")) as {
+            sessionId: string | null;
+            startTime: string | null;
+          };
+          expect(entry).toEqual({ sessionId: "walk-session", startTime: `fixture-start-${pid}` });
+        }
+      } finally {
+        lookup.restore();
+      }
+    } finally {
+      for (const child of children) child.kill();
+    }
+  });
+
+  test("a chat the host or a hook payload names is used without walking the process chain", () => {
+    const lookup = mockMacProcessTree(new Map([[process.ppid, process.pid]]));
+    try {
+      // The walk returns before any ps when the PID map is missing, so one
+      // exists; the table it read is cleared so each step below reads its own.
+      writeSessionPidEntry(proj, process.ppid, "ancestry-session");
+      const walks = () => {
+        clearSessionProcessTable();
+        lookup.ps.mockClear();
+      };
+      walks();
+      process.env.CLAUDE_PID = String(process.pid);
+      process.env.CLAUDE_CODE_SESSION_ID = "named-session";
+      expect(resolveInvokingSessionId(proj)).toBe("named-session");
+      expect(lookup.ps).toHaveBeenCalledTimes(0);
+
+      walks();
+      delete process.env.CLAUDE_PID;
+      delete process.env.CLAUDE_CODE_SESSION_ID;
+      process.env.AIDLC_SESSION_OVERRIDE = "payload-session";
+      process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+      expect(resolveInvokingSessionId(proj)).toBe("payload-session");
+      expect(lookup.ps).toHaveBeenCalledTimes(0);
+
+      // With no chat named, the walk still runs and its session is the answer.
+      walks();
+      delete process.env.AIDLC_SESSION_OVERRIDE;
+      delete process.env.AIDLC_SESSION_OVERRIDE_SOURCE;
+      expect(resolveInvokingSessionId(proj)).toBe("ancestry-session");
+      expect(lookup.ps).toHaveBeenCalledTimes(1);
+    } finally {
+      lookup.restore();
+    }
+  });
+
+  // The real `ps` on Linux and macOS (Windows has none). The start time
+  // SessionStart records is the same lstart string a per-pid lookup prints,
+  // so entries recorded before this change still match.
+  test.skipIf(process.platform === "win32")("a recorded start time is the lstart a per-pid ps prints", () => {
+    process.env.AIDLC_TEST_SESSION_PLATFORM = "darwin";
+    writeSessionPidEntry(proj, process.ppid, "real-session", Date.now() + 5000);
+    const recorded = JSON.parse(readFileSync(join(sessionPidMapDir(proj), String(process.ppid)), "utf-8")) as {
+      startTime: string | null;
+    };
+    const single = childProcess.spawnSync("ps", ["-o", "lstart=", "-p", String(process.ppid)], { encoding: "utf-8" });
+    expect(recorded.startTime).toBe(single.stdout.trim());
+    // A SessionStart walk and a resolve walk with the real ps find the session.
+    // A shared runner can stall the walk's own `ps -A` past its 50 ms budget,
+    // so the walk gets three tries, and a miss is skipped, not failed, when the
+    // walk itself ran out: SessionStart left only its barrier for this process's
+    // parent, or the resolve walk returned nothing after spending its budget.
+    // The mocked cases above cover the walk's logic.
+    let found: string | null = null;
+    let ranOut = false;
+    for (let attempt = 0; attempt < 3 && found !== "real-session"; attempt++) {
+      writeSessionPidAncestry(proj, "real-session");
+      const entry = JSON.parse(readFileSync(join(sessionPidMapDir(proj), String(process.ppid)), "utf-8")) as {
+        sessionId: string | null;
+      };
+      const started = performance.now();
+      found = resolveSessionIdFromAncestry(proj);
+      ranOut = entry.sessionId !== "real-session" || (found === null && performance.now() - started >= 45);
+    }
+    if (found !== "real-session" && ranOut) return;
+    expect(found).toBe("real-session");
+  });
+
+  // The numbers that decide whether macOS needs a native read instead of `ps`
+  // (over 25 ms median for one `ps -A` on the runner). Printed, not asserted.
+  test.skipIf(process.platform !== "darwin")("macOS: one ps -A beside one per-pid ps, in ms", () => {
+    const time = (args: string[]): number[] => Array.from({ length: 10 }, () => {
+      const started = performance.now();
+      childProcess.spawnSync("ps", args, { encoding: "utf-8" });
+      return performance.now() - started;
+    }).sort((x, y) => x - y);
+    const table = time(["-A", "-o", "pid=,ppid=,lstart="]);
+    const single = time(["-o", "ppid=,lstart=", "-p", String(process.pid)]);
+    console.log(`t318 macOS ps timing: ps -A median ${table[5].toFixed(1)} ms max ${table[9].toFixed(1)} ms; ` +
+      `ps -p median ${single[5].toFixed(1)} ms max ${single[9].toFixed(1)} ms`);
+    expect(table).toHaveLength(10);
   });
 
   test("the PID map is optional and missing entries preserve cursor fallback", () => {

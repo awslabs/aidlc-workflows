@@ -13,9 +13,11 @@ choice from different perspectives:
   route, depth, test strategy, review ceiling, and ceremony switches used for that workflow.
 
 Choose a profile explicitly with `/aidlc <profile>` or describe the work and let
-AI-DLC suggest one. A keyword match or compose offer confirms the route before
-starting; an explicitly named profile starts immediately and prints its stage
-and gate counts.
+AI-DLC suggest one. The assistant reads what you describe and proposes the
+profile that fits it, or offers the adaptive composer when none does; you
+confirm the route before anything starts. An explicitly named profile is used
+as you named it: with what to build after it, it starts and prints its stage
+and gate counts; named alone, it first asks what the work is for.
 
 ## Quick chooser
 
@@ -192,10 +194,10 @@ You do not need to memorize the profiles. Describe the work:
 /aidlc Create a lightweight prototype for the new search flow
 ```
 
-A clear keyword match proposes a stock profile and shows its stage and gate
-count for confirmation. Rich or ambiguous work receives an offer to use the
-adaptive composer, which proposes a tailored stage route and waits for approval
-before creating it.
+When a stock profile fits what you describe, the assistant proposes it and
+shows its stage and gate count for confirmation. Rich or ambiguous work
+receives an offer to use the adaptive composer, which proposes a tailored stage
+route and waits for approval before creating it.
 
 You can force that path with:
 
@@ -238,8 +240,9 @@ The workflow profile chooses the route and defaults. You can independently tune:
 - **Depth** with `--depth minimal|standard|comprehensive`.
 - **Test strategy** with `--test-strategy minimal|standard|comprehensive`.
 - **Review cap** with `--review adversarial|advisory|none`. The effective class
-  is the lowest of the stage declaration, profile cap, and this per-run cap, so
-  it can never raise review intensity.
+  is the stage's own declared class, lowered by this per-run cap when set,
+  otherwise by the profile cap; neither ceiling can raise a stage past what it
+  declares, and a set per-run cap replaces the profile cap.
 
 These overrides do not turn one profile into another; they adjust the selected
 profile. See [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) for the

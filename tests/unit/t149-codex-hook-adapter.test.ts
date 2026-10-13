@@ -39,6 +39,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { listMessages } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -50,6 +51,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
@@ -421,7 +423,7 @@ describe("t149 Codex structured request_user_input presence", () => {
     }
   });
 
-  test("an explicit Abort option is human judgment, not cancellation boilerplate", () => {
+  test("an explicit Abort option the person picked is their pick, and mints", () => {
     const dir = scratchProject(true);
     try {
       const payload = structuredSelectionPayload(
@@ -438,7 +440,27 @@ describe("t149 Codex structured request_user_input presence", () => {
     }
   });
 
-  test("empty, cancelled, timed-out, auto-resolved, error, and malformed responses do not mint", () => {
+  // Codex hands the hook nothing when its box is interrupted (measured
+  // 2026-10-12: no PostToolUse at all) and `{"answers":{}}` when it runs out, so
+  // a cancellation word in a box's answers is one the person typed there.
+  test("a cancellation word the person typed into the box is their word, and mints", () => {
+    for (const [index, answers] of [["Approve", "Dismissed"], ["Abort"], ["cancel"]].entries()) {
+      const dir = scratchProject(true);
+      try {
+        const payload = structuredSelectionPayload(
+          dir,
+          JSON.stringify({ answers: { decision: { answers } } }),
+          `typed-cancellation-word-${index}`,
+        );
+        expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+        expect(humanTurnCount(dir), answers.join(", ")).toBe(1);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("empty, timed-out, auto-resolved, error, and malformed responses do not mint", () => {
     const responses: unknown[] = [
       "{}",
       JSON.stringify({ status: "completed", answer: "Cancelled" }),
@@ -449,8 +471,6 @@ describe("t149 Codex structured request_user_input presence", () => {
       JSON.stringify({ answers: {} }),
       JSON.stringify({ answers: { decision: { answers: [] } } }),
       JSON.stringify({ answers: { decision: { answers: ["   "] } } }),
-      JSON.stringify({ answers: { decision: { answers: ["Approve", "Dismissed"] } } }),
-      JSON.stringify({ answers: { decision: { answers: ["Abort"] } } }),
       JSON.stringify({ answer: "Approve" }),
       JSON.stringify({ selection: "Approve" }),
       "{malformed-json",
@@ -553,7 +573,7 @@ describe("t149 Codex structured request_user_input presence", () => {
 });
 
 describe("t149 Codex typed guard switch", () => {
-  test("a typed $aidlc summary-confirmation off prompt turns it off as the person's choice", () => {
+  test("a typed $aidlc summary-confirmation off prompt is recorded, and the setter the agent runs turns it off as the person's choice", () => {
     const dir = scratchProject(true);
     try {
       const typed = runAdapter(dir, "record-human-turn", {
@@ -564,15 +584,10 @@ describe("t149 Codex typed guard switch", () => {
         prompt: "$aidlc config set summary-confirmation off",
       });
       expect(typed.code, typed.stderr).toBe(0);
-      const state = readFileSync(seededStateFile(dir), "utf-8");
-      expect(state).toContain("- **Summary Confirmation**: off (set by you)");
-      const audit = readAudit(dir);
-      const ceremonyRows = audit.split("**Event**: CEREMONY_SET").slice(1);
-      expect(ceremonyRows).toHaveLength(1);
-      expect(ceremonyRows[0]).toContain("**Source**: you");
-
-      // An agent-run repeat is a no-op: the saved line is already the person's off.
-      const repeated = spawnSync(
+      // The hook applies nothing; the agent reads the line and runs the setter.
+      expect(readFileSync(seededStateFile(dir), "utf-8")).not.toContain("- **Summary Confirmation**: off (set by you)");
+      expect(readAudit(dir)).not.toContain("**Event**: CEREMONY_SET");
+      const setter = () => spawnSync(
         "bun",
         [join(dir, ".codex", "tools", "aidlc.ts"), "engine", "config", "set", "summary-confirmation", "off"],
         {
@@ -582,6 +597,17 @@ describe("t149 Codex typed guard switch", () => {
           timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
+      const lowered = setter();
+      expect(lowered.status, lowered.stderr).toBe(0);
+      const state = readFileSync(seededStateFile(dir), "utf-8");
+      expect(state).toContain("- **Summary Confirmation**: off (set by you)");
+      const audit = readAudit(dir);
+      const ceremonyRows = audit.split("**Event**: CEREMONY_SET").slice(1);
+      expect(ceremonyRows).toHaveLength(1);
+      expect(ceremonyRows[0]).toContain("**Source**: you");
+
+      // An agent-run repeat is a no-op: the saved line is already the person's off.
+      const repeated = setter();
       expect(repeated.status, repeated.stderr).toBe(0);
       expect(repeated.stdout).toContain("Summary Confirmation is already off (set by you)");
       expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
@@ -591,10 +617,10 @@ describe("t149 Codex typed guard switch", () => {
     }
   });
 
-  // The adapter used to drop the core hook's stdout here, so the agent never
-  // heard that the switch was applied and ran a setter of its own on the piece
-  // of work that was open instead of the one the person asked about.
-  test("the note saying what the switch did reaches the agent, so it runs no setter of its own", () => {
+  // The hook applies nothing: the line is recorded whole, with its settings as
+  // the engine's own parser reads them, and the agent runs the setter `next`
+  // names. No note travels for it.
+  test("a typed switch is recorded whole and applies nothing; no Guard Policy note travels", () => {
     const dir = scratchProject(true);
     try {
       const typed = runAdapter(dir, "record-human-turn", {
@@ -605,13 +631,12 @@ describe("t149 Codex typed guard switch", () => {
         prompt: "$aidlc --guard.review-freeze off fix the parser",
       });
       expect(typed.code, typed.stderr).toBe(0);
-      const context = JSON.parse(typed.stdout) as {
-        hookSpecificOutput?: { hookEventName?: string; additionalContext?: string };
-      };
-      expect(context.hookSpecificOutput?.hookEventName).toBe("UserPromptSubmit");
-      const note = context.hookSpecificOutput?.additionalContext ?? "";
-      expect(note).toContain("The review freeze check (it stops edits to work you already approved) is off for the work you are asking for (set by you).");
-      expect(note).toContain("never run a setter for it");
+      // Nothing to say about the line: no note at all, or none about a switch.
+      expect(typed.stdout).not.toContain("AIDLC Guard Policy");
+      expect(typed.stdout).not.toContain("never run a setter for it");
+      const [record] = listMessages(dir);
+      expect(record.settings).toEqual([{ key: "guard.review-freeze", value: "off" }]);
+      expect(record.words).toBe("fix the parser");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1359,6 +1384,48 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(rows.length).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("9b: the replay cache lives in the project's own aidlc/.aidlc-sessions/, keeps at most 64 slots under 5 minutes old, and writes nothing in the OS temp folder", () => {
+    const dir = scratchProject(true);
+    const temp = realpathSync(mkdtempSync(join(tmpdir(), "t149-temp-")));
+    try {
+      const payload = withCwd(FIXTURES.subagentStop, dir);
+      const tempEnv = { TMPDIR: temp, TEMP: temp, TMP: temp };
+      const cache = join(sessionsDir(dir), "codex-dedupe");
+      // Left from earlier deliveries: one slot past the age bound, and a burst
+      // of 70 fresh ones a minute old (a live run made 1247 in 27 minutes).
+      const stale = join(cache, "stale-slot");
+      mkdirSync(stale, { recursive: true });
+      const past = new Date(Date.now() - 6 * 60 * 1000);
+      utimesSync(stale, past, past);
+      const minuteAgo = new Date(Date.now() - 60 * 1000);
+      for (let i = 0; i < 70; i++) {
+        const fresh = join(cache, `fresh-${String(i).padStart(2, "0")}`);
+        mkdirSync(fresh);
+        utimesSync(fresh, minuteAgo, minuteAgo);
+      }
+      const r1 = runAdapter(dir, "log-subagent", payload, tempEnv);
+      const r2 = runAdapter(dir, "log-subagent", payload, tempEnv);
+      expect(r1.code).toBe(0);
+      expect(r2.code).toBe(0);
+      // The duplicate still replays the first run under the bound.
+      expect(r2.stdout).toBe(r1.stdout);
+      expect((readAudit(dir).match(/SUBAGENT_COMPLETED/g) ?? []).length).toBe(1);
+      // Nothing of the person's outside the project.
+      expect(readdirSync(temp).filter((name) => name.startsWith("aidlc-codex-"))).toEqual([]);
+      // The stale slot is gone, the burst is cut to the newest, the slot that
+      // served this delivery is among them with its response.
+      const slots = readdirSync(cache);
+      expect(slots).not.toContain("stale-slot");
+      expect(slots.length).toBe(64);
+      const slot = slots.find((name) => !name.startsWith("fresh-"));
+      if (slot === undefined) throw new Error(`no slot for the delivery in ${slots.join(",")}`);
+      expect(existsSync(join(cache, slot, "response.json"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(temp, { recursive: true, force: true });
     }
   });
 

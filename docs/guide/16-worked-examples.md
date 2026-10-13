@@ -5,8 +5,8 @@ Two complete walkthroughs showing AI-DLC in action: a bugfix and a feature. Each
 > **Harness note.** These transcripts are recorded on **Claude Code**, so they show
 > its surfaces — `/aidlc`, and subagent stages dispatched via `Task` calls. The
 > stage flow, gates, and artifacts are identical on every harness; only the
-> dispatch mechanic differs (Kiro uses its `subagent` tool, Codex uses `codex exec`
-> workers). See [Running on other harnesses](harnesses/README.md).
+> dispatch mechanic differs (Kiro uses its `subagent` tool, Codex its `spawn_agent`
+> subagents). See [Running on other harnesses](harnesses/README.md).
 
 ---
 

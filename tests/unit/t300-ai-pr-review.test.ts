@@ -1282,7 +1282,8 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(WORKFLOW).not.toContain("github.event.issue");
     expect(WORKFLOW).not.toContain("issues: read");
     expect(WORKFLOW).not.toContain("      - dismissed");
-    expect(WORKFLOW.match(/^ {6}- edited$/gm)).toHaveLength(1);
+    expect(WORKFLOW).not.toContain("      - synchronize");
+    expect(WORKFLOW).not.toContain("      - edited");
     expect(WORKFLOW).not.toContain("      - deleted");
     expect(WORKFLOW).not.toContain("  workflow_run:");
     expect(WORKFLOW).not.toContain("pull_request_target:");
@@ -1412,7 +1413,8 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(WORKFLOW).toContain("timeout-minutes: 110");
     expect(WORKFLOW).toContain("              15m \\");
     expect(WORKFLOW).not.toContain("              35m \\");
-    expect(WORKFLOW).toContain("      - edited");
+    expect(WORKFLOW).toContain("      - reopened");
+    expect(WORKFLOW).toContain("      - ready_for_review");
     expect(WORKFLOW).toContain("      - main");
     expect(WORKFLOW).toContain("already_reviewed");
     expect(WORKFLOW).not.toContain("[0:20000]");
@@ -1579,8 +1581,11 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(common).toContain("## What AI-DLC is, and who owns what");
     expect(common).toContain("## What counts as a problem");
     expect(common).toContain(
-      "the human drives the engine; tools for determinism; LLM for knowledge; human for",
+      "Judge every candidate against the four tenets in `AGENTS.md`, in order; the",
     );
+    expect(common).toContain("- REPRO: ");
+    expect(common).toContain("- LOSS: ");
+    expect(common).toContain("- BLAME: ");
     expect(common).toContain("Priority is what a person meets in a normal run, never your confidence and");
     expect(common).not.toContain("Priority is impact, never confidence");
     expect(REPOSITORY_INSTRUCTIONS).toContain(
@@ -1593,7 +1598,10 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     );
     expect(security).toContain("## Delivery and CI");
     expect(security).toContain("## The product");
-    expect(security).toContain("overriding the person's setup (for example `-c core.fsmonitor=false`, an empty");
+    expect(security).toContain(
+      "Never propose a\ncorrection that changes or works around what the person brought",
+    );
+    expect(security).not.toContain("-c core.fsmonitor=false");
     expect(candidates).toContain("Suggested fix:");
     expect(candidates).not.toContain("Required correction:");
     expect(candidates).toContain("inspection or the command sandbox fails");

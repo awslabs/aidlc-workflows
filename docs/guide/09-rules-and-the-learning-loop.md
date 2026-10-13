@@ -42,7 +42,7 @@ The model is **strict-additive**. Every applicable rule appears in the agent's c
 
 This is a deliberate change from earlier versions. There is no `overrides:` block and no `enforcement:` keyword anymore. All the applicable layers are present at once, and the orchestrator is asked to check a kept learning for conflict at admission time rather than leaving the runtime resolver to reconcile it (see [Admission-time conflict checks](#admission-time-conflict-checks) below).
 
-The chain is resolved **once**, at workflow start, when the framework compiles your stage definitions, rules, and sensors into a single graph. Throughout the workflow the agent reads the resolved view; it never re-walks the chain mid-run. That compile boundary is the same one the planes model describes — see [Planes: how it fits together](#planes-how-it-fits-together) at the end of this chapter.
+The chain **selection** is resolved **once**, when the framework compiles your stage definitions, rules, and sensors into a single graph; a workflow reads that compiled graph. The graph records which rule files apply to each stage; the engine never re-walks the directory chain mid-run. The files' **contents** are not frozen, though: before each stage runs, the engine reads the selected files' current text and delivers it. That compile boundary is the same one the planes model describes — see [Planes: how it fits together](#planes-how-it-fits-together) at the end of this chapter.
 
 ---
 
@@ -67,10 +67,76 @@ Each entry carries a timestamp. The language model writes observations to `memor
 
 Before each approval gate, the framework runs the learning gate (the protocol calls it the §13 ritual). It collects candidates from two sources and presents them as one confirm-list:
 
-1. **Your agent's diary, surfaced verbatim.** A deterministic tool reads `memory.md` and emits each non-blank line under the four headings as a candidate, with its source heading attached. No paraphrase, no "interesting" filtering — the lines are shown as written.
-2. **A free-text channel that always asks "Anything to add for next time?"** You type the observation and pick which of the four headings it belongs under. That heading pick is the only classification asked of you.
+1. **Your agent's diary, surfaced verbatim.** A deterministic tool reads `memory.md` and offers each entry under Interpretations, Deviations and Tradeoffs as a candidate, with its source heading attached. No paraphrase, no "interesting" filtering: the entries are shown as written. Each entry is one line in the diary. Open questions are never offered: they stay in the diary as things to look into, not rules to install.
+2. **A question that always asks "Anything to add for next time?"** Choose **Add a note**, say the observation in your own words, and pick which of the four headings it belongs under. That heading pick is the only classification asked of you.
 
-You tick the candidates you want to keep, or **Keep none of these**, the first choice, to keep none. If `memory.md` was empty for the stage, no one asks you to attest to whether the diary was kept — the framework records that quietly and moves on.
+You tick the candidates you want to keep, or **Keep none of these**, the first choice, to keep none. If `memory.md` was empty for the stage, no one asks you to attest to whether the diary was kept: the framework records that quietly and moves on, and you are asked only "Anything to add for next time?".
+
+### What it looks like
+
+From a Claude Code run at the Intent Capture gate (shortened, drawing characters shown as plain text). The diary held one Interpretation and one Deviation, so the first question offers both:
+
+```text
+ Keep notes
+ Which notes from this step should I keep as practices for future work? (select all that apply)
+ > 1. [ ] Keep none of these
+          Don't save any of these notes
+   2. [ ] Treated store customers as the people the first release helps, not as a stakeholder group
+          -> project.md ## Corrections (say if it should go to team.md instead)
+   3. [ ] Added a ninth question for the vision document's open per-warehouse question
+          -> project.md ## Corrections (say if it should go to team.md instead)
+```
+
+Then the question that is always asked:
+
+```text
+ Anything to add for next time?
+ > 1. Nothing to add
+      Go on to the approval question
+   2. Add a note
+      Tell me something to remember for future work
+```
+
+After **Add a note** and the note "Call a stock item a SKU in every document, never a product.", the agent asks which heading it belongs under:
+
+```text
+ Note type
+ Which kind of note is "Call a stock item a SKU in every document, never a product"? I'll file it
+ under the right practice heading from your pick.
+ > 1. Interpretation
+      How to read or name something where it could be ambiguous
+   2. Deviation
+      A place where we deliberately do things differently
+   3. Tradeoff
+      A choice between alternatives and why
+   4. Open question
+      Something to confirm later (kept as a reminder, not a practice)
+```
+
+With candidate 2 kept and the note filed as an Interpretation, `aidlc/spaces/default/memory/project.md` ends with two practice lines (the agent words a kept candidate as a practice; your note is kept as you wrote it):
+
+```text
+## Corrections
+...
+- Treat online store customers as the people the first release helps, not as a stakeholder group, unless the user names them as stakeholders (learned 2026-10-13) <!-- cid:... -->
+- Call a stock item a SKU in every document, never a product. (learned 2026-10-13) <!-- cid:... -->
+```
+
+and the audit shard gets one row for each, here the note's:
+
+```text
+## Rule Learned
+**Timestamp**: 2026-10-13T10:41:30Z
+**Event**: RULE_LEARNED
+**Stage**: intent-capture
+**Candidate-ID**: u1
+**Content-Hash**: 3a3aa8df...
+**Destination**: <project-dir>/aidlc/spaces/default/memory/project.md
+**Heading**: ## Corrections
+**Source**: user_addition
+```
+
+Asked at that gate which knowledge it had used, the agent said the two notes were written after the stage's documents were finished and would be in force from the next stage on, as [Applies from the next applicable stage](#applies-from-the-next-applicable-stage) describes.
 
 ### Where a kept learning goes
 
@@ -89,41 +155,35 @@ When a kept learning is a **sensor binding** rather than a rule (you want a new 
 
 Before a kept learning lands on disk, the gate protocol asks the orchestrator to compare it with the matching section of `memory/org.md`. This is a section-level LLM check. If the proposed entry contradicts an org rule, the orchestrator quotes the conflicting sentence inline and asks you to revise the entry, skip it, or escalate to the org-rule owner. Only conflict-clear or user-escalated selections are then handed to the deterministic writer. `aidlc-learnings.ts persist` has no independent view of `org.md`, does not judge conflicts, and accepts the selections it is handed. The org-contradiction escalation is therefore an audit aid for keeping resolver inputs coherent, not an enforcement boundary.
 
-The practices-discovery affirmation gate does not run this org-conflict check. Its promotion is a deterministic section-replace legitimised by your affirmation. And when org policy changes *after* a team or project rule is already on disk, `/aidlc --doctor` surfaces the resulting drift on demand: it names the file, the section, and the conflicting org sentence so the team can act on it. The doctor check is advisory and never blocks. The two doctor advisory rows are described in [CLI Commands](12-cli-commands.md) and [Troubleshooting](15-troubleshooting.md).
+The practices-discovery affirmation gate does not run this org-conflict check. Its promotion is a deterministic section-replace legitimised by your affirmation. And when org policy changes *after* a team or project rule is already on disk, `/aidlc --doctor` surfaces possible drift on demand: for each team or project file with a filled-in section whose heading `org.md` also fills in, it names the file and the heading and quotes the first sentence of org's section there, so you (or the agent) can judge whether the two disagree. It compares headings, not meaning. The doctor check is advisory and never blocks. The two doctor advisory rows are described in [CLI Commands](12-cli-commands.md) and [Troubleshooting](15-troubleshooting.md).
 
-### Applies next workflow, not mid-run
+### Applies from the next applicable stage
 
-A learning captured at one gate does **not** change the rules for the rest of the current workflow. You already corrected the agent in conversation for this run; the rule is for next time. The new line is on disk, but the in-flight workflow keeps the compiled view it started with.
+A kept learning is appended to an already-selected rule file (`project.md` or `team.md`), and the engine reads the selected files' current text before each stage delivery. So the learning reaches the agent at the next applicable stage of the **current** workflow — the stage where it was captured already got your correction in conversation, and every later delivery carries the written rule. Later workflows receive it too.
 
-The next time you start a workflow, the compile reads the new file and the rule applies from stage one onward. This is the same stability property a router gets from BGP: routes don't recompute mid-packet-flight, and AI-DLC doesn't recompile mid-workflow. The payoff is predictability — gates you approved earlier in the workflow attested to a stable set of rules, and the framework doesn't change the ground under a run in progress.
+What waits for the next compile is the **selection**: a brand-new rule file enters the chain, and a new Sensor binds and fires, only when the stage graph is next compiled. This is the stability property a router gets from BGP: the compiled selection doesn't recompute mid-packet-flight. The rule *text* inside the selected files is read fresh each stage, so a correction you kept does not sit idle for the rest of the run.
 
 ---
 
-## Worked example: the ANZ banking project
+## Worked example: a banking project
 
 A concrete walk-through shows the loop end to end.
 
-Sam runs `/aidlc feature` on the ANZ banking project. The workflow lands on `requirements-analysis`. Sam writes a stakeholder note saying "the transaction shouldn't duplicate on retry" — meaning a banking transaction, the payment being processed. The product agent reads "transaction" as a database transaction and interprets the note as an ACID-semantics requirement. Sam corrects it. The agent updates the artifact and continues.
+Sam runs `/aidlc feature` on a banking project. The workflow lands on `requirements-analysis`. Sam writes a stakeholder note saying "the transaction shouldn't duplicate on retry" — meaning a banking transaction, the payment being processed. The product agent reads "transaction" as a database transaction and interprets the note as an ACID-semantics requirement. Sam corrects it. The agent updates the artifact and continues.
 
-Nothing in the framework predicted this. There's no rule about ANZ-specific terminology and no sensor catching generic-versus-domain term clashes. The agent simply hit an ambiguity.
+Nothing in the framework predicted this. There's no rule about the bank's own terminology and no sensor catching generic-versus-domain term clashes. The agent simply hit an ambiguity.
 
-**1. The diary records it.** The framework appends an entry under `## Interpretations` in `<record>/inception/requirements-analysis/memory.md`:
+**1. The diary records it.** The agent appends one line under `## Interpretations` in `<record>/inception/requirements-analysis/memory.md`: its time, a short summary ("Stakeholder note used 'transaction'; interpreted as database-transaction") and the context (Sam corrected it to mean the payment being processed, not the database write). Each entry is a single line; a note wrapped onto a second line would be offered as two candidates.
 
-```
-- 2026-05-21T09:14:32Z — Stakeholder note used "transaction"; interpreted as
-  database-transaction. Sam corrected to mean banking-transaction (the payment
-  being processed, not the DB write). Worth flagging for ANZ project context.
-```
+No rule is installed yet: this is just the agent's diary.
 
-No rule is installed yet — this is just the agent's diary.
+**2. The gate surfaces it.** The stage finishes. Before the approval gate, the learning gate reads `memory.md` and shows the interpretation line as a candidate. It also asks "Anything to add for next time?" Sam ticks the transaction-terminology candidate (Interpretation → lands in `memory/project.md`) and adds a free-text note: "the agent kept defaulting to AWS account terminology — should always say 'bank customer' for the banking customer entity." Sam picks the Deviation heading for that addition, which routes it to the same `memory/project.md` file.
 
-**2. The gate surfaces it.** The stage finishes. Before the approval gate, the learning gate reads `memory.md` and shows the interpretation line as a candidate. It also asks "Anything to add for next time?" Sam ticks the transaction-terminology candidate (Interpretation → lands in `memory/project.md`) and adds a free-text note: "the agent kept defaulting to AWS account terminology — should always say 'ANZ customer' for the banking customer entity." Sam picks the Deviation heading for that addition, which routes it to the same `memory/project.md` file.
+**3. The conflict check runs.** The orchestrator compares both entries against the org practices (`memory/org.md`) as a section-level LLM check. Neither the "transaction" nor the "bank customer" terminology is covered by an org rule, so both pass. The deterministic tool then writes both lines into `memory/project.md` with provenance, and the audit log records a `RULE_LEARNED` event for each.
 
-**3. The conflict check runs.** The orchestrator compares both entries against the org practices (`memory/org.md`) as a section-level LLM check. Neither "ANZ transaction" nor "ANZ customer" terminology is covered by an org rule, so both pass. The deterministic tool then writes both lines into `memory/project.md` with provenance, and the audit log records a `RULE_LEARNED` event for each.
+**4. The current workflow carries them forward.** The stage approves and the workflow advances to `user-stories`. `memory/project.md` was already in this workflow's compiled selection, and the engine re-reads its text before each stage delivery — so from `user-stories` onward, the new lines are in the agent's context for the rest of this run.
 
-**4. The current workflow continues unchanged.** The stage approves and the workflow advances to `user-stories`. The new lines are on disk but don't enter this workflow's compiled view — Sam already corrected the agent in-stage for this run.
-
-**5. The next workflow picks them up.** Later that day Sam runs `/aidlc bugfix`. The compile at workflow start walks the space memory layer, picks up `memory/project.md`, and includes it in every stage's context. From stage one of the bugfix workflow, the agent knows "transaction" means a payment and the customer entity is the "ANZ customer."
+**5. Later workflows receive them too.** Later that day Sam runs `/aidlc bugfix`. `memory/project.md` is in every stage's selection (the org, team, and project files attach to every stage), so from stage one of the bugfix workflow, the agent knows "transaction" means a payment and the customer entity is the "bank customer."
 
 The cost was paid once — one gate confirmation, one file write — and it pays back on every future workflow for the price of one more file in the directory walk.
 
@@ -137,11 +197,26 @@ Rules are prose the agent reads. Sensors are deterministic checks that run autom
 
 When an agent writes or edits an output file during a stage, a PostToolUse hook checks which sensors apply to that stage and runs each matching one. Matching is by file shape: a code-quality sensor declares it analyses `**/*.{ts,js}`, so it only fires on TypeScript and JavaScript writes; a document-shape sensor that fires on any stage output omits the filter. Gate-fired sensors, the first three in the table below, run instead when the stage reaches its approval gate, once for each of the stage's declared output files their filter accepts. When the gate is one the tool approves on its own under Construction autonomy, only blocking sensors run there: advisory findings would have no one to read them. You don't invoke sensors by hand during a workflow; they ride along on the stage's writes and its gate.
 
-A sensor result is **advisory** in this release. A failing sensor produces an audit row and a detail file pointing at exactly what's missing, but it does not block the stage's approval gate or stop your workflow. When the gate opens, the agent tells you which checks still report findings on the stage's outputs, and where the details are, so you decide with that in view. With Sensors switched off, nothing is said about checks.
+The six sensors that ship are **advisory**. A failing one produces an audit row and a detail file pointing at exactly what's missing, but it does not block the stage's approval gate or stop your workflow. When the gate opens, the agent tells you which checks still report findings on the stage's outputs, so you decide with that in view. With Sensors switched off, nothing is said about checks.
+
+A sensor you add can be **blocking** instead (`default_severity: blocking` in its manifest). When a blocking sensor at a gate does not pass, the gate does not open: the agent offers **Fix findings** or **Override blocking sensors**, and an override is recorded as your choice. In autonomous Construction the run stops there instead, and choosing the override first sets Construction back to stopping for your approval at each Bolt. See [Sensor System](../reference/07-sensor-system.md).
 
 ### What you see in the audit log
 
-Sensor activity shows up in the intent's `audit/` shards as `Sensor Fired`, `Sensor Passed`, and `Sensor Failed` rows. A failed row links to a detail file (for example `<record>/.aidlc-engine/sensors/<stage-slug>/required-sections-<timestamp>.md`) that lists the specific gap - the missing headings, the unreferenced upstream artifact, the lint error. The audit log is covered in [State and Audit](10-state-and-audit.md).
+Sensor activity shows up in the intent's `audit/` shards as `Sensor Fired`, `Sensor Passed`, and `Sensor Failed` rows. A failed row links to a detail file (for example `<record>/.aidlc-engine/sensors/intent-capture/claim-sources-0719478d.md`, named for the sensor and the fire id on its rows) that lists the specific gap - the missing headings, the unreferenced upstream artifact, the lint error. A passing check leaves a row like this one, from the run above:
+
+```text
+## Sensor Passed
+**Timestamp**: 2026-10-13T10:41:35Z
+**Event**: SENSOR_PASSED
+**Fire id**: 0d3ee5cc
+**Sensor ID**: claim-sources
+**Stage slug**: intent-capture
+**Output path**: aidlc/spaces/default/intents/261013-inventory-api/ideation/intent-capture/intent-statement.md
+**Duration ms**: 190
+```
+
+The audit log is covered in [State and Audit](10-state-and-audit.md).
 
 ### The six framework sensors
 
@@ -162,7 +237,7 @@ Each stage declares which sensors fire on its outputs. You can add your own sens
 
 ## Planes: how it fits together
 
-You can use everything above without thinking about planes. But the underlying design borrows a discipline from networking, and naming it makes the "applies next workflow" behavior click into place.
+You can use everything above without thinking about planes. But the underlying design borrows a discipline from networking, and naming it makes the compile boundary — what is fixed at workflow start and what is read live — click into place.
 
 A modern router splits its work into three planes, and AI-DLC mirrors the split:
 
@@ -170,7 +245,7 @@ A modern router splits its work into three planes, and AI-DLC mirrors the split:
 - **Data plane** — the *actual runs*. Stage executions, agent invocations, the files in the intent's record dir. In networking terms, this is packet forwarding: fast, repeated, by lookup. The data plane reads the resolved answers; it doesn't re-derive them.
 - **Management plane** — the *observe-and-configure* surface. `/aidlc --doctor`, the audit log, `CLAUDE.md`. You configure here and you query here, at human cadence.
 
-The control plane compiles your rules and sensors into a graph **once**, at workflow start. The data plane reads pre-resolved answers off that graph for the rest of the run. That's why a learning captured mid-workflow waits for the next compile: the framework computes the answer at "topology-change time" (workflow start), not at "packet time" (every stage). The result is reproducible runs and clean recovery after a restart.
+The control plane compiles your rules and sensors into a graph **once**; the data plane reads pre-resolved answers off that graph for the rest of the run. The compiled answer is the *selection* — which rule files and sensors attach to which stage. The selected rule files' text is read at delivery time, so a kept learning in an already-selected file reaches the next stage without a recompile; a new file or a new Sensor binding is a topology change and waits for the next graph compile. The result is reproducible runs and clean recovery after a restart.
 
 As a user you mostly touch one horizontal slice at a time — running a workflow, capturing a learning, customizing team practices, auditing what happened. Each slice touches the planes underneath without making you reason about them. The full model, the compile boundary, and the recovery property are in [Plane Architecture](../reference/02-plane-architecture.md), with the telemetry artifact it produces documented in [Runtime Graph](../reference/13-runtime-graph.md).
 

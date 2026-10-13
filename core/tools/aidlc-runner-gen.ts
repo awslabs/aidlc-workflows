@@ -266,16 +266,16 @@ no standalone meaning.
    word kebab-case essence of what's being built (\`"I would like to build a
    simple calculator application"\` gives \`--label "simple calc"\`). The label
    becomes the readable, date-prefixed record dir name (\`<YYMMDD>-simple-calc\`);
-   the full \`--arguments\` text is preserved separately in the audit + state.
-   When only a scope was supplied, omit \`--arguments\` and \`--label\` (the tool
-   then falls back to the scope token):
+   the full \`--arguments\` text is preserved separately in the audit + state:
 
    \`\`\`bash
    ${aidlcDispatcherInvocation("intent create")} --scope <scope> --arguments "<description>" --label "<2-3 word essence>"
    \`\`\`
 
    Print the tool's output and stop. This does not advance a stage; run
-   \`${entrySkill}\` afterwards to continue.
+   \`${entrySkill}\` afterwards to continue. When only a scope was supplied, create
+   nothing: run step 3's command, which carries the scope, and act on what it
+   returns as step 3 describes.
 
 3. **The user described the work but gave no \`--scope\`** (even when the
    description starts with a scope name, as in \`feature flags for billing\`):
@@ -718,7 +718,7 @@ ahead of that run-stage. Adopt it for the whole run.
    run that bare \`next\` at once and act on what it returns, with no completion
    summary. If the person's reply that led to that step also asked to stop the
    workflow there for now (not to pause on one decision inside the work), run
-   \`${aidlcToolInvocation("orchestrate")} park\` instead and act on its
+   \`${aidlcToolInvocation("orchestrate")} park --person-asked\` instead and act on its
    \`parked\` directive.
 
 On that first \`next\`, pass \`$ARGUMENTS\` through verbatim after \`--scope ${scope}\`; the engine parses
@@ -740,10 +740,10 @@ This recognition and conductor-authored offer apply only before an engine ask
 is emitted. Once an ask exists, follow its typed route and supplied commands,
 preserving any \`--request\` id rather than rebuilding the request.
 
-- **Default to CONTINUATION.** Treat the input as new-work ONLY when it clearly
+- Treat the input as new-work ONLY when it clearly
   names a distinct feature/bug/unit unrelated to the active intent's subject
   (\`${aidlcDispatcherInvocation("intent list")} --json\` gives its \`slug\` and
-  \`status\`). When in doubt, continue: false-positive offers are the main risk.
+  \`status\`).
 - **On genuine new-work, OFFER, never auto-create.** Surface an
   \`AskUserQuestion\` showing the active intent and the proposed new one, **including
   the scope you'd give the new intent**. Default that scope to this runner's baked
