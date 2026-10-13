@@ -12922,13 +12922,15 @@ export function verificationCommandDetails(command: string): VerificationCommand
  * The record-relative name of a file the agent names for the engine to read
  * from the work's record. Named from the record, from the project folder, or in
  * full, it is the same file (#2167, #2451): the prompts say to write it to
- * `<record>/<name>`, and `<record>` is a project-relative path. A name with a
- * `.` or `..` part, or one that is not inside the record from the project
- * folder, is returned as given, for the record reader to take or refuse.
+ * `<record>/<name>`, and `<record>` is a project-relative path. A `.` part
+ * (`./aidlc/...`) names nothing and is dropped. A name with a `..` part, or one
+ * that is not inside the record from the project folder, is returned as given,
+ * for the record reader to take or refuse.
  */
 export function recordRelativeFileName(projectDir: string, root: string, file: string): string {
-  const given = file.replaceAll("\\", "/");
-  if (given.split("/").some((part) => part === ".." || part === ".")) return given;
+  const parts = file.replaceAll("\\", "/").split("/");
+  if (parts.includes("..")) return file.replaceAll("\\", "/");
+  const given = parts.filter((part, index) => part !== "." || index === parts.length - 1).join("/");
   const fromRecord = relative(root, resolvePath(projectDir, given)).replaceAll("\\", "/");
   const inRecord = fromRecord !== "" && fromRecord !== ".." && !fromRecord.startsWith("../") && !isAbsolute(fromRecord);
   return inRecord ? fromRecord : given;

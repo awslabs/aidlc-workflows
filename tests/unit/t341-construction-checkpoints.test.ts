@@ -31,6 +31,7 @@ import {
 import {
   approvedConstructionUnits,
   authorizedVerificationCommand,
+  recordRelativeFileName,
   verificationCommandDetails,
   artifactFilename,
   auditBlockField,
@@ -816,7 +817,7 @@ describe("t341 verification command consent", () => {
     writeFileSync(join(root, "verification-command.txt"), "bun test\n");
     const fromProject = relative(dir, join(root, "verification-command.txt"));
     const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--session", "t341-command-file"];
-    for (const file of [fromProject, fromProject.replaceAll("/", "\\"), join(root, "verification-command.txt")]) {
+    for (const file of [fromProject, fromProject.replaceAll("/", "\\"), `./${fromProject}`, `.\\${fromProject.replaceAll("/", "\\")}`, join(root, "verification-command.txt")]) {
       const decision = cli(dir, "log", ["decision", ...identity, "--command-file", file, "--decision", "Use this command?", "--options", "Approve,Request Changes"]);
       expect(decision.code, `${file}: ${decision.out}`).toBe(0);
     }
@@ -832,6 +833,29 @@ describe("t341 verification command consent", () => {
       expect(refused.code, file).not.toBe(0);
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The one helper the command, answer-text and batch readers share: every
+  // spelling of a file in the record is its record-relative name, and a `..`
+  // part or a file outside the record is left for the reader to refuse.
+  test("recordRelativeFileName names a record file the same way however it is spelled", () => {
+    const dir = project();
+    const root = seededRecordDir(dir);
+    const fromProject = relative(dir, join(root, "plan", "batch.json"));
+    const back = (path: string) => path.replaceAll("/", "\\");
+    for (const spelled of [
+      "plan/batch.json", "./plan/batch.json", "plan/./batch.json", back("./plan/batch.json"),
+      fromProject, back(fromProject), `./${fromProject}`, `.\\${back(fromProject)}`, join(root, "plan", "batch.json"),
+    ]) {
+      expect(recordRelativeFileName(dir, root, spelled), spelled).toBe("plan/batch.json");
+    }
+    for (const [spelled, left] of [
+      ["plan/../batch.json", "plan/../batch.json"],
+      [`${fromProject}/../../x.json`, `${fromProject}/../../x.json`.replaceAll("\\", "/")],
+      ["outside.json", "outside.json"],
+    ]) {
+      expect(recordRelativeFileName(dir, root, spelled), spelled).toBe(left);
+    }
+  });
 
   test("command files must stay in the record without symlinks and satisfy byte and command limits", () => {
     const dir = project();
