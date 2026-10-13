@@ -1474,10 +1474,10 @@ updated first.
 
 A pin switches the engine that serves the project at once, but the project's
 own files stay at the version they were last refreshed to until the next
-`aidlc config`. While work is open, `config --pin` and `config --unpin` are
-done as asked; when the project's files are on another version than the one it
-now follows (or on a release from before versions were recorded), the reply
-ends with "Run `aidlc config` to finish updating this project."
+`aidlc config`. `config --pin` and `config --unpin` are done as asked, also
+while work is open; when the project's files are on another version than the
+one it now follows (or on a release from before versions were recorded), the
+reply ends with "Run `aidlc config` to finish updating this project."
 
 A fresh clone or CI runner installs the committed version before config:
 

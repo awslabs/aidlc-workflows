@@ -11952,7 +11952,6 @@ export async function main(
   }
   if (argv.includes("--pin") || argv.includes("--unpin")) {
     emitResult(await configureProjectPin(argv, {
-      activeWorkflows: activeWorkflowDescriptions,
       // A project with several harnesses refreshes each one by name.
       refreshCommands: (dir) => {
         const harnesses = discoverProjectHarnesses(dir).map((harness) => harness.distribution).sort();
