@@ -423,6 +423,7 @@ import {
   resolveStageAnswerMode,
   editedReviewNotice,
   dictatedReviewNotice,
+  noReviewerNotice,
   findStageBySlug,
   withPersonsWordsFirst,
 } from "./aidlc-lib.ts";
@@ -10114,14 +10115,17 @@ function applyConstructionCheckpointShape(
   if (directive.construction_policy) {
     directive.construction_policy.human_completion_required = checkpoint.human_required;
   }
-  // A review edited after the reviewer finished, or a verdict the reviewer's
-  // dispatch dictated, is said once, before the person is asked, in the line
-  // every other accepted change uses.
+  // A review edited after the reviewer finished, a verdict the reviewer's
+  // dispatch dictated, or a verdict recorded before any reviewer finished, is
+  // said once, before the person is asked, in the line every other accepted
+  // change uses.
   const reviewLines = [
     ...(checkpoint.review_edited?.stages ?? []).map((slug) =>
       editedReviewNotice(findStageBySlug(slug)?.name ?? slug, checkpoint.unit)),
     ...(checkpoint.review_dictated?.stages ?? []).map((slug) =>
       dictatedReviewNotice(findStageBySlug(slug)?.name ?? slug, checkpoint.unit)),
+    ...(checkpoint.review_no_reviewer?.stages ?? []).map((slug) =>
+      noReviewerNotice(findStageBySlug(slug)?.name ?? slug, checkpoint.unit)),
   ];
   if (reviewLines.length > 0) {
     const noticed = directive as RunStageDirective & Pick<Directive, "change_notices">;

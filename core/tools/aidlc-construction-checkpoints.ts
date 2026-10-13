@@ -24,6 +24,7 @@ import {
   reviewCompletionDidNotFinish,
   reviewCompletionDictated,
   reviewCompletionEdited,
+  reviewCompletionWithoutReviewer,
   reviewRecordNotHere,
   effectivePlanAction,
   eventMatchesClaimAttempt,
@@ -185,6 +186,10 @@ export interface ConstructionCheckpoint {
    *  (strict; relaxed and off said it with the verdict). The checkpoint says so
    *  in one line before the person is asked. */
   review_dictated?: { stages: string[] };
+  /** The stages whose fresh review records that no reviewer had finished when
+   *  its verdict was recorded (strict; relaxed and off said it with the
+   *  verdict). The checkpoint says so in one line before the person is asked. */
+  review_no_reviewer?: { stages: string[] };
   /** From verify: the one line for each change to this Unit's reviewed work
    *  its Guard Policy accepted, said before the person is asked. */
   change_notices?: string[];
@@ -721,10 +726,12 @@ function snapshot(
   // Stages whose review ended in the NOT-READY fallback no reviewer gave:
   // ready as before, and asked about and approved as not finished.
   const endedUnfinished: string[] = [];
-  // Stages whose fresh review was edited after the reviewer finished, and
-  // stages whose fresh review records the verdict its dispatch dictated.
+  // Stages whose fresh review was edited after the reviewer finished, whose
+  // fresh review records the verdict its dispatch dictated, and whose verdict
+  // was recorded before any reviewer finished.
   const editedReviews: string[] = [];
   const dictatedReviews: string[] = [];
+  const noReviewerReviews: string[] = [];
   let mayGoOn: boolean | null = null;
   const overAllowed = (): boolean => (mayGoOn ??= personMayApproveOverUnfinishedReview(projectDir, state));
   // The unfinished review `rereview` names is one the person may go on without.
@@ -998,6 +1005,7 @@ function snapshot(
     }
     if (review && reviewCompletionEdited(review.block) && !acceptsChanges()) editedReviews.push(slug);
     if (review && reviewCompletionDictated(review.block) && !acceptsChanges()) dictatedReviews.push(slug);
+    if (review && reviewCompletionWithoutReviewer(review.block) && !acceptsChanges()) noReviewerReviews.push(slug);
     if (reviewClass === "none" || waived) {
       // No review re-checks this stage (or the person let the Unit go on
       // without it): a later change to the work the person approved, which
@@ -1153,6 +1161,7 @@ function snapshot(
       } : {}),
       ...(editedReviews.length > 0 ? { review_edited: { stages: editedReviews } } : {}),
       ...(dictatedReviews.length > 0 ? { review_dictated: { stages: dictatedReviews } } : {}),
+      ...(noReviewerReviews.length > 0 ? { review_no_reviewer: { stages: noReviewerReviews } } : {}),
       run_floor: floors[stages.at(-1)!] ?? "unstarted#0",
       run_floors: floors, proof_path: `${root}/${proofPath}`, verification: proof ?? restored,
       rereview, rechecked,

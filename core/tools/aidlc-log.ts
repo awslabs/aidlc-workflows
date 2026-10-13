@@ -128,6 +128,9 @@ import {
   REVIEW_EDITED_FIELD,
   dictatedReviewNotice,
   REVIEW_DICTATED_FIELD,
+  noAgentFinishedSinceReview,
+  noReviewerNotice,
+  REVIEWER_FINISHED_FIELD,
   recordFileTargetOrThrow,
   relativeRecordDir,
   recoveryGuidance,
@@ -4152,9 +4155,12 @@ function handleReview(args: string[]): void {
       // verdict). The verdict still records, as the file reads, and the row
       // says the review was edited after the reviewer finished: under strict
       // the gate tells the person in one line; under relaxed or off the change
-      // is accepted and said once here, like every other accepted change. No
-      // completion row since the request, or one without the digest, is no
-      // evidence, and the row carries nothing.
+      // is accepted and said once here, like every other accepted change. A
+      // completion row without the digest is no evidence, and the row carries
+      // nothing. No completion of any agent since the request is evidence only
+      // where noAgentFinishedSinceReview says so (on Claude Code, outside a
+      // worktree, with no background agent sent since): there the row says no
+      // reviewer had finished, said once here, and at the gate under strict.
       if (body !== null && requestBinding.requestId !== null) {
         const events = readAuditShardEvents(pd, intent, space);
         const request = openReviewRequests(events)
@@ -4183,6 +4189,11 @@ function handleReview(args: string[]): void {
           } else {
             verdictChangeNotices.push(notice);
           }
+        }
+        if (request !== undefined && finished === null &&
+          noAgentFinishedSinceReview(pd, events, request.row, selection)) {
+          fields[REVIEWER_FINISHED_FIELD] = "no";
+          verdictChangeNotices.push(noReviewerNotice(node.name, flags.unit));
         }
       }
       let reviewBytes = body ?? snapshot.appendix;

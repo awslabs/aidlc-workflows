@@ -431,6 +431,10 @@ interface ShippedHarnessData {
   documentExtractors: ReadonlyMap<string, DocumentExtractorSpec> | null;
   runnerFrontmatterAdditions: readonly string[];
   hookActivation: HookActivation | null;
+  /** The host variables of a host whose own stop event records every
+   *  dispatched agent's finish before the agent that dispatched it sees the
+   *  result (agentFinishRecorded), or null. */
+  agentFinishRecorded: readonly string[] | null;
 }
 
 let _shippedHarnessData: ShippedHarnessData | null = null;
@@ -608,12 +612,20 @@ function readShippedHarnessData(): ShippedHarnessData {
           ...(typeof activation.agentStepEdits === "string" ? { agentStepEdits: activation.agentStepEdits } : {}),
         }
         : null;
+    // agentFinishRecorded is evidence the engine relies on to say no reviewer
+    // finished, so anything but a list of variable names reads as undeclared.
+    const finish = (parsed as { agentFinishRecorded?: { env?: unknown } | null }).agentFinishRecorded?.env;
+    const agentFinishRecorded = Array.isArray(finish) && finish.length > 0 &&
+        finish.every((name) => typeof name === "string" && name !== "")
+      ? [...finish as string[]]
+      : null;
     _shippedHarnessData = {
       rulesSubdir,
       plugins,
       documentExtractors,
       runnerFrontmatterAdditions,
       hookActivation,
+      agentFinishRecorded,
     };
     return _shippedHarnessData;
   } catch (err) {
@@ -626,6 +638,7 @@ function readShippedHarnessData(): ShippedHarnessData {
     documentExtractors: null,
     runnerFrontmatterAdditions: [],
     hookActivation: null,
+    agentFinishRecorded: null,
   };
   return _shippedHarnessData;
 }
@@ -15676,6 +15689,10 @@ export interface FreshReviewReceipts {
    *  records the verdict its dispatch dictated (reviewCompletionDictated).
    *  Read only beside stageVerdict / unitVerdicts, for the one line the gate says. */
   dictatedVerdicts?: Set<string>;
+  /** Scopes ("" for the stage, else the Unit) whose fresh terminal verdict
+   *  records that no reviewer had finished (reviewCompletionWithoutReviewer).
+   *  Read only beside stageVerdict / unitVerdicts, for the one line the gate says. */
+  noReviewerVerdicts?: Set<string>;
   /**
    * Units with a merge-confirmed Bolt attempt. A name-only attempt is
    * confirmed by its BOLT_COMPLETED row; a slug-backed (worktree) attempt is
@@ -18200,6 +18217,78 @@ export function dictatedReviewNotice(stageName: string, unit?: string | null): s
   return `The reviewer for ${stageName}${unit ? ` (${unit})` : ""} was told what to conclude before it looked.`;
 }
 
+/** The REVIEW_COMPLETED field the logger writes, as `no`, when the verdict was
+ *  recorded before any agent had finished since its review was requested, on
+ *  a host where that absence is evidence (noAgentFinishedSinceReview). True
+ *  when written, even if an agent finishes later; distinct from
+ *  REVIEW_FINISHED_FIELD, the NOT-READY fallback with no review at all. */
+export const REVIEWER_FINISHED_FIELD = "Reviewer Finished Before Verdict";
+
+/** Whether a REVIEW_COMPLETED row records a verdict no reviewer had finished.
+ *  Read for what the person is told; it changes no readiness and no fingerprint. */
+export function reviewCompletionWithoutReviewer(completionBlock: string): boolean {
+  return auditBlockField(completionBlock, REVIEWER_FINISHED_FIELD) === "no";
+}
+
+/** The one line the person hears with the verdict, and at the gate under
+ *  strict, when no reviewer finished the review they are deciding on. */
+export function noReviewerNotice(stageName: string, unit?: string | null): string {
+  return `No reviewer finished the review for ${stageName}${unit ? ` (${unit})` : ""}; its verdict was recorded without a reviewer.`;
+}
+
+/** Whether the agent's shell is in a host whose own stop event records every
+ *  dispatched agent's finish before the agent that dispatched it sees the
+ *  result: the harness declares it (harness.json `agentFinishRecorded`) with
+ *  the variables that host sets in its agent's shell. */
+export function hostRecordsAgentFinishes(): boolean {
+  try {
+    return inHostShell(readShippedHarnessData().agentFinishRecorded ?? undefined);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the record shows that no agent finished after `request`, on a host
+ * where a missing completion row means that. Every doubt reads as false, so a
+ * lost or late row can never put a wrong line in front of the person: another
+ * host, a delegated worktree (its reviewers' rows land in the parent's ledger),
+ * a chat whose hooks do not write into this record (the check log-subagent
+ * makes), a background agent sent or finished since the request (the in-flight
+ * ledger written since, or an entry still fresh), a completion hook that ran
+ * since (its heartbeat), or any SUBAGENT_COMPLETED row, of any agent, not
+ * definitely before the request. The caller holds the audit lock, so neither
+ * the rows nor the ledger move while this reads.
+ */
+export function noAgentFinishedSinceReview(
+  projectDir: string,
+  events: ReadonlyArray<AuditShardEvent>,
+  request: AuditShardEvent,
+  selection: WorkflowSelection,
+): boolean {
+  try {
+    if (!hostRecordsAgentFinishes()) return false;
+    if (delegatedWorktreeIntent(projectDir) !== null) return false;
+    if (selection.intent === null || workflowParticipation(projectDir, selection) !== "participant") return false;
+    const requested = Date.parse(request.timestamp);
+    if (!Number.isFinite(requested)) return false;
+    const ledger = subagentInflightMarkerPath(projectDir);
+    if (existsSync(ledger)) {
+      if (lstatSync(ledger).mtimeMs >= requested) return false;
+      const inflight = inspectSubagentInflight(projectDir);
+      if (inflight.malformed || inflight.freshCount > 0) return false;
+    }
+    const heartbeat = join(hooksHealthReadDir(projectDir, selection.intent, selection.space), "log-subagent.last");
+    if (existsSync(heartbeat)) {
+      const beat = Date.parse(readFileSync(heartbeat, "utf-8").trim());
+      if (!Number.isFinite(beat) || beat >= requested) return false;
+    }
+    return !events.some((row) => row.event === "SUBAGENT_COMPLETED" && !attemptEventDefinitelyBefore(row, request));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The review each scope of a stage most recently recorded, in the stage's
  * whole history: the record the newest PAIRED REVIEW_COMPLETED row names (null
@@ -20112,6 +20201,7 @@ export function freshReviewReceipts(
     unfinishedVerdicts: new Set(),
     editedVerdicts: new Set(),
     dictatedVerdicts: new Set(),
+    noReviewerVerdicts: new Set(),
     mergedBoltUnits: new Set(),
     openBoltUnits: new Set(),
     acceptedChanges: [],
@@ -20216,11 +20306,13 @@ export function freshReviewReceipts(
   const recordedRepos = new Set(intentRepos(projectDir));
   const unitVerdicts = new Map<string, ReviewVerdict>();
   // Read beside the verdicts above: which of them no reviewer gave, which
-  // record a review edited after the reviewer finished, and which record the
-  // verdict the reviewer's dispatch dictated.
+  // record a review edited after the reviewer finished, which record the
+  // verdict the reviewer's dispatch dictated, and which were recorded before
+  // any reviewer finished.
   const unfinishedVerdicts = new Set<string>();
   const editedVerdicts = new Set<string>();
   const dictatedVerdicts = new Set<string>();
+  const noReviewerVerdicts = new Set<string>();
   const unitStale = new Set<string>();
   const unitStaleProgress = new Map<string, StaleReviewProgress>();
   const unitIterations = new Map<string, number>();
@@ -20652,6 +20744,8 @@ export function freshReviewReceipts(
     else editedVerdicts.delete(unit ?? "");
     if (reviewCompletionDictated(e.block)) dictatedVerdicts.add(unit ?? "");
     else dictatedVerdicts.delete(unit ?? "");
+    if (reviewCompletionWithoutReviewer(e.block)) noReviewerVerdicts.add(unit ?? "");
+    else noReviewerVerdicts.delete(unit ?? "");
     if (unit) {
       unitVerdicts.set(unit, terminalVerdict);
       unitStale.delete(unit);
@@ -21119,6 +21213,7 @@ export function freshReviewReceipts(
     unfinishedVerdicts,
     editedVerdicts,
     dictatedVerdicts,
+    noReviewerVerdicts,
     mergedBoltUnits,
     openBoltUnits,
     acceptedChanges: [

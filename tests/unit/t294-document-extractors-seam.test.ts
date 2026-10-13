@@ -204,7 +204,10 @@ const BASE_KEYS = [
 // every other harness omits. `statusLine` is AI-DLC's status line value on the
 // two hosts that have one (Claude Code and Codex), shipped here so it reaches a
 // settings file the host reads only when someone chooses it (#1407).
+// `agentFinishRecorded` is Claude Code's (its SubagentStop row lands before a
+// helper's result, so a verdict with none since its request had no reviewer).
 const OPTIONAL_KEYS = [
+  "agentFinishRecorded",
   "directiveMaxBytes",
   "hookActivation",
   "kiroLayout",

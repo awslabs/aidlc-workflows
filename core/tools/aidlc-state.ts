@@ -66,6 +66,7 @@ import {
   guardPolicyAcceptsChanges,
   editedReviewNotice,
   dictatedReviewNotice,
+  noReviewerNotice,
   recordAcceptedChanges,
   inertPath,
   resolveChangeControl,
@@ -274,6 +275,11 @@ const HARNESS_DOC_DIRS = new Set([
   ".cursor",
   ".git",
 ]);
+
+// The review lines sayEditedReview has said in this command, so the second of
+// gate-start's two admissions does not say them again. At module top for the
+// same reason as HARNESS_DOC_DIRS.
+const saidAtGate = new Set<string>();
 
 // KNOWN_CODEKB_STAGES now lives in aidlc-lib.ts (imported above) beside the
 // shared produces-artifact matchers, so the review-freeze hook and this tool
@@ -4002,10 +4008,13 @@ function verifyGateOpeningGuards(
 
 // The gate tells the person, once and in one line, when the review it stands
 // on records a review edited after the reviewer finished (Review Edited After
-// Reviewer on the fresh terminal receipt) or a verdict the reviewer's dispatch
-// dictated (Review Verdict Dictated). Strict only: relaxed and off said it when
-// the verdict was recorded. The verdict and the gate are unchanged: the person
-// approves as today or has the reviewer run again.
+// Reviewer on the fresh terminal receipt), a verdict the reviewer's dispatch
+// dictated (Review Verdict Dictated), or a verdict recorded before any reviewer
+// finished (Reviewer Finished Before Verdict). Strict only: relaxed and off
+// said it when the verdict was recorded. The verdict and the gate are
+// unchanged: the person approves as today or has the reviewer run again.
+// gate-start admits the gate twice (once before its lock, once under it), so a
+// line already said in this command is not said again (saidAtGate).
 function sayEditedReview(
   pd: string,
   content: string,
@@ -4021,6 +4030,7 @@ function sayEditedReview(
     const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
     const edited = receipts.editedVerdicts ?? new Set<string>();
     const dictated = receipts.dictatedVerdicts ?? new Set<string>();
+    const noReviewer = receipts.noReviewerVerdicts ?? new Set<string>();
     // The stage gate speaks for every review it stands on: the stage's own, or
     // one per Unit of a per-unit stage; a Unit gate speaks for its Unit only.
     const scopes = unit === undefined
@@ -4031,8 +4041,12 @@ function sayEditedReview(
         .map((scope) => editedReviewNotice(stage.name, scope === "" ? undefined : scope)),
       ...scopes.filter((scope) => dictated.has(scope))
         .map((scope) => dictatedReviewNotice(stage.name, scope === "" ? undefined : scope)),
+      ...scopes.filter((scope) => noReviewer.has(scope))
+        .map((scope) => noReviewerNotice(stage.name, scope === "" ? undefined : scope)),
     ];
-    if (lines.length > 0) console.log(JSON.stringify({ change_notices: lines }));
+    const unsaid = lines.filter((line) => !saidAtGate.has(line));
+    for (const line of unsaid) saidAtGate.add(line);
+    if (unsaid.length > 0) console.log(JSON.stringify({ change_notices: unsaid }));
   } catch {
     // The line is for the person; a scan that cannot run leaves the gate as it was.
   }

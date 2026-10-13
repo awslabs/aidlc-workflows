@@ -5033,6 +5033,7 @@ const HARNESS_IDENTITY_KEYS = new Set([
   "harnessDir",
   "rulesSubdir",
   "statusLine",
+  "agentFinishRecorded",
 ]);
 
 const CLAUDE_SHIPPED_KEYS = [

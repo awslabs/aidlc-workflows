@@ -125,6 +125,16 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   (`HOST_LABELS` in `core/tools/aidlc-runtime-paths.ts`), never from the
   project-editable `productName`; add your harness there, or it reads "this
   assistant".
+- `agentFinishRecorded` (optional) - `{ env: [...] }`, only for a host whose own
+  stop event runs the `log-subagent` hook (its `SUBAGENT_COMPLETED` row) before
+  the agent that dispatched a helper sees the helper's result, for every
+  dispatch. `env` names the variables the host sets in its agent's shell. On
+  such a host a review verdict recorded with no agent finished since its
+  request is marked as recorded before any reviewer finished, and the person
+  hears it in one line. Declare it only after a live check shows the row lands
+  first: on a host that writes it later or not at all, the person would be told
+  no reviewer finished a review one did. Only Claude Code declares it
+  (`CLAUDE_CODE_SESSION_ID`).
 - `statusLine` (optional) - only for a host with a status line AI-DLC can show
   its progress in, in that host's own shape (Claude Code: `{ type, command }`;
   Codex: `{ items }`). It is emitted into `tools/data/harness.json`, never into a
