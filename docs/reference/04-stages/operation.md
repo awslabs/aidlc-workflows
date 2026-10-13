@@ -11,9 +11,24 @@ observability, incident response, performance validation, and feedback
 collection.
 
 All seven Operation stages are **CONDITIONAL** -- they execute based on the
-scope and execution plan. For example, mvp and poc skip Operation entirely.
-Bugfix, refactor, infra, security-patch, and express run deployment-focused
-subsets.
+scope and execution plan. mvp, poc and classic skip Operation entirely;
+bugfix, refactor, infra, security-patch and express run deployment-focused
+subsets (see Scope applicability below). The express plan, for example, ends
+with three Operation stages:
+
+```text
+$ aidlc engine graph scope express
+workspace-scaffold
+workspace-detection
+state-init
+reverse-engineering
+requirements-analysis
+code-generation
+build-and-test
+deployment-pipeline
+deployment-execution
+observability-setup
+```
 
 All stages run **inline** (no subagents in the Operation phase). All stages
 follow `stage-protocol.md` for approval gates, question format, completion
@@ -41,9 +56,12 @@ Three Operation stages involve multiple agents:
 - **4.3 Deployment Execution**: aidlc-pipeline-deploy-agent (lead) + aidlc-developer-agent (database migrations)
 - **4.7 Feedback & Optimization**: aidlc-operations-agent (lead) + aidlc-aws-platform-agent (cost optimization, drift detection)
 
-In all cases, the conductor invokes the lead agent first, then invokes
-support agents with the lead's output as context. The conductor performs
-every delegation; agents never invoke each other.
+All three are inline: the conductor takes on each support agent's perspective
+in its own context (loading its persona file and knowledge as it did the
+lead's), writes the lead's output first, then layers in each support
+perspective. No support agent is dispatched and no contribution files are
+written. The support agents that take part are the directive's
+`support_agents`, the list left after the collaborators setting.
 
 ---
 
