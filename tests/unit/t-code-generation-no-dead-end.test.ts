@@ -311,6 +311,55 @@ describe("the guard judges only the build: records and engine commands pass, the
     expect(clear.code, clear.said).toBe(0);
   });
 
+  test("a release update the person asked for passes in one step in every shape, and the plan question stays", async () => {
+    for (const id of ["S2", "S3"]) {
+      const state = STATES.find((builder) => builder.id === id)!.build();
+      created.push(state.proj);
+      // The plain update and the refresh doctor names for a tree that is behind.
+      const commands = [
+        "bun .claude/tools/aidlc.ts config --download --yes",
+        `bun .claude/tools/aidlc.ts config --harness claude --download --project-dir ${state.proj}`,
+      ];
+      const verdicts = async (expected: number, why: string) => {
+        for (const shape of SHAPES) {
+          shape.install(state.proj);
+          for (const command of commands) {
+            const verdict = await shape.call(state.proj, state.session, { tool: "Bash", command });
+            expect(verdict.code, `[${id} ${shape.name}] ${why}: ${command}\n${verdict.said}`).toBe(expected);
+          }
+        }
+      };
+      await verdicts(2, "passed with nobody asking");
+      expect(reply(state.proj, "update AI-DLC").status).toBe(0);
+      expect(latestHumanTurnWords(state.proj)).toBe("update AI-DLC");
+      await verdicts(0, "refused after the person asked");
+      // The update answers nothing: next still asks the plan question.
+      const step = next(state.proj);
+      expect(step.kind, JSON.stringify(step)).toBe("ask");
+      expect(step.ask_type, JSON.stringify(step)).toBe("plan-approval");
+    }
+  });
+
+  test("after the person's approve the same turn still counts: an update passes with no new turn, as the four settings do", async () => {
+    // personAskedSinceGate: an approval does not use the person's turn up, so
+    // "approve and update AI-DLC" in one message is never refused.
+    const state = STATES.find((builder) => builder.id === "S3")!.build();
+    created.push(state.proj);
+    const update = "bun .claude/tools/aidlc.ts config --download --yes";
+    const setting = "bun .claude/tools/aidlc.ts config flags --sensor-timeout-ms 5 --local --yes";
+    for (const command of [update, setting]) {
+      const unasked = await claude.call(state.proj, state.session, { tool: "Bash", command });
+      expect(unasked.code, `passed with nobody asking: ${command}`).toBe(2);
+    }
+    expect(reply(state.proj, "approve").status).toBe(0);
+    const recorded = answer(state.proj, "Approve Plan");
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    for (const command of [update, setting]) {
+      const asked = await claude.call(state.proj, state.session, { tool: "Bash", command });
+      expect(asked.code, `${command}\n${asked.said}`).toBe(0);
+    }
+  });
+
   test("S6b: the person hands the plan back while editing: every shape's refusal names the answer, and three calls later the plan is the agent's", async () => {
     const state = STATES.find((builder) => builder.id === "S6b")!.build();
     created.push(state.proj);

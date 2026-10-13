@@ -598,6 +598,10 @@ const claude: Shape = {
   )),
 };
 
+// Codex gives every tool call its own turn and call ids; its adapter replays a
+// verdict only for a byte-identical delivery, so each call here carries its own.
+let codexCall = 0;
+
 const codex: Shape = {
   name: "codex", dir: ".codex",
   install: (proj) => installTree(proj, "codex", ".codex"),
@@ -611,7 +615,10 @@ const codex: Shape = {
           : { tool_name: "spawn_agent", tool_input: { agent_type: call.agent, message: respell(call.prompt, ".codex") } };
     return stderrVerdict(spawnShape(
       proj, [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "plan-approval-guard"],
-      { hook_event_name: "PreToolUse", cwd: proj, session_id: session, ...native },
+      {
+        hook_event_name: "PreToolUse", cwd: proj, session_id: session,
+        turn_id: `turn-sweep-${++codexCall}`, tool_use_id: `call-sweep-${codexCall}`, ...native,
+      },
       { CLAUDE_PROJECT_DIR: undefined, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined, AIDLC_COMPILED_EXECUTABLE: "" },
     ));
   },

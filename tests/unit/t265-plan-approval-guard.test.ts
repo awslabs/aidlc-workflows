@@ -1861,10 +1861,11 @@ describe("t265b hook lifecycle", () => {
   // for with one `config <section> ... --yes`. While a plan waits, a read or a
   // setting passes whoever typed it: none builds anything or changes what the
   // plan says. Kiro's Workflows on, the sensor timeout and which plugins are on
-  // can take a check away or change the stations, so they pass once the person
-  // asked. A release fetched or applied, another project's folder, and the
-  // switches with their own rule are not this.
-  test("a config section change passes while the plan waits; a release or another folder does not", () => {
+  // can take a check away or change the stations, and a release fetched or
+  // applied replaces the engine itself, so they pass once the person asked
+  // ("update AI-DLC"). Another project's folder and the switches with their own
+  // rule are not this.
+  test("a config section change passes while the plan waits; a release once the person asked; another folder is the engine's", () => {
     const proj = scratchProject();
     try {
       seedState(proj);
@@ -1916,9 +1917,11 @@ describe("t265b hook lifecycle", () => {
         for (const command of spellings(args)) expectCode(command, 2);
       }
       const otherProject = mkdtempSync(join(tmpdir(), "t265-other-project-"));
-      // A release fetched or applied replaces the engine itself: it waits for the
-      // plan's answer whoever asked. A bypass with extra flags is judged whole.
-      const refused = [
+      // A release fetched or applied, and a setup run with no section (an unknown
+      // word is one; the config tool refuses that itself), including the refresh
+      // doctor names for a tree that is behind: each waits until the person has
+      // asked, then passes in one step, never on an unattended run.
+      const releases = [
         "config --yes",
         "config --pin 2.11.0 --yes",
         "config bogus --show",
@@ -1929,11 +1932,16 @@ describe("t265b hook lifecycle", () => {
         "config project --from /tmp/release --yes",
         "config project --mcp none --from=/tmp/release --yes",
         "config flags --from /tmp/release --yes",
-        "config flags --default-scope feature --bypass AIDLC_DISABLE_SENSORS --local --yes",
+        `config --harness kiro --download --project-dir '${proj}'`,
+        `config --harness kiro --project-dir '${proj}'`,
       ];
+      // A bypass with extra flags is judged whole, whoever asked.
+      const refused = ["config flags --default-scope feature --bypass AIDLC_DISABLE_SENSORS --local --yes"];
       // A help request, a check turned back on, a repeated or empty --harness and
-      // another project's folder are the config command's own to refuse.
+      // another project's folder are the config command's own to refuse. The
+      // native update is not a config form: it is AI-DLC's own command.
       const enginesOwn = [
+        "update",
         "config --help --yes",
         "config flags --swarm on --clear-bypass AIDLC_DISABLE_SENSORS --yes",
         "config models --show --harness claude --harness codex",
@@ -1947,7 +1955,7 @@ describe("t265b hook lifecycle", () => {
       cpSync(join(AIDLC_SRC, "tools", "aidlc-init.ts"), join(proj, ".claude", "tools", "aidlc-init.ts"));
       const script = "bun .claude/tools/aidlc-init.ts";
       try {
-        for (const args of refused) {
+        for (const args of [...releases, ...refused]) {
           for (const command of spellings(args)) expectCode(command, 2);
         }
         for (const args of enginesOwn) {
@@ -1963,10 +1971,11 @@ describe("t265b hook lifecycle", () => {
         ]) {
           expectCode(command, 2);
         }
-        // The person asked: the three that can take a check away pass, and an
-        // unattended driver, with no person behind it, never runs them.
+        // The person asked: the settings that can take a check away and the
+        // releases pass, and an unattended driver, with no person behind it,
+        // never runs them.
         appendAuditEntry("HUMAN_TURN", { Session: "t265-config" }, proj);
-        for (const args of asked) {
+        for (const args of [...asked, ...releases]) {
           for (const command of spellings(args)) {
             expectCode(command, 0);
             expectCode(command, 2, { AIDLC_UNATTENDED: "1" });
@@ -1976,7 +1985,8 @@ describe("t265b hook lifecycle", () => {
           for (const command of spellings(args)) expectCode(command, 2);
         }
         expectCode(`${script} project --plugins all --yes`, 0);
-        expectCode(`${script} --download --yes`, 2);
+        expectCode(`${script} --download --yes`, 0);
+        expectCode(`${script} --download --yes`, 2, { AIDLC_UNATTENDED: "1" });
       } finally {
         rmSync(otherProject, { recursive: true, force: true });
       }
