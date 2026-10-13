@@ -320,12 +320,13 @@ artifact Y is moot because Y's producer is SKIP in this scope." That's
 advisory, not blocking — the user has already opted into the
 truncation by picking the scope.
 
-**What v0.10.0 adds.** The reserved `when:` primitive (see "Reserved"
-section below) will let authors express richer predicates —
-`when: producer-in-plan`, `when: mode == brownfield`,
-`when: scope != poc`. Today's `required: true` + `conditional_on:
-brownfield|greenfield` pair covers the two dimensions v0.3.0 needs;
-`when:` generalises it.
+**What `when:` adds.** `when: {producer-in-plan: <artifact>}` names an
+input a stage takes from another stage. It never removes the stage from
+a plan: when nothing on the plan produces the artifact, the person hears
+at workflow start that the stage will run without it. Richer predicates
+(`mode == brownfield`, `scope != poc`) are still to come; today's
+`required: true` + `conditional_on: brownfield|greenfield` pair covers
+those two dimensions.
 
 ### `consumes[].conditional_on`
 
@@ -665,7 +666,7 @@ prevents future contributions from colliding with ad-hoc additions.
 
 | Key | Likely release | What it will do |
 |-----|----------------|-----------------|
-| `when` | v0.10.0 fitness compiler | Structured condition. Compiles `condition` prose into machine-enforceable logic. Supersedes `consumes[].conditional_on` and generalises today's scope-aware `consumes[].required` with richer predicates (`producer-in-plan`, `mode == brownfield`, `scope != poc`) |
+| `when` | **active** (`producer-in-plan`) | Structured input condition, checked against the plan at workflow set-up: when no stage on the plan produces the named artifact, the person is told the stage will run without it. The stage stays on the plan; `scopes:` alone decide the compiled grid. Further predicates (`mode == brownfield`, `scope != poc`) are still to come; adding one is a `WHEN_PREDICATE_KEYS` entry plus a check beside `unmetProducerInPlan` |
 | `on_failure` | v0.8.0 Ralph loop | Declarative error recovery — "if this stage fails, jump back to X" or "retry with adjusted inputs". Moves revision semantics out of `stage-protocol-recovery.md` prose |
 | `blocks_on` | v0.4.0 Construction (if surfaced) | Completion dependency without data read — splits today's overloaded `requires_stage` (which conflates "I consume your output" with "I run after you") |
 | `timeout` | v0.5.0 sensor binding | Execution budget (deadline). Homed in sensor bindings, not stage frontmatter |
