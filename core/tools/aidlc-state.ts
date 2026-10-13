@@ -29,7 +29,6 @@ import {
   REVIEW_FINDING_DISPOSITIONS_FIELD,
 } from "./aidlc-review-brief.ts";
 import {
-  activeIntent,
   activeIntentUuid,
   activeSpace,
   approvedTogetherCover,
@@ -218,6 +217,8 @@ import {
   validateUnitName,
   validScopes,
   withAuditLock,
+  withWorkflowRecordLock,
+  type WorkflowSelection,
   worktreeDocsDir,
   worktreeStateFilePath,
   sameWorkspaceSource,
@@ -234,6 +235,7 @@ import {
   engineDir,
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
+import { compileRuntime } from "./aidlc-runtime.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
@@ -388,6 +390,21 @@ function workflowRollupFields(pd: string): Record<string, string> {
     return workflowUsageAuditFields(pd);
   } catch {
     return {};
+  }
+}
+
+// Completion owns the last derived snapshot: terminal hooks no longer refresh
+// it. Call only after authoritative audit succeeds, before the terminal state
+// write, under the same workspace lock and selection as that write. A cache
+// failure is advisory; audit/state persistence errors remain completion errors.
+function projectCompletedRuntime(pd: string, selection: WorkflowSelection): void {
+  try {
+    compileRuntime(pd, selection);
+  } catch (e) {
+    const detail = inertPath(errorMessage(e)).slice(0, 240);
+    process.stderr.write(
+      `Runtime graph refresh failed (${detail}); completion continues. Repair it with \`${aidlcToolInvocation("runtime")} compile\`.\n`,
+    );
   }
 }
 
@@ -771,8 +788,8 @@ let projectDir: string | undefined;
 // branch writing ERROR_LOGGED to the wrong bucket. These mirror the resolved
 // intent+space into error() so emitError keys lock==write. Set immediately
 // before the lock, cleared after; on the happy path no error fires and they are
-// harmless. All OTHER handlers lock the sentinel bucket and leave these unset
-// (undefined), so error() keys the sentinel for them — correct.
+// harmless. All OTHER handlers lock workspace then the selected intent and
+// leave these unset, so error() can reuse their workspace lock.
 let lockIntent: string | undefined;
 let lockSpace: string | undefined;
 let stateSessionOverride: string | undefined;
@@ -820,6 +837,19 @@ function assertWorkflowNotArchived(content: string, operation: string): void {
     `Workflow is Archived, so ${operation} is refused. Bring it back first with ` +
       `\`${entrySkillInvocation()} intent unarchive <name>\`.`,
   );
+}
+
+// Main's early admission improves the ordinary refusal, but archive may finish
+// while this command waits. Recheck its authoritative state only after owning
+// the same W -> I boundary as archive, merge and the complete state write.
+function withWritableStateRecord<T>(
+  pd: string,
+  fn: (selection: WorkflowSelection) => T extends Promise<unknown> ? never : T,
+): T extends Promise<unknown> ? never : T {
+  return withWorkflowRecordLock<T>(pd, (selection) => {
+    assertWorkflowNotArchived(readStateFile(pd), "changing workflow state");
+    return fn(selection);
+  });
 }
 
 // A serial verb refused by a live wave must leave the audit unchanged too.
@@ -1158,7 +1188,7 @@ function handleSet(args: string[]): void {
   // two concurrent `set`s of different fields can't clobber each other (A reads
   // V1, B reads V1, A writes V2, B writes V1.5 → A's field lost). The +1/-1
   // increment forms are especially exposed — they read-modify a counter.
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, () => {
   let content = readStateFile(pd);
 
   for (const pair of args) {
@@ -1196,7 +1226,7 @@ function handleSetConstructionVerificationCommand(args: string[]): void {
   const command = fromFile
     ? readVerificationCommandFile(pd, args[1])
     : verificationCommandDetails(args[0]);
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, () => {
     const content = readStateFile(pd);
     // setOrInsertField uses a replacement string when the field exists. Quote
     // dollar signs there so shell expansions remain exact command bytes.
@@ -1246,7 +1276,7 @@ function setConstructionPolicyField(content: string, field: string, value: strin
 function handleSetConstructionPolicy(field: string, args: string[]): void {
   if (args.length !== 1) error(`${field} requires exactly one value.`);
   const pd = resolveProjectDir(projectDir);
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, () => {
     const content = readStateFile(pd);
     const updated = setConstructionPolicyField(content, field, args[0]);
     if (updated !== content) {
@@ -1395,7 +1425,7 @@ function handleSetSkeletonStance(args: string[]): void {
   const pd = resolveProjectDir(projectDir);
   // C2b lost-update safety: read→write under one lock (a concurrent `set` of an
   // unrelated field must not lose this stance write, nor vice versa).
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, () => {
   const content = readStateFile(pd);
   const updated = setOrInsertField(
     content,
@@ -1435,7 +1465,7 @@ function handleSetConstructionIteration(args: string[]): void {
   }
   const pd = resolveProjectDir(projectDir);
   // Lost-update safety: read-then-write under one lock, as for the stance write.
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, () => {
   const content = readStateFile(pd);
   if (value !== "unit-major" && isTeamUnitOwnership(content)) {
     error(
@@ -1575,7 +1605,7 @@ function handleSetUnitOwnership(args: string[]): void {
     error(`Invalid unit ownership "${value}". Valid: ${values.join(", ")}.`);
   }
   const pd = resolveProjectDir(projectDir);
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, () => {
     const before = readStateFile(pd);
     let content = before;
     const current = getField(content, "Unit Ownership")?.trim() || "solo";
@@ -1670,7 +1700,7 @@ function handleSetUnitGateRhythm(args: string[]): void {
     error(`Invalid unit gate rhythm "${value}". Valid: ${values.join(", ")}.`);
   }
   const pd = resolveProjectDir(projectDir);
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, () => {
     let content = readStateFile(pd);
     if (!isTeamUnitOwnership(content)) {
       error(
@@ -1825,7 +1855,7 @@ function handleRefreshUnitProgress(
     );
   }
   const pd = resolveProjectDir(projectDir);
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, (selection) => {
     let content = readStateFile(pd);
     const before = content;
     if (!isTeamUnitOwnership(content)) {
@@ -2015,11 +2045,12 @@ function handleRefreshUnitProgress(
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
+    if (workflowCompleted) projectCompletedRuntime(pd, selection);
     writeStateFile(pd, content);
     if (workflowCompleted) {
-      const completedIntentDir = activeIntent(pd);
+      const completedIntentDir = selection.intent;
       if (completedIntentDir) {
-        updateIntentStatus(pd, completedIntentDir, "complete");
+        updateIntentStatus(pd, completedIntentDir, "complete", selection.space);
       }
     }
     afterWrite?.();
@@ -2239,7 +2270,7 @@ function handleSyncUnitScopeStage(args: string[]): void {
     error("Usage: aidlc-state.ts sync-unit-scope-stage <stage> --unit <unit>");
   }
   const pd = resolveProjectDir(projectDir);
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, () => {
     let content = readStateFile(pd);
     const stamp = validateLiveUnitScope(pd, unit);
     if (!stamp) error("Scoped Unit stage sync requires a live Unit claim.");
@@ -2407,7 +2438,7 @@ export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): Par
     );
     return { parked: true, unit: scopeStamp.unit, checkout_local: true };
   }
-  return withAuditLock(pd, (): ParkResult => {
+  return withWritableStateRecord(pd, (): ParkResult => {
     let content = readStateFile(pd);
     const status = getField(content, "Status");
     if (status === "Completed") {
@@ -2464,7 +2495,7 @@ function handleUnpark(_args: string[]): void {
     }));
     return;
   }
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, () => {
     let content = readStateFile(pd);
     const wasParked = (getField(content, "Parked") ?? "").trim().length > 0;
     // Remove the runtime markers (no-op if absent - unpark is idempotent).
@@ -2551,7 +2582,7 @@ function handleUnit(args: string[]): void {
   // One lock across read→validate→emit→write (the C2b idiom): the checkpoint
   // read and the receipt append must see one ledger snapshot, or two racing
   // `unit start` calls could both pass the single-active-unit check.
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, () => {
     let content = readStateFile(pd);
     const scope = getField(content, "Scope");
     if (usesStageLevelPerUnitArtifacts(scope, content)) {
@@ -3143,7 +3174,7 @@ function handleCheckbox(args: string[]): void {
   // C2b lost-update safety: read→apply→count→write under one lock so the
   // Completed counter resync sees a consistent snapshot (a concurrent checkbox
   // flip between our read and write would otherwise desync the count).
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, () => {
   let content = readStateFile(pd);
 
   for (const { slug, state } of changes) {
@@ -5373,7 +5404,7 @@ function handleAdvance(
   // append variant, so audit + state land together (audit-first). The replay
   // guard's early `return` exits the arrow cleanly; the lock releases in
   // withAuditLock's finally.
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, () => {
   let content = readStateFile(pd);
 
   // Look up stage data
@@ -5603,8 +5634,8 @@ function handleFinalize(args: string[]): void {
   const completedSlug = positional[0];
 
   const pd = resolveProjectDir(projectDir);
-  // C2b lost-update safety: read→decide→write under one lock (no audit here).
-  withAuditLock(pd, () => {
+  // Read, decide and settle under W -> I, including the final projection.
+  withWritableStateRecord(pd, (selection) => {
   let content = readStateFile(pd);
 
   const completedStage = findStageBySlug(completedSlug);
@@ -5674,6 +5705,7 @@ function handleFinalize(args: string[]): void {
   content = setField(content, "Last Updated", timestamp);
   content = setField(content, "Next Action", nextStage ? `Resume from ${nextStage.name}` : "Workflow complete");
 
+  if (!nextStage) projectCompletedRuntime(pd, selection);
   writeStateFile(pd, content);
   console.log(
     JSON.stringify({
@@ -5713,10 +5745,10 @@ function handleCompleteWorkflow(
   const stageUsageFields = stageRollupFields(pd, completedSlug);
   const workflowUsageFields = workflowRollupFields(pd);
   // C2b lost-update safety: read→decide→emit-audit (4 rows)→write under one
-  // lock so the 4 audit rows and the completion state commit atomically against
+  // record transaction so the audit rows and completion state use
   // a single snapshot (audit-first / decide-inside-lock). emitAudit uses the
   // unlocked variant because the lock is held.
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, (selection) => {
   let content = readStateFile(pd);
 
   const completedStage = findStageBySlug(completedSlug);
@@ -5810,6 +5842,7 @@ function handleCompleteWorkflow(
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
 
+  projectCompletedRuntime(pd, selection);
   writeStateFile(pd, content);
   // Intent status lifecycle: terminal completion flips the active intent's
   // registry row to "complete". This is the determinism (field write) gated by
@@ -5817,14 +5850,13 @@ function handleCompleteWorkflow(
   // automatic inference from state, so a crashed run never self-completes. Runs
   // under the workspace lock already held (every intents.json mutation takes the
   // sentinel bucket). No-op for the legacy flat record (no registry row).
-  const completedSelection = resolveWorkflowSelection(pd);
-  const completedIntentDir = completedSelection.intent;
+  const completedIntentDir = selection.intent;
   if (completedIntentDir) {
     updateIntentStatus(
       pd,
       completedIntentDir,
       "complete",
-      completedSelection.space,
+      selection.space,
     );
   }
   console.log(
@@ -6568,7 +6600,7 @@ function handleGateStart(args: string[]): void {
 
   // C2b lost-update safety: validate→transition→emit-audit→write under one
   // lock (the state-precondition check and the write see one snapshot).
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, () => {
   withdrawProtectedQuestions(pd, "*");
   let content = readStateFile(pd);
 
@@ -6884,13 +6916,13 @@ function handleApprove(args: string[]): void {
   const usageFields = stageRollupFields(pd, slug);
   // C2b lost-update safety: the ENTIRE approve transaction — including the
   // nested handleAdvance / handleCompleteWorkflow calls below — runs under one
-  // outer lock. withAuditLock is REENTRANT (per-pd depth counter): the nested
-  // handlers' own withAuditLock calls bump depth 1→2→1 and run inline without
-  // re-acquiring the OS lock, so approve+advance commit as one atomic unit and
+  // outer W -> I transaction. Both buckets are reentrant: nested handlers
+  // reuse them without re-acquiring either OS lock, so approve+advance commit
+  // as one atomic unit and
   // no concurrent writer can interleave between approve's write and the
   // advance's re-read. The original ordering is preserved: approve writes its
   // own state (slug → [x]) BEFORE delegating, so the nested re-read sees it.
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, () => {
   let content = readStateFile(pd);
 
   const stage = findStageBySlug(slug);
@@ -7273,7 +7305,7 @@ function handleReject(args: string[]): void {
   // increment lost). emit-then-write stays idempotent on retry: the lock
   // serialises, and re-running the same input recomputes from the locked
   // snapshot rather than double-incrementing a stale value.
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, () => {
   let content = readStateFile(pd);
 
   const stage = findStageBySlug(slug);
@@ -7597,7 +7629,7 @@ function handleRevise(args: string[]): void {
   );
 
   // C2b lost-update safety: validate→transition→emit-audit→write under one lock.
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, () => {
   let content = readStateFile(pd);
 
   const stage = findStageBySlug(slug);
@@ -7711,7 +7743,7 @@ function handleSkip(args: string[]): void {
   const pd = resolveProjectDir(projectDir);
   const workflowUsageFields = workflowRollupFields(pd);
   // C2b lost-update safety: validate→transition→emit-audit→write under one lock.
-  withAuditLock(pd, () => {
+  withWritableStateRecord(pd, (selection) => {
   let content = readStateFile(pd);
 
   const stage = findStageBySlug(slug);
@@ -8007,16 +8039,16 @@ function handleSkip(args: string[]): void {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
 
+  if (!nextStage) projectCompletedRuntime(pd, selection);
   writeStateFile(pd, content);
   if (!nextStage) {
-    const completedSelection = resolveWorkflowSelection(pd);
-    const completedIntentDir = completedSelection.intent;
+    const completedIntentDir = selection.intent;
     if (completedIntentDir) {
       updateIntentStatus(
         pd,
         completedIntentDir,
         "complete",
-        completedSelection.space,
+        selection.space,
       );
     }
   }
@@ -8522,7 +8554,7 @@ function handlePracticesPromote(args: string[]): void {
   // forged independently of a successful promotion.
   let affirmedAt = "";
   try {
-    withAuditLock(pd, () => {
+    withWorkflowRecordLock(pd, () => {
       let state = readStateFile(pd);
       affirmedAt = emitAudit(pd, "PRACTICES_AFFIRMED", {
         "Affirming User": flags["affirming-user"] ?? "unknown",

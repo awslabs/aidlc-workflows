@@ -33,6 +33,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { runAnchor } from "../tools/aidlc-attest.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
+import { publishHookOutput } from "../tools/aidlc-hook-output.ts";
+import { recordHookBootstrap } from "../tools/aidlc-hook-bootstrap.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
 import {
   ACTIVE_MEMORY_DIR,
@@ -45,7 +47,6 @@ import {
 import { kiroIdeWorkflowsAsk } from "../tools/aidlc-kiro-ide-workflows.ts";
 import { kiroIdeTerminalAsk, kiroIdeTerminalStandingLine, recordKiroTerminalShell } from "../tools/aidlc-kiro-ide-terminal.ts";
 import {
-  isBindableIntentRecordName,
   isSafeIntentRecordName,
   intentDisplayLabel,
   activeIntent,
@@ -63,6 +64,7 @@ import {
   writeHookStatusFile,
   humanPresenceGuardDisabled,
   isClaudeCodeHookInput,
+  isTerminalWorkflow,
   isoTimestamp,
   intentUuidForSelection,
   readSessionBinding,
@@ -90,6 +92,13 @@ import {
   SELECTION_NOTICE_FOLLOW,
   writeSessionSelectionNotice,
   clearSessionRebindOffer,
+  workflowLifecycle,
+  workflowParticipation,
+  withHookWorkflowMutation,
+  type HookWorkflow,
+  runInHookWorkflow,
+  currentHookWorkflow,
+  legacySessionResumeSelection,
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import { recordRulesLoad } from "../tools/aidlc-rules-held.ts";
@@ -114,6 +123,7 @@ function switchOffContext(projectDir: string): string {
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
+const inheritedWorkflow = currentHookWorkflow(projectDir);
 
 // Read stdin before the workflow-state gate. A fresh session commonly starts
 // before the first intent is created; retaining its id lets intent-create stamp
@@ -195,6 +205,19 @@ const preExistingBinding =
   sessionId ? readSessionBinding(projectDir, sessionId) : null;
 const preExistingStamp =
   sessionId ? readSessionIntentUuid(projectDir, sessionId) : null;
+let admittedSessionBinding = inheritedWorkflow?.selection?.binding;
+// A parent adapter's event keeps its old physical record even if a command
+// switches this chat before the child begins. Bootstrap must not undo that
+// newer binding (or overwrite its companion UUID stamp).
+function stillOwnsSessionSelection(): boolean {
+  const captured = inheritedWorkflow?.selection;
+  if (!captured || captured.sessionId !== sessionId) return true;
+  const current = readSessionBinding(projectDir, sessionId);
+  const prior = admittedSessionBinding ?? null;
+  return current === null ? prior === null : prior !== null &&
+    current.space === prior.space && current.intent === prior.intent &&
+    current.boundAt === prior.boundAt && current.source === prior.source;
+}
 if (
   sessionId &&
   (
@@ -206,29 +229,25 @@ if (
 ) {
   clearSessionRebindOffer(projectDir, sessionId);
 }
-const stampedTarget =
-  source === "resume" && !preExistingBinding && preExistingStamp
-    ? findIntentByUuid(projectDir, preExistingStamp)
+const stampedSelection =
+  inheritedWorkflow === null && source === "resume"
+    ? legacySessionResumeSelection(projectDir, sessionId)
     : null;
-const resolved = stampedTarget
-  ? {
-      space: stampedTarget.space,
-      intent: stampedTarget.dirName,
-      sessionId,
-      binding: null,
-    }
-  : resolveWorkflowSelection(projectDir, { sessionId });
+const resolved = inheritedWorkflow?.selection ?? stampedSelection ??
+  resolveWorkflowSelection(projectDir, { sessionId });
 
 // Resolving a record is not joining it. A lone committed record in a fresh clone
 // is a teammate's, so it binds this conversation to intent:null and its hooks
 // stay out of that record. A resumed session's own UUID stamp does join it: only
 // a joined session is stamped, and a chat left open across an upgrade carries
 // only that stamp. A record name the binding cannot carry does not join.
-const joinsByStamp = stampedTarget !== null && isBindableIntentRecordName(stampedTarget.dirName);
+const joinsByStamp = inheritedWorkflow?.resumedFromStamp === true || stampedSelection !== null;
 // The rule a new chat follows (classifyFirstContact) lives in the library, where
 // resolveChat applies it to a chat the engine first meets in a command.
-const contact = stampedTarget ? null : classifyFirstContact(projectDir, resolved);
-const joined = joinsByStamp || (contact?.joined ?? false);
+const contact = joinsByStamp ? null : classifyFirstContact(projectDir, resolved);
+const joined = inheritedWorkflow !== null
+  ? inheritedWorkflow.participation === "participant"
+  : joinsByStamp || (contact?.joined ?? false);
 const selection = joined ? resolved : { ...resolved, intent: null, binding: null };
 // The record a previously bound conversation can rejoin explicitly.
 const rejoinRecord =
@@ -251,8 +270,9 @@ function bindingSource(): SessionBindingSource | undefined {
 // Persist the selection before any early return. A cold session must retain
 // intent:null instead of later following a cursor moved by another session that
 // creates the first workflow.
-if (sessionId) {
+if (sessionId && stillOwnsSessionSelection()) {
   writeSessionBinding(projectDir, sessionId, selection.space, selection.intent, bindingSource());
+  admittedSessionBinding = readSessionBinding(projectDir, sessionId);
 }
 
 // Atomically materialize a clone's missing gitignored cursor, then bring the
@@ -357,6 +377,19 @@ if (sessionId && !rebindCheckOnly) {
   trackedSteeringAsk = asks.filter(Boolean).join("\n");
 }
 
+// These messages describe session/bootstrap effects already applied above.
+// Closing the selected workflow must not consume their one-time delivery.
+const sessionBootstrapContext =
+  `AIDLC Runtime Session: ${sessionId}` +
+  (trackedSteeringAsk ? `\n${trackedSteeringAsk}` : "") +
+  memoryHandoff;
+if (sessionId) {
+  // First-contact bootstrap can legitimately bind no record. The independent
+  // response still belongs to the parent's captured event, not to a new event
+  // inferred from the binding bootstrap just established.
+  recordHookBootstrap(projectDir, { ...(inheritedWorkflow?.selection ?? selection), sessionId },
+    hookContextLine("SessionStart", sessionBootstrapContext));
+}
 const stateFile = stateFilePathForSelection(projectDir, selection);
 
 // No workflow joined — retain only the session identity recorded above.
@@ -407,13 +440,26 @@ if (!existsSync(stateFile)) {
   return 0;
 }
 
-// Write health heartbeat
-const healthDir = hooksHealthDir(
-  projectDir,
-  selection.intent ?? undefined,
-  selection.space,
-);
-writeHookStatusFile(healthDir, "session-start.last", isoTimestamp());
+// A selected history record is not a live workflow mission. Keep the chat's
+// identity/bootstrap context without adding session events or health to it.
+if (inheritedWorkflow?.mode === "independent" || isTerminalWorkflow(projectDir, selection)) {
+  if (sessionId) {
+    process.stdout.write(hookContextLine(
+      "SessionStart",
+      sessionBootstrapContext,
+    ));
+  }
+  return 0;
+}
+
+const workflow: HookWorkflow = {
+  selection,
+  participation: inheritedWorkflow?.participation ?? (joinsByStamp ? "participant" : workflowParticipation(projectDir, selection)),
+  lifecycle: workflowLifecycle(projectDir, selection),
+  ...(inheritedWorkflow?.mode === "independent" ? { mode: "independent" as const } : {}),
+  restore: () => {},
+};
+return await runInHookWorkflow(projectDir, workflow, () => publishHookOutput(projectDir, workflow, async () => {
 
 // Emit session event. appendAuditEntry creates audit.md if missing, so no
 // audit-existence guard — the state-file guard above is the sole "workflow
@@ -426,8 +472,14 @@ if (!rebindCheckOnly) {
 }
 // compact / unknown: no emission — compact is owned by PreCompact hook
 
-if (eventType) {
-  try {
+try {
+  withHookWorkflowMutation(projectDir, workflow, () => {
+    writeHookStatusFile(
+      hooksHealthDir(projectDir, selection.intent ?? undefined, selection.space),
+      "session-start.last",
+      isoTimestamp(),
+    );
+    if (eventType) {
     appendAuditEntry(
       eventType,
       { Source: source, ...(sessionId ? { Session: sessionId } : {}) },
@@ -435,10 +487,11 @@ if (eventType) {
       selection.intent ?? undefined,
       selection.space,
     );
-  } catch (e) {
-    recordHookDrop(projectDir, "session-start", errorMessage(e));
-    // Non-fatal — continue with context injection
-  }
+    }
+  });
+} catch (e) {
+  withHookWorkflowMutation(projectDir, workflow, () => recordHookDrop(projectDir, "session-start", errorMessage(e)));
+  // Non-fatal — continue with context injection
 }
 
 // --- Commit-provenance anchor sweep (OPT-IN) ----------------------------------
@@ -460,7 +513,7 @@ if (eventType) {
 // and rebind probes. See docs/reference/20-commit-provenance.md §7.
 if (eventType && process.env.AIDLC_SESSION_ANCHOR === "1") {
   try {
-    runAnchor(projectDir, { reconcile: true, maxCommits: 25 });
+    withHookWorkflowMutation(projectDir, workflow, () => runAnchor(projectDir, { reconcile: true, maxCommits: 25 }));
   } catch {
     // Best-effort: a project dir that is not a git repository (and has no
     // sole recorded repo to auto-select) or a transient git failure must
@@ -487,12 +540,12 @@ const liveUuid = activeIntentUuid(projectDir, activeSp);
 const binding = preExistingBinding;
 const selectedUuid = intentUuidForSelection(projectDir, selection);
 let rebindOffer = "";
-if (sessionId) {
+if (sessionId && stillOwnsSessionSelection()) {
   const stampedUuid = preExistingStamp;
   if (eventType === "SESSION_STARTED") {
     if (selectedUuid) writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
   } else if (source === "resume") {
-    const ownedUuid = binding ? selectedUuid : stampedUuid;
+    const ownedUuid = binding || joinsByStamp ? selectedUuid : stampedUuid;
     if (ownedUuid && ownedUuid !== liveUuid) {
       const was = findIntentByUuid(projectDir, ownedUuid);
       // The offer's commands carry the record name, so only a name in the record-name shape is offered.
@@ -544,7 +597,7 @@ if (sessionId) {
       writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
     } else if (binding && stampedUuid) {
       clearSessionIntentUuid(projectDir, sessionId);
-    } else if (stampedTarget && selectedUuid) {
+    } else if (joinsByStamp && selectedUuid) {
       writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
     } else if (liveUuid) {
       writeSessionIntentUuid(projectDir, sessionId, liveUuid);
@@ -561,8 +614,8 @@ if (sessionId) {
 // prompt itself always goes through. Consume a real drift here so the same
 // line is not written again for the same move.
 if (rebindCheckOnly) {
-  if (rebindOffer) {
-    if (binding && selectedUuid) {
+  if (rebindOffer && stillOwnsSessionSelection()) {
+    if ((binding || joinsByStamp) && selectedUuid) {
       writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
     } else if (liveUuid) {
       writeSessionIntentUuid(projectDir, sessionId, liveUuid);
@@ -573,6 +626,10 @@ if (rebindCheckOnly) {
 }
 
 // Read and parse state file for context injection
+if (isTerminalWorkflow(projectDir, selection)) {
+  if (sessionId) process.stdout.write(hookContextLine("SessionStart", sessionBootstrapContext));
+  return 0;
+}
 const content = readFileSync(stateFile, "utf-8");
 
 const phase = getField(content, "Lifecycle Phase") ?? "unknown";
@@ -672,6 +729,10 @@ ${unitLine}${recovery}${driftNote}${switchOffContext(projectDir).trimStart()}A B
 
 process.stdout.write(hookContextLine("SessionStart", `${context}${memoryHandoff}`));
 return 0;
+}, () => {
+  if (sessionId) process.stdout.write(hookContextLine("SessionStart", sessionBootstrapContext));
+  return 0;
+}));
 }
 
 if (import.meta.main) {

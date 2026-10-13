@@ -59,10 +59,18 @@ import {
   decideFence,
   engineDirFor,
   enterHookWorkflow,
+  hookWorkflowIsInactive,
+  hookChildEnv,
+  currentHookWorkflow,
+  captureHookWorkflow,
+  validSessionId,
   promptMovesSelection,
+  runInHookWorkflow,
   takeSessionSelectionNotice,
 } from "../tools/aidlc-lib.ts";
 import { aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
+import { noteHookRefusal, publishHookOutput } from "../tools/aidlc-hook-output.ts";
+import { beginHookBootstrapCapture } from "../tools/aidlc-hook-bootstrap.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -98,6 +106,7 @@ export async function run(
       if (rawInput.length > 0) cursor = JSON.parse(rawInput) as CursorHookInput;
     } catch {
       if (target === "guards") {
+        noteHookRefusal();
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:
@@ -125,8 +134,35 @@ export async function run(
     CLAUDE_PROJECT_DIR: projectDir,
     CURSOR_PROJECT_DIR: projectDir,
   };
+  const workflow = enterHookWorkflow(projectDir, sessionId, {
+    ...(target === "session-start" ? { sessionStartSource: cursor.source ?? "startup" }
+      : target === "mint" ? { sessionStartSource: "resume" } : {}),
+  });
+const bootstrapCapture = workflow.selection ? beginHookBootstrapCapture(projectDir, {
+  ...workflow.selection, sessionId: validSessionId(sessionId) ?? workflow.selection.sessionId,
+}) : null;
+let bootstrapOutput = "";
+
+  try {
+  const dispatch = async (): Promise<number> => {
 
   // --- Core-hook subprocess plumbing ------------------------------------------
+
+  function coreChildEnv(hook: string, input: string, authorityToken: string) {
+    let session = validSessionId(sessionId);
+    try {
+      session = validSessionId((JSON.parse(input) as { session_id?: string }).session_id) ?? session;
+    } catch { /* malformed advisory input retains this event's identity */ }
+    const childWorkflow = hook === "rebuild-stage-graph" ? undefined
+      : hook === "session-end" && session !== validSessionId(sessionId)
+        ? captureHookWorkflow(projectDir, session)
+        : currentHookWorkflow(projectDir) ?? workflow;
+    return hookChildEnv(projectDir, session ?? undefined, {
+      ...projectEnv,
+      ...(authorityToken ? { AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken } : {}),
+      ...(hook === "session-start" ? bootstrapCapture?.env : {}),
+    }, childWorkflow);
+  }
 
   function runCore(hookFile: string, stdinText: string): { stdout: string; code: number } {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
@@ -143,17 +179,16 @@ export async function run(
             "--internal-aidlc-record-human-turn",
             join(HOOKS_DIR, hookFile),
           ]
-        : [process.execPath, join(HOOKS_DIR, hookFile)];
+        : [process.execPath, join(HOOKS_DIR, "..", "tools", "aidlc.ts"), "engine", "hook", hook];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdinText, "utf-8"),
       stdout: "pipe",
       stderr: "ignore",
       cwd: projectDir,
-      env: authorityToken
-        ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
-        : projectEnv,
+      env: coreChildEnv(hook, stdinText, authorityToken),
     });
-    return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
+    if (hook === "session-start") bootstrapOutput = bootstrapCapture?.read() ?? "";
+  return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
   }
 
   function runCoreWithStderr(
@@ -174,15 +209,13 @@ export async function run(
             "--internal-aidlc-record-human-turn",
             join(HOOKS_DIR, hookFile),
           ]
-        : [process.execPath, join(HOOKS_DIR, hookFile)];
+        : [process.execPath, join(HOOKS_DIR, "..", "tools", "aidlc.ts"), "engine", "hook", hook];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdinText, "utf-8"),
       stdout: "pipe",
       stderr: "pipe",
       cwd: projectDir,
-      env: authorityToken
-        ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
-        : projectEnv,
+      env: coreChildEnv(hook, stdinText, authorityToken),
     });
     return {
       stdout: r.stdout?.toString() ?? "",
@@ -2684,6 +2717,7 @@ export async function run(
           "call was stopped. Retry it once; if it is stopped again, tell the person to run " +
           `\`${aidlcInvocation()} config --harness cursor\` in a terminal, which puts AI-DLC's Cursor files ` +
           "back, then try again.";
+    noteHookRefusal();
     process.stdout.write(`${JSON.stringify({ permission: "deny", agent_message: reason })}\n`);
     return true;
   }
@@ -2848,6 +2882,7 @@ export async function run(
         if (parentAgent) {
           const identity =
             parentAgent === AMBIGUOUS_REVIEWER ? "an ambiguously attributed reviewer" : parentAgent;
+          noteHookRefusal();
           process.stdout.write(`${JSON.stringify({
             permission: "deny",
             agent_message:
@@ -2859,6 +2894,10 @@ export async function run(
         if (blockedByGuard("aidlc-plan-approval-guard.ts", claudeShaped("PreToolUse"))) {
           return 0;
         }
+        if (currentHookWorkflow(projectDir)?.mode === "independent") {
+          writeAllow();
+          return 0;
+        }
         const sub = cursor.tool_input?.subagent_type;
         if (
           typeof sub === "string" &&
@@ -2866,6 +2905,7 @@ export async function run(
           !recordSpawn(sub) &&
           !delegateChecksStandAside()
         ) {
+          noteHookRefusal();
           process.stdout.write(`${JSON.stringify({
             permission: "deny",
             agent_message:
@@ -2886,6 +2926,7 @@ export async function run(
         await shellInvokesDynamicEvaluation(command, effectiveCwd()) &&
         !delegateChecksStandAside()
       ) {
+        noteHookRefusal();
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:
@@ -2897,6 +2938,7 @@ export async function run(
         return 0;
       }
       if (agent && await touchesProtectedReviewerState() && !delegateChecksStandAside()) {
+        noteHookRefusal();
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:
@@ -2905,6 +2947,7 @@ export async function run(
         return 0;
       }
       if (agent === AMBIGUOUS_REVIEWER && !delegateChecksStandAside()) {
+        noteHookRefusal();
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:
@@ -3020,6 +3063,25 @@ export async function run(
 
     default:
       return 0;
+  }
+  };
+  return await runInHookWorkflow(projectDir, workflow, () => {
+    // Terminal prompts still reach the message store, and independent
+    // delegation/runtime checks still run. Suppress only a response whose
+    // selected workflow closed while its child hooks were evaluating it.
+    if (hookWorkflowIsInactive(workflow)) return dispatch();
+    return publishHookOutput(projectDir, workflow, dispatch, () =>
+      target === "guards" ? run(target, input, _extraArgs) : (() => {
+        try {
+          const context = JSON.parse(bootstrapOutput).additionalContext;
+          if (typeof context === "string" && context) process.stdout.write(`${JSON.stringify({ additional_context: context })}\n`);
+        } catch { /* no independently produced bootstrap */ }
+        return 0;
+      })());
+  });
+  } finally {
+    bootstrapCapture?.close();
+  workflow.restore();
   }
 }
 

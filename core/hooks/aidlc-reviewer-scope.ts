@@ -46,10 +46,13 @@
 import { existsSync, statSync, unlinkSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
+import { publishHookOutput } from "../tools/aidlc-hook-output.ts";
 import {
   hookOutsideGate,
+  hookWorkflowIsInactive,
   enterHookWorkflow,
-  acquireAuditLock,
+  runInHookWorkflow,
+  withCurrentHookWorkflowMutation,
   auditFilePath,
   type ClaudeCodeHookInput,
   decideFence,
@@ -66,7 +69,6 @@ import {
   readActiveDirectiveMarker,
   readStateFile,
   readUnitScopeStamp,
-  releaseAuditLock,
   resolveProjectFlag,
   resolveProjectDirFromHook,
   REVIEWER_DISPATCH_TTL_MS,
@@ -844,13 +846,13 @@ function reviewerScopeStandsAside(
   if (guardStandAsideSpeaks(gate)) {
     writeGuardStoodAside(guardStoodAsideLine("reviewer-scope", gate.source, detail));
   }
-  recordGuardStoodAside(projectDir, {
+  withCurrentHookWorkflowMutation(projectDir, () => recordGuardStoodAside(projectDir, {
     fence: "reviewer-scope",
     authority: gate.authority,
     ...(stage ? { stage } : {}),
     tool: toolName,
     details: detail,
-  });
+  }));
   return true;
 }
 
@@ -867,15 +869,7 @@ function emitReviewerScopeBlocked(
   // not stretch a fast refuse into a laggy one.
   try {
     if (!existsSync(auditFilePath(projectDir))) return;
-    if (!acquireAuditLock(projectDir, 5, 50)) {
-      recordHookDrop(
-        projectDir,
-        HOOK_NAME,
-        "audit lock contended; REVIEWER_SCOPE_BLOCKED row dropped (block still enforced)",
-      );
-      return;
-    }
-    try {
+    withCurrentHookWorkflowMutation(projectDir, () => {
       appendAuditEntryUnlocked(
         "REVIEWER_SCOPE_BLOCKED",
         {
@@ -886,9 +880,7 @@ function emitReviewerScopeBlocked(
         },
         projectDir,
       );
-    } finally {
-      releaseAuditLock(projectDir);
-    }
+    }, { maxRetries: 5, retryMs: 50 });
   } catch {
     // Advisory emission only.
   }
@@ -937,7 +929,11 @@ export async function run(input: string): Promise<number> {
   }
   const workflow = enterHookWorkflow(projectDir, payloadSession);
   try {
-    return await checkScope(input, projectDir, hookOutsideGate(workflow));
+    return await runInHookWorkflow(projectDir, workflow, () => publishHookOutput(
+      projectDir, workflow,
+      () => checkScope(input, projectDir, hookOutsideGate(workflow), hookWorkflowIsInactive(workflow)),
+      () => checkScope(input, projectDir, hookOutsideGate(workflow), true),
+    ));
   } finally {
     workflow.restore();
   }
@@ -946,8 +942,8 @@ export async function run(input: string): Promise<number> {
 // `outside`: this conversation has not joined the selected workflow. The
 // claimed-checkout write bound still applies; its bookkeeping and the reviewer
 // read scope, which belong to that workflow, do not.
-async function checkScope(input: string, projectDir: string, outside: boolean): Promise<number> {
-  if (!outside) {
+async function checkScope(input: string, projectDir: string, outside: boolean, terminal: boolean): Promise<number> {
+  if (!outside && !terminal) {
     try {
       const healthDir = hooksHealthDir(projectDir);
       writeHookStatusFile(healthDir, `${HOOK_NAME}.last`, isoTimestamp());
@@ -1001,7 +997,7 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
         scopedVerdict = evaluateReviewerScope(toolName, toolInput, { unit: unitScope.unit, exempt: [] }, context);
       }
     } catch (e) {
-      recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
+      if (!terminal) recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
       return 0;
     }
     if (scopedVerdict.block) {
@@ -1009,13 +1005,15 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
       // switches, and the reviewer-scope environment escape hatch govern the
       // reviewer's read boundary only; none authorizes writes into a sibling
       // Unit's construction subtree.
-      emitReviewerScopeBlocked(
-        projectDir,
-        toolName,
-        scopedVerdict.target ?? "",
-        "claimed-checkout",
-        unitScope.unit,
-      );
+      if (!terminal) {
+        emitReviewerScopeBlocked(
+          projectDir,
+          toolName,
+          scopedVerdict.target ?? "",
+          "claimed-checkout",
+          unitScope.unit,
+        );
+      }
       const defaultNote = scopedVerdict.defaulted
         ? " (an implicit search root the command falls back to with no path, not a path you typed)"
         : "";
@@ -1030,7 +1028,7 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
 
   // The deterministic off-switch applies only to reviewer read-scope
   // enforcement. Mandatory claimed-checkout ownership was handled above.
-  if (outside || resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK") === "1") return 0;
+  if (outside || terminal || resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK") === "1") return 0;
 
   // A record that cannot be located (delegated worktree metadata that does not
   // validate) is unavailable dispatch evidence: the read scope fails open, and
@@ -1085,7 +1083,7 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
       // ignore it and best-effort janitor it so a stale window cannot keep
       // refusing sibling access indefinitely. Mirrors the compose marker.
       try {
-        unlinkSync(recordPath);
+        withCurrentHookWorkflowMutation(projectDir, () => unlinkSync(recordPath));
       } catch {
         // Unlink failure is non-fatal - the staleness check already refused it.
       }

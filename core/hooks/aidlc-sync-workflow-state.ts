@@ -12,7 +12,9 @@
 import { existsSync } from "node:fs";
 import {
   hookStandsOutside,
+  hookWorkflowIsTerminal,
   enterHookWorkflow,
+  runInHookWorkflow,
   type ClaudeCodeHookInput,
   getField,
   hookDebug,
@@ -26,6 +28,7 @@ import {
   readStateFile,
   resolveProjectDirFromHook,
   stateFilePath,
+  withHookWorkflowMutation,
 } from "../tools/aidlc-lib.ts";
 import { setStatus } from "../tools/aidlc-utility.ts";
 
@@ -40,14 +43,16 @@ export async function run(input: string): Promise<number> {
   // A conversation that has not joined the selected workflow does not move its stage.
   const workflow = enterHookWorkflow(projectDir, payloadSession);
   try {
-    if (hookStandsOutside(workflow)) return 0;
-    return await syncStatus(input, projectDir);
+    return runInHookWorkflow(projectDir, workflow, () => {
+    if (hookStandsOutside(workflow) || hookWorkflowIsTerminal(workflow)) return 0;
+    return withHookWorkflowMutation(projectDir, workflow, () => syncStatus(input, projectDir)) ?? 0;
+    });
   } finally {
     workflow.restore();
   }
 }
 
-async function syncStatus(input: string, projectDir: string): Promise<number> {
+function syncStatus(input: string, projectDir: string): number {
 hookDebug(projectDir, "sync-workflow-state", "invoked");
 
 // Read JSON from stdin. Exit cleanly if stdin is a TTY — no Claude Code JSON

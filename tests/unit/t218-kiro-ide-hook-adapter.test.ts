@@ -128,8 +128,12 @@ function seedShell(dir: string): void {
 function recordingGuard(capture: string): string {
   return [
     'import { appendFileSync } from "node:fs";',
+    'import { currentHookWorkflow, resolveProjectDirFromHook } from "../tools/aidlc-lib.ts";',
     "export async function run(input: string): Promise<number> {",
-    `  appendFileSync(${JSON.stringify(capture)}, input + "\\n");`,
+    // Keep response-only preflight separate from the workflow evaluation whose
+    // forwarding count these tests assert. Both channels retain exact payloads.
+    '  const independent = currentHookWorkflow(resolveProjectDirFromHook(import.meta.url))?.mode === "independent";',
+    `  appendFileSync(${JSON.stringify(capture)} + (independent ? ".independent" : ""), input + "\\n");`,
     "  return 0;",
     "}",
     "if (import.meta.main) process.exit(await run(await Bun.stdin.text()));",
@@ -2509,6 +2513,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         expect(r.code).toBe(0);
       }
       expect(forwardedSessions(capture)).toEqual(["S-IDE", "S-IDE", "S-IDE"]);
+      expect(readFileSync(`${capture}.independent`, "utf8")).toBe(readFileSync(capture, "utf8"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -5240,7 +5245,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     }
   });
 
-  test("N6i: a chat an older release stamped but never bound resumes its own intent after another chat moved the cursor", () => {
+  test.each(["record-human-turn", "person-message"])("N6i: a stamp-only chat resumes its own intent after cursor drift through %s", (target) => {
     const dir = scratchProject(true);
     const sessions = join(dir, "aidlc", ".aidlc-sessions");
     const otherIntent = "other-8000000000000002";
@@ -5255,13 +5260,15 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
       // Another chat moved the shared cursor.
       writeFileSync(join(intentsDirOf(dir, DEFAULT_SPACE), "active-intent"), `${otherIntent}\n`);
 
-      const next = runIdeStdin(dir, "record-human-turn", chatPrompt("sess_stamp_only"));
+      const next = runIdeStdin(dir, target, chatPrompt("sess_stamp_only"));
       expect(next.code, next.stderr).toBe(0);
       expect(
         JSON.parse(readFileSync(join(sessions, "sess_stamp_only.binding.json"), "utf8")),
       ).toMatchObject({ space: DEFAULT_SPACE, intent: DEFAULT_RECORD_DIR });
       expect(auditEvents(dir, "SESSION_RESUMED")).toBe(1);
       expect(auditEvents(dir, "SESSION_STARTED")).toBe(0);
+      expect(next.stdout).toContain("AIDLC WORKFLOW ACTIVE");
+      expect(readAllAuditShards(dir, otherIntent, DEFAULT_SPACE)).not.toContain("SESSION_RESUMED");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -6203,6 +6210,71 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
 // after-shell hooks another (after-shell) (#2022). Each check keeps the tools
 // its own registration selected, every check still runs after one refuses (as
 // Kiro ran every hook), and the call is refused when any check refuses.
+describe("t218 terminal publication at the outer card boundary", () => {
+  test("a later check closes work before the group publishes an earlier workflow refusal", () => {
+    const dir = scratchProject(true);
+    try {
+      const state = seededStateFile(dir);
+      writeSessionBinding(dir, "sess_publication", DEFAULT_SPACE, DEFAULT_RECORD_DIR, "switch");
+      writeFileSync(join(dir, ".kiro", "hooks", "aidlc-plan-approval-guard.ts"), `
+import { readFileSync } from "node:fs";
+export async function run(): Promise<number> {
+  if (!readFileSync(${JSON.stringify(state)}, "utf-8").includes("- **Status**: Running")) return 0;
+  process.stderr.write("stale workflow refusal\\n");
+  return 2;
+}
+if (import.meta.main) process.exit(await run());
+`);
+      writeFileSync(join(dir, ".kiro", "hooks", "aidlc-review-freeze.ts"), `
+import { readFileSync, writeFileSync } from "node:fs";
+export async function run(): Promise<number> {
+  const path = ${JSON.stringify(state)};
+  const before = readFileSync(path, "utf-8");
+  if (before.includes("- **Status**: Running")) writeFileSync(path, before.replace("- **Status**: Running", "- **Status**: Completed"));
+  process.stderr.write("independent runtime refusal\\n");
+  return 2;
+}
+if (import.meta.main) process.exit(await run());
+`);
+      const result = runIdeStdin(dir, "guard-tool-call", JSON.stringify({
+        session_id: "sess_publication", tool_name: "fs_write",
+        tool_input: { path: "scratch.txt", text: "fixture write" },
+      }), { AIDLC_COMPILED_EXECUTABLE: "" });
+      expect(result.code, result.stderr).toBe(2);
+      expect(readFileSync(state, "utf-8")).toContain("- **Status**: Completed");
+      expect(result.stderr).not.toContain("stale workflow refusal");
+      expect(result.stderr).toBe("independent runtime refusal\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the group preserves an explicit archive result without replaying the command", () => {
+    const dir = scratchProject(true);
+    try {
+      writeSessionBinding(dir, "sess_publication", DEFAULT_SPACE, DEFAULT_RECORD_DIR, "switch");
+      writeFileSync(join(dir, ".kiro", "hooks", "aidlc-session-start.ts"), `
+export async function run(): Promise<number> {
+  console.log(JSON.stringify({ additionalContext: "WORKFLOW ACTIVE stale context" }));
+  return 0;
+}
+if (import.meta.main) process.exit(await run());
+`);
+      const result = runIdeStdin(dir, "person-message", JSON.stringify({
+        session_id: "sess_publication",
+        prompt: `/aidlc intent archive ${DEFAULT_RECORD_DIR}`,
+      }), { AIDLC_COMPILED_EXECUTABLE: "" });
+      expect(result.code, result.stderr).toBe(0);
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toContain("- **Status**: Archived");
+      expect(result.stdout).not.toContain("WORKFLOW ACTIVE stale context");
+      expect(result.stdout).toContain("Archived intent");
+      expect(readAudit(dir).match(/\*\*Event\*\*: WORKFLOW_ARCHIVED/g)).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("t218 one card runs the checks that had their own cards (#2022)", () => {
   const FLOOR = "An approval is waiting for the person's answer, so nothing runs until they give it: end the turn.";
   const RUNTIME = "AIDLC runtime records and hooks belong to the harness";

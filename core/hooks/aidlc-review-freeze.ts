@@ -52,10 +52,13 @@
 
 import { existsSync } from "node:fs";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
+import { publishHookOutput } from "../tools/aidlc-hook-output.ts";
 import {
   hookOutsideGate,
+  hookWorkflowIsInactive,
   enterHookWorkflow,
-  acquireAuditLock,
+  runInHookWorkflow,
+  withCurrentHookWorkflowMutation,
   auditFilePath,
   type ClaudeCodeHookInput,
   type FreshReviewReceipts,
@@ -84,7 +87,6 @@ import {
   readStateFile,
   recordHookDrop,
   recoveryGuidance,
-  releaseAuditLock,
   resolveReviewClass,
   resolveProjectFlag,
   resolveProjectDirFromHook,
@@ -225,7 +227,8 @@ export async function run(input: string): Promise<number> {
   // A conversation that has not joined the selected workflow is not held to its review freeze.
   const workflow = enterHookWorkflow(projectDir, payloadSession);
   try {
-    if (hookOutsideGate(workflow)) return 0;
+    return await runInHookWorkflow(projectDir, workflow, () => publishHookOutput(projectDir, workflow, async () => {
+    if (hookOutsideGate(workflow) || hookWorkflowIsInactive(workflow)) return 0;
     // The heartbeat says the host ran this hook, so it comes before the off
     // switch: the freeze switched off never looks like a host running no hooks.
     try {
@@ -236,6 +239,7 @@ export async function run(input: string): Promise<number> {
     // Deterministic off-switch: enforcement disabled entirely.
     if (resolveProjectFlag("AIDLC_DISABLE_REVIEW_FREEZE_HOOK") === "1") return 0;
     return await checkFreeze(input, projectDir);
+    }));
   } finally {
     workflow.restore();
   }
@@ -336,13 +340,14 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
       if (guardStandAsideSpeaks(gate)) {
         writeGuardStoodAside(guardStoodAsideLine("review-freeze", gate.source, detail));
       }
-      recordGuardStoodAside(projectDir, {
+      const authority = gate.authority;
+      withCurrentHookWorkflowMutation(projectDir, () => recordGuardStoodAside(projectDir, {
         fence: "review-freeze",
-        authority: gate.authority,
+        authority,
         ...(blockedStage ? { stage: blockedStage.slug } : {}),
         tool: toolName,
         details: detail,
-      });
+      }));
       return 0;
     }
   }
@@ -355,8 +360,7 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
   // preferable to a slow block.
   try {
     if (existsSync(auditFilePath(projectDir))) {
-      if (acquireAuditLock(projectDir, 5, 50)) {
-        try {
+      withCurrentHookWorkflowMutation(projectDir, () => {
           appendAuditEntryUnlocked(
             "REVIEW_FREEZE_BLOCKED",
             {
@@ -367,12 +371,7 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
             },
             projectDir,
           );
-        } finally {
-          releaseAuditLock(projectDir);
-        }
-      } else {
-        recordHookDrop(projectDir, HOOK_NAME, "audit lock contended; REVIEW_FREEZE_BLOCKED row dropped (block still enforced)");
-      }
+      }, { maxRetries: 5, retryMs: 50 });
     }
   } catch {
     // Advisory emission only.

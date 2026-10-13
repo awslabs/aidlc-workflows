@@ -122,6 +122,7 @@ import {
   takeRestartRequest,
 } from "./aidlc-question-store.ts";
 import { latestMessage } from "./aidlc-message-store.ts";
+import { currentTerminalRequest, takeTerminalRequest } from "./aidlc-terminal-request.ts";
 import { aidlcEntryWords } from "./aidlc-reply-reader.ts";
 import {
   type AskDirective,
@@ -291,6 +292,10 @@ import {
   isNonAnswer,
   commandAtPersonsTerminal,
   personSpokeSinceGate,
+  isTerminalWorkflow,
+  runInHookWorkflow,
+  withHookWorkflowMutation,
+  workflowLifecycle,
   planApprovalAskIsOpen,
   planApprovalRuntimeFile,
   readPlanApprovalRuntimeRecord,
@@ -798,6 +803,7 @@ function hookHealthNotice(): string | null {
   const projectDir = engineProjectDir;
   if (!notice || projectDir === undefined || engineUnjoined) return null;
   try {
+    if (isTerminalWorkflow(projectDir, engineSelection(projectDir))) return null;
     if (delegatedWorktreeIntent(projectDir) === null && hookLiveness(projectDir, undefined, engineWorkflow(projectDir)).neverFired) {
       activeHookHealthNotice = notice;
     }
@@ -849,6 +855,9 @@ function hooksOffStop(
     personAtOwnTerminal(projectDir) ? OWN_TERMINAL_PRESENCE_STEP : hooksOffAgentStep(projectDir, HOOKS_OFF_RERUN, keep);
   try {
     if (delegatedWorktreeIntent(projectDir) !== null) return null;
+    // Terminal hooks intentionally leave no record heartbeat. Its absence
+    // cannot stop the person's next request from reaching new work or reopen.
+    if (isTerminalWorkflow(projectDir, selection)) return null;
     if (selection.intent === null) {
       // Before any workflow, a harness whose hooks beat on every message of
       // the person's (it declares notRunYet) knows from the message that led
@@ -2444,7 +2453,21 @@ interface ToolRun {
   stderr: string;
 }
 
+// Legacy Kiro recovery runs next/continue automatically under the terminal
+// barrier. A nested engine child cannot inherit that process's locks; handing
+// the step to the conductor keeps the ordinary command outside that barrier.
+let ambientRecoveryActive = false;
+class AmbientRecoveryHandoff extends Error {}
+function requireExplicitRecoveryForChild(): void {
+  if (ambientRecoveryActive) {
+    throw new AmbientRecoveryHandoff(
+      `Run \`${aidlcDispatcherInvocation("orchestrate next")}\` explicitly to finish this recovery, then retry the tool.`,
+    );
+  }
+}
+
 function runTool(toolFile: string, args: string[]): ToolRun {
+  requireExplicitRecoveryForChild();
   const proc = Bun.spawnSync({
     cmd: toolCommand(toolFile, args),
     env: engineChildEnv(),
@@ -5559,6 +5582,10 @@ function routedGuardPolicyNote(flags: ParsedFlags, projectDir: string, question:
 // they typed it.
 function personAskedInThisChat(projectDir: string): boolean {
   if (commandAtPersonsTerminal()) return true;
+  const selection = engineSelection(projectDir);
+  if (isTerminalWorkflow(projectDir, selection)) {
+    return currentTerminalRequest(projectDir, selection, "creation") !== null;
+  }
   if (loadStateFileIfPresent(projectDir) !== null) {
     return personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true });
   }
@@ -8123,7 +8150,7 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 // their line's arguments when it took them, for the readings that look at the
 // command as typed.
 function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
-  if (engineSessionId === undefined || isReadOnlyEngineProbe()) return null;
+  if (ambientRecoveryActive || engineSessionId === undefined || isReadOnlyEngineProbe()) return null;
   if (flags.intent !== undefined || flags.request !== undefined) return null;
   const carriesNothing = Object.entries(flags).every(([key, value]) =>
     key === "scope" || key === "positionalScope" || key === "resume" || value === undefined || value === false);
@@ -8131,16 +8158,23 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   const message = latestMessage(pd, engineSessionId);
   if (message === null || message.source !== "prompt") return null;
   const stateContent = loadStateFileIfPresent(pd);
+  const terminal = isTerminalWorkflow(pd, engineSelection(pd));
+  const request = terminal ? currentTerminalRequest(pd, engineSelection(pd), "line") : null;
+  if (terminal && request?.id !== message.id) return null;
+  const currentLine = (): boolean => terminal ? request !== null : turnIsLatestRow(pd, message.id);
   if (message.words !== null) {
     // Their words name work; with work selected, only while their turn is
     // still the latest row: after that the agent's bare `next` is the work in
     // hand.
-    if (stateContent !== null && !turnIsLatestRow(pd, message.id)) return null;
+    if (stateContent !== null && !currentLine()) return null;
   } else {
     // The entry word alone over work in hand picks it back up, as `--resume`
     // does, whichever the agent sent first: the line decides, not the agent.
-    if (message.settings.length === 0) {
-      if (stateContent === null || aidlcEntryWords(message.text) !== "" || !turnIsLatestRow(pd, message.id)) return null;
+    const terminalRoute = terminal && (message.route.scope !== null || message.route.newIntent ||
+      message.route.projectType !== null || message.route.skip.length > 0 || message.route.add.length > 0);
+    if (message.settings.length === 0 && !terminalRoute) {
+      if (stateContent === null || aidlcEntryWords(message.text) !== "" || !currentLine()) return null;
+      if (request !== null && !takeTerminalRequest(pd, request, "line")) return null;
       flags.resume = true;
       return ["--resume"];
     }
@@ -8149,7 +8183,7 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
     // rows follow the turn, or its record is newer than the message) a bare
     // `next` is the work's again.
     if (lineHandedOut(pd, engineSessionId, message.id)) return null;
-    if (stateContent !== null ? !turnIsLatestRow(pd, message.id) : settingsKeptSince(pd, engineSessionId, message.at)) return null;
+    if (stateContent !== null ? !currentLine() : settingsKeptSince(pd, engineSessionId, message.at)) return null;
   }
   const typed = aidlcEntryWords(message.text);
   if (typed === null || typed.length === 0) return null;
@@ -8159,9 +8193,26 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   // has selected kept its words as a question) is not read again: the bare
   // `next` the agent runs after that step asks which work to pick up.
   if (own.intent !== undefined && wordsAlreadyRead(pd, own.intent, message.at)) return null;
+  if (request !== null && !takeTerminalRequest(pd, request, "line")) return null;
   for (const key of Object.keys(flags)) delete (flags as unknown as Record<string, unknown>)[key];
   Object.assign(flags, own);
   return argv;
+}
+
+// Passing the person's words directly also hands them out. Otherwise the
+// later bare next would recover the same terminal prompt a second time.
+function handOutTerminalLine(flags: ParsedFlags, pd: string): void {
+  if (engineSessionId === undefined || isReadOnlyEngineProbe()) return;
+  const message = currentTerminalRequest(pd, engineSelection(pd), "line");
+  if (message === null) return;
+  const typed = aidlcEntryWords(message.text);
+  if (typed === null) return;
+  const own = parseNextFlags(splitKiroCommandArgs(typed));
+  if (
+    (own.intent !== undefined && own.intent === flags.intent) ||
+    (Object.keys(own).length > 0 && Object.entries(own).every(([key, value]) =>
+      JSON.stringify(value) === JSON.stringify((flags as unknown as Record<string, unknown>)[key])))
+  ) takeTerminalRequest(pd, message, "line");
 }
 
 // A settings-only line is handed out once, and `next`, which hands it out,
@@ -8187,6 +8238,7 @@ function lineHandedOut(pd: string, session: string, messageId: string): boolean 
 }
 function handOutSettingsLine(flags: ParsedFlags, pd: string): void {
   if (engineSessionId === undefined || isReadOnlyEngineProbe()) return;
+  if (isTerminalWorkflow(pd, engineSelection(pd))) return;
   if (typedSettingModifiers(flags).length === 0) return;
   const message = latestMessage(pd, engineSessionId);
   if (message === null || message.source !== "prompt" || message.words !== null || message.settings.length === 0) return;
@@ -8229,6 +8281,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   activeRetiredGuardPolicyNotice = null;
   const flags = parseNextFlags(agentArgs);
   const args = takePersonsOwnLine(flags, resolveProjectDir(projectDir)) ?? agentArgs;
+  handOutTerminalLine(flags, resolveProjectDir(projectDir));
   handOutSettingsLine(flags, resolveProjectDir(projectDir));
   pickingUp = flags.resume === true;
 
@@ -11933,6 +11986,7 @@ function settleBookkeepingGate(
     return false;
   }
   for (const result of ["awaiting-approval", "approved"] as const) {
+    requireExplicitRecoveryForChild();
     const run = Bun.spawnSync({
       cmd: aidlcEngineCommand(
         "orchestrate",
@@ -14398,6 +14452,7 @@ function spawnState(
   projectDir: string,
   subArgs: string[],
 ): { exitCode: number; stdout: string; stderr: string } {
+  requireExplicitRecoveryForChild();
   // In source and compiled modes, the orchestrator uses only its own process
   // identity, never an executable supplied through the environment.
   const command = aidlcEngineCommand(
@@ -17543,6 +17598,8 @@ export function main(argv: string[]): void {
   // Extract --project-dir (mirrors aidlc-jump.ts / aidlc-state.ts).
   const requestFrom = requestWordsBeginAt(rawArgs);
   let projectDir: string | undefined;
+  let hookSpace: string | undefined;
+  let hookIntent: string | undefined;
   let attemptId: string | undefined;
   let conflictingAttemptId = false;
   const filteredArgs: string[] = [];
@@ -17556,6 +17613,15 @@ export function main(argv: string[]): void {
     ) {
       projectDir = rawArgs[i + 1];
       i++;
+    } else if (!literalArgs && i < requestFrom &&
+      (rawArgs[i] === "--hook-space" || rawArgs[i] === "--hook-intent")) {
+      const flag = rawArgs[i];
+      const value = rawArgs[++i];
+      if (value === undefined || value.startsWith("--")) {
+        throw new Error("ambient recovery requires both --hook-space and --hook-intent");
+      }
+      if (flag === "--hook-space") hookSpace = value;
+      else hookIntent = value;
     } else if (!literalArgs && rawArgs[i] === "--aidlc-attempt-id" && i + 1 < rawArgs.length) {
       const candidate = rawArgs[i + 1];
       if (/^[A-Za-z0-9._:-]{1,128}$/.test(candidate)) {
@@ -17572,6 +17638,43 @@ export function main(argv: string[]): void {
   let subArgs = filteredArgs.slice(1);
   if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
   const resolvedProjectDir = resolveProjectDir(projectDir);
+  if (hookSpace !== undefined || hookIntent !== undefined) {
+    if (!hookSpace || hookIntent === undefined) {
+      throw new Error("ambient recovery requires both --hook-space and --hook-intent");
+    }
+    if (!(subcommand === "next" && subArgs.length === 0) &&
+      !(subcommand === "continue" && subArgs.length === 1 && /^[A-Za-z0-9_-]{8}$/.test(subArgs[0]))) {
+      throw new Error("ambient recovery accepts only bare next or continue with its receipt");
+    }
+    const selection = resolveWorkflowSelection(resolvedProjectDir, { space: hookSpace, intent: hookIntent });
+    if (hookIntent === "") selection.intent = null;
+    const workflow = {
+      selection,
+      participation: workflowParticipation(resolvedProjectDir, selection),
+      lifecycle: workflowLifecycle(resolvedProjectDir, selection),
+      restore: () => {},
+    };
+    // Recovery repairs a live issued workflow; it cannot create one from a
+    // missing record or turn a kept workspace request into new work.
+    if (workflow.lifecycle !== "running") return;
+    runInHookWorkflow(resolvedProjectDir, workflow, () =>
+      withHookWorkflowMutation(resolvedProjectDir, workflow, () => {
+        const previousRecovery = ambientRecoveryActive;
+        ambientRecoveryActive = true;
+        try {
+          main([...filteredArgs, "--project-dir", resolvedProjectDir]);
+        } catch (error) {
+          if (!(error instanceof AmbientRecoveryHandoff)) throw error;
+          // The conductor runs this ordinary command after the child returns;
+          // it is a lock-boundary handoff, not another request for approval.
+          process.stdout.write(`${JSON.stringify(errorDirective(error.message))}\n`);
+        } finally {
+          ambientRecoveryActive = previousRecovery;
+        }
+      }),
+    );
+    return;
+  }
   let spendRequestFile = (): void => {};
   if (subcommand === "next") {
     // Read once, before anything reads the request.

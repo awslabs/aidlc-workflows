@@ -79,7 +79,9 @@ import {
 import {
   hookOutsideGate,
   enterHookWorkflow,
-  acquireAuditLock,
+  runInHookWorkflow,
+  hookWorkflowIsInactive,
+  withCurrentHookWorkflowMutation,
   type ActiveDirectiveMarker,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
@@ -113,7 +115,6 @@ import {
   spacesRoot,
   activeDirectiveOutOfDateReason,
   recordHookDrop,
-  releaseAuditLock,
   resolveBoltDag,
   resolveProjectFlag,
   resolveProjectDirFromHook,
@@ -121,6 +122,7 @@ import {
   worktreesDir,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
+import { publishHookOutput } from "../tools/aidlc-hook-output.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcToolInvocation, quoteCommandArgument } from "../tools/aidlc-runtime-paths.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
@@ -1879,16 +1881,13 @@ function recordGuardDisabled(input: string): void {
       break;
     }
   }
-  if (!acquireAuditLock(projectDir, 5, 50)) return;
-  try {
+  withCurrentHookWorkflowMutation(projectDir, () => {
     appendAuditEntryUnlocked(
       "GUARD_DISABLED",
       { Guard: HOOK_NAME, Tool: toolName || "(unknown)" },
       projectDir,
     );
-  } finally {
-    releaseAuditLock(projectDir);
-  }
+  }, { maxRetries: 5, retryMs: 50 });
 }
 
 export async function run(input: string): Promise<number> {
@@ -1900,9 +1899,14 @@ export async function run(input: string): Promise<number> {
   } catch {
     return 0; // malformed stdin - fail open
   }
-  const workflow = enterHookWorkflow(resolveProjectDirFromHook(import.meta.url), parsed.session_id);
+  const projectDir = resolveProjectDirFromHook(import.meta.url);
+  const workflow = enterHookWorkflow(projectDir, parsed.session_id);
   try {
-    return await evaluate(parsed, input, workflow);
+    return await runInHookWorkflow(projectDir, workflow, () => publishHookOutput(
+      projectDir, workflow,
+      () => evaluate(parsed, input, workflow),
+      () => evaluate(parsed, input, { ...workflow, lifecycle: "completed" }),
+    ));
   } finally {
     workflow.restore();
   }
@@ -1915,6 +1919,9 @@ async function evaluate(
 ): Promise<number> {
   // Runtime integrity is not a fence and cannot be disabled with this hook.
   if (refuseRuntimeIntegrityViolation(parsed)) return 2;
+  // Historical selection carries no Plan Approval fence or guard telemetry.
+  // Runtime integrity above belongs to the harness, regardless of lifecycle.
+  if (hookWorkflowIsInactive(workflow)) return 0;
 
   // A conversation that has not joined the selected workflow is not held to its
   // Plan Approval: its ordinary edits pass as in a workspace with no workflow.
@@ -2331,12 +2338,13 @@ async function evaluate(
         const targets = verdict.mentioned.map((mentioned) => ({
           unit: mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned,
         }));
-        changeNotices.push(...beginCodeGenerationBatch(projectDir, targets));
+        changeNotices.push(...(withCurrentHookWorkflowMutation(projectDir, () => beginCodeGenerationBatch(projectDir, targets)) ?? []));
       } else if (blockedMutation === null) {
         const state = readFileSync(stateFilePath(projectDir), "utf-8");
         const marker = readActiveDirectiveMarker(projectDir, state);
         if (marker?.version === 2 && marker.kind === "run-stage") {
-          changeNotices.push(...beginCodeGeneration(projectDir, { unit: marker.unit?.trim() || null }));
+          changeNotices.push(...(withCurrentHookWorkflowMutation(projectDir, () =>
+            beginCodeGeneration(projectDir, { unit: marker.unit?.trim() || null })) ?? []));
         }
       }
     } catch (e) {
@@ -2408,9 +2416,9 @@ async function evaluate(
       // locked start transaction even when edited content made the verdict fail.
       // This hook emits its own stand-aside row below, so begin only reports drift.
       try {
-        for (const notice of beginCodeGenerationBatch(
+        for (const notice of withCurrentHookWorkflowMutation(projectDir, () => beginCodeGenerationBatch(
           projectDir, selected.map(({ target }) => target), { recordContinuation: false },
-        )) {
+        )) ?? []) {
           process.stdout.write(`${notice}\n`);
         }
       } catch (e) {
@@ -2421,13 +2429,14 @@ async function evaluate(
       // It is this fence's account of what it let through, not approval
       // evidence: a ledger that cannot take it never refuses the person's
       // lowered fence. The line says it was not recorded, and the doctor lists it.
-      const recorded = recordGuardStoodAside(projectDir, {
+      const authority = gate.authority;
+      const recorded = withCurrentHookWorkflowMutation(projectDir, () => recordGuardStoodAside(projectDir, {
         fence: "plan-approval",
-        authority: gate.authority,
+        authority,
         stage: GUARDED_STAGE,
         tool: toolName,
         details: detail,
-      });
+      })) ?? false;
       if (!recorded) {
         recordHookDrop(projectDir, HOOK_NAME, `GUARD_STOOD_ASIDE row not recorded (audit ledger busy or not writable): ${detail}`);
       }
@@ -2445,8 +2454,7 @@ async function evaluate(
   // preferable to a slow block.
   try {
     if (existsSync(auditFilePath(projectDir))) {
-      if (acquireAuditLock(projectDir, 5, 50)) {
-        try {
+      withCurrentHookWorkflowMutation(projectDir, () => {
           appendAuditEntryUnlocked(
             "PLAN_APPROVAL_BLOCKED",
             {
@@ -2461,16 +2469,7 @@ async function evaluate(
             },
             projectDir,
           );
-        } finally {
-          releaseAuditLock(projectDir);
-        }
-      } else {
-        recordHookDrop(
-          projectDir,
-          HOOK_NAME,
-          "audit lock contended; PLAN_APPROVAL_BLOCKED row dropped (block still enforced)",
-        );
-      }
+      }, { maxRetries: 5, retryMs: 50 });
     }
   } catch {
     // Advisory emission only.

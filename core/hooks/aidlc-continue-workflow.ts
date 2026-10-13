@@ -162,9 +162,12 @@ import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts"
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, fstatSync, openSync, readFileSync, readdirSync, readSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { publishHookOutput } from "../tools/aidlc-hook-output.ts";
 import {
   hookStandsOutside,
+  hookWorkflowIsTerminal,
   enterHookWorkflow,
+  runInHookWorkflow,
   ActiveDirectiveLockContendedError,
   clearSessionIntentHandoff,
   boundDirectiveMessage,
@@ -220,6 +223,7 @@ import {
   unitLifecycleSnapshot,
   validateUnitName,
   withAuditLock,
+  withCurrentHookWorkflowMutation,
   writeEngineFileNoFollow,
 } from "../tools/aidlc-lib.ts";
 import { compareVersions } from "../tools/aidlc-channel.ts";
@@ -308,11 +312,14 @@ function allowStop(): number {
 // whose adapter reads the block.
 type StopShape = "block" | "feedback";
 function blockStop(reason: string, shape: StopShape = "block"): number {
+  const projectDir = resolveProjectDirFromHook(import.meta.url);
+  withCurrentHookWorkflowMutation(projectDir, () => {
   console.log(JSON.stringify(
     shape === "feedback"
       ? { hookSpecificOutput: { hookEventName: "Stop", additionalContext: reason } }
       : { decision: "block", reason },
   ));
+  });
   return 0;
 }
 
@@ -410,7 +417,7 @@ function claimErrorDirectiveDelivery(
   try {
     // Serialize read-modify-write across sessions; atomic replacement alone
     // prevents torn JSON, not one session losing another's delivered errors.
-    return withAuditLock(projectDir, () => {
+    return withCurrentHookWorkflowMutation(projectDir, () => withAuditLock(projectDir, () => {
       const path = errorDirectiveFilePath(projectDir, intent, space);
       let fingerprints: string[] = [];
       if (existsSync(path)) {
@@ -442,7 +449,7 @@ function claimErrorDirectiveDelivery(
         space,
       );
       return "deliver";
-    }, intent ?? undefined, space);
+    }, intent ?? undefined, space)) ?? "failed";
   } catch {
     return "failed";
   }
@@ -483,7 +490,7 @@ async function emitErrorDirectiveAudit(
     // Lazy import mirrors aidlc-lib.ts emitError and avoids loading the audit
     // module unless the hook is delivering a new engine error diagnostic.
     const audit = await import("../tools/aidlc-audit.ts");
-    audit.appendAuditEntry("ERROR_LOGGED", {
+    withCurrentHookWorkflowMutation(projectDir, () => audit.appendAuditEntry("ERROR_LOGGED", {
       Tool: "aidlc-orchestrate",
       Command: command,
       Error: message,
@@ -491,7 +498,7 @@ async function emitErrorDirectiveAudit(
       "Exit Code": "0",
       "Observed By": "aidlc-continue-workflow",
       "Error Fingerprint": fingerprint,
-    }, projectDir, intent ?? undefined, space);
+    }, projectDir, intent ?? undefined, space));
   } catch (error) {
     recordHookDrop(
       projectDir,
@@ -581,7 +588,8 @@ function readGuard(projectDir: string): GuardRecord | null {
 function writeGuard(projectDir: string, record: GuardRecord): void {
   try {
     // Under the record's engine folder, through no link planted there.
-    writeEngineFileNoFollow(projectDir, GUARD_FILE_NAME, JSON.stringify(record));
+    withCurrentHookWorkflowMutation(projectDir, () =>
+      writeEngineFileNoFollow(projectDir, GUARD_FILE_NAME, JSON.stringify(record)));
   } catch {
     // If we cannot persist the counter we still proceed; the stop_hook_active
     // flag remains a second, native bound (see decideBlock). Worst case the
@@ -654,7 +662,8 @@ function decideBlock(
 // inheriting a stale streak from an earlier, since-resolved hang.
 function resetGuard(projectDir: string): void {
   try {
-    writeEngineFileNoFollow(projectDir, GUARD_FILE_NAME, JSON.stringify({ signature: "", count: 0 }));
+    withCurrentHookWorkflowMutation(projectDir, () =>
+      writeEngineFileNoFollow(projectDir, GUARD_FILE_NAME, JSON.stringify({ signature: "", count: 0 })));
   } catch {
     // Non-fatal — a stale streak only ever makes us release SOONER, never trap.
   }
@@ -946,7 +955,7 @@ function isPendingComposeStop(projectDir: string, stateContent: string): boolean
     // Orphaned marker: do not honour it, and best-effort clean it up so it
     // cannot disable the enforcement loop indefinitely.
     try {
-      unlinkSync(marker);
+      withCurrentHookWorkflowMutation(projectDir, () => unlinkSync(marker));
     } catch {
       // Unlink failure is non-fatal - the staleness check above already refused
       // to honour the marker, so the loop stays enforced regardless.
@@ -1714,8 +1723,10 @@ export async function run(input: string): Promise<number> {
   // A conversation that has not joined the selected workflow is not held to it at Stop.
   const workflow = enterHookWorkflow(projectDir, payloadSession);
   try {
-    if (hookStandsOutside(workflow)) return allowStop();
+    return await runInHookWorkflow(projectDir, workflow, () => publishHookOutput(projectDir, workflow, async () => {
+    if (hookStandsOutside(workflow) || hookWorkflowIsTerminal(workflow)) return allowStop();
     return await stop(input, projectDir);
+    }, allowStop));
   } finally {
     workflow.restore();
   }
@@ -1824,13 +1835,13 @@ if (transcriptPath && transcriptFormat === "claude") {
       (currentStageSlug(stateContent) || null);
     // The turn is ending, so every file's last message-id group is complete and
     // must be counted now (PostToolUse holds it back; Stop closes it).
-    foldTranscriptIntoLedger(
+    withCurrentHookWorkflowMutation(projectDir, () => foldTranscriptIntoLedger(
       projectDir,
       transcriptPath,
       currentStage,
       "flush-all",
       { sessionId },
-    );
+    ));
   } catch {
     // best-effort - usage never breaks the hook
   }

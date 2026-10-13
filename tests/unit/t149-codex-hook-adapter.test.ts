@@ -139,8 +139,10 @@ function seedShell(dir: string): void {
 function recordingGuard(capture: string): string {
   return [
     'import { appendFileSync } from "node:fs";',
+    'import { currentHookWorkflow, resolveProjectDirFromHook } from "../tools/aidlc-lib.ts";',
     "export async function run(input: string): Promise<number> {",
-    `  appendFileSync(${JSON.stringify(capture)}, input + "\\n");`,
+    '  const independent = currentHookWorkflow(resolveProjectDirFromHook(import.meta.url))?.mode === "independent";',
+    `  appendFileSync(${JSON.stringify(capture)} + (independent ? ".independent" : ""), input + "\\n");`,
     "  return 0;",
     "}",
     "if (import.meta.main) process.exit(await run(await Bun.stdin.text()));",
@@ -1177,6 +1179,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         expect(r.code).toBe(0);
       }
       expect(forwardedSessions(capture)).toEqual(["S-CODEX", "S-CODEX", "S-CODEX"]);
+      expect(forwardedSessions(`${capture}.independent`)).toEqual(["S-CODEX", "S-CODEX", "S-CODEX"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1453,7 +1456,10 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         "prior-session-0000",
       );
 
-      const firstCreate = runIntentCreate(dir, "first intent");
+      // The actual creating command runs for this chat. A sessionless test
+      // process can resolve unrelated ancestry and leave only observed-create,
+      // which correctly ceases to participate after another cursor is chosen.
+      const firstCreate = runIntentCreate(dir, "first intent", "prior-session-0000");
       expect(firstCreate.code).toBe(0);
       expect(
         runAdapter(
@@ -1474,6 +1480,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         ).code,
       ).toBe(0);
       const prior = activeRecord(dir);
+      expect(readSessionBinding(dir, "prior-session-0000")).toMatchObject({ intent: prior, source: "create" });
       // Another conversation creates the second intent.
       expect(runIntentCreate(dir, "second intent", "next-session-0001").code).toBe(0);
       const current = activeRecord(dir);
@@ -1491,7 +1498,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(r.code).toBe(0);
       const priorAudit = readRecordAudit(dir, prior);
       const currentAudit = readRecordAudit(dir, current);
-      expect(priorAudit).toContain("SESSION_ENDED");
+      expect((priorAudit.match(/\*\*Event\*\*: SESSION_ENDED/g) ?? []).length).toBe(1);
       expect(priorAudit).toContain("inferred");
       expect(priorAudit).toContain("prior-session-0000");
       expect(currentAudit).not.toContain("SESSION_ENDED");
@@ -1939,8 +1946,14 @@ function standInHook(
 ): string {
   return [
     'import { appendFileSync } from "node:fs";',
+    'import { currentHookWorkflow, resolveProjectDirFromHook } from "../tools/aidlc-lib.ts";',
     "export async function run(_input: string): Promise<number> {",
-    `  appendFileSync(${JSON.stringify(capture)}, JSON.stringify({ pid: process.pid, hook: ${JSON.stringify(hook)} }) + "\\n");`,
+    '  const independent = currentHookWorkflow(resolveProjectDirFromHook(import.meta.url))?.mode === "independent";',
+    `  appendFileSync(${JSON.stringify(capture)} + (independent ? ".independent" : ""), JSON.stringify({ pid: process.pid, hook: ${JSON.stringify(hook)} }) + "\\n");`,
+    // These stand-ins model workflow checks. Independent integrity checks have
+    // their own real-adapter contention tests; a synthetic workflow refusal
+    // must not become one merely because the publisher preflights this hook.
+    "  if (independent) return 0;",
     answer.throws ? '  throw new Error("STANDIN-THREW");' : "",
     answer.stderr ? `  process.stderr.write(${JSON.stringify(answer.stderr)});` : "",
     `  return ${answer.code};`,
@@ -2031,6 +2044,9 @@ describe("t149 Codex guard-tool-call runs the four PreToolUse checks in one proc
       expect(runs.map((run) => run.hook)).toEqual([...GUARD_HOOKS]);
       expect(r.pid).toBeGreaterThan(0);
       expect(runs.map((run) => run.pid)).toEqual(GUARD_HOOKS.map(() => r.pid));
+      const independent = recordedRuns(`${capture}.independent`);
+      expect(new Set(independent.map(run => run.hook))).toEqual(new Set(GUARD_HOOKS));
+      expect(independent.every(run => run.pid === r.pid)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2060,7 +2076,7 @@ describe("t149 Codex guard-tool-call runs the four PreToolUse checks in one proc
     }
   });
 
-  test("6: the duplicate delivery replays the refusal without running the checks again", () => {
+  test("6: the duplicate delivery replays a workflow refusal without repeating workflow checks", () => {
     const dir = scratchProject(true);
     try {
       const capture = join(dir, "guard-runs.ndjson");
@@ -2079,6 +2095,7 @@ describe("t149 Codex guard-tool-call runs the four PreToolUse checks in one proc
       expect(first.stderr).toContain("STANDIN-FREEZE-REFUSAL");
       expect(second.stderr).toBe(first.stderr);
       expect(recordedRuns(capture)).toHaveLength(GUARD_HOOKS.length);
+      expect(recordedRuns(`${capture}.independent`).length).toBeGreaterThanOrEqual(GUARD_HOOKS.length * 2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

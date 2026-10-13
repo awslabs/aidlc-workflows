@@ -2528,6 +2528,14 @@ async function withProjectDir(
 }
 
 async function runHook(action: Extract<Action, { type: "hook" }>): Promise<number> {
+  if (process.env.AIDLC_HOOK_WORKFLOW_CONTEXT !== undefined) {
+    const { withInheritedHookWorkflow } = await import("./aidlc-lib.ts");
+    return await withInheritedHookWorkflow(runtimeProjectDir(), () => runHookAtTarget(action));
+  }
+  return await runHookAtTarget(action);
+}
+
+async function runHookAtTarget(action: Extract<Action, { type: "hook" }>): Promise<number> {
   if (!existsSync(action.path)) {
     text(2, `aidlc engine hook ${action.name}: not available in this install\n`);
     return 1;
@@ -3698,7 +3706,12 @@ export async function main(rawArgv: string[]): Promise<void> {
     rawArgv.length === 2 &&
     (process.env.AIDLC_INTERNAL_HUMAN_TURN_TOKEN ?? "") !== ""
   ) {
-    await import(pathToFileURL(rawArgv[1]).href);
+    if (process.env.AIDLC_HOOK_WORKFLOW_CONTEXT !== undefined) {
+      const { withInheritedHookWorkflow } = await import("./aidlc-lib.ts");
+      await withInheritedHookWorkflow(runtimeProjectDir(), () => import(pathToFileURL(rawArgv[1]).href));
+    } else {
+      await import(pathToFileURL(rawArgv[1]).href);
+    }
     return;
   }
   // Canonicalized before route policy so stdin buffering, pinning, and

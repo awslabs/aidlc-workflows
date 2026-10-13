@@ -10,7 +10,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   hookStandsOutside,
+  hookWorkflowIsTerminal,
   enterHookWorkflow,
+  runInHookWorkflow,
   auditFilePath,
   errorMessage,
   getField,
@@ -23,6 +25,7 @@ import {
   stateFilePath,
   validSessionId,
   writeEngineFileNoFollow,
+  withHookWorkflowMutation,
 } from "../tools/aidlc-lib.ts";
 import { clearRulesDelivered } from "../tools/aidlc-rules-held.ts";
 
@@ -42,14 +45,16 @@ export async function run(input: string): Promise<number> {
   // leaves that workflow's heartbeat, breadcrumb and ledger alone.
   const workflow = enterHookWorkflow(projectDir, payloadSession);
   try {
-    if (hookStandsOutside(workflow)) return 0;
-    return await compact(input, projectDir);
+    return runInHookWorkflow(projectDir, workflow, () => {
+    if (hookStandsOutside(workflow) || hookWorkflowIsTerminal(workflow)) return 0;
+    return withHookWorkflowMutation(projectDir, workflow, () => compact(input, projectDir)) ?? 0;
+    });
   } finally {
     workflow.restore();
   }
 }
 
-async function compact(input: string, projectDir: string): Promise<number> {
+function compact(input: string, projectDir: string): number {
 const stateFile = stateFilePath(projectDir);
 
 // Write health heartbeat

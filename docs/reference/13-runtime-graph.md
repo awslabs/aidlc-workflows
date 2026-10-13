@@ -153,13 +153,26 @@ work, once, behind the 2.7 approval gate) is what keeps the hook-fired
 
 ## 3. Compile lifecycle
 
-The compile is invoked by the PostToolUse Bash hook
+For running workflows, compile is invoked by the PostToolUse Bash hook
 (`.claude/hooks/aidlc-rebuild-stage-graph.ts`) on every transition-class
 audit emit. The hook fires on every `Bash` tool call from the
 conductor. Before these compile filters it relays an engine `error`
 directive's message to the human and binds a new intent to its session (see
 [Hooks and Tools](06-hooks-and-tools.md#posttooluse-rebuild-stage-graphts));
 neither affects the compile. It then filters cheaply:
+
+Completed and Archived records are excluded before hook telemetry or
+compilation. Explicit completion performs the final projection after its audit
+evidence and before sealing the terminal state, under the same workspace lock.
+A projection-only failure warns and permits authoritative completion; run
+`aidlc engine runtime compile` to repair the derived graph. Audit or state
+persistence failures remain completion failures. Recompilation retains the
+existing `MEMORY_EMPTY` deduplication.
+
+The hook forwards internal `--hook-space` and `--hook-intent` selectors to its
+compiler child. The child pins that record and rechecks lifecycle under the
+write lock; a changed cursor cannot redirect publication. Ordinary explicit
+compilation remains available for terminal records.
 
 1. **Command filter** — only transition-capable `aidlc` state, jump, Bolt, and
    utility routes plus `orchestrate report` get past the early exit. The
@@ -176,16 +189,10 @@ neither affects the compile. It then filters cheaply:
    against any of the 3 blocks. Exit on no match.
 6. **Dispatch** — `aidlc engine runtime compile ...`.
 
-`WORKFLOW_COMPLETED` is in the transition set so the final-stage
-approve fires the compile. `handleCompleteWorkflow` at
-`aidlc-state.ts:575-593` emits 4 audit rows — STAGE_COMPLETED +
-PHASE_COMPLETED + PHASE_VERIFIED + WORKFLOW_COMPLETED — and the last 3
-of those are `PHASE_COMPLETED + PHASE_VERIFIED + WORKFLOW_COMPLETED`.
-(On the approve path the STAGE_COMPLETED is suppressed because approve
-already emitted it, and a `GATE_APPROVED` precedes the run — so a
-final-stage approve appends 5 rows in one Bash call either way.)
-Without `WORKFLOW_COMPLETED` in the regex, the runtime-graph would
-never record the final stage as approved.
+The transition filter retains `WORKFLOW_COMPLETED` for compatibility with
+running records whose audit contains earlier completion evidence. Final-stage
+correctness comes from the explicit completion transaction; a terminal record
+never reaches this ambient filter.
 
 The compile itself walks the full audit log (so the result is
 event-sourced, not transition-incremental), pairs `STAGE_STARTED` with
@@ -398,35 +405,18 @@ aidlc engine runtime fragment-merge --slug <kebab-slug>
 All subcommands accept `--project-dir <path>` to override the standard
 cwd-based resolution.
 
-The compile is hook-driven in normal operation; manual invocation
-exists for tests and debugging.
+The compile is hook-driven while running, completion-owned at the terminal
+boundary, and explicitly callable for repairs, tests and debugging.
 
 ---
 
-## 9. Why hook-driven, not LLM-tool-coupled
+## 9. Deterministic ownership
 
-Earlier plan revisions proposed inserting `spawnSibling(...,
-"aidlc-runtime.ts compile", ...)` calls inside `handleApprove` /
-`handleAdvance` / `handleComplete --merge`. That approach violates the
-load-bearing tenet documented in
-[Plane Architecture](02-plane-architecture.md):
-
-> Where you require determinism, use a tool. Where you require
-> knowledge, use an LLM/agent. Where you require judgement, use a
-> human.
-
-Runtime-graph compile is data-plane substrate that must be observable
-from outside any specific session. Coupling it to LLM-invoked tools
-means LLM omission breaks the determinism guarantee — if the
-conductor forgets to call `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "Approve"` after a human
-clicks Approve, the audit row never appends AND the compile never
-fires; runtime-graph silently lags, recovery substrate is corrupt.
-
-The PostToolUse Bash hook fires on the conductor's actual command invocation
-regardless of what the LLM does next. The audit-emitting hidden dispatcher
-routes (`aidlc engine state ...`, `jump ...`, `bolt ...`,
-`utility ...`, and `orchestrate report ...`) are the deterministic
-anchor.
+During a running workflow the PostToolUse hook refreshes the projection after
+transition commands. At completion the explicit state owner performs the final
+refresh itself, so correctness does not depend on a later ambient hook
+mutating historical work. Both paths use the same compiler and audit evidence;
+the model does not decide which stages belong in the projection.
 
 ---
 

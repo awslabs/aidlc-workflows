@@ -222,6 +222,21 @@ function beat(proj: string, hook: string): void {
 }
 
 describe("next stops with the agent's step when the engine knows the hooks never ran", () => {
+  for (const status of ["Completed", "Archived"]) {
+    test(`a selected ${status} record without health files does not stop an explicit request`, () => {
+      const h = HARNESSES[0];
+      const proj = installed(h);
+      intentCreate(proj, h);
+      const intents = join(proj, "aidlc", "spaces", "default", "intents");
+      const intent = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+      const path = join(intents, intent, "aidlc-state.md");
+      writeFileSync(path, readFileSync(path, "utf-8").replace("- **Status**: Running", `- **Status**: ${status}`));
+      const directive = next(proj, h, {}, ["--new-intent", "--scope", "bugfix", "fix a new parser defect"]);
+      expect(isStop(directive), JSON.stringify(directive)).toBe(false);
+      expect(JSON.stringify(directive)).not.toContain("hooks have not run");
+    });
+  }
+
   for (const h of HARNESSES) {
     test(`${h.name}: the agent is told its own step and the exact line; a heartbeat lets next run`, () => {
       const proj = installed(h);

@@ -696,6 +696,11 @@ function validateAuditEntry(entry: AuditEntryInput): void {
   }
 }
 
+/** The persisted spelling of a field value, shared with exact-entry recovery. */
+export function renderAuditFieldValue(value: string, projectDir: string): string {
+  return redactProjectDirPrefix(value, projectDir).replace(/\r\n?|\n|\u2028|\u2029/g, "\\n");
+}
+
 function renderAuditBlock(
   entry: AuditEntryInput,
   timestamp: string,
@@ -711,10 +716,7 @@ function renderAuditBlock(
     if (EMITTER_OWNED_FIELD_KEYS.has(key)) continue;
     // Escape every JavaScript line terminator in values so a malicious or
     // malformed input cannot forge a second audit field or event line.
-    const safeValue = redactProjectDirPrefix(
-      String(value),
-      projectDir,
-    ).replace(/\r\n?|\n|\u2028|\u2029/g, "\\n");
+    const safeValue = renderAuditFieldValue(String(value), projectDir);
     block += `**${key}**: ${safeValue}\n`;
   }
   return `${block}\n---\n`;
@@ -754,6 +756,12 @@ export function appendAuditEntry(
   space?: string
 ): { appended: true; event: string; timestamp: string } {
   validateAuditEntry({ eventType, fields });
+
+  // A checked ambient mutation may already hold this exact bucket. Reuse the
+  // caller's lock; raw acquireAuditLock is intentionally not reentrant.
+  if (holdsAuditLock(projectDir, intent, space)) {
+    return appendAuditEntryUnlocked(eventType, fields, projectDir, intent, space);
+  }
 
   // Lock + audit shard both pin to the same (intent, space) record so a fork/
   // merge pair targets ONE intent end-to-end; omitted -> default-resolution.
@@ -807,13 +815,22 @@ export function appendCoordinationStoodAside(
 ): boolean {
   try {
     if (!existsSync(auditFilePath(projectDir))) return false;
-    if (!acquireAuditLock(projectDir, 2, 25)) return false;
-    try {
+    const append = (): void => {
       appendAuditEntryUnlocked("COORDINATION_STOOD_ASIDE", {
         ...(row.session ? { Session: row.session } : {}),
         Command: row.command,
         Reason: row.reason,
       }, projectDir);
+    };
+    // Copilot's lifecycle transaction already owns W and the selected I.
+    // Raw acquisition is not reentrant; preserve that caller's ownership.
+    if (holdsAuditLock(projectDir)) {
+      append();
+      return true;
+    }
+    if (!acquireAuditLock(projectDir, 2, 25)) return false;
+    try {
+      append();
     } finally {
       releaseAuditLock(projectDir);
     }

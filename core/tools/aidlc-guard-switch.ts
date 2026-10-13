@@ -6,6 +6,7 @@ import {
   latestPersonTurn,
   isReplyTurn,
   personSpokeSinceGate,
+  isTerminalWorkflow,
   readAuditShardEvents,
   type AuditShardEvent,
   auditBlockField,
@@ -69,6 +70,7 @@ import {
 } from "./aidlc-lib.ts";
 import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { latestMessage } from "./aidlc-message-store.ts";
+import { currentTerminalRequest, type TerminalRequest } from "./aidlc-terminal-request.ts";
 import { quoted } from "./aidlc-recorded-switches.ts";
 import { settingPurpose } from "./aidlc-settings.ts";
 
@@ -287,13 +289,15 @@ export function applyIntentSettings(
   projectDir: string,
   content: string,
   requested: IntentSettingsRequest,
-  { sessionId = null, typedByPerson = false, fail: die = throwSettingsError, reviewScope, ...selection }: {
+  { sessionId = null, typedByPerson = false, fail: die = throwSettingsError, reviewScope, terminalRequest: suppliedTerminalRequest, ...selection }: {
     intent?: string; space?: string; sessionId?: string | null; typedByPerson?: boolean;
+    /** A scope transaction carries the same current request through its settings. */
+    terminalRequest?: TerminalRequest | null;
     fail?: (message: string) => never;
     /** The scope a review level is compared with; defaults to the state's own. */
     reviewScope?: string;
   },
-): { content: string; audit: AuditEntryInput[]; lines: string[] } {
+): { content: string; audit: AuditEntryInput[]; lines: string[]; terminalRequest: TerminalRequest | null } {
   // `guard.plan-approval` is another way to say `plan-approval`: one switch that
   // removes the plan stop. Whether an edited plan asks again is Guard Policy's.
   if (requested["guard.plan-approval"] !== undefined) {
@@ -475,9 +479,19 @@ export function applyIntentSettings(
     ceremonies[key] !== undefined && requested[CEREMONY_FLAGS[key].slice(2) as ConfigKey]?.source === "you");
   const personsRequest = lowering.length > 0 || theirCeremonies.length > 0;
   const atTheirTerminal = personsRequest && !typedByPerson && commandAtPersonsTerminal();
+  const requestSelection = resolveWorkflowSelection(projectDir, { ...selection, sessionId: sessionId ?? undefined });
+  const terminal = isTerminalWorkflow(projectDir, requestSelection);
+  const terminalMessage = terminal
+    ? suppliedTerminalRequest === undefined
+      ? currentTerminalRequest(projectDir, requestSelection, "settings")
+      : suppliedTerminalRequest
+    : null;
+  const requestInChat = personsRequest && (terminal
+    ? terminalMessage !== null
+    : personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true, ...selection }));
   if (
     lowering.length > 0 && !typedByPerson && !atTheirTerminal && !fenceKeyBypassed(projectDir, sessionId) &&
-    !personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true })
+    !requestInChat
   ) {
     die(guardSwitchRefusal(lowering[0], projectDir));
   }
@@ -489,14 +503,16 @@ export function applyIntentSettings(
   // its whole ancestor chain, so a terminal beside it resolves the same session
   // anyway, and the walk that resolves it fails closed under load, which would
   // drop the person's own words from their record for no reason they could see.
-  const turn = personsRequest && !typedByPerson && !atTheirTerminal
+  const turn = personsRequest && !typedByPerson && !atTheirTerminal && !terminal
     ? latestPersonTurn(projectDir)
     : null;
-  const askedIn = turn?.words ?? null;
+  const askedIn = terminalMessage !== null && personsRequest && !typedByPerson && !atTheirTerminal
+    ? terminalMessage.words ?? terminalMessage.text
+    : turn?.words ?? null;
   // Asked for in the chat (not typed): each check it turns off is said in one
   // line, in their words, with the way back, instead of the setter's own line.
   const askedInChat = personsRequest && !typedByPerson && process.env.AIDLC_UNATTENDED !== "1" &&
-    personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true });
+    requestInChat;
   // Theirs either way: asked for in their chat, or run by them at their terminal.
   // Both get the one line that names the check, where it applies and the way
   // back, and both record the person as the one who set it.
@@ -517,7 +533,7 @@ export function applyIntentSettings(
   // command set what they typed with their own hands.
   const typedOnTheirLine = (key: string, value: string | undefined): boolean => {
     if (value === undefined) return false;
-    const message = latestMessage(projectDir, sessionId);
+    const message = terminal ? terminalMessage : latestMessage(projectDir, sessionId);
     if (message === null) return false;
     return message.settings.some((setting) => setting.key === key && setting.value === value) ||
       setterCommandNames(message.text, key, value);
@@ -528,7 +544,7 @@ export function applyIntentSettings(
     const ceremony = theirCeremonies.find((candidate) => CEREMONY_FLAGS[candidate].slice(2) === key);
     if (ceremony === undefined) return false;
     return atTheirTerminal || typedOnTheirLine(key, ceremonies[ceremony]) ||
-      (askedInChat && personTurnSinceSetting(projectDir, ceremony, selection));
+      (askedInChat && (terminalMessage !== null || personTurnSinceSetting(projectDir, ceremony, selection)));
   };
 
   const audit: AuditEntryInput[] = [];
@@ -751,7 +767,10 @@ export function applyIntentSettings(
   for (const item of lowering) {
     if (saidAsAsked(item.key)) lines.push(askedSwitchLine(item, askedIn, cc.value, !atTheirTerminal));
   }
-  return { content, audit, lines };
+  if (terminalMessage !== null && askedInChat) {
+    for (const entry of audit) entry.fields["Message Id"] = terminalMessage.id;
+  }
+  return { content, audit, lines, terminalRequest: askedInChat ? terminalMessage : null };
 }
 
 /**

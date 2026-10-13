@@ -215,13 +215,13 @@ describe("a shell command that changed nothing the hook reads skips the engine",
     expect(shellHook(dir, "guard-tool-call").ran).toBe(true);
   });
 
-  test("a skipped rebuild still says the hook fired", () => {
+  test("a skipped rebuild preserves the last full-hook heartbeat", () => {
     const dir = project();
     settled(dir, "rebuild-stage-graph");
     const heartbeat = join(hooksHealthDir(dir), "rebuild-stage-graph.last");
     writeFileSync(heartbeat, "2026-01-01T00:00:00Z");
     expectSkipped(shellHook(dir, "rebuild-stage-graph"));
-    expect(Date.parse(readFileSync(heartbeat, "utf-8"))).toBeGreaterThan(Date.now() - 60_000);
+    expect(readFileSync(heartbeat, "utf-8")).toBe("2026-01-01T00:00:00Z");
   });
 
   test.each([...GATED])("%s: finding nothing to do leaves the mark where the engine keeps hook health", (hook) => {

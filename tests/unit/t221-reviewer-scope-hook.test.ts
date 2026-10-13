@@ -535,6 +535,7 @@ function scratchProject(): string {
   cpSync(join(AIDLC_SRC, "hooks", "review-freeze-command.ts"), join(dir, ".claude", "hooks", "review-freeze-command.ts"));
   for (const t of [
     "aidlc-lib.ts",
+    "aidlc-hook-output.ts",
     "aidlc-artifact-vocabulary.ts",
     "aidlc-settings.ts",
     "aidlc-install-paths.ts",
@@ -580,7 +581,7 @@ function seedUnitScope(
 ): void {
   writeFileSync(
     join(proj, "aidlc", "spaces", "default", "intents", "aidlc-state.md"),
-    `# AI-DLC State Tracking\n\n## Runtime State\n- **Unit Ownership**: team\n${settings}`,
+    `# AI-DLC State Tracking\n\n## Runtime State\n- **Status**: Running\n- **Unit Ownership**: team\n${settings}`,
     "utf-8",
   );
   writeFileSync(
@@ -639,7 +640,7 @@ function dropsPath(proj: string): string {
 // per-unit predicate and not the version-2 identity/attempt envelope, which this
 // predicate never reads.
 function seedActiveDirective(proj: string, marker: { unit?: string }): void {
-  const state = "# AI-DLC State Tracking\n\n## Runtime State\n- **Current Stage**: nfr-requirements\n";
+  const state = "# AI-DLC State Tracking\n\n## Runtime State\n- **Status**: Running\n- **Current Stage**: nfr-requirements\n";
   writeFileSync(join(proj, "aidlc", "spaces", "default", "intents", "aidlc-state.md"), state, "utf-8");
   writeFileSync(
     join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-engine", "active-directive.json"),
@@ -659,7 +660,7 @@ function publishActiveDirective(
   proj: string,
   marker: { kind: "invoke-swarm" | "run-stage"; stage: string; unit?: string; units?: string[] },
 ): void {
-  const state = "# AI-DLC State Tracking\n\n## Runtime State\n- **Current Stage**: nfr-requirements\n";
+  const state = "# AI-DLC State Tracking\n\n## Runtime State\n- **Status**: Running\n- **Current Stage**: nfr-requirements\n";
   writeFileSync(join(proj, "aidlc", "spaces", "default", "intents", "aidlc-state.md"), state, "utf-8");
   writeActiveDirectiveMarker(proj, {
     kind: marker.kind,
@@ -881,7 +882,7 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     const shardPath = seedAuditShard(proj);
     writeFileSync(
       join(proj, "aidlc", "spaces", "default", "intents", "aidlc-state.md"),
-      `# AI-DLC State Tracking\n\n## Runtime State\n- **Guard Policy**: ${policy} (set by you)\n${switches}`,
+      `# AI-DLC State Tracking\n\n## Runtime State\n- **Status**: Running\n- **Guard Policy**: ${policy} (set by you)\n${switches}`,
     );
     const result = runHook(proj, SIBLING_SWEEP, { AIDLC_DISABLE_REVIEWER_SCOPE_HOOK: "" });
     expect(result.code, result.stderr).toBe(code);

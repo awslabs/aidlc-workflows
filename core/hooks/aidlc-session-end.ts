@@ -17,12 +17,16 @@ import {
   hooksHealthDir,
   writeHookStatusFile,
   isClaudeCodeHookInput,
+  isTerminalWorkflow,
   isoTimestamp,
   readSessionIntentUuid,
   recordHookDrop,
   resolveProjectDirFromHook,
   stateFilePath,
   validSessionId,
+  type HookWorkflow,
+  workflowLifecycle,
+  withHookWorkflowMutation,
 } from "../tools/aidlc-lib.ts";
 
 export async function run(input: string): Promise<number> {
@@ -90,6 +94,7 @@ if (binding?.intent) {
 // A conversation that has not joined the workflow does not end a session in it.
 // Without a binding the stamp names where the session worked; SessionStart turns
 // it into a join on resume, and until then this end needs other evidence.
+let workflow: HookWorkflow;
 try {
   const ended = intent !== undefined && space !== undefined
     ? {
@@ -103,6 +108,13 @@ try {
   const source = ended.binding?.source;
   if (source === "unjoined") return 0;
   if (ended.intent !== null && workflowParticipation(projectDir, ended) !== "participant") return 0;
+  if (isTerminalWorkflow(projectDir, ended)) return 0;
+  workflow = {
+    selection: ended,
+    participation: workflowParticipation(projectDir, ended),
+    lifecycle: workflowLifecycle(projectDir, ended),
+    restore: () => {},
+  };
 } catch {
   return 0;
 }
@@ -110,6 +122,7 @@ try {
 // No workflow active for the resolved session intent — do nothing (consistent
 // with session-start.ts). A session without an id, or a flat legacy workflow,
 // retains cursor fallback.
+return withHookWorkflowMutation(projectDir, workflow, () => {
 if (!existsSync(stateFilePath(projectDir, intent, space))) return 0;
 
 // Health heartbeat follows the same session-owned intent as the audit event.
@@ -123,6 +136,7 @@ try {
   return 0;
 }
 return 0;
+}) ?? 0;
 }
 
 if (import.meta.main) {

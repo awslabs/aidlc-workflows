@@ -161,6 +161,8 @@ import {
   resolveProjectFlag,
   sameWorkspaceSource,
   resolveWorkflowSelection,
+  withHookWorkflowMutation,
+  workflowLifecycle,
   resolveReviewClass,
   selfAttributedDecisionMarker,
   impliedConfirmationMarker,
@@ -4548,6 +4550,8 @@ let readOnlyCommand = false;
 
 export function main(argv: string[]): void {
   const rawArgs = argv;
+  let hookSpace: string | undefined;
+  let hookIntent: string | undefined;
 
   // Extract --project-dir
   const filteredArgs: string[] = [];
@@ -4555,15 +4559,43 @@ export function main(argv: string[]): void {
     if (rawArgs[i] === "--project-dir" && i + 1 < rawArgs.length) {
       projectDir = rawArgs[i + 1];
       i++;
+    } else if (rawArgs[i] === "--hook-space" && i + 1 < rawArgs.length) {
+      hookSpace = rawArgs[++i];
+    } else if (rawArgs[i] === "--hook-intent" && i + 1 < rawArgs.length) {
+      hookIntent = rawArgs[++i];
     } else {
       filteredArgs.push(rawArgs[i]);
     }
   }
 
+  // Kiro's legacy planning mediator is an ambient hook child. It cannot
+  // become an explicit writer merely by crossing a process boundary. Its
+  // synchronous decision/answer owner takes the lifecycle barrier itself;
+  // the parent never holds a lock while waiting for this child.
+  if (hookSpace !== undefined || hookIntent !== undefined) {
+    if (hookSpace === undefined || hookIntent === undefined ||
+      !["decision", "answer"].includes(filteredArgs[0])) {
+      throw new Error("ambient log requires decision/answer and both --hook-space and --hook-intent");
+    }
+    if (filteredArgs.includes("--park")) {
+      throw new Error("ambient log cannot schedule an asynchronous --park operation");
+    }
+    const pd = resolveProjectDir(projectDir);
+    const selection = resolveWorkflowSelection(pd, { space: hookSpace, intent: hookIntent });
+    if (hookIntent === "") selection.intent = null;
+    withHookWorkflowMutation(pd, {
+      selection, participation: "participant", lifecycle: workflowLifecycle(pd, selection), restore: () => {},
+    }, () => dispatchLog(filteredArgs));
+    return;
+  }
+  dispatchLog(filteredArgs);
+}
+
+function dispatchLog(filteredArgs: string[]): void {
   const subcommand = filteredArgs[0];
   readOnlyCommand = subcommand === "answers";
   if (subcommand === "decision" || subcommand === "answer") {
-    refuseSplitValues(subcommand, rawArgs);
+    refuseSplitValues(subcommand, filteredArgs);
   }
 
   try {

@@ -1,5 +1,9 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { hasStoredMessages, latestMessage } from "./aidlc-message-store.ts";
+import {
+  currentTerminalRequest, applyTerminalMutation, resumeTerminalMutation, terminalOperation,
+  type TerminalMutationPlan,
+} from "./aidlc-terminal-request.ts";
 import { createHash, randomUUID } from "node:crypto";
 import {
   constants as fsConstants,
@@ -416,6 +420,8 @@ import {
   OWN_TERMINAL_PRESENCE_STEP,
   personAtOwnTerminal,
   personSpokeSinceGate,
+  isTerminalWorkflow,
+  withWorkflowRecordLock,
   personSaidProjectType,
   clearProjectTypeAsked,
   recordDir,
@@ -7907,6 +7913,15 @@ function answerAlreadyStarted(projectDir: string, questionId: string, sessionId?
 // the CREATED intent's record (the active-intent cursor set first makes the
 // default-resolving state/audit helpers resolve there).
 function handleIntentCreate(projectDir: string, flags: Record<string, string>): void {
+  const creationOperation = terminalOperation("intent-create", flags);
+  const resumed = withAuditLock(projectDir, () => resumeTerminalMutation(
+    projectDir, resolveWorkflowSelection(projectDir).sessionId, "creation", creationOperation, plan => validateTerminalMutation(projectDir, plan),
+  ));
+  if (resumed !== null) {
+    process.stdout.write(`${resumed.output.join("\n")}\n`);
+    if (resumed.creation?.questionId !== undefined) retireRequest(projectDir, resumed.creation.questionId);
+    return;
+  }
   // An engine question's answer names its request by id. The copy is removed
   // once the answer starts work, so look for that work before the copy.
   const questionId = flags.request;
@@ -8019,6 +8034,9 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     }
   }
   const initialSelection = resolveWorkflowSelection(projectDir, { space: flags.space });
+  const terminalSelection = isTerminalWorkflow(projectDir, initialSelection);
+  const terminalRequest = terminalSelection ? currentTerminalRequest(projectDir, initialSelection, "creation") : null;
+  let terminalLoweringUsed = false;
 
   // Preflight the target space's Change Control memory BEFORE any mutation. The
   // state build re-reads it under the lock to write the state line; checking
@@ -8113,11 +8131,16 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   // this chat is the proof then, as the turn is once work exists. Per chat,
   // never the project's messages: a teammate's turn in their own chat is not
   // this one's.
-  const personAskedForThisLowering = (): boolean =>
-    commandAtPersonsTerminal() ||
-    (existsSync(stateFilePath(projectDir))
+  const personAskedForThisLowering = (): boolean => {
+    if (commandAtPersonsTerminal()) return true;
+    if (terminalSelection) {
+      terminalLoweringUsed ||= terminalRequest !== null;
+      return terminalRequest !== null;
+    }
+    return existsSync(stateFilePath(projectDir))
       ? personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true })
-      : latestMessage(projectDir, initialSelection.sessionId) !== null);
+      : latestMessage(projectDir, initialSelection.sessionId) !== null;
+  };
   // A recorded presence bypass authorizes the lowering, as it does on main, but
   // it is nobody's word: the setting stays "set by a command".
   const loweringAuthorized = (): boolean =>
@@ -8229,6 +8252,10 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
         );
       }
       gitRmFlatTree(projectDir, migration.movedFrom);
+      // Migration has already published this record and its cursor. An
+      // intent-only fork/merge can now see it, so the review update must read
+      // and settle under the same record lock as those writers.
+      withWorkflowRecordLock(projectDir, () => {
       const migratedState = readStateFile(projectDir);
       const reviewUpdate = applyReviewOverride(
         migratedState,
@@ -8258,6 +8285,9 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
             reviewUpdate.storedReview || "cleared (scope default applies)",
         });
       }
+      }, resolveWorkflowSelection(projectDir, {
+        space: DEFAULT_SPACE, intent: migration.intentDirName,
+      }));
       process.stdout.write(
         `Migrated flat workspace into intent: ${migration.intentDirName} (space: ${DEFAULT_SPACE})\n`,
       );
@@ -8341,8 +8371,21 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // folder is invisible to every record scan, so a start cut off here leaves
     // nothing a user can select. Listing it is the last step (below).
     const created = mintIntentRecord(projectDir, slug, space);
+    // The first state publication makes this record addressable before its
+    // final settings and registration land. Keep I for the whole creation so
+    // a fork/merge cannot interleave with those subsequent whole-state writes.
+    // W is already held. Keep default resolution unchanged: authority checks
+    // still belong to the initiating selection; every new-record write below
+    // carries created.dirName/created.space explicitly.
+    withAuditLock(projectDir, () => {
     failIntentCreateAt("after-mint");
 
+    const prepared: { state?: string; description?: string; output?: string; audit: TerminalMutationPlan["audit"] } | undefined =
+      terminalLoweringUsed && terminalRequest !== null ? { audit: [] } : undefined;
+    const emit: typeof appendAuditEvent = (pd, eventType, fields, intent, space) => {
+      if (prepared) prepared.audit.push({ eventType, fields });
+      else appendAuditEvent(pd, eventType, fields, intent, space);
+    };
     const ts = isoTimestamp();
 
     // ---- Audit bootstrap + creation events (relocated from the old --init) ----
@@ -8363,9 +8406,10 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // WORKFLOW_STARTED — mandatory first event of any new workflow. Captures the
     // creation timestamp so "when did this feature begin?" is answerable from the
     // audit alone. Lands in the created intent's audit (relocated from --init).
-    appendAuditEvent(projectDir, "WORKFLOW_STARTED", {
+    emit(projectDir, "WORKFLOW_STARTED", {
       Scope: scope,
       Request: `/aidlc ${flags.arguments || scope}`,
+      ...(terminalLoweringUsed && terminalRequest !== null ? { "Message Id": terminalRequest.id } : {}),
       // The record is listed last, so its repo set comes from this creation,
       // not from the registry.
       ...sourceBaselineAuditFields(
@@ -8399,7 +8443,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     const initStageCount = stagesInScope(scope).filter(
       (s) => s.phase === "initialization" && s.action === "EXECUTE"
     ).length;
-    appendAuditEvent(projectDir, "PHASE_STARTED", {
+    emit(projectDir, "PHASE_STARTED", {
       Phase: "initialization",
       "Stage count": String(initStageCount),
       Scope: scope,
@@ -8415,7 +8459,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       if (phase === "initialization") continue;
       const inPhase = loadStageGraph().filter((s) => s.phase === phase);
       if (!runningPhases.has(phase) && inPhase.length > 0) {
-        appendAuditEvent(projectDir, "PHASE_SKIPPED", {
+        emit(projectDir, "PHASE_SKIPPED", {
           Phase: phase,
           Scope: scope,
           Reason: composedPlan ? `this plan excludes ${phase}` : `scope ${scope} excludes ${phase}`,
@@ -8423,7 +8467,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       }
     }
 
-    appendAuditEvent(projectDir, "STAGE_STARTED", {
+    emit(projectDir, "STAGE_STARTED", {
       Stage: "workspace-scaffold",
       Agent: "orchestrator",
     }, created.dirName, created.space);
@@ -8437,11 +8481,11 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     ensureWorkspaceDirs(projectDir, plannedStages.stages, created.dirName, created.space);
 
     const phaseDirDetail = `${runningPhases.size} in-scope phase dirs + verification/ + space-level knowledge/ ensured`;
-    appendAuditEvent(projectDir, "WORKSPACE_SCAFFOLDED", {
+    emit(projectDir, "WORKSPACE_SCAFFOLDED", {
       Request: `/aidlc ${flags.arguments || scope}`,
       Details: `${phaseDirDetail} (shell shipped by SEED)`,
     }, created.dirName, created.space);
-    appendAuditEvent(projectDir, "STAGE_COMPLETED", {
+    emit(projectDir, "STAGE_COMPLETED", {
       Stage: "workspace-scaffold",
       Details: phaseDirDetail,
     }, created.dirName, created.space);
@@ -8458,6 +8502,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       requestedCeremony,
       ceremonySetByPerson,
       composedPlan ? plannedStages.stages : null,
+      prepared,
     );
     // The checks the person turned off for this work start off, set by them;
     // one they typed on starts on.
@@ -8467,12 +8512,33 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       if (fenceFlags[fence] === "on") requested[`guard.${fence}`] = { value: "on", source: "you" };
     }
     if (Object.keys(requested).length > 0 && lockedMemoryStrict === null) {
-      const content = readStateFile(projectDir, created.dirName, created.space);
+      const content = prepared?.state ?? readStateFile(projectDir, created.dirName, created.space);
       const update = applyIntentSettings(projectDir, content, requested, {
         intent: created.dirName, space: created.space, sessionId: initialSelection.sessionId, typedByPerson: true,
       });
-      if (update.audit.length > 0) appendAuditEntries(update.audit, projectDir, created.dirName, created.space);
-      if (update.content !== content) writeStateFile(projectDir, update.content, created.dirName, created.space);
+      if (prepared) {
+        prepared.audit.push(...update.audit);
+        prepared.state = update.content;
+      } else {
+        if (update.audit.length > 0) appendAuditEntries(update.audit, projectDir, created.dirName, created.space);
+        if (update.content !== content) writeStateFile(projectDir, update.content, created.dirName, created.space);
+      }
+    }
+    if (prepared && terminalRequest !== null) {
+      if (prepared.state === undefined || prepared.description === undefined || prepared.output === undefined) throw new Error("Incomplete creation plan");
+      applyTerminalMutation(projectDir, terminalRequest, "creation", creationOperation, {
+        selection: { space: created.space, intent: created.dirName }, before: null, after: prepared.state,
+        audit: prepared.audit, output: [prepared.output.trimEnd()], description: prepared.description, settings: intentSettingsFromFlags(flags),
+        creation: { created, scope, repos, sessionId: initialSelection.sessionId ?? undefined, questionId },
+      }, plan => validateTerminalMutation(projectDir, plan));
+      markEngineTouch(projectDir, created.dirName, created.space);
+      process.stdout.write(prepared.output);
+      if (teamKeptCheck !== null && initialSelection.sessionId) {
+        addPendingPersonLines(projectDir, initialSelection.sessionId, [teamKeptCheck]);
+      }
+      carryPendingPersonLines(projectDir, initialSelection.sessionId);
+      if (questionId !== undefined) retireRequest(projectDir, questionId);
+      return;
     }
     // The commit point: list the finished record with the question it answered,
     // then select it. The question's copy is no longer needed once listed.
@@ -8492,6 +8558,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // (the creation line naming what the person set for this work) follows it.
     carryPendingPersonLines(projectDir, initialSelection.sessionId);
     if (questionId !== undefined) retireRequest(projectDir, questionId);
+    }, created.dirName, created.space);
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
@@ -8511,12 +8578,17 @@ function handleIntentCreateStateBuild(
   requestedCeremony: Partial<CeremonyPolicy>,
   ceremonySetByPerson: Partial<Record<CeremonyKey, true>>,
   composedPlan: Record<string, "EXECUTE" | "SKIP"> | null,
+  prepared?: { state?: string; description?: string; output?: string; audit: TerminalMutationPlan["audit"] },
 ): void {
+  const emit: typeof appendAuditEvent = (pd, eventType, fields, intent, space) => {
+    if (prepared) prepared.audit.push({ eventType, fields });
+    else appendAuditEvent(pd, eventType, fields, intent, space);
+  };
   const depthOverride = flags.depth;
   const testStrategyOverride = flags["test-strategy"];
   // ---- Workspace detection (stage 0.2) ----
 
-  appendAuditEvent(projectDir, "STAGE_STARTED", {
+  emit(projectDir, "STAGE_STARTED", {
     Stage: "workspace-detection",
     Agent: "orchestrator",
   }, createdDir, createdSpace);
@@ -8532,7 +8604,7 @@ function handleIntentCreateStateBuild(
       ? `${uninitSubmodules.length} uninitialized submodule path(s) (${enumerateSubmodulePaths(uninitSubmodules)}) - run '${SUBMODULE_INIT_REMEDY}' to fetch them`
       : "";
 
-  appendAuditEvent(projectDir, "WORKSPACE_SCANNED", {
+  emit(projectDir, "WORKSPACE_SCANNED", {
     "Project Type": scan.projectType,
     Languages: scan.languages,
     Frameworks: scan.frameworks,
@@ -8548,14 +8620,14 @@ function handleIntentCreateStateBuild(
         ? `Deterministic rule-based scan; ${submoduleRemedy}`
         : "Deterministic rule-based scan",
   }, createdDir, createdSpace);
-  appendAuditEvent(projectDir, "STAGE_COMPLETED", {
+  emit(projectDir, "STAGE_COMPLETED", {
     Stage: "workspace-detection",
     Details: `Classified ${scan.projectType}; languages=${scan.languages}; frameworks=${scan.frameworks}`,
   }, createdDir, createdSpace);
 
   // ---- State init (stage 0.3) ----
 
-  appendAuditEvent(projectDir, "STAGE_STARTED", {
+  emit(projectDir, "STAGE_STARTED", {
     Stage: "state-init",
     Agent: "orchestrator",
   }, createdDir, createdSpace);
@@ -8781,14 +8853,13 @@ ${stageProgress}
 - **Pending Artifacts**: none
 `;
 
-  writeFileAtomic(
-    projectDescriptionFilePath(projectDir, createdDir, createdSpace),
-    `${JSON.stringify(rawProjectDesc)}\n`,
-  );
+  const description = `${JSON.stringify(rawProjectDesc)}\n`;
+  if (prepared) prepared.description = description;
+  else writeFileAtomic(projectDescriptionFilePath(projectDir, createdDir, createdSpace), description);
   // The state file is the last durable write: until it lands the record holds
   // only its creation stub, which `next` refuses to route, so an interrupted
   // creation never leaves a routable workflow without its initialization audit.
-  appendAuditEvent(projectDir, "WORKSPACE_INITIALISED", {
+  emit(projectDir, "WORKSPACE_INITIALISED", {
     Request: `/aidlc ${flags.arguments || scope}`,
     "Project Type": projectType,
     [PROJECT_TYPE_SOURCE_FIELD]: projectTypeSource,
@@ -8798,7 +8869,7 @@ ${stageProgress}
     "Build System": scan.buildSystem,
     Details: `${totalInScope} stages in scope, routing to ${firstPostInit}`,
   }, createdDir, createdSpace);
-  appendAuditEvent(projectDir, "STAGE_COMPLETED", {
+  emit(projectDir, "STAGE_COMPLETED", {
     Stage: "state-init",
     Details: `State initialized: ${scope} scope, ${totalInScope} stages, routing to ${firstPostInit}`,
   }, createdDir, createdSpace);
@@ -8810,29 +8881,32 @@ ${stageProgress}
   // subsequent `advance` call would appear to jump from workspace-scaffold
   // directly into a fresh phase.
   if (firstPostInitEntry && firstPostInitEntry.phase !== "initialization") {
-    appendAuditEvent(projectDir, "PHASE_COMPLETED", {
+    emit(projectDir, "PHASE_COMPLETED", {
       "From phase": "initialization",
       "To phase": firstPostInitEntry.phase,
       "Stages completed": String(completedInit),
     }, createdDir, createdSpace);
-    appendAuditEvent(projectDir, "PHASE_VERIFIED", {
+    emit(projectDir, "PHASE_VERIFIED", {
       "Phase boundary": `initialization → ${firstPostInitEntry.phase}`,
     }, createdDir, createdSpace);
-    appendAuditEvent(projectDir, "PHASE_STARTED", {
+    emit(projectDir, "PHASE_STARTED", {
       Phase: firstPostInitEntry.phase,
       Scope: scope,
     }, createdDir, createdSpace);
-    appendAuditEvent(projectDir, "STAGE_STARTED", {
+    emit(projectDir, "STAGE_STARTED", {
       Stage: firstPostInit,
       Agent: firstPostInitAgent,
     }, createdDir, createdSpace);
   }
-  failIntentCreateAt("before-state");
-  writeStateFile(projectDir, stateContent, createdDir, createdSpace);
-  failIntentCreateAt("after-state");
+  if (prepared) prepared.state = stateContent;
+  else {
+    failIntentCreateAt("before-state");
+    writeStateFile(projectDir, stateContent, createdDir, createdSpace);
+    failIntentCreateAt("after-state");
+  }
   // Creating the work started its first stage. Record that advance on the new
   // work itself, so a later chat on it that only talks ends like any other.
-  markEngineTouch(projectDir, createdDir, createdSpace);
+  if (!prepared) markEngineTouch(projectDir, createdDir, createdSpace);
 
   // Combined stdout summary (intent created + state-build). The state file and
   // every row above name the created record explicitly.
@@ -8840,16 +8914,16 @@ ${stageProgress}
     uninitSubmodules.length > 0
       ? `Warning: ${uninitSubmodules.length} uninitialized git submodule path(s) (${enumerateSubmodulePaths(uninitSubmodules)}) - run '${SUBMODULE_INIT_REMEDY}' before proceeding so reverse-engineering can read the code.\n`
       : "";
-  process.stdout.write(
-    `Intent created: ${createdDir} (space: ${createdSpace})
+  const output = `Intent created: ${createdDir} (space: ${createdSpace})
 State initialized: ${scope} scope, ${totalInScope} stages, ${effectiveDepth} depth
 ${composedPlan ? `Plan: ${composedPlanLabel(flags["plan-name"])}, for this piece of work only (no scope file written)\n` : ""}Project type: ${projectType}${declaredType ? " (you said so)" : ""}
 ${declaredType === "Brownfield" && scan.projectType !== "Brownfield" ? `${NO_CODE_FOUND_YET}\n` : ""}Languages: ${scan.languages}
 Frameworks: ${scan.frameworks}
 Build System: ${scan.buildSystem}
 ${submoduleWarningLine}First post-init stage: ${firstPostInit} (${firstPostInitPhase})
-`
-  );
+`;
+  if (prepared) prepared.output = output;
+  else process.stdout.write(output);
 }
 
 // ---------------------------------------------------------------------------
@@ -11573,10 +11647,18 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   const selection = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
+  const operation = terminalOperation("scope-change", flags);
   // The workspace lock first, since the work's intents.json row records the
   // new scope (invariant 2), then the work's own.
   withAuditLock(projectDir, () => withAuditLock(projectDir, () => {
+    const resumed = resumeTerminalMutation(projectDir, selection.sessionId, "scope", operation, plan => validateTerminalMutation(projectDir, plan), selection);
+    if (resumed !== null) {
+      process.stdout.write(`${resumed.output.join("\n")}\n`);
+      return;
+    }
     const contentBefore = readConfigState(projectDir, { intent, space });
+    const terminal = isTerminalWorkflow(projectDir, selection);
+    const terminalRequest = terminal ? currentTerminalRequest(projectDir, selection, "scope") : null;
     const scopeMapping = loadScopeMapping();
     const newScopeDef = scopeMapping[newScope];
     if (!newScopeDef) die(`Unknown scope: ${newScope}. Valid scopes: ${Object.keys(scopeMapping).join(", ")}`);
@@ -11585,7 +11667,8 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     // change does both: the approval recorded from it does not use it up.
     const personAsked = (): boolean =>
       process.env.AIDLC_UNATTENDED !== "1" &&
-      personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true, intent, space });
+      (terminal ? terminalRequest !== null :
+        personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true, intent, space }));
     // Under "Continue automatically" the person's own scope change goes
     // through like any other, and the remaining work keeps their autonomy
     // choice. Only a change nobody asked for (an unattended driver) is
@@ -11645,6 +11728,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     // output describe the state before this transaction.
     const update = applyIntentSettings(projectDir, contentBefore, requested, {
       intent, space, sessionId: selection.sessionId, fail: die, reviewScope: newScope,
+      terminalRequest,
     });
     let content = update.content;
     const auditEntries = update.audit;
@@ -11809,6 +11893,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
             "Stages in Scope": String(executeStages.length),
             "Approval Gates": String(gates),
             Depth: effectiveDepth,
+            ...(terminalRequest !== null && personAsked() ? { "Message Id": terminalRequest.id } : {}),
           },
         },
         ...skippedNow.map(({ slug }) => ({
@@ -11857,14 +11942,23 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       ];
     }
     if (content !== contentBefore) {
+      const written = setField(content, "Last Updated", isoTimestamp());
+      if (terminalRequest !== null && personAsked()) {
+        if (auditEntries.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
+        applyTerminalMutation(projectDir, terminalRequest, "scope", operation, {
+          selection, before: contentBefore, after: written, audit: auditEntries, output: outputLines, settings: requested,
+          ...(oldScope !== newScope ? { scope: newScope } : {}),
+          ...(reopened ? { status: "in-flight" as const } : {}),
+        }, plan => validateTerminalMutation(projectDir, plan));
+      } else {
       try {
         if (auditEntries.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
         appendAuditEntries(auditEntries, projectDir, intent, space);
       } catch (error) {
         throw new Error(`Cannot record the scope change: ${errorMessage(error)}`);
       }
-      const written = setField(content, "Last Updated", isoTimestamp());
       writeStateFile(projectDir, written, intent, space);
+      }
       // Asked for while the code plan's question waits, it stays the open step.
       try {
         keepPlanApprovalAskOverStateWrite(projectDir, contentBefore, written);
@@ -11872,9 +11966,9 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
       }
       // The work list and a restart offer name the scope it runs on now.
-      if (intent && oldScope !== newScope) updateIntentScope(projectDir, intent, newScope, space);
+      if (intent && oldScope !== newScope && !(terminalRequest !== null && personAsked())) updateIntentScope(projectDir, intent, newScope, space);
       // Reopened work is in flight again on the work list.
-      if (intent && reopened) updateIntentStatus(projectDir, intent, "in-flight", space);
+      if (intent && reopened && !(terminalRequest !== null && personAsked())) updateIntentStatus(projectDir, intent, "in-flight", space);
     }
     // Reopened work goes straight on into the stage it started, so what the
     // switch did rides the next step the agent speaks from, as a backward
@@ -12036,7 +12130,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     die("No state file found. recompose re-shapes a RUNNING workflow; start one first.");
   }
 
-  withAuditLock(projectDir, () => {
+  withWorkflowRecordLock(projectDir, () => {
     let content = readStateFile(projectDir, flags.intent, flags.space);
     const before = content;
     // AUTONOMY GUARD (mirrors the park guard's shape in aidlc-state.ts): an
@@ -12220,7 +12314,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       ? applyIntentSettings(projectDir, content, settings, {
           intent: flags.intent, space: flags.space, sessionId: readCurrentSessionId(projectDir), fail: die,
         })
-      : { content, audit: [], lines: [] };
+      : { content, audit: [], lines: [], terminalRequest: null };
     content = setField(settingsUpdate.content, "Last Updated", isoTimestamp());
 
     // Audit first, as config-change does, in one batch: a failed append leaves
@@ -12255,7 +12349,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
         (droppedUnitWork === null ? "" : `${droppedUnitWork}\n`) +
         settingsUpdate.lines.map((line) => `${line}\n`).join(""),
     );
-  }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
+  }, resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space }));
 }
 
 // ---------------------------------------------------------------------------
@@ -12484,6 +12578,18 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   process.stdout.write(`${lines.join("\n")}\n`);
 }
 
+// A pending journal retains the accepted request, not a policy exemption.
+// Reuse the settings owner against its saved input and today's team policy.
+// Once state is already applied the journal only finalizes bookkeeping, so
+// later policy changes cannot turn that recovery into another mutation.
+function validateTerminalMutation(projectDir: string, plan: TerminalMutationPlan): void {
+  if (process.env.AIDLC_UNATTENDED === "1") throw new Error("The requested change cannot finish while the run is unattended.");
+  applyIntentSettings(projectDir, plan.before ?? plan.after, plan.settings, {
+    intent: plan.selection.intent ?? undefined, space: plan.selection.space,
+    typedByPerson: true, reviewScope: plan.scope,
+  });
+}
+
 // The setter's one transaction on a piece of work: the settings applied, their
 // audit rows, the state written, and the step in hand kept; its lines returned.
 function writeSettings(
@@ -12494,7 +12600,13 @@ function writeSettings(
   options: { sessionId: string | null; fail?: (message: string) => never; typedByPerson?: boolean },
 ): string[] {
   let lines: string[] = [];
-  withAuditLock(projectDir, () => {
+  withWorkflowRecordLock(projectDir, (selection) => {
+    const operation = terminalOperation("config-change", request);
+    const resumed = resumeTerminalMutation(projectDir, options.sessionId, "settings", operation, plan => validateTerminalMutation(projectDir, plan), selection);
+    if (resumed !== null) {
+      lines = resumed.output;
+      return;
+    }
     const content = readConfigState(projectDir, { intent, space });
     const update = applyIntentSettings(projectDir, content, request, {
       intent, space, sessionId: options.sessionId, typedByPerson: options.typedByPerson,
@@ -12504,9 +12616,15 @@ function writeSettings(
       if (update.audit.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
       // A name-only rename or removal of an agreeing retired line records nothing.
       // Resolving conflicting lines records the prior effective policy instead.
-      if (update.audit.length > 0) appendAuditEntries(update.audit, projectDir, intent, space);
       const written = setField(update.content, "Last Updated", isoTimestamp());
-      writeStateFile(projectDir, written, intent, space);
+      if (update.terminalRequest !== null) {
+        applyTerminalMutation(projectDir, update.terminalRequest, "settings", operation, {
+          selection, before: content, after: written, audit: update.audit, output: update.lines, settings: request,
+        }, plan => validateTerminalMutation(projectDir, plan));
+      } else {
+        if (update.audit.length > 0) appendAuditEntries(update.audit, projectDir, intent, space);
+        writeStateFile(projectDir, written, intent, space);
+      }
       // The step in hand stays the open step (the code plan's question, or the
       // stage the agent is on): a setting changes how it runs, not which step it is.
       try {
@@ -12514,9 +12632,13 @@ function writeSettings(
       } catch (e) {
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
       }
+    } else if (update.terminalRequest !== null) {
+      applyTerminalMutation(projectDir, update.terminalRequest, "settings", operation, {
+        selection, before: content, after: content, audit: [], output: update.lines, settings: request,
+      }, plan => validateTerminalMutation(projectDir, plan));
     }
     lines = update.lines;
-  }, intent, space);
+  }, resolveWorkflowSelection(projectDir, { intent, space, sessionId: options.sessionId ?? undefined }));
   return lines;
 }
 

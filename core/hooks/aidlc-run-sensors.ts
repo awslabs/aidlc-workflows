@@ -25,7 +25,9 @@ import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import {
   hookStandsOutside,
+  hookWorkflowIsTerminal,
   enterHookWorkflow,
+  runInHookWorkflow,
   auditFilePath,
   type ClaudeCodeHookInput,
   getField,
@@ -45,6 +47,8 @@ import {
   sensorsReadDir,
   stateFilePath,
   harnessDir,
+  type HookWorkflow,
+  withHookWorkflowMutation,
 } from "../tools/aidlc-lib.ts";
 
 export async function run(input: string): Promise<number> {
@@ -60,14 +64,16 @@ export async function run(input: string): Promise<number> {
   // A write in a conversation that has not joined the selected workflow fires none of its sensors.
   const workflow = enterHookWorkflow(projectDir, payloadSession);
   try {
-    if (hookStandsOutside(workflow)) return 0;
-    return await fireSensors(input, projectDir);
+    return await runInHookWorkflow(projectDir, workflow, async () => {
+    if (hookStandsOutside(workflow) || hookWorkflowIsTerminal(workflow)) return 0;
+    return await fireSensors(input, projectDir, workflow);
+    });
   } finally {
     workflow.restore();
   }
 }
 
-async function fireSensors(input: string, projectDir: string): Promise<number> {
+async function fireSensors(input: string, projectDir: string, workflow: HookWorkflow): Promise<number> {
 
 // Enclosing dispatcher backstop; explicit project/user limits still win,
 // including the deliberately short timeout-calibration fixtures.
@@ -150,6 +156,7 @@ if (resolveCeremony("sensors", scope, stateContent).value === "off") return 0;
 // with empty sensors_applicable like workspace-scaffold, (b) no
 // matches glob hit since last fire. See plan § Cross-milestone for the
 // canonical heuristic.
+const recorded = withHookWorkflowMutation(projectDir, workflow, () => {
 writeHookStatusFile(healthDir, "run-sensors.last", isoTimestamp());
 
 // Step 8b — First-fire banner. On the first invocation against a
@@ -169,6 +176,9 @@ if (!existsSync(firstFiredMarker)) {
   // Marker write failure is non-fatal: the banner may repeat next fire.
   writeHookStatusFile(healthDir, ".first-fired", isoTimestamp());
 }
+return true;
+});
+if (!recorded) return 0;
 
 // Step 9 — Active stage lookup (C3). The compile-resolved
 // `sensors_applicable` list is keyed on the stage slug. Prefer the engine's
@@ -252,6 +262,9 @@ for (const entry of applicableSensors) {
       [
         "fire", entry.id, "--stage", activeStage, "--output-path", filePath,
         ...(activeUnit ? ["--unit", activeUnit] : []),
+        ...(workflow.selection
+          ? ["--hook-space", workflow.selection.space, "--hook-intent", workflow.selection.intent ?? ""]
+          : []),
       ],
       sensorTs,
     );

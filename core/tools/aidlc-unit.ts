@@ -72,7 +72,7 @@ import {
   unitParticipantPath,
   unitReleasePendingPath,
   validateUnitName,
-  withAuditLock,
+  withWorkflowRecordLock,
   writeUnitClaimRegistryCache,
   writeUnitMergeTransaction,
   writeStateFile,
@@ -3627,7 +3627,7 @@ function releaseUnit(args: string[], projectDir?: string): void {
 }
 
 function clearUnitOwner(projectDir: string, unit: string): void {
-  withAuditLock(projectDir, () => {
+  withWorkflowRecordLock(projectDir, () => {
     const stateContent = readStateFile(projectDir);
     const lines = stateContent.split("\n");
     let changed = false;

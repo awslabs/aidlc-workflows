@@ -39,7 +39,7 @@
 
 import { LONG_SUBPROCESS_TIMEOUT_MS, EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -75,7 +75,8 @@ import {
   validateUnitName,
   slugify,
   validateLiveUnitScope,
-  withAuditLock,
+  withWorkflowRecordLock,
+  type WorkflowSelection,
   worktreeStateFilePath,
   writeStateFile,
   verificationCommandRecovery,
@@ -1029,16 +1030,16 @@ function forkedState(
   slug: string,
   intent?: string,
   space?: string,
-): { worktree: string; statePath: string } | null {
+): { worktree: string; statePath: string; selection: WorkflowSelection } | null {
   const selection = resolveWorkflowSelection(pd, { intent, space });
   const identity = resolveBoltIdentity(pd, slug, selection);
   const wtPath = identity.dir;
   // Pin the worktree mirror to the SAME record the state fork wrote (null ->
   // flat legacy mirror, today's behaviour).
-  const recordPrefix = relativeRecordDir(pd, intent, space);
+  const recordPrefix = relativeRecordDir(pd, selection.intent ?? undefined, selection.space);
   const wtStatePath = worktreeStateFilePath(wtPath, recordPrefix);
   if (!existsSync(wtStatePath)) return null;
-  return { worktree: wtPath, statePath: wtStatePath };
+  return { worktree: wtPath, statePath: wtStatePath, selection };
 }
 
 function forkedStateFilePath(pd: string, slug: string, intent?: string, space?: string): string | null {
@@ -1060,20 +1061,24 @@ function setMergeHeld(pd: string, slug: string, held: boolean, intent?: string, 
       `No per-Bolt forked state file for slug "${slug}" — was \`aidlc-bolt start --worktree --slug ${slug}\` run?`
     );
   }
-  const content = readFileSync(forked.statePath, "utf-8");
-  const value = held ? "true" : "false";
-  // Nothing to change (a release on a Bolt that was never held): the forked
-  // state and the worker's issued step stay exactly as they are.
-  if ((getField(content, "Merge-Held") ?? "false") === value) return;
-  const updated = setOrInsertField(content, "## Project Information", "Merge-Held", value);
-  writeFileSync(forked.statePath, updated, "utf-8");
-  // The hold is coordination state, not a new step: the worker's issued
-  // directive stays current, so its approval checks keep passing after finalize.
-  try {
-    keepActiveDirectiveOverAutonomyWrite(forked.worktree, content, updated);
-  } catch (e) {
-    recordHookDrop(forked.worktree, "active-directive", errorMessage(e));
-  }
+  // This is the worker's physical record, so share its W -> I boundary with
+  // worker state transitions. A parent-workspace lock would not protect it.
+  withWorkflowRecordLock(forked.worktree, () => {
+    const content = readStateFile(forked.worktree);
+    const value = held ? "true" : "false";
+    // Nothing to change (a release on a Bolt that was never held): the forked
+    // state and the worker's issued step stay exactly as they are.
+    if ((getField(content, "Merge-Held") ?? "false") === value) return;
+    const updated = setOrInsertField(content, "## Project Information", "Merge-Held", value);
+    writeStateFile(forked.worktree, updated);
+    // The hold is coordination state, not a new step: the worker's issued
+    // directive stays current, so its approval checks keep passing after finalize.
+    try {
+      keepActiveDirectiveOverAutonomyWrite(forked.worktree, content, updated);
+    } catch (e) {
+      recordHookDrop(forked.worktree, "active-directive", errorMessage(e));
+    }
+  }, forked.selection);
 }
 
 // --- Subcommand: dispatch-event ---
@@ -1225,7 +1230,7 @@ function handleSetAutonomy(args: string[]): void {
 
   // One lock covers presence check -> audit consume -> state write. Otherwise
   // two grants, or a grant racing approval, can both observe one fresh turn.
-  withAuditLock(pd, () => {
+  withWorkflowRecordLock(pd, () => {
     const content = readStateFile(pd);
     if (getField(content, "Status") === "Archived") {
       error(

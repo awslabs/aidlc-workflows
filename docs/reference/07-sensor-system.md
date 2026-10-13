@@ -299,6 +299,15 @@ reports when the later result is a noted pass or a budget override, because
 those evaluated nothing. The earlier `SENSOR_FAILED` row keeps its
 `Detail path` after a prune; the audit row, not the file, is the record.
 
+Ambient write sensors carry internal `--hook-space` and `--hook-intent`
+selectors into the dispatcher. These pin the original physical record.
+Both the initial audit row and final publication recheck lifecycle under the
+workspace → intent lock order. Detail-file creation, pruning and the paired
+result row share the final publication boundary. If completion or archival
+wins that boundary, the late result publishes nothing; an earlier
+`SENSOR_FIRED` remains honestly `incomplete`. Explicit and gate-owned sensor
+invocations keep their existing behavior.
+
 ---
 
 ## `command:` invocation contract

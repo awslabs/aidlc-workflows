@@ -157,6 +157,7 @@ import {
   worktreeStateFilePath,
   worktreeReviewAttemptProjection,
   withAuditLock,
+  withWorkflowRecordLock,
   writeBufferAtomic,
   writeStateFile,
   type AuditShardEvent,
@@ -2314,7 +2315,7 @@ function releasePreparationRegistration(pd: string, unit: string): void {
     "--error", "Interrupted swarm preparation; source and records preserved for recovery",
   ], pd);
   if (!failed.ok) throw new Error(`${unit}: could not close interrupted Bolt before retry: ${failed.stderr.trim()}`);
-  withAuditLock(pd, () => {
+  withWorkflowRecordLock(pd, () => {
     const state = readStateFile(pd);
     const refs = getField(state, "Bolt Refs") ?? "";
     if (!parseRefsList(refs).includes(slug)) return;
@@ -2700,7 +2701,7 @@ function handlePrepare(rest: string[]): void {
     const discardedSha256 = discarded?.discardedSha256;
     if (discardedSha256) {
       try {
-        withAuditLock(projectDir, () => {
+        withWorkflowRecordLock(projectDir, () => {
           if (resume) {
             const checked = validateSwarmResume(projectDir, flags.batch, unit, identity, attempt, repoCwd, repoName);
             if (!checked.recreate || checked.discardedSha256 !== discardedSha256 ||

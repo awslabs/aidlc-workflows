@@ -49,6 +49,10 @@ import {
   hookOutsideGate,
   hookStandsOutside,
   enterHookWorkflow,
+  hookWorkflowIsInactive,
+  hookChildEnv,
+  currentHookWorkflow,
+  runInHookWorkflow,
   noteHelperSession,
   validSessionId,
   activeSpace,
@@ -75,6 +79,8 @@ import {
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 import { ACTIVE_MEMORY_DIR, refreshActiveMemory } from "../tools/aidlc-includes.ts";
 import { aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { publishHookOutput } from "../tools/aidlc-hook-output.ts";
+import { beginHookBootstrapCapture } from "../tools/aidlc-hook-bootstrap.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // The agent-v1 hook's default max_output_size is 10 KiB, independently of
@@ -289,7 +295,7 @@ if (!process.stdin.isTTY) {
 }
 
 const projectDirRaw =
-  process.env.AIDLC_PROJECT_DIR ?? kiro.cwd ?? process.cwd();
+  process.env.AIDLC_PROJECT_DIR ?? process.env.CLAUDE_PROJECT_DIR ?? kiro.cwd ?? process.cwd();
 const projectDir = isAbsolute(projectDirRaw)
   ? projectDirRaw
   : resolve(process.cwd(), projectDirRaw);
@@ -312,6 +318,14 @@ const projectEnv = process.env.AIDLC_PROJECT_DIR
     }
   : process.env;
 const childCwd = process.env.AIDLC_PROJECT_DIR ? projectDir : process.cwd();
+const workflow = enterHookWorkflow(projectDir, kiro.session_id);
+const bootstrapCapture = workflow.selection ? beginHookBootstrapCapture(projectDir, {
+  ...workflow.selection, sessionId: validSessionId(kiro.session_id) ?? workflow.selection.sessionId,
+}) : null;
+let bootstrapOutput = "";
+
+try {
+const dispatch = async (): Promise<number> => {
 
 // --- verb-intercept: the deterministic terminal-command seam (userPromptSubmit) ---
 //
@@ -911,7 +925,7 @@ if (target === "guard-tool-call") {
             "The first aidlc-orchestrate next call dropped or changed the user's arguments. " +
               `Run exactly: {{INVOKE}} engine orchestrate next ${forwarding.raw ?? ""}\n`,
           );
-          process.exit(2);
+          return 2;
         }
         rmSync(forwardingPath, { force: true });
       }
@@ -941,7 +955,7 @@ if (target === "guard-tool-call") {
   // selected workflow is not held at that workflow's gates.
   const floorWorkflow = enterHookWorkflow(cwd, kiro.session_id);
   try {
-    if (hookOutsideGate(floorWorkflow)) return 0;
+    if (hookOutsideGate(floorWorkflow) || hookWorkflowIsInactive(floorWorkflow)) return 0;
     const content = existsSync(stateFilePath(cwd))
       ? readFileSync(stateFilePath(cwd), "utf-8")
       : null;
@@ -968,13 +982,13 @@ if (target === "guard-tool-call") {
 // --- state-transition-guard: engine ownership of lifecycle mutations -------
 if (target === "state-transition-guard") {
   const tool = kiro.tool_name ?? "";
-  if (canonicalTool(tool) !== "Bash") process.exit(0);
+  if (canonicalTool(tool) !== "Bash") return 0;
   const command = String(kiro.tool_input?.command ?? "");
   const registeredAgent = extraArgs[0] ?? "";
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const hookCommand = executable
     ? [executable, "engine", "hook", "state-transition-guard"]
-    : [process.execPath, join(HOOKS_DIR, "aidlc-state-transition-guard.ts")];
+    : [process.execPath, join(HOOKS_DIR, "..", "tools", "aidlc.ts"), "engine", "hook", "state-transition-guard"];
   const r = Bun.spawnSync(
     hookCommand,
     {
@@ -992,7 +1006,7 @@ if (target === "state-transition-guard") {
       cwd: childCwd,
       stdout: "pipe",
       stderr: "pipe",
-      env: projectEnv,
+      env: hookChildEnv(projectDir, kiro.session_id, projectEnv, currentHookWorkflow(projectDir) ?? workflow),
     },
   );
   if (r.exitCode === 2) {
@@ -1010,9 +1024,9 @@ if (target === "state-transition-guard") {
           "pick aidlc, then give it once more.\" Never offer to turn a check off for them. Then end your turn.\n",
       );
     }
-    process.exit(2);
+    return 2;
   }
-  process.exit(0);
+  return 0;
 }
 
 // --- plan-approval-guard: code-generation plan-before-generation (preToolUse) ---
@@ -1058,7 +1072,7 @@ if (target === "plan-approval-guard") {
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "engine", "hook", "plan-approval-guard"]
-    : [process.execPath, join(HOOKS_DIR, "aidlc-plan-approval-guard.ts")];
+    : [process.execPath, join(HOOKS_DIR, "..", "tools", "aidlc.ts"), "engine", "hook", "plan-approval-guard"];
   const r = Bun.spawnSync(
     command,
     {
@@ -1069,7 +1083,7 @@ if (target === "plan-approval-guard") {
       cwd: childCwd,
       stdout: "pipe",
       stderr: "pipe",
-      env: projectEnv,
+      env: hookChildEnv(projectDir, kiro.session_id, projectEnv, currentHookWorkflow(projectDir) ?? workflow),
     },
   );
   if (r.exitCode === 2) {
@@ -1119,7 +1133,7 @@ if (target === "reviewer-scope") {
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "engine", "hook", "reviewer-scope"]
-    : [process.execPath, join(HOOKS_DIR, "aidlc-reviewer-scope.ts")];
+    : [process.execPath, join(HOOKS_DIR, "..", "tools", "aidlc.ts"), "engine", "hook", "reviewer-scope"];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(
       JSON.stringify({
@@ -1136,7 +1150,7 @@ if (target === "reviewer-scope") {
     cwd: projectDir,
     stdout: "pipe",
     stderr: "pipe",
-    env: projectEnv,
+    env: hookChildEnv(projectDir, kiro.session_id, projectEnv, currentHookWorkflow(projectDir) ?? workflow),
   });
   const stderrText = r.stderr?.toString() ?? "";
   if (r.exitCode === 2) {
@@ -1167,7 +1181,7 @@ if (target === "review-freeze") {
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "engine", "hook", "review-freeze"]
-    : [process.execPath, join(HOOKS_DIR, "aidlc-review-freeze.ts")];
+    : [process.execPath, join(HOOKS_DIR, "..", "tools", "aidlc.ts"), "engine", "hook", "review-freeze"];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(
       JSON.stringify({
@@ -1182,7 +1196,7 @@ if (target === "review-freeze") {
     cwd: projectDir,
     stdout: "pipe",
     stderr: "pipe",
-    env: projectEnv,
+    env: hookChildEnv(projectDir, kiro.session_id, projectEnv, currentHookWorkflow(projectDir) ?? workflow),
   });
   const stderrText = r.stderr?.toString() ?? "";
   if (r.exitCode === 2) {
@@ -1442,16 +1456,20 @@ function runCore(hookFile: string, input: Record<string, unknown>): { stdout: st
           "--internal-aidlc-record-human-turn",
           join(HOOKS_DIR, hookFile),
         ]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      : [process.execPath, join(HOOKS_DIR, "..", "tools", "aidlc.ts"), "engine", "hook", hook];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),
     stdout: "pipe",
     stderr: "ignore",
     cwd: childCwd,
-    env: authorityToken
-      ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
-      : projectEnv,
+    env: hookChildEnv(projectDir, typeof input.session_id === "string" ? input.session_id : undefined,
+        { ...projectEnv,
+          ...(authorityToken ? { AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken } : {}),
+          ...(hook === "session-start" ? bootstrapCapture?.env : {}),
+        },
+        hook === "rebuild-stage-graph" ? undefined : currentHookWorkflow(projectDir) ?? workflow),
   });
+  if (hook === "session-start") bootstrapOutput = bootstrapCapture?.read() ?? "";
   return {
     stdout: new TextDecoder("utf-8").decode(
       r.stdout ?? new Uint8Array(),
@@ -1499,6 +1517,29 @@ if (target === "session-start") {
 // `reason`; the `--v3`/KAS runtime uses a separate standalone-hook path.
 if (result.stdout) process.stdout.write(result.stdout);
 return result.code;
+};
+// The prompt interceptor executes the person's explicit command, and the
+// rebuild hook can bind a newly created intent. Their owners select the result
+// of that command; an ambient response must not pin them to its prior record.
+if (target === "verb-intercept" || target === "rebuild-stage-graph") return await dispatch();
+return await runInHookWorkflow(projectDir, workflow, () => {
+  if (hookWorkflowIsInactive(workflow)) return dispatch();
+  return publishHookOutput(projectDir, workflow, dispatch, () =>
+    ["guard-tool-call", "state-transition-guard", "plan-approval-guard", "reviewer-scope", "review-freeze"]
+      .includes(target)
+      ? run(target, input, extraArgs)
+      : (() => {
+          try {
+            const context = JSON.parse(bootstrapOutput).additionalContext;
+            if (typeof context === "string" && context) process.stdout.write(sanitizeHarnessPlainText(context));
+          } catch { /* no independently produced bootstrap */ }
+          return 0;
+        })());
+});
+} finally {
+  bootstrapCapture?.close();
+  workflow.restore();
+}
 }
 
 if (import.meta.main) {

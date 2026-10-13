@@ -1,15 +1,16 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readdirSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import {
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
+  runWithOwnerStampedLock,
   sessionsDir,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.ts";
 
-// One record per message the person sends, written once by the human-turn hook
+// One record per message the person sends, captured by the human-turn hook
 // as the message arrives. It proves two things and reads no meaning into either:
 // that a real person said this in this chat, and exactly what they said: the
 // text as the host delivered it, the flags the engine's own parser finds in a
@@ -21,7 +22,8 @@ import {
 //
 // Each record is its own file in the gitignored session directory
 // (`aidlc/.aidlc-sessions/messages/<id>.json`, beside the question store),
-// written once and never rewritten, through no symlink, and read back only
+// with immutable words and intake order (only an in-flight terminal receipt
+// can be settled after capture), through no symlink, and read back only
 // through the same no-follow path. The store keeps a day's worth and at most
 // MESSAGE_MAX_RECORDS; older records go on the next write. The HUMAN_TURN row
 // the hook mints names the record in its `Message Id` field; nothing names a
@@ -42,6 +44,8 @@ export interface StoredMessage {
   /** The chat the message came through. Null is reserved for a command the person types at their own terminal. */
   session: string | null;
   at: string;
+  /** Intake order assigned under the message-store lock; old records have none. */
+  sequence?: number;
   source: "prompt" | "picker" | "terminal";
   /** As the host delivered it, cut at MESSAGE_TEXT_MAX_CHARS (`cut` says so). An empty text is a prompt whose words the host did not pass on. */
   text: string;
@@ -55,6 +59,13 @@ export interface StoredMessage {
   /** The settings typed as flags, as the config setter names them ("depth" "minimal", "guard.review-freeze" "off"). */
   settings: Array<{ key: string; value: string }>;
   route: MessageRoute;
+  /** The selected terminal record when this prompt arrived. Kept outside the
+   * record so an explicit new-work/settings request needs no ambient audit row. */
+  workflow?: {
+    space: string;
+    intent: string | null;
+    status: "Completed" | "Archived";
+  };
   cut?: true;
 }
 
@@ -102,6 +113,7 @@ function parseMessage(id: string, raw: unknown): StoredMessage | null {
     message?.id === id &&
     (message.session === null || typeof message.session === "string") &&
     typeof message.at === "string" && !Number.isNaN(Date.parse(message.at)) &&
+    (message.sequence === undefined || (Number.isSafeInteger(message.sequence) && message.sequence > 0)) &&
     (message.source === "prompt" || message.source === "picker" || message.source === "terminal") &&
     typeof message.text === "string" &&
     (message.picker === null || isPickerList(message.picker)) &&
@@ -112,6 +124,12 @@ function parseMessage(id: string, raw: unknown): StoredMessage | null {
     typeof route.newIntent === "boolean" &&
     isStringList(route.skip) && isStringList(route.add) &&
     (route.projectType === null || route.projectType === "greenfield" || route.projectType === "brownfield") &&
+    (message.workflow === undefined || (
+      message.workflow !== null &&
+      typeof message.workflow.space === "string" &&
+      (message.workflow.intent === null || typeof message.workflow.intent === "string") &&
+      (message.workflow.status === "Completed" || message.workflow.status === "Archived")
+    )) &&
     (message.cut === undefined || message.cut === true)
   ) {
     return message as StoredMessage;
@@ -173,7 +191,14 @@ export function listMessages(projectDir: string): StoredMessage[] {
     const message = readStoredMessage(projectDir, id);
     if (message !== null) messages.push(message);
   }
-  return messages.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return messages.sort(compareMessages);
+}
+
+function compareMessages(a: StoredMessage, b: StoredMessage): number {
+  // Newly received messages follow legacy records even when a host's clock
+  // moved backwards. For legacy-only history retain its previous ordering.
+  return (a.sequence ?? 0) - (b.sequence ?? 0) ||
+    a.at.localeCompare(b.at) || a.id.localeCompare(b.id);
 }
 
 /**
@@ -181,14 +206,37 @@ export function listMessages(projectDir: string): StoredMessage[] {
  * after the write, so a store failure never costs the message just received.
  */
 export function saveMessage(projectDir: string, message: Omit<StoredMessage, "id">): StoredMessage {
-  const stored: StoredMessage = { ...message, id: mintMessageId(projectDir) };
-  const serialized = `${JSON.stringify(stored)}\n`;
-  if (Buffer.byteLength(serialized, "utf-8") > MESSAGE_MAX_BYTES) {
-    throw new Error("message record over the size the reader accepts");
-  }
-  writeRecordFileNoFollow(projectDir, messageRel(projectDir, stored.id), serialized);
-  pruneExpiredMessages(projectDir);
-  return stored;
+  const lockRel = join(messageRel(projectDir), "intake.lock");
+  let lock = recordFileTargetOrThrow(projectDir, lockRel);
+  mkdirSync(dirname(lock), { recursive: true });
+  lock = recordFileTargetOrThrow(projectDir, lockRel);
+  const result = runWithOwnerStampedLock(lock, 500, 10, () => {
+    const sequence = listMessages(projectDir).reduce((max, stored) => Math.max(max, stored.sequence ?? 0), 0) + 1;
+    if (!Number.isSafeInteger(sequence)) throw new Error("message intake sequence exhausted");
+    const stored: StoredMessage = { ...message, id: mintMessageId(projectDir), sequence };
+    const serialized = `${JSON.stringify(stored)}\n`;
+    if (Buffer.byteLength(serialized, "utf-8") > MESSAGE_MAX_BYTES) {
+      throw new Error("message record over the size the reader accepts");
+    }
+    writeRecordFileNoFollow(projectDir, messageRel(projectDir, stored.id), serialized);
+    pruneExpiredMessages(projectDir);
+    return stored;
+  });
+  if (!result.acquired) throw new Error("message intake is busy");
+  return result.value;
+}
+
+/** Settle only this intake's lifecycle receipt when completion won admission.
+ * Its text, identity and intake order remain unchanged. Historical messages
+ * are never swept or promoted into new requests. */
+export function settleTerminalMessage(
+  projectDir: string,
+  id: string,
+  workflow: NonNullable<StoredMessage["workflow"]>,
+): void {
+  const message = readStoredMessage(projectDir, id);
+  if (message === null || message.source !== "prompt") return;
+  writeRecordFileNoFollow(projectDir, messageRel(projectDir, id), `${JSON.stringify({ ...message, workflow })}\n`);
 }
 
 /**
@@ -206,7 +254,7 @@ export function latestMessage(
     const message = readStoredMessage(projectDir, id);
     if (message === null || message.session !== session) continue;
     if (options.words === true && message.words === null) continue;
-    if (latest === null || message.at > latest.at || (message.at === latest.at && message.id > latest.id)) {
+    if (latest === null || compareMessages(message, latest) > 0) {
       latest = message;
     }
   }
@@ -220,20 +268,21 @@ export function latestMessage(
  */
 export function pruneExpiredMessages(projectDir: string): void {
   const cutoff = Date.now() - MESSAGE_RETENTION_MS;
-  const kept: Array<{ id: string; at: number }> = [];
+  const kept: Array<{ id: string; at: number; sequence: number }> = [];
   for (const id of recordIds(projectDir)) {
     try {
       const path = recordFileTargetOrThrow(projectDir, messageRel(projectDir, id));
       if (!lstatSync(path).isFile()) continue;
-      const at = Date.parse(readStoredMessage(projectDir, id)?.at ?? "");
+      const message = readStoredMessage(projectDir, id);
+      const at = Date.parse(message?.at ?? "");
       const when = Number.isNaN(at) ? lstatSync(path).mtimeMs : at;
       if (when < cutoff) removeRecordFileNoFollow(projectDir, messageRel(projectDir, id));
-      else kept.push({ id, at: when });
+      else kept.push({ id, at: when, sequence: message?.sequence ?? 0 });
     } catch {
       // Not ours to remove, or already gone: keep going.
     }
   }
-  kept.sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
+  kept.sort((a, b) => a.sequence - b.sequence || a.at - b.at || a.id.localeCompare(b.id));
   for (const { id } of kept.slice(0, Math.max(0, kept.length - MESSAGE_MAX_RECORDS))) {
     try {
       removeRecordFileNoFollow(projectDir, messageRel(projectDir, id));

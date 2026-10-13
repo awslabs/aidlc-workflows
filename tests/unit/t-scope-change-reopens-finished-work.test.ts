@@ -28,6 +28,7 @@ import {
   runOrchestrateNext,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -160,6 +161,37 @@ const CARRY_ON = "print its output verbatim and re-run next to carry on with the
 const STOP = "print its output verbatim and stop.";
 
 describe("t-scope-change-reopens-finished-work: a scope switch on finished work starts the stage it adds (#2261)", () => {
+  for (const currentRequest of [false, true]) {
+    test(`completed autonomous work ${currentRequest ? "accepts its current chat request" : "refuses a pre-completion message"} for scope expansion`, () => {
+      const proj = finishedBugfix();
+      const path = join(recordDir(proj), "aidlc-state.md");
+      writeFileSync(path, state(proj).replace("## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous"));
+      const intent = recordDir(proj).split(/[\\/]/).at(-1)!;
+      const message = saveMessage(proj, {
+        session: SESSION, at: new Date().toISOString(), source: "prompt",
+        text: "/aidlc --scope express --plan-approval off", words: null, picker: null,
+        settings: [{ key: "plan-approval", value: "off" }],
+        route: { scope: "express", newIntent: false, skip: [], add: [], projectType: null },
+        ...(currentRequest ? { workflow: { space: "default", intent, status: "Completed" as const } } : {}),
+      });
+      env = { ...noChat, AIDLC_SESSION_OVERRIDE: SESSION, AIDLC_UNATTENDED: "0", AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" };
+      const result = run(UTILITY, proj, ["scope-change", "--scope", "express", "--plan-approval", "off"]);
+      if (!currentRequest) {
+        expect(result.rc, result.out).not.toBe(0);
+        expect(field(state(proj), "Status")).toBe("Completed");
+        return;
+      }
+      expect(result.rc, result.out).toBe(0);
+      expect(field(state(proj), "Status")).toBe("Running");
+      expect(field(state(proj), "Current Stage")).toBe(ADDED);
+      expect(field(state(proj), "Plan Approval")).toBe("off (set by you)");
+      const auditDir = join(recordDir(proj), "audit");
+      const audit = readdirSync(auditDir).map((name) => readFileSync(join(auditDir, name), "utf-8")).join("");
+      expect(audit).toContain(`**Message Id**: ${message.id}`);
+      expect(audit).not.toContain("**Event**: HUMAN_TURN");
+    });
+  }
+
   test("the scope change reopens finished work at the first stage the new scope adds after the last one", () => {
     const proj = finishedBugfix();
     const before = events(proj);

@@ -15,7 +15,7 @@
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -107,6 +107,10 @@ describe("a stage the person asks to skip while it is in progress is skipped", (
     const after = readFileSync(stateFile(proj), "utf-8");
     expect(after).toContain("- [S] build-and-test \u2014 EXECUTE");
     expect(after).toContain("- **Status**: Completed");
+    const graph = JSON.parse(readFileSync(join(dirname(stateFile(proj)), "runtime-graph.json"), "utf-8"));
+    expect(graph.stages).toContainEqual(expect.objectContaining({
+      stage_slug: "build-and-test", outcome: "pending", completed_at: null,
+    }));
   });
 
   test("a stage being revised after the person asked for changes is skipped the same way", () => {

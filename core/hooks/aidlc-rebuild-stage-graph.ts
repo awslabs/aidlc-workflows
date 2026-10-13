@@ -9,12 +9,8 @@
 // AUDIT_MERGED|WORKFLOW_COMPLETED)` against any of them, and dispatches
 // `aidlc-runtime.ts compile` on match.
 //
-// WORKFLOW_COMPLETED is in the transition set so the final-stage approve
-// fires the compile (handleCompleteWorkflow at aidlc-state.ts:572-590
-// emits 5 audit rows ending with WORKFLOW_COMPLETED — without it in the
-// regex, the last 3 blocks would be PHASE_COMPLETED + PHASE_VERIFIED +
-// WORKFLOW_COMPLETED, none in the original transition set, and the
-// runtime-graph would never record the final stage as approved).
+// Terminal projection belongs to the explicit completion operation. Once the
+// selected record is Completed or Archived, this ambient hook leaves it alone.
 //
 // Recursion guard: `aidlc-runtime.ts` is excluded from the command-regex
 // matcher set, AND MEMORY_EMPTY is not in the event-class regex. The
@@ -37,6 +33,10 @@ import {
   consumeCreationReceipt,
   clearSessionIntentUuid,
   isTrustedBindingSource,
+  isTerminalWorkflow,
+  enterHookWorkflow,
+  runInHookWorkflow,
+  withHookWorkflowMutation,
   readSessionBinding,
   workflowParticipation,
   auditShards,
@@ -103,13 +103,18 @@ function bindCreatedIntentToInvokingSession(
     (intent) => intent.dirName === dirName,
   );
   const existingUuid = readSessionIntentUuid(projectDir, sessionId);
-  hookDebug(projectDir, "rebuild-stage-graph", "session-bind", {
+  const workflow = enterHookWorkflow(projectDir, sessionId);
+  try {
+  withHookWorkflowMutation(projectDir, workflow, () => hookDebug(projectDir, "rebuild-stage-graph", "session-bind", {
     sessionId,
     dirName,
     space,
     resolvedUuid: created?.uuid ?? "",
     existingUuid: existingUuid ?? "",
-  });
+  }));
+  } finally {
+    workflow.restore();
+  }
   if (!created?.uuid) return;
   // Hosts whose tool processes cannot name the session bind the creator here.
   // The response text alone proves nothing; the creation receipt intent create
@@ -159,15 +164,19 @@ function relayEngineError(projectDir: string, parsed: ClaudeCodeHookInput): void
     parsed.tool_response,
   );
   if (message === null) return;
-  hookDebug(projectDir, "rebuild-stage-graph", "engine-error-relay", {
+  const workflow = enterHookWorkflow(projectDir, parsed.session_id);
+  try {
+  withHookWorkflowMutation(projectDir, workflow, () => hookDebug(projectDir, "rebuild-stage-graph", "engine-error-relay", {
     bytes: Buffer.byteLength(message, "utf-8"),
-  });
+  }));
+  } finally {
+    workflow.restore();
+  }
   writeEngineErrorRelay(message);
 }
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
-hookDebug(projectDir, "rebuild-stage-graph", "invoked");
 
 // 1. TTY guard — exit cleanly when invoked outside a piped stdin context
 //    (interactive shell, test harness running under `bash -x`).
@@ -194,6 +203,15 @@ relayEngineError(projectDir, parsed);
 // before the command/audit filters below. Most intent-create calls are not
 // transition-class commands, so they intentionally exit at the next gate.
 bindCreatedIntentToInvokingSession(projectDir, parsed);
+
+const selection = resolveWorkflowSelection(projectDir, {
+  sessionId: validSessionId(parsed.session_id) ?? undefined,
+});
+if (isTerminalWorkflow(projectDir, selection)) return 0;
+const workflow = enterHookWorkflow(projectDir, parsed.session_id);
+try {
+return await runInHookWorkflow(projectDir, workflow, async () => {
+hookDebug(projectDir, "rebuild-stage-graph", "invoked");
 
 // 3. Command filter - only dispatch on the audit-emit-side seam for both
 //    legacy tool-file commands and the new `aidlc ...` grammar.
@@ -231,9 +249,6 @@ if (!ideAuditMode) {
 //    would never refresh after a transition (the major). Resolve the active
 //    intent (cursor / lone-intent → null = flat-legacy) and glob-merge its
 //    shards. Exit cleanly before init (no audit yet → "").
-const selection = resolveWorkflowSelection(projectDir, {
-  sessionId: validSessionId(parsed.session_id) ?? undefined,
-});
 // A conversation that has not joined this workflow does not recompile its graph.
 if (selection.intent !== null && workflowParticipation(projectDir, selection) !== "participant") return 0;
 const space = selection.space;
@@ -244,19 +259,16 @@ if (audit.length === 0) {
   return 0;
 }
 
-// 5. Heartbeat — doctor reads this file's mtime to detect silent-hook failure.
-//    Kept at the bare (workspace-level) health dir to match where --doctor reads
-//    it (aidlc-utility.ts) and where recordHookDrop writes drops — the heartbeat
-//    is a per-hook liveness probe, not per-intent state.
+// 5. Heartbeat — doctor reads this selected record's hook health to detect
+//    silent-hook failure. Terminal records have already exited above.
 const healthDir = hooksHealthDir(projectDir, intent, space);
 writeHookStatusFile(healthDir, "rebuild-stage-graph.last", isoTimestamp());
 
 // 6. Tail-read last 3 audit blocks. Three is the upper bound: a normal
 //    approve writes GATE_APPROVED + STAGE_COMPLETED + STAGE_STARTED in
-//    one Bash call. Terminal-WORKFLOW approve writes 5 rows; the last 3
-//    are PHASE_COMPLETED + PHASE_VERIFIED + WORKFLOW_COMPLETED. In the common
-//    single-clone case the merged buffer is one shard, so the last 3 blocks are
-//    the just-written transition rows.
+//    one Bash call. In the common single-clone case the merged buffer is one
+//    shard, so the last 3 blocks are the just-written transition rows. The
+//    explicit completion command owns the terminal projection.
 const blocks = audit.split(/\n---\n/);
 const last3 = blocks.slice(-3);
 
@@ -286,10 +298,9 @@ if (!hasTransition) {
 // 7b. Idempotency guard (IDE audit-tail mode only). On the CLI the command
 //     filter (step 3) already bounds compiles to the one Bash call that emitted
 //     the transition. In ide-audit-sync mode that filter is skipped, so the
-//     transition sits in the tail across EVERY subsequent shell command — and
-//     after WORKFLOW_COMPLETED the tail never changes again, which would make
-//     every future shell command pay a blocking recompile forever. Bound it by
-//     mtime: if runtime-graph.json is already at least as new as the newest
+//     transition sits in the tail across subsequent shell commands while work
+//     remains Running. Bound it by mtime: if runtime-graph.json is already at
+//     least as new as the newest
 //     audit shard, the tail hasn't changed since the last compile — skip. A real
 //     new transition bumps a shard's mtime past the graph and re-enables the
 //     compile. Cheap stat calls; no new marker file.
@@ -327,7 +338,12 @@ try {
   // which the status check below cannot tell apart from a real failure.
   const [command, ...args] = aidlcEngineCommand(
     "runtime",
-    ["compile"],
+    [
+      "compile",
+      ...(workflow.selection
+        ? ["--hook-space", workflow.selection.space, "--hook-intent", workflow.selection.intent ?? ""]
+        : []),
+    ],
     runtimeTs,
   );
   const result = spawnSync(command, args, {
@@ -347,6 +363,10 @@ try {
   recordHookDrop(projectDir, "rebuild-stage-graph", errorMessage(e));
 }
 return 0;
+});
+} finally {
+  workflow.restore();
+}
 }
 
 if (import.meta.main) {

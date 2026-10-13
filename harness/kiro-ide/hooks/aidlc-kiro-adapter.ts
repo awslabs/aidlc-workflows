@@ -118,13 +118,20 @@ import {
   KIRO_WORKFLOW_HOST_TEMPLATES,
   kiroTurnOrigin,
   enterHookWorkflow,
+  currentHookWorkflow,
+  captureHookWorkflow,
+  validSessionId,
+  runInHookWorkflow,
+  withCurrentHookWorkflowMutation,
+  hookWorkflowIsInactive,
+  isTerminalWorkflow,
   classifyTerminalCommand,
   decodeHarnessPlainText,
   fenceCommandOutput,
   relayAsTextBlock,
   presenceFloorHolds,
-  clearKiroIdeLegacyPlanApprovalHost,
-  clearPlanApprovalViolation,
+  clearKiroIdeLegacyPlanApprovalHost as clearKiroIdeLegacyPlanApprovalHostUnchecked,
+  clearPlanApprovalViolation as clearPlanApprovalViolationUnchecked,
   getField,
   hookChildEnv,
   hookDebug,
@@ -137,8 +144,8 @@ import {
   listIntentDirs,
   listSpaces,
   kiroIdeLegacyPlanApprovalSessionId,
-  markKiroIdeLegacyPlanApprovalHost,
-  clearPlanApprovalLegacyWindow,
+  markKiroIdeLegacyPlanApprovalHost as markKiroIdeLegacyPlanApprovalHostUnchecked,
+  clearPlanApprovalLegacyWindow as clearPlanApprovalLegacyWindowUnchecked,
   recordHookDrop,
   recordPreWorkflowHeartbeat,
   resolveProjectFlag,
@@ -150,8 +157,8 @@ import {
   readSessionIntentUuid,
   resolveProjectDirFromHook,
   sanitizeHarnessPlainText,
-  writePlanApprovalLegacyWindow,
-  writePlanApprovalViolation,
+  writePlanApprovalLegacyWindow as writePlanApprovalLegacyWindowUnchecked,
+  writePlanApprovalViolation as writePlanApprovalViolationUnchecked,
   sessionsDir,
   splitKiroCommandArgs,
   stateFilePath,
@@ -201,8 +208,31 @@ import {
   mutationCapableTool,
 } from "./aidlc-kiro-tool-names.ts";
 import { isPowerShellDoubleQuote, isPowerShellSingleQuote } from "./review-freeze-command.ts";
+import { publishHookOutput } from "../tools/aidlc-hook-output.ts";
+import { beginHookBootstrapCapture } from "../tools/aidlc-hook-bootstrap.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
+
+// Legacy IDE bookkeeping is still an ambient hook write. Each short mutation
+// rechecks the captured record while holding the lifecycle writer's lock.
+const clearKiroIdeLegacyPlanApprovalHost: typeof clearKiroIdeLegacyPlanApprovalHostUnchecked = (projectDir, ...args) => {
+  withCurrentHookWorkflowMutation(projectDir, () => clearKiroIdeLegacyPlanApprovalHostUnchecked(projectDir, ...args));
+};
+const clearPlanApprovalViolation: typeof clearPlanApprovalViolationUnchecked = (projectDir, ...args) => {
+  withCurrentHookWorkflowMutation(projectDir, () => clearPlanApprovalViolationUnchecked(projectDir, ...args));
+};
+const markKiroIdeLegacyPlanApprovalHost: typeof markKiroIdeLegacyPlanApprovalHostUnchecked = (projectDir, ...args) => {
+  withCurrentHookWorkflowMutation(projectDir, () => markKiroIdeLegacyPlanApprovalHostUnchecked(projectDir, ...args));
+};
+const clearPlanApprovalLegacyWindow: typeof clearPlanApprovalLegacyWindowUnchecked = (projectDir, ...args) => {
+  withCurrentHookWorkflowMutation(projectDir, () => clearPlanApprovalLegacyWindowUnchecked(projectDir, ...args));
+};
+const writePlanApprovalLegacyWindow: typeof writePlanApprovalLegacyWindowUnchecked = (projectDir, ...args) => {
+  withCurrentHookWorkflowMutation(projectDir, () => writePlanApprovalLegacyWindowUnchecked(projectDir, ...args));
+};
+const writePlanApprovalViolation: typeof writePlanApprovalViolationUnchecked = (projectDir, ...args) => {
+  withCurrentHookWorkflowMutation(projectDir, () => writePlanApprovalViolationUnchecked(projectDir, ...args));
+};
 // The NORMALIZED hook context, whichever channel delivered it: 1.x snake_case
 // stdin { tool_name, tool_input, tool_response } or 0.12 camelCase USER_PROMPT
 // { toolName, toolArgs, toolResult, toolSuccess }. PostToolUse write/shell
@@ -298,6 +328,7 @@ function everyUnitContinuesFromApproval(projectDir: string): boolean {
 // the core guard's fail-open outside that stage.
 function codeGenerationIsCurrent(projectDir: string): boolean {
   try {
+    if (currentHookWorkflow(projectDir)?.mode === "independent" || isTerminalWorkflow(projectDir)) return false;
     const statePath = stateFilePath(projectDir);
     if (!existsSync(statePath)) return false;
     const state = readFileSync(statePath, "utf-8");
@@ -378,8 +409,12 @@ function runLegacyPlanTool(
   tool: "aidlc-log.ts",
   args: string[],
 ): { code: number; stdout: string; stderr: string } {
+  const selection = currentHookWorkflow(projectDir)?.selection;
+  if (!selection) return { code: 0, stdout: "", stderr: "" };
   const result = Bun.spawnSync(
-    legacyToolCommand(tool, args),
+    legacyToolCommand(tool, [
+      ...args, "--hook-space", selection.space, "--hook-intent", selection.intent ?? "",
+    ]),
     {
       cwd: projectDir,
       stdout: "pipe",
@@ -416,14 +451,15 @@ function resolvedPlanApprovalSessionId(ide: IdeHookContext): string {
   }
 }
 
-// Whether this conversation stands outside the workflow the default resolution
-// selects: that workflow's gates and local Plan Approval latches do not hold it.
+// Whether the selected workflow's gates and local Plan Approval latches are
+// inactive for this conversation. Terminal selection keeps its history but
+// carries no workflow fence into a new request.
 let standsOutsideMemo: boolean | undefined;
 function ideStandsOutside(pd: string, sessionId: string): boolean {
   if (standsOutsideMemo === undefined) {
     const workflow = enterHookWorkflow(pd, sessionId);
     try {
-      standsOutsideMemo = hookOutsideGate(workflow);
+      standsOutsideMemo = hookOutsideGate(workflow) || hookWorkflowIsInactive(workflow);
     } finally {
       workflow.restore();
     }
@@ -435,6 +471,8 @@ function runLegacyRecoveryNext(
   projectDir: string,
   sessionId: string,
 ): { ok: boolean; detail: string; recoveryRequired?: boolean } {
+  const selection = currentHookWorkflow(projectDir)?.selection;
+  if (!selection) return { ok: false, detail: "No workflow was selected for recovery." };
   const priorViolation = readPlanApprovalViolation(projectDir);
   const priorState = legacyPlanApprovalGuardState(projectDir);
   const priorAuthority =
@@ -466,7 +504,9 @@ function runLegacyRecoveryNext(
   let args = ["next", "--project-dir", projectDir];
   for (let step = 0; step < 64; step++) {
     const result = Bun.spawnSync(
-      legacyToolCommand("aidlc-orchestrate.ts", args),
+      legacyToolCommand("aidlc-orchestrate.ts", [
+        ...args, "--hook-space", selection.space, "--hook-intent", selection.intent ?? "",
+      ]),
       {
         cwd: projectDir,
         stdout: "pipe",
@@ -479,6 +519,10 @@ function runLegacyRecoveryNext(
     if ((result.exitCode ?? 1) !== 0) {
       return { ok: false, detail: stderr || stdout || "engine recovery failed" };
     }
+    // Terminal publication is suppressed by the outer lifecycle boundary.
+    // An unreadable record or failed admission can also yield no response;
+    // neither is evidence that recovery issued a fresh directive.
+    if (stdout === "") return { ok: false, detail: "No recovery step was returned; inspect the selected work before retrying." };
     let directive: {
       kind?: string;
       ask_type?: string;
@@ -621,16 +665,18 @@ function processLegacyPlanApprovalWrite(
   const questionsPath = join(authority.stageDir, "code-generation-questions.md");
 
   if (normalizedPath === planPath) {
-    const contract = resolveTestingPosture(projectDir);
-    const plan = readFileSync(planPath, "utf-8");
-    if (parseTestingContract(plan)?.contract_sha256 !== contract.contract_sha256) {
-      writeFileSync(
-        planPath,
-        upsertTestingContract(plan, renderTestingContract(contract)),
-        "utf-8",
-      );
-    }
-    clearPlanApprovalLegacyWindow(projectDir, sessionId);
+    withCurrentHookWorkflowMutation(projectDir, () => {
+      const contract = resolveTestingPosture(projectDir);
+      const plan = readFileSync(planPath, "utf-8");
+      if (parseTestingContract(plan)?.contract_sha256 !== contract.contract_sha256) {
+        writeFileSync(
+          planPath,
+          upsertTestingContract(plan, renderTestingContract(contract)),
+          "utf-8",
+        );
+      }
+      clearPlanApprovalLegacyWindow(projectDir, sessionId);
+    });
     return null;
   }
   if (normalizedPath === instructionsPath) {
@@ -654,6 +700,7 @@ function processLegacyPlanApprovalWrite(
       ? ["--stage-level"]
       : ["--unit", state.target.unit];
   if (answer === "") {
+    const prepared = withCurrentHookWorkflowMutation(projectDir, () => {
     const plan = readFileSync(planPath, "utf-8");
     const instructions = readFileSync(instructionsPath, "utf-8");
     const contract = resolveTestingPosture(projectDir);
@@ -699,6 +746,9 @@ function processLegacyPlanApprovalWrite(
           `[Planned Source]: ${plannedSource}\n$1`,
         );
     writeFileSync(questionsPath, withPlannedSource, "utf-8");
+    return true;
+    });
+    if (prepared !== true) return null;
     const decision = runLegacyPlanTool(projectDir, "aidlc-log.ts", [
       "decision",
       "--stage",
@@ -735,7 +785,11 @@ function processLegacyPlanApprovalWrite(
       /^\[Answer\]:[ \t]*.*$/m,
       `[Answer]: ${answer}`,
     );
-    writeFileSync(questionsPath, questions, "utf-8");
+    const prepared = withCurrentHookWorkflowMutation(projectDir, () => {
+      writeFileSync(questionsPath, questions, "utf-8");
+      return true;
+    });
+    if (prepared !== true) return null;
   }
   if (answer !== "Approve Plan" && answer !== "Request Changes") return null;
   const recorded = runLegacyPlanTool(projectDir, "aidlc-log.ts", [
@@ -1493,6 +1547,81 @@ function payloadToolName(input: string): string | null {
   }
 }
 
+// These targets re-evaluate independent malformed-input, runtime-integrity and
+// checkout checks on terminal work without executing a person's command.
+const TERMINAL_OUTPUT_GUARDS = new Set([
+  "enforce-approval-gate", "plan-approval-guard", "review-freeze", "state-transition-guard",
+]);
+const EXPLICIT_OUTPUT_TARGETS = new Set(["verb-intercept", "terminal-command-guard"]);
+
+function groupWorkflow(projectDir: string, input: string, resumesSession: boolean) {
+  let sessionId: string | undefined;
+  try {
+    const parsed: unknown = JSON.parse(input.trim() ? input : process.env.USER_PROMPT ?? "");
+    if (isRecord(parsed)) {
+      const value = parsed.session_id ?? parsed.sessionId;
+      if (typeof value === "string") sessionId = value;
+    }
+  } catch { /* legacy prompt text uses the existing host identity */ }
+  return enterHookWorkflow(projectDir, resolvedPlanApprovalSessionId({ sessionId }), {
+    ...(resumesSession && sessionId ? { sessionStartSource: "resume" } : {}),
+  });
+}
+
+type MemberResponse = { target: string; code: number; stdout: string; stderr: string; bootstrap?: string };
+
+async function captureMember(
+  target: string, input: string, extraArgs: string[], terminal = false,
+): Promise<MemberResponse> {
+  const write = process.stderr.write;
+  const print = process.stdout.write;
+  let stderr = "";
+  let stdout = "";
+  let bootstrap = "";
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    stderr += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+    return true;
+  }) as typeof process.stderr.write;
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    stdout += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+    return true;
+  }) as typeof process.stdout.write;
+  let code: number;
+  try {
+    code = await run(target, input, extraArgs, terminal, (output) => { bootstrap = output; });
+  } catch (error) {
+    stderr += `${error instanceof Error ? error.stack ?? error.message : String(error)}\n`;
+    code = 1;
+  } finally {
+    process.stderr.write = write;
+    process.stdout.write = print;
+  }
+  return { target, code, stdout, stderr, ...(bootstrap ? { bootstrap } : {}) };
+}
+
+function publishMembers(responses: MemberResponse[]): number {
+  let code = 0;
+  const refusals: string[] = [];
+  const failures: string[] = [];
+  const printed: string[] = [];
+  for (const response of responses) {
+    if (response.stdout !== "") printed.push(response.stdout);
+    if (response.code === 2) {
+      code = 2;
+      if (response.stderr && !refusals.includes(response.stderr)) refusals.push(response.stderr);
+    } else if (response.code !== 0) {
+      if (code === 0) code = response.code;
+      if (response.stderr && !failures.includes(response.stderr)) failures.push(response.stderr);
+    }
+  }
+  if (printed.length > 0) {
+    process.stdout.write(printed.map((out, at) => at < printed.length - 1 && !out.endsWith("\n") ? `${out}\n` : out).join(""));
+  }
+  const text = code === 2 ? refusals : failures;
+  if (code !== 0 && text.length > 0) process.stderr.write(text.join(""));
+  return code;
+}
+
 // One registration, several targets (KIRO_HOOK_GROUPS). A member runs for the
 // tools its own registration selected. Every member runs, in order, even after
 // one refuses, as Kiro ran every hook; the call is refused when any member
@@ -1504,53 +1633,32 @@ async function runHookGroup(
   extraArgs: string[],
 ): Promise<number> {
   const toolName = payloadToolName(input);
-  const write = process.stderr.write;
-  const print = process.stdout.write;
-  let code = 0;
-  const refusals: string[] = [];
-  const failures: string[] = [];
-  // What each member gives the agent (Kiro reads a message card's stdout), one
-  // after the other on lines of their own, as Kiro joined separate cards.
-  const printed: string[] = [];
-  for (const member of members) {
-    if (toolName !== null && !new RegExp(member.matcher).test(toolName)) continue;
-    standsOutsideMemo = undefined;
-    let said = "";
-    let out = "";
-    process.stderr.write = ((chunk: string | Uint8Array) => {
-      said += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
-      return true;
-    }) as typeof process.stderr.write;
-    process.stdout.write = ((chunk: string | Uint8Array) => {
-      out += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
-      return true;
-    }) as typeof process.stdout.write;
-    let memberCode: number;
-    try {
-      memberCode = await run(member.target, input, extraArgs);
-    } catch (error) {
-      // A member that throws fails alone, as its own hook process did.
-      said += `${error instanceof Error ? error.stack ?? error.message : String(error)}\n`;
-      memberCode = 1;
-    } finally {
-      process.stderr.write = write;
-      process.stdout.write = print;
+  const projectDir = resolveProjectDirFromHook(import.meta.url);
+  const workflow = groupWorkflow(projectDir, input, members.some(member => member.target === "record-human-turn"));
+  try {
+    const responses: MemberResponse[] = [];
+    for (const member of members) {
+      if (toolName !== null && !new RegExp(member.matcher).test(toolName)) continue;
+      responses.push(await captureMember(member.target, input, extraArgs));
     }
-    if (out !== "") printed.push(out);
-    if (memberCode === 2) {
-      code = 2;
-      if (said && !refusals.includes(said)) refusals.push(said);
-    } else if (memberCode !== 0) {
-      if (code === 0) code = memberCode;
-      if (said && !failures.includes(said)) failures.push(said);
-    }
+    if (hookWorkflowIsInactive(workflow)) return publishMembers(responses);
+    return await publishHookOutput(projectDir, workflow, () => publishMembers(responses), async () => {
+      const terminalResponses: MemberResponse[] = [];
+      for (const response of responses) {
+        // A command may itself complete or archive work. Keep its result and
+        // never execute it twice merely because its earlier context is stale.
+        if (EXPLICIT_OUTPUT_TARGETS.has(response.target)) terminalResponses.push(response);
+        else if (TERMINAL_OUTPUT_GUARDS.has(response.target)) {
+          terminalResponses.push(await captureMember(response.target, input, extraArgs, true));
+        } else if (response.bootstrap) {
+          terminalResponses.push({ ...response, code: 0, stdout: response.bootstrap, stderr: "" });
+        }
+      }
+      return publishMembers(terminalResponses);
+    });
+  } finally {
+    workflow.restore();
   }
-  if (printed.length > 0) {
-    process.stdout.write(printed.map((out, at) => at < printed.length - 1 && !out.endsWith("\n") ? `${out}\n` : out).join(""));
-  }
-  const text = code === 2 ? refusals : failures;
-  if (code !== 0 && text.length > 0) process.stderr.write(text.join(""));
-  return code;
 }
 
 // What Kiro would run after a write or a command, noted by the guard card that
@@ -1674,13 +1782,19 @@ export async function run(
   target: string,
   input: string,
   _extraArgs: string[] = [],
+  recheckingTerminalOutput = false,
+  onBootstrap?: (output: string) => void,
 ): Promise<number> {
+const previousOutsideMemo = standsOutsideMemo;
+standsOutsideMemo = undefined;
+try {
 // guard-tool-call, person-message and after-shell run their members, each as
 // its own target. A call the guard card lets through is noted for the next card.
 const group = Object.hasOwn(KIRO_HOOK_GROUPS, target) ? KIRO_HOOK_GROUPS[target] : undefined;
 if (group) {
   const code = await runHookGroup(group, input, _extraArgs);
-  if (target === "guard-tool-call" && code !== 2) await run(NOTE_CALL, input);
+  if (target === "guard-tool-call" && code !== 2 &&
+      currentHookWorkflow(resolveProjectDirFromHook(import.meta.url))?.mode !== "independent") await run(NOTE_CALL, input);
   return code;
 }
 
@@ -1797,6 +1911,26 @@ if (INPUT_TARGETS.has(target)) {
     }
   }
 }
+// A legacy chat may have only its UUID stamp. Its prompt synthesizes a resume
+// below, so select that same record before any child receives the event pin.
+const workflow = enterHookWorkflow(projectDir, resolvedPlanApprovalSessionId(ide), {
+  ...(target === "record-human-turn" && ide.sessionId ? { sessionStartSource: "resume" } : {}),
+});
+const bootstrapCapture = workflow.selection ? beginHookBootstrapCapture(projectDir, {
+  ...workflow.selection,
+  sessionId: validSessionId(resolvedPlanApprovalSessionId(ide)) ?? workflow.selection.sessionId,
+}) : null;
+let bootstrapOutput = "";
+const independentBootstrap = (): string => {
+  try {
+    const context = JSON.parse(bootstrapOutput).additionalContext;
+    return typeof context === "string" ? sanitizeHarnessPlainText(context) : "";
+  } catch {
+    return "";
+  }
+};
+try {
+const dispatch = async (): Promise<number> => {
 hookDebug(projectDir, "kiro-adapter", "invoked", {
   target,
   hasStdinPayload: input.trim().length > 0,
@@ -2617,7 +2751,7 @@ function approvalGateAwaitsHuman(): boolean {
   // not the one the shared cursor or process ancestry names.
   const workflow = enterHookWorkflow(pd, resolvedPlanApprovalSessionId(ide));
   try {
-    if (hookOutsideGate(workflow)) return false;
+    if (hookOutsideGate(workflow) || hookWorkflowIsInactive(workflow)) return false;
     const sp = stateFilePath(pd);
     const content = existsSync(sp) ? readFileSync(sp, "utf-8") : null;
     // Carve-outs first: autonomous Construction, the deterministic off-switch,
@@ -3022,8 +3156,8 @@ function buildForward(): Forward {
       recordPromptEmpty(sessionId, readTurn(sessionId) || bumpTurn(sessionId));
       if (promptEmpty && !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))) {
         try {
-          const migration = normalizeRetiredGuardPolicyField(projectDir, sessionId);
-          if (migration.normalized) {
+          const migration = withCurrentHookWorkflowMutation(projectDir, () => normalizeRetiredGuardPolicyField(projectDir, sessionId));
+          if (migration?.normalized) {
             process.stdout.write(
               `AIDLC Guard Policy migration: kept ${migration.value} and renamed the active intent's retired Change Control field to Guard Policy.\n`,
             );
@@ -3844,7 +3978,7 @@ function runCore(
           "--internal-aidlc-record-human-turn",
           join(HOOKS_DIR, hookFile),
         ]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      : [process.execPath, join(HOOKS_DIR, "..", "tools", "aidlc.ts"), "engine", "hook", hook];
   // The core hook runs from the same payload, so hand it this adapter's project
   // rather than let it derive one from its own path.
   const env = {
@@ -3857,10 +3991,20 @@ function runCore(
     stdout: "pipe",
     stderr: "pipe",
     cwd: projectDir,
-    env: authorityToken
-      ? { ...env, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
-      : env,
+    env: hookChildEnv(projectDir, typeof input.session_id === "string" ? input.session_id : undefined,
+      { ...env,
+        ...(authorityToken ? { AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken } : {}),
+        ...(hook === "session-start" ? bootstrapCapture?.env : {}),
+      },
+      hook === "rebuild-stage-graph" ? undefined
+        : hook === "session-end" && input.session_id !== resolvedPlanApprovalSessionId(ide)
+          ? captureHookWorkflow(projectDir, input.session_id)
+          : currentHookWorkflow(projectDir) ?? workflow),
   });
+  if (hook === "session-start") {
+    bootstrapOutput = bootstrapCapture?.read() ?? "";
+    onBootstrap?.(independentBootstrap());
+  }
   return {
     stdout: new TextDecoder("utf-8").decode(
       r.stdout ?? new Uint8Array(),
@@ -4006,6 +4150,26 @@ if (target === "session-start" || target === "record-human-turn") {
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.code === 2 && result.stderr) process.stderr.write(result.stderr);
 return result.code;
+};
+return await runInHookWorkflow(projectDir, workflow, () => {
+  if (recheckingTerminalOutput || hookWorkflowIsInactive(workflow) ||
+      EXPLICIT_OUTPUT_TARGETS.has(target) || target === NOTE_CALL || target === CATCH_UP) {
+    return dispatch();
+  }
+  return publishHookOutput(projectDir, workflow, dispatch, () =>
+    TERMINAL_OUTPUT_GUARDS.has(target) ? run(target, input, _extraArgs, true) : (() => {
+      const output = independentBootstrap();
+      if (output) process.stdout.write(output);
+      return 0;
+    })());
+});
+} finally {
+  bootstrapCapture?.close();
+  workflow.restore();
+}
+} finally {
+  standsOutsideMemo = previousOutsideMemo;
+}
 }
 
 // What the agent hears when the chat's last message never reached the hook. It

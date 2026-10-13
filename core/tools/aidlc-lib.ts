@@ -1,4 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
@@ -7125,14 +7126,29 @@ export function resolveSessionIdFromAncestry(projectDir: string): string | null 
 // session, and it refused. enterHookWorkflow and the Codex adapter already mark
 // payload identity without a walk.
 export function hookChildEnv(
-  _projectDir: string,
+  projectDir: string,
   payloadSessionId: string | undefined,
   extra: Record<string, string | undefined> = {},
+  workflow?: HookWorkflow,
 ): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = {
     ...process.env,
     ...extra,
   };
+  // Only an explicitly ambient child inherits the event's physical target.
+  // Ordinary engine commands and creation-receipt adoption must resolve their
+  // own selection. The dispatcher consumes this solely at a hook entry point.
+  delete env.AIDLC_HOOK_WORKFLOW_CONTEXT;
+  if (workflow !== undefined) {
+    env.AIDLC_HOOK_WORKFLOW_CONTEXT = JSON.stringify({
+      version: 1,
+      projectDir: resolvePath(projectDir),
+      selection: workflow.selection,
+      participation: workflow.participation,
+      mode: workflow.mode,
+      resumedFromStamp: workflow.resumedFromStamp,
+    });
+  }
   const payloadSession = validSessionId(payloadSessionId);
   if (!payloadSession) return env;
   env.AIDLC_SESSION_OVERRIDE = payloadSession;
@@ -7360,12 +7376,189 @@ export function resolveInvokingSessionId(projectDir: string): string | null {
   return envSession ?? ancestrySession;
 }
 
+// A short hook mutation pins paths as well as the lock. Pinning a session alone
+// is insufficient: another process can switch that session's binding while the
+// hook is waiting for the lock. Only synchronous, lock-held callbacks install
+// this override; no async work or child process may outlive it.
+const HOOK_MUTATION_SELECTIONS = new Map<string, WorkflowSelection>();
+const HOOK_WORKFLOWS = new AsyncLocalStorage<{ projectDir: string; workflow: HookWorkflow }>();
+
+// Scope default resolution to the event's physical target across await points.
+// AsyncLocalStorage.run restores the caller automatically, so an explicit
+// command after a hook cannot inherit that hook's origin or target.
+export function runInHookWorkflow<T>(projectDir: string, workflow: HookWorkflow, fn: () => T): T {
+  const key = resolvePath(projectDir);
+  const parent = HOOK_WORKFLOWS.getStore();
+  const scoped = parent?.projectDir === key && parent.workflow.mode === "independent"
+    ? { ...workflow, mode: "independent" as const }
+    : workflow;
+  return HOOK_WORKFLOWS.run({ projectDir: key, workflow: scoped }, fn);
+}
+
+export function currentHookWorkflow(projectDir: string): HookWorkflow | null {
+  const context = HOOK_WORKFLOWS.getStore();
+  return context?.projectDir === resolvePath(projectDir) ? context.workflow : null;
+}
+
+// Session reconciliation is a separate event for the previous chat, not a
+// continuation of the current chat's ambient record. Capture it before spawn
+// without inheriting the current event's default path pin.
+export function captureHookWorkflow(projectDir: string, payloadSessionId: unknown): HookWorkflow {
+  return HOOK_WORKFLOWS.exit(() => {
+    const captured = enterHookWorkflow(projectDir, payloadSessionId);
+    captured.restore();
+    return { ...captured, restore: () => {} };
+  });
+}
+
+// A dispatcher-only hook transport. This does not affect ordinary command
+// resolution and grants no human-turn authority: the existing private
+// human-turn entry point remains the only owner of that hook's activation.
+// Preserve the parent's captured join evidence through a binding/cursor switch,
+// but always read lifecycle from the selected physical record in this process.
+export function withInheritedHookWorkflow<T>(projectDir: string, run: () => T): T {
+  const encoded = process.env.AIDLC_HOOK_WORKFLOW_CONTEXT;
+  if (encoded === undefined) return run();
+  const rejected: HookWorkflow = {
+    selection: null, participation: "indeterminate", lifecycle: "unreadable",
+    mode: "independent", restore: () => {},
+  };
+  let workflow = rejected;
+  try {
+    const value = JSON.parse(encoded) as Record<string, unknown>;
+    if (value.version !== 1 || value.projectDir !== resolvePath(projectDir) ||
+      !["participant", "outsider", "indeterminate"].includes(String(value.participation)) ||
+      (value.mode !== undefined && value.mode !== "independent") ||
+      (value.resumedFromStamp !== undefined && value.resumedFromStamp !== true)) {
+      throw new Error("Invalid hook workflow transport");
+    }
+    const candidate = value.selection as Partial<WorkflowSelection> | null;
+    if (candidate === null) {
+      // Failure to resolve the parent's selection is an observed condition,
+      // not a request to disable normal fail-closed authority evaluation.
+      if (value.participation !== "indeterminate" || value.resumedFromStamp !== undefined) {
+        throw new Error("Invalid unresolved hook workflow");
+      }
+      workflow = {
+        selection: null, participation: "indeterminate", lifecycle: "unreadable",
+        ...(value.mode === "independent" ? { mode: "independent" as const } : {}),
+        restore: () => {},
+      };
+    } else {
+      if (!candidate || typeof candidate !== "object" ||
+        typeof candidate.space !== "string" || !SPACE_NAME_REGEX.test(candidate.space) ||
+        (candidate.intent !== null && !isBindableIntentRecordName(candidate.intent)) ||
+        (candidate.sessionId !== null && validSessionId(candidate.sessionId) !== candidate.sessionId)) {
+        throw new Error("Invalid hook workflow selection");
+      }
+      const binding = candidate.binding;
+      if (binding !== null && (
+        !binding || typeof binding !== "object" ||
+        binding.space !== candidate.space || binding.intent !== candidate.intent ||
+        typeof binding.boundAt !== "string" || binding.boundAt.length === 0 ||
+        (binding.source !== undefined && !SESSION_BINDING_SOURCES.includes(binding.source))
+      )) throw new Error("Invalid hook workflow binding");
+      const selection: WorkflowSelection = {
+        space: candidate.space,
+        intent: candidate.intent as string | null,
+        sessionId: candidate.sessionId as string | null,
+        binding: binding === null ? null : { ...binding },
+      };
+      workflow = {
+        selection,
+        participation: value.participation as WorkflowParticipation,
+        lifecycle: workflowLifecycle(projectDir, selection),
+        ...(value.mode === "independent" ? { mode: "independent" as const } : {}),
+        ...(value.resumedFromStamp === true ? { resumedFromStamp: true as const } : {}),
+        restore: () => {},
+      };
+    }
+  } catch {
+    // A malformed internal context must not redirect an event to the cursor.
+  }
+  return runInHookWorkflow(projectDir, workflow, run);
+}
+
+export function withCurrentHookWorkflowMutation<T>(
+  projectDir: string,
+  fn: () => T extends Promise<unknown> ? never : T,
+  lockBudget?: { maxRetries: number; retryMs: number },
+): (T extends Promise<unknown> ? never : T) | undefined {
+  const workflow = currentHookWorkflow(projectDir);
+  return workflow ? withHookWorkflowMutation(projectDir, workflow, fn, lockBudget) : fn();
+}
+
+// Synchronous path pin for an already selected operation, including explicit
+// terminal maintenance. Lifecycle authorization belongs to the caller.
+export function withWorkflowSelection<T>(
+  projectDir: string,
+  selection: WorkflowSelection,
+  fn: () => T extends Promise<unknown> ? never : T,
+): T extends Promise<unknown> ? never : T {
+  const key = resolvePath(projectDir);
+  const previous = HOOK_MUTATION_SELECTIONS.get(key);
+  if (previous && (previous.space !== selection.space || previous.intent !== selection.intent)) {
+    throw new Error("A workflow mutation cannot change its selected record");
+  }
+  HOOK_MUTATION_SELECTIONS.set(key, { ...selection });
+  try {
+    return fn();
+  } finally {
+    if (previous === undefined) HOOK_MUTATION_SELECTIONS.delete(key);
+    else HOOK_MUTATION_SELECTIONS.set(key, previous);
+  }
+}
+
+// Explicit record owners serialize their whole read/decide/write transaction
+// with both workspace writers and intent-only writers such as fork/merge.
+// Capture before waiting for W: archive/switch may otherwise move the binding
+// or cursor underneath an already invoked command. Hold W -> I and pin that
+// same target before the callback reads authoritative state. This authorizes
+// no lifecycle operation by itself; admission remains the caller's
+// responsibility, including deliberate terminal repair.
+export function withWorkflowRecordLock<T>(
+  projectDir: string,
+  fn: (selection: WorkflowSelection) => T extends Promise<unknown> ? never : T,
+  selection?: WorkflowSelection,
+): T extends Promise<unknown> ? never : T {
+  let target: WorkflowSelection;
+  if (selection === undefined) {
+    target = resolveWorkflowSelection(projectDir);
+  } else {
+    // Reuse selector validation and delegated-checkout constraints. Empty
+    // intent is the resolver's explicit flat-record spelling, not a cursor.
+    resolveWorkflowSelection(projectDir, {
+      space: selection.space, intent: selection.intent ?? "",
+    });
+    target = { ...selection };
+  }
+  return withAuditLock<T>(projectDir, () => {
+    const run = () => withWorkflowSelection<T>(projectDir, target, () => fn(target));
+    return target.intent === null
+      ? run()
+      : withAuditLock<T>(projectDir, run, target.intent, target.space);
+  });
+}
+
 // Resolve one stable workflow target for an operation. Explicit selectors win,
 // then the session binding, then the legacy cursor and lone-intent rules.
 export function resolveWorkflowSelection(
   projectDir: string,
   options: WorkflowSelectionOptions = {},
 ): WorkflowSelection {
+  const ambient = HOOK_WORKFLOWS.getStore();
+  if (ambient?.projectDir === resolvePath(projectDir) && ambient.workflow.selection === null) {
+    throw new Error("The hook's captured workflow selection could not be resolved.");
+  }
+  const pinned = HOOK_MUTATION_SELECTIONS.get(resolvePath(projectDir)) ??
+    (ambient?.projectDir === resolvePath(projectDir) ? ambient.workflow.selection : null);
+  if (pinned != null) {
+    if ((options.space !== undefined && options.space !== pinned.space) ||
+      (options.intent !== undefined && (options.intent === "" ? null : options.intent) !== pinned.intent)) {
+      throw new Error("A workflow operation cannot change its selected record");
+    }
+    return { ...pinned };
+  }
   // An explicit selector becomes one path segment, so it must not be a path: a
   // "../" in --space or --intent could otherwise reach a record outside the
   // project. Every command that takes them resolves them here. Any name that
@@ -7412,6 +7605,102 @@ export function resolveWorkflowSelection(
 }
 
 export type WorkflowParticipation = "participant" | "outsider" | "indeterminate";
+
+export type WorkflowLifecycle = "running" | "completed" | "archived" | "absent" | "unreadable";
+export type WorkflowRecordSelection = Pick<WorkflowSelection, "space" | "intent">;
+
+// Lifecycle and participation answer different questions. Completed work stays
+// selectable for history and explicit commands; its selection never authorizes
+// another ambient turn. The state is the runtime authority, since the registry
+// can still say complete after an explicit jump has reopened the work.
+export function workflowLifecycle(
+  projectDir: string,
+  selection: WorkflowRecordSelection = resolveWorkflowSelection(projectDir),
+): WorkflowLifecycle {
+  const statePath = stateFilePathForSelection(projectDir, {
+    ...selection, sessionId: null, binding: null,
+  });
+  let content: string;
+  try {
+    content = readFileSync(statePath, "utf-8");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unreadable";
+  }
+  switch (getField(content, "Status")) {
+    case "Running": return "running";
+    case "Completed": return "completed";
+    case "Archived": return "archived";
+    default: return "unreadable";
+  }
+}
+
+export function isTerminalWorkflow(
+  projectDir: string,
+  selection?: WorkflowRecordSelection,
+): boolean {
+  const lifecycle = workflowLifecycle(projectDir, selection);
+  return lifecycle === "completed" || lifecycle === "archived";
+}
+
+export interface HookWorkflow {
+  selection: WorkflowSelection | null;
+  participation: WorkflowParticipation;
+  lifecycle: WorkflowLifecycle;
+  /** Response-only evaluation of checks/notices that do not belong to a
+   * workflow. Canonical lifecycle stays accurate; this grants no mutation. */
+  mode?: "independent";
+  /** SessionStart's read-only legacy UUID-stamp adoption, captured before a
+   * child starts. It joins that physical record without changing a binding. */
+  resumedFromStamp?: true;
+  restore: () => void;
+}
+
+export function hookWorkflowIsTerminal(workflow: Pick<HookWorkflow, "lifecycle">): boolean {
+  return workflow.lifecycle === "completed" || workflow.lifecycle === "archived";
+}
+
+export function hookWorkflowIsInactive(workflow: Pick<HookWorkflow, "lifecycle" | "mode">): boolean {
+  return workflow.mode === "independent" || hookWorkflowIsTerminal(workflow);
+}
+
+// Writers skip an unreadable record as well as a terminal one. Guards still
+// decide their independent integrity/ownership checks before consulting this.
+// Absence keeps existing pre-workflow bookkeeping available.
+export function hookWorkflowMayMutateRecord(workflow: HookWorkflow): boolean {
+  return workflow.mode !== "independent" && !hookStandsOutside(workflow) &&
+    (workflow.lifecycle === "running" || workflow.lifecycle === "absent");
+}
+
+// Short ambient mutations share the workspace barrier used by the existing
+// lifecycle writers, then the exact intent bucket used by explicit session
+// emitters. Explicit whole-state writers use the same W → I order, so they
+// also serialize against intent-only fork/merge operations.
+// Both decisions and paths are refreshed/pinned inside the critical section.
+// Returning undefined is a normal skipped event, never a hook error to log.
+export function withHookWorkflowMutation<T>(
+  projectDir: string,
+  workflow: HookWorkflow,
+  fn: () => T extends Promise<unknown> ? never : T,
+  lockBudget?: { maxRetries: number; retryMs: number },
+): (T extends Promise<unknown> ? never : T) | undefined {
+  const selection = workflow.selection;
+  if (selection === null || !hookWorkflowMayMutateRecord(workflow) ||
+      currentHookWorkflow(projectDir)?.mode === "independent") return undefined;
+  // Ambient bookkeeping must not make an ordinary hook wait for a long
+  // explicit operation. Authority-bearing intake has its own admission owner.
+  const budget = lockBudget ?? { maxRetries: 5, retryMs: 25 };
+  let result: (T extends Promise<unknown> ? never : T) | undefined;
+  withAuditLock(projectDir, () => {
+    const mutate = (): void => {
+      const lifecycle = workflowLifecycle(projectDir, selection);
+      if (lifecycle !== "running" && lifecycle !== "absent") return;
+      result = withWorkflowSelection<T>(projectDir, selection, fn);
+    };
+    if (selection.intent === null) mutate();
+    else withAuditLock(projectDir, mutate, selection.intent, selection.space, budget.maxRetries, budget.retryMs);
+  }, undefined, undefined, budget.maxRetries, budget.retryMs);
+  return result;
+}
 
 // The record this checkout's own worktree metadata names, when that metadata was
 // written for this repository on this machine. `aidlc worktree create` stamps the
@@ -7495,9 +7784,22 @@ export function workflowParticipation(
 export function enterHookWorkflow(
   projectDir: string,
   payloadSessionId: unknown,
-): { selection: WorkflowSelection | null; participation: WorkflowParticipation; restore: () => void } {
+  options: { sessionStartSource?: string } = {},
+): HookWorkflow {
+  const inherited = currentHookWorkflow(projectDir);
+  // A rejected child transport has no eligible record. Do not fall through to
+  // this process's shared cursor or infer a different conversation.
+  if (inherited !== null && inherited.selection === null) {
+    return { ...inherited, restore: () => {} };
+  }
   const raw = typeof payloadSessionId === "string" ? validSessionId(payloadSessionId) : null;
   const chat = raw === null ? null : resolveChat(projectDir, raw, { bind: false });
+  if (inherited?.selection?.sessionId && chat && chat.chatId !== inherited.selection.sessionId) {
+    return {
+      selection: null, participation: "indeterminate", lifecycle: "unreadable",
+      mode: "independent", restore: () => {},
+    };
+  }
   // Placed: this chat has a binding, or the id belongs to a chat an adapter named.
   const placed = chat !== null && (chat.binding !== null || chat.chatId !== raw);
   let restore = () => {};
@@ -7516,11 +7818,45 @@ export function enterHookWorkflow(
     };
   }
   try {
-    const selection = resolveWorkflowSelection(projectDir);
-    return { selection, participation: workflowParticipation(projectDir, selection), restore };
+    const resumed = inherited === null && options.sessionStartSource === "resume"
+      ? legacySessionResumeSelection(projectDir, payloadSessionId)
+      : null;
+    const selection = resumed ?? resolveWorkflowSelection(projectDir);
+    return {
+      selection,
+      participation: inherited?.participation ?? (resumed ? "participant" : workflowParticipation(projectDir, selection)),
+      lifecycle: workflowLifecycle(projectDir, selection),
+      ...(inherited?.mode === "independent" ? { mode: "independent" as const } : {}),
+      ...(inherited?.resumedFromStamp || resumed ? { resumedFromStamp: true as const } : {}),
+      restore,
+    };
   } catch {
-    return { selection: null, participation: "indeterminate", restore };
+    return {
+      selection: null, participation: "indeterminate", lifecycle: "unreadable",
+      ...(inherited?.mode === "independent" ? { mode: "independent" as const } : {}),
+      restore,
+    };
   }
+}
+
+// SessionStart alone may restore an older chat from its UUID stamp when no
+// binding exists. Resolve this before an adapter pins its event, so a later
+// cursor/binding/stamp change cannot move any of its child hooks.
+export function legacySessionResumeSelection(
+  projectDir: string,
+  payloadSessionId: unknown,
+): WorkflowSelection | null {
+  const raw = typeof payloadSessionId === "string" ? validSessionId(payloadSessionId) : null;
+  const chat = raw === null ? null : resolveChat(projectDir, raw, { bind: false });
+  if (chat === null || chat.binding !== null) return null;
+  const stamp = readSessionIntentUuid(projectDir, chat.chatId);
+  const target = stamp === null ? null : findIntentByUuid(projectDir, stamp);
+  if (target === null || !isBindableIntentRecordName(target.dirName)) return null;
+  // Keep delegated-checkout validation at the same shared selection owner.
+  const selected = resolveWorkflowSelection(projectDir, {
+    space: target.space, intent: target.dirName, sessionId: chat.chatId,
+  });
+  return { ...selected, sessionId: chat.chatId, binding: null };
 }
 
 // A hook stands outside when its selection names a record this conversation has
@@ -39359,6 +39695,45 @@ function hookStatusTarget(healthDir: string, fileName: string, create: boolean):
   }
 }
 
+// Health files are ambient bookkeeping even when written by an adapter before
+// the core hook runs. Recover the physical target from their canonical path;
+// never resolve a later cursor and write into a different record.
+function withHookStatusMutation(healthDir: string, fn: () => boolean): boolean {
+  const record = dirname(dirname(resolvePath(healthDir)));
+  const flat = basename(record) === "intents";
+  const intents = flat ? record : dirname(record);
+  const spaceDir = dirname(intents);
+  const spaces = dirname(spaceDir);
+  const workspace = dirname(spaces);
+  if (basename(intents) !== "intents" || basename(spaces) !== "spaces" ||
+    basename(workspace) !== "aidlc") {
+    // Existing callers may use a standalone scratch/legacy health folder.
+    return fn();
+  }
+  const projectDir = dirname(workspace);
+  const selection: WorkflowSelection = {
+    space: basename(spaceDir), intent: flat ? null : basename(record), sessionId: null, binding: null,
+  };
+  // Explicit intent commands can report a best-effort hook diagnostic while
+  // holding only I. They must never wait for W behind an ambient writer that
+  // holds W and waits for I. Skip that diagnostic rather than invert the order.
+  if (selection.intent !== null &&
+    holdsAuditLock(projectDir, selection.intent, selection.space) && !holdsAuditLock(projectDir)) return false;
+  const ambient = HOOK_WORKFLOWS.getStore();
+  let workflow: HookWorkflow;
+  if (ambient?.projectDir === projectDir) {
+    workflow = ambient.workflow;
+    if (workflow.selection?.space !== selection.space || workflow.selection.intent !== selection.intent) return false;
+  } else {
+    workflow = { selection, participation: "participant", lifecycle: workflowLifecycle(projectDir, selection), restore: () => {} };
+  }
+  try {
+    return withHookWorkflowMutation(projectDir, workflow, fn) ?? false;
+  } catch {
+    return false;
+  }
+}
+
 // A heartbeat a hook writes from the person's message is written only when
 // nothing on the way from the project's own folder to it is a link, so a
 // linked aidlc/ folder never takes the write elsewhere. Never throws.
@@ -39378,6 +39753,12 @@ export function writeHookStatusFile(
   fileName: string,
   data: string,
   mode: "replace" | "append" = "replace",
+): boolean {
+  return withHookStatusMutation(healthDir, () => writeHookStatusFileUnchecked(healthDir, fileName, data, mode));
+}
+
+function writeHookStatusFileUnchecked(
+  healthDir: string, fileName: string, data: string, mode: "replace" | "append",
 ): boolean {
   const target = hookStatusTarget(healthDir, fileName, true);
   if (target === null) return false;
@@ -39399,6 +39780,10 @@ export function writeHookStatusFile(
 
 // Removes the file when it is there. Never throws; returns whether it is gone.
 export function removeHookStatusFile(healthDir: string, fileName: string): boolean {
+  return withHookStatusMutation(healthDir, () => removeHookStatusFileUnchecked(healthDir, fileName));
+}
+
+function removeHookStatusFileUnchecked(healthDir: string, fileName: string): boolean {
   const target = hookStatusTarget(healthDir, fileName, false);
   if (target === null) return false;
   try {

@@ -6,9 +6,9 @@
 //   compile                       Walk audit + memory, write runtime-graph.json
 //   read    <stage-slug>          Print one stage row from runtime-graph.json
 //
-// The compile subcommand is invoked by the PostToolUse Bash hook
-// (aidlc-rebuild-stage-graph.ts) on every transition-class audit emit. Pure
-// observer — never mutates state.md, never asks the user, only reads the
+// The PostToolUse Bash hook refreshes running workflows; explicit completion
+// performs its final refresh before sealing terminal state. Pure observer —
+// never mutates state.md, never asks the user, only reads the
 // audit log + memory.md files and writes runtime-graph.json + emits
 // MEMORY_EMPTY rows for zero-entry approved stages.
 //
@@ -17,10 +17,8 @@
 // (Bolt fork/merge, gate ritual, lifecycle, doctor) in the same change.
 //
 // Determinism: re-running compile against the same audit log produces a
-// byte-equivalent runtime-graph.json. Emitted MEMORY_EMPTY rows are
-// re-emitted on re-compile (append-only audit, no row de-duplication);
-// the doctor de-duplicates by (Stage, ISO-second) tuple when computing
-// the MEMORY_EMPTY-rate metric.
+// byte-equivalent runtime-graph.json. MEMORY_EMPTY rows are emitted once per
+// stage approval, including when explicit compilation repairs a failed refresh.
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
@@ -50,6 +48,10 @@ import {
   validateBoltSlug,
   validateLiveUnitScope,
   withAuditLock,
+  withHookWorkflowMutation,
+  withWorkflowSelection,
+  workflowLifecycle,
+  type WorkflowSelection,
   worktreeClaimBoundaryMatches,
   worktreeRuntimeGraphPath,
   writeFileAtomic,
@@ -812,8 +814,9 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
 
 export function compileRuntime(
   projectDir: string,
+  selection: WorkflowSelection = resolveWorkflowSelection(projectDir),
 ): { skipped?: string; written?: string } {
-  return compile({ projectDir });
+  return withWorkflowSelection(projectDir, selection, () => compile({ projectDir }));
 }
 
 // Empty-graph short-circuit for the "state exists, no audit / no
@@ -1380,8 +1383,32 @@ function tryRun(label: string, handler: SubcommandHandler): SubcommandHandler {
   };
 }
 
-const handleCompile: SubcommandHandler = (_rest, projectDir) => {
-  const result = compileRuntime(projectDir);
+const handleCompile: SubcommandHandler = (rest, projectDir) => {
+  // Hook children carry the physical record selected by their parent. Both
+  // selectors are internal; an empty intent denotes the legacy flat record.
+  // Explicit compile remains available to repair a terminal record.
+  const spaceAt = rest.indexOf("--hook-space");
+  const intentAt = rest.indexOf("--hook-intent");
+  const ambient = spaceAt >= 0 || intentAt >= 0;
+  let result: ReturnType<typeof compileRuntime> | undefined;
+  if (ambient) {
+    const space = spaceAt >= 0 ? rest[spaceAt + 1] : undefined;
+    const intent = intentAt >= 0 ? rest[intentAt + 1] : undefined;
+    if (!space || space.startsWith("--") || intent === undefined || intent.startsWith("--")) {
+      throw new Error("ambient compile requires both --hook-space and --hook-intent");
+    }
+    const selection = resolveWorkflowSelection(projectDir, { space, intent });
+    if (intent === "") selection.intent = null;
+    result = withHookWorkflowMutation(projectDir, {
+      selection,
+      participation: "participant",
+      lifecycle: workflowLifecycle(projectDir, selection),
+      restore: () => {},
+    }, () => compileRuntime(projectDir, selection));
+  } else {
+    result = compileRuntime(projectDir);
+  }
+  if (result === undefined) return;
   if (result.skipped) {
     process.exit(0);
   }

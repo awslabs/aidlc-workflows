@@ -1112,7 +1112,7 @@ describe("Task 6 - transcript path round-trip + foldTranscriptIntoLedger", () =>
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(
       join(stateDir, "aidlc-state.md"),
-      "- **Current Stage**: `stage-before-transition`\n",
+      "- **Status**: Running\n- **Current Stage**: `stage-before-transition`\n",
     );
     const transcript = join(dir, "session.jsonl");
     writeFileSync(
@@ -1193,7 +1193,7 @@ describe("Task 6 - transcript path round-trip + foldTranscriptIntoLedger", () =>
     mkdirSync(stateDir, { recursive: true });
     // Under unit-major Current Stage stays on the block's first stage while a
     // later stage runs for a Unit; the engine's directive marker names that stage.
-    const state = "- **Current Stage**: `functional-design`\n";
+    const state = "- **Status**: Running\n- **Current Stage**: `functional-design`\n";
     writeFileSync(join(stateDir, "aidlc-state.md"), state);
     const markerPath = join(activeDirectiveStorageDir(dir), "active-directive.json");
     mkdirSync(dirname(markerPath), { recursive: true });
@@ -1284,6 +1284,7 @@ describe("Task 6 - transcript path round-trip + foldTranscriptIntoLedger", () =>
     fold();
     // It then joins another record and works there.
     const joined = createIntent(dir, "joined-work", "default", "feature");
+    writeFileSync(join(joined.recordDir, "aidlc-state.md"), "- **Status**: Running\n- **Current Stage**: s\n");
     writeSessionBinding(dir, session, "default", joined.dirName, "switch");
     appendFileSync(transcript, `${assistantLine({ uuid: "inside", timestamp: "t", model: "opus", input: 7 })}\n`);
     fold();
@@ -1292,6 +1293,82 @@ describe("Task 6 - transcript path round-trip + foldTranscriptIntoLedger", () =>
     // Only the turn after the join; the 100 input tokens from outside are not replayed.
     expect(workflows[`intent:${joined.uuid}`].totals.tokens.input).toBe(7);
   });
+
+  test.each(["Completed", "Archived"])(
+    "%s Claude usage advances transcript cursors without charging the closed interval after reopen",
+    (status) => {
+      const hook = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "hooks", "aidlc-fold-usage.ts");
+      const dir = mkProject();
+      const session = "01995100-0000-7000-8000-000000000270";
+      const intent = createIntent(dir, "usage-reopen", "default", "feature", undefined, session);
+      const statePath = join(intent.recordDir, "aidlc-state.md");
+      const writeStatus = (value: string) => writeFileSync(
+        statePath,
+        `# AI-DLC State Tracking\n\n- **Status**: ${value}\n- **Current Stage**: \`stage-usage\`\n`,
+      );
+      writeStatus("Running");
+      writeSessionBinding(dir, session, "default", intent.dirName, "switch");
+      const transcript = join(dir, "session.jsonl");
+      const subDir = join(dir, "session", "subagents");
+      const subTranscript = join(subDir, "agent-review.jsonl");
+      mkdirSync(subDir, { recursive: true });
+      writeFileSync(join(subDir, "agent-review.meta.json"), JSON.stringify({ agentType: "code-reviewer" }));
+      const appendUsage = (period: string, mainInput: number, subInput: number) => {
+        appendFileSync(transcript, `${assistantLine({
+          uuid: `${period}-main`, msgId: `${period}-main`, timestamp: "t", model: "opus", input: mainInput,
+        })}\n`);
+        appendFileSync(subTranscript, `${assistantLine({
+          uuid: `${period}-review`, msgId: `${period}-review`, timestamp: "t", model: "haiku",
+          input: subInput, isSidechain: true, agentId: "review",
+        })}\n`);
+      };
+      const fold = () => {
+        const result = Bun.spawnSync([process.execPath, hook], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+          stdin: new TextEncoder().encode(JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: "bun .claude/tools/aidlc-orchestrate.ts report --stage stage-usage --result completed" },
+            session_id: session,
+            transcript_path: transcript,
+          })),
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout.toString()).toBe("");
+        expect(result.stderr.toString()).toBe("");
+        return loadLedger(dir);
+      };
+      const key = `intent:${intent.uuid}`;
+      appendUsage("live", 7, 3);
+      const live = fold();
+      expect(live.workflows[key].totals.tokens.input).toBe(10);
+      const closedAggregate = structuredClone(live.workflows[key]);
+
+      writeStatus(status);
+      const closedState = readFileSync(statePath, "utf-8");
+      appendUsage("closed", 100, 50);
+      const closed = fold();
+      expect(closed.workflows[key]).toEqual(closedAggregate);
+      expect(readFileSync(statePath, "utf-8")).toBe(closedState);
+      for (const file of [transcript, subTranscript]) {
+        expect(closed.cursors[file].byteOffset).toBe(statSync(file).size);
+        expect(closed.cursors[file].pending).toBeUndefined();
+      }
+
+      // Model an explicit reopen of this same physical record. The hook has
+      // already spent the closed bytes, so neither source can charge them now.
+      writeStatus("Running");
+      appendUsage("reopened", 11, 13);
+      const reopened = fold();
+      expect(Object.keys(reopened.workflows)).toEqual([key]);
+      expect(reopened.workflows[key].totals.tokens.input).toBe(34);
+      expect(reopened.workflows[key].byStage["stage-usage"].totals.tokens.input).toBe(34);
+      expect(reopened.workflows[key].byAgent["code-reviewer"].tokens.input).toBe(16);
+    },
+  );
 
   test("a stale ledger first met outside every workflow is left for the rebuild", () => {
     const hook = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "hooks", "aidlc-fold-usage.ts");
@@ -1327,7 +1404,7 @@ describe("Task 6 - transcript path round-trip + foldTranscriptIntoLedger", () =>
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(
       join(stateDir, "aidlc-state.md"),
-      "- **Current Stage**: `stage-search`\n",
+      "- **Status**: Running\n- **Current Stage**: `stage-search`\n",
     );
     const transcript = join(dir, "session.jsonl");
     writeFileSync(

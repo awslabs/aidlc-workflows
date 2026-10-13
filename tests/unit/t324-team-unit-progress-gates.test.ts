@@ -751,6 +751,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
 
   test("team block completion finalizes a plan with no later stage", () => {
     const proj = seedProject({ ownership: "team" }, ["alpha"]);
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
     writeFileSync(
       seededStateFile(proj),
       state(proj).replace(
@@ -777,6 +778,12 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(runNext(proj).kind).toBe("done");
     expect(state(proj)).toContain("- **Status**: Completed");
     expect(readAllAuditShards(proj)).toContain("**Event**: WORKFLOW_COMPLETED");
+    const graph = JSON.parse(readFileSync(join(seededRecordDir(proj), "runtime-graph.json"), "utf-8"));
+    for (const stage of BLOCK) {
+      expect(graph.stages).toContainEqual(expect.objectContaining({
+        stage_slug: stage, outcome: "approved",
+      }));
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("cross-shard boundary ties fail a unit gate closed", () => {

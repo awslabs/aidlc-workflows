@@ -67,10 +67,13 @@ import {
   clearSessionIntentHandoff,
   emptyPickerResult,
   enterHookWorkflow,
+  withHookWorkflowMutation,
+  runInHookWorkflow,
   findStageBySlug,
   freshReviewReceipts,
   getField,
   hookStandsOutside,
+  hookWorkflowIsTerminal,
   hostEnvelopeTurnText,
   clearPlanApprovalChallenge,
   planApprovalChallengeRelativePath,
@@ -98,6 +101,7 @@ import {
   swarmWorkerWorktreeMeta,
   type TurnOrigin,
   validSessionId,
+  workflowLifecycle,
   withAuditLock,
   writeProjectHookStatusFile,
 } from "../tools/aidlc-lib.ts";
@@ -115,7 +119,7 @@ import {
   notePlanApprovalFileAnswer,
 } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcEntryWords, isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
-import { MESSAGE_PICKER_MAX_CHARS, MESSAGE_TEXT_MAX_CHARS, saveMessage, type StoredMessage } from "../tools/aidlc-message-store.ts";
+import { MESSAGE_PICKER_MAX_CHARS, MESSAGE_TEXT_MAX_CHARS, saveMessage, settleTerminalMessage, type StoredMessage } from "../tools/aidlc-message-store.ts";
 
 // The one parse of a typed line, for the message record (aidlc-message-store.ts)
 // and for the turn's Reply mark: flags are syntax, read by the engine's own
@@ -588,6 +592,10 @@ try {
   // What the person said in it is still theirs: its message record (the chat's
   // own proof, kept beside the question store and outside every record) is.
   const workflow = enterHookWorkflow(projectDir, sessionId);
+  if (workflow.mode === "independent") {
+    workflow.restore();
+    return 0;
+  }
   const outside = hookStandsOutside(workflow);
   const mintAllowed = humanTurnMintAllowed();
   // A swarm worker's worktree is the copy the engine made for a worker, and a
@@ -636,6 +644,15 @@ try {
         text: full.slice(0, MESSAGE_TEXT_MAX_CHARS),
         ...(cut ? { cut: true as const } : {}),
         picker: picker === null ? null : picker.entries,
+        ...(hookWorkflowIsTerminal(workflow) && workflow.selection !== null
+          ? {
+              workflow: {
+                space: workflow.selection.space,
+                intent: workflow.selection.intent,
+                status: workflow.lifecycle === "archived" ? "Archived" as const : "Completed" as const,
+              },
+            }
+          : {}),
         ...parsed,
         words,
       }).id;
@@ -644,13 +661,28 @@ try {
       return null;
     }
   };
-  if (outside) {
+  if (outside || hookWorkflowIsTerminal(workflow)) {
     // A turn the host made (its notice or brief) is nobody's words here either:
     // kept, it would read as the person's prompt where their message is the
-    // proof before any work exists (intent creation).
+    // proof before any work exists (intent creation). Completed/archived work
+    // keeps the message outside its record for the same next-request path.
     if (turnOrigin.kind !== "host") keepMessage();
+    workflow.restore();
     return 0;
   }
+  const messageId = turnOrigin.kind === "host" ? null : keepMessage();
+  try {
+    return runInHookWorkflow(projectDir, workflow, () => withAuditLock(projectDir, () => {
+      const selection = workflow.selection;
+      const lifecycle = selection === null ? "unreadable" : workflowLifecycle(projectDir, selection);
+      if (selection !== null && (lifecycle === "completed" || lifecycle === "archived")) {
+        if (messageId !== null) settleTerminalMessage(projectDir, messageId, {
+          space: selection.space, intent: selection.intent,
+          status: lifecycle === "archived" ? "Archived" : "Completed",
+        });
+        return 0;
+      }
+      return withHookWorkflowMutation(projectDir, workflow, () => {
   // A field-only rename preserves the stored and effective value, so it carries
   // no switch authority. Kiro IDE's prompt-empty adapter performs the same
   // operation before forwarding because some builds discard core hook output.
@@ -700,7 +732,6 @@ try {
   }
   // The message record (keepMessage above). A setting typed on the line is in
   // it as the engine's own parser read it; nothing is applied here.
-  const messageId = keepMessage();
   if (existsSync(stateFilePath(projectDir))) {
     // Inside a workflow it lands in the record, before the mint branch and
     // apart from it, so a hook that ran but withheld its mint (AIDLC_UNATTENDED=1,
@@ -868,8 +899,16 @@ try {
     // asked of its own accord in between.
     if (sessionId) {
       const session = sessionId;
-      forThePerson.push(() => carryPendingPersonLines(projectDir, session));
+      forThePerson.push(() => {
+        withHookWorkflowMutation(projectDir, workflow, () => carryPendingPersonLines(projectDir, session));
+      });
     }
+  }
+  return 0;
+      }) ?? 0;
+    }));
+  } finally {
+    workflow.restore();
   }
 } catch {
   // Non-fatal — a mint failure must never block the human's turn.

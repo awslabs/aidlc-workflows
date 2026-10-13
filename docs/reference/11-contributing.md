@@ -248,7 +248,7 @@ The intent-configuration handlers share a single mutation path:
 and `--project-dir`, and requires at least one setting. Reject unknown flags by
 name and validate all values before any mutation. A shared utility applier
 returns candidate content, `AuditEntryInput[]`, and output lines in canonical
-key order; it does not write. Both mutation handlers hold one `withAuditLock`
+key order; it does not write. Both mutation handlers hold workspace then intent locks
 across state read, apply, `appendAuditEntries` in caller-held-lock mode, and a
 single state write. When the Guard Policy value moves, call
 `assertChangeControlLedgerWritable` before any write. A memory layer's

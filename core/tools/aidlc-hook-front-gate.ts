@@ -10,7 +10,7 @@
 // none of the record's files changed since. It never imports aidlc-lib, and
 // whenever it cannot tell (a legacy layout, a link, a file it cannot read, a
 // clock that moved, a change too close to the mark), the full hook runs.
-import { closeSync, constants as fsConstants, lstatSync, openSync, readdirSync, type Stats, writeSync } from "node:fs";
+import { lstatSync, readdirSync, type Stats } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 export const FRONT_GATED_TARGETS = ["rebuild-stage-graph", "sync-workflow-state"] as const;
@@ -155,14 +155,14 @@ export function frontGateProjectDirs(adapterPath: string, cwd = process.cwd()): 
 }
 
 /**
- * Whether the hook has nothing to do in any of these projects. On a skipped
- * rebuild the record's existing heartbeat is refreshed, as the full hook would,
- * so hook liveness reads the same.
+ * Whether the hook has nothing to do in any of these projects. This fast path
+ * is read-only: it has neither an event's selected target nor a lifecycle lock.
+ * The full hook's heartbeat remains valid while its inputs stay unchanged;
+ * liveness compares that heartbeat with workflow progress, not wall-clock age.
  */
 export function frontGateSkips(target: string, projectDirs: readonly string[], now = Date.now()): boolean {
   if (!isFrontGatedTarget(target) || projectDirs.length === 0) return false;
   if (process.env.AIDLC_HOOK_DEBUG) return false;
-  const marked: string[] = [];
   try {
     for (const projectDir of projectDirs) {
       // The flat layout before spaces is moved by the engine itself.
@@ -172,32 +172,10 @@ export function frontGateSkips(target: string, projectDirs: readonly string[], n
         const newest = newestInput(record, target, now);
         if (newest === null) continue;
         if (!markHolds(record, target, newest, now)) return false;
-        marked.push(record);
       }
     }
   } catch {
     return false;
   }
-  if (target === "rebuild-stage-graph") {
-    const stamp = new Date(now).toISOString().replace(/\.\d{3}Z$/, "Z");
-    for (const record of marked) refreshHeartbeat(join(recordHooksHealthDir(record), "rebuild-stage-graph.last"), stamp);
-  }
   return true;
-}
-
-// Rewrite a heartbeat that is already there, never following a link, with
-// the open flags the engine's own heartbeat writer uses.
-function refreshHeartbeat(path: string, stamp: string): void {
-  try {
-    if (entry(path)?.kind !== "file") return;
-    const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
-    const fd = openSync(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | noFollow, 0o644);
-    try {
-      writeSync(fd, stamp);
-    } finally {
-      closeSync(fd);
-    }
-  } catch {
-    // A heartbeat that cannot be written is lost telemetry, never a blocked command.
-  }
 }

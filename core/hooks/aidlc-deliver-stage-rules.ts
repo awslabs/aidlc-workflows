@@ -16,9 +16,12 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { publishHookOutput } from "../tools/aidlc-hook-output.ts";
 import {
   hookStandsOutside,
+  hookWorkflowIsInactive,
   enterHookWorkflow,
+  runInHookWorkflow,
   agentsDir,
   authorityFor,
   getField,
@@ -355,8 +358,10 @@ export async function run(input: string): Promise<number> {
   // none of that workflow's stage rules and records nothing in its ledger.
   const workflow = enterHookWorkflow(projectDir, parsed.session_id);
   try {
-    if (hookStandsOutside(workflow)) return 0;
+    return await runInHookWorkflow(projectDir, workflow, () => publishHookOutput(projectDir, workflow, async () => {
+    if (hookStandsOutside(workflow) || hookWorkflowIsInactive(workflow)) return 0;
     return deliver(parsed, projectDir);
+    }));
   } finally {
     workflow.restore();
   }

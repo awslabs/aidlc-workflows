@@ -351,6 +351,57 @@ function questionTexts(proj: string): string[] {
   return questionFiles(proj).map((name) => (JSON.parse(readFileSync(join(dir, name), "utf-8")) as { text: string }).text);
 }
 
+describe("terminal work keeps the next explicit line outside its audit", () => {
+  for (const status of ["Completed", "Archived"]) {
+    for (const args of [[], ["--resume"]]) {
+      test(`${status}: ${args.length ? "next --resume" : "bare next"} takes fresh words once without a HUMAN_TURN`, async () => {
+        const proj = fresh();
+        writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-completed.md"), "utf-8")
+          .replace("- **Status**: Completed", `- **Status**: ${status}`));
+        const auditDir = join(seededRecordDir(proj), "audit");
+        const audit = (): string => existsSync(auditDir)
+          ? readdirSync(auditDir).sort().map((name) => readFileSync(join(auditDir, name), "utf-8")).join("")
+          : "";
+        const before = audit();
+        const said = await say(proj, status === "Archived" ? `/aidlc --new-intent "${NEW_WORK}"` : NEW_LINE, "claude");
+        expect(said.status, `${said.stdout}${said.stderr}`).toBe(0);
+        expect(audit()).toBe(before);
+        const first = await next(proj, "claude", args);
+        expect(questionTexts(proj), first.out).toContain(NEW_WORK);
+        const count = questionFiles(proj).length;
+        await next(proj, "claude", []);
+        expect(questionFiles(proj)).toHaveLength(count);
+      });
+    }
+  }
+
+  test("terminal settings-only line is handed out once even when the setter has not run", async () => {
+    const proj = fresh();
+    writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-completed.md"), "utf-8"));
+    await say(proj, "/aidlc --plan-approval off", "claude");
+    const first = await next(proj, "claude", []);
+    expect(first.directive.message ?? "", first.out).toContain("plan-approval off");
+    const second = await next(proj, "claude", []);
+    expect(second.directive.message ?? "", second.out).not.toContain("plan-approval off");
+  });
+
+  test("a scope-only terminal request survives the agent's bare next", async () => {
+    const proj = fresh();
+    writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-completed.md"), "utf-8"));
+    await say(proj, "/aidlc --scope express", "claude");
+    const first = await next(proj, "claude", []);
+    expect(first.directive.message ?? "", first.out).toContain("scope change --scope express");
+  });
+
+  test("a pre-completion line cannot be recovered from a terminal record", async () => {
+    const proj = await workOpen();
+    await say(proj, NEW_LINE, "claude");
+    writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-completed.md"), "utf-8"));
+    await next(proj, "claude", []);
+    expect(questionFiles(proj)).toHaveLength(0);
+  });
+});
+
 /** The open work's own step: its rules part or its stage, never a reading of words. */
 function isTheWorksStep(directive: Directive): boolean {
   return directive.kind === "load-steering" || directive.kind === "run-stage";

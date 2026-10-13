@@ -5,9 +5,13 @@
 // directly bypasses that boundary. Read-only state queries and specialized
 // recovery/configuration verbs remain available.
 
+import { publishHookOutput } from "../tools/aidlc-hook-output.ts";
 import {
   hookStandsOutside,
   enterHookWorkflow,
+  runInHookWorkflow,
+  withCurrentHookWorkflowMutation,
+  hookWorkflowIsInactive,
   type ClaudeCodeHookInput,
   decideFence,
   guardStandAsideSpeaks,
@@ -1189,6 +1193,11 @@ export async function run(input: string): Promise<number> {
   // This is the harness trust boundary, not a fence. Never consult policy,
   // memory, session presence, or a bypass before enforcing it.
   if (refuseRuntimeIntegrityViolation(parsed)) return 2;
+  const projectDir = resolveProjectDirFromHook(import.meta.url);
+  const workflow = enterHookWorkflow(projectDir, parsed.session_id);
+  try {
+    return await runInHookWorkflow(projectDir, workflow, () => publishHookOutput(projectDir, workflow, () => {
+    if (hookWorkflowIsInactive(workflow)) return 0;
   if (parsed.tool_name !== "Bash") return 0;
   // The fence stands aside when it is LOWERED for this piece of work, by the
   // guard policy word (off lowers this one) or by the human's own
@@ -1217,12 +1226,12 @@ export async function run(input: string): Promise<number> {
       if (guardStandAsideSpeaks(gate)) {
         writeGuardStoodAside(guardStoodAsideLine("state-transition", gate.source, detail));
       }
-      recordGuardStoodAside(projectDir, {
+      withCurrentHookWorkflowMutation(projectDir, () => recordGuardStoodAside(projectDir, {
         fence: "state-transition",
         authority: gate.authority,
         tool: "Bash",
         details: detail,
-      });
+      }));
       return true;
     } finally {
       workflow.restore();
@@ -1267,6 +1276,10 @@ export async function run(input: string): Promise<number> {
       "or presenting an approval question.\n",
   );
   return 2;
+    }));
+  } finally {
+    workflow.restore();
+  }
 }
 
 if (import.meta.main) {

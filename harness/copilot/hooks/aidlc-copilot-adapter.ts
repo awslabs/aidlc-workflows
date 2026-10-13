@@ -100,6 +100,13 @@ import {
   workflowParticipation,
   hookStandsOutside,
   enterHookWorkflow,
+  runInHookWorkflow,
+  hookWorkflowIsInactive,
+  hookChildEnv,
+  currentHookWorkflow,
+  captureHookWorkflow,
+  isTerminalWorkflow,
+  withHookWorkflowMutation,
   boundDirectiveMessage,
   claimCopilotCommand,
   constructionPolicyChangeAllowed,
@@ -119,6 +126,8 @@ import {
   stateFilePath,
   stateFilePathForSelection,
 } from "../tools/aidlc-lib.ts";
+import { noteHookRefusal, publishHookOutput } from "../tools/aidlc-hook-output.ts";
+import { beginHookBootstrapCapture } from "../tools/aidlc-hook-bootstrap.ts";
 import { appendCoordinationStoodAside, appendSubagentPromptUnmatched } from "../tools/aidlc-audit.ts";
 import { keptRestartRun } from "../tools/aidlc-question-store.ts";
 import { ROUTES, routePolicyFor, withoutProjectDirFlag } from "../tools/aidlc.ts";
@@ -242,12 +251,20 @@ export async function run(
   // engine is told nothing and treats the call as it treats a command with no
   // chat, instead of binding a new "chat" for every tool call.
   const coreSessionId = sessionId.startsWith("toolu_") ? "" : sessionId;
-  const projectEnv = {
-    ...process.env,
+  const projectEnv = hookChildEnv(projectDir, coreSessionId, {
     AIDLC_PROJECT_DIR: projectDir,
     CLAUDE_PROJECT_DIR: projectDir,
     ...(sessionId ? { AIDLC_COPILOT_SESSION_ID: sessionId } : {}),
-  };
+  });
+  const workflow = enterHookWorkflow(projectDir, coreSessionId, {
+    ...(target === "session-start" ? { sessionStartSource: copilot.source ?? "startup" } : {}),
+  });
+  const bootstrap = workflow.selection === null ? null : beginHookBootstrapCapture(projectDir, {
+    ...workflow.selection, sessionId: coreSessionId || workflow.selection.sessionId,
+  });
+  let bootstrapOutput = "";
+  try {
+  const dispatch = async (): Promise<number> => {
 
   // Tolerant field reads: PascalCase-registered events arrive snake_case on
   // both surfaces EXCEPT SubagentStart, which the CLI delivers camelCase
@@ -373,6 +390,18 @@ export async function run(
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
     const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
     const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
+    const childSession = forwardedSessionId(stdin);
+    // Creation receipts intentionally adopt the newly created workflow.
+    // Reconciliation, however, is a separate captured event for the prior chat.
+    const childWorkflow = hook === "rebuild-stage-graph" ? undefined
+      : hook === "session-end" && childSession !== coreSessionId
+        ? captureHookWorkflow(projectDir, childSession)
+        : currentHookWorkflow(projectDir) ?? workflow;
+    const childEnv = hookChildEnv(projectDir, childSession || undefined, {
+      ...projectEnv,
+      ...(hook === "session-start" ? bootstrap?.env : {}),
+      ...(authorityToken ? { AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken } : {}),
+    }, childWorkflow);
     const command = executable
       ? authorityToken
         ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
@@ -384,16 +413,15 @@ export async function run(
             "--internal-aidlc-record-human-turn",
             join(HOOKS_DIR, hookFile),
           ]
-        : [process.execPath, join(HOOKS_DIR, hookFile)];
+        : [process.execPath, join(HOOKS_DIR, "..", "tools", "aidlc.ts"), "engine", "hook", hook];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdin, "utf-8"),
       stdout: "pipe",
       stderr: "pipe",
       cwd: projectDir,
-      env: authorityToken
-        ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
-        : projectEnv,
+      env: childEnv,
     });
+    if (hook === "session-start") bootstrapOutput = bootstrap?.read() ?? "";
     const stderr = r.stderr?.toString() ?? "";
     failedCoreHookDrop(hook, r.exitCode, r.signalCode ?? null, stderr, forwardedSessionId(stdin));
     return {
@@ -439,6 +467,7 @@ export async function run(
     let space: string | undefined;
     try {
       const selection = resolveWorkflowSelection(projectDir, hookSessionId ? { sessionId: hookSessionId } : {});
+      if (isTerminalWorkflow(projectDir, selection)) return;
       intent = selection.intent ?? undefined;
       space = intent ? selection.space : undefined;
     } catch {
@@ -450,6 +479,7 @@ export async function run(
   // The one deny dialect both surfaces honor (difference #4). stdout JSON,
   // exit 0 — live-verified: the tool call is refused, the reason relayed.
   function denyJson(reason: string): string {
+    noteHookRefusal();
     return `${JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
@@ -461,6 +491,7 @@ export async function run(
 
   function selectedWorkflowIsRunning(): boolean {
     try {
+      if (currentHookWorkflow(projectDir)?.mode === "independent") return false;
       const selection = resolveWorkflowSelection(
         projectDir,
         sessionId ? { sessionId } : {},
@@ -474,6 +505,24 @@ export async function run(
       return stateContent.match(/^- \*\*Status\*\*:\s*(\S+)\s*$/m)?.[1] === "Running";
     } catch {
       return false;
+    }
+  }
+
+  function withWorkflowMutation<T>(action: () => T extends Promise<unknown> ? never : T) {
+    const workflow = enterHookWorkflow(projectDir, sessionId);
+    try {
+      return withHookWorkflowMutation(projectDir, workflow, action);
+    } finally {
+      workflow.restore();
+    }
+  }
+
+  function selectedWorkflowIsTerminal(): boolean {
+    const workflow = enterHookWorkflow(projectDir, sessionId);
+    try {
+      return hookWorkflowIsInactive(workflow);
+    } finally {
+      workflow.restore();
     }
   }
 
@@ -1685,6 +1734,9 @@ export async function run(
 
   // A transient write failure is retried; a lock that stays busy is not.
   function recordBriefings(prompts: unknown[]): boolean {
+    // Independent refusal preflight may evaluate this dispatch before the real
+    // launch. It must neither duplicate nor consume launch bookkeeping.
+    if (currentHookWorkflow(projectDir)?.mode === "independent") return true;
     const digests = [...new Set(
       prompts
         .filter((prompt): prompt is string => typeof prompt === "string" && prompt.trim().length > 0)
@@ -1754,11 +1806,13 @@ export async function run(
   // HUMAN_TURN.
   function noteUnmatchedPrompt(agent: string, recordRead: boolean): void {
     try {
+      withWorkflowMutation(() => {
       if (!existsSync(stateFilePath(projectDir))) return;
       appendSubagentPromptUnmatched(projectDir, {
         session: sessionId,
         agent,
         recordRead,
+      });
       });
     } catch {
       // Advisory only.
@@ -1842,9 +1896,11 @@ export async function run(
         const sequenceWorkflow = enterHookWorkflow(projectDir, sessionId);
         try {
           const statePath = stateFilePath(projectDir);
-          if (!hookStandsOutside(sequenceWorkflow) && existsSync(statePath)) {
-            recordCopilotHumanSequence(projectDir, readFileSync(statePath, "utf-8"), sessionId);
-          }
+          withHookWorkflowMutation(projectDir, sequenceWorkflow, () => {
+            if (!hookStandsOutside(sequenceWorkflow) && existsSync(statePath)) {
+              recordCopilotHumanSequence(projectDir, readFileSync(statePath, "utf-8"), sessionId);
+            }
+          });
         } catch { /* bounded coordination remains best effort */ } finally {
           sequenceWorkflow.restore();
         }
@@ -2022,6 +2078,12 @@ export async function run(
         }
         if (command.status === "recognized") {
           if (!sessionId) return 0;
+          if (selectedWorkflowIsTerminal()) {
+            if (allow && !command.keepsPrompt) {
+              process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...allow } })}\n`);
+            }
+            return 0;
+          }
           // When this check cannot find or trust its own record, it stands aside
           // instead of refusing. A refusal could only send the agent back to a
           // fresh `next`, which re-issues the same step, and a record the hook
@@ -2033,18 +2095,27 @@ export async function run(
           // records the pass. In VS Code a routine command keeps its allow there
           // too: the click would only pause a step the engine answers from disk.
           const standAside = (reason: string): number => {
-            appendCoordinationStoodAside(projectDir, {
-              session: sessionId,
-              command: command.claim.commandKind,
-              reason,
-            });
+            try {
+              withWorkflowMutation(() => appendCoordinationStoodAside(projectDir, {
+                session: sessionId,
+                command: command.claim.commandKind,
+                reason,
+              }));
+            } catch {
+              // This audit is advisory. A competing lifecycle/record owner
+              // must not turn a command already standing aside into a failure.
+            }
             if (allow && !command.keepsPrompt) {
               process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...allow } })}\n`);
             }
             return 0;
           };
           let claimed: ReturnType<typeof claimCopilotCommand>;
-          try { claimed = claimCopilotCommand(projectDir, currentState(), command.claim); }
+          try {
+            const result = withWorkflowMutation(() => claimCopilotCommand(projectDir, currentState(), command.claim));
+            if (result === undefined) return 0;
+            claimed = result;
+          }
           catch (error) {
             if (error instanceof Error && error.name === "ActiveDirectiveLockContendedError") {
               process.stdout.write(denyJson("AI-DLC coordination is busy and no claim was committed. Retry this exact command and the same continuation token, when present."));
@@ -2188,6 +2259,7 @@ export async function run(
             hook_event_name: "PostToolUse",
             tool_name: target.toolName,
             tool_input: { file_path: target.filePath },
+            ...(coreSessionId ? { session_id: coreSessionId } : {}),
           });
           runCore("aidlc-write-audit-log.ts", fwd);
           runCore("aidlc-run-sensors.ts", fwd);
@@ -2201,13 +2273,13 @@ export async function run(
         const command = orchestrationCommand();
         if (command.status === "recognized" && sessionId) {
           try {
-            settleCopilotCommand(projectDir, currentState(), command.claim, capturedDirective());
+            withWorkflowMutation(() => settleCopilotCommand(projectDir, currentState(), command.claim, capturedDirective()));
           } catch {
             // A fresh next is the bounded recovery for an unsettled result.
           }
         }
         if (sessionId) {
-          try { settleCopilotIntentBoundary(projectDir, sessionId); } catch { /* bounded marker evidence */ }
+          try { withWorkflowMutation(() => settleCopilotIntentBoundary(projectDir, sessionId)); } catch { /* bounded marker evidence */ }
         }
       }
       return 0;
@@ -2387,6 +2459,22 @@ export async function run(
     } catch {
       // reconcile is observability — never block the session start
     }
+  }
+  };
+  return await runInHookWorkflow(projectDir, workflow, () => {
+    // Terminal prompts and session bootstrap still run. If completion wins
+    // while an active event is being evaluated, only independent guard
+    // refusals are recomputed; prompt effects are never replayed.
+    if (hookWorkflowIsInactive(workflow)) return dispatch();
+    return publishHookOutput(projectDir, workflow, dispatch, () => {
+      if (target === "guard-tool-call") return run(target, input, _extraArgs);
+      if (target === "session-start" && bootstrapOutput) process.stdout.write(bootstrapOutput);
+      return 0;
+    });
+  });
+  } finally {
+    bootstrap?.close();
+    workflow.restore();
   }
 }
 

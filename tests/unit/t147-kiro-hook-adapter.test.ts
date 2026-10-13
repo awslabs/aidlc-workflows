@@ -134,8 +134,10 @@ function seedShell(dir: string): void {
 function recordingGuard(capture: string): string {
   return [
     'import { appendFileSync } from "node:fs";',
+    'import { currentHookWorkflow, resolveProjectDirFromHook } from "../tools/aidlc-lib.ts";',
     "export async function run(input: string): Promise<number> {",
-    `  appendFileSync(${JSON.stringify(capture)}, input + "\\n");`,
+    '  const independent = currentHookWorkflow(resolveProjectDirFromHook(import.meta.url))?.mode === "independent";',
+    `  appendFileSync(${JSON.stringify(capture)} + (independent ? ".independent" : ""), input + "\\n");`,
     "  return 0;",
     "}",
     "if (import.meta.main) process.exit(await run(await Bun.stdin.text()));",
@@ -509,6 +511,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     try {
       const original = readIntentRegistry(dir)[0];
       const created = createIntent(dir, "new-work", "default", "bugfix");
+      appendFileSync(join(created.recordDir, "aidlc-state.md"), "\n- **Status**: Running\n");
       const sessionId = "kiro-create-session";
       writeSessionIntentUuid(dir, sessionId, created.uuid);
       writeSessionIntentHandoff(dir, sessionId, original.uuid, created.uuid);
@@ -553,6 +556,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         expect(r.code).toBe(0);
       }
       expect(forwardedSessions(capture)).toEqual(["S-KIRO", "S-KIRO", "S-KIRO"]);
+      expect(readFileSync(`${capture}.independent`, "utf8")).toBe(readFileSync(capture, "utf8"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

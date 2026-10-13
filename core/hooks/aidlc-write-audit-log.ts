@@ -6,12 +6,14 @@
 // Receives JSON on stdin from Claude Code. No-op if no audit.md exists (no
 // active workflow in this cwd) to preserve the existing "only log when
 // relevant" behaviour.
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
   hookStandsOutside,
+  hookWorkflowIsTerminal,
   enterHookWorkflow,
+  runInHookWorkflow,
   auditFilePath,
   type StageEntry,
   type ClaudeCodeHookInput,
@@ -30,6 +32,7 @@ import {
   resolveProjectDirFromHook,
   SUMMARY_AUTHORIZATION_FIELD,
   withAuditLock,
+  withHookWorkflowMutation,
 } from "../tools/aidlc-lib.ts";
 
 export async function run(input: string): Promise<number> {
@@ -43,14 +46,16 @@ export async function run(input: string): Promise<number> {
   // A write in a conversation that has not joined the selected workflow is not that workflow's artifact.
   const workflow = enterHookWorkflow(projectDir, payloadSession);
   try {
-    if (hookStandsOutside(workflow)) return 0;
-    return await recordArtifact(input, projectDir);
+    return runInHookWorkflow(projectDir, workflow, () => {
+    if (hookStandsOutside(workflow) || hookWorkflowIsTerminal(workflow)) return 0;
+    return withHookWorkflowMutation(projectDir, workflow, () => recordArtifact(input, projectDir)) ?? 0;
+    });
   } finally {
     workflow.restore();
   }
 }
 
-async function recordArtifact(input: string, projectDir: string): Promise<number> {
+function recordArtifact(input: string, projectDir: string): number {
 hookDebug(projectDir, "write-audit-log", "invoked", { projectDir, cwd: process.cwd() });
 
 // Write health heartbeat
@@ -176,7 +181,6 @@ if (tool === "Edit") {
   // Write or any other create-capable tool: check if file was net-new.
   let isNew = false;
   try {
-    const { statSync } = await import("node:fs");
     const st = statSync(file);
     // The filesystem creation timestamp (birthtimeMs) tracks mtimeMs on fresh
     // creation. If a file was overwritten, mtime advances past that timestamp.

@@ -744,6 +744,7 @@ describe("t276 cursor adapter payload conversion", () => {
   test("8: beforeSubmitPrompt never blocks the prompt; the next step says once where this chat's work is", () => {
     const proj = installedProject();
     const a = createIntent(proj, "intent-a", "default", "feature");
+    appendFileSync(join(a.recordDir, "aidlc-state.md"), "\n- **Status**: Running\n");
     const b = createIntent(proj, "intent-b", "default", "feature");
     setActiveIntentCursor(proj, a.dirName, "default");
 
@@ -804,6 +805,7 @@ describe("t276 cursor adapter payload conversion", () => {
   test("8b: a stamped, unbound chat keeps its own work and its turn after another chat moved the selection", () => {
     const proj = installedProject();
     const a = createIntent(proj, "intent-a", "default", "feature");
+    appendFileSync(join(a.recordDir, "aidlc-state.md"), "\n- **Status**: Running\n");
     const b = createIntent(proj, "intent-b", "default", "feature");
     setActiveIntentCursor(proj, a.dirName, "default");
     expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
@@ -837,6 +839,7 @@ describe("t276 cursor adapter payload conversion", () => {
   test("8c: a typed switch from a stamped, unbound chat carries no rebind line and gives the other work no turn", () => {
     const proj = installedProject();
     const a = createIntent(proj, "intent-a", "default", "feature");
+    appendFileSync(join(a.recordDir, "aidlc-state.md"), "\n- **Status**: Running\n");
     const b = createIntent(proj, "intent-b", "default", "feature");
     setActiveIntentCursor(proj, a.dirName, "default");
     expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
@@ -905,6 +908,7 @@ describe("t276 cursor adapter payload conversion", () => {
   test("9: beforeSubmitPrompt is silent when the session's intent is unchanged", () => {
     const proj = installedProject();
     const a = createIntent(proj, "unchanged", "default", "feature");
+    appendFileSync(join(a.recordDir, "aidlc-state.md"), "\n- **Status**: Running\n");
     setActiveIntentCursor(proj, a.dirName, "default");
     runAdapter(proj, "session-start", payload("sessionStart", proj));
 
@@ -1243,7 +1247,7 @@ describe("t276 cursor adapter payload conversion", () => {
     const captureFile = join(proj, "state-transition-input.json");
     writeFileSync(
       join(proj, ".cursor", "hooks", "aidlc-state-transition-guard.ts"),
-      `await Bun.write(${JSON.stringify(captureFile)}, await Bun.stdin.text());\n`,
+      `export async function run(input: string): Promise<number> { await Bun.write(${JSON.stringify(captureFile)}, input); return 0; }\n`,
     );
 
     const r = runAdapter(
@@ -1743,8 +1747,9 @@ describe("t276 cursor adapter payload conversion", () => {
     // Classification comes from the real review-freeze-command.ts; this stub
     // only marks whether the full child hook process was spawned.
     const spawnMarkerHook = `
-if (import.meta.main) {
+export async function run(): Promise<number> {
   await Bun.write(${JSON.stringify(marker)}, "ran");
+  return 0;
 }
 `;
 

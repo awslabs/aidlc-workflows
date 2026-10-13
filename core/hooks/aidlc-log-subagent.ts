@@ -27,6 +27,9 @@ import {
   reviewFileDigestOnDisk,
   stateFilePathForSelection,
   validSessionId,
+  withHookWorkflowMutation,
+  runInHookWorkflow,
+  type HookWorkflow,
 } from "../tools/aidlc-lib.ts";
 
 export async function run(input: string): Promise<number> {
@@ -78,6 +81,13 @@ export async function run(input: string): Promise<number> {
   // Record the completion in the workflow whose state was just read.
   const intent = selection.intent ?? undefined;
   const space = intent ? selection.space : undefined;
+  const workflow: HookWorkflow = {
+    selection,
+    participation: workflowParticipation(projectDir, selection),
+    lifecycle: "running",
+    restore: () => {},
+  };
+  return runInHookWorkflow(projectDir, workflow, () => withHookWorkflowMutation(projectDir, workflow, () => {
 
   // Write health heartbeat
   const healthDir = hooksHealthDir(projectDir, intent, space);
@@ -133,6 +143,7 @@ export async function run(input: string): Promise<number> {
     return 0;
   }
   return 0;
+  }) ?? 0);
 }
 
 if (import.meta.main) {

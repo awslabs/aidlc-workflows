@@ -95,6 +95,10 @@ export async function run(input: string): Promise<number> {
       stateFilePathForSelection,
       validSessionId,
       workflowParticipation,
+      isTerminalWorkflow,
+      workflowLifecycle,
+      withHookWorkflowMutation,
+      runInHookWorkflow,
       writeCurrentSessionId,
     },
     {
@@ -117,7 +121,6 @@ export async function run(input: string): Promise<number> {
       ? "flush-all"
       : "seal-main"
     : "holdback";
-  let currentStage: string | null = null;
   try {
     const selection = resolveWorkflowSelection(projectDir, {
       sessionId: sessionId || undefined,
@@ -126,6 +129,7 @@ export async function run(input: string): Promise<number> {
     // and a session bound to no record because it stayed out or left carries no
     // usage key. Its bytes are skipped, not held: a later join must not fold them.
     if (
+      isTerminalWorkflow(projectDir, selection) ||
       (selection.intent !== null && workflowParticipation(projectDir, selection) !== "participant") ||
       (selection.intent === null && selection.binding !== null &&
         LEFT_WORKFLOW_SOURCES.has(selection.binding.source))
@@ -135,6 +139,14 @@ export async function run(input: string): Promise<number> {
       usageTrace("fold-skip-end");
       return 0;
     }
+    const workflow = {
+      selection,
+      participation: workflowParticipation(projectDir, selection),
+      lifecycle: workflowLifecycle(projectDir, selection),
+      restore: () => {},
+    };
+    const folded = runInHookWorkflow(projectDir, workflow, () => withHookWorkflowMutation(projectDir, workflow, () => {
+    let currentStage: string | null = null;
     const statePath = stateFilePathForSelection(projectDir, selection);
     if (existsSync(statePath)) {
       // Under unit-major Current Stage stays on the block's first stage while
@@ -143,10 +155,6 @@ export async function run(input: string): Promise<number> {
       currentStage = readActiveDirectiveMarker(projectDir, stateContent)?.stage ??
         (currentStageSlug(stateContent) || null);
     }
-  } catch {
-    currentStage = null;
-  }
-
   if (sessionId) writeCurrentSessionId(projectDir, sessionId);
   writeCurrentTranscriptPath(projectDir, sessionId, transcriptPath);
   // PreToolUse seals the main assistant message. Before an engine call it also
@@ -158,6 +166,14 @@ export async function run(input: string): Promise<number> {
     sessionId,
   });
   usageTrace("fold-end");
+    return true;
+    }));
+    // A completion that won the lock also spends these transcript bytes, so
+    // an explicit later reopen never retroactively attributes this interval.
+    if (!folded) skipTranscriptUsage(projectDir, transcriptPath);
+  } catch {
+    // An unreadable selection cannot authorize workflow usage attribution.
+  }
   return 0;
 }
 

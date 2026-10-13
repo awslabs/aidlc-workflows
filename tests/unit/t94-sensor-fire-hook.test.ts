@@ -100,17 +100,19 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
+  DEFAULT_RECORD_DIR,
   seededAuditDir,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { setField, stateDigest } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { getField, setField, stateDigest } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-run-sensors.ts");
 const FRAMEWORK_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
+const HOOK_TARGET_ARGS = ["--hook-space", "default", "--hook-intent", DEFAULT_RECORD_DIR];
 
 // ISO-8601-ish prefix the .sh grepped for: YYYY-MM-DDThh:mm:ss... (isoTimestamp
 // emits the trailing Z; we anchor on the date+T to match the .sh's
@@ -239,7 +241,9 @@ function writeDispatchGraph(proj: string): string {
  *  state is what makes the active-intent cursor resolve to the record. */
 function seedState(proj: string, body: string): void {
   mkdirSync(seededRecordDir(proj), { recursive: true });
-  writeFileSync(seededStateFile(proj), body, "utf-8");
+  // A malformed lifecycle cannot authorize ambient sensor/health writes.
+  writeFileSync(seededStateFile(proj), getField(body, "Status") === null
+    ? `- **Status**: Running\n${body}` : setField(body, "Status", "Running"), "utf-8");
 }
 
 /** Create the resolved audit SHARD (the active-workflow gate at hook :100). With
@@ -376,6 +380,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
       "requirements-analysis",
       "--output-path",
       filePath,
+      ...HOOK_TARGET_ARGS,
     ]);
   });
 
@@ -400,6 +405,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     const argv = JSON.parse(readFileSync(spawnLogPath(proj), "utf-8").trim()) as string[];
     expect(argv.slice(2)).toEqual([
       "fire", "write-sensor", "--stage", "requirements-analysis", "--output-path", filePath,
+      ...HOOK_TARGET_ARGS,
     ]);
   });
 
@@ -418,6 +424,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     const argv = JSON.parse(readFileSync(spawnLogPath(proj), "utf-8").trim()) as string[];
     expect(argv.slice(2)).toEqual([
       "fire", "write-sensor", "--stage", "requirements-analysis", "--output-path", filePath,
+      ...HOOK_TARGET_ARGS,
     ]);
   });
 
@@ -446,6 +453,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
       "requirements-analysis",
       "--output-path",
       absoluteFilePath,
+      ...HOOK_TARGET_ARGS,
     ]);
   });
 
@@ -506,10 +514,12 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     // belongs to; the rows the dispatcher writes carry it.
     expect(argvFor({ stage: "requirements-analysis", unit: "alpha" })).toEqual([
       "fire", "write-sensor", "--stage", "requirements-analysis", "--output-path", filePath, "--unit", "alpha",
+      ...HOOK_TARGET_ARGS,
     ]);
     // No Unit named: the dispatch is as before.
     expect(argvFor({ stage: "requirements-analysis" })).toEqual([
       "fire", "write-sensor", "--stage", "requirements-analysis", "--output-path", filePath,
+      ...HOOK_TARGET_ARGS,
     ]);
   });
 

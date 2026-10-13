@@ -76,6 +76,12 @@ import {
 	usesStageLevelPerUnitArtifacts,
 	validateUnitName,
 	withAuditLock,
+	withHookWorkflowMutation,
+	withWorkflowSelection,
+	resolveWorkflowSelection,
+	workflowLifecycle,
+	hookWorkflowMayMutateRecord,
+	type HookWorkflow,
 } from "./aidlc-lib.ts";
 import {
 	compiledExecutable,
@@ -157,6 +163,7 @@ type FireOutcome =
 	| { kind: "budget-override"; capValue: number; observedSeconds: number };
 
 interface FireContext {
+	workflow: HookWorkflow | null;
 	sensor: SensorFile;
 	stageSlug: string;
 	unit: string | null;
@@ -192,7 +199,7 @@ function withSensorAuditLock(
 	ctx: FireContext,
 	phase: "fired" | "terminal",
 	append: () => void,
-): void {
+): boolean {
 	const started = process.hrtime.bigint();
 	const times: { entered: bigint | null; bodyEnded: bigint | null } = {
 		entered: null, bodyEnded: null,
@@ -200,11 +207,15 @@ function withSensorAuditLock(
 	let failed = false;
 	let failure: string | null = null;
 	try {
-		withAuditLock(projectDir, () => {
+		const publish = () => {
 			times.entered = process.hrtime.bigint();
 			try { append(); }
 			finally { times.bodyEnded = process.hrtime.bigint(); }
-		});
+			return true;
+		};
+		return ctx.workflow
+			? withHookWorkflowMutation(projectDir, ctx.workflow, publish) ?? false
+			: withAuditLock(projectDir, publish);
 	} catch (error) {
 		failed = true;
 		failure = errorMessage(error).slice(0, 512);
@@ -503,6 +514,25 @@ function consumeWithProducer(slug: string): string {
 //            emit terminal row.
 // Step 9 — exit 0.
 function handleFire(args: string[]): void {
+	const projectDir = resolveProjectDir();
+	const flags = parseFlags(args.slice(1));
+	const ambient = flags["hook-space"] !== undefined || flags["hook-intent"] !== undefined;
+	if (ambient && (flags["hook-space"] === undefined || flags["hook-intent"] === undefined)) {
+		dispatchError("ambient fire requires both --hook-space and --hook-intent");
+	}
+	const selection = resolveWorkflowSelection(projectDir, ambient
+		? { space: flags["hook-space"], intent: flags["hook-intent"] }
+		: {});
+	// The empty argument is the legacy flat record, not a fresh cursor lookup.
+	if (ambient && flags["hook-intent"] === "") selection.intent = null;
+	const workflow: HookWorkflow | null = ambient ? {
+		selection, participation: "participant", lifecycle: workflowLifecycle(projectDir, selection), restore: () => {},
+	} : null;
+	if (workflow && !hookWorkflowMayMutateRecord(workflow)) return;
+	withWorkflowSelection(projectDir, selection, () => handleSelectedFire(args, projectDir, workflow));
+}
+
+function handleSelectedFire(args: string[], projectDir: string, workflow: HookWorkflow | null): void {
 	const id = args[0];
 	if (!id || id.startsWith("--")) {
 		dispatchError("fire requires a sensor id as first positional arg");
@@ -576,8 +606,6 @@ function handleFire(args: string[]): void {
 
 	// Resolve the project dir once — used by the consume filter in step 2 and
 	// the detail-file path in step 3.
-	const projectDir = resolveProjectDir();
-
 	// --- 2. Compute extra args for the per-sensor script ---
 	// Markdown sensors take --output-path; code sensors take --file-path.
 	// upstream-coverage additionally takes --consumes
@@ -672,6 +700,7 @@ function handleFire(args: string[]): void {
 	const timeoutMs = timeoutSeconds * 1000;
 
 	const ctx: FireContext = {
+		workflow,
 		sensor,
 		stageSlug,
 		unit,
@@ -684,7 +713,7 @@ function handleFire(args: string[]): void {
 	};
 
 	// --- 4. Lock window A — emit SENSOR_FIRED ---
-	withSensorAuditLock(projectDir, ctx, "fired", () => {
+	const fired = withSensorAuditLock(projectDir, ctx, "fired", () => {
 		appendAuditEntryUnlocked(
 			"SENSOR_FIRED",
 			{
@@ -697,6 +726,7 @@ function handleFire(args: string[]): void {
 			projectDir,
 		);
 	});
+	if (!fired) return;
 
 	// --- 5. Spawn (no lock held). Wall-clock measured for branch a. ---
 	const startedAt = Date.now();
@@ -720,8 +750,12 @@ function handleFire(args: string[]): void {
 	// --- 6. Decide outcome via the truth table ---
 	const outcome = decideOutcome(ctx, result, elapsedMs, timeoutMs);
 
-	// --- 7. If FAILED: write detail file via wx-flag + rename ---
+	// Publish the detail, pruning and paired row in one checked critical
+	// section. An ambient worker finishing after completion publishes nothing;
+	// its earlier FIRED row truthfully remains incomplete.
 	let finalOutcome = outcome;
+	const published = withSensorAuditLock(projectDir, ctx, "terminal", () => {
+	// --- 7. If FAILED: write detail file via wx-flag + rename ---
 	if (outcome.kind === "failed") {
 		try {
 			mkdirSync(detailDir, { recursive: true });
@@ -747,10 +781,10 @@ function handleFire(args: string[]): void {
 		pruneSupersededDetailFiles(detailDir, id, outputPath, startedAt);
 	}
 
-	// --- 8. Lock window B — emit terminal row ---
-	withSensorAuditLock(projectDir, ctx, "terminal", () => {
+	// --- 8. Emit terminal row under the same publication lock ---
 		emitTerminal(ctx, finalOutcome, projectDir);
 	});
+	if (!published) return;
 
 	// --- 9. Machine-readable verdict for gate-boundary enforcement ---
 	const verdict: FireVerdict = {

@@ -46,6 +46,7 @@ import {
   answerModeStageStartedFields,
   personsGateFeedback,
   resolveInvokingSessionId,
+  withWorkflowRecordLock,
 } from "./aidlc-lib.js";
 
 // The EFFECTIVE per-stage action: the live state file's EXECUTE/SKIP suffix
@@ -239,6 +240,7 @@ function parseFlags(
 function handleReopen(args: string[]): void {
   const flags = parseFlags(args);
   const pd = resolveProjectDir(projectDir);
+  withWorkflowRecordLock(pd, () => {
   let content = readStateFile(pd);
   const targetSlug = flags.target;
   const units = (flags.units ?? "").split(",").map((unit) => unit.trim()).filter(Boolean);
@@ -323,6 +325,7 @@ function handleReopen(args: string[]): void {
     reopened: targetSlug, stages, units, ...(stagesReset.length > 0 ? { stages_reset: stagesReset } : {}),
     state_updated: true, audit_appended: true,
   }));
+  });
 }
 
 // --- Subcommand: resolve ---
@@ -638,6 +641,7 @@ function movedState(
 function handleExecute(args: string[]): void {
   const flags = parseFlags(args);
   const pd = resolveProjectDir(projectDir);
+  const unitJump = withWorkflowRecordLock(pd, () => {
   let content = readStateFile(pd);
 
   const targetSlug = flags.target;
@@ -678,8 +682,9 @@ function handleExecute(args: string[]): void {
   }
 
   if (flags.units !== undefined) {
-    executeUnitsForward(pd, flags, targetStage, direction);
-    return;
+    // The per-unit route invokes state-tool children. Release this preflight
+    // transaction before dispatch: each child owns its own record transaction.
+    return { targetStage, direction };
   }
 
   const graph = loadStageGraph();
@@ -819,6 +824,8 @@ function handleExecute(args: string[]): void {
       timestamp,
     })
   );
+  });
+  if (unitJump) executeUnitsForward(pd, flags, unitJump.targetStage, unitJump.direction);
 }
 
 // `execute --units`: a forward jump in Construction that runs one unit at a
@@ -861,6 +868,7 @@ function executeUnitsForward(
   }
   // The active Unit's lifecycle mirror describes the step it left; the next
   // `unit start` writes it again.
+  withWorkflowRecordLock(pd, () => {
   let content = readStateFile(pd);
   if (units.includes(getField(content, "Active Unit")?.trim() ?? "")) {
     for (const field of ["Active Unit", "Unit Stage", "Unit State", "Unit Pause Reason", "Unit Next Action"]) {
@@ -885,6 +893,7 @@ function executeUnitsForward(
       timestamp,
     })
   );
+  });
 }
 
 // The state tool, run as its own command: it owns the one-Unit skip, and

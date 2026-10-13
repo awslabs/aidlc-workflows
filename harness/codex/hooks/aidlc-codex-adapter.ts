@@ -72,13 +72,25 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   emptyPickerResult,
   isNonAnswer,
+  enterHookWorkflow,
+  hookWorkflowIsInactive,
+  hookChildEnv,
+  currentHookWorkflow,
+  captureHookWorkflow,
+  runInHookWorkflow,
   noteHelperSession,
   sessionsDir,
   stateFilePath,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
+import { publishHookOutput } from "../tools/aidlc-hook-output.ts";
+import { beginHookBootstrapCapture } from "../tools/aidlc-hook-bootstrap.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
+const TERMINAL_GUARD_TARGETS = new Set([
+  "guard-tool-call", "state-transition-guard", "reviewer-scope",
+  "review-freeze", "plan-approval-guard",
+]);
 
 interface CodexHookInput {
   hook_event_name?: string;
@@ -205,10 +217,36 @@ function explicitHumanSelectionText(toolResponse: unknown): string {
   return "";
 }
 
+// Re-wrap the core context output ({"additionalContext": ...}) into the
+// hookSpecificOutput envelope Codex consumes (verified live for SessionStart).
+// CONTRACT WARNING: each Codex event has its OWN output schema — do not reuse
+// this envelope for other events without checking the binary's embedded
+// <event>.command.output schema. PostCompact in particular allows NO
+// hookSpecificOutput and no context channel at all ("this event cannot emit
+// additionalContext"); reusing this wrapper there is rejected as invalid
+// hook JSON on every compaction.
+function wrapContext(coreStdout: string, eventName: string): string {
+  try {
+    const parsed = JSON.parse(coreStdout) as { additionalContext?: string };
+    if (parsed.additionalContext) {
+      return `${JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: eventName,
+          additionalContext: parsed.additionalContext,
+        },
+      })}\n`;
+    }
+  } catch {
+    // unparseable core output — pass through untouched
+  }
+  return coreStdout;
+}
+
 export async function run(
   target: string,
   input: string,
   _extraArgs: string[] = [],
+  recheckingTerminalReplay = false,
 ): Promise<number> {
 let rawInput = "";
 let codex: CodexHookInput = {};
@@ -245,6 +283,16 @@ const projectEnv = {
   AIDLC_PROJECT_DIR: projectDir,
   CLAUDE_PROJECT_DIR: projectDir,
 };
+const workflow = enterHookWorkflow(projectDir, payloadSessionId, {
+  ...(target === "session-start" ? { sessionStartSource: codex.source ?? "startup" } : {}),
+});
+const bootstrapCapture = workflow.selection ? beginHookBootstrapCapture(projectDir, {
+  ...workflow.selection, sessionId: payloadSessionId ?? workflow.selection.sessionId,
+}) : null;
+let bootstrapOutput = "";
+
+try {
+const dispatch = async (): Promise<number> => {
 
 // --- Duplicate-delivery replay cache ---------------------------------------
 //
@@ -265,7 +313,7 @@ const projectEnv = {
 // stdin and would replay the FIRST compaction's (stale) workflow context.
 // The compact render is read-only (source=compact emits no audit row), so
 // re-running a true duplicate is harmless while replaying a stale one is not.
-const bypassReplay = target === "session-start" && codex.source === "compact";
+const bypassReplay = recheckingTerminalReplay || (target === "session-start" && codex.source === "compact");
 
 const DEDUPE_ROOT = join(sessionsDir(projectDir), "codex-dedupe");
 const dedupeKey = createHash("sha256").update(`${target}\n${rawInput}`).digest("hex").slice(0, 32);
@@ -302,7 +350,7 @@ function pruneStale(): void {
   }
 }
 
-function replayResponse(): { stdout: string; code: number; stderr?: string } {
+function replayResponse(): { stdout: string; code: number; stderr?: string; bootstrap?: string } {
   // Duplicate delivery: wait up to ~2s for the first runner's response, then
   // answer identically. If it never lands, fail open silently. stderr rides
   // the cache too so a reviewer-scope BLOCK (stderr + exit 2) replays
@@ -313,6 +361,7 @@ function replayResponse(): { stdout: string; code: number; stderr?: string } {
         stdout: string;
         code: number;
         stderr?: string;
+        bootstrap?: string;
       };
       return cached;
     } catch {
@@ -325,7 +374,10 @@ function replayResponse(): { stdout: string; code: number; stderr?: string } {
 function persistResponse(stdout: string, code: number, stderr?: string): void {
   if (bypassReplay) return;
   try {
-    writeFileSync(responseFile, JSON.stringify({ stdout, code, ...(stderr ? { stderr } : {}) }), "utf-8");
+    writeFileSync(responseFile, JSON.stringify({
+      stdout, code, ...(stderr ? { stderr } : {}),
+      ...(bootstrapOutput ? { bootstrap: bootstrapOutput } : {}),
+    }), "utf-8");
   } catch {
     // best-effort — a duplicate will fail open instead of replaying
   }
@@ -338,13 +390,44 @@ if (!bypassReplay) {
     mkdirSync(slotDir); // atomic claim — throws EEXIST for the duplicate
   } catch {
     const replay = replayResponse();
-    if (replay.stdout) process.stdout.write(replay.stdout);
-    if (replay.stderr) process.stderr.write(replay.stderr);
-    return replay.code;
+    return await publishHookOutput(projectDir, workflow, () => {
+      if (replay.stdout) process.stdout.write(replay.stdout);
+      if (replay.stderr) process.stderr.write(replay.stderr);
+      return replay.code;
+    }, async () => {
+      // Delivery remains spent: never re-mint a prompt or repeat workflow
+      // effects because its cached response became stale. Guard responses can
+      // include independent runtime/checkout refusals, so recompute those
+      // through their normal core checks instead of inspecting stderr prose.
+      if (TERMINAL_GUARD_TARGETS.has(target)) {
+        return await run(target, input, _extraArgs, true);
+      }
+      if (typeof replay.bootstrap === "string") {
+        const context = wrapContext(replay.bootstrap, "SessionStart");
+        if (context) process.stdout.write(context);
+      }
+      return 0;
+    });
   }
 }
 
 // --- Core-hook subprocess plumbing ------------------------------------------
+
+function coreChildEnv(hook: string, input: string, authorityToken: string) {
+  let session = payloadSessionId;
+  try {
+    session = validSessionId((JSON.parse(input) as { session_id?: string }).session_id) ?? session;
+  } catch { /* malformed advisory input retains this event's identity */ }
+  const childWorkflow = hook === "rebuild-stage-graph" ? undefined
+    : hook === "session-end" && session !== payloadSessionId
+      ? captureHookWorkflow(projectDir, session)
+      : currentHookWorkflow(projectDir) ?? workflow;
+  return hookChildEnv(projectDir, session ?? undefined, {
+    ...projectEnv,
+    ...(authorityToken ? { AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken } : {}),
+    ...(hook === "session-start" ? bootstrapCapture?.env : {}),
+  }, childWorkflow);
+}
 
 function runCore(hookFile: string, input: string): { stdout: string; code: number } {
   // Reuse the exact bun binary running this adapter; the child must not depend on
@@ -363,16 +446,15 @@ function runCore(hookFile: string, input: string): { stdout: string; code: numbe
           "--internal-aidlc-record-human-turn",
           join(HOOKS_DIR, hookFile),
         ]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      : [process.execPath, join(HOOKS_DIR, "..", "tools", "aidlc.ts"), "engine", "hook", hook];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(input, "utf-8"),
     stdout: "pipe",
     stderr: "ignore",
     cwd: projectDir,
-    env: authorityToken
-      ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
-      : projectEnv,
+    env: coreChildEnv(hook, input, authorityToken),
   });
+  if (hook === "session-start") bootstrapOutput = bootstrapCapture?.read() ?? "";
   return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
 }
 
@@ -396,15 +478,13 @@ function runCoreWithStderr(
           "--internal-aidlc-record-human-turn",
           join(HOOKS_DIR, hookFile),
         ]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      : [process.execPath, join(HOOKS_DIR, "..", "tools", "aidlc.ts"), "engine", "hook", hook];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(input, "utf-8"),
     stdout: "pipe",
     stderr: "pipe",
     cwd: projectDir,
-    env: authorityToken
-      ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
-      : projectEnv,
+    env: coreChildEnv(hook, input, authorityToken),
   });
   return {
     stdout: r.stdout?.toString() ?? "",
@@ -469,31 +549,6 @@ async function collectOutput(
     process.stderr.write = stderrWrite;
   }
   return { stdout: out.join(""), stderr: err.join(""), code };
-}
-
-// Re-wrap the core context output ({"additionalContext": ...}) into the
-// hookSpecificOutput envelope Codex consumes (verified live for SessionStart).
-// CONTRACT WARNING: each Codex event has its OWN output schema — do not reuse
-// this envelope for other events without checking the binary's embedded
-// <event>.command.output schema. PostCompact in particular allows NO
-// hookSpecificOutput and no context channel at all ("this event cannot emit
-// additionalContext"); reusing this wrapper there is rejected as invalid
-// hook JSON on every compaction.
-function wrapContext(coreStdout: string, eventName: string): string {
-  try {
-    const parsed = JSON.parse(coreStdout) as { additionalContext?: string };
-    if (parsed.additionalContext) {
-      return `${JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: eventName,
-          additionalContext: parsed.additionalContext,
-        },
-      })}\n`;
-    }
-  } catch {
-    // unparseable core output — pass through untouched
-  }
-  return coreStdout;
 }
 
 function allowUpdatedInput(coreStdout: string): string {
@@ -897,7 +952,7 @@ switch (target) {
     let allowed = "";
     const refusals: string[] = [];
     for (const member of members) {
-      const said = await collectOutput(() => run(member, rawInput, _extraArgs));
+      const said = await collectOutput(() => run(member, rawInput, _extraArgs, recheckingTerminalReplay));
       if (said.code === 2) {
         code = 2;
         if (said.stderr && !refusals.includes(said.stderr)) refusals.push(said.stderr);
@@ -998,6 +1053,29 @@ switch (target) {
   default:
     persistResponse("", 0);
     return 0;
+}
+};
+// Creation's trusted receipt binds the invoking chat inside the rebuild hook.
+// That core hook captures its target after the binding; pinning the adapter's
+// previous selection here would hide the newly created record from it.
+return await (target === "rebuild-stage-graph"
+  ? dispatch()
+  : runInHookWorkflow(projectDir, workflow, () => {
+      // A prompt already received beside history still belongs in the message
+      // store. Only a response computed while Running needs late suppression.
+      if (hookWorkflowIsInactive(workflow)) return dispatch();
+      return publishHookOutput(projectDir, workflow, dispatch, () =>
+        TERMINAL_GUARD_TARGETS.has(target)
+          ? run(target, input, _extraArgs, true)
+          : (() => {
+              const context = wrapContext(bootstrapOutput, "SessionStart");
+              if (context) process.stdout.write(context);
+              return 0;
+            })());
+    }));
+} finally {
+  bootstrapCapture?.close();
+  workflow.restore();
 }
 }
 
