@@ -126,7 +126,7 @@ tool_output_token_limit = 20000
 # Sandbox: workspace-write keeps <workspace>/.git read-only BY DESIGN;
 # interactive sessions escalate (deny -> approve -> retry unsandboxed) and the
 # shipped rules/default.rules pre-allows git worktree/commit/add prefixes so
-# escalations vanish. HEADLESS runs (codex exec workers, CI, test drivers)
+# escalations vanish. HEADLESS runs (CI, test drivers)
 # cannot escalate: uncomment writable_roots with the MAIN repo's absolute
 # .git path (linked worktrees resolve into <main>/.git/worktrees/*).
 sandbox_mode = "workspace-write"
