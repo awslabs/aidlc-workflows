@@ -708,13 +708,16 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     const huge = 'keep the "old" layout\nand the old colours '.repeat(1200).trim();
     const big = installed(OPENCODE);
     intentCreate(big, OPENCODE);
-    const bigId = idIn(next(big, OPENCODE, {}, ["--", huge]));
+    // Through a request file: one argument this long is past Windows' command-line limit.
+    mkdirSync(join(big, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(big, "aidlc", ".aidlc-request-text", "request.txt"), huge);
+    const bigId = idIn(next(big, OPENCODE, {}, ["--request-file", "aidlc/.aidlc-request-text/request.txt"]));
     beat(big, "reviewer-scope");
     const cut = next(big, OPENCODE, {}, ["--request", bigId]);
     expect(cut.kind, JSON.stringify(cut).slice(0, 300)).toBe("print");
     expect(cut.message ?? "").toContain("(cut to fit this step: if this step has you pass their words on, tell the person in one line that their request was too long to carry on whole");
     expect(cut.message ?? "").not.toContain(JSON.stringify(huge));
-    expect(existsSync(join(big, "aidlc", ".aidlc-request-text"))).toBe(false);
+    expect(existsSync(join(big, "aidlc", ".aidlc-request-text", `kept-${bigId}.txt`))).toBe(false);
   });
 
   test("it runs in the work it was stopped in, never in work selected since", () => {
