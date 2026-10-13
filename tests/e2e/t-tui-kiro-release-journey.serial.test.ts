@@ -43,6 +43,7 @@ import {
   runReleaseJourney,
   setupReleaseJourneyProject,
 } from "../harness/release-journey.ts";
+import { assertTuiDriveKill } from "../harness/tui-fixtures.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
@@ -156,7 +157,7 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
           }
         });
       } finally {
-        drive(["kill", "--session", session]);
+        assertTuiDriveKill(drive(["kill", "--session", session]), session);
       }
       expect(report.problems).toEqual([]);
       rmSync(project.root, { recursive: true, force: true });
