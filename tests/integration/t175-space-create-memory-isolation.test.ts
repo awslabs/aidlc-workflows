@@ -116,7 +116,7 @@ describe("t175 space-create memory isolation (vision §11 — no learning leak)"
 
     expect(util(["space", "payments"]).status).toBe(0);
     expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
-    const env = { ...process.env, AIDLC_UNATTENDED: "1" };
+    const env: Record<string, string | undefined> = { ...process.env, AIDLC_UNATTENDED: "1" };
     delete env.AWS_AIDLC_DEFAULT_SCOPE;
     const r = runOrchestrateNext(ORCH, proj, [], { env });
     expect(r.directive?.kind, r.out).toBe("run-stage");
