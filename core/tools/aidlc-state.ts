@@ -52,6 +52,7 @@ import {
   CONSTRUCTION_POLICY_RECOVERY,
   latestPersonTurn,
   leftOutLine,
+  PERSON_ASKED_SKIP_REASON,
   auditShardName,
   appendSlug,
   appendUnderHeading,
@@ -7840,14 +7841,16 @@ function handleSkip(args: string[]): void {
     error("aidlc-state.ts skip --route requires a nonblank --reason <text>.");
   }
   // A stage waiting at its approval gate may be skipped only once its plan
-  // row says SKIP: the person decided it no longer applies (they said the
-  // work is a new project), so the gate closes as skipped, not approved.
-  const planSkips = parseStateStageSuffixes(content).get(slug) === "SKIP";
+  // row says SKIP (the person decided it no longer applies: they said the
+  // work is a new project) or the person asked to skip it, so the gate
+  // closes as skipped, not approved.
+  const personDecided = parseStateStageSuffixes(content).get(slug) === "SKIP" ||
+    reason === PERSON_ASKED_SKIP_REASON;
   validateSlugInState(content, slug, [
     "in-progress",
     "revising",
     "skipped",
-    ...(planSkips ? ["awaiting-approval" as const] : []),
+    ...(personDecided ? ["awaiting-approval" as const] : []),
   ]);
   const currentStage = getField(content, "Current Stage");
   if (currentStage !== slug) {

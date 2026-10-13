@@ -214,8 +214,10 @@ workflow with an explicit nonblank `--stage` and `--reason`, when the named
 stage is declared `execution: CONDITIONAL` (a stage of any kind when the
 reason is the one the engine's skip step names for a stage the person asked
 to skip, `the person asked to skip it`), equals `Current Stage`, and is
-Active or Revising, or AwaitingApproval when its plan row now says SKIP (a
-gate the person's own decision made moot). It runs before
+Active or Revising, or AwaitingApproval when its plan row now says SKIP or
+the reason is that token (a gate the person's own decision made moot; under
+Unit-by-Unit Construction the Units' files for it stay as they are). It runs
+before
 artifact, per-unit, and ensemble-evidence guards because a justified skip owes
 no completion evidence. The engine invokes the internal skip transition with
 its routing marker: the transaction preserves `[S]`, emits exactly one

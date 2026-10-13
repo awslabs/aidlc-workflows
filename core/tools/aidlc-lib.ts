@@ -6590,6 +6590,12 @@ export function personLineHeard(projectDir: string, sessionId: string, line: str
   return readPendingPersonLines(path, turn, work).said.includes(line);
 }
 
+// The reason the engine's skip step hands the agent for a stage the person
+// asked to skip where it stands (orchestrate's planChangeDirective). report
+// and the state tool read it back: that skip is the person's, so a stage that
+// must run, or one waiting at its own question, is skipped as they asked.
+export const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
+
 // What the person asked to leave out of a build (#1342): the `Deferred` items
 // in these traceability.json files, at most ten by id and then a count, or
 // null when there are none or a file cannot be read.
