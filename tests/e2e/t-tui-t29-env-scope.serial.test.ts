@@ -13,9 +13,9 @@
 //     no-state guidance. The shipped settings env default is not enough by
 //     itself to start a workflow; the state file remains absent.
 //   - Case override (explicit flag wins over env): same shipped `feature`
-//     default, but `/aidlc --scope feature` overrides it -> Scope=feature on disk.
+//     default, but `/aidlc --scope feature <description>` overrides it -> Scope=feature on disk.
 //     .sh assertion ported: state `- **Scope**: feature`.
-//   - Case known-scope positional: `/aidlc feature` bootstraps Scope=feature
+//   - Case known-scope positional: `/aidlc feature: <description>` bootstraps Scope=feature
 //     without a scope-disambiguation gate; the bare known-scope token wins over the
 //     settings default in the live TUI path.
 //   - Case error (invalid env value errors, writes NO state): the env block is
@@ -370,7 +370,9 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
         // Shipped `feature` env default stays; the explicit --scope flag must win.
         launchReady(session, proj);
 
-        drive(["send", "--session", session, "--keys", "/aidlc --scope feature", "--literal", "--no-enter"]);
+        // With a description: named alone, the scope first asks what the work is
+        // for (#2355), and this case is about the creation that follows.
+        drive(["send", "--session", session, "--keys", "/aidlc --scope feature build a simple todo app", "--literal", "--no-enter"]);
         drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
 
         // TERMINATE on the DETERMINISTIC disk signal: Scope=feature in state.md.
@@ -410,11 +412,15 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
   );
 
   // --- Case known-scope positional: bare keyword bootstraps that scope --------
-  // `/aidlc feature` is a known-scope request. The first engine call sees no
-  // state and emits the workflow creation print naming `init --scope feature`
-  // (run-then-continue); the TUI conductor runs it and re-enters the loop, so
-  // Scope=feature lands on disk. No scope-disambiguation AUQ is expected or
-  // required; a generic no-state bootstrap menu is answered when it appears.
+  // `/aidlc feature: <description>` is a known-scope request. The first engine
+  // call sees no state and emits the workflow creation print naming
+  // `intent create --scope feature` (run-then-continue); the TUI conductor runs
+  // it and re-enters the loop, so Scope=feature lands on disk. No
+  // scope-disambiguation AUQ is expected or required; a generic no-state
+  // bootstrap menu is answered when it appears. The description comes with it
+  // because a scope named alone first asks what the work is for (#2355), and
+  // in the colon form because `feature <words>` leaves it to the agent whether
+  // `feature` names the plan or is the person's own first word.
   test.skipIf(SKIP_REASON !== null)(
     `bare known-scope command (/aidlc feature) bootstraps Scope=feature without a scope disambiguation gate${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
@@ -424,7 +430,7 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
         // Shipped `feature` env default stays; the known scope positional wins.
         launchReady(session, proj);
 
-        drive(["send", "--session", session, "--keys", "/aidlc feature", "--literal", "--no-enter"]);
+        drive(["send", "--session", session, "--keys", "/aidlc feature: build a simple todo app", "--literal", "--no-enter"]);
         drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
 
         const { landed, pane } = await waitForScopeLanding(session, proj, "feature", remainingWorkMs());
