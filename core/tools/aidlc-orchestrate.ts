@@ -7237,8 +7237,18 @@ function buildRunStageDirective(
   ) {
     protocolModules.push("ensemble");
   }
+  // Contribution files and mob rounds apply only when support agents are
+  // dispatched; an inline stage adopts its supports in the lead's own chat.
+  if (effectiveSupports.length > 0 && node.mode !== "inline") {
+    protocolModules.push("collaborators");
+  }
   if (node.phase === "construction") {
     protocolModules.push("construction");
+  }
+  // A Build and Test failure can loop back to Code Generation, and a reopened
+  // Code Generation runs by the same procedure.
+  if (node.slug === "code-generation" || node.slug === "build-and-test") {
+    protocolModules.push("loopback");
   }
   // The learnings ritual runs at a gate's first showing, never again for a
   // revision of it (stage-protocol.md, Request Changes).
@@ -10470,6 +10480,7 @@ function applyGateOnlyShape(
     (module) =>
       module !== "reviewer" &&
       module !== "ensemble" &&
+      module !== "collaborators" &&
       module !== "learnings",
   );
   if (directive.construction_policy) {
@@ -10601,7 +10612,9 @@ function applyConstructionCheckpointShape(
     directive.consumes = rechecked.consumes;
     directive.produces = rechecked.produces;
   }
-  directive.protocol_modules = checkpoint.rereview ? ["reviewer", "construction"] : ["construction"];
+  directive.protocol_modules = checkpoint.rereview
+    ? ["reviewer", "construction", "checkpoint"]
+    : ["construction", "checkpoint"];
   // A checkpoint the person approves offers one learnings ritual for the
   // stages it covers, as a stage's own approval gate does. A re-check of
   // changed code asks only for the approval, and so does a checkpoint whose
@@ -10634,7 +10647,7 @@ function applySwarmCheckpointShape(
   delete directive.review_artifact;
   delete directive.review_class;
   delete directive.reviewer_max_iterations;
-  directive.protocol_modules = ["construction", "swarm"];
+  directive.protocol_modules = ["construction", "checkpoint", "swarm"];
 }
 
 // Try to handle an eligible autonomous swarm stage, returning true (and emitting)
@@ -10871,9 +10884,13 @@ function tryEmitSwarm(
             : node.reviewer_max_iterations ?? 2,
       }
     : {};
+  // A swarm batch verifies with the checkpoint's command and can replay a
+  // Build and Test loop-back.
   const protocolModules: ProtocolModule[] = [
     ...(node.reviewer ? (["reviewer"] as const) : []),
     "construction",
+    "checkpoint",
+    "loopback",
     "swarm",
   ];
   const resumeExisting = stateContent !== null && checkpointPolicyEnabled(stateContent) &&
@@ -11445,6 +11462,7 @@ function attachBoundedWave(
     );
   }
   directive.wave = { batch_index: wave.batch_index, entries };
+  directive.protocol_modules = [...(directive.protocol_modules ?? []), "wave"];
   if (directive.ceremony.learnings === "on") {
     for (const entry of entries) {
       bootstrapDirectiveMemory(entry.unit_memory_path, codekbCtx);

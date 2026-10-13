@@ -72,9 +72,7 @@
 //   §8 Test Strategy      (.sh 138)  → "Test Strategy section in §8"
 //   §8 Nyquist            (.sh 139)  → "test strategy mentions Nyquist"
 //   §8 5-8 per component  (.sh 140)  → "Standard volume 5-8 tests per component"
-//   §3 within-bolt        (.sh 143)  → "Within-Bolt Question Collection section"
-//   §3 QUESTION-ONLY      (.sh 144)  → "references QUESTION-ONLY mode"
-//   §3 ARTIFACT-ONLY      (.sh 145)  → "references ARTIFACT-ONLY mode"
+//   §3 execution modes    (.sh 143-145) → "names the stage files' execution modes"
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -400,19 +398,9 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
   });
 
   // =========================================================================
-  // §3 — Within-Bolt Question Collection + execution modes (.sh 143-145).
+  // §3: execution modes (.sh 143-145).
   // =========================================================================
-  test("Construction module carries Within-Bolt Question Collection", () => {
-    expect(CONSTRUCTION_PROTOCOL).toContain(
-      "### Within-Bolt Question Collection",
-    );
-  });
-
-  test("§3: bolt protocol references QUESTION-ONLY mode", () => {
-    expect(CONSTRUCTION_PROTOCOL).toContain("QUESTION-ONLY mode");
-  });
-
-  test("§3: bolt protocol references ARTIFACT-ONLY mode", () => {
-    expect(CONSTRUCTION_PROTOCOL).toContain("ARTIFACT-ONLY mode");
+  test("§3: the Construction module names the stage files' execution modes", () => {
+    expect(CONSTRUCTION_PROTOCOL).toContain("documents its execution modes (QUESTION-ONLY, ARTIFACT-ONLY, Full)");
   });
 });

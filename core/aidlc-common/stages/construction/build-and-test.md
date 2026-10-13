@@ -197,8 +197,8 @@ quality target is never an acceptable fix.
 3. **Autonomous bounded loop-back** — if `Construction Autonomy Mode:
    autonomous` (in aidlc-state.md), an impact-estimated fix exists, and fewer than
    3 entries exist under `## Loop-Back Log` in test-results.md: follow the
-   construction protocol module
-   (`aidlc-common/protocols/stage-protocol-construction.md`),
+   loop-back protocol module
+   (`aidlc-common/protocols/stage-protocol-loopback.md`),
    "Build-and-Test failure loop-back". Record the diagnosis +
    impact-estimated fix plan, then reopen code-generation for the unit(s) the
    fix names (every unit only when the cause spans them all) and replay
@@ -207,16 +207,16 @@ quality target is never an acceptable fix.
 4. **Halt-and-ask** — if the mode is gated (or unset), the 3-loop-back bound
    is exhausted, or no identifiable fix exists: log the failure in
    test-results.md and present the impact-estimated halt-and-ask question
-   defined in the construction protocol module
-   (`aidlc-common/protocols/stage-protocol-construction.md`),
+   defined in the loop-back protocol module
+   (`aidlc-common/protocols/stage-protocol-loopback.md`),
    "Build-and-Test failure loop-back", listing every candidate fix WITH ITS
    ESTIMATED IMPACT. Giving up is the human's decision to make, never the
    agent's. When rung 2 found no identifiable fix at all, present that
    section's no-fix variant instead — it drops the "Retry with fix" option
    entirely rather than inventing a fix to retry with.
 
-**Loop-back replay invariant** (construction protocol module,
-`aidlc-common/protocols/stage-protocol-construction.md`): artifact-only
+**Loop-back replay invariant** (loop-back protocol module,
+`aidlc-common/protocols/stage-protocol-loopback.md`): artifact-only
 code-generation workflows may
 settle directly to the all-covered gate, while sticky receipt-mode workflows
 re-emit per-unit work. Both routes apply the planned fix and deterministic

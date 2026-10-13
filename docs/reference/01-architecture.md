@@ -763,7 +763,11 @@ dist/claude/.claude/
     |   +-- stage-protocol-governance.md
     |   +-- stage-protocol-reviewer.md
     |   +-- stage-protocol-ensemble.md
+    |   +-- stage-protocol-collaborators.md
     |   +-- stage-protocol-construction.md
+    |   +-- stage-protocol-checkpoint.md
+    |   +-- stage-protocol-loopback.md
+    |   +-- stage-protocol-wave.md
     |   +-- stage-protocol-swarm.md
     |   +-- stage-protocol-learnings.md
     +-- stages/

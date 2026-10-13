@@ -81,6 +81,13 @@ export const VALID_PROTOCOL_MODULES = [
   "construction",
   "swarm",
   "learnings",
+  // The Construction and ensemble branches a step can take, each named only
+  // on the steps that take it: a checkpoint, the Build-and-Test loop-back, a
+  // wave, and dispatched support agents.
+  "checkpoint",
+  "loopback",
+  "wave",
+  "collaborators",
 ] as const;
 export type ProtocolModule = (typeof VALID_PROTOCOL_MODULES)[number];
 

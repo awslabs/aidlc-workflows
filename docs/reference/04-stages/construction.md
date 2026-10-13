@@ -245,7 +245,7 @@ current batch until every applicable Unit has all of that evidence, then permits
 a dependent batch or the single stage gate. Waves never apply under
 `Construction Iteration: unit-major`; harnesses without a parallel dispatch
 primitive process the entries serially. See
-`stage-protocol-construction.md` § "Per-unit batch waves" for the full contract.
+`stage-protocol-wave.md` § "Per-unit batch waves" for the full contract.
 
 **Parallel batches.** Follow the exact dependency-ready Units emitted by the
 engine. Explicit stage-major/swarm execution can dispatch eligible Code
@@ -298,8 +298,8 @@ post-merge child. See [Swarm prepare](../../guide/12-cli-commands.md#aidlc-engin
 regardless of autonomy mode. Options are retry (re-run just the failed
 Unit), skip (mark `[S]` and continue — dependents may also fail), or abort.
 Successful siblings in a parallel batch keep their `[x]` status and
-artifacts. See `stage-protocol-construction.md` §§ "Unit and skeleton checkpoints" and
-"Halt-and-ask on failure" for the canonical procedures.
+artifacts. See `stage-protocol-checkpoint.md` and `stage-protocol-construction.md`
+§ "Halt-and-ask on failure" for the canonical procedures.
 The ordinary failure-prompt Abort pauses Construction with the worktree
 preserved. A stale-review recovery abort explicitly carrying `--discard` instead
 parks tracked and non-ignored untracked files and reviewed source refs, then
@@ -1390,14 +1390,14 @@ with the aidlc-devsecops-agent providing security testing expertise.
        `## Loop-Back Log`: record the diagnosis + impact-estimated fix, reopen
        code-generation via the engine for the Unit(s) the fix names (every Unit
        only when the cause spans them all), and replay forward through its
-       settlement-aware route per the construction protocol module
-       (`aidlc-common/protocols/stage-protocol-construction.md`),
+       settlement-aware route per the loop-back protocol module
+       (`aidlc-common/protocols/stage-protocol-loopback.md`),
        "Build-and-Test failure loop-back". The failed run's gate is not
        presented; its enabled learnings ritual defers to the eventual passing run. When the `learnings` module is absent, no diary or ritual runs.
     4. **Halt-and-ask** -- gated/unset mode, bound exhausted, or no
        identifiable fix: log the failure and present the halt-and-ask
-       question from the construction protocol module
-       (`aidlc-common/protocols/stage-protocol-construction.md`) -- the
+       question from the loop-back protocol module
+       (`aidlc-common/protocols/stage-protocol-loopback.md`) -- the
        impact-estimated 3-option variant (Retry with fix [estimated impact] /
        Accept failure / Abort) when a candidate fix exists, or the no-fix
        2-option variant (Accept failure / Abort) when rung 2 found none.
@@ -1492,8 +1492,8 @@ Strictly 2-option: Approve / Request Changes.
   approach choice, the stage classifies and estimates the impact of a fix, then either runs
   the bounded autonomous loop-back to code-generation (max 3, counted by the
   append-only `## Loop-Back Log` in test-results.md) or presents the impact-estimated
-  halt-and-ask question. See the construction protocol module
-  (`aidlc-common/protocols/stage-protocol-construction.md`),
+  halt-and-ask question. See the loop-back protocol module
+  (`aidlc-common/protocols/stage-protocol-loopback.md`),
   "Build-and-Test failure loop-back". Re-entry is settlement-aware, asks for
   Plan Approval again on the repaired plan while `plan_approval` is on (the
   earlier approval belongs to the previous attempt), and cannot reach its gate until every applicable Code
