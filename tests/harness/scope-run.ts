@@ -539,6 +539,8 @@ export interface PersonAnswers {
   autonomy(): "Continue automatically" | "Review each checkpoint";
   verificationCommand(): string;
   checkpoint(unit: string, kind: string): string;
+  /** Who builds a plan of two or more Units, asked as Inception ends. */
+  staffing(): string;
   /** The answer to "where does this new work go?": unset means the run never expects it. */
   newWork?(description: string): string;
   /** The person stops at this open gate for today instead of answering it. */
@@ -555,6 +557,7 @@ export const PLAIN_ANSWERS: PersonAnswers = {
   autonomy: () => "Review each checkpoint",
   verificationCommand: () => "Approve",
   checkpoint: () => "Approve",
+  staffing: () => "Just me",
 };
 
 const RECORD_PREFIX = /^aidlc\/spaces\/[^/]+\/intents\/[^/]+\//;
@@ -1398,6 +1401,16 @@ export class AgentStandIn {
       this.hooks.beforePlanAnswer?.(unit, this);
       this.askPerson("plan approval", "code-generation", question,
         offered.length ? offered : ["Approve Plan", "Request Changes"], this.answers.plan(unit));
+      return;
+    }
+    if (type === "construction-staffing") {
+      const choices = (d.choices as { label: string; command?: string }[] | undefined) ?? [];
+      const choice = this.askPerson("staffing", "", String(d.question ?? ""), choices.map((c) => c.label),
+        this.answers.staffing());
+      const command = choices.find((c) => c.label === choice)?.command;
+      if (!command) this.fail(`the staffing question offered no command for ${choice}`, d);
+      const res = this.host.bash(command);
+      if (res.status !== 0) this.fail(`${command} was refused: ${clip(res.stdout + res.stderr, 1200)}`, d);
       return;
     }
     if (type === "new-work-routing" && this.answers.newWork) {

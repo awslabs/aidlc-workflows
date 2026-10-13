@@ -243,12 +243,16 @@ import {
   isReadOnlyEngineProbe,
   latestPersonTurn,
   noteProjectTypeAsked,
+  constructionStaffingPassedOver,
+  noteConstructionStaffingAsked,
+  teamsAcrossReposLine,
   isRefusedModifierNextArgv,
   isRetiredOnlyNextArgv,
   isRegularFile,
   isRouteCheckProbe,
   isStopHookProbe,
   isTeamUnitOwnership,
+  UNIT_OWNERSHIP_FIELD,
   KNOWN_CODEKB_STAGES,
   leadingOrchestratorVerb,
   intentStartedByQuestion,
@@ -463,6 +467,7 @@ import {
   shippedInlineContextEntries,
 } from "./aidlc-inline-context.ts";
 import {
+  constructionHasStarted,
   detectWorkspace,
   documentInputLooksSecret,
   GREENFIELD_RE_SKIP_LABEL,
@@ -3468,6 +3473,67 @@ function projectTypeAskDirective(
     existing_code_command: reclassifyCommand(projectDir, "brownfield"),
     new_project_command: reclassifyCommand(projectDir, "greenfield"),
   };
+}
+
+// Who builds a plan of two or more Units is the person's to say, once, as
+// Inception ends: at the first step into a per-Unit Construction stage, while
+// nothing is built (a jump there meets the same rule). A pick records Unit
+// Ownership, which a resume, a second chat and a teammate's clone read. Once
+// the question was shown and the person spoke without a pick, this session
+// builds the Units and the step says so; work with recorded repos gets that
+// line instead of a choice the setter refuses. Null when the step goes on.
+function constructionStaffingAsk(
+  projectDir: string,
+  stateContent: string | null,
+  slug: string,
+  scope: string,
+): AskDirective | null {
+  const node = nodeForSlug(slug);
+  if (stateContent === null || !node || node.phase !== "construction" || !isPerUnit(node)) return null;
+  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return null;
+  if ((getField(stateContent, UNIT_OWNERSHIP_FIELD) ?? "").trim() !== "") return null;
+  if (constructionHasStarted(stateContent, recordDir(projectDir))) return null;
+  const dag = resolveBoltBatches(projectDir, routingEvidenceFor(projectDir, stateContent));
+  if (dag.state !== "ok" || dag.units.length < 2) return null;
+  const units = dag.units.length;
+  const order = readConstructionIteration(stateContent) === "unit-major" ? "one after another" : "stage by stage";
+  const repos = intentRepos(projectDir);
+  if (repos.length > 0) {
+    sayWithStepOnce(projectDir, teamsAcrossReposLine(repos.length, units));
+    return null;
+  }
+  if (constructionStaffingPassedOver(projectDir)) {
+    sayWithStepOnce(
+      projectDir,
+      `This session builds the ${units} Units ${order}. To have several teams each own a Unit instead, ` +
+        "say so before the first Unit is built.",
+    );
+    return null;
+  }
+  if (!isReadOnlyEngineProbe()) noteConstructionStaffingAsked(projectDir);
+  const state = aidlcToolInvocation("state");
+  return {
+    kind: "ask",
+    ask_type: "construction-staffing",
+    response_route: "command",
+    question: `Inception is done, and the plan has ${units} Units. Who builds them?`,
+    choices: [
+      { label: "Just me", detail: `This session builds the Units ${order}.`, command: `${state} set-unit-ownership solo` },
+      {
+        label: "Several teams",
+        detail: "Each team owns one Unit, builds it in its own copy of this project and approves its work." +
+          (order === "stage by stage" ? " Each Unit is then built start to finish, one at a time, instead of stage by stage." : ""),
+        command: `${state} set-unit-ownership team`,
+      },
+    ],
+  };
+}
+
+// A line for the person said with the step this `next` emits, once per chat.
+function sayWithStepOnce(projectDir: string, line: string): void {
+  if (engineSessionId && personLineHeard(projectDir, engineSessionId, line)) return;
+  settledNotices.push(line);
+  if (engineSessionId && !isReadOnlyEngineProbe()) markPersonLinesHeard(projectDir, engineSessionId, [line]);
 }
 
 // The reclassify command for the piece of work selected now, named exactly, so
@@ -9881,6 +9947,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // (one unit per `next`, gate suppressed on every uncovered unit with the real
     // gate only on the all-covered re-entry; issue #368) and emits a single
     // directive for every other stage.
+    const staffing = constructionStaffingAsk(pd, stateContent, currentSlug, scope);
+    if (staffing) {
+      emit(staffing);
+      return;
+    }
     if (!tryEmitSwarm(currentSlug, scope, stateContent, pd, projectType, recordPrefix, codekbCtx)) {
       emitForSlug(currentSlug, projectType, scope, stateContent, recordPrefix, codekbCtx, pd);
     }
@@ -9911,6 +9982,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // swarm path, emitForSlug drives the engine's per-unit for_each loop for a
   // per-unit Construction stage (issue #368) and emits a single directive
   // otherwise.
+  const staffing = constructionStaffingAsk(pd, stateContent, next.slug, scope);
+  if (staffing) {
+    emit(staffing);
+    return;
+  }
   if (!tryEmitSwarm(next.slug, scope, stateContent, pd, projectType, recordPrefix, codekbCtx)) {
     emitForSlug(next.slug, projectType, scope, stateContent, recordPrefix, codekbCtx, pd);
   }

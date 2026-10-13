@@ -486,9 +486,16 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
         expect("unit_gate" in directive).toBe(false);
         return directive;
       });
-      expect(results[1]).toEqual(results[0]);
-      expect(results[2]).toEqual(results[0]);
-      expect(results[0]).toMatchObject({
+      // With nothing built yet, nobody has said who builds the two Units, so
+      // the absent field is asked once (t-construction-staffing-question); a
+      // recorded answer routes as before.
+      if (dormant.name === "empty coverage") {
+        expect(results[0]).toMatchObject({ kind: "ask", ask_type: "construction-staffing" });
+      } else {
+        expect(results[1]).toEqual(results[0]);
+      }
+      expect(results[2]).toEqual(results[1]);
+      expect(results[1]).toMatchObject({
         kind: "run-stage",
         ...dormant.expected,
       });
@@ -1229,9 +1236,6 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
       seededStateFile(proj),
       state(proj).replace("- **Construction Iteration**: unit-major\n", ""),
     );
-    const premature = runState(proj, ["set-unit-ownership", "team"]);
-    expect(premature.rc).not.toBe(0);
-    expect(premature.out).toContain("requires Construction Iteration: unit-major");
     const prematureRhythm = runState(
       proj,
       ["set-unit-gate-rhythm", "unit-end"],
@@ -1239,9 +1243,11 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(prematureRhythm.rc).not.toBe(0);
     expect(prematureRhythm.out).toContain("requires Unit Ownership: team");
 
-    expect(runState(proj, ["set-construction-iteration", "unit-major"]).rc)
-      .toBe(0);
-    expect(runState(proj, ["set-unit-ownership", "team"]).rc).toBe(0);
+    // Teams on a plan that is not one Unit at a time: the pick switches it.
+    const teams = runState(proj, ["set-unit-ownership", "team"]);
+    expect(teams.rc, teams.out).toBe(0);
+    expect(teams.out).toContain("Construction now builds one Unit at a time");
+    expect(state(proj)).toContain("- **Construction Iteration**: unit-major");
     expect(state(proj)).toContain("- **Unit Ownership**: team");
     expect(UNIT_OWNERSHIP_FIELD).toBe("Unit Ownership");
     expect(isTeamUnitOwnership(state(proj))).toBe(true);
@@ -1312,7 +1318,8 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
 
     const result = runState(proj, ["set-unit-ownership", "team"]);
     expect(result.rc).not.toBe(0);
-    expect(result.out).toContain("not supported for intents with recorded workspace repos");
+    expect(result.out).toContain("This work spans 2 repos, so this session builds its Units: teams each owning a " +
+      "Unit is not available yet for work across repos. Carry on with `/aidlc`.");
     expect(state(proj)).toBe(stateBefore);
     expect(readAllAuditShards(proj)).toContain("**Event**: ERROR_LOGGED");
     expect(readAllAuditShards(proj)).not.toContain(

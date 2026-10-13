@@ -269,37 +269,6 @@ command. Never auto-approve, write the state field without the receipt, or use
 generic `state set`. A later change requires a new human decision/answer receipt
 and the typed setter; an autonomy grant does not authorize command selection.
 
-**Construction staffing.** After classifying iteration, ask:
-
-> "How do you want to staff Construction? I can run the work from this session
-> using the execution settings you chose, or each of your teams can own a Unit
-> and approve its work independently."
-
-Picking several teams is the person's request for the unit-first order above.
-If the plan is not already unit-major, switch it in the same turn and say each
-setter's `notice` line: for an explicit swarm setting, first run
-`{{INVOKE}} engine state set-construction-execution serial`, then
-`bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-construction-iteration unit-major`.
-Then record
-`bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-unit-ownership team`. Team ownership
-requires the workspace root itself to be the source Git repository; intents with
-recorded sibling repos must remain solo.
-For the one-session choice, leave the field absent (the byte-identical default)
-or record `set-unit-ownership solo`.
-
-**Team check-in rhythm.** Only after team ownership is selected, ask:
-
-> "While a team builds their unit, how often should I check in for approval?
-> After each stage is the safer default: a wrong turn is caught before the next
-> stage builds on it. Once at the end means fewer interruptions: one review
-> after the unit's design and code are complete."
-
-Record the answer with
-`bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-unit-gate-rhythm per-stage` or
-`... unit-end`. If the field is absent under team ownership, `per-stage` is the
-default. These names are tool vocabulary; present the plain-language choices,
-not the field or enum names.
-
 ### Step 7: Present Completion & Request Approval
 
 Completion emoji: :calendar:

@@ -299,8 +299,10 @@ operation (worktree, swarm, Bolt) targets one repo; the conductor passes
 `--repo <name>` to anchor it, required only when an intent spans more than one
 repo. An intent with no recorded repos is the single-repo default (git runs in the
 workspace/project dir). Team-owned Units currently require that single-repo
-default: `set-unit-ownership team` rejects an intent with recorded sibling repos
-before changing state. See [Artifacts Reference](14-artifacts-reference.md).
+default: work with recorded sibling repos is not asked who builds its Units, and
+the first Construction step says in one line that this session builds them;
+`set-unit-ownership team` refuses with the same line before changing state. See
+[Artifacts Reference](14-artifacts-reference.md).
 
 ---
 

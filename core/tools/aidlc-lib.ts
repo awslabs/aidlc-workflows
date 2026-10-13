@@ -11933,6 +11933,28 @@ export function personSaidProjectType(projectDir: string): boolean {
   }
 }
 
+const CONSTRUCTION_STAFFING_ASK = "construction-staffing-ask.json";
+
+export function noteConstructionStaffingAsked(projectDir: string): void {
+  noteEngineAskMark(projectDir, CONSTRUCTION_STAFFING_ASK);
+}
+
+// Who builds the Units was asked in this clone and the person has spoken since
+// (an answer, their own words, or a command) without a pick being recorded:
+// the default stands and the question is not put again.
+export function constructionStaffingPassedOver(projectDir: string): boolean {
+  const asked = engineAskMark(projectDir, CONSTRUCTION_STAFFING_ASK);
+  if (asked === null) return false;
+  try {
+    const shardPath = auditFilePath(projectDir);
+    if (projectRelativePath(projectDir, shardPath) !== asked.shard) return false;
+    const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(asked.offset).toString("utf-8");
+    return auditShardBlocks(after).some((block) => isRequestTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+  } catch {
+    return false;
+  }
+}
+
 // With `intent` and `space`, the turns read are that work's, not the active work's.
 export function humanTurnState(
   projectDir: string,
@@ -26836,6 +26858,16 @@ export function intentRepos(
     return entry.repos ?? [];
   }
   return [];
+}
+
+// Teams each owning a Unit need the code in this project's own repo, so work
+// with recorded repos is built by one session for now. What the person hears,
+// from the engine as Construction starts and from the ownership setter alike.
+export function teamsAcrossReposLine(repoCount: number, unitCount?: number): string {
+  const where = repoCount === 1 ? "This work's code is in a repo of its own" : `This work spans ${repoCount} repos`;
+  const units = unitCount === undefined ? "its Units" : `its ${unitCount} Units`;
+  return `${where}, so this session builds ${units}: teams each owning a Unit is not available yet for ` +
+    "work across repos.";
 }
 
 /** Recovery operates exactly where the framework recorded parking this slug;

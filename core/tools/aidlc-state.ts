@@ -127,6 +127,8 @@ import {
   recordGuardStoodAside,
   unattendedHumanPresenceHint,
   intentRepos,
+  addPendingPersonLines,
+  teamsAcrossReposLine,
   isGitRepoDir,
   isValidRepoName,
   repoDir,
@@ -1544,30 +1546,18 @@ function handleSetUnitOwnership(args: string[]): void {
   }
   const pd = resolveProjectDir(projectDir);
   withAuditLock(pd, () => {
-    let content = readStateFile(pd);
+    const before = readStateFile(pd);
+    let content = before;
     const current = getField(content, "Unit Ownership")?.trim() || "solo";
     if (value !== current && hasCurrentTeamUnitActivity(pd, content)) {
       error(
         `Unit ownership is frozen after team Unit activity in the current workflow attempt (current: ${current}).`,
       );
     }
-    if (
-      value === "team" &&
-      getField(content, "Construction Iteration")?.trim() !== "unit-major"
-    ) {
-      error(
-        'Unit ownership "team" requires Construction Iteration: unit-major. ' +
-          "Run aidlc-state.ts set-construction-iteration unit-major first.",
-      );
-    }
     if (value === "team") {
       const repos = intentRepos(pd);
       if (repos.length > 0) {
-        error(
-          `Unit ownership "team" is not supported for intents with recorded workspace repos ` +
-            `(${repos.join(", ")}). Team-owned Unit claims require the workspace root itself ` +
-            "to be the source Git repository.",
-        );
+        error(`${teamsAcrossReposLine(repos.length)} Carry on with \`${entrySkillInvocation()}\`.`);
       }
       const resolution = resolveBoltDag(pd);
       if (resolution.state === "none") {
@@ -1586,6 +1576,32 @@ function handleSetUnitOwnership(args: string[]): void {
         );
       }
     }
+    // Each team builds its own Unit start to finish, so the person's pick of
+    // teams is their request for one Unit at a time: a stage-by-stage plan
+    // switches here by the two setters' own rules and records, after every
+    // refusal and before any write.
+    const switches: Array<{ from: string; to: string; field: string; value: string; words: string | null }> = [];
+    const switchTo = (field: string, next: string, updated: string): void => {
+      const words = requireHumanConstructionPolicyChange(pd, content, field, next);
+      switches.push({ from: content, to: updated, field, value: next, words });
+      content = updated;
+    };
+    if (value === "team" && getField(content, "Construction Iteration")?.trim() !== "unit-major") {
+      if (
+        getField(content, "Construction Checkpoints") === "enabled" &&
+        getField(content, "Construction Execution") === "swarm"
+      ) {
+        switchTo("Construction Execution", "serial", setConstructionPolicyField(content, "Construction Execution", "serial"));
+      }
+      switchTo(
+        "Construction Iteration",
+        "unit-major",
+        setOrInsertField(content, "## Runtime State", "Construction Iteration", "unit-major"),
+      );
+    }
+    for (const change of switches) {
+      emitConstructionPolicySet(pd, change.from, change.to, change.field, change.value, change.words);
+    }
     content = setOrInsertField(
       content,
       "## Runtime State",
@@ -1595,7 +1611,35 @@ function handleSetUnitOwnership(args: string[]): void {
     if (value === "solo") content = removeUnitProgressSection(content);
     emitAudit(pd, "UNIT_OWNERSHIP_SET", { Mode: value });
     writeStateFile(pd, content);
-    console.log(JSON.stringify({ updated: true, unit_ownership: value }));
+    if (switches.length > 0) keepPlanQuestionOver(pd, before, content);
+    // What the person hears: each switch's own line, and how team approvals
+    // go while nobody has said otherwise. They ride the next step the agent
+    // speaks from; with no chat to hold them, this output carries them.
+    const lines = switches
+      .map((change) => constructionPolicyNotice(change.from, change.to, change.field).notice)
+      .filter((line): line is string => typeof line === "string");
+    const teamsNow = value === "team" && current !== "team";
+    if (teamsNow && getField(content, "Unit Gate Rhythm") === null) {
+      lines.push(
+        "Each team approves its Unit after every stage. To approve once at the end of each Unit instead, " +
+          "say so before the first Unit is built.",
+      );
+    }
+    let notice: string | undefined = lines.length > 0 ? lines.join(" ") : undefined;
+    if (notice !== undefined) {
+      try {
+        const session = resolveWorkflowSelection(pd).sessionId;
+        if (session && addPendingPersonLines(pd, session, lines)) notice = undefined;
+      } catch {
+        // No chat to hold them: the output carries them.
+      }
+    }
+    console.log(JSON.stringify({
+      updated: true,
+      unit_ownership: value,
+      ...(notice !== undefined ? { notice } : {}),
+      ...(teamsNow ? { unit_end_gates_command: `${aidlcToolInvocation("state")} set-unit-gate-rhythm unit-end` } : {}),
+    }));
   });
 }
 

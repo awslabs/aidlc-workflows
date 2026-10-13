@@ -601,6 +601,20 @@ review, and their late stage approvals come as one question (`approve_together`)
 team-owned `unit_gate` uses its own policy.
 Design-only, zero-Unit, and isolated runs do not gain a checkpoint ceremony.
 
+Who builds the Units is asked once, as Inception ends. When the step `next`
+would route is the first per-Unit Construction step, nothing is built yet, the
+Unit DAG has two or more Units and the state records no `Unit Ownership`, `next`
+returns `ask_type: construction-staffing` instead: **Just me** runs `state
+set-unit-ownership solo`, **Several teams** runs `state set-unit-ownership team`
+(which switches a stage-major plan to unit-major, a swarm execution to serial
+first, with the setters' own records and notices). A jump into Construction
+meets the same rule. Showing the question notes an engine ask mark; once a
+human turn is on record after it with no answer recorded, the question is not
+put again and the first step carries one line that this session builds the
+Units and how to ask for teams. Work with recorded repos is never asked: the
+first step carries `teamsAcrossReposLine` instead, the line the setter's
+refusal also says.
+
 When skeleton-on applies, the first DAG Unit must be planned as the smallest
 working integrated slice. It completes its applicable per-unit stages before
 later Units even under stage-major. The engine then emits a `run-stage` with

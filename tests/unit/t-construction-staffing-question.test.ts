@@ -59,8 +59,8 @@ const DEFAULT_LINE = "This session builds the 2 Units one after another. To have
   "instead, say so before the first Unit is built.";
 const APPROVALS_LINE = "Each team approves its Unit after every stage. To approve once at the end of each Unit " +
   "instead, say so before the first Unit is built.";
-const REPOS_LINE = "This work spans 2 repos, so this session builds its 2 Units one after another: teams each " +
-  "owning a Unit is not available yet for work across repos.";
+const REPOS_LINE = "This work spans 2 repos, so this session builds its 2 Units: teams each owning a Unit is " +
+  "not available yet for work across repos.";
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -294,8 +294,10 @@ describe("who builds the Units is asked once as Inception ends", () => {
     expect(ran.rc, ran.out).toBe(0);
     const after = state(proj);
     expect(field(after, "Unit Ownership")).toBe("solo");
-    expect(after.replace("- **Unit Ownership**: solo\n", "").replace(/^- \*\*Last Updated\*\*:.*\n/m, ""))
-      .toBe(before.replace(/^- \*\*Last Updated\*\*:.*\n/m, ""));
+    // Every other line stays as it was.
+    const lines = (content: string) =>
+      content.split("\n").filter((line) => line.trim() !== "" && !/^- \*\*(Last Updated|Unit Ownership)\*\*:/.test(line));
+    expect(lines(after)).toEqual(lines(before));
     expect(events(proj, "UNIT_OWNERSHIP_SET").length).toBe(1);
     const first = next(proj);
     expect(first.kind, JSON.stringify(first)).toBe("run-stage");
@@ -317,7 +319,8 @@ describe("who builds the Units is asked once as Inception ends", () => {
     const step = next(proj, [], CHAT);
     expect(isStaffingAsk(step)).toBe(false);
     expect(step.kind, JSON.stringify(step)).not.toBe("ask");
-    expect(step.change_notices ?? [], JSON.stringify(step)).toContain(APPROVALS_LINE);
+    // The line rides the next step the agent speaks from.
+    expect(String(step.narration), JSON.stringify(step)).toContain(APPROVALS_LINE);
   });
 
   test("Several teams on a stage-by-stage plan with parallel builds is one pick: the order switches with it", () => {
@@ -391,8 +394,8 @@ describe("who builds the Units is asked once as Inception ends", () => {
     const before = state(proj);
     const teams = runState(proj, ["set-unit-ownership", "team"]);
     expect(teams.rc).not.toBe(0);
-    expect(teams.out).toContain("This work spans 2 repos, so this session builds its Units one after another: " +
-      "teams each owning a Unit is not available yet for work across repos. Carry on with `/aidlc`.");
+    expect(teams.out).toContain("This work spans 2 repos, so this session builds its Units: teams each owning " +
+      "a Unit is not available yet for work across repos. Carry on with `/aidlc`.");
     expect(state(proj)).toBe(before);
   });
 
