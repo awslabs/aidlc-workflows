@@ -591,8 +591,8 @@ try {
   const outside = hookStandsOutside(workflow);
   const mintAllowed = humanTurnMintAllowed();
   // A swarm worker's worktree is the copy the engine made for a worker, and a
-  // prompt that arrives there (a `codex exec` worker's brief, on Codex its own
-  // session) is the conductor's, never a person's turn. No authority row lands
+  // prompt that arrives there (the brief of a session started there, such as a
+  // headless `codex exec`) is the conductor's, never a person's turn. No authority row lands
   // in that record (finalize merges it back, and the merge refuses every
   // authority row), no words are kept, no switch is applied, and nothing is
   // said about it: there is no person there to read a line. The heartbeat and

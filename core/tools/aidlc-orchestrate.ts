@@ -2492,9 +2492,16 @@ function narrateStageEntry(
   // see in their own artifacts (bolt-plan.md, and every later beat of this
   // phase), so the line that introduces it defines it in the same breath. The
   // definition is delivery-planning's own, said the way a colleague would say
-  // it. Said once, on the phase boundary; later Construction stages get the
-  // ordinary per-stage line.
-  if (isFirstConstructionStage(node, scope, stateContent)) {
+  // it. Said once, on the phase boundary, and only on a plan that builds code:
+  // one with no Code Generation (stock infra, a plan made for an analysis)
+  // starts no build pass. A Bolt is a slice of Units, so a plan with no Units
+  // (refactor, security-patch) has none. Later Construction stages, and those
+  // plans, get the ordinary per-stage line.
+  if (
+    isFirstConstructionStage(node, scope, stateContent) &&
+    effectivePlanAction("code-generation", scope, stateContent) === "EXECUTE" &&
+    !usesStageLevelPerUnitArtifacts(scope, stateContent)
+  ) {
     return (
       `Starting the first Bolt now: one build pass over the code, tests and ` +
       `checks for a piece of the work. First step is ${stageName}.`
@@ -2885,6 +2892,7 @@ function scopeConfirmAskDirective(
   const stored = saveQuestion(projectDir, intentText, proposedScope, "front", undefined, newWork, derivedFrom, undefined, settings);
   const confirmCommand = `${tool} next --scope ${scopeArg(proposedScope)} --request ${stored.id}${carried}`;
   const composeCommand = `${tool} next compose --request ${stored.id}${carried}`;
+  const scopes = scopeCommands(`${tool} next`, stored.id, carried, projectDir, declaredType);
   return {
     kind: "ask",
     ask_type: "scope-confirm",
@@ -2893,11 +2901,16 @@ function scopeConfirmAskDirective(
     proposed_scope: proposedScope,
     confirm_command: confirmCommand,
     compose_command: composeCommand,
-    scope_commands: scopeCommands(`${tool} next`, stored.id, carried, projectDir, declaredType),
+    scope_commands: scopes,
     // The answers the question offers, worded for the person, so a host that
-    // shows options shows these instead of ones the agent makes up.
+    // shows options shows these instead of ones the agent makes up, in the order
+    // the question names them. "Use a different plan" carries no command: the
+    // pick needs the plan named, and the step's note has the agent show the
+    // plans this step lists (scope_commands, each with its length) and run the
+    // one they name, as the menu did before the step carried its choices.
     choices: [
       { label: `Go ahead with the "${proposedScope}" plan`, command: confirmCommand },
+      { label: "Use a different plan" },
       { label: "Tailor a plan to this task", command: composeCommand },
     ],
   };
@@ -3488,7 +3501,7 @@ function approvedPlanUndoReading(projectDir: string, stateContent: string): stri
 // change to this work: the conductor reads which, the same split as
 // openGateReplyDirective. The person's words never travel in the re-entry
 // report; the engine kept them for the other reading.
-function reentryReplyDirective(requestId: string, undo = "", work: string[] = []): PrintDirective {
+function reentryReplyDirective(requestId: string, undo = "", work: string[] = [], openWork = ""): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   // The pieces of work here by exact name, the one in progress marked: the
   // agent reads whether the words name exactly one ("the auth one" with auth
@@ -3500,8 +3513,10 @@ function reentryReplyDirective(requestId: string, undo = "", work: string[] = []
     `\`${aidlcDispatcherInvocation("intent")} switch <name>\`, say the line it prints, then stop: no \`next\`, no stage, ` +
     "no offer to resume. If their words fit more than one (a word several names share, such as a name that is part " +
     "of another), ask them once in plain words which they meant, then stop.";
+  // One piece here: its name, so the agent compares their words with it.
+  const on = work.length < 2 && openWork !== "" ? ` on "${openWork}"` : "";
   return printDirective(
-    `${undo}Work is in progress, and the person's words may ask to redo, jump to a stage, or start fresh, or may only ` +
+    `${undo}Work is in progress${on}, and the person's words may ask to redo, jump to a stage, or start fresh, or may only ` +
       "ask for it to go on. Read them. If they only ask for the work to go on (such as \"carry on\", \"proceed\" or " +
       `"keep going"), run \`${orchestrate} next\` with nothing after it: the work continues where it stands. If they ` +
       `ask to redo, jump or start fresh, run \`${orchestrate} report --result resumed --choice <redo|jump|fresh>\` with ` +
@@ -7969,10 +7984,11 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 // same holds for the agent's first step after their line, a bare `next` or the
 // `next --resume` a re-entry sends (measured on Claude Code: the open stage came
 // back and their new work was gone): `--resume` is the agent's, never theirs. A
-// later bare `next` is the work in hand. Nothing happens without a chat identity
+// later bare `next` is the work in hand. Their `/aidlc` alone over work in hand
+// is a resume whichever the agent sent. Nothing happens without a chat identity
 // (no record is read), on a read-only probe (an observer learns the directive and
 // never asks), once anything is recorded after their line, or with any other
-// message last (a reply in plain words, a bare `/aidlc`, a utility). Returns
+// message last (a reply in plain words, a utility). Returns
 // their line's arguments when it took them, for the readings that look at the
 // command as typed.
 function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
@@ -7990,11 +8006,17 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
     // hand.
     if (stateContent !== null && !turnIsLatestRow(pd, message.id)) return null;
   } else {
+    // The entry word alone over work in hand picks it back up, as `--resume`
+    // does, whichever the agent sent first: the line decides, not the agent.
+    if (message.settings.length === 0) {
+      if (stateContent === null || aidlcEntryWords(message.text) !== "" || !turnIsLatestRow(pd, message.id)) return null;
+      flags.resume = true;
+      return ["--resume"];
+    }
     // A line of settings alone ("/aidlc --plan-approval off"): `next` names the
     // setter for it, with or without work, once. After the setter has run (its
     // rows follow the turn, or its record is newer than the message) a bare
     // `next` is the work's again.
-    if (message.settings.length === 0) return null;
     if (lineHandedOut(pd, engineSessionId, message.id)) return null;
     if (stateContent !== null ? !turnIsLatestRow(pd, message.id) : settingsKeptSince(pd, engineSessionId, message.at)) return null;
   }
@@ -9855,7 +9877,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
-      emit(reentryReplyDirective(words.id, undo, workNamesHere(pd, selection)));
+      emit(reentryReplyDirective(words.id, undo, workNamesHere(pd, selection), activeWorkLabel(stateContent)));
       return;
     }
   }
@@ -13506,6 +13528,11 @@ function keptWhilePlanWaits<T extends Directive>(directive: T, planWaits: boolea
   return directive;
 }
 
+// The reason the step below hands the agent for a started stage the person
+// asked to skip. report reads its own token back: that skip is the person's,
+// so it gives no reason of its own (the step already said the one line).
+const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
+
 // A typed `--skip`/`--add` on a running workflow. The person named the
 // stages, so recompose applies them straight away (after any scope or setting
 // command typed with them), and one line says what changed and the way back;
@@ -13588,7 +13615,7 @@ function planChangeDirective(
   if (started !== null) {
     commands.push({
       command: `${aidlcToolInvocation("orchestrate")} report --stage ${started} --result skipped ` +
-        `--reason ${shellArg("the person asked to skip it")}`,
+        `--reason ${shellArg(PERSON_ASKED_SKIP_REASON)}`,
       why: `to skip ${name(started)}, which has already started`,
     });
   }
@@ -15899,6 +15926,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
 
+    // Read before the skip, while this attempt is open: the person's keep
+    // choice covers every repository the stage reads and no scan ran.
+    const evidence = node.mode === "pipeline" ? pipelineLinkEvidence(pd, node) : null;
+    const reusedStore = evidence !== null && evidence.missing.length === 0 && evidence.receipts.length === 0;
     const res = spawnState(pd, [
       "skip",
       slug,
@@ -15913,16 +15944,25 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // A stage skipped because it does not apply is said, in one line, with the
     // next step the agent speaks from: the agent reports the skip and goes
     // straight on. The agent's reason stays in the audit; it is the agent's
-    // own words, so it never becomes a line the engine says.
+    // own words, so it never becomes a line the engine says. A stage the
+    // person asked to skip does apply: the step that named this report has
+    // already said the skip in one line, so no reason is added here. Reverse
+    // Engineering kept on the existing code knowledge base applies too, so its
+    // line says that knowledge base was reused instead of a scan.
+    const personAsked = reason === PERSON_ASKED_SKIP_REASON;
     const skipped: Directive = {
       kind: "done",
       reason:
         `Committed skip for "${slug}" (scope: ${scope}). ` +
         "State routed forward; run next to continue.",
       ...workflowContinues(pd),
-      narration: unitsDone.length > 0
-        ? `${node.name} is not part of the ${scope} plan; what the Units already did for it stays as it is.`
-        : `${node.name} does not apply here, so I skipped it.`,
+      ...(personAsked ? {} : {
+        narration: unitsDone.length > 0
+          ? `${node.name} is not part of the ${scope} plan; what the Units already did for it stays as it is.`
+          : reusedStore
+            ? `${node.name} reused the existing code knowledge base, so I skipped the scan.`
+            : `${node.name} does not apply here, so I skipped it.`,
+      }),
     };
     // Carried only while the work goes on; the last stage's skip is said here.
     if (skipped.kind === "done" && skipped.workflow_continues === true) carriesNarration.add(skipped);

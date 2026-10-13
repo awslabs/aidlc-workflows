@@ -11,7 +11,7 @@
 // the agent the sentence instead, beside the step, the way the agent notes
 // already do for the walking-skeleton stance and the autonomy choice:
 //   - every question the engine asks carries its numbered rendering and its
-//     choices, each with the command that answers it;
+//     choices, each with the command that answers it (the plan offer's "Use a different plan" needs the plan named first);
 //   - the answer mode, the files to read first, a missing input, a gate shown
 //     again, a Code Generation plan's status, a dispatched brief and the
 //     summary confirmation each arrive as one instruction;
@@ -112,6 +112,7 @@ function askOf(type: string): Json {
         scope_commands: [{ scope: "classic", command: `${INVOCATION} next --scope classic --request a1b2c3d4`, stages: "15 stages" }],
         choices: [
           { label: 'Go ahead with the "bugfix" plan', command: `${INVOCATION} next --scope bugfix --request a1b2c3d4` },
+          { label: "Use a different plan" },
           { label: "Tailor a plan to this task", command: `${INVOCATION} next compose --request a1b2c3d4` },
         ],
       };
@@ -265,7 +266,9 @@ describe("the engine renders every question it asks", () => {
     expect(rendered.startsWith("The question for the person.")).toBe(true);
     choices.forEach((choice, at) => {
       expect(rendered, `${type} option ${at + 1}`).toContain(`\n${at + 1}. **${choice.label}**`);
-      expect(typeof choice.command, `${type} ${choice.label} runs a command`).toBe("string");
+      // The one pick that needs one more answer is the plan offer's "Use a different plan" (the plan named).
+      if (type === "scope-confirm" && choice.label === "Use a different plan") expect(choice.command).toBeUndefined();
+      else expect(typeof choice.command, `${type} ${choice.label} runs a command`).toBe("string");
     });
     expect(rendered).toContain(`\n${choices.length + 1}. ${OTHER}\n\n${HINT}`);
     const result = validateDirective(step);
@@ -353,7 +356,15 @@ describe("the engine renders every question it asks", () => {
     expect(note).toContain(`run \`${INVOCATION} next\` when it returns none`);
     expect(note).toContain("read what they meant");
     expect(namesAField(note)).toEqual([]);
-    expect(str(notes(ask("scope-confirm")).question_note)).toBe(note);
+    expect(str(notes(ask("unit-paused")).question_note)).toBe(note);
+    // The plan offer's "Use a different plan" needs the plan named: the note says to show the plans the step lists,
+    // each with its length, and run the one named; the menu itself stays three choices plus Other.
+    const offer = str(notes(ask("scope-confirm")).question_note);
+    expect(offer.startsWith(note)).toBe(true);
+    expect(offer).toContain('Their "Use a different plan" answer needs the plan named');
+    expect(offer).toContain("show the plans this step lists, each with its length, as a numbered list with Other");
+    expect(namesAField(offer)).toEqual([]);
+    expect(str(notes(ask("scope-confirm")).numbered_prose_question)).toContain("2. **Use a different plan**\n3. **Tailor a plan to this task**\n4. **Other**");
   });
 });
 

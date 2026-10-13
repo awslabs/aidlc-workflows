@@ -232,13 +232,6 @@ export function makeSeed(
       'export const keep3 = "same";\n' +
       'export const right = "base";\n',
   );
-  writeFileSync(
-    join(seededAuditDir(seed), "skeleton.md"),
-    "## Bolt Started\n**Timestamp**: 2026-08-20T00:00:00Z\n" +
-      "**Event**: BOLT_STARTED\n**Bolt names**: skeleton\n**Walking skeleton**: true\n\n---\n" +
-      "## Bolt Completed\n**Timestamp**: 2026-08-20T00:00:01Z\n" +
-      "**Event**: BOLT_COMPLETED\n**Bolt names**: skeleton\n\n---\n",
-  );
   completeUnitOnMain(seed, "skeleton");
   writeFileSync(
     join(seed, ".gitignore"),

@@ -236,14 +236,14 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
 - **Git under the sandbox**: `workspace-write` keeps `.git` read-only
   in-sandbox by design. Interactive sessions auto-escalate, and the shipped
   `.codex/rules/default.rules` pre-allows `git worktree`/`commit`/`add`.
-  Headless runs (CI, exec workers) need
+  Headless runs (CI) need
   `writable_roots = ["<main repo>/.git"]` — template in the shipped
   `config.toml` (linked worktrees resolve into `<main>/.git/worktrees/*`,
   so it must be the main repo's `.git`).
-- **Swarm floor = `codex exec` workers** — one headless worker per
-  emitted Construction Unit in the isolated worktree for that Unit's Bolt
-  (always `< /dev/null`), with the
-  same deterministic referee. `AIDLC_USE_SWARM=1` has no Workflow tool here
+- **Swarm floor = developer subagents**: one `aidlc-developer-agent`
+  subagent per emitted Construction Unit, side by side, each working in the
+  isolated worktree for that Unit's Bolt, with the same deterministic
+  referee. They run inside your sandbox with your approval setting. `AIDLC_USE_SWARM=1` has no Workflow tool here
   and loud-degrades (`SWARM_DEGRADED` is audited).
 - **Only what you type in the main chat counts as your reply.** Codex sends a
   subagent's brief, and every follow-up the agent sends it, through the same

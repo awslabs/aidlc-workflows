@@ -613,8 +613,8 @@ export interface ScopeConfirmAskDirective extends AskDirectiveBase {
   confirm_command: string;
   compose_command: string;
   scope_commands: ScopeCommandRow[];
-  /** The offer's answers as the person sees them, in order: go ahead, then compose. */
-  choices: Array<{ label: string; command: string }>;
+  /** The offer's answers as the person sees them, in the question's order: go ahead, use a different plan, tailor one. */
+  choices: AskChoice[];
 }
 
 export interface ComposeOfferAskDirective extends AskDirectiveBase {
@@ -1116,6 +1116,14 @@ export function routingRecordsQuestionNote(invocation: string): string {
     "not, show only those pieces as a numbered list with Other, end your turn, and run the command of the one they name.";
 }
 
+// The plan offer: "Use a different plan" needs the plan named, so that pick
+// shows the plans the step lists (each with its length) and runs the one named.
+export function planOfferQuestionNote(invocation: string): string {
+  return questionNote(invocation) + ' Their "Use a different plan" answer needs the plan named: show the plans this ' +
+    "step lists, each with its length, as a numbered list with Other, end your turn, and run the command of the plan " +
+    "they pick or name.";
+}
+
 export function unresolvedGateNote(invocation: string): string {
   return 'Do no work on this stage yet: read the "## Walking Skeleton" section of the memory text (project.md over ' +
     "team.md over org.md) and settle what the team says it does: on if the team always runs a walking skeleton, off " +
@@ -1420,6 +1428,8 @@ export function withAgentNotes<T extends object>(
   if (d.kind === "ask" && d.agent_work !== true) {
     notes.question_note = d.ask_type === "plan-approval"
       ? planApprovalQuestionNote(invocation, logInvocation)
+      : d.ask_type === "scope-confirm"
+      ? planOfferQuestionNote(invocation)
       : d.ask_type === "new-work-routing" && Array.isArray(d.available_intents)
       ? routingRecordsQuestionNote(invocation)
       : questionNote(invocation);
@@ -3081,7 +3091,9 @@ function checkSelectCommands(
 
 // A required array of `{ <key>: string, command: string }` rows.
 // The choices of a question: a label each, a detail and a command when it has
-// one. Required on a scope offer, whose answers are its two commands.
+// one. `required`: the field itself must be present (the plan offer always
+// carries its choices). A choice's command is optional everywhere: a pick
+// without one needs one more answer (the plan offer's "Use a different plan").
 function checkChoices(o: Record<string, unknown>, kind: DirectiveKind, errors: string[], required: boolean): void {
   if (!("choices" in o)) {
     if (required) errors.push(`${kind}: missing required field: choices`);
@@ -3106,7 +3118,6 @@ function checkChoices(o: Record<string, unknown>, kind: DirectiveKind, errors: s
         errors.push(`${kind}: choices[${i}].${optional} must be string, got ${describe(row[optional])}`);
       }
     }
-    if (required && typeof row.command !== "string") errors.push(`${kind}: choices[${i}].command must be string`);
   });
 }
 

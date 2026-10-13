@@ -226,17 +226,18 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     const parsed = JSON.parse(r.stdout.trim());
     expect(typeof parsed.additionalContext).toBe("string");
     expect(parsed.additionalContext.length).toBeGreaterThan(0);
-    // A bare re-entry carries on like --resume: no resume menu, one hint line.
-    expect(parsed.additionalContext).toContain(
-      "A BARE /aidlc re-entry carries on with this work, the same as /aidlc --resume",
-    );
-    expect(parsed.additionalContext).toContain("send the first `next` as `next --resume`");
+    // A bare re-entry carries on: no resume menu, one hint line. The agent runs
+    // `next` with what was typed; the engine reads the recorded line, so the
+    // context never tells the agent to turn it into `next --resume`.
+    expect(parsed.additionalContext).toContain("A BARE /aidlc re-entry carries on with this work, with no resume menu.");
+    expect(parsed.additionalContext).not.toContain("send the first `next` as `next --resume`");
+    expect(parsed.additionalContext).not.toContain("the same as /aidlc --resume");
     // The hint is the recovery protocol's one SAY line; the request is typed.
     expect(parsed.additionalContext).toContain("including its one SAY line");
     expect(parsed.additionalContext).toContain("report --result resumed --choice <redo|jump|fresh>");
     // None of the person's words travel in that command.
     expect(parsed.additionalContext).not.toContain('--user-input "<their words>"');
-    expect(parsed.additionalContext).toContain("`/aidlc` alone -> `next --resume`");
+    expect(parsed.additionalContext).not.toContain("`/aidlc` alone -> `next --resume`");
     expect(parsed.additionalContext).not.toContain("Resume / Redo / Jump / Start Fresh");
     expect(parsed.additionalContext).not.toContain("offer the user the standard resume options");
   });
@@ -322,13 +323,15 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     // Intent Capture is current and nothing has run: the first call starts it.
     seedStateFile(proj, join(FIXTURES_DIR, "state-initialization-done.md"));
     const ctx = JSON.parse(fire(proj).stdout.trim()).additionalContext as string;
-    expect(ctx).toContain("send the first `next` as `next --resume`");
+    expect(ctx).toContain("A BARE /aidlc re-entry carries on with this work, with no resume menu.");
+    expect(ctx).not.toContain("send the first `next` as `next --resume`");
     expect(ctx).not.toContain("Resume / Redo / Jump / Start Fresh");
   });
 
   test("a parked workflow gets the same carry-on rule on a bare re-entry", () => {
-    // A new session on a parked workflow: the first call is `next --resume`,
-    // which clears the park, so the person never has to retype `/aidlc --resume`.
+    // A new session on a parked workflow: the first call is `next` with what was
+    // typed, and the engine reads a bare `/aidlc` as the resume that clears the
+    // park, so the person never has to retype `/aidlc --resume`.
     seedStateFile(proj, MID_IDEATION);
     const state = statePath(proj);
     writeFileSync(state, readFileSync(state, "utf-8").replace(
@@ -337,8 +340,8 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     ));
     expect(readFileSync(state, "utf-8")).toContain("- **Parked At Stage**: feasibility");
     const ctx = JSON.parse(fire(proj).stdout.trim()).additionalContext as string;
-    expect(ctx).toContain("send the first `next` as `next --resume`");
-    expect(ctx).toContain("`/aidlc` alone -> `next --resume`");
+    expect(ctx).toContain("A BARE /aidlc re-entry carries on with this work, with no resume menu.");
+    expect(ctx).not.toContain("`/aidlc` alone -> `next --resume`");
   });
 
   test("injects the Lifecycle Phase (IDEATION) [.sh test 4]", () => {

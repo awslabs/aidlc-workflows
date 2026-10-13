@@ -1079,7 +1079,9 @@ records the choice the person made through the question's own command; the
 engine requires a reply since the question was shown and carries the person's
 words on the receipt (`Person Reply`). While the engine's Plan Approval
 question is the active directive, `notePlanApprovalAskReply` keeps each message
-on the open question from any chat on this piece of work, and the conductor's
+on the open question from any chat on this piece of work (a typed one in a chat
+where the agent has since asked a question of its own with `log decision`, still
+open, goes to that question instead), and the conductor's
 `answer --checkpoint plan-approval` (`recordPlanApprovalAnswer`) takes the
 fingerprint of the plan files as they are, writes the questions-file answer, the
 receipt, and the `PLAN_APPROVAL_RECORDED` row. A request to look at the plan

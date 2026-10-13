@@ -25,10 +25,10 @@
 // passes, and so does a direct, unwrapped invocation of the installed engine,
 // whose verbs the engine judges itself. Where no tool of the engine's owns the
 // call, a condition stays here (engineCommandAdmitted): a recorded switch that
-// turns a check off, and four config settings that can take a check away, pass
-// once a person has asked; a release fetched or applied, and a Code Generation
+// turns a check off, four config settings that can take a check away, and a
+// release fetched or applied, pass once a person has asked; a Code Generation
 // completion (a report that opens or passes the gate, a Unit's completion
-// receipt), wait while the plan does (the person's answer at the held gate and
+// receipt) waits while the plan does (the person's answer at the held gate and
 // the recovery remedy they picked excepted); a jump waits for the person's
 // move: the restart they picked at the recovery question, or one they asked
 // for while the last step is current. While the person is editing the plan
@@ -1508,13 +1508,13 @@ function configToolArgs(engineArgs: readonly string[]): readonly string[] | null
 }
 
 // Two config forms keep a condition, because the config tool has no other owner
-// for them. A release fetched or applied replaces the engine itself, so it waits
-// for the plan's answer whoever asked: `--download`, `--release-base-url`,
-// `--ca-bundle`, `--from` outside `config models`, or a setup run with no
-// section (other than `--help` and `--statusline`). Kiro's Workflows on, the
-// sensor timeout, which plugins are on and `config project --reset` can take a
-// check away or change the stations, so they pass once a person has asked since
-// the last decision (never on an unattended run).
+// for them. A release fetched or applied replaces the engine itself: `--download`,
+// `--release-base-url`, `--ca-bundle`, `--from` outside `config models`, or a
+// setup run with no section (other than `--help` and `--statusline`). Kiro's
+// Workflows on, the sensor timeout, which plugins are on and `config project
+// --reset` can take a check away or change the stations. Each passes once a
+// person has asked since the last decision (their "update AI-DLC" is that), and
+// never on an unattended run.
 const RELEASE_FLAGS = new Set(["--download", "--release-base-url", "--ca-bundle"]);
 
 function configToolAdmitted(projectDir: string, rest: readonly string[]): boolean {
@@ -1523,9 +1523,9 @@ function configToolAdmitted(projectDir: string, rest: readonly string[]): boolea
     rest[index].includes("=") ? rest[index].slice(rest[index].indexOf("=") + 1) : rest[index + 1];
   const section = rest[0] ?? "";
   const sectioned = (CONFIG_SECTIONS as readonly string[]).includes(section);
-  if (!sectioned && !names.includes("--help") && !names.includes("--statusline")) return false;
-  if (names.some((name) => RELEASE_FLAGS.has(name)) || (section !== "models" && names.includes("--from"))) return false;
-  const lowers = names.some((name, index) => name === "--kiro-workflows" && valueAt(index) !== "off") ||
+  const release = (!sectioned && !names.includes("--help") && !names.includes("--statusline")) ||
+    names.some((name) => RELEASE_FLAGS.has(name)) || (section !== "models" && names.includes("--from"));
+  const lowers = release || names.some((name, index) => name === "--kiro-workflows" && valueAt(index) !== "off") ||
     names.includes("--sensor-timeout-ms") || names.includes("--plugins") ||
     (section === "project" && names.includes("--reset"));
   return !lowers || personAskedSinceGate(projectDir);
