@@ -2880,7 +2880,7 @@ export function reviewRecoverySpentMessage(
       `the Bolt attempt. On an approved retry, return to the main workspace, run ` +
       `\`aidlc-bolt.ts abort --name "${autonomousBolt.unit}" --slug "${slug}" ` +
       `--reason "stale review recovery exhausted" --discard\`. After success, ` +
-      "use the retry-discard SAY line in stage-protocol-reviewer.md §12a. Then rerun the " +
+      "use the retry-discard SAY line in stage-protocol-swarm.md. Then rerun the " +
       `current \`aidlc-swarm.ts prepare\` step for Unit "${autonomousBolt.unit}" in` +
       `${batch} with the original base/repo arguments. The fresh Bolt attempt ` +
       "restores one review allowance without claiming convergence. Do not " +

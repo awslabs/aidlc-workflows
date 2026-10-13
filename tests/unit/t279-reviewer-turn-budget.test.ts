@@ -65,6 +65,9 @@ const REVIEWERS = [
 
 const CAP = "60";
 const REVIEWER_MODULE = "aidlc-common/protocols/stage-protocol-reviewer.md";
+// A Unit's review rules and a re-dispatch's context, named on the reviews that take them.
+const REVIEWER_UNIT_MODULE = "aidlc-common/protocols/stage-protocol-reviewer-unit.md";
+const REVIEWER_REPAIR_MODULE = "aidlc-common/protocols/stage-protocol-reviewer-repair.md";
 const SKILL = join("skills", "aidlc", "SKILL.md");
 const MISSING_VERDICT_FINDING = "review did not complete within its turn budget";
 
@@ -233,8 +236,9 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(request).toBeGreaterThan(-1);
       expect(hydrate).toBeGreaterThan(request);
       expect(dispatch).toBeGreaterThan(hydrate);
-      expect(labelled).toContain("settled decisions from the engine-owned list");
-      expect(labelled.replace(/\s+/g, " ")).toContain(
+      const repair = readFileSync(path.replace(REVIEWER_MODULE, REVIEWER_REPAIR_MODULE), "utf-8");
+      expect(repair).toContain("settled decisions from the engine-owned list");
+      expect(repair.replace(/\s+/g, " ")).toContain(
         "excludes fixed findings",
       );
       expect(labelled).toContain("as the one file the reviewer writes");
@@ -243,7 +247,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toContain("Writes NOTHING else");
       // The Part 0 revision-path paragraph relies on request binding, not on
       // deleting anything from the artifact.
-      expect(labelled).toContain("the new request binds");
+      expect(repair).toContain("the new request binds");
       // Negative pins: the retired appendix mechanics must not come back.
       expect(labelled).not.toContain("DELETE the existing `## Review` section");
       expect(labelled).not.toContain("## Review (superseded)");
@@ -339,8 +343,8 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     // so the protocol's dispatch-record roster must include it - it was
     // written before the Copilot harness landed and went stale.
     for (const path of [
-      join(REPO_ROOT, "core", REVIEWER_MODULE),
-      join(AIDLC_SRC, REVIEWER_MODULE),
+      join(REPO_ROOT, "core", REVIEWER_UNIT_MODULE),
+      join(AIDLC_SRC, REVIEWER_UNIT_MODULE),
     ]) {
       const body = readFileSync(path, "utf-8");
       expect(body).toContain(
@@ -400,8 +404,12 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(inList).toContain(
         "in any form including a table or a section of its own",
       );
-      expect(labelled).toContain("settled decisions from the engine-owned list");
-      expect(labelled.replace(/\s+/g, " ")).toContain(
+      const repair = readFileSync(
+        join(harness.engineRoot, "aidlc-common", "protocols", "stage-protocol-reviewer-repair.md"),
+        "utf-8",
+      );
+      expect(repair).toContain("settled decisions from the engine-owned list");
+      expect(repair.replace(/\s+/g, " ")).toContain(
         "excludes fixed findings",
       );
       expect(labelled).toContain("Writes exactly ONE file: its review, at the passed `reviewFile` path");
@@ -445,6 +453,10 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       "utf-8",
     );
     expect(module).toContain(MISSING_VERDICT_FINDING);
-    expect(module).toContain("(Kiro IDE today), do not write the record");
+    const unitModule = readFileSync(
+      join(REPO_ROOT, "dist", "kiro-ide", ".kiro", REVIEWER_UNIT_MODULE),
+      "utf-8",
+    );
+    expect(unitModule).toContain("(Kiro IDE today), do not write the record");
   });
 });

@@ -1299,7 +1299,17 @@ function sayPendingPersonLines(requested: Directive, transported: Directive): ((
   return pending.said;
 }
 
+// A Unit's review reads the per-Unit review rules. Many routes set the Unit
+// after the step is built, so the module is named as the step goes out.
+function nameUnitReviewModule(directive: Directive): void {
+  if (directive.kind !== "run-stage" || typeof directive.unit !== "string") return;
+  const modules = directive.protocol_modules;
+  const at = modules?.indexOf("reviewer") ?? -1;
+  if (modules && at >= 0 && !modules.includes("reviewer-unit")) modules.splice(at + 1, 0, "reviewer-unit");
+}
+
 function prepareEmission(directive: Directive): PreparedEmission {
+  nameUnitReviewModule(directive);
   const requested = directive;
   // Read before the notices below can copy the directive. A guard-recovery
   // ask whose ways on are the conductor's own work (agent_work) is no question
@@ -7215,9 +7225,20 @@ function buildRunStageDirective(
         reviewClass === "advisory" ? 1 : node.reviewer_max_iterations ?? 2;
     }
   }
+  // The learnings ritual runs at a gate's first showing, never again for a
+  // revision of it (stage-protocol.md, Request Changes).
+  const revising = stateContent !== null && checkboxStateOf(parseCheckboxes(stateContent), node.slug) === "revising";
   const protocolModules: ProtocolModule[] = [];
   if (directive.reviewer && directive.review_class) {
     protocolModules.push("reviewer");
+    // A review that can repair: an adversarial one, a revision's re-review,
+    // or the one stale-receipt recovery Guard Policy strict allows.
+    if (
+      directive.review_class === "adversarial" || revising ||
+      !codekbCtx || !guardPolicyAcceptsChanges(codekbCtx.projectDir, stateContent)
+    ) {
+      protocolModules.push("reviewer-repair");
+    }
   }
   if (
     node.mode === "subagent" ||
@@ -7240,9 +7261,6 @@ function buildRunStageDirective(
   if (node.slug === "code-generation" || node.slug === "build-and-test") {
     protocolModules.push("loopback");
   }
-  // The learnings ritual runs at a gate's first showing, never again for a
-  // revision of it (stage-protocol.md, Request Changes).
-  const revising = stateContent !== null && checkboxStateOf(parseCheckboxes(stateContent), node.slug) === "revising";
   if (ceremony.learnings === "on" && !revising) protocolModules.push("learnings");
   if (protocolModules.length > 0) {
     directive.protocol_modules = protocolModules;
@@ -10603,7 +10621,7 @@ function applyConstructionCheckpointShape(
     directive.produces = rechecked.produces;
   }
   directive.protocol_modules = checkpoint.rereview
-    ? ["reviewer", "construction", "checkpoint"]
+    ? ["reviewer", "reviewer-repair", "construction", "checkpoint"]
     : ["construction", "checkpoint"];
   // A checkpoint the person approves offers one learnings ritual for the
   // stages it covers, as a stage's own approval gate does. A re-check of
@@ -10877,7 +10895,7 @@ function tryEmitSwarm(
   // A swarm batch verifies with the checkpoint's command and can replay a
   // Build and Test loop-back.
   const protocolModules: ProtocolModule[] = [
-    ...(node.reviewer ? (["reviewer"] as const) : []),
+    ...(node.reviewer ? (["reviewer", "reviewer-unit", "reviewer-repair"] as const) : []),
     "construction",
     "checkpoint",
     "loopback",
