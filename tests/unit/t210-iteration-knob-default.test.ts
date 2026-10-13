@@ -110,6 +110,7 @@ function constructionState(opts: {
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **State Version**: 8
+- **Unit Ownership**: solo
 - **Skeleton Stance**: on
 ${autonomyLine}## Scope Configuration
 - **Stages to Execute**: all

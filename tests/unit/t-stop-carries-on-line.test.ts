@@ -46,7 +46,7 @@ const STEPS = [
   'adding `--unit "<directive.unit>"` in team-owned Unit work',
   "`--single`, `--checkpoint` or `--questions-file`",
   "end your turn without asking it again",
-  "If the person asked to stop here, run `{{INVOKE}} engine orchestrate park`.",
+  "If the person asked to stop here, run `{{INVOKE}} engine orchestrate park --person-asked`.",
   // Rules parts: the receipt the agent holds; a stale one gets the current step.
   "`{{INVOKE}} engine orchestrate continue <receipt>` with the receipt of the last part you hold",
   "a receipt that no longer fits is answered with the current step",

@@ -942,10 +942,11 @@ This stage has a **two-part structure**: planning followed by generation.
    (the question, both tags, and a blank `[Answer]:`) and records the question
    in the protected runtime directory; the conductor shows it and ends the turn.
    The human-turn hook keeps the person's reply, from any chat on this piece of
-   work, except one typed in a chat where the agent has since asked a question
-   of its own that is still open (the verification command, say), which answers
-   that question; the conductor reads it and records their choice with `answer
-   --checkpoint plan-approval`, which takes the fingerprint of the files as they
+   work, except one typed in a chat where the agent has asked a question of its
+   own since the plan question was last shown in that chat, still open (the
+   verification command, say), which answers that question; the conductor
+   reads it and records their choice with `answer --checkpoint plan-approval`,
+   which takes the fingerprint of the files as they
    are then and writes the answer, the receipt, and the `PLAN_APPROVAL_RECORDED`
    row with the person's words. The person may instead write their answer on the
    questions file's own `[Answer]:` line, as that file invites, and say so: the

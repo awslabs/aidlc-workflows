@@ -75,6 +75,7 @@ function state(current: "units-generation" | "functional-design", review: string
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **State Version**: 8
+- **Unit Ownership**: solo
 
 ## Runtime State
 - **Revision Count**: 0

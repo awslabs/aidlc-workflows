@@ -340,10 +340,12 @@ A sensor complements the check on the prose side. The `required-sections` and
 artifacts' shape and coverage at the gate; you can author a project-specific
 convergence or required-sections sensor with the muscle from
 [Sensors](06-sensors.md) and bind it to the Construction stages whose output you
-keep eyeing for the same gap. The sensor is advisory telemetry that fires on each
-write; the project check command is the hard convergence gate. They work the two
-halves — the sensor watches shape as the agent writes, the check decides whether
-the Unit may merge.
+keep eyeing for the same gap. Those two fire at the gate and are advisory; a
+sensor you add fires on each write or at the gate, as its `fire_on` says, and a
+blocking gate sensor stops the gate until its findings are fixed or a person
+overrides it (see [Sensors](06-sensors.md)). The project check command is the
+hard convergence gate. They work the two halves: the sensor watches the
+artifacts' shape, the check decides whether the Unit may merge.
 
 ---
 
@@ -361,8 +363,9 @@ shapes.
 | `"1"` | inline Dynamic Workflow | The conductor authors a `Workflow` whose JS owns the per-Unit pipeline and the iteration cap. |
 | `"1"` but Workflow tool unavailable | loud-degrade to the floor | The conductor falls back to the floor and passes `--degraded-from ultracode` so the referee emits `SWARM_DEGRADED`. |
 
-Both drivers run the same five per-Unit stages and converge against the same
-project check. The difference is purely how the parallel work is dispatched. The
+Both drivers run each Unit's Code Generation (the one per-Unit stage that runs
+as a subagent, which is what the swarm dispatches; the per-Unit design stages
+are not part of the swarm) and converge against the same project check. The difference is purely how the parallel work is dispatched. The
 runaway backstop lives in the harness's **Stop-hook ceiling**
 (`core/hooks/aidlc-continue-workflow.ts`, the `blockCap()` / `defaultBlockCap()` pair, exposed
 as `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`), outside the swarm tool itself. On this
@@ -401,10 +404,11 @@ territory:
   merge-back, and emit the six referee-owned `SWARM_*` events. The conductor
   then invokes `aidlc-worktree merge` for each converged Unit; that separate
   immutable source landing emits `SWARM_SOURCE_MERGED`.
-- **The engine** `aidlc-orchestrate.ts` — the deterministic router with exactly
-  five subcommands: `next`, `continue`, `report`, `park`, and `team-board`;
-  `continue` is internal steering transport and `team-board` is the read-only
-  Team Construction query. It decides when a Construction batch is
+- **The engine** `aidlc-orchestrate.ts` - the deterministic router with exactly
+  six subcommands: `next`, `continue`, `report`, `park`, `team-board`, and
+  `wait`; `continue` is internal steering transport, `team-board` is the
+  read-only Team Construction query, and `wait` is the bounded read-only wait
+  for dispatched work. It decides when a Construction batch is
   eligible for the swarm.
 - **The Bolt-DAG parser** — the compile step that reads the edge block into
   `runtime-graph.json`.
@@ -420,8 +424,9 @@ shows the eligible source-producing solo path: a real integrated Unit check and
 human skeleton approval, followed by **Continue automatically** / **Review each
 checkpoint** when offered. It also distinguishes legacy first-stage reviews and
 the retained design-only, no-Unit, and team-owned paths. The autonomy choice
-controls ordinary completion approval independently of execution. The six
-`SWARM_*` audit events are catalogued in
+controls ordinary completion approval independently of execution. The seven
+`SWARM_*` audit events (six from the referee, plus `SWARM_SOURCE_MERGED` from
+the source landing) are catalogued in
 [State and Audit](../guide/10-state-and-audit.md).
 
 ---

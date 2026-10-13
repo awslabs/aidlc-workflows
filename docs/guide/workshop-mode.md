@@ -10,9 +10,11 @@ engine contract is scope-agnostic:
 - a shared git namespace, or sibling worktrees sharing one local ref database
 
 Team ownership currently requires the workspace root itself to be the source Git
-repository. An intent with a recorded sibling-repo set is rejected before
-`Unit Ownership: team` is recorded; use solo ownership for that multi-repo
-intent.
+repository. Work with a recorded sibling-repo set is not asked who builds its
+Units: when Construction starts, AI-DLC says in one line that this session
+builds them, because teams each owning a Unit is not available yet for work
+across repos, and `set-unit-ownership team` refuses with the same line before
+changing state.
 
 The integration lead works from unscoped main. Each delivery team works from a
 checkout stamped to one claimed Unit. A claimed checkout runs that Unit's exact
@@ -132,6 +134,19 @@ The integration lead completes Inception, including:
 3. `Unit Ownership: team`;
 4. the team gate rhythm, `per-stage` or `unit-end`;
 5. the affirmed branching strategy.
+
+When Inception ends with two or more Units, the first step into Construction
+asks who builds them, once, in every scope and in a composed workflow: **Just
+me** records `Unit Ownership: solo` and this session builds the Units;
+**Several teams** records `Unit Ownership: team`, switching a stage-by-stage
+plan to one Unit at a time on the way (the choice says so, and says that each
+team approves its Unit after every stage unless the lead asks for one approval
+at the end of each Unit). A plan with one Unit, no Unit plan, or
+Construction already under way is never asked. A reply that picks neither
+leaves this session building, and the first step says to ask for teams before
+the first Unit is built. Team approvals come after every stage (`per-stage`)
+unless the lead runs `set-unit-gate-rhythm unit-end` before the first Unit
+starts; the first team step says so.
 
 When the scope records `skeleton: on`, the first DAG Unit is the walking
 skeleton. It runs on unscoped main before claims open and needs no merge-back

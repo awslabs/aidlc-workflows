@@ -718,7 +718,7 @@ ahead of that run-stage. Adopt it for the whole run.
    run that bare \`next\` at once and act on what it returns, with no completion
    summary. If the person's reply that led to that step also asked to stop the
    workflow there for now (not to pause on one decision inside the work), run
-   \`${aidlcToolInvocation("orchestrate")} park\` instead and act on its
+   \`${aidlcToolInvocation("orchestrate")} park --person-asked\` instead and act on its
    \`parked\` directive.
 
 On that first \`next\`, pass \`$ARGUMENTS\` through verbatim after \`--scope ${scope}\`; the engine parses

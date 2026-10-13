@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue,
-// function:activeDirectiveStorageDir, hook:aidlc-deliver-stage-rules
+// function:activeDirectiveStorageDir, function:copyFrameworkPhaseRules, hook:aidlc-deliver-stage-rules
 //
 // Deterministic stage-rule delivery. Rules ride inside the run-stage directive
 // (rules_content) whenever run-stage plus rules fit the transport cap; a bundle
@@ -1510,9 +1510,9 @@ describe("t248 deterministic steering delivery", () => {
     expect(result.message).toContain("Cannot load required stage rule");
     expect(result.message).toContain("The stage has not started");
     expect(result.message).toContain("run `next` again");
-    // It names how to put the file back, and the doctor.
+    // It names how to put the file back, and not the doctor, which has no check for it.
     expect(result.message).toContain("git checkout -- aidlc/spaces/default/memory/org.md");
-    expect(result.message).toContain("--doctor");
+    expect(result.message).not.toContain("--doctor");
     // The named step works: with the file back, the same request starts the stage.
     writeFileSync(orgPath, org);
     expect(invoke(proj, "next", args).directive.kind).not.toBe("error");
@@ -1527,6 +1527,7 @@ describe("t248 deterministic steering delivery", () => {
     const result = invoke(proj, "next", args).directive;
     expect(result.kind).toBe("error");
     expect(result.message).toContain("Keep a copy of the file, then fix its permissions or save it as UTF-8");
+    expect(result.message).not.toContain("--doctor");
     expect(result.message).not.toContain("git checkout");
     // The named step works: saved as UTF-8, the same request starts the stage.
     writeFileSync(orgPath, org);
@@ -1592,6 +1593,112 @@ describe("t248 deterministic steering delivery", () => {
         entry.path.startsWith("aidlc/spaces/team-a/memory/")
       ),
     ).toBe(true);
+  });
+
+  // A space made by `space create` before #2419 got an empty memory/phases/
+  // (and a team clone of it has no phases/ folder at all, since git keeps no
+  // empty folder), so its first stage after Initialization stopped on a phase
+  // rule file that was never written. After the update the stage starts.
+  const seedPhases = (proj: string): string =>
+    join(proj, ".claude", "tools", "data", "memory-seed", "phases");
+  function oldShapeSpace(proj: string, phasesFolder = true): string {
+    const teamMemory = join(proj, "aidlc", "spaces", "team-a", "memory");
+    mkdirSync(join(teamMemory, "templates"), { recursive: true });
+    if (phasesFolder) mkdirSync(join(teamMemory, "phases"));
+    cpSync(orgPath(proj), join(teamMemory, "org.md"));
+    writeFileSync(join(teamMemory, "team.md"), "# Team practices\n", "utf-8");
+    writeFileSync(join(teamMemory, "project.md"), "# Project overrides\n", "utf-8");
+    writeFileSync(join(proj, "aidlc", "active-space"), "team-a\n", "utf-8");
+    return teamMemory;
+  }
+
+  for (const shape of ["empty phases folder", "no phases folder"] as const) {
+    test(`a space made before its phase rules shipped starts its first stage (${shape})`, () => {
+      const proj = project();
+      const teamMemory = oldShapeSpace(proj, shape === "empty phases folder");
+
+      const result = drive(proj);
+      expect(result.final.kind, result.final.message).toBe("run-stage");
+      // The space now holds the framework's phase rules, as a new space does.
+      const seeded = readdirSync(seedPhases(proj)).sort();
+      expect(seeded).toEqual(["construction.md", "ideation.md", "inception.md", "operation.md"]);
+      for (const name of seeded) {
+        expect(readFileSync(join(teamMemory, "phases", name), "utf-8"))
+          .toBe(readFileSync(join(seedPhases(proj), name), "utf-8"));
+      }
+      expect(reconstructed(result.contents, "aidlc/spaces/team-a/memory/phases/ideation.md"))
+        .toBe(readFileSync(join(seedPhases(proj), "ideation.md"), "utf-8"));
+    });
+  }
+
+  test("a phase rule file the team wrote stays as it is while the missing ones are added", () => {
+    const proj = project();
+    const teamMemory = oldShapeSpace(proj);
+    const ownRules = "# Inception rules\n\n- TEAM-A-OWN-INCEPTION-RULE\n";
+    writeFileSync(join(teamMemory, "phases", "inception.md"), ownRules, "utf-8");
+
+    expect(drive(proj).final.kind).toBe("run-stage");
+    expect(readFileSync(join(teamMemory, "phases", "inception.md"), "utf-8")).toBe(ownRules);
+    for (const name of ["construction.md", "ideation.md", "operation.md"]) {
+      expect(readFileSync(join(teamMemory, "phases", name), "utf-8"))
+        .toBe(readFileSync(join(seedPhases(proj), name), "utf-8"));
+    }
+  });
+
+  test("the person hears once which rules files were added, and where", () => {
+    const proj = project();
+    const teamMemory = oldShapeSpace(proj);
+    writeFileSync(join(teamMemory, "phases", "inception.md"), "# Inception rules\n\n- Own rule\n", "utf-8");
+
+    const first = invoke(proj, "next", ["--scope", "mvp", "--stage", "intent-capture"]).directive as
+      WireDirective & { narration?: string };
+    expect(first.kind).toBe("run-stage");
+    expect(first.narration).toContain(
+      "Space team-a had no rules for the ideation, construction and operation phases, so I added the " +
+        "framework's to aidlc/spaces/team-a/memory/phases/; edit those files to change them.",
+    );
+    const again = invoke(proj, "next", ["--scope", "mvp", "--stage", "intent-capture"]).directive as
+      WireDirective & { narration?: string };
+    expect(again.narration ?? "").not.toContain("had no rules");
+  });
+
+  test("the Stop hook's look at the step starts the stage too, and writes nothing", () => {
+    const proj = project();
+    oldShapeSpace(proj);
+    const before = treeDigest(join(proj, "aidlc", "spaces", "team-a"));
+    const probe = invoke(
+      proj,
+      "next",
+      ["--scope", "mvp", "--stage", "intent-capture"],
+      { ...process.env, AIDLC_STOP_HOOK_PROBE: "1" },
+    ).directive;
+    expect(probe.kind, probe.message).not.toBe("error");
+    expect(treeDigest(join(proj, "aidlc", "spaces", "team-a"))).toEqual(before);
+  });
+
+  test("a sub-agent in such a space gets the framework's phase rules, and nothing is written", () => {
+    const proj = project();
+    const teamMemory = oldShapeSpace(proj);
+    const result = runDispatchHook(proj, "Task", {
+      subagent_type: "aidlc-product-agent",
+      prompt: "Run .claude/aidlc-common/stages/inception/user-stories.md.",
+    });
+    expect(result.code, result.stderr).toBe(0);
+    const prompt = String(
+      (JSON.parse(result.stdout) as HookRewrite).hookSpecificOutput?.updatedInput?.prompt ?? "",
+    );
+    expect(prompt).toContain(readFileSync(join(seedPhases(proj), "inception.md"), "utf-8"));
+    expect(readdirSync(join(teamMemory, "phases"))).toEqual([]);
+  });
+
+  test("the default space keeps its own way back for a phase rule file it is missing", () => {
+    const proj = project();
+    const ideation = join(proj, "aidlc", "spaces", "default", "memory", "phases", "ideation.md");
+    rmSync(ideation);
+    const result = invoke(proj, "next", ["--scope", "mvp", "--stage", "intent-capture"]).directive;
+    expect(result.kind).toBe("error");
+    expect(result.message).toContain("git checkout -- aidlc/spaces/default/memory/phases/ideation.md");
+    expect(existsSync(ideation)).toBe(false);
   });
 
   test("readable optional knowledge is listed for inline loading", () => {

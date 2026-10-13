@@ -631,7 +631,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const report = (...extra: string[]) =>
       directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
     const stopAsked = "The person also asked to stop there for now: make the move";
-    const parkInstead = " park` in place of that `next` and act on its `parked` directive.";
+    const parkInstead = " park --person-asked` in place of that `next` and act on its `parked` directive.";
     // Every move a re-entry request names keeps the stop the person asked for,
     // and without --park the conductor still checks their words for one.
     for (const extra of [
@@ -647,7 +647,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       expect(stopped.message, extra.join(" ")).toContain(stopAsked);
       expect(stopped.message, extra.join(" ")).toContain(parkInstead);
       // The engine's own park, which every tool runs without asking.
-      expect(stopped.message, extra.join(" ")).toMatch(/orchestrate(\.ts)? park` in place of that `next`/);
+      expect(stopped.message, extra.join(" ")).toMatch(/orchestrate(\.ts)? park --person-asked` in place of that `next`/);
       const plain = report(...extra);
       expect(plain.message, extra.join(" ")).not.toContain(stopAsked);
       expect(plain.message, extra.join(" ")).toContain("If the person also asked to stop there for now, make the move");

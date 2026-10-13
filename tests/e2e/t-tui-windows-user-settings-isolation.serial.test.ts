@@ -8,7 +8,7 @@
 // The explicit user,project control runs first and must see both sentinels,
 // proving the poisoned file is in Claude's real user-memory location. The bare
 // launch then must see project guidance only. Its driver trace also pins that an
-// absolute claude.exe launch receives one project-only flag.
+// absolute claude.exe launch receives one project,local flag (never user).
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
@@ -424,7 +424,7 @@ describe("Windows Claude TUI user-settings isolation", () => {
         expect(startTrace(isolated.trace).command).toEqual([
           CLAUDE_EXE as string,
           "--setting-sources",
-          "project",
+          "project,local",
           "--dangerously-skip-permissions",
         ]);
         expect(startTrace(isolated.trace).requestedCommand).toEqual([

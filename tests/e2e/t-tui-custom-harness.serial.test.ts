@@ -403,7 +403,9 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
         noAidlcDocs: true,
       });
       try {
-        const r = await driveAidlc(`/aidlc --init --scope ${CUSTOM_SCOPE}`, {
+        // With a description: named alone, the scope first asks what the work is
+        // for (#2355), and this journey is about the creation that follows.
+        const r = await driveAidlc(`/aidlc --init --scope ${CUSTOM_SCOPE} move the orders table to the new schema`, {
           projectDir: sdkProj,
           timeoutMs: remainingWorkMs(),
           stopAfterToolResult: {

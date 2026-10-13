@@ -1,6 +1,6 @@
 # State Tracking and Audit Trail
 
-AI-DLC maintains two persistent files that together provide full traceability from intent to production: the **state file** tracks where you are in the workflow, and the **audit trail** records every decision, action, and event along the way.
+Each piece of work keeps two committed records that together provide full traceability from intent to production: the **state file** tracks where you are in the workflow, and the **audit trail**, a folder of files, records every decision, action, and event along the way.
 
 ---
 
@@ -22,22 +22,60 @@ sidecar's final line ending.
 
 | Section | Purpose |
 |---------|---------|
-| **Project Information** | Project description, type (greenfield/brownfield) and who set it (`Project Type Source`: `workspace scan` or `you`), scope, start date, current phase, active agent |
-| **Scope Configuration** | Stages to execute, stages to skip (with reasons), depth level, test strategy, and the per-intent settings: `Guard Policy`, `Guards Off` (fences lowered for this piece of work), `Guards On` (fences forced on above the policy word), `Sensors`, `Learnings`, `Summary Confirmation`. The fence lines appear only when used and never include human presence, which has no per-work switch. |
+| **Project Information** | Project description, type (greenfield/brownfield) and who set it (`Project Type Source`: `workspace scan` or `you`), scope, start date, active agent |
+| **Scope Configuration** | Stages to execute, stages to skip (with reasons), depth level, test strategy, `Review Override`, and the per-intent settings: `Guard Policy`, `Guards Off` (fences lowered for this piece of work), `Guards On` (fences forced on above the policy word), `Sensors`, `Learnings`, `Summary Confirmation`, `Plan Approval`, `Collaborators`. The fence lines appear only when used and never include human presence, which has no per-work switch. |
 | **Workspace State** | Project root, detected languages, frameworks, build system |
 | **Execution Plan Summary** | Total stages, completed count, in-progress stage |
 | **Runtime State** | Revision count, Construction checkpoints, iteration and execution settings, receipt-bound Construction Verification Command, and optional Unit ownership and Unit gate rhythm |
+| **Phase Progress** | Each phase as `Pending`, `Active`, `Verified`, or `Skipped` |
 | **Stage Progress** | Per-stage checkboxes tracking completion status |
 | **Unit Progress** | Team mode only: derived per-Unit Construction stage and gate cells; rewritten by `next`, never authoritative |
 | **Current Status** | Lifecycle phase, current/next stage, status, last updated timestamp |
 | **Session Resume Point** | Last completed stage, next action, pending artifacts |
 
+Here is part of one, from a Claude Code run on the `mvp` plan just after Intent Capture was approved (shortened; the file puts a long dash between each stage and its `EXECUTE` or `SKIP`, shown here as `-`):
+
+```text
+## Scope Configuration
+- **Depth**: Standard
+- **Test Strategy**: Minimal
+- **Review Override**:
+- **Guard Policy**: off (from scope mvp)
+- **Sensors**: on (from scope mvp)
+- **Learnings**: on (from scope mvp)
+- **Summary Confirmation**: on (from scope mvp)
+- **Plan Approval**: on (from scope mvp)
+- **Collaborators**: off (from scope mvp)
+
+## Phase Progress
+- **Initialization**: Verified
+- **Ideation**: Active
+- **Inception**: Pending
+- **Construction**: Pending
+- **Operation**: Skipped
+
+## Stage Progress
+### IDEATION PHASE
+- [x] intent-capture - EXECUTE
+- [ ] market-research - SKIP
+- [-] feasibility - EXECUTE
+- [ ] scope-definition - EXECUTE
+...
+
+## Current Status
+- **Lifecycle Phase**: IDEATION
+- **Current Stage**: feasibility
+- **Next Stage**: scope-definition
+- **Status**: Running
+- **Last Updated**: 2026-10-13T10:43:59Z
+```
+
 If `Guard Policy` and the retired `Change Control` both appear with different
 policy words, strict applies and status shows `strict (from conflicting state lines)`;
 memory-held strict still takes precedence. If both agree, the `Guard Policy`
 line is used. Any write of the policy line removes the retired line, leaving one
-setting. Until a conflict is resolved, `next` carries this notice with `<a>` and
-`<b>` replaced by the raw line values, without changing the state file:
+setting. Until a conflict is resolved, `next` carries this notice, without
+changing the state file:
 
 > This work has two settings for how closely AI-DLC checks changes, and they disagree, so AI-DLC checks everything for now. Do you want it to keep checking everything, carry on with a note when something you approved changes, or also skip some of its own checks? I'll ask again until you choose.
 
@@ -61,7 +99,9 @@ Stage progress uses a six-state checkbox notation:
 | `[?]` | Awaiting your approval (gate open) |
 | `[R]` | Revising (you rejected the gate, stage is being revised) |
 | `[x]` | Completed |
-| `[S]` | Skipped (scope-excluded, cut via `skip`, or bypassed via `--stage`/`--phase` jump) |
+| `[S]` | Skipped while the work ran (cut via `skip`, or bypassed by a `--stage`/`--phase` jump) |
+
+A stage your plan leaves out never changes box: it stays `[ ]` with `SKIP` after its name, like `market-research` above.
 
 Stages transition through `[ ]` → `[-]` → `[?]` → `[x]` on the happy path. When you reject at the gate, the stage moves to `[R]` while it's revised, back to `[?]` when ready, and finally to `[x]` on approval. `/aidlc --status` reads the checkbox and tells you who's blocking — "Awaiting your approval on \<stage\>" for `[?]`, "Revising \<stage\> (revision N of 3)" for `[R]`.
 
@@ -84,20 +124,20 @@ stateDiagram-v2
     Awaiting --> Completed : You approve
     Awaiting --> Revising : You request changes
     Revising --> Awaiting : Revision done, re-enter gate
-    NotStarted --> Skipped : --stage/--phase jump or scope excludes
+    NotStarted --> Skipped : skipped, or jumped past
     InProgress --> Skipped : Cut mid-flight
     Revising --> Skipped : Abandon after rejection
-    Awaiting --> Skipped : Forward jump, or a scope that skips it
+    Awaiting --> Skipped : Forward jump
     Completed --> NotStarted : Redo (artifacts deleted)
 ```
 
-<!-- Text fallback: [ ] Not Started transitions to [-] In Progress when a stage begins. [-] In Progress transitions to [?] Awaiting Approval when stage work is done and the gate opens. [?] Awaiting Approval transitions to [x] Completed when you approve, or to [R] Revising when you request changes. [R] Revising transitions back to [?] Awaiting Approval when revision is complete. [ ] Not Started, [-] In Progress, [?] Awaiting Approval, and [R] Revising can each transition to [S] Skipped via jumps, scope exclusion or a scope change, or abandonment. [x] Completed transitions back to [ ] Not Started on redo (artifacts deleted). -->
+<!-- Text fallback: [ ] Not Started transitions to [-] In Progress when a stage begins. [-] In Progress transitions to [?] Awaiting Approval when stage work is done and the gate opens. [?] Awaiting Approval transitions to [x] Completed when you approve, or to [R] Revising when you request changes. [R] Revising transitions back to [?] Awaiting Approval when revision is complete. [ ] Not Started, [-] In Progress, [?] Awaiting Approval, and [R] Revising can each transition to [S] Skipped via a skip, a jump, or abandonment. [x] Completed transitions back to [ ] Not Started on redo (artifacts deleted). -->
 
 ### Normal, revision, skip, redo, and jump flows
 
 - **Normal flow**: `[ ]` -> `[-]` -> `[?]` -> `[x]` (stage begins, work completes, gate opens, you approve)
 - **Revision flow**: `[?]` -> `[R]` -> `[?]` -> `[x]` (you reject, stage is revised, gate re-opens, you approve)
-- **Scope skip flow**: `[ ]` -> `[S]` (stage not in scope for this workflow, marked at init)
+- **Scope skip flow**: none: a stage not in the plan stays `[ ]`, marked `SKIP` when the work is created
 - **Redo flow**: `[x]` or `[-]` -> `[ ]` -> `[-]` (you request redo, artifacts are deleted, stage re-executes)
 - **Jump flow**: `[-]` at stage A, you request jump to stage B, intervening stages are marked `[S]`
 
@@ -146,7 +186,7 @@ Events are organized into 25 categories:
 ### What gets logged and when
 
 - **Every stage start and completion** is logged with `STAGE_STARTED` and `STAGE_COMPLETED` events
-- **Every file write** to the intent's record dir (except the `audit/` shards themselves) is automatically logged by the write-audit-log hook
+- **Every file the agent writes or edits with its file tools** in the intent's record dir or the space's `codekb/` (except the `audit/` shards themselves) is logged by the write-audit-log hook; a file written by a shell command is not
 - **Every approval gate decision** (approve, request changes, accept-as-is) is logged
 - **Every question answer** you provide is recorded
 - **Every subagent completion** is logged by the log-subagent hook
@@ -154,7 +194,27 @@ Events are organized into 25 categories:
 
 ### How to read the audit log
 
-Run `aidlc engine audit history` for the event timeline, or add
+Each shard is plain Markdown, one block per event. Two from the Intent Capture
+stage of the run above:
+
+```text
+## Stage Start
+**Timestamp**: 2026-10-13T10:27:19Z
+**Event**: STAGE_STARTED
+**Stage**: intent-capture
+**Agent**: aidlc-product-agent
+
+---
+
+## Question Answered
+**Timestamp**: 2026-10-13T10:34:07Z
+**Event**: QUESTION_ANSWERED
+**Stage**: intent-capture
+**Details**: Q9: One total per SKU
+**Person Reply**: One total per SKU
+```
+
+Run `aidlc engine audit history` for the event timeline as JSON, or add
 `--stage <slug>` to review one stage. Each event carries its timestamp, type,
 and named fields. Results are oldest first; `unordered: true` marks tied
 entries with no known order across writers. Free-form notes appear as `NOTE`

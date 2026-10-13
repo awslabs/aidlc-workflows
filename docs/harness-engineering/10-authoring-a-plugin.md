@@ -6,12 +6,13 @@
 > [Plugin Mechanism](../reference/18-plugin-mechanism.md).
 
 An **AIDLC plugin** (a **plugin**) is a reusable, optional set of AIDLC
-contributions — new stages, agents, scopes, method/rules (the memory layer),
+contributions - new stages, agents, scopes,
 sensors, methodology knowledge, and additive modifications to existing core
 stages — packaged in its own directory,
 published from its own repository, and **composed** into a user's install over
 their chosen set of plugins. A plugin never edits `core/`; with every plugin
-disabled, the install is byte-identical to bare core.
+disabled, the install behaves as bare core does (the plugins' files stay
+installed, so one can be enabled again).
 
 First-party plugins (shipped by the AIDLC team) and third-party plugins (anyone
 else) are **mechanically identical** — same structure, same seams, same
@@ -63,7 +64,7 @@ block:
 ```jsonc
 {
   "name": "test-pro",                 // == dir name; "core", "aidlc", and "aidlc-*" are reserved
-  "version": "0.1.0",                 // semver; checked by dependents
+  "version": "0.1.0",                 // semver (dependency checks are deferred)
   "description": "Full-featured testing plugin — unit/branch coverage, functional, integration, regression, edge, and API positive+negative.",
   "author": { "name": "AWS AIDLC" },
   "dependencies": ["core"],           // other plugins, e.g. ["compliance@^1.2.0"]
@@ -195,7 +196,7 @@ adds:                         # STRUCTURAL — set-unioned into the stage node
   produces:
     - test-pro-testability-requirements   # <plugin>- prefixed
   required_sections:
-    - "Testability Requirements"          # machine-enforced
+    - "Testability Requirements"          # declared; not enforced today (below)
     - "Coverage Targets"
 fragments:                    # PROSE — spliced into the stage body
   - anchor: after-step:6
@@ -271,14 +272,13 @@ and hash in the plugin contribution sidecar. That provenance exists even for a
 prose-only plugin, allowing doctor to detect a missing marker or changed fragment
 body after an engine reinstall. Two authoring rules follow from that:
 
-- **Don't write a sentinel-lookalike line in fragment prose.** A line matching
-  `<!-- /plugin:… -->` inside your prose will be mistaken for a block terminator
-  and corrupt the splice on upgrade.
-- **Upgrading from a pre-release build:** installs composed from a *review build*
-  of this branch (before the hash was added to the sentinel) carry the old
-  hashless marker; an upgrade won't recognize it and will splice a second copy.
-  Only PR-branch installs are affected — recompose from a clean base, or delete
-  the old block by hand, once.
+- **A marker-lookalike line in fragment prose is safe.** The closing marker
+  carries the block's content hash, so a `<!-- /plugin:... -->` line inside your
+  prose (which lacks that hash) is never taken for the end of the block.
+- **An install with hashless markers:** a block whose markers carry no hash
+  (composed before the hash was added) is not recognized on upgrade, and a
+  second copy is spliced in. Recompose from a clean base, or delete the old
+  block by hand, once.
 
 ### Contribute to a core persona
 
@@ -341,7 +341,7 @@ with `tools/data/plugin-owned-<key>.json`, the same hash-proven record
 `plugin sync` writes. A copy the person changed stays as it is; the drops log
 (shown by `/aidlc --doctor`) names the file and the step: move the change
 elsewhere, remove the file, re-run compose. A project composed before that record
-existed (compose.ts run by hand on 2.10.0 or earlier) reports each differing file
+existed (no `tools/data/plugin-owned-<key>.json`) reports each differing file
 the same way; identical files are recorded on the first run of the current
 compose, so later upgrades need nothing. A prose fragment your new version no
 longer ships at its old `(anchor, order)` is removed together with its sidecar
@@ -460,10 +460,10 @@ guards external builds. Publish the output to a git repo with semver tags and a
 ```bash
 # teams run these in their host CLI:
 /plugin marketplace add <your-org>/<your-plugin-repo>    # Claude
-/plugin install test-pro@<marketplace>                   # Claude
+/plugin install aidlc-test-pro@<marketplace>             # Claude
 
 codex plugin marketplace add <your-org>/<your-plugin-repo>   # Codex
-codex plugin add test-pro@<marketplace>                      # Codex
+codex plugin add aidlc-test-pro@<marketplace>                # Codex
 ```
 
 A **SessionStart hook** (bundled in the emitted plugin) calls the same
@@ -523,7 +523,7 @@ AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
 ```
 
 > **Kiro note.** Use the `kiro-ide` projection for Kiro IDE 1.x or Kiro CLI v3; its folder-drop
-> includes a v2 `.kiro/hooks/aidlc-<plugin>-compose.json` SessionStart registration
+> includes a `version: "v1"` `.kiro/hooks/aidlc-<plugin>-compose.json` SessionStart registration
 > that runs the cross-platform `hooks/aidlc-plugin-compose.ts` Bun launcher from
 > the workspace root. The `kiro` projection emits no hook registration,
 > so run one of the explicit composer commands above. Neither projection emits the
@@ -742,7 +742,8 @@ test("plugin composes into a Claude install", () => {
   it may not collide with a core artifact or another plugin's.
 - **Primitive names are unique.** Your scopes/agents/sensors may not
   collide with core or another plugin — a collision is a compose error with
-  attribution. (Method files merge into the memory seed by file, additively.)
+  attribution. (Method files are not a plugin contribution yet: the validator
+  rejects `contributes.memory`.)
 - **Dependencies** *(⏳ deferred).* `dependencies` is designed to resolve a
   `name@^x.y.z` constraint against the dependency's `version` with cycle
   rejection, but **nothing reads the field yet** — declaring it has no effect

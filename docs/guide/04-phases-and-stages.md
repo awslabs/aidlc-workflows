@@ -94,7 +94,7 @@ Phases execute sequentially. At each phase boundary (except Initialization → I
 
 ## Phase 0: Initialization
 
-**Purpose:** Bootstrap the workspace — scaffold the docs directory, detect the workspace, and initialize state. The welcome message is shown at session start via the `companyAnnouncements` entry in `settings.json` (not a stage).
+**Purpose:** Bootstrap the workspace: create the intent's record dir, detect the workspace, and initialize state. The welcome message is shown at session start via the `companyAnnouncements` entry in `settings.json` (not a stage).
 
 Initialization stages run **automatically** without approval gates. All three execute inside a single deterministic tool call (`aidlc-utility intent-create`) that completes in well under a second.
 
@@ -127,12 +127,12 @@ flowchart TD
     VG1{{"Verification Gate:\nIdeation → Inception"}}
 
     S11 ==>|ALWAYS| S12
-    S11 -.->|"skip: bugfix, refactor,\ninfra, security-patch"| S14
+    S11 -.->|"mvp: no Market Research"| S13
     S12 -.->|CONDITIONAL| S13
     S12 -.->|"skip if no\nfeasibility needed"| S14
     S13 -.->|CONDITIONAL| S14
     S14 ==>|ALWAYS| S15
-    S14 -.->|"skip: poc,\nbugfix, refactor"| S17
+    S14 -.->|"mvp: no Team Formation"| S16
     S15 -.->|CONDITIONAL| S16
     S15 -.->|"skip if no UI"| S17
     S16 -.->|CONDITIONAL| S17
@@ -148,7 +148,7 @@ flowchart TD
     style VG1 fill:#ef9a9a,stroke:#c62828,color:#000
 ```
 
-<!-- Text fallback: 1.1 Intent Capture (ALWAYS) flows to 1.2 Market Research (CONDITIONAL) or directly to 1.4. 1.2 flows to 1.3 Feasibility (CONDITIONAL) or to 1.4. 1.3 flows to 1.4 Scope Definition (ALWAYS). 1.4 flows to 1.5 Team Formation (CONDITIONAL) or to 1.7. 1.5 flows to 1.6 Rough Mockups (CONDITIONAL, skip if no UI) or to 1.7. 1.6 flows to 1.7 Approval & Handoff (ALWAYS), then Verification Gate 1. -->
+<!-- Text fallback: 1.1 Intent Capture (ALWAYS) flows to 1.2 Market Research (CONDITIONAL); mvp goes from 1.1 to 1.3. 1.2 flows to 1.3 Feasibility (CONDITIONAL) or to 1.4. 1.3 flows to 1.4 Scope Definition (ALWAYS). 1.4 flows to 1.5 Team Formation (CONDITIONAL); mvp goes from 1.4 to 1.6. 1.5 flows to 1.6 Rough Mockups (CONDITIONAL, skip if no UI) or to 1.7. 1.6 flows to 1.7 Approval & Handoff (ALWAYS), then Verification Gate 1. poc leaves Ideation after 1.1, mvp after 1.6, and the other plans except enterprise and feature skip Ideation. -->
 
 | # | Stage | Lead | Supporting | Key Artifacts | Condition |
 |---|-------|------|-----------|---------------|-----------|
@@ -157,8 +157,10 @@ flowchart TD
 | 1.3 | Feasibility & Constraints | aidlc-architect-agent | aidlc-aws-platform-agent, aidlc-compliance-agent | Feasibility assessment, constraint register, RAID log | CONDITIONAL |
 | 1.4 | Scope Definition | aidlc-product-agent | aidlc-delivery-agent | Scope definition, intent backlog | ALWAYS |
 | 1.5 | Team Formation | aidlc-delivery-agent | — | Team assessment, mob composition plan | CONDITIONAL |
-| 1.6 | Rough Mockups | aidlc-design-agent | aidlc-product-agent | Wireframes, user flows, concept deck | CONDITIONAL |
+| 1.6 | Rough Mockups | aidlc-design-agent | aidlc-product-agent | Wireframes, user flows | CONDITIONAL |
 | 1.7 | Approval & Handoff | aidlc-delivery-agent | aidlc-product-agent | Initiative brief, decision log | ALWAYS |
+
+Which plans enter Ideation at all: `enterprise` and `feature` run all seven stages, `mvp` runs Intent Capture, Feasibility & Constraints, Scope Definition and Rough Mockups, `poc` runs Intent Capture only, and every other plan skips Ideation.
 
 **Stage colors:** Green = ALWAYS (runs whenever the selected scope includes it). Yellow = CONDITIONAL (may skip based on scope, project type, or plan). For the exact per-scope stage membership, see the [Stage-by-Scope Matrix](05-scopes-and-depth.md#stage-by-scope-matrix).
 
@@ -243,7 +245,7 @@ Supporting agents take part when collaborators are on (the `collaborators` setti
 | 2.8 | Contract Design | aidlc-architect-agent | aidlc-aws-platform-agent | `contract-summary.md` | CONDITIONAL |
 | 2.9 | Delivery Planning | aidlc-delivery-agent | aidlc-architect-agent | `bolt-plan.md`, `team-allocation.md`, `risk-and-sequencing-rationale.md`, `external-dependency-map.md` | ALWAYS |
 
-**Key behavior:** Stage 2.1 runs as a **pipeline** (2-link chain) — first an aidlc-developer-agent code scan, then an aidlc-architect-agent synthesis that writes the artifacts. Each return creates an ordered durable receipt, and multi-repo work requires one complete chain per repo before approval. It only executes for brownfield projects. Stage 2.2 runs as a **subagent hub-and-spoke** for greenfield and brownfield work: the lead drafts, quality/developer/devsecops inspect it independently, the human interview resolves gaps, and the lead integrates. Stage 2.4 runs as a **mob** — the lead drafts, and the design, developer, and quality agents contribute in parallel via contribution files.
+**Key behavior:** Stage 2.1 runs as a **pipeline**: with collaborators on, a 2-link chain (first an aidlc-developer-agent code scan, then an aidlc-architect-agent synthesis that writes the artifacts); with collaborators off, the developer alone scans and writes them. Each return creates an ordered durable receipt, and multi-repo work requires one complete chain per repo before approval. It only executes for brownfield projects. Stage 2.2 runs as a **subagent hub-and-spoke** for greenfield and brownfield work: the lead drafts, quality/developer/devsecops inspect it independently, the human interview resolves gaps, and the lead integrates. Stage 2.4 runs as a **mob**: the lead drafts, and the design, developer, and quality agents contribute in parallel via contribution files.
 
 ---
 
@@ -266,11 +268,11 @@ stage-major order. A first design-stage review alone is not a working skeleton.
 
 The check is the intent's recorded, human-authorized `Construction Verification
 Command`, reused for every Unit/batch checkpoint. Delivery Planning proposes it
-from the project scan and records your **Approve** / **Request Changes**
-reply in the invoking SessionStart session. Only **Approve** authorizes the
-receipt before the command is set; an unrelated reply, **Request Changes**, or
-a reply from another session does not. You may defer if no runnable check exists
-yet; the first checkpoint then asks before
+from the project scan and asks you to approve it. Your approval of that question,
+in your own words or by picking **Approve**, is what sets it; **Request
+Changes**, an answer to some other question, or a reply from another chat does
+not. You may
+defer if no runnable check exists yet; the first checkpoint then asks before
 verification. A missing authorization or later command change always requires
 the [recorded-command flow](12-cli-commands.md#construction-verification-command-record-human-authorization),
 never a command chosen at verify time. The approval question shows **Verified
@@ -281,15 +283,12 @@ proof file cannot verify a Unit. On a checkout with no proof file at all (a
 fresh clone, another machine), that receipt stands in for the proof of a Unit
 already approved whose evidence is unchanged, so nothing runs again.
 
-Before asking you to **Approve** or **Request Changes** at a Unit/skeleton
-checkpoint, the conductor opens the question with
-`aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton>`
-(it finds its own session). Your exact reply in that session, to this checkpoint question, authorizes only
-the matching action; an unrelated reply, another session's reply, or a reply to
-a different question does not. Approval/rejection uses only the `--user-input`
-you actually chose. A changed checkpoint needs a new
-question and answer. Automatic approval (`human_required: false`) needs no `ask`
-and no `--user-input`; a human Request Changes always needs this flow.
+At a Unit or skeleton checkpoint you are asked to **Approve** or **Request
+Changes**. Answer in your own words or pick an option: your reply to that
+checkpoint's question decides it, and an option you pick is the one recorded.
+A reply to a different question, or from another chat, does not count. A
+checkpoint whose work changed after it was asked is asked again. Checkpoints
+you chose to let run automatically are recorded without a question.
 
 The autonomy offer is **Continue automatically** / **Review each checkpoint**:
 for eligible checkpoint workflows, skeleton-off offers it at Construction entry,
@@ -339,7 +338,9 @@ flowchart TD
 ### Parallel Unit batches
 
 Unit-major remains serial. To use swarm execution in an eligible checkpoint
-workflow, explicitly choose stage-major and `Construction Execution: swarm`.
+workflow, explicitly choose stage-major and `Construction Execution: swarm`:
+say so in your own words, for example "run the Units in parallel", and AI-DLC
+makes the changes this needs and says each in one line.
 Execution and approval are separate choices: batch completion may be guided or
 automatic. Dependency-ready Units may run together; an inline Unit already
 approved at its checkpoint is not rebuilt in a later batch.
@@ -349,11 +350,9 @@ skeleton source before preparing parallel Units. This is an explicit action;
 the tool never commits automatically and checks all Units before creating any
 child. See [Swarm prepare](12-cli-commands.md#aidlc-engine-swarm-prepare-prepare-a-reproducible-batch).
 
-For a human batch completion decision, the conductor first runs
-`aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>"`,
-then presents **Approve** / **Request Changes** and waits for your exact reply to
-that batch's question. The same session-bound consent rule applies: never use
-another question's reply or invent `--user-input`. Automatic batch approval needs no `ask` or `--user-input`.
+A guided batch ends with one **Approve** / **Request Changes** question for the
+batch, read the same way: your reply to that batch's question decides it.
+Automatic batch approval asks nothing.
 
 ```mermaid
 flowchart LR
@@ -403,7 +402,7 @@ Failures always stop Construction, even in autonomous mode. The Build-and-Test l
 - The real skeleton is the first complete integrated Unit, verified and human-approved before later Units; a legacy first-stage gate is only a stage review.
 - Ordinary completion follows the recorded autonomy policy. `completion_only` stage directives settle existing approvals without repeating bodies, reviewers, or human completion questions.
 - An autonomy answer does not choose swarm or change iteration order. Explicit stage-major/swarm selection supports guided or automatic batch checkpoints.
-- Plan Approval remains mandatory for each Unit; grouping its presentation never removes individual approval receipts. Enabled summary confirmation, verification command selection, and failures still require the human.
+- While Plan Approval is on for the work, each Unit's plan is approved; grouping its presentation never removes individual approval receipts. Enabled summary confirmation, verification command selection, and failures still require the human.
 
 ---
 
@@ -479,9 +478,9 @@ If verification fails, the conductor reports the issues and asks whether to proc
 | Mode | Stages | User Interaction | Description |
 |------|--------|-----------------|-------------|
 | Inline (auto-proceed) | 0.1, 0.2, 0.3 | None | Run deterministically inside `aidlc-utility intent-create`, no approval gate |
-| Inline | 29 stages | Full | Agent works in conversation, approval gate at end |
+| Inline | 26 stages | Full | Agent works in conversation, approval gate at end |
 | Subagent | 2.2, 3.5 | Practices interview + final gate for 2.2; approval gate for 3.5 | Hub-and-spoke Practices Discovery; focused Code Generation |
-| Pipeline (2-link) | 2.1 | Approval gate only | Developer scan, then architect synthesis-and-write |
+| Pipeline | 2.1 | Approval gate only | Developer scan, then architect synthesis-and-write (the developer alone with collaborators off) |
 | Mob | 2.4 | Mid-stage judgment questions + approval gate | Lead drafts; design/developer/quality collaborate in parallel via contribution files |
 
 Across all 33 stages, the topology count is **29 inline / 2 subagent / 1 pipeline / 1 mob**.

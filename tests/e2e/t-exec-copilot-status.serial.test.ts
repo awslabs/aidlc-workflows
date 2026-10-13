@@ -28,8 +28,8 @@
 // on PATH (or AIDLC_COPILOT_BIN) + a model provider: either GitHub auth or
 // BYOK env vars (COPILOT_PROVIDER_BASE_URL etc. — pass through verbatim).
 // Skips cleanly otherwise. NOTE: hooks are deliberately NOT exercised here
-// (they need trustedFolders + GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1 and a
-// mutation journey); the unit adapter test (t249) covers the hook contract.
+// (they need trustedFolders and a mutation journey); the unit adapter test
+// (t249) covers the hook contract.
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";

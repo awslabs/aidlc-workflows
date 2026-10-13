@@ -6,7 +6,8 @@
 // answers it, never the plan question beneath: "1" there records the command,
 // no plan approval, and the plan question still waits for its own answer.
 // A picker names its own question, and a plan question shown again is the
-// newest one on screen.
+// newest one on screen in the chat it is shown in: another chat showing it
+// leaves this chat's question the newest here.
 
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -24,6 +25,7 @@ setDefaultTimeout(120_000);
 
 const BUN = process.execPath;
 const SESSION = "01995000-7a11-7000-8000-000000000031";
+const OTHER_CHAT = "01995000-7a11-7000-8000-000000000032";
 const COMMAND = "git diff --check";
 const QUESTION = `Use this command to verify each completed Unit? \`${COMMAND}\``;
 const PLAN_QUESTION = "Approve the code plan?";
@@ -68,9 +70,10 @@ function log(proj: string, args: string[]): { code: number; out: string } {
 
 const command = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", COMMAND];
 
-function next(proj: string): Record<string, unknown> {
+// `chat` runs it in that chat, as the agent's shell there does.
+function next(proj: string, chat?: string): Record<string, unknown> {
   const result = runOrchestrateNext(join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts"), proj, [], {
-    env: { ...process.env, AIDLC_UNATTENDED: "0" },
+    env: { ...process.env, AIDLC_UNATTENDED: "0", ...(chat ? { AIDLC_SESSION_OVERRIDE: chat } : {}) },
   });
   expect(result.status, result.out).toBe(0);
   return result.directive as Record<string, unknown>;
@@ -90,7 +93,7 @@ const laterSecond = () => Bun.sleepSync(1001 - (Date.now() % 1000));
 
 // The plan question is open, and the person asks for the command first; the
 // agent registers its own question about it, as the Construction rules say.
-function commandAskedOverThePlan(): string {
+function commandAskedOverThePlan(chat?: string): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
   writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8")
@@ -110,7 +113,7 @@ function commandAskedOverThePlan(): string {
     "utf-8");
   writeFileSync(join(dir, "unit-test-instructions.md"),
     "# Unit Test Instructions\n\nRun `bun test src/slugify.test.ts`.\n", "utf-8");
-  expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+  expect(next(proj, chat)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
   laterSecond();
   say(proj, `before you build anything, use ${COMMAND} as the verification command`);
   const asked = log(proj, ["decision", ...command, "--decision", "Use this command to verify each completed Unit?",
@@ -163,4 +166,20 @@ test("the code plan question shown again after the command question takes the ne
   say(proj, "1");
   expect(planApprovals(proj)).toBe(1);
   expect(next(proj)).toMatchObject({ plan_approval: { status: "approved" } });
+});
+
+test("a number typed at the command question answers it while another chat shows the code plan question", () => {
+  const proj = commandAskedOverThePlan(SESSION);
+  expect(next(proj, OTHER_CHAT)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+  laterSecond();
+  say(proj, "1");
+  pickAnsweredTheCommand(proj);
+});
+
+test("the code plan question shown again in the same chat takes its next typed pick", () => {
+  const proj = commandAskedOverThePlan(SESSION);
+  expect(next(proj, SESSION)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+  laterSecond();
+  say(proj, "1");
+  expect(planApprovals(proj)).toBe(1);
 });

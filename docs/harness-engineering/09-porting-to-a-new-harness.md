@@ -7,8 +7,9 @@ packager (`scripts/package.ts`) materializes each ignored local Bun copy tree
 under `dist/<harness>/` and its native counterpart under
 `dist-release/<harness>/`. Adding another harness is **one directory and one
 manifest row** — the engine, methodology, projection ownership, and
-harness-dir/rules resolution take no `core/` edits at all; the lone optional
-exception is a per-harness `--doctor` arm (see Step 2). This page walks the
+harness-dir/rules resolution take no `core/` edits at all; the two optional
+exceptions are a per-harness `--doctor` arm (see Step 2) and your tool's
+binding subsections in the protocol modules (see the end of Step 4). This page walks the
 contract.
 
 > Three senses of "harness" in this repo: **`harness/`** (top-level — the
@@ -198,16 +199,17 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   shell deny). The packager errors when a `from` is absent from the projection,
   and its projected-invocation check skips the `to` text, which is generated
   from the route table.
-- `rulesRename` — the renamed rules dir (`"steering"` | `"aidlc-rules"` | `null`).
-  The packager applies it to the copied dir AND to in-prose `<harnessDir>/rules/`
-  references AND to the compiled stage-graph rule paths (it sets
-  `AIDLC_RULES_DIR` at compile so `loadRules` finds the renamed dir) AND emits it
-  into a generated `tools/data/harness.json` that records both the manifest
-  name and rules directory. Runtime path resolution uses the name to
+- `rulesRename` - the renamed rules dir (`"steering"` | `"aidlc-rules"` | `null`).
+  The packager applies it to the copied dir and to in-prose `<harnessDir>/rules/`
+  references, and emits it into a generated `tools/data/harness.json` that
+  records both the manifest name and rules directory. The rules themselves come
+  from the space memory layer (`aidlc/spaces/default/memory/`), which the graph
+  compile reads through `AIDLC_RULES_DIR` for every harness; the pass over the
+  compiled rule paths for a renamed dir still runs and changes nothing today. Runtime path resolution uses the name to
   disambiguate harnesses that share an engine directory, while `rulesSubdir()`
   reads the rename — so a real install resolves both facts without hardcoding.
   This is the seam that makes `rulesRename` purely manifest data: set it here and
-  every layer (build prose, compiled paths, runtime) follows, with no `core/` edit.
+  the build prose and the runtime follow, with no `core/` edit.
 - `onboarding: OnboardingSpec` — render neutral guidance from
   `core/templates/onboarding.md` and harness-specific setup from
   `core/templates/onboarding-harness.md` with `harness/<name>/onboarding.fills.ts`.
@@ -255,7 +257,7 @@ with a real core-hook consumer.
 
 Six hooks are flow-altering and need their control channels forwarded, not
 just piped. The Stop hook answers with `{"decision":"block"}` on stdout;
-dispatch-rules rewrites the delegated prompt; and the PreToolUse
+`aidlc-deliver-stage-rules` rewrites the delegated prompt; and the PreToolUse
 reviewer-scope, review-freeze, plan-approval, and state-transition guards
 answer with exit 2 + a reason on stderr (the tool call must be refused when
 the adapter relays that exit code). If the new harness cannot hard-block a

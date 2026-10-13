@@ -52,9 +52,7 @@ that ship the neutral-only block. Keep those imports when merging project instru
     (`%USERPROFILE%\.copilot` on Windows). An interactive `copilot` run asks
     you to confirm folder trust before it takes a prompt; choose "Yes, and
     remember this folder for future sessions" to record it. `aidlc config`
-    tells you when the list does not cover the folder. Headless
-    `copilot -p` runs additionally need
-    `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`.
+    tells you when the list does not cover the folder.
   - VS Code agent mode never reads that list. Its hooks run only in a
     trusted workspace (VS Code Workspace Trust) with the **Chat: Use Hooks**
     setting (`chat.useHooks`) on. That setting is a preview feature your
@@ -458,8 +456,8 @@ copilot -p "/aidlc --doctor" -s --allow-all-tools   # or run /aidlc --doctor in 
 ```
 
 The doctor checks the engine tree and every adapter dependency, root
-`AGENTS.md`, the `.github` wiring files, the Copilot CLI version floor, folder
-trust, and reminds about the headless env var. The Copilot CLI is optional: a
+`AGENTS.md`, the `.github` wiring files, the Copilot CLI version floor, and
+folder trust. The Copilot CLI is optional: a
 VS Code-only install reports `Harness CLI: optional copilot is not installed`
 and passes. VS Code puts its own stand-in `copilot` on its terminals' PATH
 that asks "Install GitHub Copilot CLI? (y/N)" when the CLI is absent, so the

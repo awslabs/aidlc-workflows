@@ -555,7 +555,7 @@ describe("t328 (2) every legitimate action preserves the recorded decision", () 
     }],
     ["parking and resuming", (p) => {
       const beforeDigest = stateDigest(readFileSync(p.statePath, "utf-8"));
-      const parked = spawn([BUN, p.tool("orchestrate"), "park", "--project-dir", p.dir], p.env, p.dir);
+      const parked = spawn([BUN, p.tool("orchestrate"), "park", "--person-asked", "--project-dir", p.dir], p.env, p.dir);
       expect(parked.code, parked.stderr).toBe(0);
       expect(stateDigest(readFileSync(p.statePath, "utf-8"))).not.toBe(beforeDigest);
       const unparked = spawn(

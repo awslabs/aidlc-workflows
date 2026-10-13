@@ -3913,6 +3913,38 @@ export function aidlcOwnedSourceKey(projectDir: string): (pathKey: string) => bo
   };
 }
 
+// The paths that changed between two source listings, AI-DLC's own files left
+// out: an AI-DLC update the person took moves only those, and it is nobody's
+// change to their source. Rendered `repo/path`, sorted.
+export function sourceChangedOutsideAidlc(
+  projectDir: string,
+  before: ReadonlyMap<string, string>,
+  after: ReadonlyMap<string, string>,
+): string[] {
+  const owned = aidlcOwnedSourceKey(projectDir);
+  const theirs = (listing: ReadonlyMap<string, string>) => new Map([...listing].filter(([key]) => !owned(key)));
+  return sourceListingChangedPaths(theirs(before), theirs(after));
+}
+
+// Whether the main checkout moved from the listing a landing kept (its
+// `Source Listing`) only in AI-DLC's own files. False when no listing was kept
+// or it does not read back exactly: the caller then compares fingerprints.
+export function onlyAidlcFilesChangedSince(
+  projectDir: string,
+  stageSlug: string,
+  listing: string | undefined,
+  current: WorkspaceSourceState,
+  intent?: string,
+  space?: string,
+): boolean {
+  const recorded = listing === undefined ? null : readBaselineSourceSnapshot(projectDir, stageSlug, listing, intent, space);
+  return recorded !== null && sourceChangedOutsideAidlc(
+    projectDir,
+    recordedSourceListingUnderCurrentBoundary(recorded, current.listing),
+    current.listing,
+  ).length === 0;
+}
+
 function generatedRunnerSkill(skillDir: string): boolean {
   try {
     const skillMd = join(skillDir, "SKILL.md");
@@ -6585,6 +6617,52 @@ export function leftOutLine(paths: readonly string[]): string | null {
     ? `${shown.join(", ")} and ${more} more`
     : shown.length === 1 ? shown[0] : `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`;
   return `Left out of this build: ${list}.`;
+}
+
+// The one check the approval offers when a stage's review passes are spent
+// and its reviewed work changed after the last review (#1189): a review the
+// person asks for runs past the passes. From the record only: the attempt's
+// own review count (the one the cap refuses on) against the stage's passes,
+// and a kept change that names files after the Unit's last verdict. The stage
+// gate of a per-Unit stage asks for each Unit reviewed in it. `change` is that
+// change's own line, so a reply that says it can end it with the offer.
+export const REVIEW_CHECK_OFFER = "Do you want me to have the new approach checked before you decide?";
+export function reviewCheckOffer(
+  projectDir: string,
+  stage: StageEntry,
+  unit: string | null,
+): { offer: string; change: string } | null {
+  if (!stage.reviewer) return null;
+  try {
+    const state = readStateFile(projectDir);
+    const reviewClass = resolveReviewClass(stage.review_class ?? "adversarial", getField(state, "Scope") ?? "", state);
+    if (reviewClass === "none") return null;
+    const passes = reviewClass === "advisory" ? 1 : stage.reviewer_max_iterations ?? 2;
+    const rows = readAuditShardEvents(projectDir);
+    const view = reviewInvalidationAttemptView(rows, stage.slug);
+    const attempt = view.events.filter((event) =>
+      attemptEventAfterFrontier(view.floor, event) && auditBlockField(event.block, "Stage") === stage.slug);
+    const units = unit !== null || stage.for_each !== "unit-of-work"
+      ? [unit ?? undefined]
+      : [...new Set(attempt.filter((event) => event.event === "REVIEW_COMPLETED")
+        .map((event) => auditBlockField(event.block, "Unit") ?? undefined))];
+    for (const each of units) {
+      const mine = attempt.filter((event) => (auditBlockField(event.block, "Unit") ?? undefined) === each);
+      const review = mine.filter((event) => event.event === "REVIEW_COMPLETED").at(-1);
+      const change = mine.filter((event) =>
+        event.event === "CHANGE_ACCEPTED" && auditBlockField(event.block, "Checkpoint") === "review-receipt" &&
+        ![null, "", "(paths unavailable)"].includes(auditBlockField(event.block, "Changed"))).at(-1);
+      if (!review || !change || !attemptEventDefinitelyBefore(review, change)) continue;
+      const used = reviewAttemptAccounting(
+        projectDir, reviewAttemptWindow(projectDir, state, stage, rows), state, stage, stage.reviewer, each, undefined,
+        { eventFilter: (row) => reviewAttemptEventMatchesCurrentClaim(projectDir, state, each, row) },
+      ).budgetCount;
+      if (used >= passes) return { offer: REVIEW_CHECK_OFFER, change: auditBlockField(change.block, "Details") ?? "" };
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 // What the person hears about a finished stage that is behind something it
@@ -12013,6 +12091,28 @@ export function personSaidProjectType(projectDir: string): boolean {
   if (personSpokeSinceGate(projectDir, { replies: true })) return true;
   try {
     const after = readAppendOnlyFileNoFollowOrThrow(auditFilePath(projectDir), "audit shard").subarray(asked.offset).toString("utf-8");
+    return auditShardBlocks(after).some((block) => isRequestTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+  } catch {
+    return false;
+  }
+}
+
+const CONSTRUCTION_STAFFING_ASK = "construction-staffing-ask.json";
+
+export function noteConstructionStaffingAsked(projectDir: string): void {
+  noteEngineAskMark(projectDir, CONSTRUCTION_STAFFING_ASK);
+}
+
+// Who builds the Units was asked in this clone and the person has spoken since
+// (an answer, their own words, or a command) without a pick being recorded:
+// the default stands and the question is not put again.
+export function constructionStaffingPassedOver(projectDir: string): boolean {
+  const asked = engineAskMark(projectDir, CONSTRUCTION_STAFFING_ASK);
+  if (asked === null) return false;
+  try {
+    const shardPath = auditFilePath(projectDir);
+    if (projectRelativePath(projectDir, shardPath) !== asked.shard) return false;
+    const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(asked.offset).toString("utf-8");
     return auditShardBlocks(after).some((block) => isRequestTurn({ event: auditBlockField(block, "Event") ?? "", block }));
   } catch {
     return false;
@@ -26512,7 +26612,7 @@ function writeSourceSnapshot(recordRoot: string, path: string, serialized: strin
   return `sha256:${hash}`;
 }
 
-/** Write a content-addressed stage-entry baseline listing snapshot. */
+/** Write a content-addressed listing snapshot: a stage-entry baseline, or what a swarm landing left. */
 export function writeBaselineSourceSnapshot(
   projectDir: string,
   stageSlug: string,
@@ -27004,6 +27104,16 @@ export function intentRepos(
     return entry.repos ?? [];
   }
   return [];
+}
+
+// Teams each owning a Unit need the code in this project's own repo, so work
+// with recorded repos is built by one session for now. What the person hears,
+// from the engine as Construction starts and from the ownership setter alike.
+export function teamsAcrossReposLine(repoCount: number, unitCount?: number): string {
+  const where = repoCount === 1 ? "This work's code is in a repo of its own" : `This work spans ${repoCount} repos`;
+  const units = unitCount === undefined ? "its Units" : `its ${unitCount} Units`;
+  return `${where}, so this session builds ${units}: teams each owning a Unit is not available yet for ` +
+    "work across repos.";
 }
 
 /** Recovery operates exactly where the framework recorded parking this slug;
@@ -36300,6 +36410,9 @@ export type SwarmSourceMergeChain =
   | {
       state: "ready";
       fingerprint: string;
+      // The listing that landing kept (`Source Listing`), absent on rows an
+      // earlier release wrote.
+      listing?: string;
       units: Set<string>;
     };
 
@@ -36400,10 +36513,17 @@ export function currentSwarmSourceOpeningFingerprint(
           reason: "current rejection carries malformed prior accepted source authority",
         };
       }
+      // The listing that landing kept, when it reads back exactly; rows an
+      // earlier release wrote have none and are compared by fingerprint.
+      const recorded = auditBlockField(row.block, "Prior Accepted Source Listing");
+      const listing = recorded === null
+        ? null
+        : readBaselineSourceSnapshot(projectDir, slug, recorded, intent, space);
       return {
         state: "ready",
         fingerprint: prior,
         source: "prior-accepted",
+        ...(listing === null ? {} : { listing }),
       };
     }
   }
@@ -36484,6 +36604,7 @@ export function currentSwarmSourceMergeChain(
   const units = new Set<string>();
   const lastMerge = new Map<string, AuditShardEvent>();
   let priorFingerprint: string | null = null;
+  let priorListing: string | undefined;
   let openingPrevious: string | null = null;
   let openingRow: AuditShardEvent | null = null;
   // A link may start from a main checkout the person changed during the build
@@ -36619,6 +36740,7 @@ export function currentSwarmSourceMergeChain(
       if (rejections.some((rejection) => attemptEventDefinitelyBefore(row, rejection))) units.delete(unit);
       else units.add(unit);
       priorFingerprint = fingerprint;
+      priorListing = auditBlockField(row.block, "Source Listing") ?? undefined;
     }
     start = end;
   }
@@ -36643,7 +36765,7 @@ export function currentSwarmSourceMergeChain(
   }
   return priorFingerprint === null
     ? { state: "none" }
-    : { state: "ready", fingerprint: priorFingerprint, units };
+    : { state: "ready", fingerprint: priorFingerprint, listing: priorListing, units };
 }
 
 // The set of units the CURRENT attempt of an INLINE per-unit stage has

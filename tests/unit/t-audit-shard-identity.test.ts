@@ -81,6 +81,7 @@ const STATE_MD = `# AI-DLC State Tracking
 
 ## Runtime State
 - **Revision Count**: 0
+- **Unit Ownership**: solo
 
 ## Scope Configuration
 - **Stages to Execute**: all

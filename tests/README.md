@@ -158,9 +158,11 @@ and apply to one coordinator. See
 [Isolated E2E Workers](../docs/reference/09-testing.md#isolated-e2e-workers)
 for result/skip semantics, Windows usage and capacity tuning.
 
-Live SDK and TUI drivers default to project-only Claude setting sources. That
-keeps the copied test `.claude/` tree authoritative while excluding developer
-user-level hooks/settings; focused calibration can opt the TUI back into CLI
+Live SDK and TUI drivers default to the project's own Claude setting sources
+(the TUI driver adds the project's `.claude/settings.local.json`, where the
+status line choice lives). That keeps the copied test `.claude/` tree
+authoritative while excluding developer user-level hooks/settings; focused
+calibration can opt the TUI back into CLI
 defaults with `AIDLC_TUI_SETTING_SOURCES=default`.
 
 `--all --debug` defaults `AIDLC_TUI_LIVE=1` so the full debug run includes

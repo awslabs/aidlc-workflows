@@ -245,7 +245,7 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
         expect(collapsed).not.toContain("Repeat from step 1");
         expect(collapsed).toContain("A `done` that carries it only recorded a step: run that bare `next` at once");
         expect(collapsed).toContain(
-          "also asked to stop the workflow there for now (not to pause on one decision inside the work), run `bun .claude/tools/aidlc-orchestrate.ts park` instead",
+          "also asked to stop the workflow there for now (not to pause on one decision inside the work), run `bun .claude/tools/aidlc-orchestrate.ts park --person-asked` instead",
         );
       }
     });

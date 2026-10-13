@@ -6262,6 +6262,52 @@ function preserveOpenCodeProviderFields(
   writeFileSync(stagedPath, jsonFileText(staged, currentText));
 }
 
+// Kiro CLI reads a project's MCP servers from .kiro/settings/mcp.json, inside
+// the harness folder: AI-DLC's five and any the person adds or turns on. The
+// staged copy merges the project's file per server as Claude Code's .mcp.json
+// merges, so a refresh keeps the person's servers instead of stopping on the
+// file. A file that is not a JSON object with an mcpServers object is left to
+// the ownership check. Returns the servers that are AI-DLC's, or null when
+// nothing was merged.
+function mergeKiroMcpServers(
+  projectDir: string,
+  stagedRoot: string,
+  harnessDir: string,
+  prior: Baseline | null,
+  force: boolean,
+): Record<string, string> | null {
+  const rel = `${harnessDir}/settings/mcp.json`;
+  const currentPath = join(projectDir, rel);
+  const stagedPath = join(stagedRoot, rel);
+  if (!regularFile(currentPath) || !regularFile(stagedPath)) return null;
+  const currentText = readFileSync(currentPath, "utf-8");
+  let current: unknown;
+  let staged: unknown;
+  try {
+    current = JSON.parse(withoutBom(currentText));
+    staged = readJsonFile(stagedPath);
+  } catch {
+    return null;
+  }
+  if (!isRecord(current) || !isRecord(staged)) return null;
+  const currentMap = current.mcpServers ?? {};
+  const stagedMap = staged.mcpServers ?? {};
+  if (!isRecord(currentMap) || !isRecord(stagedMap)) return null;
+  const hashes = (map: Record<string, unknown>) =>
+    Object.fromEntries(Object.entries(map).map(([name, value]) => [name, sha256Bytes(canonical(value))]));
+  // With no record of AI-DLC's servers yet, a file nobody changed since config
+  // wrote it holds only AI-DLC's, and a server equal to the staged one is AI-DLC's.
+  const priorFile = prior?.files[rel];
+  const untouched = priorFile !== undefined && sha256Matching(currentText, [priorFile]) === priorFile;
+  const priorEntries = prior?.entries?.[rel] ?? (untouched ? hashes(currentMap) : {});
+  const shipped = Object.fromEntries(Object.entries(hashes(stagedMap)).map(([name, hash]) => [name, [hash]]));
+  const servers = { ...currentMap };
+  const owned = mergeJsonMapEntries(servers, stagedMap, priorEntries, shipped, force);
+  const merged = { ...current, mcpServers: servers };
+  writeFileSync(stagedPath, canonical(merged) === canonical(current) ? currentText : jsonFileText(merged, currentText));
+  return owned;
+}
+
 function preserveUserProviderFields(
   projectDir: string,
   stagedRoot: string,
@@ -6337,6 +6383,7 @@ function prepareRefreshSource(
   recordOnly: boolean,
   projectProjection: boolean,
   diagnosticsOverride?: ConfigDiagnosticOverrides,
+  force = false,
 ): PreparedRefreshSource {
   // A copied project is not a release: never baseline the user's edits as
   // shipped entries during an in-place record mutation.
@@ -6365,6 +6412,19 @@ function prepareRefreshSource(
       )),
       ...Object.fromEntries(codexFrameworkValueEntries(config)),
     };
+  } else if (!projectProjection && entries && descriptor.distribution === "kiro") {
+    // Each MCP server the release ships is AI-DLC's until the person changes it.
+    const rel = `${descriptor.harnessDir}/settings/mcp.json`;
+    try {
+      const servers = (readJsonFile(join(sourceRoot, rel)) as Record<string, unknown>).mcpServers;
+      if (isRecord(servers)) {
+        entries[rel] = Object.fromEntries(
+          Object.entries(servers).map(([name, value]) => [name, sha256Bytes(canonical(value))]),
+        );
+      }
+    } catch {
+      // A release without the file ships no servers to record.
+    }
   }
   const currentHarness = join(projectDir, descriptor.harnessDir);
   const currentHarnessData = join(currentHarness, "tools", "data", "harness.json");
@@ -6372,6 +6432,8 @@ function prepareRefreshSource(
     ? join(currentHarness, "settings.json")
     : descriptor.distribution === "codex"
     ? join(currentHarness, "config.toml")
+    : descriptor.distribution === "kiro"
+    ? join(currentHarness, "settings", "mcp.json")
     : null;
   if (
     !prior &&
@@ -6604,12 +6666,20 @@ function prepareRefreshSource(
   // Kiro CLI: the aws-mcp region is the project's own MCP setting, not a provider
   // answer, so the staged file takes it from the project rather than the release.
   // This runs after the regenerated scan on purpose: a file in `regenerated` is
-  // copied without the locally-modified check, and this preservation must not
-  // grant that. The staged file equals the project's when the region is its only
-  // difference, so the planner preserves it; any other local edit still meets the
-  // ownership check and is reported as a conflict instead of being overwritten.
+  // copied without the locally-modified check. The region preservation alone
+  // must not grant that; the per-server merge after it does, because the merge
+  // itself keeps every server the person added or changed.
   if (modelHarness(distribution) === "kiro") {
     preserveKiroMcpRegion(projectDir, root, descriptor.harnessDir);
+    // After the region, so a server that differs only there stays AI-DLC's.
+    const owned = projectProjection
+      ? null
+      : mergeKiroMcpServers(projectDir, root, descriptor.harnessDir, prior, force);
+    if (owned !== null) {
+      const rel = `${descriptor.harnessDir}/settings/mcp.json`;
+      regenerated.add(rel);
+      if (entries) entries[rel] = owned;
+    }
   }
 
   const currentGrid = join(currentHarness, "tools", "data", "scope-grid.json");
@@ -9487,6 +9557,49 @@ function openCodeProviderClaim(
   return { entries: { "opencode.json": ids }, ...(note ? { note } : {}) };
 }
 
+// One map entry (an MCP server) at a time: an entry AI-DLC wrote and nobody
+// changed since takes the release's value, an entry the person added or
+// changed stays theirs, and one the release no longer ships goes only when
+// nobody changed it. `shippedHashes` names values a release shipped, for an
+// entry with no record yet. Updates `targetMap` and returns the hash of each
+// entry that is AI-DLC's after the merge.
+function mergeJsonMapEntries(
+  targetMap: Record<string, unknown>,
+  sourceMap: Record<string, unknown>,
+  priorEntries: Record<string, string>,
+  shippedHashes: Record<string, readonly string[]>,
+  force: boolean,
+  keepPresent = false,
+): Record<string, string> {
+  const nextEntries: Record<string, string> = {};
+  for (const [entry, value] of Object.entries(sourceMap)) {
+    const desiredHash = sha256Bytes(canonical(value));
+    if (!(entry in targetMap)) {
+      if (keepPresent) continue;
+      targetMap[entry] = value;
+      nextEntries[entry] = desiredHash;
+      continue;
+    }
+    const currentHash = sha256Bytes(canonical(targetMap[entry]));
+    const priorHash = priorEntries[entry];
+    if (priorHash && (currentHash === priorHash || force)) {
+      targetMap[entry] = value;
+      nextEntries[entry] = desiredHash;
+    } else if (priorHash && currentHash === desiredHash) {
+      nextEntries[entry] = desiredHash;
+    } else if (!priorHash && (shippedHashes[entry] ?? []).includes(currentHash)) {
+      targetMap[entry] = value;
+      nextEntries[entry] = desiredHash;
+    }
+  }
+  for (const [entry, priorHash] of Object.entries(priorEntries)) {
+    if (entry in sourceMap || !(entry in targetMap)) continue;
+    const currentHash = sha256Bytes(canonical(targetMap[entry]));
+    if (currentHash === priorHash || force) delete targetMap[entry];
+  }
+  return nextEntries;
+}
+
 function planRootIntegrations(
   projectDir: string,
   sourceRoot: string,
@@ -9780,34 +9893,7 @@ function planRootIntegrations(
           if ((shippedHashes[entry] ?? []).includes(currentHash)) nextEntries[entry] = currentHash;
         }
       } else if (mcpMode === "defaults") {
-        for (const [entry, value] of Object.entries(sourceMap)) {
-          const desiredHash = sha256Bytes(canonical(value));
-          if (!(entry in targetMap)) {
-            if (keepPresent) continue;
-            targetMap[entry] = value;
-            nextEntries[entry] = desiredHash;
-            continue;
-          }
-          const currentHash = sha256Bytes(canonical(targetMap[entry]));
-          const priorHash = priorEntries[entry];
-          if (priorHash && (currentHash === priorHash || force)) {
-            targetMap[entry] = value;
-            nextEntries[entry] = desiredHash;
-          } else if (priorHash && currentHash === desiredHash) {
-            nextEntries[entry] = desiredHash;
-          } else if (
-            !priorHash &&
-            (integration.legacySignatures?.jsonEntryHashes?.[entry] ?? []).includes(currentHash)
-          ) {
-            targetMap[entry] = value;
-            nextEntries[entry] = desiredHash;
-          }
-        }
-        for (const [entry, priorHash] of Object.entries(priorEntries)) {
-          if (entry in sourceMap || !(entry in targetMap)) continue;
-          const currentHash = sha256Bytes(canonical(targetMap[entry]));
-          if (currentHash === priorHash || force) delete targetMap[entry];
-        }
+        Object.assign(nextEntries, mergeJsonMapEntries(targetMap, sourceMap, priorEntries, shippedHashes, force, keepPresent));
       } else {
         for (const [entry, priorHash] of Object.entries(priorEntries)) {
           if (!(entry in targetMap)) continue;
@@ -12457,6 +12543,7 @@ export async function main(
       recordOnly,
       Boolean(selected.projectProjection),
       diagnosticsContext?.overrides ?? choicesContext?.overrides,
+      argv.includes("--force"),
     );
     prepared.notes.unshift(...sourceNotes);
     // A release that no longer ships AI-DLC's status line in the shared Claude

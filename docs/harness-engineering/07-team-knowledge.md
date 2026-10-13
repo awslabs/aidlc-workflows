@@ -23,9 +23,10 @@ edit.
 `.claude/knowledge/`. It holds the methodology references each agent uses to
 run a stage — `aidlc-architect-agent/architecture-guide.md`,
 `aidlc-developer-agent/code-generation-guide.md`, and the cross-agent material
-in `aidlc-shared/`. **Leave it alone.** These files are overwritten on every
-framework upgrade. Anything you add there disappears the next time the team
-pulls a new version.
+in `aidlc-shared/`. **Leave it alone.** These are AI-DLC's files: a local edit
+to one stops the next `aidlc config` refresh with a conflict until you move it
+away or take the shipped file back with `--force`. A file you add there is
+kept, but it sits among AI-DLC's own files; put your own material in Tier 2.
 
 **Tier 2 — team knowledge** is yours. It lives at the space level under
 `aidlc/knowledge/` (shorthand for `aidlc/spaces/<space>/knowledge/`), a sibling
@@ -55,7 +56,7 @@ drop a file decides which agents load it.
 | Placement | Loaded by | Use it for |
 |-----------|-----------|------------|
 | `aidlc/knowledge/aidlc-shared/` | **every** agent, on every stage | cross-cutting standards — naming conventions, commit format, the project's domain glossary |
-| `aidlc/knowledge/<agent>-agent/` | **only** that agent, only when it's the active lead | domain context for one role — architecture patterns for the architect, security policy for devsecops |
+| `aidlc/knowledge/<agent>-agent/` | **only** that agent, whenever it works on a stage: as the lead, as a supporting agent on an inline stage, or dispatched on its own | domain context for one role - architecture patterns for the architect, security policy for devsecops |
 
 The directory name must match the agent slug exactly — `aidlc-architect-agent/`,
 not `architect/`. A typo in the directory name is the most common reason a
@@ -64,7 +65,7 @@ name, finds nothing, and moves on without an error. The engine does not create
 these subdirectories for you — `aidlc/knowledge/` is empty at bootstrap (see
 below), so you create each directory yourself with the exact slug.
 
-Reach for `aidlc-shared/` only when a standard genuinely applies across all 11
+Reach for `aidlc-shared/` only when a standard genuinely applies across all 14
 agents. A pattern that matters to the architect and no one else belongs in
 `aidlc-architect-agent/`, where it adds context to architecture stages without
 diluting every other agent's window. The

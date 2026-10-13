@@ -160,7 +160,7 @@ const DEFAULT_TIMEOUT_MS = LIVE_COMMAND_TIMEOUT_MS;
 const DEFAULT_STABLE_MS = 600;
 const DEFAULT_STARTUP_TIMEOUT_MS = LIVE_STARTUP_TIMEOUT_MS;
 const DEFAULT_DEAD_TIMEOUT_MS = NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS;
-const DEFAULT_TUI_SETTING_SOURCES = "project";
+const DEFAULT_TUI_SETTING_SOURCES = "project,local";
 const DEFAULT_ANSWER_GATE_TRACE_POLL_MS = 10_000;
 const ANSWER_REPAINT_WAIT_MS = 5_000;
 const MENU_SETTLE_MS = 500;
@@ -405,7 +405,9 @@ const LAUNCHING_SESSION_MARKERS = ["CLAUDE_CODE_CHILD_SESSION"];
 
 /**
  * Keep live TUI runs isolated from developer/user-level Claude settings and
- * hooks by default, mirroring sdk-drive's `settingSources: ["project"]`.
+ * hooks by default. A real launch also reads the project's own
+ * .claude/settings.local.json, where the person's choice of AI-DLC's status
+ * line lives (#1407), so the fixture's local settings load beside the project's.
  * Explicit command flags win, and AIDLC_TUI_SETTING_SOURCES=default opts a
  * focused calibration run back into Claude CLI defaults.
  */

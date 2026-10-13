@@ -54,6 +54,7 @@ function state(reviewOverride: string | null): string {
 - **Revision Count**: 0
 - **Skeleton Stance**: off
 - **Construction Iteration**: unit-major
+- **Unit Ownership**: solo
 - **Construction Checkpoints**: enabled
 - **Construction Execution**: serial
 - **Construction Autonomy Mode**: autonomous

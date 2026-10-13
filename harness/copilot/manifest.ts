@@ -59,8 +59,7 @@ const manifest: HarnessManifest = {
       'In VS Code, turn on Chat: Use Hooks for this folder ("chat.useHooks": true in ' +
       ".vscode/settings.json), then send your next message in the same chat. If your " +
       "organization has switched it off, ask your administrator to turn it on. In the Copilot " +
-      "CLI, start it again in this folder and trust the folder when it asks. Headless " +
-      "`copilot -p` runs need GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1.",
+      "CLI, start it again in this folder and trust the folder when it asks.",
     notRunYet:
       "This is expected before your first Copilot chat in this folder. If you already started " +
       'one, turn on Chat: Use Hooks in VS Code for this folder ("chat.useHooks": true in ' +
@@ -82,9 +81,10 @@ const manifest: HarnessManifest = {
       'VS Code. Ask your administrator to turn it on." In the Copilot CLI, change no file and ' +
       'show this line instead: "Quit Copilot, start it again in this folder and trust the folder ' +
       'when it asks, then type <entry> to carry on." In a headless `copilot -p` run, show this ' +
-      'line instead: "Set GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1 for headless copilot -p runs, ' +
-      'then run it again." Until the person has done their step, do not touch the project\'s ' +
-      'files or the workflow, and read any "fix it" as this setting. End your turn right after ' +
+      'line instead: "Start copilot in this folder once, trust the folder when it asks and ' +
+      'choose to remember it, then run copilot -p again." Until the person has done their step, ' +
+      'do not touch the project\'s files or the workflow, and read any "fix it" as this setting. ' +
+      "End your turn right after " +
       "the line: your own next command in this turn would still run without the change.",
   },
   harnessDir: ".aidlc",
@@ -181,6 +181,9 @@ const manifest: HarnessManifest = {
           // The variant whose onboarding said the init runner with a scope
           // always creates the work in one step (a scope alone now asks first).
           "sha256:0274b7bd2c26f8fc6158aafd6632a99aced247305d2aa09d1c60312283de7e69",
+          // The variant whose onboarding said headless `copilot -p` runs also
+          // need GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1 (a trusted folder is enough).
+          "sha256:6130b11ceb91e334f30940d3a3a1f40b41e82519ac777b0177c089b35f348442",
         ],
       },
     },

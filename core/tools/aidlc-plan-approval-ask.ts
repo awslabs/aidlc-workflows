@@ -52,7 +52,7 @@ import {
   recordedSourceListingUnderCurrentBoundary,
   removePlanApprovalRuntimeRecord,
   renderChangedPaths,
-  sourceListingChangedPaths,
+  sourceChangedOutsideAidlc,
   stalePlanApprovalReceiptsForTarget,
   stateFilePath,
   steeringPayloadAuthenticAt,
@@ -161,6 +161,11 @@ export interface PlanApprovalAskRecord {
   bound: boolean;
   /** When the question was last shown: showing it again moves it. */
   issuedAt: string;
+  /**
+   * When it was last shown in each chat, by the engine's session id; "" for a
+   * showing whose chat the engine could not name, which may be any chat.
+   */
+  shownIn?: Record<string, string>;
   /** What the engine has to tell the conductor about the last answer (a repair, say). */
   lastNotice?: string;
   /**
@@ -483,7 +488,8 @@ function targetView(projectDir: string, unit: string | null, changed: string | n
  * approval), so a later Unit's question does not repeat what the person saw
  * when they approved the earlier one, and a unit-major run's first question
  * does not reach back into earlier stages. The files the plans approved since
- * that start name are their own build, not something that ran ahead. Nothing
+ * that start name are their own build, not something that ran ahead, and
+ * AI-DLC's own files (an update the person took) are nobody's. Nothing
  * is said when the start is not on record or cannot be read, or nothing changed.
  */
 function changedBeforeApprovalLine(projectDir: string): string | null {
@@ -525,7 +531,7 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
     const theirBuild = (path: string): boolean =>
       named.some((entry) =>
         path === entry || path.startsWith(`${entry}/`) || (!entry.includes("/") && path.split("/").at(-1) === entry));
-    const changed = sourceListingChangedPaths(start, current.listing).filter((path) => !theirBuild(path));
+    const changed = sourceChangedOutsideAidlc(projectDir, start, current.listing).filter((path) => !theirBuild(path));
     if (changed.length === 0) return null;
     return changed.length === 1
       ? `Already changed before you approved: ${renderChangedPaths(changed)}.`
@@ -950,7 +956,11 @@ function planApprovalAskDirective(
  * question for the same files keeps its id, so a restart or a new chat shows
  * the question the person was already asked.
  */
-export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprovalAskDirective): void {
+export function publishPlanApprovalAsk(
+  projectDir: string,
+  directive: PlanApprovalAskDirective,
+  session?: string,
+): void {
   withAuditLock(projectDir, () => {
     const units = directive.plan_approval.targets.map((target) => target.unit);
     const authorities = units.map((unit) => resolveCodeGenerationAuthority(projectDir, { unit }));
@@ -964,7 +974,7 @@ export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprov
     }
     const existing = readPlanApprovalAsk(projectDir, intentId);
     if (directive.plan_approval.editing && existing?.mode === "editing") {
-      writePlanApprovalAsk(projectDir, { ...existing, bound: true, issuedAt: isoTimestamp() });
+      writePlanApprovalAsk(projectDir, { ...existing, bound: true, ...shownNow(existing, session) });
       return;
     }
     const source = workspaceSourceState(projectDir);
@@ -988,7 +998,7 @@ export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprov
       existing.targets.every((target) =>
         targets.some((current) => current.unit === target.unit && current.fingerprint === target.fingerprint));
     const record: PlanApprovalAskRecord = same && existing
-      ? { ...existing, bound: true, issuedAt: isoTimestamp() }
+      ? { ...existing, bound: true, ...shownNow(existing, session) }
       : {
           version: 1,
           askId: randomBytes(16).toString("hex"),
@@ -998,7 +1008,7 @@ export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprov
           choices: directive.plan_approval.choices,
           mode: "ask",
           bound: true,
-          issuedAt: isoTimestamp(),
+          ...shownNow(null, session),
           repliesFrom: auditMark(projectDir),
         };
     writePlanApprovalAsk(projectDir, record);
@@ -1481,10 +1491,11 @@ export function notePlanApprovalAskReply(
       record.targets.every((target) => record.results?.some((result) => result.unit === target.unit));
     if (answeredAll && !record.results?.some((result) => result.choice === "request-changes")) return false;
     if (picker && !pickerAsksThisQuestion(picker, record)) return false;
-    // A typed reply in a chat where the agent has since asked a question of
-    // its own, still open (the verification command, say), answers that one.
+    // A typed reply in a chat where the agent has asked a question of its own
+    // since the plan question was last shown there, still open (the
+    // verification command, say), answers that one.
     if (picker === undefined && session && readProtectedQuestion(projectDir, session) !== null &&
-      askedAfter(projectDir, record.issuedAt, session)) return false;
+      askedAfter(projectDir, shownInChat(record, session), session)) return false;
     const reply = text.trim();
     if (!reply || isNonAnswer(reply)) return true;
     const replies = [
@@ -1745,6 +1756,27 @@ function askedAfter(projectDir: string, since: string, session?: string): boolea
     (session === undefined || auditBlockField(row.block, "Session") === session) &&
     (LATER_QUESTION_EVENTS.has(row.event) ? row.timestamp > since
       : row.event === "REQUEST_ROUTED" && row.timestamp >= since));
+}
+
+// The Plan Approval question is shown now, in `session`'s chat. Showing the
+// same question again keeps when the other chats last saw it; a record from
+// before chats were told apart was last shown in any of them.
+function shownNow(
+  record: PlanApprovalAskRecord | null,
+  session: string | undefined,
+): Pick<PlanApprovalAskRecord, "issuedAt" | "shownIn"> {
+  const issuedAt = isoTimestamp();
+  const earlier = record === null ? {} : record.shownIn ?? { "": record.issuedAt };
+  return { issuedAt, shownIn: { ...earlier, [session || ""]: issuedAt } };
+}
+
+// When the Plan Approval question was last shown in this chat, or in a chat
+// the engine could not name; "" when it never was.
+function shownInChat(record: PlanApprovalAskRecord, session: string): string {
+  const shown = record.shownIn ?? { "": record.issuedAt };
+  const here = shown[session] ?? "";
+  const unnamed = shown[""] ?? "";
+  return here > unnamed ? here : unnamed;
 }
 
 function openEngineQuestionPath(projectDir: string): string {

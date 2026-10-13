@@ -648,6 +648,15 @@ export interface ProjectTypeAskDirective extends AskDirectiveBase {
   new_project_command: string;
 }
 
+// As Inception ends, a plan of two or more Units: who builds them, this
+// session or several teams each owning one. Each choice is one complete
+// command that records the answer.
+export interface ConstructionStaffingAskDirective extends AskDirectiveBase {
+  ask_type: "construction-staffing";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   ask_type: "new-work-routing";
   response_route: "next";
@@ -752,6 +761,7 @@ export type AskDirective =
   | IntentPickAskDirective
   | UnitPausedAskDirective
   | ProjectTypeAskDirective
+  | ConstructionStaffingAskDirective
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
   | LegacyPlanApprovalRecoveryAskDirective
@@ -1659,7 +1669,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "proposed_scope", kind, errors);
       checkOptionalStringArray(o, "available_intents", kind, errors);
       checkOptionalString(o, "numbered_prose_question", kind, errors);
-      checkChoices(o, kind, errors, o.ask_type === "scope-confirm");
+      checkChoices(o, kind, errors, o.ask_type === "scope-confirm" || o.ask_type === "construction-staffing");
       checkOptionalString(o, "recovery_choice", kind, errors);
       checkOptionalString(o, "existing_code_command", kind, errors);
       checkOptionalString(o, "new_project_command", kind, errors);
@@ -1676,10 +1686,11 @@ export function validateDirective(obj: unknown): ValidationResult {
           "guard-recovery",
           "plan-approval",
           "project-type",
+          "construction-staffing",
         ].includes(o.ask_type)
       ) {
         errors.push(
-          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type | construction-staffing, got ${String(o.ask_type)}`,
         );
       }
       if ("plan_approval" in o && o.ask_type !== "plan-approval") {
@@ -1783,6 +1794,11 @@ export function validateDirective(obj: unknown): ValidationResult {
           "project-type",
           { existing_code_command: true, new_project_command: true },
         );
+      } else if (o.ask_type === "construction-staffing") {
+        if (o.response_route !== "command") {
+          errors.push(`${kind}: construction-staffing response_route must be "command"`);
+        }
+        rejectUnexpected("construction-staffing", {});
       } else if (o.ask_type === "new-work-routing") {
         if (o.response_route !== "next") {
           errors.push(`${kind}: new-work-routing response_route must be "next"`);

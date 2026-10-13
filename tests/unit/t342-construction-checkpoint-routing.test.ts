@@ -73,6 +73,7 @@ function fixture(options: Options = {}) {
 - **Project Type Source**: you
 - **Scope**: ${options.scope ?? "feature"}
 - **State Version**: 8
+- **Unit Ownership**: solo
 ## Runtime State
 - **Revision Count**: 0
 - **Skeleton Stance**: ${options.stance ?? "off"}
@@ -2274,7 +2275,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     for (const [, name, rest] of message.matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
       // The move's own commands; the park the print names only for a person
       // who also asked to stop there is not run here.
-      if (name === "orchestrate" && rest === "park") continue;
+      if (name === "orchestrate" && rest === "park --person-asked") continue;
       const ran = tool(p, name, rest.split(" "));
       expect(ran.status, ran.out).toBe(0);
     }
@@ -2383,7 +2384,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
         );
         expect(message).not.toContain("unit resume");
         for (const [, name, rest] of message.matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
-          if (name === "orchestrate" && rest === "park") continue;
+          if (name === "orchestrate" && rest === "park --person-asked") continue;
           const ran = tool(p, name, rest.split(" "));
           expect(ran.status, ran.out).toBe(0);
         }

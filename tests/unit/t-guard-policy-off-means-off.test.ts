@@ -396,6 +396,12 @@ describe("the project source cannot be read on this machine", () => {
     const done = approve(dir);
     expect(done.rc, done.out).toBe(0);
     expect(done.out).toContain("could not be checked against the Code Generation review on this machine; carrying on.");
+    // Doctor says what happens here, and nothing is refused.
+    const doctor = cli(join(AIDLC_SRC, "tools", "aidlc-utility.ts"), ["doctor"], dir);
+    expect(doctor.out).toContain("Workspace source boundary binds: no (");
+    expect(doctor.out).toContain("the build starts without a check of the project's files");
+    expect(doctor.out).not.toContain("refused");
+    expect(doctor.out).not.toContain("build the plan anyway");
   });
 
   test("strict: it says the source could not be read, not that it changed, and names doctor", () => {
@@ -409,6 +415,7 @@ describe("the project source cannot be read on this machine", () => {
     expect(refused.out).not.toContain("because the project source changed after");
     const doctor = cli(join(AIDLC_SRC, "tools", "aidlc-utility.ts"), ["doctor"], dir);
     expect(doctor.out).toContain("Workspace source boundary binds: no (");
+    expect(doctor.out).toContain("Plan Approval decisions are refused while the source cannot be bound.");
   });
 });
 
