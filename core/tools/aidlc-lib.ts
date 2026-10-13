@@ -6483,6 +6483,35 @@ export function personLineHeard(projectDir: string, sessionId: string, line: str
   return readPendingPersonLines(path, turn, work).said.includes(line);
 }
 
+// What the person asked to leave out of a build (#1342): the `Deferred` items
+// in these traceability.json files, at most ten by id and then a count, or
+// null when there are none or a file cannot be read.
+export function leftOutLine(paths: readonly string[]): string | null {
+  const LEFT_OUT_IDS = 10;
+  const ID_MAX_CHARS = 64;
+  const ids: string[] = [];
+  try {
+    for (const path of paths) {
+      if (!existsSync(path)) continue;
+      const coverage = (JSON.parse(readFileSync(path, "utf-8")) as { coverage?: unknown }).coverage;
+      if (!Array.isArray(coverage)) continue;
+      for (const entry of coverage as Array<{ id?: unknown; status?: unknown }>) {
+        const id = typeof entry?.id === "string" ? entry.id.trim() : "";
+        if (entry?.status === "Deferred" && id !== "" && id.length <= ID_MAX_CHARS && !ids.includes(id)) ids.push(id);
+      }
+    }
+  } catch {
+    return null;
+  }
+  if (ids.length === 0) return null;
+  const shown = ids.slice(0, LEFT_OUT_IDS);
+  const more = ids.length - shown.length;
+  const list = more > 0
+    ? `${shown.join(", ")} and ${more} more`
+    : shown.length === 1 ? shown[0] : `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`;
+  return `Left out of this build: ${list}.`;
+}
+
 // What the person hears about a finished stage that is behind something it
 // used: the work carries on, and the redo is offered as a plain question.
 export function staleStageLine(name: string): string {

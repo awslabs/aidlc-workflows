@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-bolt:checkpoint
-// covers: function:leftOutNotice
+// covers: function:leftOutNotice, function:leftOutLine
 //
 // The person asks to leave planned work out of a build ("skip the remaining
 // stories") and the approval read like any finished build (#1342). The agent
@@ -154,32 +154,34 @@ function recordCommand(p: string) {
   tool(p, "state", ["set-construction-verification-command", command], env);
 }
 
-// The Unit checkpoint as the person meets it: verified, and the directive the
-// approval question is asked from.
-function checkpointBeforeTheQuestion(p: string) {
+// The Unit checkpoint as the person meets it: verified, then the question
+// asked. What `ask` returns is the last thing before the question.
+function checkpointQuestion(p: string) {
   recordCommand(p);
-  // Before it is verified the checkpoint asks nothing yet, so it says nothing yet.
-  const waiting = next(p);
-  expect(waiting.construction_checkpoint?.unit).toBe("alpha");
-  expect(String(waiting.narration ?? "")).not.toContain("Left out");
+  expect(next(p).construction_checkpoint?.unit).toBe("alpha");
   const verified = tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "verify"]);
   expect(verified.verified, JSON.stringify(verified)).toBe(true);
-  const directive = next(p);
-  expect(directive.construction_checkpoint?.ready, JSON.stringify(directive)).toBe(true);
-  return directive;
+  const asked = tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "ask", "--session", "left-out"]);
+  return { verified, asked };
 }
 
 describe("t-approval-says-what-was-left-out", () => {
-  test("a Unit's approval says which items the person left out of its build", () => {
+  test("a Unit's approval says which items the person left out of its build, once, just before the question", () => {
     const p = fixture();
     cover(p, "alpha", SKIPPED);
-    expect(String(checkpointBeforeTheQuestion(p).narration ?? "")).toContain(LEFT_OUT);
+    const { verified, asked } = checkpointQuestion(p);
+    expect(asked.left_out, JSON.stringify(asked)).toBe(LEFT_OUT);
+    expect(JSON.stringify(verified)).not.toContain("Left out");
+    // Approve stays exactly as it is.
+    humanTurn(p, "left-out", "Approve");
+    const approved = tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "approve", "--session", "left-out", "--user-input", "Approve"]);
+    expect(approved.approved, JSON.stringify(approved)).toBe(true);
   });
 
   test("control: a Unit built in full says nothing about left-out work", () => {
     const p = fixture();
     cover(p, "alpha", BUILT);
-    expect(String(checkpointBeforeTheQuestion(p).narration ?? "")).not.toContain("Left out");
+    expect(JSON.stringify(checkpointQuestion(p))).not.toContain("Left out");
   });
 
   test("the stage's approval says what was left out of every Unit's build", () => {

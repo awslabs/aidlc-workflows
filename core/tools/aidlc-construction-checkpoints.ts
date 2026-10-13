@@ -50,6 +50,7 @@ import {
   isNonAnswer,
   latestMainWorkflowStageRunFloorForProject,
   latestPersonTurn,
+  leftOutLine,
   loadStageGraph,
   maximalAttemptEvents,
   personMayApproveOverUnfinishedReview,
@@ -191,6 +192,9 @@ export interface ConstructionCheckpoint {
   /** The person was asked to approve this Unit since its last checkpoint
    *  decision, so its learnings question, asked first, is behind them. */
   asked?: true;
+  /** From ask: what the person left out of this Unit's build, said once just
+   *  before the question. */
+  left_out?: string;
   /** From ask: what the person typed in this chat while the Unit's review ran,
    *  before the question was asked, kept as its reply. The conductor reads it:
    *  an answer is recorded with no question shown; anything else leaves the
@@ -1492,7 +1496,11 @@ export function askConstructionCheckpoint(
     const question = mintProtectedQuestion(projectDir, {
       kind: "checkpoint-approval", session, target: approvalTarget(current),
     });
-    if (earlier === null) return current.result;
+    const leftOut = leftOutLine(current.result.stages
+      .filter((slug) => findStageBySlug(slug)?.workspace_requires === true)
+      .map((slug) => join(current.root, "construction", unit, slug, "traceability.json")));
+    const result = leftOut === null ? current.result : { ...current.result, left_out: leftOut };
+    if (earlier === null) return result;
     const words = earlier.join("\n").slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
     const pick = exactOptionPick(earlier.at(-1), APPROVAL_GATE_CHOICES);
     markProtectedQuestionReplied(projectDir, question);
@@ -1502,7 +1510,7 @@ export function askConstructionCheckpoint(
       responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
       words,
     });
-    return { ...current.result, earlier_reply: words };
+    return { ...result, earlier_reply: words };
   });
 }
 

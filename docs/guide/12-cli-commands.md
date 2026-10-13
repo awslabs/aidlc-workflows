@@ -2068,7 +2068,9 @@ while the Unit's review ran: their words typed after the review was asked for
 and before any other question was asked (such as the learnings question) are
 this question's reply.
 Read them and run the action they chose, with no question shown; when they
-answer nothing, present the question and wait as below.
+answer nothing, present the question and wait as below. When `ask` returns
+`left_out`, what the person asked to leave out of the Unit's build, it is said just
+before the question, for example "Left out of this build: AC2.1.1 and AC2.2.1."
 
 Wait for the human's **Approve** / **Request Changes** reply in that
 session, to this checkpoint question. It authorizes only the matching action;

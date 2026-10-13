@@ -51,6 +51,7 @@ import {
   constructionPolicyChangeAuthority,
   CONSTRUCTION_POLICY_RECOVERY,
   latestPersonTurn,
+  leftOutLine,
   auditShardName,
   appendSlug,
   appendUnderHeading,
@@ -6306,37 +6307,18 @@ export function failedCheckNotices(pd: string, stage: GateStage, unit: string | 
   return lines;
 }
 
-// What the person asked to leave out of a build (#1342): the `Deferred` items
-// in the gate's traceability.json files (the stage writes one per Unit, a
-// Unit's gate reads its own), said once with the approval, at most ten by id
-// and then a count. A stage that builds no code says nothing (its `Deferred`
-// means a later stage covers the item), and neither does an unreadable file.
+// What the person asked to leave out of a build (#1342), said once with the
+// approval: the `Deferred` items in the gate's traceability.json files (the
+// stage writes one per Unit, a Unit's gate reads its own). A stage that builds
+// no code says nothing (its `Deferred` means a later stage covers the item).
 // Said with Sensors off too: it is the record, not a check.
 export function leftOutNotice(pd: string, stage: GateStage, unit: string | null = null): string | null {
-  const LEFT_OUT_IDS = 10;
-  const ID_MAX_CHARS = 64;
   if (stage.workspace_requires !== true) return null;
-  const ids: string[] = [];
   try {
-    for (const path of declaredOutputsForGate(pd, stage, unit)) {
-      if (basename(path) !== "traceability.json") continue;
-      const coverage = (JSON.parse(readFileSync(path, "utf-8")) as { coverage?: unknown }).coverage;
-      if (!Array.isArray(coverage)) continue;
-      for (const entry of coverage as Array<{ id?: unknown; status?: unknown }>) {
-        const id = typeof entry?.id === "string" ? entry.id.trim() : "";
-        if (entry?.status === "Deferred" && id !== "" && id.length <= ID_MAX_CHARS && !ids.includes(id)) ids.push(id);
-      }
-    }
+    return leftOutLine(declaredOutputsForGate(pd, stage, unit).filter((path) => basename(path) === "traceability.json"));
   } catch {
     return null;
   }
-  if (ids.length === 0) return null;
-  const shown = ids.slice(0, LEFT_OUT_IDS);
-  const more = ids.length - shown.length;
-  const list = more > 0
-    ? `${shown.join(", ")} and ${more} more`
-    : shown.length === 1 ? shown[0] : `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`;
-  return `Left out of this build: ${list}.`;
 }
 
 // A stage artifact may list the decisions only the person can make in a fenced

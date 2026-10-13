@@ -1135,10 +1135,6 @@ function prepareEmission(directive: Directive): PreparedEmission {
     const unit = directive.unit !== undefined && directive.unit !== UNIT_NAME_PLACEHOLDER ? ` for ${directive.unit}` : "";
     directive.narration = `Writing the code plan for Code Generation${unit} first; the developer builds from it.`;
   }
-  // A Unit's checkpoint, verified and about to ask the person, says what they
-  // left out of its build, as a stage's own gate does.
-  const leftOut = directive.kind === "run-stage" ? checkpointLeftOutLine(directive) : null;
-  if (leftOut !== null) directive.narration = directive.narration ? `${directive.narration} ${leftOut}` : leftOut;
   if (activeKeptRequestLine !== null) {
     directive.narration = directive.narration
       ? `${activeKeptRequestLine} ${directive.narration}`
@@ -1670,20 +1666,6 @@ function readSteeringCursor(
 }
 
 // The project a directive is emitted for, as the emission machinery sees it.
-function checkpointLeftOutLine(directive: RunStageDirective): string | null {
-  const checkpoint = directive.construction_checkpoint;
-  const projectDir = emissionProjectDir(directive);
-  if (!checkpoint?.ready || !checkpoint.verified || !checkpoint.human_required || checkpoint.rereview || !projectDir) {
-    return null;
-  }
-  for (const slug of checkpoint.stages) {
-    const stage = nodeForSlug(slug);
-    const line = stage ? leftOutNotice(projectDir, stage, checkpoint.unit) : null;
-    if (line !== null) return line;
-  }
-  return null;
-}
-
 function emissionProjectDir(directive: Directive): string | undefined {
   if (directive.kind === "run-stage") {
     return runStageRoutes.get(directive)?.codekbCtx.projectDir ?? engineProjectDir;
