@@ -17,7 +17,7 @@ import {
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
-  requestFilePair,
+  REQUEST_TEXT_DIR,
   SPACE_NAME_REGEX,
   sessionsDir,
   writeRecordFileNoFollow,
@@ -471,6 +471,8 @@ export interface RestartRequest {
 
 // A kept stop's file or its mark, by its id.
 const RESTART_FILE = new RegExp(`^(${QUESTION_ID_BODY})\\.(json|taken)$`);
+// The request file a kept stop's words went to (restartWordsRel).
+const RESTART_WORDS_FILE = new RegExp(`^kept-(${QUESTION_ID_BODY})\\.txt$`);
 
 function restartRel(projectDir: string, name?: string): string {
   const dir = join(sessionsDir(projectDir), "restarts");
@@ -491,6 +493,26 @@ function pruneExpiredRestartRequests(projectDir: string, cutoff: number): void {
       const path = recordFileTargetOrThrow(projectDir, restartRel(projectDir, name));
       if (lstatSync(path).isFile() && lstatSync(path).mtimeMs < cutoff) {
         removeRecordFileNoFollow(projectDir, restartRel(projectDir, name));
+      }
+    } catch {
+      // Not ours to remove, or already gone: keep going.
+    }
+  }
+  // The words a step could not hold, written later than their kept stop,
+  // expire by their own age.
+  let texts: string[];
+  try {
+    texts = readdirSync(recordFileTargetOrThrow(projectDir, REQUEST_TEXT_DIR));
+  } catch {
+    return;
+  }
+  for (const name of texts) {
+    const match = RESTART_WORDS_FILE.exec(name);
+    if (match === null) continue;
+    try {
+      const path = recordFileTargetOrThrow(projectDir, restartWordsRel(match[1]));
+      if (lstatSync(path).isFile() && lstatSync(path).mtimeMs < cutoff) {
+        removeRecordFileNoFollow(projectDir, restartWordsRel(match[1]));
       }
     } catch {
       // Not ours to remove, or already gone: keep going.
@@ -586,34 +608,32 @@ export function readRestartRequest(projectDir: string, id: string): RestartReque
 }
 
 /**
- * A line that runs a kept stop: `--request <id>` alone, or with the person's
- * words behind one `--`, the mark that says what follows is theirs (nothing
- * reads them), or in a request file, which the engine reads in behind `--`
- * before it reads the line. Null for any other line, which runs no kept stop.
- * The same answer for the line as typed and as the engine reads it, so a host
- * adapter that never opens the file judges the command the engine runs.
+ * The id a line names when it is `--request <id>` and nothing else; null for
+ * any other line, which runs no kept stop.
  */
-export function keptRestartLine(args: readonly string[]): { id: string; words: boolean } | null {
-  const pair = requestFilePair(args);
-  const line = pair === null ? args : pair.rest;
-  if (line.length < 2 || line[0] !== "--request" || !QUESTION_ID.test(line[1])) return null;
-  if (pair !== null) return line.length === 2 ? { id: line[1], words: true } : null;
-  if (line.length === 2) return { id: line[1], words: false };
-  return line[2] === "--" ? { id: line[1], words: line.slice(3).some((word) => word.trim() !== "") } : null;
+export function keptRestartLine(args: readonly string[]): string | null {
+  return args.length === 2 && args[0] === "--request" && QUESTION_ID.test(args[1]) ? args[1] : null;
 }
 
 /**
- * The kept stop a `next` runs: a `keptRestartLine` naming a kept stop that has
- * not run; null otherwise. Words behind the id's `--` are the person's next
- * request, not part of the kept one, so the kept command runs as it was kept.
- * The engine runs its arguments in place of the line, and a host adapter judges
- * the command by them.
+ * The request file a kept stop's words go to whole when a step cannot hold
+ * them, for `next --request-file` to read (and remove).
+ */
+export function restartWordsRel(id: string): string {
+  return `${REQUEST_TEXT_DIR}/kept-${id}.txt`;
+}
+
+/**
+ * The kept stop a `next` runs: its arguments when the line is `--request <id>`
+ * alone (keptRestartLine), naming a kept stop that has not run; null otherwise.
+ * The engine runs those arguments in its place, and a host adapter judges the
+ * command by them.
  */
 export function keptRestartRun(projectDir: string, args: readonly string[]): RestartRequest | null {
-  const line = keptRestartLine(args);
-  if (line === null) return null;
-  const request = readRestartRequest(projectDir, line.id);
-  return request === null || restartRequestTaken(projectDir, line.id) ? null : request;
+  const id = keptRestartLine(args);
+  if (id === null) return null;
+  const request = readRestartRequest(projectDir, id);
+  return request === null || restartRequestTaken(projectDir, id) ? null : request;
 }
 
 /** Whether the stopped `next` kept under `id` was already run once (a link in the mark's place counts). */
