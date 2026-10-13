@@ -108,8 +108,11 @@ with a fresh timestamp.
 
 ## Approval Gates
 
-Every stage except the 3 Initialization stages requires explicit user approval
-before advancing. Approval uses `AskUserQuestion` with structured UI options.
+Every stage except the 3 Initialization stages has an approval gate before it
+advances; in Construction, a recorded checkpoint policy can approve routine
+completion without asking (see check 1 above and the Construction module). The
+question is rendered by the active harness's question annex: on Claude Code it
+is `AskUserQuestion` with structured UI options, on Kiro numbered prose.
 
 The gate corresponds to the `[?]` AwaitingApproval checkbox state in `aidlc-state.md`; rejection transitions the stage to `[R]` Revising. See [State Machine](12-state-machine.md) for the full stage state diagram and the canonical `GATE_APPROVED` / `GATE_REJECTED` / `STAGE_AWAITING_APPROVAL` emitters.
 
@@ -247,7 +250,7 @@ flowchart TD
     REPORT_APPROVED["Report approved with exact choice:\nengine emits GATE_APPROVED,\ncompletes + routes"]
     REPORT_REJECTED["Report rejected with feedback:\nengine emits GATE_REJECTED,\nrecords revising state"]
     REPORT_REVISED["Report revised:\nengine verifies evidence + re-opens gate"]
-    PROGRESS["Display progress line:\nN/total overall"]
+    PROGRESS["Relay the engine's\nprogress line"]
     NEXT_STAGE["Proceed to next stage"]
 
     REVISE["Apply user feedback\nto stage artifacts"]
@@ -316,7 +319,9 @@ Structured bullet-point summary of what was produced:
   | requirements-analysis-questions.md | 5 questions, all answered |
   ```
 - **First completion of a session** must include:
-  `**Project depth**: [Minimal/Standard/Comprehensive] -- depth adapts artifact detail. You can request different depth at any approval gate.`
+  `**Project depth**: [Minimal/Standard/Comprehensive]: how much detail I write into each document.`
+  `**Test strategy**: [Minimal/Standard/Comprehensive]: how many tests I write.`
+  `Ask me to change either one at any approval gate.`
 
 ### Part 3: Review + Approval
 
@@ -333,14 +338,16 @@ a block the engine cannot read is recorded as `unreadable` and stops nothing.
 
 ### Part 4: Progress Update
 
-After user approves, display before proceeding:
+After an approval that moves on, the engine's narration carries the progress
+line; relay it as written and count nothing yourself:
 
 ```
-Progress: [N]/[total] overall | [phase-N]/[phase-total] [Phase] stages complete. Next: [Next Stage Name]
+Progress: [done]/[planned] in-scope stages complete ([done]/[all] overall) | [phase-done]/[phase-planned] [PHASE]. Next: [Next Stage Name]
 ```
 
-Count only current-phase stages. Include completed and skipped in numerator.
-Example: `Progress: 13/33 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff`
+The engine counts completed stages only; a skipped stage leaves the plan rather
+than counting as done. Example from a Claude Code run on the `mvp` plan, after
+Intent Capture: `Progress: 1/19 in-scope stages complete (4/33 overall) | 1/4 IDEATION. Next: Feasibility & Constraints`
 
 ---
 
@@ -419,9 +426,11 @@ and an unclear reply gets one short follow-up.
 
 #### Guide Me (Interactive Mode)
 
-- Present via `AskUserQuestion` in batches (max 4 questions per call, max 4
-  options per question)
-- Questions with 5+ options: split across multiple calls (4 options each).
+- Present in batches through the harness's question tool. Limits are the
+  harness's: on Claude Code `AskUserQuestion` takes at most 4 questions per call
+  and 4 options per question; Codex's question tool takes 1-3 questions and 2-3
+  options. See each harness's `question-rendering.md`.
+- Questions with more options than one call holds: split across calls.
   User must see every option. File retains full option set.
 - Built-in "Other" takes an answer in the user's own words as their answer,
   or opens a discussion when they ask about the question. Tell user before
@@ -487,11 +496,11 @@ proceed with partial answers. The file is the authoritative record.
 
 ### Batch Rules
 
-| Constraint | Limit |
-|-----------|-------|
-| Questions per `AskUserQuestion` call | Max 4 |
-| Options per question per call | Max 4 |
-| Questions with 5+ options | Split across multiple calls |
+| Constraint | Claude Code (`AskUserQuestion`) | Codex question tool |
+|-----------|-------|-------|
+| Questions per call | Max 4 | 1-3 |
+| Options per question per call | Max 4 | 2-3 |
+| More options than one call holds | Split across calls | Split across calls |
 
 ### Answer Analysis
 
@@ -584,7 +593,10 @@ not. Report gate and terminal outcomes through `aidlc-orchestrate.ts`.
 Before beginning any stage, transition sidebar tasks:
 
 1. Previous stage task `in_progress` -> mark `completed`
-2. Current stage task -> mark `in_progress` with `activeForm: "Running [Stage Name]"`
+2. Current stage task -> mark `in_progress` with `activeForm: "Running <Stage Name> [<slug>]"`
+   (the display name, then the stage slug in literal brackets at the end, for
+   example `Running Requirements Analysis [requirements-analysis]`; the
+   `sync-workflow-state` hook reads the bracketed slug and does nothing without it)
 
 Only when `TaskCreate`/`TaskUpdate`, or the plan or todo tool the harness's
 skill maps them to, is in the agent's tool list; otherwise the agent skips
@@ -838,9 +850,13 @@ If `aidlc-state.md` exists but cannot be parsed:
 
 If a stage references artifacts that do not exist on disk:
 1. List missing artifacts
-2. Check if producing stage is marked complete
-3. If complete but missing: inform user, offer re-run or manual provision
-4. If not complete: run stage normally
+2. Check whether the producing stage is on the active scope's path. A producer
+   the scope skips never produced the artifact: that is by design, so use the
+   consuming stage's documented fallback (or an artifact the person provides),
+   never re-run the producer
+3. If the producer is on the path and complete but its files are missing:
+   inform the user, offer re-run or manual provision
+4. If the producer is on the path and not complete: run it normally
 
 ### Contradictory Inputs Recovery
 
@@ -905,7 +921,7 @@ Affect application architecture (switching DBs, deployment model, major
 integration):
 1. Identify scope: affected design artifacts, story designs, generated code
 2. Present full impact analysis
-3. If approved, return to App Design stage and re-run from there
+3. If approved, return to Domain Design and re-run from there
 4. Regenerate all downstream artifacts for affected units
 5. Preserve unaffected units
 
@@ -937,7 +953,7 @@ and problem complexity.
 | refactor | Minimal | Minimal | 10 | Targeted |
 | infra | Standard | Standard | ~13 | Infra-focused |
 | security-patch | Minimal | Minimal | ~10 | Security-focused |
-| classic | Standard | Standard | 18 | Default v1-style lifecycle without Ideation, ending at Build and Test |
+| classic | Standard | Standard | 18 | The implicit default: no Ideation, Inception and Construction through Build and Test, no CI Pipeline or Operation |
 | workshop | Standard | Minimal | 26 | Facilitated lifecycle with teaching test floor |
 | express | Minimal | Minimal | 10 | Requirements to conditional deploy, reviewers disabled |
 
@@ -948,20 +964,20 @@ User can override depth or test strategy at any approval gate.
 **Minimal** (poc, bugfix, refactor, security-patch, express) -- minimal artifacts,
 brief analysis, skip optional stages:
 - Requirements: 5-10 items, brief descriptions, minimal NFRs
-- App Design: single component diagram, basic data model, no ADRs
+- Domain Design: single component diagram, basic data model, minimal ADR log (a one-line "no significant decisions" note is fine)
 - Functional Design: brief business rules, simple entities, skip
   `frontend-components.md`
 
 **Standard** (feature, mvp, infra, classic, workshop) -- full artifacts at moderate detail:
 - Requirements: 15-30 with acceptance criteria, moderate NFRs
-- App Design: component diagrams with interactions, relationships, 2-3 ADRs
+- Domain Design: component diagrams with interactions, relationships, 2-3 ADRs
 - Functional Design: detailed business logic, comprehensive rules, entity
   lifecycle
 
 **Comprehensive** (enterprise) -- deep analysis, all stages execute:
 - Requirements: 30+, detailed criteria, comprehensive NFRs across all
   categories
-- App Design: multi-layer diagrams, detailed data flow, integration sequences,
+- Domain Design: multi-layer diagrams, detailed data flow, integration sequences,
   5+ ADRs with alternatives
 - Functional Design: decision trees, state machines, concurrency, error
   recovery, cross-unit patterns
@@ -979,7 +995,7 @@ brief analysis, skip optional stages:
 | **Stage** | A discrete step within a phase (e.g., Intent Capture, Code Generation) |
 | **Scope** | Controls which stages execute and at what depth (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, classic, workshop, express) |
 | **Depth** | Artifact detail scale: Minimal, Standard, or Comprehensive |
-| **Unit of Work** | An independently implementable package of features; the Construction iteration unit. One pass through stages 3.1-3.7. |
+| **Unit of Work** | An independently implementable package of features; the Construction iteration unit. Each Unit runs the per-Unit stages 3.1-3.5; Build and Test (3.6) and CI Pipeline (3.7) then run once across all Units. |
 | **Service** | A deployable process or container (API server, worker, frontend app) |
 | **Module** | Code-level organizational boundary within a service (package, namespace) |
 | **Component** | Logical building block within a module (class, function group, UI component) |
@@ -989,7 +1005,7 @@ brief analysis, skip optional stages:
 | **Guardrail** | A learned behavioral rule stored in the active space memory layer (`aidlc/spaces/<active-space>/memory/`) |
 | **Approval Gate** | Structured prompt where user approves or requests changes |
 | **Inline Stage** | Stage executing directly in the orchestrator conversation |
-| **Subagent Stage** | Stage delegating execution to a Claude Code Task tool call |
+| **Subagent Stage** | Stage whose lead runs in a separate agent context through the harness's dispatch tool (Claude Code's Task tool, Codex's agent roles, and so on) |
 | **Lead Agent** | Primary agent persona responsible for a stage's work |
 
 ---
@@ -1086,7 +1102,10 @@ investigation before marking complete.
 
 When a `run-stage` directive carries a non-null `reviewer` field, the conductor
 invokes that reviewer as a **separate sub-agent** after the stage body produces its
-artifacts and before the enabled §13 Learnings Ritual and the approval gate. The stage
+artifacts and before the enabled section 13 Learnings Ritual and the approval gate.
+The exception is an open-gate re-entry (`directive.gate_only === true`): the
+stage and its review are settled, so the conductor presents the gate from the
+recorded review and dispatches no reviewer. The stage
 ritual sequence in full: questions → artifact → reviewer (if declared) →
 learnings (only when its module is listed) → gate.
 
@@ -1226,8 +1245,9 @@ change. See
    review artifact(s), the engine-owned findings list, decision effects, and
    concrete upstream/downstream invalidation paths (`reviewer_max_iterations`
    is 1, engine-enforced). The final gate of a per-Unit stage renders every Unit
-   covered by that single approval; Unit filtering remains limited to reviewer
-   dispatch context.
+   covered by that single approval. A Unit's own approval (its Construction
+   checkpoint or team Unit gate) passes `--unit "<unit>"` and shows only that
+   Unit's review; reviewer dispatch context is always Unit-filtered.
    On `adversarial`: READY → run the learnings ritual only when its module is listed, then proceed to the gate.
    NOT-READY with iterations remaining below `reviewer_max_iterations` (default
    2) → the lead agent re-runs to address the findings and the reviewer
@@ -1265,8 +1285,11 @@ change. See
    Unit's applicable required outputs must exist. The recorded receipt is terminal
    whenever no further review pass follows it: do not write reviewed output
    documents before the gate. Fixes happen inside the iteration loop or after
-   the recorded lifecycle remedy reopens revision; summary-owned questions
-   follow the separate boundary above.
+   the recorded lifecycle remedy reopens revision, with one exception: under
+   Guard Policy `relaxed` or `off`, a change the person asks for after the
+   verdict is made directly, with no Request Changes round and no new review,
+   and the gate shows it as changed. Summary-owned questions follow the
+   separate boundary above.
    Suggestions riding on a verdict are quoted at the gate for the human, not
    applied. If a final review already exists and the document genuinely needs
    changes, Request Changes can be recorded while the stage is active or
@@ -1348,8 +1371,8 @@ verdict.
 ## Learnings Ritual
 
 When a human corrects agent behavior, the correction can become a persistent
-rule (guardrail) for later stages and workflows. v0.5.0 handles this through the
-tool-as-actor Learnings Ritual, not a separate guardrail-emission flow.
+rule (guardrail) for later stages and workflows. The tool-as-actor Learnings
+Ritual handles this, not a separate guardrail-emission flow.
 
 *(Conditional module: `stage-protocol-learnings.md`, Section 13; the base protocol keeps a loading stub.)*
 
@@ -1394,13 +1417,16 @@ Ritual, which is `stage-protocol-learnings.md` Section 13)*
 
 - After last stage of each phase is approved
 - Before first stage of next phase begins
-- On demand via `/aidlc --status`
+- On demand, when the person asks for it (`/aidlc --status` only reports and
+  runs no check)
 
 ### Process
 
 1. Read methodology from `.claude/knowledge/aidlc-shared/verification.md`
 2. Run phase-specific traceability checks
-3. Write results to `<record>/verification/[phase-boundary]-verification.md`
+3. Write results to `<record>/verification/phase-check-<phase>.md`, the name the
+   phase-ending stages and `verification.md` use (the governance protocol module
+   still calls it `[phase-boundary]-verification.md`)
 4. If failed: present issues (missing links, orphaned artifacts,
    inconsistencies) before proceeding
 5. `PHASE_VERIFIED` is emitted by the engine at the phase boundary; do not append it

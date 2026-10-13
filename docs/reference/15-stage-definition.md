@@ -19,9 +19,9 @@ the canonical spec — this chapter adds narrative and "when to use" guidance.
 
 Every stage `.md` file serves two readers:
 
-- **The parser** (`parseStageFrontmatter` in `lib.ts`, ships in milestone 7). Reads
-  the YAML frontmatter, produces a structured `StageEntry`. Doesn't touch the
-  body.
+- **The parser** (`parseStageFrontmatter` in `core/tools/aidlc-lib.ts`). Reads
+  the YAML frontmatter into a plain record that `validateStageFrontmatter`
+  (`core/tools/aidlc-stage-schema.ts`) then checks. Doesn't touch the body.
 - **The LLM agent** executing the stage. Reads the body, follows the prose
   instructions, produces artifacts. Doesn't touch the frontmatter.
 
@@ -34,8 +34,8 @@ that makes stages reviewable.
 
 ## Why Variant A3
 
-The format is called "Variant A3" — the third of three authorship variants
-weighed during v0.3.0 planning:
+The format is called "Variant A3", the third of three authorship variants
+that were weighed for it:
 
 - **One file beats split files.** Frontmatter plus prose in one `.md` keeps
   graph structure and execution steps together. A reviewer reading a stage
@@ -59,9 +59,9 @@ Edit stage YAML
       v
 bun scripts/package.ts
       |
-      +--> ignored dist/<harness>/tools/data/stage-graph.json
+      +--> ignored dist/<harness>/<harness-dir>/tools/data/stage-graph.json
       |
-      +--> ignored dist-release/<harness>/tools/data/stage-graph.json
+      +--> ignored dist-release/<harness>/<harness-dir>/tools/data/stage-graph.json
                     |
                     v
              loadStageGraph()
@@ -92,8 +92,8 @@ Encodes dependency edges. Two roles:
    produces" → add `Y` to `requires_stage`.
 2. **Presentation-order edge.** Two stages in the same phase with no
    semantic dependency but a fixed ordering (e.g., `market-research` before
-   `feasibility` in Ideation). Add the weak edge so the computed
-   `display_order` lands stably.
+   `feasibility` in Ideation). Add the weak edge so the computed stage
+   `number` lands stably.
 
 The compile step's slug-alphabetical tiebreak is a safety net. For stages
 that must land in a specific order, author the edge explicitly rather than
@@ -320,12 +320,12 @@ artifact Y is moot because Y's producer is SKIP in this scope." That's
 advisory, not blocking — the user has already opted into the
 truncation by picking the scope.
 
-**What v0.10.0 adds.** The reserved `when:` primitive (see "Reserved"
-section below) will let authors express richer predicates —
-`when: producer-in-plan`, `when: mode == brownfield`,
-`when: scope != poc`. Today's `required: true` + `conditional_on:
-brownfield|greenfield` pair covers the two dimensions v0.3.0 needs;
-`when:` generalises it.
+**`when:` (accepted, not yet evaluated).** A stage may declare a `when:`
+predicate; today the schema accepts only `producer-in-plan`, checks its shape,
+and nothing acts on it yet, so the stage runs under its `scopes:` as if it were
+absent. The `required: true` + `conditional_on: brownfield|greenfield` pair
+covers the two dimensions the engine evaluates today; `when:` is meant to
+generalise it.
 
 ### `consumes[].conditional_on`
 
@@ -443,7 +443,7 @@ stage might lead with `aidlc-product-agent` for requirements work but load
 `aidlc-delivery-agent` as support for capacity reality-checking.
 
 Both fields validate dynamically against `.claude/agents/*.md` via
-`loadAgents()` (introduced in milestone 3) — `aidlc-graph.ts compile` passes the
+`loadAgents()`, which reads the active harness's agents directory; `aidlc-graph.ts compile` passes the
 discovered agent slugs into `validateStageFrontmatter`, so a `lead_agent` or
 `support_agents` value naming an agent with no matching file fails the
 compile loudly (`lead_agent "<name>" has no matching .claude/agents/*.md`)
@@ -477,8 +477,8 @@ fails. Structured outputs such as `traceability.json` cannot be review targets.
 
 `reviewer_max_iterations` caps the review/revise loop before the workflow proceeds
 to the gate with unresolved findings. It **defaults to 2** when `reviewer` is
-declared but no cap is given; the compiler coerces a missing or non-positive value
-to 2. Omit the field on a stage that declares no `reviewer`: the compiler rejects
+declared but no cap is given; a value you give must be a positive integer, and
+any other value fails schema validation before the compile. Omit the field on a stage that declares no `reviewer`: the compiler rejects
 a `reviewer_max_iterations` declared without a `reviewer` (the schema error
 `reviewer_max_iterations requires a reviewer` fails the graph compile), so it is
 never silently ignored.
@@ -489,7 +489,7 @@ loop above — the default when a `reviewer` is declared without a class) or
 from the engine-owned findings list, no repair loop; the effective iteration budget is 1). A later
 write that invalidates its terminal receipt permits one bounded recovery request
 at the next ordinal, and a review the person asks for is never refused. The shipped split:
-the 7 human-gated ideation/inception prose stages declare `advisory`; the 5
+the 8 human-gated ideation/inception prose stages declare `advisory`; the 5
 Construction design/build stages default `adversarial`. `none` is deliberately
 not a stage value — a stage that wants no review deletes its `reviewer:` line;
 `none` exists on the scope `review_cap` and the per-run `--review` override,
@@ -612,48 +612,46 @@ The example encodes, in structured form, what today's prose describes:
 
 ## Three-compartment body model
 
-The body of a stage file has three compartments, declared in this order.
-Only `## Steps` is populated in v0.3.0.
+The body of a stage file has three compartments, declared in this order, and
+every shipped stage populates all three:
 
-| Compartment | v0.3.0 | v0.5.0 | What goes here |
-|-------------|--------|--------|----------------|
-| `## Steps` | Required, populated | Unchanged | Imperative prose the agent follows |
-| `## Sensors` | Reserved, absent | Populated | Compact output-location, imported-sensor, and upstream-target summary; stage-specific exceptions remain local |
-| `## Learn` | Reserved, absent | Populated | Compact pointer to the shared §13 learning-loop contract and bootstrap exception |
+| Compartment | What goes here |
+|-------------|----------------|
+| `## Steps` | Imperative prose the agent follows |
+| `## Sensors` | Compact output-location, imported-sensor, and upstream-target summary; stage-specific exceptions remain local |
+| `## Learn` | Compact pointer to the shared section 13 learning-loop contract and its bootstrap exception |
 
-Pre-declaring the three compartments in v0.3.0 meant v0.5.0's additions
-were slot-in changes, not body restructures. See [Sensor
+The fixed order means a stage's sensor bindings and learning-loop pointer
+always have a place of their own. See [Sensor
 System](07-sensor-system.md) for the `## Sensors` binding semantics and
 the pull-import model. Shared sensor behavior is defined once in
-`stage-protocol.md` §14, while `stage-protocol-learnings.md` §13 defines the diary and ritual only when `directive.protocol_modules` lists `learnings`; otherwise skip both.
-
-**milestone 8 migration rule:** wrap the existing body under `## Steps`, nothing
-else. Most stage files already use `## Steps` as their first body heading.
-
----
-
-## YAML migration — shipped
-
-milestone 7 shipped `parseStageFrontmatter` and `emitStageFrontmatter` in
-`lib.ts` — YAML-only, no prose back-compat path. milestone 8 migrated all 31
-stage files to YAML frontmatter in a single atomic change. milestone 9 expanded
-`aidlc-graph.ts` to compile the YAML into `stage-graph.json`. The repository now
-generates that file only inside ignored projections; package determinism, not a
-committed compiled-file drift check, is the source-tree gate.
+`stage-protocol.md` section 14, while `stage-protocol-learnings.md` section 13 defines the diary and ritual only when `directive.protocol_modules` lists `learnings`; otherwise skip both.
+The `## Sensors` and `## Learn` headings are checked by
+`t87-stage-compartment-headers` across all 33 stages; `## Steps` is in every
+stage but has no test of its own.
 
 ---
 
-## Known limits in v0.3.0
+## Parser and emitter
 
-- **`for_each` is new.** The 5 Construction stages with `**Per-Unit**: Yes`
-  migrate to `for_each: unit-of-work`; the other 26 stages omit the field
-  entirely.
-- **Sensors / Learn compartments declared but empty.** The parser
-  tolerates their absence; v0.5.0 populated them (see [Sensor
-  System](07-sensor-system.md)).
-- **No runtime validation beyond drift check.** The parser accepts any
-  YAML that produces a valid `StageEntry`; doctor's later extensions add
-  advisory rule/sensor checks on top.
+`parseStageFrontmatter` and `emitStageFrontmatter` live in
+`core/tools/aidlc-lib.ts`, YAML-only. `aidlc-graph.ts compile`, which
+`bun scripts/package.ts` runs for every generated tree, compiles the YAML into
+`stage-graph.json`. The repository generates that file only inside ignored
+projections; package determinism, not a committed compiled-file drift check, is
+the source-tree gate.
+
+---
+
+## Known limits
+
+- **`for_each` is used by Construction only.** The five per-Unit Construction
+  stages declare `for_each: unit-of-work`; the other 28 stages omit the field.
+- **`when:` is accepted but not evaluated.** See the field note above.
+- **Only the frontmatter is validated at compile.** The body prose is not
+  parsed; its `## Sensors` and `## Learn` headings are checked by the test suite, and the
+  engine's runtime guards (for example the completion checks on a stage's
+  required work) act on what the stage produces, not on its prose.
 
 ---
 
@@ -663,13 +661,16 @@ The spec reserves names for primitives AI-DLC will likely add in later
 releases. The schema rejects unknown keys — reserving the names here
 prevents future contributions from colliding with ad-hoc additions.
 
-| Key | Likely release | What it will do |
-|-----|----------------|-----------------|
-| `when` | v0.10.0 fitness compiler | Structured condition. Compiles `condition` prose into machine-enforceable logic. Supersedes `consumes[].conditional_on` and generalises today's scope-aware `consumes[].required` with richer predicates (`producer-in-plan`, `mode == brownfield`, `scope != poc`) |
-| `on_failure` | v0.8.0 Ralph loop | Declarative error recovery — "if this stage fails, jump back to X" or "retry with adjusted inputs". Moves revision semantics out of `stage-protocol-recovery.md` prose |
-| `blocks_on` | v0.4.0 Construction (if surfaced) | Completion dependency without data read — splits today's overloaded `requires_stage` (which conflates "I consume your output" with "I run after you") |
-| `timeout` | v0.5.0 sensor binding | Execution budget (deadline). Homed in sensor bindings, not stage frontmatter |
-| `retry` | v0.8.0 Ralph loop | Retry policy on failure. Homed in loop config, not stage frontmatter |
+| Key | Reserved for | What it would do |
+|-----|--------------|------------------|
+| `on_failure` | the loop driver | Declarative error recovery: "if this stage fails, jump back to X" or "retry with adjusted inputs". Would move revision semantics out of `stage-protocol-recovery.md` prose |
+| `blocks_on` | Construction worktrees | Completion dependency without data read: would split today's overloaded `requires_stage` (which conflates "I consume your output" with "I run after you") |
+| `timeout` | sensor binding | Execution budget (deadline). Homed in sensor bindings, not stage frontmatter |
+| `retry` | the loop driver | Retry policy on failure. Homed in loop config, not stage frontmatter |
+
+`when` is no longer reserved: the schema accepts it with the `producer-in-plan`
+predicate and checks its shape, and its evaluation is still to come (see
+`consumes[].required` above).
 
 Design rationale: Claude Code's own task primitives (TaskCreate family plus
 `/loop` and cron) omit dependency, blocks, retry, and timeout — all
@@ -680,10 +681,9 @@ above would be modest structural extensions if consumers emerge, not new
 paradigms.
 
 The reserved-namespace pattern has precedent in the audit taxonomy
-([State Machine](12-state-machine.md)), which pre-registers event names with an
-Emitter cell of `Reserved (v0.x PR N)` — the name exists in the registry but no
-code emits it until the consumer PR ships, at which point the same commit
-replaces the `Reserved` marker with the real emitter path.
+([State Machine](12-state-machine.md)), which can pre-register an event name
+with a `Reserved` Emitter cell until the code that emits it ships, and keeps a
+retired name as `Reserved (retired name)` (`CHANGE_CONTROL_SET` today).
 
 ---
 
