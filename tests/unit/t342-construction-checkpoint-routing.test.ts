@@ -73,6 +73,7 @@ function fixture(options: Options = {}) {
 - **Project Type Source**: you
 - **Scope**: ${options.scope ?? "feature"}
 - **State Version**: 8
+- **Unit Ownership**: solo
 ## Runtime State
 - **Revision Count**: 0
 - **Skeleton Stance**: ${options.stance ?? "off"}

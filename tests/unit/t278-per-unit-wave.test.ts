@@ -138,7 +138,7 @@ function constructionState(
 - **Construction Iteration**: ${iteration}
 ${reviewOverride ? `- **Review Override**: ${reviewOverride}\n` : ""}
 ${autonomy ? `- **Construction Autonomy Mode**: ${autonomy}\n` : ""}
-${ownership ? `- **Unit Ownership**: ${ownership}\n` : ""}
+- **Unit Ownership**: ${ownership ?? "solo"}
 
 ## Scope Configuration
 - **Stages to Execute**: all

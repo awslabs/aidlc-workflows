@@ -360,6 +360,7 @@ describe("a Unit's step never carries them", () => {
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **State Version**: 8
+- **Unit Ownership**: solo
 - **Skeleton Stance**: on
 
 ## Scope Configuration

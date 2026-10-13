@@ -184,6 +184,7 @@ function constructionState(opts: {
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **State Version**: 8
+- **Unit Ownership**: solo
 ${stanceLine}
 ## Runtime State
 - **Revision Count**: 0
