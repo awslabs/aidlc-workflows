@@ -94,7 +94,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   deleteQuestion,
@@ -161,6 +161,7 @@ import {
   attemptEventIsCrossShardTied,
   artifactFilename,
   auditBlockField,
+  auditFilePath,
   REDO_REUSE_SOURCE,
   boltSlugForUnit,
   composeMarkerPath,
@@ -7764,10 +7765,13 @@ function markLineHandedOut(pd: string, session: string, messageId: string): void
 }
 
 // The latest row of the chat's record is the person's turn that carries this
-// message: nothing has run since they spoke.
+// message: nothing has run since they spoke. This clone's own shard holds it
+// (each clone appends to its own; shards are read in filename order, so a
+// teammate's can come after it).
 function turnIsLatestRow(pd: string, messageId: string): boolean {
   try {
-    const rows = readAuditShardEvents(pd);
+    const own = basename(auditFilePath(pd));
+    const rows = readAuditShardEvents(pd).filter((row) => basename(row.shard) === own);
     const last = rows[rows.length - 1];
     return last !== undefined && last.event === "HUMAN_TURN" && auditBlockField(last.block, "Message Id") === messageId;
   } catch {
