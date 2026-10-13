@@ -6,7 +6,7 @@
 |-------|-------|
 | Name | aidlc-developer-agent |
 | Tier | **judgment** |
-| Allowed Claude Code Tools | Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion |
+| Claude Code Tools | Inherits the full session toolset, MCP tools included (no `tools:` allowlist); expected to use Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion |
 | Disallowed Claude Code Tools | Task |
 
 ---
@@ -57,18 +57,18 @@ Path: `.claude/knowledge/aidlc-developer-agent/`
 
 | File | Content |
 |------|---------|
-| api-design-guide.md | API contract design (REST, GraphQL, gRPC) methodology |
+| api-design-guide.md | API contract design methodology (REST/HTTP conventions, OpenAPI, AsyncAPI) |
 | code-analysis-guide.md | Codebase analysis and reverse engineering techniques |
 | code-generation-guide.md | Code generation methodology and implementation patterns |
-| code-generation-patterns.md | Language-specific code generation patterns and templates |
+| code-generation-patterns.md | Code generation principles that apply in any language (clean code, SOLID, errors, logging, organization) |
 | data-modelling-patterns.md | Data model design patterns (relational and NoSQL) |
 | re-artifacts.md | Reverse engineering artifact specifications |
 
 ### Team (Tier 2)
 
-Path: `aidlc/knowledge/aidlc-developer-agent/` (the space-level knowledge dir; user-managed)
+Path: `aidlc/spaces/<active-space>/knowledge/aidlc-developer-agent/` (the space-level knowledge dir; user-managed)
 
-A space-level directory the team creates when it has content (the engine ships `aidlc/knowledge/` empty). Populated by the team with project-specific
+A space-level directory the team creates when it has content (the engine creates the space's `knowledge/` folder empty). Populated by the team with project-specific
 development context such as coding standards, framework conventions, existing
 API patterns, or migration strategies.
 

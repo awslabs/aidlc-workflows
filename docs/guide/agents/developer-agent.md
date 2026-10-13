@@ -4,9 +4,9 @@
 
 The aidlc-developer-agent is your senior software developer. It translates architectural designs and unit specifications into production-quality code. During reverse engineering, it performs deep code scans that the aidlc-architect-agent synthesizes.
 
-The aidlc-developer-agent leads the Reverse Engineering code scan and Code Generation, and is a dispatched collaborator in both Inception ensembles: it examines code-pattern evidence in the Practices Discovery hub-and-spoke and provides the implementability voice in the User Stories mob. Code Generation runs as a focused subagent. It has Bash access for running build tools, package managers, and test commands.
+The aidlc-developer-agent leads the Reverse Engineering code scan and Code Generation, and is a dispatched collaborator in both Inception ensembles: it examines code-pattern evidence in the Practices Discovery hub-and-spoke and provides the implementability voice in the User Stories mob. Code Generation runs as a focused subagent. It is expected to use Bash for running build tools, package managers, and test commands.
 
-Workspace Detection (0.2) used to be led by the aidlc-developer-agent as a subagent; it now runs deterministically inside `aidlc-utility intent-create` as a rule-based scanner. The aidlc-developer-agent is no longer involved in Initialization.
+Initialization, Workspace Detection included, runs as a deterministic tool; the aidlc-developer-agent takes no part in it.
 
 ## Stages Led
 
@@ -36,7 +36,7 @@ The aidlc-developer-agent receives unit specifications and design patterns from 
 
 ## Key Principles
 
-- Deliver functional, tested implementations — refactor in subsequent iterations
+- Deliver functional, tested implementations; refactor during the first generation when the Testing Contract includes that step (TDD, BDD, ATDD, or custom)
 - Follow the project's existing patterns and conventions
 - Write code that is easy to read and debug — avoid clever abstractions
 - Validate inputs early, throw meaningful errors, never swallow exceptions
