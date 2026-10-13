@@ -6323,9 +6323,12 @@ function personalKiroMcpPath(env: NodeJS.ProcessEnv = process.env): string | nul
 // So the AI-DLC agent's staged copy names every server config finds in the
 // project's mcp.json and in the person's own, and allowedTools stays as
 // shipped, so each call still asks first. A server added later is named at
-// the next config run.
-function grantKiroMcpServers(stagedRoot: string, harnessDir: string): void {
-  const agentPath = join(stagedRoot, harnessDir, "agents", "aidlc.json");
+// the next config run. True when the project's copy is the release's own
+// bytes (a copy install puts them there before config runs), so the named copy
+// replaces it; any other copy meets the ownership check.
+function grantKiroMcpServers(projectDir: string, sourceRoot: string, stagedRoot: string, harnessDir: string): boolean {
+  const rel = `${harnessDir}/agents/aidlc.json`;
+  const agentPath = join(stagedRoot, rel);
   const names = new Set<string>();
   for (const path of [join(stagedRoot, harnessDir, "settings", "mcp.json"), personalKiroMcpPath()]) {
     if (path === null || !regularFile(path)) continue;
@@ -6336,21 +6339,26 @@ function grantKiroMcpServers(stagedRoot: string, harnessDir: string): void {
       // A file Kiro cannot read names no server.
     }
   }
-  if (!regularFile(agentPath)) return;
+  if (!regularFile(agentPath)) return false;
   const agentText = readFileSync(agentPath, "utf-8");
   let agent: unknown;
   try {
     agent = JSON.parse(withoutBom(agentText));
   } catch {
-    return;
+    return false;
   }
-  if (!isRecord(agent) || !Array.isArray(agent.tools)) return;
+  if (!isRecord(agent) || !Array.isArray(agent.tools)) return false;
   const tools = [
     ...agent.tools.filter((tool) => typeof tool !== "string" || !tool.startsWith("@")),
     ...[...names].map((name) => `@${name}`),
   ];
-  if (canonical(tools) === canonical(agent.tools)) return;
+  if (canonical(tools) === canonical(agent.tools)) return false;
   writeFileSync(agentPath, jsonFileText({ ...agent, tools }, agentText));
+  const current = join(projectDir, rel);
+  const release = join(sourceRoot, rel);
+  if (!regularFile(current) || !regularFile(release)) return false;
+  const releaseHash = sha256File(release);
+  return sha256Matching(readFileSync(current), [releaseHash]) === releaseHash;
 }
 
 function preserveUserProviderFields(
@@ -6725,7 +6733,9 @@ function prepareRefreshSource(
       regenerated.add(rel);
       if (entries) entries[rel] = owned;
     }
-    if (!projectProjection) grantKiroMcpServers(root, descriptor.harnessDir);
+    if (!projectProjection && grantKiroMcpServers(projectDir, sourceRoot, root, descriptor.harnessDir)) {
+      regenerated.add(`${descriptor.harnessDir}/agents/aidlc.json`);
+    }
   }
 
   const currentGrid = join(currentHarness, "tools", "data", "scope-grid.json");

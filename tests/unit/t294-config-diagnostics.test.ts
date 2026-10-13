@@ -6602,6 +6602,24 @@ process.exit(0);
     ]);
     expect(agent.allowedTools).toEqual(shippedAgent.allowedTools);
     expect(readFileSync(personalMcp)).toEqual(personalBefore);
+
+    // A copy install puts the runtime's files in the project before config
+    // runs: the agent file as shipped is AI-DLC's, so setup names the servers
+    // in it rather than stopping on it. A hand edit to it still stops config.
+    const copied = temp("aidlc-t294-kiro-grants-copy-");
+    mkdirSync(join(copied, ".git"));
+    cpSync(join(DIST_RELEASE, "kiro"), copied, { recursive: true });
+    const copySetup = run([...args.slice(0, 2), copied, ...args.slice(3)], copied, env);
+    expect(copySetup.status, copySetup.stdout + copySetup.stderr).toBe(0);
+    const copiedAgentPath = join(copied, ".kiro", "agents", "aidlc.json");
+    expect((JSON.parse(readFileSync(copiedAgentPath, "utf-8")) as Agent).tools)
+      .toEqual([...shippedAgent.tools, ...shippedServers.map((name) => `@${name}`), "@my-docs"]);
+    const edited = JSON.parse(readFileSync(copiedAgentPath, "utf-8")) as Agent;
+    edited.tools.push("@my-own-grant");
+    writeFileSync(copiedAgentPath, `${JSON.stringify(edited, null, 2)}\n`);
+    const editedRun = run([...args.slice(0, 2), copied, ...args.slice(3)], copied, env);
+    expect(editedRun.status).not.toBe(0);
+    expect(editedRun.stdout + editedRun.stderr).toContain(".kiro/agents/aidlc.json (locally modified");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("check names an unrecorded providers section instead of calling it clean", () => {
