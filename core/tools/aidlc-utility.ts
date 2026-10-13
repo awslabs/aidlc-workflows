@@ -269,6 +269,7 @@ import {
   recordDirMatches,
   updateIntentScope,
   updateIntentStatus,
+  writeIntentRegistry,
   type IntentInfo,
   type IntentLifecycleVerb,
   type IntentRegistryEntry,
@@ -347,7 +348,6 @@ import {
   setStageSuffix,
   intentRepos,
   discoverSiblingRepos,
-  intentsRegistryPath,
   INTENT_SELECTOR_REGEX,
   SPACE_NAME_REGEX,
   scopeGridPath,
@@ -9402,7 +9402,7 @@ function handleIntentRepos(
         space,
       );
       row.repos = next;
-      writeFileAtomic(intentsRegistryPath(projectDir, space), `${JSON.stringify(list, null, 2)}\n`);
+      writeIntentRegistry(projectDir, list, space);
       const reAction = parseStateStageSuffixes(state).get("reverse-engineering") ??
         loadScopeMapping()[getField(state, "Scope") ?? ""]?.stages["reverse-engineering"];
       return { kind: "changed" as const, reState: boxes.get("reverse-engineering"), reAction };
@@ -11176,7 +11176,7 @@ function recordDiscoveredRepos(projectDir: string, dirName: string, repos: strin
   const row = list.find((entry) => recordDirMatches(entry, dirName));
   if (!row || (row.repos?.length ?? 0) > 0) return false;
   row.repos = repos;
-  writeFileAtomic(intentsRegistryPath(projectDir, space), `${JSON.stringify(list, null, 2)}\n`);
+  writeIntentRegistry(projectDir, list, space);
   return true;
 }
 

@@ -4250,17 +4250,64 @@ export function appendIntentToRegistry(
   entry: IntentRegistryEntry,
   space?: string,
 ): void {
-  const path = intentsRegistryPath(projectDir, space);
-  let list: IntentRegistryEntry[] = [];
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
-    if (Array.isArray(parsed)) list = parsed as IntentRegistryEntry[];
-  } catch {
-    // absent / malformed → start a fresh list
-  }
+  const list = readIntentRegistry(projectDir, space);
   list.push(entry);
+  writeIntentRegistry(projectDir, list, space);
+}
+
+// Write a space's registry. A file git left conflicted was read as every row of
+// both sides, so this write keeps them all; the person hears once that git
+// still shows the file as conflicted. Their git is theirs: nothing is staged.
+export function writeIntentRegistry(projectDir: string, list: IntentRegistryEntry[], space?: string): void {
+  const path = intentsRegistryPath(projectDir, space);
+  let conflicted = false;
+  try {
+    conflicted = CONFLICT_START.test(readFileSync(path, "utf-8"));
+  } catch {
+    // absent → a new list
+  }
   mkdirSync(dirname(path), { recursive: true });
   writeFileAtomic(path, `${JSON.stringify(list, null, 2)}\n`);
+  if (!conflicted) return;
+  try {
+    const session = resolveInvokingSessionId(projectDir);
+    if (session) {
+      addPendingPersonLines(projectDir, session, [
+        `Your list of work, ${toPosix(relative(projectDir, path))}, had a git conflict: every piece of work ` +
+          "from both sides was kept, and git still shows the file as conflicted until you add it with git add.",
+      ]);
+    }
+  } catch {
+    // A line the person may miss never undoes the write.
+  }
+}
+
+// Git's conflict markers. No line of JSON starts with one, so in intents.json
+// they split the text into its two sides exactly.
+const CONFLICT_START = /^<{7}/m;
+
+// One side of a file git left conflicted: the lines outside every conflict plus
+// that side's own lines (a diff3 or zdiff3 base section belongs to neither).
+function conflictSide(text: string, side: "ours" | "theirs"): string {
+  const kept: string[] = [];
+  let zone: "both" | "ours" | "base" | "theirs" = "both";
+  for (const line of text.split(/\r?\n/)) {
+    if (line.startsWith("<<<<<<<")) zone = "ours";
+    else if (zone !== "both" && line.startsWith("|||||||")) zone = "base";
+    else if (zone !== "both" && line.startsWith("=======")) zone = "theirs";
+    else if (zone !== "both" && line.startsWith(">>>>>>>")) zone = "both";
+    else if (zone === "both" || zone === side) kept.push(line);
+  }
+  return kept.join("\n");
+}
+
+function registryList(text: string): IntentRegistryEntry[] | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return Array.isArray(parsed) ? (parsed as IntentRegistryEntry[]) : null;
+  } catch {
+    return null;
+  }
 }
 
 // The `aidlc/spaces` root — the parent of every space dir. Sole helper so the
@@ -4270,20 +4317,35 @@ export function spacesRoot(projectDir: string): string {
 }
 
 // Read a space's intents.json registry as a typed list. Returns [] when the
-// file is absent or malformed (same tolerance as appendIntentToRegistry). The
+// file is absent or malformed. A file git left conflicted (two clones started
+// work in one space) reads as every row of both sides, once per uuid. The
 // canonical "what intents exist" record for humans/ordering/status — the cheap
 // on-disk listIntentDirs() scan is the path-resolver's record-presence signal,
 // but the registry carries the uuid/status/scope/repos a human or the --json
 // consumer needs.
 export function readIntentRegistry(projectDir: string, space?: string): IntentRegistryEntry[] {
-  const path = intentsRegistryPath(projectDir, space);
+  let text: string;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
-    if (Array.isArray(parsed)) return parsed as IntentRegistryEntry[];
+    text = readFileSync(intentsRegistryPath(projectDir, space), "utf-8");
   } catch {
-    // absent / malformed → empty
+    return [];
   }
-  return [];
+  const whole = registryList(text);
+  if (whole !== null) return whole;
+  if (!CONFLICT_START.test(text)) return [];
+  // ponytail: a row both sides changed keeps the first side's copy (every row
+  // is still kept); a side that is not JSON (a hand edit) adds nothing.
+  const rows: IntentRegistryEntry[] = [];
+  const seen = new Set<string>();
+  for (const side of ["ours", "theirs"] as const) {
+    for (const entry of registryList(conflictSide(text, side)) ?? []) {
+      const key = typeof entry?.uuid === "string" ? entry.uuid : JSON.stringify(entry);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push(entry);
+    }
+  }
+  return rows;
 }
 
 // --- The deterministic query layer: "what exists" (one source, two modes) ----
@@ -7977,7 +8039,6 @@ function updateIntentRow(
   space?: string,
 ): boolean {
   const sp = space ?? activeSpace(projectDir);
-  const path = intentsRegistryPath(projectDir, sp);
   const list = readIntentRegistry(projectDir, sp);
   let changed = false;
   for (const entry of list) {
@@ -7989,10 +8050,7 @@ function updateIntentRow(
     }
     break;
   }
-  if (changed) {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileAtomic(path, `${JSON.stringify(list, null, 2)}\n`);
-  }
+  if (changed) writeIntentRegistry(projectDir, list, sp);
   return changed;
 }
 
