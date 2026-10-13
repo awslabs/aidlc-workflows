@@ -13218,6 +13218,11 @@ function keptWhilePlanWaits<T extends Directive>(directive: T, planWaits: boolea
   return directive;
 }
 
+// The reason the step below hands the agent for a started stage the person
+// asked to skip. report reads its own token back: that skip is the person's,
+// so it gives no reason of its own (the step already said the one line).
+const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
+
 // A typed `--skip`/`--add` on a running workflow. The person named the
 // stages, so recompose applies them straight away (after any scope or setting
 // command typed with them), and one line says what changed and the way back;
@@ -13300,7 +13305,7 @@ function planChangeDirective(
   if (started !== null) {
     commands.push({
       command: `${aidlcToolInvocation("orchestrate")} report --stage ${started} --result skipped ` +
-        `--reason ${shellArg("the person asked to skip it")}`,
+        `--reason ${shellArg(PERSON_ASKED_SKIP_REASON)}`,
       why: `to skip ${name(started)}, which has already started`,
     });
   }
@@ -15625,16 +15630,21 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // A stage skipped because it does not apply is said, in one line, with the
     // next step the agent speaks from: the agent reports the skip and goes
     // straight on. The agent's reason stays in the audit; it is the agent's
-    // own words, so it never becomes a line the engine says.
+    // own words, so it never becomes a line the engine says. A stage the
+    // person asked to skip does apply: the step that named this report has
+    // already said the skip in one line, so no reason is added here.
+    const personAsked = reason === PERSON_ASKED_SKIP_REASON;
     const skipped: Directive = {
       kind: "done",
       reason:
         `Committed skip for "${slug}" (scope: ${scope}). ` +
         "State routed forward; run next to continue.",
       ...workflowContinues(pd),
-      narration: unitsDone.length > 0
-        ? `${node.name} is not part of the ${scope} plan; what the Units already did for it stays as it is.`
-        : `${node.name} does not apply here, so I skipped it.`,
+      ...(personAsked ? {} : {
+        narration: unitsDone.length > 0
+          ? `${node.name} is not part of the ${scope} plan; what the Units already did for it stays as it is.`
+          : `${node.name} does not apply here, so I skipped it.`,
+      }),
     };
     // Carried only while the work goes on; the last stage's skip is said here.
     if (skipped.kind === "done" && skipped.workflow_continues === true) carriesNarration.add(skipped);
