@@ -1740,8 +1740,9 @@ function findAgentFile(slug: string): string | null {
 
 // The harness-native twins of a core persona: the files a harness's own
 // dispatch reads instead of the Markdown persona, built from it at package
-// time (the Codex agent TOML, the opencode and Copilot native agents). They
-// take the same fragments, so a plugin's instruction reaches the agent on
+// time (the Codex agent TOML, the opencode and Copilot native agents), and the
+// Kiro IDE persona without its tool permissions, which the inline lead reads.
+// They take the same fragments, so a plugin's instruction reaches the agent on
 // every harness. Kiro CLI's agent JSON loads its prompt from the Markdown
 // persona, and the other harnesses dispatch from it directly.
 function personaTwinFiles(slug: string): Array<{ path: string; toml: boolean }> {
@@ -1749,7 +1750,9 @@ function personaTwinFiles(slug: string): Array<{ path: string; toml: boolean }> 
     ? { path: join(HARNESS_DIR, "agents", `${slug}.toml`), toml: true }
     : HARNESS_LEAF === ".aidlc"
       ? { path: join(nativeAgentsDir(), `${slug}.md`), toml: false }
-      : null;
+      : HARNESS_LEAF === ".kiro"
+        ? { path: join(HARNESS_DIR, "aidlc-common", "personas", `${slug}.md`), toml: false }
+        : null;
   return twin && existsSync(twin.path) ? [twin] : [];
 }
 

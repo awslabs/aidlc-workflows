@@ -607,7 +607,9 @@ the `/aidlc` skill and the Markdown `agents/aidlc-aidlc.md` are its conductor su
 JSON files (the `kiro` harness relies on the agent-JSON `hooks` block); it preloads standing rules through
 always-included steering rather than CLI agent resources; the shared Kiro
 projection removes the core persona's Claude-only `disallowedTools` key; and
-its manifest adds `tools:` and `permissions.rules` frontmatter to every persona.
+its manifest adds `tools:` and `permissions.rules` frontmatter to every persona
+(each persona a stage reads inline also ships without it, as
+`.kiro/aidlc-common/personas/<agent>.md`, the file the lead reads in its own chat).
 It does not ship the `kiro` harness's agent-v1 JSON.
 See [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-harness.md).
 

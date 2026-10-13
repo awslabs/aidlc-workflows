@@ -514,8 +514,10 @@ every harness: the Markdown persona (the engine roster, and the native agent
 on Claude Code, Cursor and Kiro IDE; Kiro CLI's agent JSON loads its prompt
 from it), plus the harness-native twin the packager builds from it: the Codex
 agent TOML's `developer_instructions` string (the fragment text escaped for
-TOML) and the OpenCode `.opencode/agents/` and Copilot `.github/agents/`
-native agents. Doctor checks each of these files, a refresh replays the
+TOML), the OpenCode `.opencode/agents/` and Copilot `.github/agents/`
+native agents, and on Kiro IDE the persona without its tool permissions
+(`.kiro/aidlc-common/personas/<agent>.md`, the file the engine roster names
+there for an agent a stage reads inline). Doctor checks each of these files, a refresh replays the
 fragments into each, and disable and prune strip them from each.
 
 On Kiro CLI, Codex, and OpenCode, a Markdown persona in the engine roster is
