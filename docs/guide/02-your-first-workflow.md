@@ -284,6 +284,11 @@ with `<verification_command>` (exit 0)** before you approve the skeleton and
 later Units start. Reviewing only the first design stage does not demonstrate a
 working skeleton.
 
+If you ask to leave planned work out of a build ("skip the remaining stories"),
+the build goes on without it and its approval says what was left out, for
+example "Left out of this build: AC2.1.1, AC2.1.2 and AC2.2.1." The Unit's
+`traceability.json` keeps each of those items as `Deferred`, with your words.
+
 If no autonomy choice is already recorded, the workflow then asks:
 
 ```

@@ -1,4 +1,5 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-bolt:checkpoint
+// covers: function:leftOutNotice
 //
 // The person asks to leave planned work out of a build ("skip the remaining
 // stories") and the approval read like any finished build (#1342). The agent
@@ -63,7 +64,8 @@ ${options.team ? "- **Unit Ownership**: team\n- **Unit Gate Rhythm**: per-stage\
 - **Test Strategy**: Standard
 ## Stage Progress
 ### CONSTRUCTION PHASE
-${STAGES.map((stage) => `- [${stage === current ? "-" : " "}] ${stage} \u2014 EXECUTE`).join("\n")}
+${STAGES.map((stage) => stage === current ? `- [-] ${stage} \u2014 EXECUTE`
+    : options.team ? `- [S] ${stage} \u2014 SKIP` : `- [ ] ${stage} \u2014 EXECUTE`).join("\n")}
 - [ ] build-and-test \u2014 EXECUTE
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION
@@ -156,7 +158,10 @@ function recordCommand(p: string) {
 // approval question is asked from.
 function checkpointBeforeTheQuestion(p: string) {
   recordCommand(p);
-  expect(next(p).construction_checkpoint?.unit).toBe("alpha");
+  // Before it is verified the checkpoint asks nothing yet, so it says nothing yet.
+  const waiting = next(p);
+  expect(waiting.construction_checkpoint?.unit).toBe("alpha");
+  expect(String(waiting.narration ?? "")).not.toContain("Left out");
   const verified = tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "verify"]);
   expect(verified.verified, JSON.stringify(verified)).toBe(true);
   const directive = next(p);
@@ -223,7 +228,9 @@ describe("t-approval-says-what-was-left-out", () => {
     expect(narration).not.toContain("check reports");
   });
 
-  test("a team's Unit gate names that Unit's left-out items only, and nothing says them again after", () => {
+  // A team approves Unit by Unit; once every Unit is approved the stage
+  // settles without another question, and nothing says alpha's items again.
+  test("a team's Unit gate names that Unit's left-out items only, and the stage after it does not repeat them", () => {
     const p = fixture({ checkpoints: false, current: "code-generation", team: true });
     cover(p, "alpha", SKIPPED);
     cover(p, "beta", BUILT);
@@ -234,12 +241,10 @@ describe("t-approval-says-what-was-left-out", () => {
     expect(String(alpha.narration ?? ""), JSON.stringify(alpha)).toContain(LEFT_OUT);
     const beta = report("beta", "awaiting-approval");
     expect(String(beta.narration ?? ""), JSON.stringify(beta)).not.toContain("Left out");
-    const said = [
-      report("alpha", "approved", ["--user-input", "Approve"]),
-      report("beta", "approved", ["--user-input", "Approve"]),
-      next(p) as Record<string, unknown>,
-    ].map((step) => JSON.stringify(step));
-    for (const step of said) expect(step).not.toContain("Left out");
+    const after = [report("alpha", "approved", ["--user-input", "Approve"]), report("beta", "approved", ["--user-input", "Approve"])];
+    const following = next(p) as Record<string, unknown>;
+    expect(following.stage, JSON.stringify(following).slice(0, 400)).toBe("build-and-test");
+    for (const step of [...after, following]) expect(JSON.stringify(step)).not.toContain("Left out");
   });
 
   test("control: a design stage's Deferred item (handled by a later stage) is not said as left out", () => {
