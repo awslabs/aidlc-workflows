@@ -924,7 +924,8 @@ Lookup failure, an ambiguous parent edge, or exhaustion of the existing
 50 ms / 64-ancestor budget yields no ancestry session; null barriers and the
 negative cache retain their existing behavior. Linux reads `/proc` for each hop; macOS
 reads the whole process table (pid, parent, `lstart`) with one `ps` call per walk and
-every hop from it, so a deep chain fits the same budget and the recorded start times
+every hop from it, inside a 250 ms budget because that one call is slower than a
+`/proc` read and slower again on a busy Mac, and the recorded start times
 are the strings a per-pid lookup prints. One process reuses that table for up to a
 second (the negative cache's window); a SessionStart write clears it.
 

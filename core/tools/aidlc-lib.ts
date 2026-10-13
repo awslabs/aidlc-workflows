@@ -6704,7 +6704,12 @@ export interface ProcessIdentity {
   startTime: string | null;
 }
 
-const SESSION_ANCESTRY_BUDGET_MS = 50;
+// The whole time one walk may spend finding its chat. macOS reads the process
+// table with one `ps -A`, about 16 ms on an idle machine and several times that
+// on a busy one, so it gets longer; Linux and Windows read each hop natively.
+export function sessionAncestryBudgetMs(): number {
+  return sessionProcessPlatform() === "darwin" ? 250 : 50;
+}
 const SESSION_ANCESTRY_MAX_DEPTH = 64;
 const SESSION_ANCESTRY_CACHE_MS = 1000;
 const sessionAncestryCache = new Map<
@@ -6829,7 +6834,7 @@ let windowsSessionProcessApi: ReturnType<typeof loadWindowsSessionProcessApi> | 
 // independent of the lock subsystem's process probes.
 export function windowsSessionProcessIdentity(
   pid: number,
-  deadlineMs = Date.now() + SESSION_ANCESTRY_BUDGET_MS,
+  deadlineMs = Date.now() + sessionAncestryBudgetMs(),
 ): ProcessIdentity | null {
   // A test platform override must never load Windows DLLs on another host.
   if (
@@ -6985,7 +6990,7 @@ export function writeSessionPidEntry(
   projectDir: string,
   pid: number,
   sessionId: string,
-  deadlineMs: number = Date.now() + SESSION_ANCESTRY_BUDGET_MS,
+  deadlineMs: number = Date.now() + sessionAncestryBudgetMs(),
   identity: ProcessIdentity | null | undefined = undefined,
 ): void {
   sessionAncestryCache.delete(projectDir);
@@ -7066,7 +7071,7 @@ export function writeSessionPidAncestry(
   sessionAncestryCache.delete(projectDir);
   clearSessionProcessTable();
   if (validSessionId(sessionId) === null) return;
-  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  const deadline = Date.now() + sessionAncestryBudgetMs();
   const windows = sessionProcessPlatform() === "win32";
   const readIdentity = processIdentityReader(deadline);
   let childIdentity: ProcessIdentity | null = null;
@@ -7128,7 +7133,7 @@ export function resolveSessionIdFromAncestry(projectDir: string): string | null 
 // A valid payload always carries the private source marker, so the selection
 // chokepoint lets payload identity win without weakening bare env refusal. It
 // used to be set only when this process's ancestry walk named a different
-// session, but that walk fails closed within its 50 ms budget on a loaded host:
+// session, but that walk fails closed within its budget on a loaded host:
 // the child then saw an unmarked override, its own walk could find the other
 // session, and it refused. enterHookWorkflow and the Codex adapter already mark
 // payload identity without a walk.
@@ -7165,7 +7170,7 @@ export function hookChildEnv(
 
 function resolveSessionIdFromAncestryUncached(projectDir: string): string | null {
   if (!existsSync(sessionPidMapDir(projectDir))) return null;
-  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  const deadline = Date.now() + sessionAncestryBudgetMs();
   const windows = sessionProcessPlatform() === "win32";
   let childIdentity = windows ? windowsSessionProcessIdentity(process.pid, deadline) : null;
   if (windows && (!childIdentity || childIdentity.ppid !== process.ppid)) return null;
@@ -13093,6 +13098,17 @@ export function isConstructionSwarmEnabled(stateContent: string | null): boolean
 
 // An approved skeleton Unit was deliberately built before a stage-major swarm.
 // Its per-Unit source binding survives unrelated Units changing the workspace.
+// A Unit the person skipped every code-writing step for (UNIT_SKIPPED in that
+// step's current attempt) has nothing a checkpoint could verify, so it owes
+// none: the walk goes on to the next Unit and nothing waits on its approval,
+// as when the plan does not run Code Generation at all.
+export function unitSkippedItsCode(projectDir: string, stateContent: string, unit: string): boolean {
+  const code = unitMajorConstructionStageSlugs(getField(stateContent, "Scope") ?? "", stateContent, true)
+    .filter((slug) => findStageBySlug(slug)?.workspace_requires === true);
+  return code.length > 0 &&
+    code.every((slug) => unitSkippedUnits(projectDir, slug, undefined, stateContent).has(unit));
+}
+
 export function approvedConstructionUnits(
   projectDir: string,
   stateContent: string,
@@ -13114,6 +13130,11 @@ export function approvedConstructionUnits(
   if (dag.state !== "ok") return approved;
   const skeleton = constructionSkeletonOn(stateContent) ? dag.batches.flat()[0] : null;
   for (const unit of dag.units) {
+    // It owes no checkpoint, so it stands where an approved one does.
+    if (unitSkippedItsCode(projectDir, stateContent, unit)) {
+      approved.add(unit);
+      continue;
+    }
     const kind = unit === skeleton
       ? "skeleton"
       : "unit";

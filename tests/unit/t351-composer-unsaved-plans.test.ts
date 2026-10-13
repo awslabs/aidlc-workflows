@@ -514,7 +514,7 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(d.kind).toBe("print");
     expect(d.message).not.toContain("next compose");
     const command = /`([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? "";
-    expect(command.endsWith("engine recompose --skip team-formation"), d.message).toBe(true);
+    expect(command.endsWith("engine recompose --skip team-formation --reason 'the person asked to skip it'"), d.message).toBe(true);
     expect(d.message).toContain('"Skipped Team Formation. You can undo that any time."');
     expect(d.message).toContain("If they later ask to undo it, run `");
     expect(d.message.endsWith("recompose --add team-formation`."), d.message).toBe(true);
@@ -522,7 +522,9 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(d.message).toContain("do not show its output");
     expect(d.message).not.toContain("print its output verbatim");
     const words = command.split(" ");
-    const applied = runTool(proj, "aidlc.ts", words.slice(words.indexOf("engine")));
+    const applied = runTool(proj, "aidlc.ts", [
+      ...words.slice(words.indexOf("engine"), words.indexOf("--reason")), "--reason", "the person asked to skip it",
+    ]);
     expect(applied.status, applied.out).toBe(0);
     expect(applied.out).toContain("1 skipped (team-formation)");
     expect(stateOf(proj)).toContain("- [ ] team-formation \u2014 SKIP");
@@ -570,7 +572,7 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(d.kind).toBe("print");
     const commands = [...d.message.matchAll(/`([^`]*\.ts [^`]*)`/g)].map((m) => m[1]);
     const recompose = commands.find((c) => c.includes("engine recompose")) ?? "";
-    expect(recompose.endsWith("engine recompose --skip deployment-execution"), d.message).toBe(true);
+    expect(recompose.endsWith("engine recompose --skip deployment-execution --reason 'the person asked to skip it'"), d.message).toBe(true);
     const report = commands.find((c) => c.includes("report --stage deployment-pipeline --result skipped")) ?? "";
     expect(report, d.message).toContain("--reason 'the person asked to skip it'");
     expect(d.message).toContain('"Skipped Deployment Pipeline and Deployment Execution.');
@@ -583,7 +585,9 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(d.message).not.toContain("jump");
     // The two commands it names do the whole thing on this state.
     const words = recompose.split(" ");
-    const applied = runTool(proj, "aidlc.ts", words.slice(words.indexOf("engine")));
+    const applied = runTool(proj, "aidlc.ts", [
+      ...words.slice(words.indexOf("engine"), words.indexOf("--reason")), "--reason", "the person asked to skip it",
+    ]);
     expect(applied.status, applied.out).toBe(0);
     const skipped = runTool(proj, "aidlc-orchestrate.ts", [
       "report", "--stage", "deployment-pipeline", "--result", "skipped", "--reason", "the person asked to skip it",
@@ -614,7 +618,7 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
       .replace("- **Next Stage**: environment-provisioning", "- **Next Stage**: ci-pipeline"));
     const d = nextDirective(proj, ["--skip", "deployment-pipeline,deployment-execution"]);
     expect(d.kind).toBe("print");
-    expect(d.message).toContain("engine recompose --skip deployment-pipeline,deployment-execution`");
+    expect(d.message).toContain("engine recompose --skip deployment-pipeline,deployment-execution --reason 'the person asked to skip it'`");
     expect(d.message).toContain('"Skipped Deployment Pipeline and Deployment Execution. You can undo that any time."');
     expect(d.message).toContain("the open Build and Test question");
     expect(d.message).toContain("report --stage build-and-test --result approved --user-input Approve");
