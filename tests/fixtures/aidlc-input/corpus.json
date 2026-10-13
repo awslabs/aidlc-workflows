@@ -14772,7 +14772,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine recompose --skip requirements-analysis"
+          "report --stage requirements-analysis --result skipped"
         ],
         "no_ask": true
       },
