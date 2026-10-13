@@ -6559,6 +6559,51 @@ process.exit(0);
     expect(merged.mcpServers).toEqual({ "team-docs": { command: "team-docs-server" }, ...shipped.mcpServers });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Kiro CLI offers an agent only the servers its tools name: config names
+  // every server in the project's file and in the person's own Kiro settings
+  // for the AI-DLC agent, and reads the person's file without writing it.
+  test("Kiro CLI config grants the AI-DLC agent every MCP server it finds", () => {
+    type Agent = { includeMcpJson?: unknown; tools: string[]; allowedTools: string[] };
+    const kiroHome = temp("aidlc-t294-kiro-home-");
+    mkdirSync(join(kiroHome, "settings"), { recursive: true });
+    const personalMcp = join(kiroHome, "settings", "mcp.json");
+    writeFileSync(personalMcp, `${JSON.stringify({ mcpServers: { "my-docs": { command: "my-docs-server" } } }, null, 2)}\n`);
+    const personalBefore = readFileSync(personalMcp);
+    const env = { KIRO_HOME: kiroHome };
+    const project = temp("aidlc-t294-kiro-grants-");
+    mkdirSync(join(project, ".git"));
+    const args = ["config", "--project-dir", project, "--from", join(DIST_RELEASE, "kiro"), "--harness", "kiro", "--yes"];
+    const shippedAgent = JSON.parse(readFileSync(join(DIST_RELEASE, "kiro", ".kiro", "agents", "aidlc.json"), "utf-8")) as Agent;
+    const shippedServers = Object.keys((JSON.parse(
+      readFileSync(join(DIST_RELEASE, "kiro", ".kiro", "settings", "mcp.json"), "utf-8"),
+    ) as { mcpServers: Record<string, unknown> }).mcpServers);
+    const agentPath = join(project, ".kiro", "agents", "aidlc.json");
+
+    const setup = run(args, project, env);
+    expect(setup.status, setup.stdout + setup.stderr).toBe(0);
+    let agent = JSON.parse(readFileSync(agentPath, "utf-8")) as Agent;
+    expect(agent.includeMcpJson).toBe(true);
+    expect(agent.tools).toEqual([...shippedAgent.tools, ...shippedServers.map((name) => `@${name}`), "@my-docs"]);
+    expect(agent.allowedTools).toEqual(shippedAgent.allowedTools);
+
+    // A server the person adds to the project's file reaches the agent the
+    // next time config runs.
+    const mcpPath = join(project, ".kiro", "settings", "mcp.json");
+    const mcp = JSON.parse(readFileSync(mcpPath, "utf-8")) as { mcpServers: Record<string, unknown> };
+    mcp.mcpServers["team-docs"] = { command: "team-docs-server" };
+    writeFileSync(mcpPath, `${JSON.stringify(mcp, null, 2)}\n`);
+    const refresh = run(args, project, env);
+    expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
+    agent = JSON.parse(readFileSync(agentPath, "utf-8")) as Agent;
+    expect(agent.tools).toEqual([
+      ...shippedAgent.tools,
+      ...[...shippedServers, "team-docs"].map((name) => `@${name}`),
+      "@my-docs",
+    ]);
+    expect(agent.allowedTools).toEqual(shippedAgent.allowedTools);
+    expect(readFileSync(personalMcp)).toEqual(personalBefore);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("check names an unrecorded providers section instead of calling it clean", () => {
     const env = runtimeEnv();
     // Where AI-DLC configures the provider, an unrecorded section is a real gap.
