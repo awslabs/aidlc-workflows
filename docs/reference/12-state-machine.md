@@ -560,7 +560,8 @@ Policy prepare leaves AI-DLC's own files out (an AI-DLC update the person took):
 they need not be committed before the worktrees fork, and under `strict` they
 are no reason to approve the plan again; it refuses only when the person's own
 files moved since the build's last verified source, compared as a landing
-compares it.
+compares it, or when no listing is on record to tell (a rejection an earlier
+release wrote).
 
 Swarm footprint verification and immutable Source Commit creation apply the
 same boundary. Clean-filter raw-byte replacement is restricted to exact
