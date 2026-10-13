@@ -16,7 +16,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  AIDLC_SRC, cleanupTestProject, createTestProject, REPO_ROOT, removeWorkspaceRecord, runOrchestrateNext, seedAidlcMemory,
+  AIDLC_SRC, cleanupTestProject, createTestProject, followProposal, REPO_ROOT, removeWorkspaceRecord, runOrchestrateNext,
+  seedAidlcMemory,
 } from "../harness/fixtures.ts";
 import {
   auditBlockField, getField, hooksHealthDir, lowerFenceRemedy, lowerFenceSentence, readAuditShardEvents,
@@ -195,6 +196,46 @@ describe("the agent names their reply with --person-words, and the tool proves i
     expect(existsSync(join(record, file))).toBe(false);
   });
 
+  // The words in a file sit in the record the chat is on; the new work and the
+  // recompose read and remove them the same way.
+  const wordsFile = (proj: string, words: string): string => {
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const record = join(intents, readFileSync(join(intents, "active-intent"), "utf-8").trim());
+    const file = ".aidlc-engine/answer-text/answer.txt";
+    mkdirSync(join(record, ".aidlc-engine", "answer-text"), { recursive: true });
+    writeFileSync(join(record, file), `${words}\n`, "utf-8");
+    return join(record, file);
+  };
+
+  test("their words in a file at creation: the new work's setting is theirs, the file read and removed", () => {
+    const { proj } = project();
+    const words = "Build the export, and don't stop for the code plan";
+    said(proj, words);
+    const written = wordsFile(proj, words);
+    const made = utility(proj, [
+      "intent-create", "--scope", "bugfix", "--arguments", "build the export", "--label", "export",
+      "--plan-approval", "off", "--person-words-file", ".aidlc-engine/answer-text/answer.txt",
+    ]);
+    expect(made.status, made.out).toBe(0);
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const active = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    expect(getField(readFileSync(join(intents, active, "aidlc-state.md"), "utf-8"), "Plan Approval")).toBe("off (set by you)");
+    expect(existsSync(written)).toBe(false);
+  });
+
+  test("their words in a file for recompose: the settings they approved land as theirs, the file read and removed", () => {
+    const { proj, state } = project();
+    const words = "Approve, and don't run the sensors";
+    said(proj, words);
+    const written = wordsFile(proj, words);
+    const reshaped = utility(proj, [
+      "recompose", "--skip", "market-research", "--sensors", "off", "--person-words-file", ".aidlc-engine/answer-text/answer.txt",
+    ]);
+    expect(reshaped.status, reshaped.out).toBe(0);
+    expect(getField(state(), "Sensors")).toBe("off (set by you)");
+    expect(existsSync(written)).toBe(false);
+  });
+
   test("words that are only part of a reply earn nothing: applied, set by a command", () => {
     const { proj, state } = project();
     said(proj, "ok, show me the status");
@@ -264,6 +305,101 @@ describe("a setting the agent sends through next names their words", () => {
     said(proj, "go deeper on this one");
     expect(step(proj, ["--depth", "comprehensive"])).not.toContain("--person-words");
   });
+
+  test("a stage skipped beside the setting in one reply: the step still names their words, and it is theirs", () => {
+    const { proj, state } = project();
+    const asked = "skip market research and turn the sensors off";
+    said(proj, asked);
+    const message = step(proj, ["--skip", "market-research", "--sensors", "off"]);
+    expect(message).toContain(
+      "config set sensors off --person-words '<their words>'`, with <their words> the person's reply that asked for it, " +
+        "word for word, and print its output verbatim",
+    );
+    expect(message).toContain("recompose --skip market-research");
+    const named = /`[^`]*? engine config set ([^`]+)`/.exec(message)![1];
+    const set = configSet(proj, [...named.replace(" --person-words '<their words>'", "").split(" "), "--person-words", asked]);
+    expect(set.status, set.out).toBe(0);
+    expect(getField(state(), "Sensors")).toBe("off (set by you)");
+  });
+
+  test("a plan switch with a setting in one reply: the scope change names their words, and the setting is theirs", () => {
+    const { proj, state } = project();
+    const asked = "switch this to the feature plan and turn the sensors off";
+    said(proj, asked);
+    const message = step(proj, ["--scope", "feature", "--sensors", "off"]);
+    expect(message).toContain(
+      "scope change --scope feature --sensors off --person-words '<their words>'` to change scope, with <their words> " +
+        "the person's reply that asked for it, word for word, then print its output verbatim",
+    );
+    const named = /`[^`]*? engine scope change ([^`]+)`/.exec(message)![1];
+    const args = [...named.replace(" --person-words '<their words>'", "").split(" "), "--person-words", asked];
+    const result = spawnSync(BUN, [DISPATCHER, "engine", "scope", "change", ...args, "--project-dir", proj], {
+      cwd: proj, env: env(proj, SESSION), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(getField(state(), "Scope")).toBe("feature");
+    expect(getField(state(), "Sensors")).toBe("off (set by you)");
+  });
+
+  // New work from their words: the plan offer, their pick, then the engine's
+  // own creation command.
+  const startWork = (prompt: string, args: string[]): { proj: string; message: string } => {
+    const proj = createTestProject();
+    created.push(proj);
+    seedAidlcMemory(proj);
+    removeWorkspaceRecord(proj);
+    const health = hooksHealthDir(proj);
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "record-human-turn.last"), new Date().toISOString());
+    said(proj, prompt);
+    const options = { env: env(proj, SESSION) };
+    const offer = followProposal(runOrchestrateNext(ORCHESTRATE, proj, args, options), ORCHESTRATE, proj, options);
+    const confirm = String((offer.directive as { confirm_command?: unknown } | null)?.confirm_command);
+    expect(confirm, offer.out).toContain(" next --scope ");
+    said(proj, "yes, that plan");
+    const made = runOrchestrateNext(ORCHESTRATE, proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" "), options);
+    return { proj, message: String((made.directive as { message?: unknown } | null)?.message) };
+  };
+  const createdField = (proj: string, field: string): string | null => {
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const active = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    return getField(readFileSync(join(intents, active, "aidlc-state.md"), "utf-8"), field);
+  };
+  const DESCRIPTION = "Fix the login crash when the session expires";
+
+  test("new work asked for in plain words with a setting: the creation names their words, and it is theirs", () => {
+    const asked = `${DESCRIPTION}, and do not stop to ask me about the code plan`;
+    const { proj, message } = startWork(asked, ["--plan-approval", "off", DESCRIPTION]);
+    expect(message).toContain(
+      "--plan-approval off --person-words '<their words>'` to start the workflow",
+    );
+    expect(message).toContain(", with <their words> the person's reply that asked for it, word for word, then re-run `next`");
+    const command = /`[^`]*? engine intent create ([^`]+)`/.exec(message)![1]
+      .replace('--label "<2-3 word kebab essence>"', "--label login-crash")
+      .replace(" --person-words '<their words>'", "")
+      .split(" ");
+    const made = utility(proj, ["intent-create", ...command, "--person-words", asked]);
+    expect(made.status, made.out).toBe(0);
+    expect(createdField(proj, "Plan Approval")).toBe("off (set by you)");
+  });
+
+  test("new work typed with a setting: the creation names no words, and it is theirs", () => {
+    const { proj, message } = startWork(`/aidlc --plan-approval off ${DESCRIPTION}`, ["--plan-approval", "off", DESCRIPTION]);
+    expect(message).toContain("--plan-approval off` to start the workflow");
+    expect(message).not.toContain("--person-words");
+    const command = /`[^`]*? engine intent create ([^`]+)`/.exec(message)![1]
+      .replace('--label "<2-3 word kebab essence>"', "--label login-crash")
+      .split(" ");
+    const made = utility(proj, ["intent-create", ...command]);
+    expect(made.status, made.out).toBe(0);
+    expect(createdField(proj, "Plan Approval")).toBe("off (set by you)");
+  });
+
+  test("a plan switch alone names no words", () => {
+    const { proj } = project();
+    said(proj, "switch this to the feature plan");
+    expect(step(proj, ["--scope", "feature"])).not.toContain("--person-words");
+  });
 });
 
 describe("every step that names the setter for the person's yes names their words", () => {
@@ -308,6 +444,8 @@ describe("every step that names the setter for the person's yes names their word
 
   test("the in-flight composer's approve step names their words for recompose and summary confirmation", () => {
     const { proj } = project();
+    // Their message arrives through the chat's hooks, as it does live.
+    said(proj, "turn sensors off");
     const step = message(proj, ["compose", "turn sensors off"]);
     expect(step).toContain(`[approved setting flags ${SLOT}]\``);
     expect(step).toContain(`config set summary-confirmation off ${SLOT}\``);

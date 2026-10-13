@@ -768,8 +768,9 @@ describe("t230 dispatcher route parity", () => {
     expect(changed.exitCode, changed.stderr.toString()).toBe(0);
     const selectedState = readFileSync(join(selectedRecord, "aidlc-state.md"), "utf-8");
     for (const [field, value] of [
+      // Nobody asked for any of them, so each is the command's.
       ["Depth", "Minimal"], ["Test Strategy", "Comprehensive"], ["Review Override", "advisory"],
-      ["Guard Policy", "relaxed (set by you)"], ["Guards Off", "state-transition (set by you)"],
+      ["Guard Policy", "relaxed (set by a command)"], ["Guards Off", "state-transition (set by a command)"],
       ["Sensors", "off (set by a command)"],
       ["Learnings", "off (set by a command)"], ["Summary Confirmation", "off (set by a command)"],
     ]) expect(selectedState).toContain(`- **${field}**: ${value}\n`);

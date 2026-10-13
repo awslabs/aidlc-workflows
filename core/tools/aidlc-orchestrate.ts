@@ -3440,6 +3440,8 @@ function openPlanQuestionReplyDirective(
   requestId: string,
   undo = "",
   settings: string[] = [],
+  // A setting read from their words: the setter names those words.
+  needsWords = false,
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   // Settings typed on the same line ("/aidlc --guard-policy off approve the
@@ -3448,7 +3450,8 @@ function openPlanQuestionReplyDirective(
   // words describe it, where the routing answer carries them.
   const typed = settings.length > 0
     ? ` The line also carries ${settings.map((modifier) => `\`--${modifier}\``).join(" ")}: if the words answer the ` +
-      `question, those settings are for this work, so run \`${configSetCommand(settings)}\` first and print its output ` +
+      `question, those settings are for this work, so run \`${configSetCommand(settings, needsWords)}\`` +
+      `${needsWords ? `${PERSON_WORDS_FILL},` : ""} first and print its output ` +
       "verbatim; if the words are new work, the settings ride with them."
     : "";
   const answer = editing
@@ -5399,6 +5402,11 @@ function createPrintDirective(
   if ((flags.planChanges?.skip.length || flags.planChanges?.add.length) && flags.planName) {
     cmd.push(`--plan-name ${flags.planName}`);
   }
+  // A setting read from their words names those words, as Branch 5's does.
+  const named = cmd.filter((part) => /^--(guard-policy|guard\.[a-z-]+|sensors|learnings|summary-confirmation|plan-approval|collaborators) /.test(part))
+    .map((part) => part.slice(2));
+  const unnamed = settingNeedsTheirWords(projectDir, named);
+  if (unnamed) cmd.push(`--person-words '${PERSON_WORDS_SLOT}'`);
   // Disclose the ceremony on the print: an explicitly named scope creates
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
@@ -5410,7 +5418,8 @@ function createPrintDirective(
   // New work, like the first, carries on in this chat: the creation binds the
   // chat to the new work, so the next `next` runs its first stage.
   const directive = printDirective(
-    `${runCmd} to start the ${flags.newIntent ? "new intent" : "workflow"}${cost}, then re-run \`next\` to continue.${labelHint}`,
+    `${runCmd} to start the ${flags.newIntent ? "new intent" : "workflow"}${cost}${unnamed ? PERSON_WORDS_FILL : ""}, ` +
+      `then re-run \`next\` to continue.${labelHint}`,
   );
   // The user named a scope (or one was inferred and confirmed), so the spoken
   // line can say what is being set up and how much process that means, with the
@@ -9380,10 +9389,17 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       stateContent && source === "state" && flags.scope && validScopes().has(flags.scope) &&
       !flags.stage && !flags.phase && !startsNewWork && !composesInFlight && !flags.intent?.trim()
     ) {
-      const parts = [`--scope ${scopeArg(flags.scope)}`, ...typedSettingModifiers(flags).map((modifier) => `--${modifier}`)];
+      const typed = typedSettingModifiers(flags);
+      // A setting read from their words names those words, as Branch 5's does.
+      const unnamed = settingNeedsTheirWords(pd, typed);
+      const parts = [
+        `--scope ${scopeArg(flags.scope)}`, ...typed.map((modifier) => `--${modifier}`),
+        ...(unnamed ? [`--person-words '${PERSON_WORDS_SLOT}'`] : []),
+      ];
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
-      emit(flags.planChanges ? planChangeDirective(flags.planChanges, command, null) : turnEndingPrint(
-        `Run \`${command}\` to change scope, then print its output verbatim and stop.`,
+      const fill = unnamed ? PERSON_WORDS_FILL : "";
+      emit(flags.planChanges ? planChangeDirective(flags.planChanges, command, null, false, null, fill) : turnEndingPrint(
+        `Run \`${command}\` to change scope${fill}, then print its output verbatim and stop.`,
       ));
       return;
     }
@@ -9622,17 +9638,21 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     ) {
       const parts = [`--scope ${scopeArg(flags.scope)}`];
       for (const modifier of modifiers) parts.push(`--${modifier}`);
+      // A setting read from their words names those words, as Branch 5's does.
+      const unnamed = settingNeedsTheirWords(pd, modifiers);
+      if (unnamed) parts.push(`--person-words '${PERSON_WORDS_SLOT}'`);
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
+      const fill = unnamed ? PERSON_WORDS_FILL : "";
       withdrawSettingWords(pd);
       // On finished work the change starts the first stage the new scope adds
       // after the last one (the tool reads the same predicate), so nothing
       // waits on the person: the agent carries on into it instead of ending
       // the turn, as a setting over running work does (#2261).
       const reopensFinishedWork = stageReopenedByScopeChange(stateContent, flags.scope) !== null;
-      emit(planChanges ? planChangeDirective(planChanges, command, null, planApprovalAskIsOpen(pd), stillParked) : keptWhilePlanWaits(
+      emit(planChanges ? planChangeDirective(planChanges, command, null, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
         reopensFinishedWork
-          ? printDirective(`Run \`${command}\` to change scope, then print its output verbatim and re-run next to carry on with the work.`)
-          : turnEndingPrint(`Run \`${command}\` to change scope, then ${verbatimThenStop}`),
+          ? printDirective(`Run \`${command}\` to change scope${fill}, then print its output verbatim and re-run next to carry on with the work.`)
+          : turnEndingPrint(`Run \`${command}\` to change scope${fill}, then ${verbatimThenStop}`),
         planApprovalAskIsOpen(pd),
       ));
       return;
@@ -9668,13 +9688,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
     if (modifiers.length > 0 && !describedWork) {
-      // A stage change beside the setting keeps its own step, which names the
-      // setter alone.
-      const unnamed = !planChanges && settingNeedsTheirWords(pd, modifiers);
+      // A stage change beside the setting keeps its own step, which names
+      // their words for the setter as this one does.
+      const unnamed = settingNeedsTheirWords(pd, modifiers);
       const command = configSetCommand(modifiers, unnamed);
       const fill = unnamed ? PERSON_WORDS_FILL : "";
       withdrawSettingWords(pd);
-      emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd), stillParked) : keptWhilePlanWaits(
+      emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
         pickedUpIfTurnEnds(
           settingPrint(
             `Run \`${command}\` to update the configuration${fill}, then ${verbatimThenStop}`,
@@ -10020,7 +10040,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
           undefined, routingSettings(carriedRoutingFlags(flags)),
         );
-        emit(openPlanQuestionReplyDirective(planQuestion.editing, words.id, undo, typedSettingModifiers(flags)));
+        const settings = typedSettingModifiers(flags);
+        emit(openPlanQuestionReplyDirective(planQuestion.editing, words.id, undo, settings, settingNeedsTheirWords(pd, settings)));
         return;
       }
     }
@@ -13793,7 +13814,10 @@ function planChangeDirective(
   planWaits = false,
   // Parked work stays parked: the one line ends by saying so.
   stillParked: string | null = null,
+  // What the agent puts in place of a slot `before` names (their words).
+  beforeFill = "",
 ): PrintDirective {
+  const filled = beforeFill === "" ? "" : `${beforeFill},`;
   const kept = (directive: PrintDirective): PrintDirective => keptWhilePlanWaits(directive, planWaits);
   const end = " Then stop.";
   const parkedTail = stillParked === null ? "" : ` ${stillParked}`;
@@ -13820,7 +13844,7 @@ function planChangeDirective(
     : "";
   if (skip.length === 0 && add.length === 0) {
     return kept(turnEndingPrint(
-      `${before ? `Run \`${before}\` and print its output verbatim, then tell` : "Tell"} the person in one line: ` +
+      `${before ? `Run \`${before}\`${filled} and print its output verbatim, then tell` : "Tell"} the person in one line: ` +
         `"${noted} The plan is unchanged.${parkedTail}"${end}${resume}`,
     ));
   }
@@ -13916,7 +13940,7 @@ function planChangeDirective(
     // What their words must say: for which Units the step that waits on them.
     const asked = unitStep.others ? step : listed(restWalk.map(name));
     return kept(turnEndingPrint(
-      `${before === null ? "" : `Run \`${before}\` and print its output verbatim. `}` +
+      `${before === null ? "" : `Run \`${before}\`${filled} and print its output verbatim. `}` +
         `The person asked to skip ${listed(skip.map(name))}, and the ${unitName} Unit is on ${step} now. ` +
         `If their words mean the ${unitName} Unit only, run ${onlyUnit}, then tell the person in one line: ` +
         `"${onlyLine}${parkedTail}" ` +
@@ -13952,7 +13976,7 @@ function planChangeDirective(
       "change covers every Unit. If the person's words mean one Unit only, run nothing and tell them in one line: " +
       `"${listed(notHere.map(name))} can be skipped for one Unit while that Unit is working on it; the ${unitName} Unit is ` +
       `${unitIsAt} now." and stop. Otherwise: `;
-  const lead = `${aheadNote}${before === null ? run : `Run \`${before}\` and print its output verbatim, ${run}`}`;
+  const lead = `${aheadNote}${before === null ? run : `Run \`${before}\`${filled} and print its output verbatim, ${run}`}`;
   // The way back: a plan flip is undone by the opposite flip while the work
   // runs; a stage skipped where it stood is run on its own, the route
   // recompose itself names for a skipped stage, and a Unit's step skipped for

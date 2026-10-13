@@ -620,7 +620,8 @@ export function applyIntentSettings(
     // A command's run of the person's own value never relabels their choice.
     const sameAsTheirs = policySource === "command" && previous === formatGuardPolicy(changeControl, "you");
     if ((previous === line || sameAsTheirs) && cc.stateField === GUARD_POLICY_FIELD && getField(content, CHANGE_CONTROL_FIELD) === null) {
-      if (!scopeDefault("guard-policy")) lines.push(`Guard Policy is already ${line}`);
+      // It says whose it already is, as the ceremony lines do.
+      if (!scopeDefault("guard-policy")) lines.push(`Guard Policy is already ${previous ?? line}`);
     } else {
       // Every write keeps only the Guard Policy line, even when its stored text is unchanged.
       // Resolving a conflict records one GUARD_POLICY_SET from the prior effective policy, not a name-only rename.

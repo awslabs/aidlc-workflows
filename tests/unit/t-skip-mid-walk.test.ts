@@ -220,6 +220,19 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     expect(JSON.stringify(next(proj).kept_replies ?? null)).not.toContain("skip code generation");
   });
 
+  // A setting asked for in plain words beside the skip names their words, so
+  // it lands as theirs (t-set-by-you-needs-their-reply).
+  test("a setting asked for beside the skip names their words", () => {
+    const proj = walk(["alpha", "beta"]);
+    says(proj, "skip code generation for this unit, and turn the sensors off");
+    const step = next(proj, ["--skip", "code-generation", "--sensors", "off"]);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(step.message).toContain(
+      "config set sensors off --person-words '<their words>'`, with <their words> the person's reply that asked for it, " +
+        "word for word, and print its output verbatim.",
+    );
+  });
+
   test("this Unit only when the Unit's code files are already written: still skipped as the person asked", () => {
     const proj = walk(["alpha", "beta"]);
     const dir = join(dirname(stateFile(proj)), "construction", "alpha", "code-generation");

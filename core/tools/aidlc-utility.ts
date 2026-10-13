@@ -530,10 +530,8 @@ function validateIntentSettingsArgs(
   if (command === "scope-change") allowed.add("scope");
   // The person's own words the agent says asked for this: the setter proves them
   // against their replies before it records the setting as theirs.
-  if (command === "config-change") {
-    allowed.add("person-words");
-    allowed.add("person-words-file");
-  }
+  allowed.add("person-words");
+  allowed.add("person-words-file");
   // Inspect option names before the parser's object assignment as well, so
   // even an unknown property-like name cannot disappear from validation.
   for (const arg of rawArgs) {
@@ -578,6 +576,8 @@ const INTENT_CREATE_VALUE_FLAGS = [
   "skip",
   "add",
   "plan-name",
+  "person-words",
+  "person-words-file",
   "repos",
   "project-type",
   "space",
@@ -7906,6 +7906,7 @@ function answerAlreadyStarted(projectDir: string, questionId: string, sessionId?
 // the CREATED intent's record (the active-intent cursor set first makes the
 // default-resolving state/audit helpers resolve there).
 function handleIntentCreate(projectDir: string, flags: Record<string, string>): void {
+  readPersonWordsFile(projectDir, flags);
   // An engine question's answer names its request by id. The copy is removed
   // once the answer starts work, so look for that work before the copy.
   const questionId = flags.request;
@@ -8079,11 +8080,14 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   const ceremoniesAsked = ceremoniesCreationGranted(projectDir, initialSelection.sessionId, questionId ?? null);
   consumeCeremoniesCreationGrant(projectDir, initialSelection.sessionId);
   // Whose a setting this creation carries reads as: the one rule the setter
-  // uses (settingTheirs), on their own terminal or their own typed line; a
-  // creation that names no request takes nobody's line.
+  // uses (settingTheirs), on their own terminal, their own typed line or the
+  // reply of theirs the agent names; a creation that names no request takes
+  // nobody's line, only their named reply.
   const theirsAtCreation = (key: string, value: string): boolean =>
     commandAtPersonsTerminal() ||
-    (questionId !== undefined && settingTheirs(projectDir, initialSelection.sessionId, key, value) !== null);
+    settingTheirs(
+      projectDir, initialSelection.sessionId, key, questionId !== undefined ? value : undefined, flags["person-words"],
+    ) !== null;
   for (const key of CEREMONY_KEYS) {
     if (key === "plan_approval") continue;
     // Their words carry the value, the way plan approval does above: a ceremony
@@ -11590,6 +11594,7 @@ function droppedUnitWorkLine(
 function handleScopeChange(projectDir: string, flags: Record<string, string>): void {
   const newScope = flags.scope;
   if (!newScope) die("--scope is required for scope-change");
+  readPersonWordsFile(projectDir, flags);
   const selection = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
@@ -11664,7 +11669,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     // Apply against the original scope so previous settings and effective
     // output describe the state before this transaction.
     const update = applyIntentSettings(projectDir, contentBefore, requested, {
-      intent, space, sessionId: selection.sessionId, fail: die, reviewScope: newScope,
+      intent, space, sessionId: selection.sessionId, fail: die, reviewScope: newScope, personWords: flags["person-words"],
     });
     let content = update.content;
     const auditEntries = update.audit;
@@ -11998,7 +12003,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
   const usage = (message: string): never => die(
     `${message}\nUsage: recompose [--skip <slug,...>] [--add <slug,...>] ` +
     "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--collaborators <on|off>] [--review <adversarial|advisory|none>] " +
-    "[--person-words <their words>] [--reason <text>] [--intent <slug>] [--space <name>] [--project-dir <path>] - repeat --skip/--add to list more stages.",
+    "[--person-words <their words> | --person-words-file <file>] [--reason <text>] [--intent <slug>] [--space <name>] [--project-dir <path>] - repeat --skip/--add to list more stages.",
   );
   const flips = { skip: new Set<string>(), add: new Set<string>() };
   // Settings approved together with the stage changes land in the same state
@@ -12010,7 +12015,10 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
   // The reply of theirs that approved the settings, as the agent names it: the
   // setter proves it (settingTheirs) before it records them as theirs.
   let personWords: string | undefined;
-  const allowed = new Set<string>(["skip", "add", "reason", "person-words", "intent", "space", "project-dir", ...settingKeys]);
+  const allowed = new Set<string>([
+    "skip", "add", "reason", "person-words", "person-words-file", "intent", "space", "project-dir", ...settingKeys,
+  ]);
+  let personWordsFile: string | undefined;
   // Preserve the original tokens before parseArgs collapses repeated flags,
   // including in-process CLI dispatch;
   // process.argv may still belong to the outer `aidlc engine` invocation.
@@ -12038,9 +12046,17 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       reason = value.trim();
     } else if (name === "person-words") {
       personWords = value;
+    } else if (name === "person-words-file") {
+      personWordsFile = value;
     } else if (settingKeys.has(name as ConfigKey)) {
       settings[name as ConfigKey] = { value, source: "you" };
     }
+  }
+  if (personWordsFile !== undefined) {
+    const read: Record<string, string> = { "person-words-file": personWordsFile };
+    if (personWords !== undefined) read["person-words"] = personWords;
+    readPersonWordsFile(projectDir, read);
+    personWords = read["person-words"];
   }
   const skipList = [...flips.skip];
   const addList = [...flips.add];
@@ -12489,17 +12505,20 @@ function handleConfigList(projectDir: string, flags: Record<string, string>): vo
   process.stdout.write(`${Object.entries(values).map(([key, value]) => `${key}: ${value}`).join("\n")}\n`);
 }
 
-function handleConfigChange(projectDir: string, flags: Record<string, string>): void {
-  // Their words that hold a quote or a $ arrive in a file the agent wrote, as
-  // an answer's do (--details-file), so no shell reads them on the way.
-  if (flags["person-words-file"] !== undefined) {
-    if (flags["person-words"] !== undefined) die("Pass either --person-words or --person-words-file, not both.");
-    try {
-      flags["person-words"] = readAnswerTextFile(projectDir, flags["person-words-file"]);
-    } catch (err) {
-      die(errorMessage(err));
-    }
+// Their words that hold a quote or a $ arrive in a file the agent wrote, as
+// an answer's do (--details-file), so no shell reads them on the way.
+function readPersonWordsFile(projectDir: string, flags: Record<string, string>): void {
+  if (flags["person-words-file"] === undefined) return;
+  if (flags["person-words"] !== undefined) die("Pass either --person-words or --person-words-file, not both.");
+  try {
+    flags["person-words"] = readAnswerTextFile(projectDir, flags["person-words-file"]);
+  } catch (err) {
+    die(errorMessage(err));
   }
+}
+
+function handleConfigChange(projectDir: string, flags: Record<string, string>): void {
+  readPersonWordsFile(projectDir, flags);
   const selection = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
