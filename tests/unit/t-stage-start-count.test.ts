@@ -112,6 +112,22 @@ describe("each stage start says which stage of how many", () => {
     );
   });
 
+  test("Code Generation run on its own outside the plan says no place in the plan", () => {
+    const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
+    tempDirs.push(proj);
+    run(proj, "aidlc-utility.ts", ["intent-create", "--scope", "feature"]);
+    const step = runOrchestrateNext(
+      join(proj, ".claude", "tools", "aidlc-orchestrate.ts"),
+      proj,
+      ["--stage", "code-generation", "--single"],
+      { env },
+    );
+    expect(step.directive?.single, step.out).toBe(true);
+    expect(String(step.directive?.narration ?? "")).toBe(
+      "Writing the code plan for Code Generation first; the developer builds from it.",
+    );
+  });
+
   test("stages the person skipped leave the count", () => {
     const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
     tempDirs.push(proj);

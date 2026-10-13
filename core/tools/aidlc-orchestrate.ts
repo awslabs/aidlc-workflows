@@ -1179,8 +1179,9 @@ function prepareEmission(directive: Directive): PreparedEmission {
     directive.mode = "inline";
     const unit = directive.unit !== undefined && directive.unit !== UNIT_NAME_PLACEHOLDER ? ` for ${directive.unit}` : "";
     // On a plan with no Units this line is the stage's start, so it says which
-    // stage of how many, as every other stage start does.
-    const projectDir = unit ? undefined : emissionProjectDir(directive);
+    // stage of how many, as every other stage start does. A stage run on its
+    // own sits outside the plan, so it says no place in it.
+    const projectDir = unit || directive.single === true ? undefined : emissionProjectDir(directive);
     const state = projectDir ? loadStateFileIfPresent(projectDir) : null;
     const count = state ? stageOfPlan("code-generation", getField(state, "Scope")?.trim() ?? "", state) : "";
     directive.narration = `Writing the code plan for Code Generation${unit}${count} first; the developer builds from it.`;
