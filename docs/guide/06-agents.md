@@ -18,7 +18,7 @@ In human software teams, a mob of 3-5 people covers an entire feature from requi
 
 - **Support roles enable collaboration without proliferation.** Rather than creating a "security-reviewer-agent" and a "compliance-reviewer-agent" and a "cost-reviewer-agent," the aidlc-devsecops-agent and aidlc-compliance-agent participate as support agents in stages led by others. HOW they participate is the stage's `mode` — its communication topology: on an `inline` stage the conductor adopts each support agent as a persona in its own context; on `subagent` (hub-and-spoke) and `mob` (mesh) stages each support agent is dispatched as a real, independent collaborator that writes its own contribution file for the lead to integrate (everyone writes, the lead owns the final artifacts; user-stories ships as the mob showcase), and on `pipeline` (chain) stages the links advance the artifacts directly in sequence and each return is recorded as ordered completion evidence (reverse-engineering is the shipped chain). On every topology the conductor performs every delegation — agents never invoke each other.
 
-- **Knowledge loading is per-agent.** Each agent loads methodology knowledge from `.claude/knowledge/<agent-name>/` and team knowledge from the space-level `aidlc/knowledge/<agent-name>/` (if the team created it). Fewer agents means fewer knowledge directories to manage and fewer opportunities for contradictory guidance.
+- **Knowledge loading is per-agent.** Each agent loads methodology knowledge from `.claude/knowledge/<agent-name>/` and team knowledge from the space-level `aidlc/spaces/<space>/knowledge/<agent-name>/` (if the team created it). Fewer agents means fewer knowledge directories to manage and fewer opportunities for contradictory guidance.
 
 ---
 
@@ -85,7 +85,7 @@ flowchart TD
 
 ## The 11 Domain Agents
 
-> **Customizing what a shipped agent knows?** Do not edit the 14 shipped agent files at `.claude/agents/*.md` — they're framework files and get overwritten on upgrade. Add your company standards to the space-level `aidlc/knowledge/<agent-name>/` instead. See [Knowledge](08-knowledge.md) for the full workflow. Teams that want a *new* agent can drop a file at `.claude/agents/<slug>.md` with the required frontmatter — that file is user-owned. See [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent). Your harness's own subagents can live in the same directory: a file with none of AI-DLC's persona keys (`display_name`, `examples`, `tier`, `plugin`) and no `aidlc-` prefix is left to the harness, and `aidlc doctor --verbose` lists it as an advisory.
+> **Customizing what a shipped agent knows?** Do not edit the 14 shipped agent files at `.claude/agents/*.md`: they're framework files and get overwritten on upgrade. Add your company standards to the space-level `aidlc/spaces/<space>/knowledge/<agent-name>/` instead. See [Knowledge](08-knowledge.md) for the full workflow. Teams that want a *new* agent can drop a file at `.claude/agents/<slug>.md` with the required frontmatter; that file is user-owned. See [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent). Your harness's own subagents can live in the same directory: a file with none of AI-DLC's persona keys (`display_name`, `examples`, `tier`, `plugin`) and no `aidlc-` prefix is left to the harness, and `aidlc doctor --verbose` lists it as an advisory.
 
 Each agent below has a **deep-dive page** — its full responsibilities, the stages it leads and supports, and the knowledge it loads. The [agent deep-dive index](agents/README.md) lists all 11; the per-agent links are inline under each heading.
 
@@ -197,7 +197,7 @@ The aidlc-pipeline-deploy-agent configures CI/CD pipelines, plans deployment str
 The aidlc-operations-agent sets up monitoring, defines incident response procedures, and closes the lifecycle loop by feeding operational insights back to the aidlc-product-agent for the next iteration.
 
 - **Leads:** observability-setup, incident-response, feedback-optimization
-- **Supports:** performance-validation
+- **Supports:** none
 - **Special tools:** Bash (for observability and monitoring commands)
 
 ---
@@ -266,10 +266,10 @@ challenge it, representing the customer (or the review board) at the gate.
 One more agent sits outside both groups: `aidlc-composer-agent`, the adaptive-workflows composer. The conductor dispatches it on a compose request (`/aidlc compose`, a compose offer on a cold start, `--report`, or `--new-scope`). It estimates the task's implementation entropy (five components: intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions - grounded in CodeKB MCP analysis when configured, the workspace scan otherwise), proposes the minimum viable EXECUTE/SKIP grid with the score breakdown and a per-stage rationale, and - only after your approval at the gate - the plan is created for that piece of work (front/report; the composer writes no scope file, and the engine saves the plan as a scope only if you ask) or its pending-stage flips are applied by the deterministic `recompose` verb (in-flight). Its persona justifies both presence and absence against the entropy profile: every EXECUTE names the component it reduces, every SKIP names what already covers it, and cutting the spine (core, verification, the load-bearing discovery stage) is treated as the dangerous failure. See [Scopes and Depth - The Adaptive Composer](05-scopes-and-depth.md#the-adaptive-composer).
 
 A reviewer fires only when a stage declares a `reviewer:` field. Today the product
-lead reviews `rough-mockups`, `refined-mockups`, `requirements-analysis`, and
-`user-stories`; the architecture reviewer reviews `domain-design`,
-`units-generation`, `functional-design`, `nfr-requirements`, `nfr-design`,
-`infrastructure-design`, and `code-generation`.
+lead reviews `intent-capture`, `rough-mockups`, `refined-mockups`,
+`requirements-analysis`, and `user-stories`; the architecture reviewer reviews
+`domain-design`, `units-generation`, `contract-design`, `functional-design`,
+`nfr-requirements`, `nfr-design`, `infrastructure-design`, and `code-generation`.
 
 **The reviewer step.** After the stage body produces its artifacts and before the
 learnings ritual and approval gate, the conductor invokes the named reviewer as a

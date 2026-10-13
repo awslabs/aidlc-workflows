@@ -14,13 +14,21 @@ AI-DLC provides three ways to interact with agents during stages, plus approval 
 
 ## Tri-Mode Question Flow
 
-When a stage gathers your input, the agent presents three interaction modes. You choose the one that suits you; later stages reuse that choice (see [Asked Once, Then Reused](#asked-once-then-reused)).
+When a stage gathers your input, the agent writes its questions to a file and offers three interaction modes. You choose the one that suits you; later stages reuse that choice (see [Asked Once, Then Reused](#asked-once-then-reused)). From the run in [Getting Started](01-getting-started.md):
 
-```
-▸ Choose interaction mode:
-  (1) Guide Me — agent asks structured questions
-  (2) Edit File — write directly to the artifact
-  (3) Chat — freeform discussion
+```text
+ Answer mode
+ I've created 8 questions at
+ aidlc/spaces/default/intents/261013-inventory-rest-api/ideation/intent-capture/intent-capture-questions.md.
+ How would you like to answer them?
+ > 1. Guide me
+      Walk through each question interactively here
+   2. I'll edit the file
+      Fill in the answers in the file directly
+   3. Chat
+      Discuss freely; I'll extract the decisions from the conversation
+   4. Type something.
+   5. Chat about this
 ```
 
 ### Guide Me
@@ -69,19 +77,24 @@ records the mode you meant, so you are not asked again because of the wording.
 
 ## Approval Gates
 
-Every stage (except the 3 Initialization stages) ends with an approval gate. This is your checkpoint to review the agent's work before the workflow advances.
+Every stage (except the 3 Initialization stages) ends with an approval gate. This is your checkpoint to review the agent's work before the workflow advances. In Construction, the gates can come per Unit instead, and the ones you chose to let run automatically are recorded without a question (see [Phases and Stages](04-phases-and-stages.md#what-runs-in-order-and-what-runs-in-parallel)).
 
 ### Standard Gate
 
-The default approval gate presents two options:
+The default approval gate presents two options. From the same run:
 
-```
-▸ How would you like to proceed?
-  (1) Approve — Continue to [next stage]
-  (2) Request Changes — Provide revision feedback
+```text
+ Approval
+ Intent Capture & Framing complete. How would you like to proceed?
+ > 1. Approve
+      Continue to Feasibility & Constraints
+   2. Request Changes
+      Provide revision feedback
+   3. Type something.
+   4. Chat about this
 ```
 
-`[next stage]` shows the actual next stage the workflow will run (for example "Continue to NFR Requirements"), or "Complete workflow" on the final stage; the engine computes it, so it is always correct rather than a guess.
+The Approve line names the actual next stage the workflow will run (for example "Continue to NFR Requirements"), or "Complete workflow" on the final stage; the engine computes it, so it is always correct rather than a guess.
 
 - **Approve** reports the outcome; the engine marks the stage completed, updates
   `aidlc-state.md`, shows a progress line, and advances to the next stage
@@ -210,14 +223,9 @@ flowchart TD
 
 If you have requested changes 3 or more times on the same stage, a third option appears:
 
-```
-▸ This is revision cycle 4. How would you like to proceed?
-  (1) Approve — Continue to [next stage]
-  (2) Request Changes — Provide revision feedback
-  (3) Accept as-is — Archive current version and move on
-```
+After three rounds of **Request Changes** on the same stage, the question says which revision cycle it is and adds a third option, **Accept as-is** (described as "Archive current version and move on").
 
-**Accept as-is** archives the current version of the stage artifacts and advances the workflow. This prevents infinite revision loops when perfect is the enemy of good.
+**Accept as-is** approves the stage with its documents as they are and advances the workflow. This prevents infinite revision loops when perfect is the enemy of good.
 
 ### How It Activates
 
@@ -282,7 +290,7 @@ When you are told a file changed and the run is continuing, that is the whole re
 
 An edit to a finished stage's files is not reviewed or approved again unless you ask for it:
 
-- **What warns you.** When you edit one of the stage documents AIDLC tracks for a finished stage, the next step says once which finished stage is now behind and what to say to redo it; `/aidlc --status` lists the stages affected downstream. Moving, renaming or copying the project folder changes none of those documents, so it brings no warning (see the [Artifacts Reference](14-artifacts-reference.md) for when it still can). The warning is advice, not a stop. A stage finished without a validation record (for example, by an older AIDLC release) gets no warning, and `/aidlc --status` does not list it.
+- **What warns you.** Under Guard Policy `strict`, when you edit one of the stage documents AIDLC tracks for a finished stage, the next step says once which finished stage is now behind and what to say to redo it; under `relaxed` and `off` (the default in most plans) an edit is taken as yours: the next step raises no stage as behind, and you are told once only when the file you edited was a reviewed document or a confirmed questions file. A tracked document that has gone missing is raised under every policy. `/aidlc --status` lists the stages affected downstream. Moving, renaming or copying the project folder changes none of those documents, so it brings no warning (see the [Artifacts Reference](14-artifacts-reference.md) for when it still can). The warning is advice, not a stop. A stage finished without a validation record (for example, by an older AIDLC release) gets no warning, and `/aidlc --status` does not list it.
 - **What does not.** Your application code is not tracked this way, so changing it after Code Generation raises no warning.
 - **Getting it checked again.** Jump back with `/aidlc --stage <name>` to the earliest affected stage (Code Generation for application code). That reopens it and every later stage in your plan. The files stay, so each reopened stage that finds its earlier files asks you to **Keep** them, **Modify** them, or **Redo from scratch**. Keep skips regenerating the files, not the checks: any review or approval the stage needs still happens. Choose Modify or Redo where your change should be carried through. Code Generation's review covers only the application files listed in a Unit's source manifest, so a file you added or moved by hand is not reviewed until it is listed there. When you choose Modify, name the files you added or moved and the Unit they belong to. Work without Units (for example a bugfix or refactor scope) has no source manifest, so check hand edits to application code yourself before you approve. Construction checkpoints you set to run automatically stay automatic.
 
@@ -290,10 +298,10 @@ An edit to a finished stage's files is not reviewed or approved again unless you
 
 ## Progress Tracking
 
-After every approval, a progress line appears:
+After an approval that moves on to another stage, a progress line appears. From the same run:
 
-```
-Progress: 6/30 in-scope stages complete (9/33 overall) | 6/7 IDEATION. Next: Approval & Handoff
+```text
+Progress: 1/19 in-scope stages complete (4/33 overall) | 1/4 IDEATION. Next: Feasibility & Constraints
 ```
 
 This shows:
@@ -303,11 +311,7 @@ This shows:
 - Progress within the current phase
 - The name of the next stage
 
-On a shorter plan the numbers are smaller, for example:
-
-```
-Progress: 2/6 in-scope stages complete (5/33 overall) | 2/2 INCEPTION. Next: Code Generation
-```
+On a shorter plan the numbers are that plan's own.
 
 ---
 
