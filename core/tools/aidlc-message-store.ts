@@ -13,10 +13,11 @@ import {
 // as the message arrives. It proves two things and reads no meaning into either:
 // that a real person said this in this chat, and exactly what they said: the
 // text as the host delivered it, the flags the engine's own parser finds in a
-// typed `/aidlc` line, the words after them, and the switch lines the hook
-// applied to the open work. Which question a message answers is never written
-// here: the conductor says that when it records a decision, and the engine then
-// proves only that a message of the person's stands behind it.
+// typed `/aidlc` line, and the words after them. Nothing is applied here: the
+// agent reads the line and runs the setter the engine names. Which question a
+// message answers is never written here: the conductor says that when it
+// records a decision, and the engine then proves only that a message of the
+// person's stands behind it.
 //
 // Each record is its own file in the gitignored session directory
 // (`aidlc/.aidlc-sessions/messages/<id>.json`, beside the question store),
@@ -54,8 +55,6 @@ export interface StoredMessage {
   /** The settings typed as flags, as the config setter names them ("depth" "minimal", "guard.review-freeze" "off"). */
   settings: Array<{ key: string; value: string }>;
   route: MessageRoute;
-  /** The lines the hook's typed-switch step produced for the work this chat has open. */
-  applied: string[];
   cut?: true;
 }
 
@@ -113,7 +112,6 @@ function parseMessage(id: string, raw: unknown): StoredMessage | null {
     typeof route.newIntent === "boolean" &&
     isStringList(route.skip) && isStringList(route.add) &&
     (route.projectType === null || route.projectType === "greenfield" || route.projectType === "brownfield") &&
-    isStringList(message.applied) &&
     (message.cut === undefined || message.cut === true)
   ) {
     return message as StoredMessage;

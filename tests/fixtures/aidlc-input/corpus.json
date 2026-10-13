@@ -114,7 +114,7 @@
         }
       }
     },
-    "after": "WO3"
+    "after": "pending"
   },
   {
     "id": "tf04-w",
@@ -367,7 +367,8 @@
         "settings": [],
         "no_ask": true,
         "never": [
-          "auth-fix"
+          "engine intent auth-fix",
+          "intent switch auth-fix`"
         ]
       },
       "end": {
@@ -3240,7 +3241,7 @@
       }
     },
     "unsure": true,
-    "after": "WO6"
+    "after": "pending"
   },
   {
     "id": "hs09-w",
@@ -3691,11 +3692,11 @@
         "kinds": [
           "print"
         ],
-        "words": "fix the login",
+        "words": "bugfix fix the login",
         "settings": [],
         "no_ask": true,
         "names": [
-          "--scope bugfix"
+          "--scope bugfix -- 'fix the login'"
         ]
       },
       "end": {
@@ -3734,7 +3735,7 @@
         }
       }
     },
-    "after": "pending"
+    "after": "WO6"
   },
   {
     "id": "sl11-w",
@@ -3755,8 +3756,66 @@
       }
     },
     "unsure": true,
-    "after": "pending",
-    "ambiguous": true
+    "ambiguous": true,
+    "after": "pending"
+  },
+  {
+    "id": "sl12-f",
+    "category": "scope-led-sentence",
+    "input": "feature flags",
+    "state": "fresh",
+    "meaning": "the person means: new work on feature flags; they did not pick the feature plan (a plan's name and one word of theirs, passed through as typed)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "print"
+        ],
+        "words": "feature flags",
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "--scope feature -- flags",
+          "-- 'feature flags'"
+        ],
+        "never": [
+          "engine intent create --scope feature"
+        ]
+      },
+      "end": {
+        "asks": 1,
+        "work": {
+          "words": "feature flags"
+        }
+      }
+    }
+  },
+  {
+    "id": "sl12-w",
+    "category": "scope-led-sentence",
+    "input": "feature flags",
+    "state": "work-open",
+    "meaning": "the person means: new work on feature flags; they did not pick the feature plan (a plan's name and one word of theirs, passed through as typed)",
+    "expected": {
+      "engine": {
+        "kinds": [
+          "ask",
+          "print"
+        ],
+        "words": "feature flags",
+        "settings": [],
+        "no_ask": false,
+        "names": [
+          "feature flags"
+        ],
+        "never": [
+          "engine intent create --scope feature"
+        ]
+      },
+      "end": {
+        "asks": 1,
+        "work": "same"
+      }
+    }
   },
   {
     "id": "rt01-f",
@@ -4259,21 +4318,28 @@
     "category": "ambiguous",
     "input": "auth",
     "state": "two-similar-records",
-    "meaning": "the person means: switch to auth or auth-fix; which one is unclear, the agent asks once",
+    "meaning": "the person means: switch to the piece of work named auth, its exact name; auth-fix is another record, not a reason to ask",
     "expected": {
       "engine": {
         "kinds": [
           "print"
         ],
         "words": "auth",
-        "settings": []
+        "settings": [],
+        "no_ask": true,
+        "names": [
+          "engine intent auth`"
+        ],
+        "never": [
+          "--request",
+          "intent auth-fix"
+        ]
       },
       "end": {
-        "work": "same",
-        "asks": 1
+        "active": "auth",
+        "asks": 0
       }
-    },
-    "ambiguous": true
+    }
   },
   {
     "id": "am06-w",
@@ -4375,7 +4441,10 @@
           "print"
         ],
         "words": "the auth one please",
-        "settings": []
+        "settings": [],
+        "names": [
+          "The pieces of work here are: auth-fix (in progress), auth, fixture."
+        ]
       },
       "end": {
         "asks": 1,
@@ -6375,7 +6444,7 @@
       }
     },
     "source": "FORMS.md C11",
-    "after": "WO6"
+    "after": "pending"
   },
   {
     "id": "C12a-w",
@@ -6850,7 +6919,7 @@
     "category": "audit-form",
     "input": "proceed",
     "state": "work-open",
-    "meaning": "the person means: carry on with the open work (a word the carry-on list does not know)",
+    "meaning": "the person means: carry on with the open work (said in their own words)",
     "expected": {
       "engine": {
         "kinds": [
@@ -7703,10 +7772,7 @@
         ],
         "words": "continue",
         "settings": [],
-        "no_ask": true,
-        "names": [
-          "unpark"
-        ]
+        "no_ask": true
       },
       "end": {
         "asks": 0,
@@ -7838,11 +7904,11 @@
         "kinds": [
           "print"
         ],
-        "words": "add CSV export",
+        "words": "feature add CSV export",
         "settings": [],
         "no_ask": true,
         "names": [
-          "--scope feature"
+          "--scope feature -- 'add CSV export'"
         ]
       },
       "end": {
@@ -10992,7 +11058,7 @@
     "category": "audit-form",
     "input": "proceed",
     "state": "work-open",
-    "meaning": "the person means: carry on with the open work (a word the carry-on list does not know) (said in plain chat, no /aidlc)",
+    "meaning": "the person means: carry on with the open work (said in their own words) (said in plain chat, no /aidlc)",
     "expected": {
       "engine": {
         "kinds": [
@@ -11761,12 +11827,15 @@
           ]
         ],
         "names": [
-          "engine intent create --scope bugfix --depth comprehensive"
+          "next --scope bugfix --depth comprehensive -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -12056,10 +12125,10 @@
         "kinds": [
           "print"
         ],
-        "words": "Fix the crash",
+        "words": "bugfix Fix the crash",
         "settings": [],
         "names": [
-          "engine intent create --scope bugfix"
+          "--scope bugfix -- 'Fix the crash'"
         ],
         "no_ask": true
       },
@@ -12176,7 +12245,7 @@
         "work": "none"
       }
     },
-    "after": "WO3",
+    "after": "pending",
     "documented_differs": "error: `--init` and `--force` are retired and no longer initialize or restart a workflow. Start work by invoking the AI-DLC skill with a description of what to build, "
   },
   {
@@ -12277,8 +12346,12 @@
     "expected": {
       "engine": {
         "kinds": [
-          "ask"
+          "print"
         ],
+        "names": [
+          "--propose <plan> --request"
+        ],
+        "no_ask": true,
         "words": "build a to-do app",
         "settings": []
       },
@@ -12626,14 +12699,15 @@
     "state": "work-open",
     "meaning": "the person means: carry on with the open work",
     "source": "docs/guide/03-spaces-and-intents.md:154",
-    "documented": "\"Saying only that the work should go on (`/aidlc carry on`, \"continue\", \"keep going\", \"go on\" or \"resume\", with or without \"please\") asks nothing: AI-DLC carries on with the active work. With work in the project but none selected yet, it asks which piece to pick up.\"",
+    "documented": "\"Saying only that the work should go on (`/aidlc carry on`, \"proceed\", \"keep going\", in your own words) asks nothing: AI-DLC reads your words and carries on with the active work. With work in the project but none selected yet, it asks which piece to pick up.\"",
     "expected": {
       "engine": {
         "kinds": [
-          "run-stage"
+          "print"
         ],
         "words": "carry on",
-        "settings": []
+        "settings": [],
+        "no_ask": true
       },
       "end": {
         "asks": 1,
@@ -13996,12 +14070,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope feature"
+          "next --scope feature -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -14022,12 +14099,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope bugfix"
+          "next --scope bugfix -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -14412,8 +14492,12 @@
     "expected": {
       "engine": {
         "kinds": [
-          "ask"
+          "print"
         ],
+        "names": [
+          "--propose <plan> --request"
+        ],
+        "no_ask": true,
         "words": "build a to-do app",
         "settings": [
           [
@@ -14468,8 +14552,12 @@
     "expected": {
       "engine": {
         "kinds": [
-          "ask"
+          "print"
         ],
+        "names": [
+          "--propose <plan> --request"
+        ],
+        "no_ask": true,
         "words": "build a to-do app",
         "settings": [
           [
@@ -14768,12 +14856,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope feature"
+          "next --scope feature -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -15742,12 +15833,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope bugfix"
+          "next --scope bugfix -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -15967,7 +16061,7 @@
         "work": "none"
       }
     },
-    "after": "WO3",
+    "after": "pending",
     "documented_differs": "error: No workflow state found (no active intent). Start one by describing what to build (/aidlc \"build the auth service\") or by naming a scope (/aidlc --scope <scope>"
   },
   {
@@ -16593,12 +16687,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope enterprise"
+          "next --scope enterprise -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -16643,8 +16740,12 @@
     "expected": {
       "engine": {
         "kinds": [
-          "ask"
+          "print"
         ],
+        "names": [
+          "--propose <plan> --request"
+        ],
+        "no_ask": true,
         "words": "build the export",
         "settings": [
           [
@@ -16764,8 +16865,12 @@
     "expected": {
       "engine": {
         "kinds": [
-          "ask"
+          "print"
         ],
+        "names": [
+          "--propose <plan> --request"
+        ],
+        "no_ask": true,
         "words": "fix the parser",
         "settings": [
           [
@@ -16872,7 +16977,7 @@
           ]
         ],
         "names": [
-          "engine config set guard.state-transition off"
+          "engine config set guard-policy off --guard.state-transition off"
         ],
         "no_ask": true
       },
@@ -16899,8 +17004,12 @@
     "expected": {
       "engine": {
         "kinds": [
-          "ask"
+          "print"
         ],
+        "names": [
+          "--propose <plan> --request"
+        ],
+        "no_ask": true,
         "words": "build the auth service",
         "settings": [
           [
@@ -17121,10 +17230,10 @@
         "kinds": [
           "print"
         ],
-        "words": "Read ./vision.md and build what it describes",
+        "words": "workshop Read ./vision.md and build what it describes",
         "settings": [],
         "names": [
-          "engine intent create --scope workshop"
+          "--scope workshop -- 'Read ./vision.md and build what it describes'"
         ],
         "no_ask": true
       },
@@ -17150,10 +17259,10 @@
         "kinds": [
           "print"
         ],
-        "words": "auth",
+        "words": "bugfix auth",
         "settings": [],
         "names": [
-          "engine intent create --scope bugfix"
+          "--scope bugfix -- auth"
         ],
         "no_ask": true
       },
@@ -17179,10 +17288,10 @@
         "kinds": [
           "print"
         ],
-        "words": "auth",
+        "words": "express auth",
         "settings": [],
         "names": [
-          "engine intent create --scope express"
+          "--scope express -- auth"
         ],
         "no_ask": true
       },
@@ -17245,12 +17354,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope workshop"
+          "next --scope workshop -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17298,12 +17410,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope classic"
+          "next --scope classic -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17324,12 +17439,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope express"
+          "next --scope express -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17350,12 +17468,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope enterprise"
+          "next --scope enterprise -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17376,12 +17497,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope mvp"
+          "next --scope mvp -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17402,12 +17526,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope poc"
+          "next --scope poc -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17428,12 +17555,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope refactor"
+          "next --scope refactor -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17454,12 +17584,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope infra"
+          "next --scope infra -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17480,12 +17613,15 @@
         "words": null,
         "settings": [],
         "names": [
-          "engine intent create --scope security-patch"
+          "next --scope security-patch -- <their words>"
+        ],
+        "never": [
+          "engine intent create"
         ],
         "no_ask": true
       },
       "end": {
-        "asks": 0,
+        "asks": 1,
         "work": "none"
       }
     }
@@ -17774,8 +17910,12 @@
     "expected": {
       "engine": {
         "kinds": [
-          "ask"
+          "print"
         ],
+        "names": [
+          "--propose <plan> --request"
+        ],
+        "no_ask": true,
         "words": "build a to-do app",
         "settings": [
           [
@@ -17963,10 +18103,10 @@
         "kinds": [
           "print"
         ],
-        "words": "Build a notes app",
+        "words": "classic Build a notes app",
         "settings": [],
         "names": [
-          "engine intent create --scope classic"
+          "--scope classic -- 'Build a notes app'"
         ],
         "no_ask": true
       },

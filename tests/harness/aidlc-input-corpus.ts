@@ -4,10 +4,12 @@
 // engine's first step for every item; the live check (tests/e2e/t-live-aidlc-input-corpus.serial.test.ts) drives a
 // sample through real agents.
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import corpus from "../fixtures/aidlc-input/corpus.json";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
-import { AIDLC_SRC, FIXTURES_DIR, REPO_ROOT, createOrchestrationTestProject, intentsDirOf, recordArtifactWriteViaHook, seededRecordDir, seededStateFile } from "./fixtures.ts";
+import { AIDLC_SRC, FIXTURES_DIR, REPO_ROOT, createOrchestrationTestProject, intentsDirOf, proposalFollowUp, recordArtifactWriteViaHook, seededRecordDir, seededStateFile } from "./fixtures.ts";
 import { testGuardEnvironment } from "./runner-profile.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { splitKiroCommandArgs, writeSessionBinding, writeSessionPidEntry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -29,7 +31,7 @@ export type State =
   | "fresh" | "work-open" | "plan-question-open" | "gate-open" | "two-similar-records"
   | "plan-offer-open" | "routing-question-open" | "stage-question-asked" | "parked" | "finished" | "archived"
   | "second-chat" | "kiro-pick" | "hooks-off" | "unattended";
-export type Harness = "claude" | "codex" | "kiro" | "kiro-ide";
+export type Harness = "claude" | "codex" | "kiro" | "kiro-ide" | "copilot";
 export type ArgvVariant = "posix" | "kiro-cli" | "kiro-ide-pwsh";
 
 export interface EngineExpectation {
@@ -92,8 +94,8 @@ export const SESSION = "01995000-7a11-7000-8000-00000000d001";
 export const SECOND_SESSION = "01995000-7a11-7000-8000-00000000d002";
 const REVIEWER = "aidlc-product-lead-agent";
 
-// The source each `after` waits for, read where the change lands. `pending` and `chat-identity` wait for a work order
-// nobody has yet (an owner to be named; the chat-identity tab's plan).
+// The source each `after` waits for, read where the change lands. `pending` waits for a work order nobody has yet (an
+// owner to be named); `chat-identity` is the one door reading an unjoined chat again against this machine's choice.
 const coreTool = (name: string) => readFileSync(join(REPO_ROOT, "core", "tools", name), "utf-8");
 export const LANDED: Record<string, () => boolean> = {
   "#2276": () => !coreTool("aidlc-command.ts").includes("DISPATCHER_RESERVED_FUTURE"),
@@ -102,7 +104,7 @@ export const LANDED: Record<string, () => boolean> = {
   WO5: () => !coreTool("aidlc-lib.ts").includes("CONTINUATION_PHRASES"),
   WO6: () => !coreTool("aidlc-orchestrate.ts").includes("This looks like"),
   pending: () => false,
-  "chat-identity": () => false,
+  "chat-identity": () => coreTool("aidlc-lib.ts").includes("rejoinedByThisMachine"),
 };
 const landed = new Map<string, boolean>();
 /** The change an item still waits for, or null when its EXPECTED holds on this source. */
@@ -137,12 +139,16 @@ export function argvVariants(item: CorpusItem): Array<[ArgvVariant, string[]]> {
 
 export interface Exec { status: number; stdout: string; stderr: string }
 export async function exec(cmd: string[], opts: { cwd: string; env: NodeJS.ProcessEnv; input?: string }): Promise<Exec> {
-  // The input goes in as one buffer the runtime writes and closes itself: a hook that starts slowly under load still
-  // reads the whole line, where a pipe written and ended by hand once reached a Kiro IDE hook empty on Windows.
+  // The input is a file the child reads as its stdin, not a pipe this process has to write: the Kiro IDE hook once gave a
+  // pipe two seconds before settling for an empty payload (it now waits for the close), and on a loaded Windows runner this single-threaded parent
+  // (copying fixtures for other items) has written the pipe later than that, recording an empty turn. A file is complete
+  // before the child starts, whatever the parent is doing.
+  const payload = opts.input === undefined ? null : join(tmpdir(), `aidlc-input-stdin-${process.pid}-${randomUUID()}.json`);
+  if (payload !== null) writeFileSync(payload, opts.input as string, "utf-8");
   const proc = Bun.spawn(cmd, {
     cwd: opts.cwd,
     env: opts.env as Record<string, string>,
-    stdin: opts.input === undefined ? "ignore" : new TextEncoder().encode(opts.input),
+    stdin: payload === null ? "ignore" : Bun.file(payload),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -156,6 +162,7 @@ export async function exec(cmd: string[], opts: { cwd: string; env: NodeJS.Proce
     return { status, stdout, stderr };
   } finally {
     clearTimeout(timer);
+    if (payload !== null) rmSync(payload, { force: true });
   }
 }
 
@@ -308,7 +315,10 @@ export async function buildState(proj: string, state: State): Promise<void> {
     case "plan-offer-open": {
       // The person typed "build a notes app" on a fresh workspace and the plan offer is on screen.
       await say(proj, "/aidlc build a notes app", "claude");
-      const offer = await next(proj, ["build", "a", "notes", "app"]);
+      const read = await next(proj, ["build", "a", "notes", "app"]);
+      // The agent's step after the plan proposal print: no ready-made plan fits a new app, so it proposes compose.
+      const proposal = proposalFollowUp(read.directive, "compose");
+      const offer = proposal === null ? read : await next(proj, proposal);
       if (offer.directive?.kind !== "ask") throw new Error(`plan offer did not open: ${offer.out}`);
       return;
     }
@@ -319,7 +329,8 @@ export async function buildState(proj: string, state: State): Promise<void> {
       const reading = await next(proj, ["fix", "the", "login"]);
       const request = /`[^`]* next (--request [0-9a-f]{8})`/.exec(reading.directive?.message ?? "")?.[1];
       if (!request) throw new Error(`no request id in the reading note: ${reading.out}`);
-      const routing = await next(proj, request.split(" "));
+      // The agent reads "fix the login" as a fix and names that plan with the request, as the reading print asks.
+      const routing = await next(proj, [...request.split(" "), "--propose", "bugfix"]);
       if (routing.directive?.ask_type !== "new-work-routing") throw new Error(`routing question did not open: ${routing.out}`);
       return;
     }
@@ -365,6 +376,15 @@ export async function say(proj: string, prompt: string, harness: Harness, opts: 
     return exec([process.execPath, DISPATCHER, "engine", "hook", "record-human-turn"],
       { cwd: proj, env: env(proj, opts), input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, cwd: proj, prompt }) });
   }
+  if (harness === "copilot") {
+    installCopilot(proj);
+    return exec([process.execPath, join(proj, ".aidlc", "hooks", "aidlc-copilot-adapter.ts"), "record-human-turn"], {
+      cwd: proj,
+      env: { ...env(proj, opts), CLAUDE_PROJECT_DIR: undefined, AIDLC_UNATTENDED: opts.env?.AIDLC_UNATTENDED, USER_PROMPT: undefined },
+      // Copilot CLI's own payload (live-captured on 1.0.95): the chat's id, the prompt, a timestamp and the folder.
+      input: JSON.stringify({ sessionId: session, prompt, timestamp: Date.now(), cwd: proj }),
+    });
+  }
   const tree = harness === "codex" ? ".codex" : ".kiro";
   if (!existsSync(join(proj, tree))) cpSync(join(REPO_ROOT, "dist", harness, tree), join(proj, tree), { recursive: true });
   const unset = { ...env(proj, opts), CLAUDE_PROJECT_DIR: undefined, AIDLC_UNATTENDED: opts.env?.AIDLC_UNATTENDED, USER_PROMPT: undefined };
@@ -383,6 +403,26 @@ export async function say(proj: string, prompt: string, harness: Harness, opts: 
   });
 }
 
+/** The Copilot install as the copy channel lays it out: the engine tree and the skills Copilot discovers in .github/. */
+export function installCopilot(proj: string): void {
+  if (!existsSync(join(proj, ".aidlc"))) cpSync(join(REPO_ROOT, "dist", "copilot", ".aidlc"), join(proj, ".aidlc"), { recursive: true });
+  if (!existsSync(join(proj, ".github"))) cpSync(join(REPO_ROOT, "dist", "copilot", ".github"), join(proj, ".github"), { recursive: true });
+}
+
+// A skill the person invoked by its slash name, as Copilot CLI hands it to the UserPromptSubmit hook (live-captured on
+// 1.0.83 and 1.0.95): Copilot's sentence, then a skill-context block with the installed SKILL.md body (frontmatter gone,
+// leading blank line gone, every `$ARGUMENTS` replaced by the typed words verbatim) and the closing tag. The typed line
+// is in no field. `body` stands in for the file when the host's copy differs from what is on disk.
+export function copilotSkillPrompt(proj: string, args: string, skill = "aidlc", body?: string): string {
+  installCopilot(proj);
+  const dir = join(proj, ".github", "skills", skill);
+  const text = (body ?? readFileSync(join(dir, "SKILL.md"), "utf-8")).replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trim();
+  const related = readdirSync(dir).filter((name) => name !== "SKILL.md").sort().map((name) => `  - ${join(dir, name)}\n`).join("");
+  return `The user explicitly invoked the "/${skill}" skill. Follow its instructions now.\n\n` +
+    `<skill-context name="${skill}">\nBase directory for this skill: ${dir}\n\nRelated files (use view tool to read):\n${related}\n` +
+    `${text.split("$ARGUMENTS").join(args)}\n\n</skill-context>`;
+}
+
 export interface StoredRecord { text: string; words: string | null; settings: Array<{ key: string; value: string }>; applied: string[] }
 /** The message record the hook wrote for `prompt` (or the newest one). */
 export function messageRecord(proj: string, prompt: string): StoredRecord | null {
@@ -391,4 +431,20 @@ export function messageRecord(proj: string, prompt: string): StoredRecord | null
   const records = readdirSync(dir).filter((f) => f.endsWith(".json"))
     .map((f) => JSON.parse(readFileSync(join(dir, f), "utf-8")) as StoredRecord & { at: string });
   return records.find((r) => r.text === prompt) ?? records.sort((a, b) => a.at.localeCompare(b.at)).at(-1) ?? null;
+}
+
+// What Codex said to the person: `codex exec` logs every event to stderr; the agent's messages follow a line that is
+// exactly "codex" and run until the next event marker (a hook, an exec, a user turn, the token count, the workspace diff
+// codex exec prints after the last message). The tool log, the engine's JSON and the diff are not words to the person.
+// Without any marker the agent never spoke (codex exec stopped at its own usage text or error): nothing is its words.
+export function codexWords(out: string): string {
+  const blocks: string[] = [];
+  let current: string[] | null = null;
+  for (const line of out.split("\n")) {
+    if (line === "codex") { current = []; blocks.push(""); continue; }
+    if (current && /^(hook: |exec$|user$|thinking$|tokens used$|diff --git |\d{4}-\d{2}-\d{2}T\S+ (ERROR|WARN))/.test(line)) { blocks[blocks.length - 1] = current.join("\n").trim(); current = null; continue; }
+    if (current) current.push(line);
+  }
+  if (current) blocks[blocks.length - 1] = current.join("\n").trim();
+  return blocks.filter((b) => b.length > 0).join("\n\n");
 }

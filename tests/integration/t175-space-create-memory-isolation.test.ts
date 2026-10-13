@@ -14,13 +14,15 @@
 // on-disk content reads. Zero LLM, zero tokens — deterministic.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+import { cleanupTestProject, createTestProject, runOrchestrateNext, seedAidlcMemory } from "../harness/fixtures.ts";
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UTIL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
+const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
+const SEED_PHASES = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "data", "memory-seed", "phases");
 
 let proj: string;
 beforeEach(() => {
@@ -96,6 +98,28 @@ describe("t175 space-create memory isolation (vision §11 — no learning leak)"
     const names = spaces.spaces.map((s) => s.name).sort();
     expect(names).toContain("default");
     expect(names).toContain("platform");
+  });
+
+  test("a new space gets the framework phase rules, not default's edits, and its first stage starts", () => {
+    seedAidlcMemory(proj);
+    const TEAM_EDIT = "DEFAULT-PHASE-EDIT-must-not-leak";
+    appendFileSync(join(memoryOf("default"), "phases", "ideation.md"), `\n- ${TEAM_EDIT}\n`, "utf-8");
+
+    expect(util(["space-create", "payments"]).status).toBe(0);
+    const phases = readdirSync(SEED_PHASES);
+    expect(phases.length).toBeGreaterThan(0);
+    for (const f of phases) {
+      expect(readFileSync(join(memoryOf("payments"), "phases", f), "utf-8"))
+        .toBe(readFileSync(join(SEED_PHASES, f), "utf-8"));
+    }
+    expect(readFileSync(join(memoryOf("payments"), "phases", "ideation.md"), "utf-8")).not.toContain(TEAM_EDIT);
+
+    expect(util(["space", "payments"]).status).toBe(0);
+    expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
+    const env: Record<string, string | undefined> = { ...process.env, AIDLC_UNATTENDED: "1" };
+    delete env.AWS_AIDLC_DEFAULT_SCOPE;
+    const r = runOrchestrateNext(ORCH, proj, [], { env });
+    expect(r.directive?.kind, r.out).toBe("run-stage");
   });
 
   test("an intent created in the new space reads the SPACE's live memory, not default's", () => {

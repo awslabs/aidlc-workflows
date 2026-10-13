@@ -21,7 +21,7 @@ harness parameter. Add a column when you port to a new harness.
 | AI-DLC Concept | Claude Code | Kiro CLI | Kiro IDE | Codex CLI | opencode | GitHub Copilot | Cursor |
 |----------------|-------------|----------|----------|-----------|----------|----------------|--------|
 | **Orchestrator entry** (`/aidlc` + runners) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`$aidlc`) | Command → skill (`/aidlc`; skills from `.aidlc/skills` via `skills.paths`) | Skills (`/aidlc`; `.github/skills/`) | Native skills (`/aidlc` plus `/aidlc-status`, `/aidlc-jump`, `/aidlc-scope`; `.cursor/skills/`) |
-| **Agent personas** (14 total) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | Conductor `agents/aidlc.md` + 14 persona `.md` files with `tools:`/`permissions.rules` | `.codex/agents/` TOMLs | `.opencode/agents/*.md` (subagents) + persona `.md` | `.github/agents/*.md` (custom agents) + persona `.md` | `.cursor/agents/*.md` (native subagents) |
+| **Agent personas** (14 total) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | Conductor `agents/aidlc-aidlc.md` + 14 persona `.md` files with `tools:`/`permissions.rules` | `.codex/agents/` TOMLs | `.opencode/agents/*.md` (subagents) + persona `.md` | `.github/agents/*.md` (custom agents) + persona `.md` | `.cursor/agents/*.md` (native subagents) |
 | **Automation** (audit, state, tracking) | Hooks via `settings.json` | Hooks via `agents/aidlc.json` | `.kiro/hooks/aidlc-*.json` (v2 hook files, Kiro IDE 1.x and Kiro CLI v3) | Hooks via `.codex/hooks.json` (one adapter) | Adapter plugin (`.opencode/plugin/`) | Hooks via `.github/hooks/aidlc.json` (one adapter) | Hooks via `.cursor/hooks.json` (one adapter) |
 | **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via agent resources) | `aidlc/spaces/<active-space>/memory/` (via always-included steering live references) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) | `aidlc/spaces/<active-space>/memory/` (via `AGENTS.md` @-imports) | `aidlc/spaces/<active-space>/memory/` (always-applied `rules/aidlc.mdc` standing pointer + four agent-decided phase pointers) |
 | **Harness onboarding doc** | `.claude/CLAUDE.md` (full) | `.kiro/steering/aidlc-onboarding.md` (agent resource) | `.kiro/steering/aidlc-onboarding.md` (always-included) | `.codex/onboarding.md` (`developer_instructions` in trusted project `.codex/config.toml`) | `.aidlc/onboarding.md` (`instructions`) | `AGENTS.md` (full, with `@`-imports) | `.cursor/rules/aidlc-onboarding.mdc` (always-applied) |
@@ -62,7 +62,7 @@ The orchestrator lives at `.claude/skills/aidlc/SKILL.md`. Users invoke it with 
 ---
 name: aidlc
 description: >
-  AI-DLC workflow orchestrator. Start, resume, or manage an AI-driven
+  AI-DLC. Start, resume, or manage an AI-driven
   development lifecycle.
 argument-hint: "[description | --status | --config [section] | --stage <slug|#> | --phase <name|#> | --help]"
 user-invocable: true
@@ -235,6 +235,11 @@ Without this, Claude Code would prompt "Allow this tool?" on each first use, dis
 ```
 
 Runs periodically (not just on tool use) to keep the terminal status current.
+AI-DLC ships this value in `.claude/tools/data/harness.json`, not in
+`.claude/settings.json`: the shared file outranks each person's own status
+line, so the value reaches Claude Code only through the person's own
+`.claude/settings.local.json`, when they choose it at setup or run
+`/aidlc --statusline on` (see [Status line](../guide/13-customization.md#status-line-claude-code-and-codex)).
 
 ### SessionStart and SessionEnd Hook Configuration
 
@@ -372,7 +377,7 @@ When a user runs `/aidlc feature`:
 
 ```
 1.  CLAUDE.md loads              (every conversation)
-1a. statusLine command starts    (settings.json -- runs continuously)
+1a. statusLine command starts    (settings.local.json, when the person chose it -- runs continuously)
 2.  settings.json loads          (every conversation; all hooks register here, project-wide)
 2a. SessionStart hook fires      (settings.json -- if session resume)
 3.  memory/ rules load            (every conversation)

@@ -2436,26 +2436,17 @@ export function holdPinnedRelease(version: string): () => void {
 }
 
 export interface ProjectPinOptions {
-  /** Workflows still running in the project, as `space/intent` names. */
-  activeWorkflows?: (projectDir: string) => string[];
   /** The `config` commands that refresh the project, as the person types them (one per harness). */
   refreshCommands?: (projectDir: string) => string[];
 }
 
 // A pin changes which engine serves the project at once, while the project's
 // own files stay at the version its harness tree was last refreshed to until
-// the next `aidlc config`. With work open the pin is done and says to finish
-// the update. A tree from before stamps records no version (null), so it never
-// counts as a match.
-function pinSplitsRunningWorkflow(
-  projectDir: string,
-  target: string,
-  options: ProjectPinOptions,
-): boolean {
-  if (!options.activeWorkflows) return false;
-  const hooks = discoverProjectHarnesses(projectDir).map((harness) => harness.frameworkVersion ?? null);
-  if (hooks.every((version) => version === target)) return false;
-  return options.activeWorkflows(projectDir).length > 0;
+// the next `aidlc config`, so the pin says to finish the update whenever they
+// differ. A tree from before stamps records no version, so it never counts as
+// a match.
+function filesOnOtherVersion(projectDir: string, target: string): boolean {
+  return !discoverProjectHarnesses(projectDir).every((harness) => harness.frameworkVersion === target);
 }
 
 function finishUpdate(projectDir: string, options: ProjectPinOptions): string {
@@ -2483,7 +2474,7 @@ export async function configureProjectPin(
     if (hasUnpin) {
       // Unpinning makes the project follow the machine's active version.
       const followed = activeVersion();
-      const finish = followed !== null && pinSplitsRunningWorkflow(projectDir, followed, options)
+      const finish = followed !== null && filesOnOtherVersion(projectDir, followed)
         ? finishUpdate(projectDir, options)
         : "";
       if (dryRun) {
@@ -2506,7 +2497,7 @@ export async function configureProjectPin(
     const requested = valueAfter(argv, "--pin");
     if (!requested) return usage("--pin requires a release version");
     const version = requestedVersion(requested);
-    const finish = pinSplitsRunningWorkflow(projectDir, version, options) ? finishUpdate(projectDir, options) : "";
+    const finish = filesOnOtherVersion(projectDir, version) ? finishUpdate(projectDir, options) : "";
     const releaseReservation = dryRun ? null : reserveVersion(version);
     try {
       if (existsSync(versionRoot(version)) && !completeVersion(version)) {

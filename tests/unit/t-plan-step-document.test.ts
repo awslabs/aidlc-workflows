@@ -15,7 +15,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { cleanupTestProject, createTestProject, REPO_ROOT } from "../harness/fixtures.ts";
+import { cleanupTestProject, createTestProject, proposalFollowUp, REPO_ROOT } from "../harness/fixtures.ts";
 
 const projects: string[] = [];
 afterAll(() => {
@@ -53,7 +53,10 @@ async function next(proj: string, argv: string[]): Promise<Record<string, unknow
     child.exited,
   ]);
   expect(code, `${argv.join(" ")}: ${stderr}`).toBe(0);
-  return JSON.parse(stdout) as Record<string, unknown>;
+  const directive = JSON.parse(stdout) as Record<string, unknown>;
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const proposal = proposalFollowUp(directive, "compose");
+  return proposal === null ? directive : next(proj, [argv[0], ...proposal]);
 }
 
 describe("a document the request names is onboarded at the plan step", () => {

@@ -484,8 +484,16 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     for (const flag of ["--depth", "--test-strategy"]) {
       for (const value of hostile) {
         const d = nextDirective(proj, ["--scope", "bugfix", flag, value, "--", "x"]);
-        expect(d.kind, `${flag} ${value}`).toBe("error");
-        expect(d.message).toBe(`${flag} requires <minimal|standard|comprehensive>; received ${JSON.stringify(value)}.`);
+        // A value this engine's table does not hold is a reading step now
+        // (t-three-ways-to-read-a-line). What this case exists for is
+        // unchanged: their value is never a command, and it never runs.
+        expect(d.kind, `${flag} ${value}`).toBe("print");
+        expect(d.message, `${flag} ${value}`).toContain("minimal|standard|comprehensive");
+        expect(d.message, `${flag} ${value}`).toContain(JSON.stringify(value));
+        for (const span of [...d.message.matchAll(/`([^`]*)`/g)].map((m) => m[1])) {
+          const quoted = span.includes(`-- '`);
+          expect(quoted || !span.includes(value), `${flag} ${value}: ${span}`).toBe(true);
+        }
       }
     }
     for (const flag of ["--skip", "--add"]) {
@@ -507,7 +515,7 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(d.message).not.toContain("next compose");
     const command = /`([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? "";
     expect(command.endsWith("engine recompose --skip team-formation"), d.message).toBe(true);
-    expect(d.message).toContain('"Skipped team-formation. You can undo that any time."');
+    expect(d.message).toContain('"Skipped Team Formation. You can undo that any time."');
     expect(d.message).toContain("If they later ask to undo it, run `");
     expect(d.message.endsWith("recompose --add team-formation`."), d.message).toBe(true);
     // The one line is all the person hears: recompose's counts stay out of the reply.
@@ -522,7 +530,7 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     const again = nextDirective(proj, ["--skip", "team-formation"]);
     expect(again.kind).toBe("print");
     expect(again.message).not.toContain("engine recompose");
-    expect(again.message).toContain('"Team-formation is already skipped. The plan is unchanged."');
+    expect(again.message).toContain('"Team Formation is already skipped. The plan is unchanged."');
 
     // A setting typed with it runs first, so neither request is dropped.
     const both = nextDirective(proj, ["--add", "team-formation", "--depth", "minimal"]);
@@ -539,6 +547,98 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(combined.kind).toBe("error");
     expect(combined.message).toContain("Cannot combine --skip or --add");
     expect(combined.message).not.toContain("at creation");
+  });
+
+  // A live run on Claude Code: "approve build and test. and skip the deployment
+  // steps". The approval started Deployment Pipeline in the same second, so
+  // recompose refused the skip ("its checkbox is not pending") and named a jump
+  // to the other stage the person had asked to skip; the agent asked again. A
+  // stage the person asks to skip is skipped where it stands, through the
+  // report that routes forward, and the work goes on.
+  test("a stage the person asks to skip after it has started is skipped, and the work goes on", () => {
+    const proj = setupIntegrationProject({ withState: "state-operation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    // The live shape: the two deployment stages are the last ones on the plan.
+    let state = readFileSync(statePath, "utf-8").replace("- **Next Stage**: environment-provisioning", "- **Next Stage**: deployment-execution");
+    for (const slug of ["environment-provisioning", "observability-setup", "incident-response", "performance-validation", "feedback-optimization"]) {
+      state = state.replace(`- [ ] ${slug} \u2014 EXECUTE`, `- [ ] ${slug} \u2014 SKIP`);
+    }
+    writeFileSync(statePath, state);
+    expect(state).toContain("- [-] deployment-pipeline");
+    const d = nextDirective(proj, ["--skip", "deployment-pipeline,deployment-execution"]);
+    expect(d.kind).toBe("print");
+    const commands = [...d.message.matchAll(/`([^`]*\.ts [^`]*)`/g)].map((m) => m[1]);
+    const recompose = commands.find((c) => c.includes("engine recompose")) ?? "";
+    expect(recompose.endsWith("engine recompose --skip deployment-execution"), d.message).toBe(true);
+    const report = commands.find((c) => c.includes("report --stage deployment-pipeline --result skipped")) ?? "";
+    expect(report, d.message).toContain("--reason 'the person asked to skip it'");
+    expect(d.message).toContain('"Skipped Deployment Pipeline and Deployment Execution.');
+    // The way back is a plain fact naming the command, never "type this"
+    // (tests/unit/t-offers-are-plain-questions.test.ts).
+    expect(d.message).toContain("Either one can still be run on its own with `/aidlc --stage <stage> --single`.");
+    expect(d.message).not.toMatch(/[Tt]ype `\/aidlc/);
+    expect(d.message).toMatch(/re-run `next`/);
+    expect(d.message).not.toContain("Then stop.");
+    expect(d.message).not.toContain("jump");
+    // The two commands it names do the whole thing on this state.
+    const words = recompose.split(" ");
+    const applied = runTool(proj, "aidlc.ts", words.slice(words.indexOf("engine")));
+    expect(applied.status, applied.out).toBe(0);
+    const skipped = runTool(proj, "aidlc-orchestrate.ts", [
+      "report", "--stage", "deployment-pipeline", "--result", "skipped", "--reason", "the person asked to skip it",
+    ]);
+    expect(skipped.status, skipped.out).toBe(0);
+    const after = readFileSync(statePath, "utf-8");
+    expect(after).toContain("- [S] deployment-pipeline");
+    expect(after).toContain("- [ ] deployment-execution \u2014 SKIP");
+    // Nothing is left on the plan, so the work is finished.
+    expect(after).toContain("- **Status**: Completed");
+  });
+
+  // The other order, seen on Codex: "approve, and skip deployment" at the Build
+  // and Test gate. The skip's step ended the turn, so the approval in the same
+  // message was never recorded and the person approved twice. At an open gate
+  // the step hands the agent the gate's report for the answer their message
+  // gave, and the work goes on from the changed plan.
+  test("a skip typed at an open gate hands the agent the gate's answer to record, then the work goes on", () => {
+    const proj = setupIntegrationProject({ withState: "state-operation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace("- [x] build-and-test", "- [?] build-and-test")
+      .replace("- [x] ci-pipeline", "- [ ] ci-pipeline")
+      .replace("- [-] deployment-pipeline", "- [ ] deployment-pipeline")
+      .replace("- **Lifecycle Phase**: OPERATION", "- **Lifecycle Phase**: CONSTRUCTION")
+      .replace("- **Current Stage**: deployment-pipeline", "- **Current Stage**: build-and-test")
+      .replace("- **Next Stage**: environment-provisioning", "- **Next Stage**: ci-pipeline"));
+    const d = nextDirective(proj, ["--skip", "deployment-pipeline,deployment-execution"]);
+    expect(d.kind).toBe("print");
+    expect(d.message).toContain("engine recompose --skip deployment-pipeline,deployment-execution`");
+    expect(d.message).toContain('"Skipped Deployment Pipeline and Deployment Execution. You can undo that any time."');
+    expect(d.message).toContain("the open Build and Test question");
+    expect(d.message).toContain("report --stage build-and-test --result approved --user-input Approve");
+    expect(d.message).toContain("re-run `next`");
+    expect(d.message).toContain("otherwise stop");
+    expect(d.message).not.toContain("Then stop.");
+  });
+
+  // Work the person paused stays paused: the line already asks whether to pick
+  // it back up, so skipping the stage it stands on must not also tell the agent
+  // to carry on with the work they stopped.
+  test("a skip over parked work says it is still paused and does not carry on", () => {
+    const proj = setupIntegrationProject({ withState: "state-operation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    writeFileSync(statePath, `${readFileSync(statePath, "utf-8")}- **Parked**: 2026-10-11T00:00:00Z\n- **Parked At Stage**: deployment-pipeline\n`);
+    const d = nextDirective(proj, ["--skip", "deployment-pipeline,deployment-execution"]);
+    expect(d.kind).toBe("print");
+    expect(d.message).toContain("Your work is still paused. Do you want to pick it back up now?");
+    expect(d.message).not.toContain("re-run `next` to carry on with the work");
+    // The way back to the work is the person's yes, which the agent is told to
+    // wait for; the report that skips the started stage is still named.
+    expect(d.message).toContain("report --stage deployment-pipeline --result skipped");
+    expect(d.message).toContain("next --resume");
   });
 });
 

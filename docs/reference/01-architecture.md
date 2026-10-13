@@ -93,7 +93,7 @@ Crossing the two axes gives four quadrants. Three are populated; one is intentio
 
 The framework doesn't produce per-workflow artefacts because such outputs would have to ship with the distribution — which makes them framework-authored harness config, not per-workflow output. The empty cell is the routing rule's signature, not a gap.
 
-> **Framework-authored = ships from upstream; treat as immutable in your project.** Nothing in git or the file system enforces this — `.claude/` is editable territory and you can edit `org.md` or the `phases/*.md` files if you want. But the convention is: override at `team.md` / `project.md` (the right-hand cell) instead of mutating the framework defaults. That keeps your overrides visible at review time, lets the framework upgrade cleanly, and prevents drift between projects sharing the same framework version.
+> **Framework-authored = ships from upstream; treat as immutable in your project.** Nothing in git or the file system enforces this — `.claude/` is editable territory and you can edit `org.md` or the `phases/*.md` files if you want. But the convention is: add your practices at `team.md` / `project.md` (the right-hand cell) instead of mutating the framework defaults. That keeps your additions visible at review time, lets the framework upgrade cleanly, and prevents drift between projects sharing the same framework version.
 
 ### Boundary tests for placing a new concern
 
@@ -117,9 +117,9 @@ The top row partitions further by **form of content**:
 
 - **Framework harness mechanics** → frontmatter / JSON. Workflow ordering, stage definitions, artifact production, gate semantics. Read by tools deterministically. Lives in `.claude/skills/`, `.claude/tools/data/`.
 - **Framework domain reference** → agent KB prose under `.claude/knowledge/aidlc-<agent>-agent/`. The menu of options for a domain (the 5 branching strategies, the deployment patterns, the testing methodologies). Read by the owning agent when it needs the menu.
-- **Framework methodology defaults** → prose at `aidlc/spaces/<active-space>/memory/org.md`. What the framework recommends until a team affirms otherwise. Written in the team's voice (because if the team doesn't override, the org defaults *are* the team's voice).
+- **Framework methodology defaults** → prose at `aidlc/spaces/<active-space>/memory/org.md`. What the framework recommends until a team affirms otherwise. Written in the team's voice (because until the team adds its own practices, the org defaults *are* the team's voice).
 - **Team practices** → prose at `aidlc/spaces/<active-space>/memory/team.md`. The team's selection — "this is how we work", populated by practices-discovery's affirmation gate. Read by agents at decision points (delivery-planning reads branching strategy; the conductor reads walking-skeleton stance in `SKILL.md`).
-- **Project overrides** → prose at `aidlc/spaces/<active-space>/memory/project.md`. Project-specific corrections that override team and org defaults; also populated by practices-discovery's affirmation gate.
+- **Project overrides** → prose at `aidlc/spaces/<active-space>/memory/project.md`. Project-specific corrections loaded alongside the team and org defaults — every applicable layer is additive; fields that declare their own resolution use their own resolvers (`tier_cap` gives project precedence over team and org); also populated by practices-discovery's affirmation gate.
 - **Guardrails** (`## Forbidden`, `## Mandated`, `## Corrections` sections) — present in `org.md`, `team.md`, and `project.md`. Corrective rules for agents — `ALWAYS X`, `NEVER Y`. Loaded into agent context continuously.
 
 ### What not to put in `.claude/` directly
@@ -164,7 +164,7 @@ Twenty-nine stages use inline execution, including all three Initialization stag
 
 **Subagent stages** -- The conductor prepares context (prior artifacts, project description, workspace findings) and delegates to a Claude Code Task tool subagent. The subagent executes autonomously and returns a structured summary. This is used for stages that benefit from focused, independent work without user interaction during execution. If a subagent call fails, the conductor retries once with a reduced-context prompt, then offers the user inline execution or skip-and-revisit as fallback options.
 
-Four stages use dispatched execution: Reverse Engineering (2.1, `mode: pipeline` — developer scan then architect synthesis-and-write), Practices Discovery (2.2, `mode: subagent` — pipeline-deploy lead draft, mutually blind quality/developer/devsecops spokes, human interview, lead integration), User Stories (2.4, `mode: mob` — product lead draft plus design/developer/quality contribution rounds), and Code Generation (3.5, focused developer subagent). With collaborators off (every shipped scope except `enterprise`), the first three run their lead agent alone. The complete topology is 29 inline / 2 subagent / 1 pipeline / 1 mob. Workspace Detection (0.2) runs deterministically inside `aidlc-utility intent-create`, not as a subagent.
+Four stages use dispatched execution: Reverse Engineering (2.1, `mode: pipeline` — developer scan then architect synthesis-and-write), Practices Discovery (2.2, `mode: subagent` — pipeline-deploy lead draft, mutually blind quality/developer/devsecops spokes, human interview, lead integration), User Stories (2.4, `mode: mob` — product lead draft plus design/developer/quality contribution rounds), and Code Generation (3.5, focused developer subagent for the build; the plan step before the person's approval runs inline, in the conductor's own context, and the step says so). With collaborators off (every shipped scope except `enterprise`), the first three run their lead agent alone. The complete topology is 29 inline / 2 subagent / 1 pipeline / 1 mob. Workspace Detection (0.2) runs deterministically inside `aidlc-utility intent-create`, not as a subagent.
 
 ```mermaid
 flowchart LR
@@ -508,7 +508,12 @@ default terminal profile (`terminal.integrated.defaultProfile.windows`): in
 Command Prompt the agent's AI-DLC commands split the person's words and every
 command reports exit code -1, so `core/tools/aidlc-kiro-ide-terminal.ts` sets
 it to PowerShell on the same kinds of answer (`--kiro-terminal powershell`) and
-keeps it in the `kiro-ide-terminal` marker.
+keeps it in the `kiro-ide-terminal` marker. In that terminal (TERM_PROGRAM=kiro
+and the shell the chat's hook recorded) each tool entry also runs the tool as a
+child behind an `AI-DLC reply:` pointer line and keeps the reply under
+`aidlc/.aidlc-sessions/replies/`, and rejoins the single-quote pair cmd.exe left
+on the arguments, since the engine writes its reply straight to fd 1 and Kiro
+reads the terminal one second after sending the command.
 
 Every successful non-dry-run config transaction then runs a cheap post-apply
 sweep against the installed bytes. The runtime leg resolves only the binary
@@ -810,6 +815,8 @@ aidlc/                                    # neutral, harness-independent, commit
 precedence `in-process sessionId > AIDLC_SESSION_OVERRIDE > the chat the host
 names in the agent's shell (CODEX_THREAD_ID; CLAUDE_CODE_SESSION_ID while its
 CLAUDE_PID process is alive; KIRO_SESSION_ID) > PID ancestry > none`. Hook payload identity uses the in-process option and is authoritative.
+When the host or a hook payload names the chat, the process ancestry is not walked at all: its answer could not
+change the result.
 Whatever id that yields passes through `resolveChat` before a binding is read: a
 helper's id maps to its root chat through the `<id>.helper-of` record the adapter
 wrote (Codex agents and review threads, Kiro CLI delegations, Copilot subagents),
@@ -889,7 +896,11 @@ so a recycled parent PID cannot join the walk to a newer process. Receipts
 without a verified Windows creation time do not establish session ownership.
 Lookup failure, an ambiguous parent edge, or exhaustion of the existing
 50 ms / 64-ancestor budget yields no ancestry session; null barriers and the
-negative cache retain their existing behavior. Linux and macOS lookups are unchanged.
+negative cache retain their existing behavior. Linux reads `/proc` for each hop; macOS
+reads the whole process table (pid, parent, `lstart`) with one `ps` call per walk and
+every hop from it, so a deep chain fits the same budget and the recorded start times
+are the strings a per-pid lookup prints. One process reuses that table for up to a
+second (the negative cache's window); a SessionStart write clears it.
 
 Multiple Kiro IDE chats
 and opencode sessions can still share one process; process ancestry cannot
@@ -946,11 +957,11 @@ readers read the rows they share once (`copiedAuditBlocks` in
 
 7. **Flat agent files** -- Each agent is a single `.md` file in `agents/` (not a subdirectory with `agent.md` + `knowledge/`). This simplifies the structure and makes agents discoverable. Methodology knowledge lives separately in `knowledge/[agent]/`.
 
-8. **Scope-driven adaptive depth** -- Eleven named scopes (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, classic, workshop, express) plus auto-detect determine which stages execute and at what depth. Each scope is a `.claude/scopes/aidlc-<name>.md` file (identity); membership is a per-stage `scopes:` frontmatter tag, transposed at compile into the EXECUTE/SKIP grid (`.claude/tools/data/scope-grid.json`, authoritative) and compiled into a summary table in SKILL.md (informational). NL keyword→scope inference reads each scope's `keywords` from its `.md` frontmatter. The user can override at any approval gate.
+8. **Scope-driven adaptive depth** -- Eleven named scopes (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, classic, workshop, express) plus a plan the agent proposes from freeform words determine which stages execute and at what depth. Each scope is a `.claude/scopes/aidlc-<name>.md` file (identity); membership is a per-stage `scopes:` frontmatter tag, transposed at compile into the EXECUTE/SKIP grid (`.claude/tools/data/scope-grid.json`, authoritative) and compiled into a summary table in SKILL.md (informational). The plan proposal step hands each scope's `keywords` from its `.md` frontmatter to the agent as hints; no tool matches them. The user can override at any approval gate.
 
 9. **Minimal rules** -- Only guardrails (~35 lines total) live in the active space memory layer (`aidlc/spaces/<active-space>/memory/`, pulled in via the `.claude/rules/aidlc.md` @-import stub). Everything else (verification, brownfield safeguards, audit format, adaptive patterns) lives in `knowledge/aidlc-shared/` or the static/conditional protocol files. This prevents context bloat in non-AI-DLC conversations since rules are always loaded.
 
-10. **Self-learning loop** -- When a human corrects agent behavior, the correction can become a persistent Rule. The §13 Learnings Ritual (tool-as-actor: `aidlc-learnings.ts` surfaces and persists; the user confirms) writes each confirmed learning as a practice into the active space memory layer — `aidlc/spaces/<active-space>/memory/project.md` (default), one-click promote to `memory/team.md` — or scaffolds a Sensor, applying on the next workflow's compile. See [Rule System](08-rule-system.md).
+10. **Self-learning loop** -- When a human corrects agent behavior, the correction can become a persistent Rule. The §13 Learnings Ritual (tool-as-actor: `aidlc-learnings.ts` surfaces and persists; the user confirms) writes each confirmed learning as a practice into the active space memory layer — `aidlc/spaces/<active-space>/memory/project.md` (default), one-click promote to `memory/team.md` — applying from the next stage delivery of the in-flight workflow — or scaffolds a Sensor, which binds at the next stage-graph compile. See [Rule System](08-rule-system.md).
 
 11. **Phase boundary verification** -- Traceability checks run automatically at phase transitions (Initialization->Ideation auto-proceed, Ideation->Inception, Inception->Construction, Construction->Operation). This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 

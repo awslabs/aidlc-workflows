@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:adopt, subcommand:aidlc-unit:claim, subcommand:aidlc-unit:release, subcommand:aidlc-unit:participate, subcommand:aidlc-unit:status, subcommand:aidlc-utility:claim, subcommand:aidlc-utility:release, subcommand:aidlc-utility:participate, subcommand:aidlc-state:sync-unit-scope-stage, subcommand:aidlc-orchestrate:next, function:UNIT_SCOPE_FILE, function:UNIT_PARKED_FILE, function:CLAIM_GENERATIONS_FILE, function:UNIT_PARTICIPANT_FILE, function:CLAIM_REGISTRY_CACHE_FILE, function:UNIT_RELEASE_PENDING_FILE, function:unitScopePath, function:unitParkedPath, function:claimGenerationsPath, function:unitParticipantPath, function:claimRegistryCachePath, function:unitReleasePendingPath, function:readUnitScopeStamp, function:readApplicableTeamUnitScopeStamp, function:writeUnitScopeStamp, function:clearUnitScopeStamp, function:readClaimGenerations, function:writeClaimGeneration, function:clearClaimGeneration, function:readUnitClaimRegistryCache, function:writeUnitClaimRegistryCache, function:claimAttemptFields, function:eventMatchesClaimAttempt, function:effectiveUnitGateRhythm, function:hasAnyUnitClaimRefs, function:validateLiveUnitScope, function:requireLiveClaimForTeamUnit, function:isWalkingSkeletonUnitOnMain, function:worktreeClaimBoundaryMatches, function:ensureCloneId, function:invalidateLiveClaimPayloadCache
+// covers: subcommand:aidlc-unit:adopt, subcommand:aidlc-unit:claim, subcommand:aidlc-unit:release, subcommand:aidlc-unit:participate, subcommand:aidlc-unit:status, subcommand:aidlc-utility:claim, subcommand:aidlc-utility:release, subcommand:aidlc-utility:participate, subcommand:aidlc-state:sync-unit-scope-stage, subcommand:aidlc-orchestrate:next, function:UNIT_SCOPE_FILE, function:UNIT_PARKED_FILE, function:CLAIM_GENERATIONS_FILE, function:UNIT_PARTICIPANT_FILE, function:CLAIM_REGISTRY_CACHE_FILE, function:UNIT_RELEASE_PENDING_FILE, function:unitScopePath, function:unitParkedPath, function:claimGenerationsPath, function:unitParticipantPath, function:claimRegistryCachePath, function:unitReleasePendingPath, function:readUnitScopeStamp, function:readApplicableTeamUnitScopeStamp, function:writeUnitScopeStamp, function:clearUnitScopeStamp, function:readClaimGenerations, function:writeClaimGeneration, function:clearClaimGeneration, function:readUnitClaimRegistryCache, function:writeUnitClaimRegistryCache, function:claimAttemptFields, function:eventMatchesClaimAttempt, function:effectiveUnitGateRhythm, function:hasAnyUnitClaimRefs, function:validateLiveUnitScope, function:requireLiveClaimForTeamUnit, function:isWalkingSkeletonUnitOnMain, function:teamSkeletonOn, function:worktreeClaimBoundaryMatches, function:ensureCloneId, function:invalidateLiveClaimPayloadCache
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -28,7 +28,6 @@ import {
   cleanupTestProject,
   createTestProject,
   seedAidlcMemory,
-  seededAuditDir,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -67,6 +66,7 @@ function stateBody(
   scope = "feature",
   skeletonComplete = true,
   rhythm = "per-stage",
+  stance = "on",
 ): string {
   const skeletonMarker = skeletonComplete ? "[x]" : "[ ]";
   return `# AI-DLC State Tracking
@@ -76,7 +76,7 @@ function stateBody(
 - **Project Type**: Greenfield
 - **Scope**: ${scope}
 - **State Version**: 8
-- **Skeleton Stance**: on
+- **Skeleton Stance**: ${stance}
 
 ## Runtime State
 - **Revision Count**: 0
@@ -134,27 +134,18 @@ function makeSeed(options: {
   scope?: string;
   skeletonComplete?: boolean;
   rhythm?: "per-stage" | "unit-end";
+  stance?: "on" | "off" | "scope-dependent";
 } = {}): { seed: string; remote: string } {
   const seed = createTestProject();
   tempDirs.push(seed);
   seedAidlcMemory(seed);
   writeFileSync(
     seededStateFile(seed),
-    stateBody(options.scope, options.skeletonComplete, options.rhythm),
+    stateBody(options.scope, options.skeletonComplete, options.rhythm, options.stance),
   );
   const depDir = join(seededRecordDir(seed), "inception", "units-generation");
   mkdirSync(depDir, { recursive: true });
   writeFileSync(join(depDir, "unit-of-work-dependency.md"), dependencyBody());
-  if (options.skeletonComplete !== false) {
-    mkdirSync(seededAuditDir(seed), { recursive: true });
-    writeFileSync(
-      join(seededAuditDir(seed), "skeleton.md"),
-      "## Bolt Started\n**Timestamp**: 2026-08-20T00:00:00Z\n" +
-        "**Event**: BOLT_STARTED\n**Bolt names**: skeleton\n**Walking skeleton**: true\n\n---\n" +
-        "## Bolt Completed\n**Timestamp**: 2026-08-20T00:00:01Z\n" +
-        "**Event**: BOLT_COMPLETED\n**Bolt names**: skeleton\n\n---\n",
-    );
-  }
   writeFileSync(
     join(seed, ".gitignore"),
     "aidlc/.aidlc-clone-id\naidlc/.aidlc-unit-scope.json\naidlc/.aidlc-unit-parked\n" +
@@ -367,7 +358,9 @@ describe("t325 atomic team Unit claims", () => {
       cloneOn,
     );
     expect(blocked.status).not.toBe(0);
-    expect(blocked.out).toContain("walking skeleton");
+    expect(JSON.parse(blocked.out).error).toBe(
+      'the walking skeleton, Unit "skeleton", is not complete on origin/main yet',
+    );
 
     const skeletonOff = makeSeed({
       scope: "express",
@@ -386,6 +379,42 @@ describe("t325 atomic team Unit claims", () => {
     );
     expect(waiting.status).not.toBe(0);
     expect(waiting.out).toContain("beta waits on alpha");
+  });
+
+  // #1288: the team path walks the skeleton on main through its Unit gates and
+  // records it in Unit Progress; it writes no Bolt rows. The picker and the
+  // claim read that same row.
+  test("a skeleton Unit done on main opens the claims the picker offers (#1288)", () => {
+    const { remote } = makeSeed({ scope: "workshop" });
+    const team = clone(remote, "after-skeleton");
+    const status = run(UNIT, ["status"], team);
+    expect(status.status, status.out).toBe(0);
+    expect(JSON.parse(status.stdout).claimable).toEqual(["alpha", "gamma"]);
+    expect(run(UNIT, ["participate"], team).status).toBe(0);
+    expect(nextDirective(team)).toMatchObject({
+      kind: "ask",
+      ask_type: "unit-claim",
+      claimable_units: ["alpha", "gamma"],
+    });
+    const claimed = run(UNIT, ["claim", "alpha", "--team", "after-skeleton"], team);
+    expect(claimed.status, claimed.out).toBe(0);
+  });
+
+  test("a recorded Skeleton Stance off opens claims at once on a skeleton-on scope", () => {
+    const { remote } = makeSeed({ skeletonComplete: false, stance: "off" });
+    const team = clone(remote, "stance-off");
+    const status = run(UNIT, ["status"], team);
+    expect(status.status, status.out).toBe(0);
+    expect(JSON.parse(status.stdout)).toMatchObject({
+      claimable: ["skeleton"],
+      waiting: [
+        { unit: "alpha", blockedBy: ["skeleton"] },
+        { unit: "beta", blockedBy: ["alpha"] },
+        { unit: "gamma", blockedBy: ["skeleton"] },
+      ],
+    });
+    const claimed = run(UNIT, ["claim", "skeleton", "--team", "stance-off"], team);
+    expect(claimed.status, claimed.out).toBe(0);
   });
 
   test("malformed public claim flags fail closed instead of advancing", () => {
@@ -1475,6 +1504,17 @@ describe("t325 atomic team Unit claims", () => {
       seed,
     );
     expect(valid.status, valid.out).toBe(0);
+
+    // A recorded Skeleton Stance off has the same answer on the Bolt path as
+    // on the claim path: no skeleton, so the first Unit takes a claim too.
+    const off = makeSeed({ skeletonComplete: false, stance: "off" });
+    const noSkeleton = run(
+      BOLT,
+      ["start", "--name", "skeleton", "--batch", "1", "--walking-skeleton", "true"],
+      off.seed,
+    );
+    expect(noSkeleton.status).not.toBe(0);
+    expect(noSkeleton.out).toContain("first DAG Unit");
   });
 
   test("direct audit fork and merge use the same claimed shard authority", () => {

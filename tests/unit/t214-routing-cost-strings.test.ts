@@ -32,6 +32,7 @@ import {
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
+  proposalFollowUp,
   removeWorkspaceRecord,
   resetAidlcEnv,
   seedStateFile,
@@ -101,7 +102,8 @@ interface RunResult {
 }
 
 function runNext(proj: string, args: string[], env: Record<string, string> = {}): RunResult {
-  const res = spawnSync(BUN, [ORCH, "next", ...args, "--project-dir", proj], {
+  // Ahead of the person's words, as every caller of `next` builds it.
+  const res = spawnSync(BUN, [ORCH, "next", "--project-dir", proj, ...args], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
@@ -113,7 +115,11 @@ function runNext(proj: string, args: string[], env: Record<string, string> = {})
       ...env,
     },
   });
-  return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  let directive: unknown = null;
+  try { directive = JSON.parse((res.stdout ?? "").trim()); } catch { /* the caller reads the raw output */ }
+  const proposal = proposalFollowUp(directive);
+  return proposal === null ? { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` } : runNext(proj, proposal, env);
 }
 
 function runUtility(proj: string, args: string[]): RunResult {
@@ -232,8 +238,9 @@ describe("t214 creation print carries the cost parenthetical", () => {
   test("next bugfix prints intent-create AND the computed cost", () => {
     proj = createTestProject();
     // A genuinely empty workspace creates instead of prompting to pick (t198:208).
+    // The plan with a description creates; named alone it first asks (#2355).
     removeWorkspaceRecord(proj);
-    const d = directiveOf(runNext(proj, ["bugfix"]).out);
+    const d = directiveOf(runNext(proj, ["bugfix", "Fix the login crash"]).out);
     expect(d.kind).toBe("print");
     const m = String(d.message);
     expect(m).toContain("intent create --scope bugfix");
@@ -260,7 +267,7 @@ describe("t214 creation print carries the cost parenthetical", () => {
   test("feature creation preview discloses the environment sensor kill switch", () => {
     proj = createTestProject();
     removeWorkspaceRecord(proj);
-    const result = runNext(proj, ["--scope", "feature", "--sensors", "on"], {
+    const result = runNext(proj, ["--scope", "feature", "--sensors", "on", "add login support"], {
       AIDLC_DISABLE_SENSORS: "1",
     });
     expect(result.rc, result.out).toBe(0);
@@ -273,7 +280,7 @@ describe("t214 creation print carries the cost parenthetical", () => {
     test(`next ${scope} retains the derived per-unit clause`, () => {
       proj = createTestProject();
       removeWorkspaceRecord(proj);
-      const d = directiveOf(runNext(proj, [scope]).out);
+      const d = directiveOf(runNext(proj, [scope, "add login support"]).out);
       expect(d.kind).toBe("print");
       const expected = counts(GRID[scope].stages, true);
       expect(expected.perUnitStages).toBeGreaterThan(0);

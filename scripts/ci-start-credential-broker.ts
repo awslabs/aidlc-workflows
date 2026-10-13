@@ -61,11 +61,12 @@ export async function startBrokerProcess(input: {
 if (import.meta.main) {
   try {
     const family = process.argv[2];
-    if (!["claude-sdk", "claude-tui", "codex", "opencode"].includes(family)) throw new Error("Unsupported broker family");
+    if (!["claude-sdk", "claude-tui", "codex", "copilot", "opencode"].includes(family)) throw new Error("Unsupported broker family");
     const { BROKER_ACCESS_KEY_ID, BROKER_SECRET_ACCESS_KEY, BROKER_SESSION_TOKEN } = process.env;
     if (!BROKER_ACCESS_KEY_ID || !BROKER_SECRET_ACCESS_KEY || !BROKER_SESSION_TOKEN) throw new Error("Broker startup credentials are missing");
     if (!process.env.GITHUB_ENV) throw new Error("GITHUB_ENV is required");
-    const region = family === "codex" ? "us-east-2" : "us-east-1";
+    // Codex and Copilot reach the Mantle model, which the CI role has in us-east-2.
+    const region = family === "codex" || family === "copilot" ? "us-east-2" : "us-east-1";
     const identity = await startBrokerProcess({
       accessKeyId: BROKER_ACCESS_KEY_ID, secretAccessKey: BROKER_SECRET_ACCESS_KEY,
       sessionToken: BROKER_SESSION_TOKEN, region,
@@ -85,7 +86,8 @@ if (import.meta.main) {
         CLAUDE_CODE_USE_BEDROCK: "1", CLAUDE_CODE_SKIP_BEDROCK_AUTH: "1",
         ANTHROPIC_BEDROCK_BASE_URL: url,
       });
-    } else {
+    } else if (family !== "copilot") {
+      // Copilot needs no AWS profile: the sandbox points its BYOK settings at the broker.
       exported.AWS_ENDPOINT_URL_BEDROCK_RUNTIME = url;
       const awsDirectory = join(homedir(), ".aws");
       mkdirSync(awsDirectory, { recursive: true, mode: 0o700 });

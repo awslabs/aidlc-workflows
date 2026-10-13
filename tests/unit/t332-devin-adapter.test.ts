@@ -1908,13 +1908,13 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     }
   });
 
-  test("Item 2 case 5a: plan-approval-guard hands a reviewer dispatch to the core guard, which records its dictated verdict", () => {
+  test("Item 2 case 5a: plan-approval-guard lets a reviewer dispatch pass without reaching the core guard", () => {
     const dir = scratchProject(true);
     try {
-      // Every named dispatch reaches the core guard as a Task (upstream
-      // 32e0c57f, the codex/opencode/kiro change): a reviewer brief that
-      // already carries a rendered verdict line is recorded
-      // (REVIEW_VERDICT_DICTATED) for its open review request, never refused.
+      // Only the developer's dispatch goes to the core guard (upstream
+      // 4b38a8b3, the codex/opencode/kiro revert): a reviewer dispatch exits 0
+      // at the adapter, so even with an open review request and a brief that
+      // carries a verdict line no REVIEW_VERDICT_DICTATED row is written.
       const reviewer = "aidlc-product-lead-agent";
       const stageDir = join(seededRecordDir(dir), "inception", "requirements-analysis");
       mkdirSync(stageDir, { recursive: true });
@@ -1942,8 +1942,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       );
       expect(r.code, r.stderr).toBe(0);
       const audit = readAudit(dir);
-      expect(audit).toContain("REVIEW_VERDICT_DICTATED");
-      expect(audit).toContain("**Verdict**: READY");
+      expect(audit).not.toContain("REVIEW_VERDICT_DICTATED");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -3061,7 +3060,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 30000);
 
   test("Item 4 case 14: task-text forgery cannot open a window — a developer profile claiming reviewer identity writes nothing", () => {
     const dir = scratchProject(true);

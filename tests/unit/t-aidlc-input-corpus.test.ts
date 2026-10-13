@@ -142,9 +142,9 @@ for (const category of categories) {
 
         // The record: the hook keeps the typed text, the words and the settings, under every host that took the turn
         // (Claude Code for every item, the others for the sampled ones). No record is owed when the hook never ran
-        // (hooks off), and none is written today for a chat that has not joined or an unattended run (those items
-        // wait on their own changes; their record check is the words expectation, when set).
-        const recordOwed = hookRuns(item) && !["second-chat", "unattended"].includes(item.state);
+        // (hooks off), and none is written today for an unattended run (those items wait on their own change; their
+        // record check is the words expectation, when set). A chat that has not joined the work keeps its words too.
+        const recordOwed = hookRuns(item) && item.state !== "unattended";
         const hosts = hookRuns(item) ? ["claude", ...(hostHookSample.has(item.id) ? HOST_HOOKS : [])] : [];
         for (const harness of hosts as Harness[]) {
           const hook = seen!.hooks[harness];

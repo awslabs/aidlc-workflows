@@ -1359,6 +1359,11 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(req.status).toBe(0);
     const emitted = JSON.parse(req.stdout.trim().split("\n").pop()!);
     expect(emitted.emitted).toBe("REVIEW_REQUESTED");
+    // The time the reviewer's `**Date:**` line carries, handed over here so
+    // the reviewer runs no command for it (two live runs had the reviewer
+    // subagent call the engine by absolute path, which asked the person to
+    // allow an AI-DLC internal step).
+    expect(emitted.reviewed_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
     expect(emitted.recordVerdict).toBe(
       "bun .claude/tools/aidlc-log.ts review --stage requirements-analysis " +
         "--reviewer aidlc-product-lead-agent --iteration 1 " +

@@ -524,9 +524,11 @@ dispatch surface — a hand-authored agent-v1 JSON plus registration in the
 conductor's `trustedAgents` list on Kiro CLI, an agent config TOML (the shipped
 `aidlc-*-agent.toml` shape) on Codex, or a native `.opencode/agents/` subagent
 file on OpenCode. The `kiro-ide` row (Kiro IDE and Kiro CLI v3) instead dispatches the installed agent Markdown
-itself, but only when `tools:` is non-empty and `permissions.rules` contains at
-least one well-formed `capability`/`effect`/`match` entry; empty permissions,
-missing or empty rules, and malformed entries are rejected. Compose therefore
+itself, but only when `tools:` is non-empty and `permissions.rules` is a
+non-empty list of well-formed `capability`/`effect`/`match` entries whose effect
+is `allow`, `ask`, or `deny` (core's own personas carry all three); empty
+permissions, missing or empty rules, malformed entries, and any other effect
+are rejected. Compose therefore
 rejects a plugin stage whose
 dispatched topology (`mob`, `pipeline`, or `subagent` for the lead and
 supports; a `reviewer:` on any gated stage regardless of mode) names an agent

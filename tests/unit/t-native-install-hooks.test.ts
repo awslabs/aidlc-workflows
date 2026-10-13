@@ -180,7 +180,12 @@ beforeAll(() => {
       matcher: group.matcher ?? "",
       command: hook.command ?? "",
     }))));
-  statusLine = settings.statusLine?.command ?? "";
+  // AI-DLC's status line ships in harness.json and reaches the person's own
+  // settings only on their yes (#1407).
+  statusLine = (JSON.parse(readFileSync(join(project, ".claude", "tools", "data", "harness.json"), "utf-8")) as {
+    statusLine?: { command?: string };
+  }).statusLine?.command ?? "";
+  expect(settings.statusLine).toBeUndefined();
 }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 afterAll(() => {

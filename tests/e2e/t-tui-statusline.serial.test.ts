@@ -118,10 +118,11 @@ describe("t-tui-statusline (statusline renders in a real terminal)", () => {
         const settingsPath = join(destClaude, "settings.json");
         expect(existsSync(settingsPath)).toBe(true);
         // P0a — the retired spike (git show 4ce826b:tests/spike/t-tui-statusline.sh
-        // ~L55) also required settings.json to CARRY the "statusLine" key, not just
-        // exist: that key is what wires aidlc-statusline.ts into the TUI, so a copy
-        // that drops it would render no `[AIDLC]` line at all. Restore that guard.
-        expect(readFileSync(settingsPath, "utf8")).toContain('"statusLine"');
+        // ~L55) also required the "statusLine" key to be wired: that key is what
+        // runs aidlc-statusline.ts in the TUI. It is the person's own choice now,
+        // in .claude/settings.local.json (#1407), never the shared settings.json.
+        expect(readFileSync(settingsPath, "utf8")).not.toContain('"statusLine"');
+        expect(readFileSync(join(destClaude, "settings.local.json"), "utf8")).toContain('"statusLine"');
 
         // --- step 2: launch the claude TUI ------------------------------------
         const started = drive([
@@ -136,6 +137,10 @@ describe("t-tui-statusline (statusline renders in a real terminal)", () => {
           "40",
           "--",
           "claude",
+          // AI-DLC's status line is the person's choice, in their own
+          // .claude/settings.local.json (#1407): load it beside the project file.
+          "--setting-sources",
+          "project,local",
           "--dangerously-skip-permissions",
         ]);
         expect(started.rc).toBe(0);

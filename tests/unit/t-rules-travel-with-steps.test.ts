@@ -21,8 +21,15 @@ import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { stageValidationAuditFields } from "../../dist/claude/.claude/tools/aidlc-validity.ts";
 import {
-  AIDLC_SRC, cleanupTestProject, createOrchestrationTestProject, createTestProject, runOrchestrateNext,
-  seedAidlcMemory, seedBoltDag, seededStateFile,
+  AIDLC_SRC,
+  cleanupTestProject,
+  createOrchestrationTestProject,
+  createTestProject,
+  followProposal,
+  runOrchestrateNext,
+  seedAidlcMemory,
+  seedBoltDag,
+  seededStateFile,
 } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -43,9 +50,10 @@ const STAGE_VALIDITY_SAY =
 const CHANGE_NOTICES_NOTE =
   "Say each change_notices line to the person once, word for word, as your own sentence with nothing in front of " +
   "it, and add nothing about why.";
-const QUESTION_NOTE =
-  "This question is for the person, not for you: show it to them with its choices as given, end your turn, and " +
-  "act only on their reply.";
+// The question note names the install's own `next` for a pick whose command returns no step.
+const questionNote = (directiveModule as unknown as { questionNote: (invocation: string) => string }).questionNote;
+const QUESTION_NOTE = questionNote("bun .claude/tools/aidlc-orchestrate.ts");
+const planOfferQuestionNote = (directiveModule as unknown as { planOfferQuestionNote: (invocation: string) => string }).planOfferQuestionNote;
 
 type Json = Record<string, unknown>;
 type WithAgentNotes = (directive: Json, invocation: string) => Json;
@@ -88,7 +96,8 @@ function editTeamPractices(proj: string): void {
 }
 
 function next(proj: string, args: string[] = []): Json {
-  const result = runOrchestrateNext(ORCH, proj, args);
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const result = followProposal(runOrchestrateNext(ORCH, proj, args), ORCH, proj);
   expect(result.directive, result.stderr).not.toBeNull();
   return result.directive as Json;
 }
@@ -167,7 +176,9 @@ describe("t-rules-travel-with-steps: a person-facing field says what to do with 
     // New work with no plan named: the plan question.
     const directive = next(proj, ["--new-intent", "fix the login redirect"]);
     expect(directive.kind, JSON.stringify(directive).slice(0, 300)).toBe("ask");
-    expect(directive.question_note).toBe(QUESTION_NOTE);
+    // The plan offer's note is the shared one plus its own clause ("Use a different plan" needs the plan named).
+    expect(String(directive.question_note).startsWith(QUESTION_NOTE)).toBe(true);
+    expect(String(directive.question_note)).toContain('Their "Use a different plan" answer needs the plan named');
   });
 
   test("Construction's first step, before the walking-skeleton stance, names the stance step", () => {
@@ -270,7 +281,9 @@ describe("t-rules-travel-with-steps: the notes and their checks", () => {
     // The agent's own recovery work is not a question for the person.
     const own = add({ kind: "ask", ask_type: "guard-recovery", question: "q", agent_work: true }, "bun x.ts");
     expect(own.question_note).toBeUndefined();
-    expect(add({ kind: "ask", ask_type: "scope-confirm", question: "q" }, "bun x.ts").question_note).toBe(QUESTION_NOTE);
+    expect(add({ kind: "ask", ask_type: "unit-paused", question: "q" }, "bun x.ts").question_note).toBe(questionNote("bun x.ts"));
+    // The plan offer's note is its own variant: the shared note plus the clause for "Use a different plan".
+    expect(add({ kind: "ask", ask_type: "scope-confirm", question: "q" }, "bun x.ts").question_note).toBe(planOfferQuestionNote("bun x.ts"));
     // AIDA #2094 F1: with no skill the plan question's answer had no recording
     // step, so "looks good, build it" got the same question again.
     const plan = String(
@@ -278,7 +291,7 @@ describe("t-rules-travel-with-steps: the notes and their checks", () => {
         { kind: "ask", ask_type: "plan-approval", question: "q" }, "bun x/aidlc-orchestrate.ts", "bun x/aidlc-log.ts",
       ).question_note,
     );
-    expect(plan.startsWith(QUESTION_NOTE.replace(/\.$/, ""))).toBe(true);
+    expect(plan.startsWith(questionNote("bun x/aidlc-orchestrate.ts").replace(/\.$/, ""))).toBe(true);
     expect(plan).toContain(
       "record the choice they made with `bun x/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval " +
         "--details '<their choice>'`, then run `bun x/aidlc-orchestrate.ts next`",
@@ -317,11 +330,13 @@ describe("t-rules-travel-with-steps: the notes and their checks", () => {
 });
 
 describe("t-rules-travel-with-steps: the Kiro agent prompts", () => {
-  const ide = readFileSync(join(REPO, "dist", "kiro-ide", ".kiro", "agents", "aidlc.md"), "utf-8");
+  const ide = readFileSync(join(REPO, "dist", "kiro-ide", ".kiro", "agents", "aidlc-aidlc.md"), "utf-8");
   const cli = (JSON.parse(readFileSync(join(REPO, "dist", "kiro", ".kiro", "agents", "aidlc.json"), "utf-8")) as { prompt: string }).prompt;
   for (const [tool, prompt] of [["Kiro IDE", ide], ["Kiro CLI", cli]] as const) {
     test(`${tool}: the must-follow list holds without the skill`, () => {
-      expect(prompt).toContain("read all of .kiro/skills/aidlc/SKILL.md with your file tool in parts of at most 40 lines, from the first line to the last (Kiro shows a long skill or file only in part), unless you already read all of it in this chat");
+      // The skill rides in the conductor's own resources from chat start, so the
+      // first item says where it is instead of asking for a read in parts.
+      expect(prompt).toContain("the aidlc skill (.kiro/skills/aidlc/SKILL.md) and the two files beside it (question-rendering.md and composer.md) are in your context from the start of this chat: follow them, and never read them with your file tool");
       expect(prompt).toContain("say the lines AI-DLC gives you for the person (its warnings, notices and questions) to them word for word");
       expect(prompt).toContain("a question AI-DLC puts to the person is theirs to answer, never yours");
       // Live: "never answer one yourself" alone made the agent ask the person for the work's folder label.

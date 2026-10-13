@@ -533,12 +533,12 @@ function rewriteStdinToolName(rawInput: string, devin: DevinHookInput): string {
 }
 
 // Lift tool_input.workdir into the top-level cwd field the core
-// plan-approval-guard reads (parsed.cwd at aidlc-plan-approval-guard.ts:665).
-// The guard's isFrameworkToolInvocation resolves framework-tool script
-// paths against cwd (resolve(cwd, script) at line 487). Without this lift,
-// a framework tool command run from a subdirectory (Devin
-// passes the subdirectory as workdir) fails the framework-tool exemption
-// because the guard resolves the script path against the project root.
+// plan-approval-guard reads (parsed.cwd at aidlc-plan-approval-guard.ts:1974).
+// The guard's installedEngineArgs resolves the tool script path against cwd
+// (isTrustedToolFile / resolve(cwd, script)). Without this lift, a framework
+// tool command run from a subdirectory (Devin passes the subdirectory as
+// workdir) fails installed-engine recognition because the guard resolves the
+// script path against the project root.
 function rewriteStdinCwd(rawInput: string, devin: DevinHookInput): string {
   const workdir = devin.tool_input?.workdir;
   if (typeof workdir !== "string" || !workdir) return rawInput;
@@ -1615,9 +1615,8 @@ export async function run(
       //   conductor actually ran the command from), not the project root.
       // edit/write/apply_patch→ fan out one Write per touched path.
       // run_subagent→ normalize to the core Task shape
-      //   {PreToolUse, Task, {subagent_type, prompt}}. Every named dispatch
-      //   goes to the core guard, which judges only the developer's and
-      //   records a reviewer brief that already carries its verdict.
+      //   {PreToolUse, Task, {subagent_type, prompt}}; only the developer's
+      //   dispatch goes to the core guard.
       // Block contract: exit 2 + stderr.
       if (tool === "exec") {
         const rewritten = rewriteStdinCwd(rewriteStdinToolName(rawInput, devin), devin);
@@ -1673,11 +1672,10 @@ export async function run(
         return 0;
       }
       // Normalize the native dispatch input and forward the core Task shape
-      // {PreToolUse, Task, {subagent_type, prompt}}; every named dispatch goes
-      // to the core guard, which judges only the developer's and records a
-      // reviewer brief that already carries its verdict.
+      // {PreToolUse, Task, {subagent_type, prompt}}; only the developer's
+      // dispatch goes to the core guard.
       const normalized = normalizeRunSubagentInput(devin.tool_input ?? {});
-      if (normalized.profile === "") {
+      if (normalized.profile !== "aidlc-developer-agent") {
         return 0;
       }
       const fwd = JSON.stringify({

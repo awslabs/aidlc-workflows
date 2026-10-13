@@ -1563,7 +1563,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(readAudit(dir)).toBe("");
   });
 
-  test("12b: a typed summary-confirmation off applies as the person's choice and a command repeat is a no-op", () => {
+  test("12b: a typed summary-confirmation off is recorded, the setter applies it as the person's choice, and a repeat is a no-op", () => {
     const dir = scratchProject(true);
     const ceremonyRows = () =>
       readAuditShardEvents(dir).filter((entry) => entry.event === "CEREMONY_SET");
@@ -1574,15 +1574,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       prompt: "/aidlc config set summary-confirmation off",
     });
     expect(typed.code, typed.stderr).toBe(0);
-    const state = readFileSync(seededStateFile(dir), "utf-8");
-    expect(state).toContain("- **Summary Confirmation**: off (set by you)");
-    const audit = ceremonyRows();
-    expect(audit).toHaveLength(1);
-    expect(auditBlockField(audit[0].block, "New")).toBe("off");
-    expect(auditBlockField(audit[0].block, "Source")).toBe("you");
-
-    // An agent-run repeat neither writes nor relabels the person's off.
-    const repeated = spawnSync(
+    // The hook records their line and applies nothing; the agent runs the setter.
+    expect(readFileSync(seededStateFile(dir), "utf-8")).not.toContain("- **Summary Confirmation**: off (set by you)");
+    expect(ceremonyRows()).toHaveLength(0);
+    const setterRun = () => spawnSync(
       "bun",
       [join(dir, ".aidlc", "tools", "aidlc.ts"), "engine", "config", "set", "summary-confirmation", "off"],
       {
@@ -1597,6 +1592,17 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       },
     );
+    const applied = setterRun();
+    expect(applied.status, applied.stderr).toBe(0);
+    const state = readFileSync(seededStateFile(dir), "utf-8");
+    expect(state).toContain("- **Summary Confirmation**: off (set by you)");
+    const audit = ceremonyRows();
+    expect(audit).toHaveLength(1);
+    expect(auditBlockField(audit[0].block, "New")).toBe("off");
+    expect(auditBlockField(audit[0].block, "Source")).toBe("you");
+
+    // An agent-run repeat neither writes nor relabels the person's off.
+    const repeated = setterRun();
     expect(repeated.status, repeated.stderr).toBe(0);
     expect(repeated.stdout).toContain("Summary Confirmation is already off (set by you)");
     expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
@@ -3272,9 +3278,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         expect(pre.stdout, spec.text).toBe("");
         const executed = runShell(dir, spec.text);
         expect(executed.status, executed.stderr).toBe(0);
+        // A value this engine's own table does not hold is a reading step, which
+        // is a print the agent acts on; it carries no workflow work either way,
+        // which is what this case guards (t-three-ways-to-read-a-line).
         expect(JSON.parse(executed.stdout.trim()), spec.text).toMatchObject({
-          kind: (args[1] === "team-board" && args.length > 2) || (args[1] === "--config" && (args.includes("bogus") || args.includes("extra"))) ||
-            args.includes("extreme") || args.includes("loud") ? "error" : "print",
+          kind: (args[1] === "team-board" && args.length > 2) ||
+            (args[1] === "--config" && (args.includes("bogus") || args.includes("extra"))) ? "error" : "print",
         });
         const post = runAdapter(dir, "post-tool", commandPayload(dir, session, spec.text, attempt, true, executed.stdout));
         expect(post.code, spec.text).toBe(0);

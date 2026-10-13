@@ -28,6 +28,7 @@ Guidelines:
 
 ## Test Data Management
 
+- Build test data from the project's own types, schemas or contracts, or check it against them, so a fixture or stub never has a shape the real code or service does not produce. Data for an error-path test starts from a valid value and changes only the field under test.
 - Use **factories** or **builders** to construct test data programmatically (factory_boy, fishery, @faker-js/faker).
 - Each test should set up its own data; avoid shared mutable state across tests.
 - For integration tests, use database transactions that roll back after each test, or truncate tables in setup.

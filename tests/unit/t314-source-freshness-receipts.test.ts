@@ -1,4 +1,4 @@
-// covers: function:workspaceSourceFingerprint
+// covers: function:workspaceSourceFingerprint, function:unclaimableIgnoredSourceKeys
 // covers: function:gitCommitSourceListing
 // covers: function:unmergedRootSettingsNotices
 // covers: function:withWorkspaceSourceStateCache, subcommand:aidlc-state:gate-start, subcommand:aidlc-state:revise
@@ -340,6 +340,47 @@ function seedTwoUnitDag(proj: string): void {
     "```yaml\nunits:\n  - name: alpha\n    depends_on: []\n  - name: beta\n    depends_on: []\n```\n",
     "utf-8",
   );
+}
+
+// #2244: an in-tree tool cache the project does not ignore (Jest's
+// cacheDirectory inside the repo, say): untracked, rewritten by every test run,
+// no Unit's work and no Unit's to claim.
+function seedInTreeCache(root: string, dir = join("apps", "web", ".jest-cache")): string {
+  const cache = join(root, dir);
+  mkdirSync(join(cache, "jest-transform-cache-abc", "00"), { recursive: true });
+  writeFileSync(join(cache, "haste-map-abc"), "\u0000haste-v1", "utf-8");
+  writeFileSync(join(cache, "jest-transform-cache-abc", "00", "mod_1"), "module.exports=1;\n", "utf-8");
+  writeFileSync(join(cache, "jest-transform-cache-abc", "00", "mod_1.map"), "{}\n", "utf-8");
+  return cache;
+}
+
+// One test run: an entry rewritten, two deleted, two added.
+function churnInTreeCache(cache: string): void {
+  writeFileSync(join(cache, "haste-map-abc"), "\u0000haste-v2", "utf-8");
+  rmSync(join(cache, "jest-transform-cache-abc", "00", "mod_1"));
+  rmSync(join(cache, "jest-transform-cache-abc", "00", "mod_1.map"));
+  writeFileSync(join(cache, "jest-transform-cache-abc", "00", "mod_2"), "module.exports=2;\n", "utf-8");
+  writeFileSync(join(cache, "jest-transform-cache-abc", "00", "mod_2.map"), "{}\n", "utf-8");
+}
+
+// The stage's entry baseline is drawn again from the tree as it is now (the
+// newest WORKFLOW_STARTED row is the boundary), then the clock moves on.
+function restartBaseline(proj: string): void {
+  appendAuditEntry(
+    "WORKFLOW_STARTED",
+    { Scope: "feature", ...sourceBaselineAuditFields(proj, "code-generation") },
+    proj,
+  );
+  const boundarySecond = Math.floor(Date.now() / 1000);
+  while (Math.floor(Date.now() / 1000) === boundarySecond) {}
+}
+
+function reviewRequestCount(proj: string): number {
+  return readAllAuditShards(proj).split(/\n---\n/).filter((block) => block.includes("**Event**: REVIEW_REQUESTED")).length;
+}
+
+function sourceRegistry(dir: string, registry: { paths?: string[]; exclude?: string[] }): void {
+  writeFileSync(join(dir, ".aidlc-source-paths.json"), `${JSON.stringify({ version: 1, ...registry })}\n`, "utf-8");
 }
 
 // Rewrite the request/completion pair into the genuine pre-record appendix
@@ -1956,6 +1997,33 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     expect(row).toContain("**Changed**: app.ts");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  // #2244: when the approved plan uses stage-level artifacts the guard returns
+  // after the stage review and the unclaimed check never runs, so excluding a
+  // cache after the review costs what any source change after a review costs:
+  // the one recovery review. Not a loop: the approve after it completes.
+  test("with stage-level artifacts, excluding a cache after the review costs one recovery review, then completes", () => {
+    writeFileSync(
+      seededStateFile(proj),
+      readFileSync(seededStateFile(proj), "utf-8").replace(
+        /^- \[ \] units-generation (.*) EXECUTE$/m,
+        "- [S] units-generation $1 SKIP",
+      ),
+    );
+    const cache = seedInTreeCache(proj);
+    recordReview(proj);
+    churnInTreeCache(cache);
+    const stale = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(stale.rc).toBe(1);
+    expect(stale.out).toContain("project source changed after");
+    sourceRegistry(proj, { exclude: ["apps/web/.jest-cache"] });
+    const still = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(still.rc).toBe(1);
+    expect(still.out).toContain("project source changed after");
+    recordReview(proj);
+    const done = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(done.rc, done.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test.each([
     ["gate-start", false],
     ["gate-start", true],
@@ -2055,6 +2123,15 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
   );
 
   test("each admission reads fresh source inside a cached routing calculation", () => {
+    // The fixture has no Units and recordReview writes stage-level artifacts.
+    // Make that placement part of the approved plan, as on the sensor cases.
+    writeFileSync(
+      seededStateFile(proj),
+      readFileSync(seededStateFile(proj), "utf-8").replace(
+        "- [ ] units-generation — EXECUTE",
+        "- [S] units-generation — SKIP",
+      ),
+    );
     recordReview(proj);
     const stage = resolveStage("code-generation");
     if (!stage) throw new Error("code-generation stage missing");
@@ -2065,7 +2142,8 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       withWorkspaceSourceStateCache(() => {
         const before = workspaceSourceFingerprint(proj);
         const options = { action: "complete", entrypoint: "approve" } as const;
-        expect(guardPreflight(proj, state, stage, options).executable).toBe(true);
+        const admitted = guardPreflight(proj, state, stage, options);
+        expect(admitted.executable, JSON.stringify(admitted)).toBe(true);
         writeFileSync(src, "export const answer = 9002; // between admissions\n");
         // The routing calculation still owns its earlier observation.
         expect(workspaceSourceFingerprint(proj)).toBe(before);
@@ -2867,8 +2945,93 @@ describe("t314 multi-unit source attribution", () => {
     expect(gate.rc, gate.out).toBe(0);
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).toBe(1);
-    expect(r.out).toContain("Unclaimed source changes fail closed");
+    expect(r.out).toContain("no Unit's review covers");
     expect(r.out).toContain("unreviewed.ts");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // #2244: a build or test run rewrites output the project's .gitignore keeps
+  // out of Git (a tsc outDir, a test runner's run record). No Unit can claim
+  // those paths (the manifest refuses ignored paths as review evidence), so
+  // they are not unclaimed changes either.
+  test("ignored output rewritten during the stage is not counted as unclaimed", () => {
+    writeFileSync(join(proj, ".gitignore"), "/.build/\n/.artifacts/\n", "utf-8");
+    git(proj, ["add", ".gitignore"]);
+    git(proj, ["commit", "-qm", "ignore build output"]);
+    mkdirSync(join(proj, ".build", "scripts", "ci"), { recursive: true });
+    writeFileSync(join(proj, ".build", "scripts", "ci", "bundle.js"), "bundle(1);\n", "utf-8");
+    appendAuditEntry(
+      "WORKFLOW_STARTED",
+      {
+        Scope: "feature",
+        ...sourceBaselineAuditFields(proj, "code-generation"),
+      },
+      proj,
+    );
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "unit code"]);
+    writeFileSync(join(proj, ".build", "scripts", "ci", "bundle.js"), "bundle(2);\n", "utf-8");
+    writeFileSync(join(proj, ".build", "scripts", "ci", "bundle.js.map"), "{}\n", "utf-8");
+    mkdirSync(join(proj, ".artifacts", "run", "browser"), { recursive: true });
+    writeFileSync(join(proj, ".artifacts", "run", "browser", ".last-run.json"), "{\"status\":\"passed\"}\n", "utf-8");
+    expect(() =>
+      recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [
+        { path: "alpha.ts" },
+        { path: ".build/scripts/ci/bundle.js" },
+      ])
+    ).toThrow("is ignored by Git and cannot be source-review evidence");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    expect(gate.rc, gate.out).toBe(0);
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("no Unit's review covers");
+    expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // An ignored path a Unit could claim is still counted: a file HEAD tracks
+  // despite the ignore rule, and a path registered in .aidlc-source-paths.json.
+  test("an ignored path a Unit could claim is still refused as unclaimed", () => {
+    writeFileSync(join(proj, ".gitignore"), "/.build/\n/generated/\n", "utf-8");
+    writeFileSync(
+      join(proj, ".aidlc-source-paths.json"),
+      `${JSON.stringify({ version: 1, paths: ["generated/schema.ts"] })}\n`,
+      "utf-8",
+    );
+    mkdirSync(join(proj, ".build"), { recursive: true });
+    writeFileSync(join(proj, ".build", "tracked.ts"), "export const tracked = 1;\n", "utf-8");
+    git(proj, ["add", ".gitignore", ".aidlc-source-paths.json"]);
+    git(proj, ["add", "-f", ".build/tracked.ts"]);
+    git(proj, ["commit", "-qm", "ignore rules, a tracked ignored file, a registered ignored path"]);
+    appendAuditEntry(
+      "WORKFLOW_STARTED",
+      {
+        Scope: "feature",
+        ...sourceBaselineAuditFields(proj, "code-generation"),
+      },
+      proj,
+    );
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    writeFileSync(join(proj, ".build", "tracked.ts"), "export const tracked = 2;\n", "utf-8");
+    mkdirSync(join(proj, "generated"), { recursive: true });
+    writeFileSync(join(proj, "generated", "schema.ts"), "export const schema = 1;\n", "utf-8");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    expect(gate.rc, gate.out).toBe(0);
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc).toBe(1);
+    expect(r.out).toContain("no Unit's review covers");
+    expect(r.out).toContain(".build/tracked.ts");
+    expect(r.out).toContain("generated/schema.ts");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // A stage-entry baseline the earlier walk recorded lists .DS_Store and the
@@ -2901,8 +3064,213 @@ describe("t314 multi-unit source attribution", () => {
     const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
     expect(gate.rc, gate.out).toBe(0);
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
-    expect(r.out).not.toContain("Unclaimed source changes fail closed");
+    expect(r.out).not.toContain("no Unit's review covers");
     expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // #2244: a tool cache the project does not ignore is rewritten by the test
+  // run during the stage. No Unit can sensibly claim it, and the refusal says the
+  // way: name the folder under "exclude" in .aidlc-source-paths.json. Before this
+  // change that way was a dead end mid-stage: the baseline still listed the cache
+  // (read as deleted) and the registry file was itself an unclaimed addition, so
+  // the next approve spent a recovery review and the one after was refused again.
+  test.each([
+    ["forward slashes", "apps/web/.jest-cache"],
+    ["Windows separators", "apps\\web\\.jest-cache"],
+  ])("a cache the project does not ignore, excluded after the refusal (%s), is nobody's change", (_label, exclude) => {
+    const cache = seedInTreeCache(proj);
+    restartBaseline(proj);
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    git(proj, ["add", "alpha.ts", "beta.ts"]);
+    git(proj, ["commit", "-qm", "unit code"]);
+    churnInTreeCache(cache);
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    expect(gate.rc, gate.out).toBe(0);
+    const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(refused.rc).toBe(1);
+    // The line says what changed and the way for a path that is not source, with no engine command in it.
+    expect(refused.out).toContain("5 changes made during Code Generation that no Unit's review covers");
+    expect(refused.out).toContain("apps/web/.jest-cache/haste-map-abc");
+    expect(refused.out).toContain('under \\"exclude\\" in .aidlc-source-paths.json');
+    expect(refused.out).not.toContain("aidlc-log.ts");
+    expect(refused.out).not.toContain("RFC");
+    const requests = reviewRequestCount(proj);
+    sourceRegistry(proj, { exclude: [exclude] });
+    const done = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(done.rc, done.out).toBe(0);
+    // Strict: nothing was kept over the policy, and no recovery review was spent.
+    expect(readAllAuditShards(proj)).not.toContain("**Event**: CHANGE_ACCEPTED");
+    expect(reviewRequestCount(proj)).toBe(requests);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // The registry is AI-DLC's boundary file, like its settings files: writing it
+  // during the stage is no Unit's change.
+  test("the registry file written during the stage is AI-DLC's own, not a Unit's change", () => {
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    git(proj, ["add", "alpha.ts", "beta.ts"]);
+    git(proj, ["commit", "-qm", "unit code"]);
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    expect(gate.rc, gate.out).toBe(0);
+    sourceRegistry(proj, {});
+    const done = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(done.rc, done.out).toBe(0);
+    expect(readAllAuditShards(proj)).not.toContain("**Event**: CHANGE_ACCEPTED");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // A registered path always wins over an exclude, in the walk and here: real
+  // source declared under an excluded folder is still a change nobody reviewed.
+  test("a registered path under an excluded folder still counts as source", () => {
+    mkdirSync(join(proj, "generated"), { recursive: true });
+    writeFileSync(join(proj, "generated", "schema.ts"), "export const schema = 1;\n", "utf-8");
+    writeFileSync(join(proj, "generated", "schema.ts.map"), "{}\n", "utf-8");
+    sourceRegistry(proj, { paths: ["generated/schema.ts"], exclude: ["generated"] });
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "generated source, declared"]);
+    restartBaseline(proj);
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    git(proj, ["add", "alpha.ts", "beta.ts"]);
+    git(proj, ["commit", "-qm", "unit code"]);
+    writeFileSync(join(proj, "generated", "schema.ts"), "export const schema = 2;\n", "utf-8");
+    writeFileSync(join(proj, "generated", "schema.ts.map"), "{\"v\":2}\n", "utf-8");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    expect(gate.rc, gate.out).toBe(0);
+    const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain("1 change made during Code Generation that no Unit's review covers (generated/schema.ts)");
+    expect(refused.out).not.toContain("schema.ts.map");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // A real change nobody reviewed is still refused and named, and the way the
+  // line names clears it: the Unit lists the path as printed and is reviewed.
+  test("a tracked file deleted during the stage is refused until the Unit that removed it lists it", () => {
+    writeFileSync(join(proj, "old.ts"), "export const old = 1;\n", "utf-8");
+    git(proj, ["add", "old.ts"]);
+    git(proj, ["commit", "-qm", "old source"]);
+    restartBaseline(proj);
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    rmSync(join(proj, "old.ts"));
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "unit code, old removed"]);
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    expect(gate.rc, gate.out).toBe(0);
+    const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain("1 change made during Code Generation that no Unit's review covers (old.ts)");
+    expect(refused.out).toContain("lists the path in its source manifest");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }, { path: "old.ts" }]);
+    const done = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(done.rc, done.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // A nested repository the parent does not track: a commit inside it moves its
+  // own entry (the folder, mode 160000) with no file changed. Excluded after the
+  // refusal, the folder's baseline entry is nobody's change too: the match is by
+  // path, whatever the entry's mode.
+  test("a nested repository whose HEAD moved, excluded after the refusal, is nobody's change", () => {
+    const legacy = join(proj, "legacy", "old-app");
+    mkdirSync(legacy, { recursive: true });
+    git(legacy, ["init", "-q"]);
+    git(legacy, ["config", "user.email", "t@test"]);
+    git(legacy, ["config", "user.name", "t"]);
+    writeFileSync(join(legacy, "legacy.js"), "module.exports = 'legacy';\n", "utf-8");
+    git(legacy, ["add", "-A"]);
+    git(legacy, ["commit", "-qm", "legacy seed"]);
+    restartBaseline(proj);
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    git(proj, ["add", "alpha.ts", "beta.ts"]);
+    git(proj, ["commit", "-qm", "unit code"]);
+    writeFileSync(join(legacy, "NOTES.txt"), "touched\n", "utf-8");
+    git(legacy, ["add", "-A"]);
+    git(legacy, ["commit", "-qm", "touched during the stage"]);
+    rmSync(join(legacy, "NOTES.txt"));
+    git(legacy, ["add", "-A"]);
+    git(legacy, ["commit", "-qm", "and removed"]);
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    expect(gate.rc, gate.out).toBe(0);
+    const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain("1 change made during Code Generation that no Unit's review covers (legacy/old-app)");
+    const requests = reviewRequestCount(proj);
+    sourceRegistry(proj, { exclude: ["legacy/old-app"] });
+    const done = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(done.rc, done.out).toBe(0);
+    expect(reviewRequestCount(proj)).toBe(requests);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // The walk reads each repo root's own registry; so does the check. The root's
+  // file does not speak for a recorded repo.
+  test("a cache inside a recorded repo is excluded in that repo's own registry, not the root's", () => {
+    const repoA = join(proj, "repo-a");
+    mkdirSync(repoA, { recursive: true });
+    seedGitRepo(repoA);
+    const cache = seedInTreeCache(repoA, ".jest-cache");
+    const regPath = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+    const rows = JSON.parse(readFileSync(regPath, "utf-8")) as Array<Record<string, unknown>>;
+    rows[0].repos = ["repo-a"];
+    writeFileSync(regPath, `${JSON.stringify(rows, null, 2)}\n`, "utf-8");
+    appendAuditEntry(
+      "STAGE_JUMPED",
+      { Target: "code-generation", ...sourceBaselineAuditFields(proj, "code-generation") },
+      proj,
+    );
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
+    writeFileSync(join(repoA, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    // A real change alpha made and did not list.
+    writeFileSync(join(repoA, "gamma.ts"), "export const gamma = 3;\n", "utf-8");
+    writeFileSync(join(repoA, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    churnInTreeCache(cache);
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ repo: "repo-a", path: "alpha.ts" }]);
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ repo: "repo-a", path: "beta.ts" }]);
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    expect(gate.rc, gate.out).toBe(0);
+    const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain("repo-a/.jest-cache/haste-map-abc");
+    expect(refused.out).toContain("repo-a/gamma.ts");
+    // A recorded repo's path prints as repo-a/gamma.ts, but a manifest takes the
+    // repo and the path as two fields, so the line does not say to copy it.
+    expect(refused.out).not.toContain("exactly as");
+    // The line names the registry file of the path's own repo folder: the
+    // top-level file does not reach a recorded repo's paths.
+    expect(refused.out).toContain('under \\"exclude\\" in the .aidlc-source-paths.json of the path\'s own folder (repo-a/.aidlc-source-paths.json)');
+    // alpha lists the path in its manifest ({repo, path}) and is reviewed once
+    // more: the first approve after it no longer names gamma.ts.
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [
+      { repo: "repo-a", path: "alpha.ts" },
+      { repo: "repo-a", path: "gamma.ts" },
+    ]);
+    const claimed = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(claimed.rc).toBe(1);
+    expect(claimed.out).toContain("no Unit's review covers");
+    expect(claimed.out).toContain("repo-a/.jest-cache/haste-map-abc");
+    expect(claimed.out).not.toContain("repo-a/gamma.ts");
+    // Written in the wrong place (the root), the exclude changes nothing for
+    // repo-a's keys, so the approve is still refused.
+    sourceRegistry(proj, { exclude: ["repo-a/.jest-cache"] });
+    const still = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(still.rc).toBe(1);
+    const requests = reviewRequestCount(proj);
+    sourceRegistry(repoA, { exclude: [".jest-cache"] });
+    const done = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(done.rc, done.out).toBe(0);
+    expect(readAllAuditShards(proj)).not.toContain("**Event**: CHANGE_ACCEPTED");
+    expect(reviewRequestCount(proj)).toBe(requests);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // #646 review - the recorded-repo layout is the DEFAULT (sibling

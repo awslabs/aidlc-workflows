@@ -230,7 +230,7 @@ describe("a file no unit claims", () => {
     review(dir, record, "beta", []);
     const refused = approve(dir);
     expect(refused.rc).toBe(1);
-    expect(refused.out).toContain("Add each path to the owning unit's source-manifest.json");
+    expect(refused.out).toContain("lists the path in its source manifest");
     // The named step: claim the path in its Unit and record that Unit's review.
     review(dir, record, "alpha", ["app.ts", "extra.ts"]);
     const done = approve(dir);

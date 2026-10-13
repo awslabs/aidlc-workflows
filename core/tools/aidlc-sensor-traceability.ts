@@ -369,6 +369,18 @@ function addSource(result: UpstreamResolution, source: { ids: Set<string>; reaso
   return source.ids;
 }
 
+// Without stories the story map carries FR rows (and optional NFR rows) keyed to
+// a Unit, the join Units Generation verifies; a Unit's own stage traces exactly
+// its rows, so another Unit's requirements are never asked of it (#2282). The
+// requirements-wide set stays for a run with no Unit or no story map.
+function addUnitRows(result: UpstreamResolution, storyMap: string, context: UnitContext, patterns: RegExp[]): void {
+  const mapped = storyAssignments(storyMap, context.units, context.unitIds, patterns);
+  if (mapped.reason) result.reasons.push(mapped.reason);
+  for (const [id, units] of mapped.assignments) {
+    if (units.has(context.unitName)) result.ids.add(id);
+  }
+}
+
 // NFR Design traces NFR Requirements' NFRx.y IDs; Infrastructure Design traces
 // NFR Design's, or NFR Requirements' when NFR Design did not run. Without NFR
 // Requirements no NFRx.y IDs exist, so both trace the NFRn IDs in
@@ -502,6 +514,8 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
         if (unitStories.has(`US${group}.${story}`)) result.ids.add(ac);
       }
       if (result.ids.size === 0) result.reasons.push(`stories mapped to unit "${unit}" contain no acceptance-criterion IDs`);
+    } else if (unit && existsSync(storyMap)) {
+      addUnitRows(result, storyMap, resolvedUnit.context, [ID_PATTERNS.FR]);
     } else {
       addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR], "requirements.md"));
     }
@@ -536,6 +550,8 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
       } else {
         addSource(result, idsFromFile(stories, [ID_PATTERNS.AC], "stories.md"));
       }
+    } else if (unit && existsSync(storyMap)) {
+      addUnitRows(result, storyMap, resolvedUnit.context, [ID_PATTERNS.FR, ID_PATTERNS.NFR]);
     } else {
       addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR, ID_PATTERNS.NFR], "requirements.md"));
     }

@@ -313,6 +313,29 @@ export type HarnessManifest = {
    */
   directiveMaxBytes?: number;
   /**
+   * The host's status line setting that shows AI-DLC's progress, in the host's
+   * own settings shape. Emitted into <harnessDir>/tools/data/harness.json, never
+   * into a settings file the host reads: the engine writes it into the person's
+   * own settings only when they choose it (Claude Code: the project's
+   * .claude/settings.local.json), so the status line they set up stays theirs.
+   * Codex has no per-person project file: its `items` go into the project's
+   * shared .codex/config.toml `[tui] status_line` only when someone chooses it.
+   */
+  statusLine?: { type: "command"; command: string } | { items: string[] };
+  /**
+   * For a host whose own stop event records every dispatched agent's finish
+   * (the log-subagent hook's SUBAGENT_COMPLETED row) before the agent that
+   * dispatched it sees the result, so a review recorded with no agent finished
+   * since its request was recorded before any reviewer finished. `env` names
+   * the variables that host sets in its agent's shell (as `NAME`, or
+   * `NAME=value`), so a command another host runs in the same project is not
+   * taken for it. Emitted into <harnessDir>/tools/data/harness.json. Declare it
+   * only after a live check shows the row lands before the result: a host that
+   * writes it later, or not for every dispatch, would make the engine tell the
+   * person no reviewer finished a review one did.
+   */
+  agentFinishRecorded?: { env: string[] };
+  /**
    * Skip the packager's standard runner-gen step (write + scopes into
    * <harnessDir>/skills/). Codex sets this: it ships NO skills inside
    * <harnessDir>/skills/ — the whole skill set (orchestrator, stage/scope

@@ -122,7 +122,8 @@ function next(args: string[], p = proj): Run {
   const env = { ...process.env };
   delete env.AWS_AIDLC_DEFAULT_SCOPE;
   const r = Bun.spawnSync({
-    cmd: [BUN, ORCH, "next", ...args, "--project-dir", p],
+    // Ahead of the person's words, as every caller of `next` builds it.
+    cmd: [BUN, ORCH, "next", "--project-dir", p, ...args],
     stdout: "pipe",
     stderr: "pipe",
     env,
@@ -548,7 +549,8 @@ describe("t164 auto-create (intent-create) on an empty workspace", () => {
   });
 
   test("the engine NAMES intent-create on a fresh workspace (read-only — no state written)", () => {
-    const r = next(["--scope", "poc"]);
+    // With a description: named alone, the scope first asks what the work is for (#2355).
+    const r = next(["--scope", "poc", "--", "prove the importer reads the old files"]);
     const d = JSON.parse(r.stdout.trim());
     expect(d.kind).toBe("print");
     expect(d.message).toContain("intent create --scope poc");
@@ -680,7 +682,7 @@ describe("t164 --new-intent creation carries on in the same chat", () => {
     expect(readIntentRegistry(proj).length).toBe(0);
   });
 
-  test("next --new-intent rejects a missing or blank description", () => {
+  test("next --new-intent with a scope and a missing or blank description asks what the work is for and creates nothing", () => {
     seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
     for (const args of [
       ["--new-intent", "--scope", "bugfix"],
@@ -688,8 +690,9 @@ describe("t164 --new-intent creation carries on in the same chat", () => {
     ]) {
       const r = next(args);
       const d = JSON.parse(r.stdout.trim());
-      expect(d.kind, args.join(" ")).toBe("error");
-      expect(d.message, args.join(" ")).toContain("requires a nonblank new-work description");
+      expect(d.kind, args.join(" ")).toBe("print");
+      expect(d.narration, args.join(" ")).toContain("What should I work on?");
+      expect(d.message, args.join(" ")).not.toContain("intent create");
       expect(readIntentRegistry(proj).length, args.join(" ")).toBe(0);
     }
   });
@@ -832,7 +835,7 @@ describe("t164 --new-intent creation carries on in the same chat", () => {
   test("a fresh-start creation (no --new-intent) keeps the same-session continuation tail", () => {
     // Empty workspace (beforeEach stripped the record): a named scope on a fresh
     // workspace is the fresh-start creation, it should re-enter the loop in-session.
-    const r = next(["--scope", "bugfix"]);
+    const r = next(["--scope", "bugfix", "--", "fix the login crash"]);
     const d = JSON.parse(r.stdout.trim());
     expect(d.kind).toBe("print");
     expect(d.message).toContain("intent create --scope bugfix");
@@ -1155,9 +1158,10 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     const listing = util(["intent"]).stdout;
     expect(listing).toContain("No in-flight intents");
     expect(listing).toContain("1 archived");
-    // The creation gate ignores archived records: an explicit scope names the
-    // intent-create move instead of asking to pick the retired record.
-    const d = JSON.parse(next(["--scope", "poc"]).stdout.trim());
+    // The creation gate ignores archived records: an explicit scope with a
+    // description names the intent-create move instead of asking to pick the
+    // retired record.
+    const d = JSON.parse(next(["--scope", "poc", "--", "prove the importer reads the old files"]).stdout.trim());
     expect(d.kind).toBe("print");
     expect(d.message).toContain("intent create --scope poc");
     expect(d.message).not.toContain(only);

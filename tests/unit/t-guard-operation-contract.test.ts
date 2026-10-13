@@ -503,19 +503,21 @@ describe("recovery selection records the next interaction", () => {
     const latest = readActiveDirectiveMarker(project, state)?.guard_recovery_response;
     expect(latest).toMatchObject({ status: "ready", selected_op: "request-changes" });
     expect(latest?.feedback_sha256).not.toBe(first?.feedback_sha256);
-    // Picking the option again, or a dismissed question, keeps the words given.
-    for (const kept of ["Request Changes", "Cancelled"]) {
+    // Picking the option again, or a reply with no words, keeps the words given.
+    for (const kept of ["Request Changes", "   "]) {
       consumeSharedDirectiveAsk(project, kept);
       expect(readActiveDirectiveMarker(project, state)?.guard_recovery_response?.feedback_sha256)
         .toBe(latest?.feedback_sha256);
     }
   });
 
-  test("a dismissed question is not a reply", () => {
+  test("a reply with no words is not a reply; a cancellation word typed is one the conductor reads", () => {
     const { project, state } = publish("human-input");
-    expect(consumeSharedDirectiveAsk(project, "Cancelled")).toBe(false);
+    expect(consumeSharedDirectiveAsk(project, "   ")).toBe(false);
     expect(readActiveDirectiveMarker(project, state)?.guard_recovery_response).toBeUndefined();
-    expect(consumeSharedDirectiveAsk(project, "Split the billing step in two.")).toBe(true);
+    // No host hands the hook dismissal text (measured 2026-10-12): "Cancelled"
+    // here is what the person typed, kept like any other words of theirs.
+    expect(consumeSharedDirectiveAsk(project, "Cancelled")).toBe(true);
     expect(readActiveDirectiveMarker(project, state)?.guard_recovery_response)
       .toMatchObject({ status: "ready", selected_op: "request-changes" });
   });

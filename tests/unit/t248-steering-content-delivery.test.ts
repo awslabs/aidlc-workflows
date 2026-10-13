@@ -1910,12 +1910,12 @@ describe("t248 deterministic steering delivery", () => {
       true,
     );
     expect(result.final.inline_context_paths?.length ?? 0).toBeLessThan(260);
+    // The person reads this warning (the skill shows context warnings as written), so it is about their
+    // work: which files were left out is not said by field name or byte cap (omittedContextWarning).
     expect(result.final.context_warnings?.join("\n")).toContain(
-      "optional persona/knowledge path(s) were omitted",
+      "Some of this step's optional reference files were left out to fit; the work goes on without them.",
     );
-    expect(result.final.context_warnings?.join("\n")).toContain(
-      "inline_context_paths",
-    );
+    expect(result.final.context_warnings?.join("\n")).not.toContain("inline_context_paths");
   });
 
   test("Claude dispatch rewrites carry exact rules once", () => {

@@ -1484,7 +1484,7 @@ describe("t305 real receipt and guard flows", () => {
   test("5 unclaimed add refuses; claim+recovery and revert both clear", () => {
     const claimed = runtimeFixture(); review(claimed.project, claimed.record, "alpha", [{ path: "app.ts" }]); review(claimed.project, claimed.record, "beta", []);
     writeFileSync(join(claimed.project, "extra.ts"), "export const x=1\n"); review(claimed.project, claimed.record, "beta", []);
-    expect(approve(claimed.project).out).toContain("Unclaimed source changes fail closed");
+    expect(approve(claimed.project).out).toContain("no Unit's review covers");
     review(claimed.project, claimed.record, "alpha", [{ path: "app.ts" }, { path: "extra.ts" }]); expect(approve(claimed.project).rc).toBe(0);
     const reverted = runtimeFixture(); review(reverted.project, reverted.record, "alpha", [{ path: "app.ts" }]); review(reverted.project, reverted.record, "beta", []);
     writeFileSync(join(reverted.project, "extra.ts"), "export const x=1\n"); review(reverted.project, reverted.record, "beta", []); expect(approve(reverted.project).rc).toBe(1); rmSync(join(reverted.project, "extra.ts")); expect(approve(reverted.project).rc).toBe(0);
@@ -1537,7 +1537,7 @@ describe("t305 real receipt and guard flows", () => {
     const refused = cli(STATE, ["revise", "code-generation"], project);
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain("evil.ts");
-    expect(refused.out).toContain("Unclaimed source changes fail closed");
+    expect(refused.out).toContain("no Unit's review covers");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("6 unit-major ignores late STAGE_STARTED and destroyed baseline fails closed", () => {

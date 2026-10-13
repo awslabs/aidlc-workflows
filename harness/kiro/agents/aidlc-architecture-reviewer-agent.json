@@ -23,11 +23,6 @@
     "execute_bash": {
       "allowedCommands": [
         "bun (run )?[\"']?\\.kiro/tools/[A-Za-z0-9._-]+\\.ts[\"']?( .*)?"
-      ],
-      "deniedCommands": [
-        "([^\\s]*/)?rm( [^\\s]+)* -[A-Za-z]*[rR][A-Za-z]*( .*)?",
-        "([^\\s]*/)?rm( [^\\s]+)* --recursive( .*)?",
-        "([^\\s]*/)?git( -[^\\s]+( (\"[^\"]*\"|'[^']*'|[^\\s]+))?)* push( .*)?"
       ]
     },
     "fs_write": {

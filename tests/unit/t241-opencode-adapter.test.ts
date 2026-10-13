@@ -230,17 +230,9 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
       { tool: "write", sessionID: "S-OC-child", callID: "cw" },
       { args: { filePath: join(root, "src", "b.ts") } },
     );
-    // A reviewer task reaches the guard as a Task too: the guard records a brief
-    // that already carries the verdict, and refuses nothing for a reviewer.
-    await before(
-      { tool: "task", sessionID: "S-OC", callID: "t2" },
-      { args: { subagent_type: "aidlc-architecture-reviewer-agent", prompt: "Review u1.\n\n**Verdict:** READY\n" } },
-    );
-    const calls = readFileSync(capture, "utf-8").trim().split("\n")
-      .map((line) => JSON.parse(line) as { session_id?: unknown; tool_name?: string; tool_input?: { subagent_type?: string } });
-    expect(calls.map((call) => call.session_id)).toEqual(["S-OC", "S-OC", "S-OC", "S-OC"]);
-    expect(calls[3].tool_name).toBe("Task");
-    expect(calls[3].tool_input?.subagent_type).toBe("aidlc-architecture-reviewer-agent");
+    const sessions = readFileSync(capture, "utf-8").trim().split("\n")
+      .map((line) => (JSON.parse(line) as { session_id?: unknown }).session_id);
+    expect(sessions).toEqual(["S-OC", "S-OC", "S-OC"]);
   });
 
   test("state-transition, review-freeze and reviewer-scope calls carry the owning session id", async () => {
@@ -1256,7 +1248,13 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
     const root = freshInstalledProject();
     const engine = (session: string, ...args: string[]) => {
       const run = Bun.spawnSync({
-        cmd: [process.execPath, join(root, ".aidlc", "tools", "aidlc.ts"), "engine", ...args, "--project-dir", root],
+        // This engine's own option rides ahead of the person's words, which is
+        // where every caller of it puts it: among their words it is a word of
+        // their request.
+        cmd: [
+          process.execPath, join(root, ".aidlc", "tools", "aidlc.ts"),
+          "--project-dir", root, "engine", ...args,
+        ],
         cwd: root,
         env: { ...process.env, AIDLC_SESSION_OVERRIDE: session, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" },
         stdout: "pipe",
@@ -1343,7 +1341,7 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
     expect(prompts[0].text).toContain("[aidlc-forwarding-nudge]");
   });
 
-  test("a typed summary-confirmation off in chat reaches the real record-human-turn hook as the person's choice", async () => {
+  test("a typed summary-confirmation off in chat reaches the real record-human-turn hook, and the setter records it as the person's choice", async () => {
     const root = freshInstalledProject();
     seedStateFile(root, "state-brownfield-feature.md");
     writeSessionBinding(root, "main", "default", basename(seededRecordDir(root)));
@@ -1359,15 +1357,9 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
       { parts: [{ type: "text", text: "/aidlc config set summary-confirmation off" }] },
     );
 
-    const state = readFileSync(statePath, "utf-8");
-    expect(state).toContain("- **Summary Confirmation**: off (set by you)");
-    const audit = ceremonyRows();
-    expect(audit).toHaveLength(1);
-    expect(auditBlockField(audit[0].block, "New")).toBe("off");
-    expect(auditBlockField(audit[0].block, "Source")).toBe("you");
-
-    // A later agent-run command repeat neither writes nor relabels the choice.
-    const repeated = Bun.spawnSync({
+    // The hook records their line and applies nothing; the agent runs the setter
+    // the engine names, and the setting is recorded as theirs.
+    const setterRun = () => Bun.spawnSync({
       cmd: [
         process.execPath,
         join(root, ".aidlc", "tools", "aidlc.ts"),
@@ -1384,6 +1376,17 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
       stdout: "pipe",
       stderr: "pipe",
     });
+    const applied = setterRun();
+    expect(applied.exitCode, applied.stderr.toString()).toBe(0);
+    const state = readFileSync(statePath, "utf-8");
+    expect(state).toContain("- **Summary Confirmation**: off (set by you)");
+    const audit = ceremonyRows();
+    expect(audit).toHaveLength(1);
+    expect(auditBlockField(audit[0].block, "New")).toBe("off");
+    expect(auditBlockField(audit[0].block, "Source")).toBe("you");
+
+    // A later agent-run command repeat neither writes nor relabels the choice.
+    const repeated = setterRun();
     expect(repeated.exitCode, repeated.stderr.toString()).toBe(0);
     expect(repeated.stdout.toString()).toContain("Summary Confirmation is already off (set by you)");
     expect(readFileSync(statePath, "utf-8")).toBe(state);
@@ -1665,7 +1668,7 @@ writeFileSync(${JSON.stringify(recorded)}, await Bun.stdin.text(), "utf-8");
     expect(JSON.parse(readFileSync(recorded, "utf-8")).prompt).toBe(expanded);
   });
 
-  test("a setting typed through /aidlc reaches the real human-turn hook as the person's choice", async () => {
+  test("a setting typed through /aidlc reaches the real human-turn hook, and the setter records it as the person's choice", async () => {
     const root = freshInstalledProject();
     seedStateFile(root, "state-brownfield-feature.md");
     writeSessionBinding(root, "main", "default", basename(seededRecordDir(root)));
@@ -1697,6 +1700,27 @@ writeFileSync(${JSON.stringify(recorded)}, await Bun.stdin.text(), "utf-8");
     await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ id: "prt_n", type: "text", text: "[aidlc-forwarding-nudge] keep going", synthetic: true }] });
     parts.forEach((part, i) => { part.id = `prt_c${i}`; });
     await adapter["chat.message"]({ sessionID: "main" }, { parts });
+    // Their line is on record for this chat; the setter the agent runs for it
+    // records the setting as theirs.
+    expect(ceremonyRows()).toHaveLength(0);
+    const applied = Bun.spawnSync({
+      cmd: [
+        process.execPath,
+        join(root, ".aidlc", "tools", "aidlc.ts"),
+        "engine", "config", "set", "summary-confirmation", "off",
+        "--project-dir", root,
+      ],
+      cwd: root,
+      env: {
+        ...process.env,
+        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+        AIDLC_SESSION_OVERRIDE: undefined,
+        AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(applied.exitCode, applied.stderr.toString()).toBe(0);
     expect(readFileSync(statePath, "utf-8")).toContain("- **Summary Confirmation**: off (set by you)");
     const rows = ceremonyRows();
     expect(rows).toHaveLength(1);

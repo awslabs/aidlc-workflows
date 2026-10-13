@@ -47,9 +47,9 @@
 // (Lifecycle Phase=IDEATION, Current Stage=intent-capture, In Progress=
 // intent-capture, Completed=4, Status=Running, [x] count=4). One AskUserQuestion
 // gate fired on the landing and was answered with the default option-1 policy;
-// the run still stopped stable at intent-capture (no auto-advance). Any benign
-// ERROR_LOGGED probes (e.g. Initial Intent "Field not found") are
-// routine optional-field reads — NOT failures; we do NOT assert on them.
+// the run still stopped stable at intent-capture (no auto-advance). An
+// optional-field read (e.g. get "Initial Intent") writes no ERROR_LOGGED row
+// (#2264); we do NOT assert on ERROR_LOGGED.
 //
 // THE KNOWN-ANSWER COUNT. countCheckboxes("completed") after a backward reset to
 // intent-capture leaves exactly 4 [x] (jump.ts:330-331). Verified by both the

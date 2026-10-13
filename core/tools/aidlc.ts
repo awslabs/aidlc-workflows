@@ -329,6 +329,20 @@ export const ROUTES: readonly Route[] = [
     all: ["now"],
   },
   {
+    // The installed orchestrator skill, whole. A host command template prints
+    // it into itself where the host cuts the skill tool's output (opencode).
+    id: "top-skill-text",
+    group: "top",
+    kind: "top-passthrough",
+    classification: "passthrough",
+    verbs: ["skill-text"],
+    tool: TOOLS.utility,
+    ...HIDDEN_ENGINE,
+    namespace: "engine",
+    mutationScope: "none",
+    all: ["skill-text [--harness-dir <dir>]"],
+  },
+  {
     id: "top-doctor",
     namespace: "public",
     group: "top",
@@ -406,6 +420,7 @@ export const ROUTES: readonly Route[] = [
       "config flags [--show [--json]|--check|--reset] [--default-scope <name>] [--swarm <on|off>] [--hook-debug <on|off>] [--sensor-timeout-ms <n>] [--question-retention-days <days|unlimited>] [--bypass <name>] [--clear-bypass <name>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config project [--show [--json]|--check|--reset] [--plugins <names|all>] [--mcp <defaults|none>] [--completions <shell|none>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config --pin <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline]",
+      "config --statusline <on|off> [--harness <claude|codex>] [--dry-run] [--json] [--project-dir <path>]",
       "config --unpin",
       "config --channel [stable|preview]",
     ],
@@ -2103,15 +2118,128 @@ function canonicalizeLegacyCopilotHookArgv(argv: string[]): string[] {
     : argv;
 }
 
+/**
+ * Where the person's own words begin on this line, as an index into `argv`: the
+ * first word after the route the resolver named and the subcommand's own verb.
+ * Everything from there on is the subcommand's argv, which is where a request of
+ * theirs lives, so a token that looks like one of this launcher's flags among
+ * those words is one of their words and stays exactly where they typed it.
+ *
+ * `route` is how many leading tokens the resolver read as the route (the
+ * delegate's own argv is what is left), so the grammar decides the boundary and
+ * nothing here mirrors it. A token after one of our flags is that flag's value,
+ * never a word of theirs.
+ */
+function theirWordsBegin(argv: readonly string[], route: number): number | undefined {
+  let named = 0;
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (token === "--") return i;
+    // A token after any flag is that flag's value, never a word of theirs: the
+    // same rule nextArgsCarryRequestWords reads in aidlc-lib.ts, so a line like
+    // `config --harness kiro --project-dir <dir>` still names this launcher's
+    // own directory.
+    if (token.startsWith("-")) {
+      if (argv[i + 1] !== undefined && !argv[i + 1].startsWith("-")) i++;
+      continue;
+    }
+    named++;
+    if (named > route + 1) return i;
+  }
+  return undefined;
+}
+
 export function resolveAction(
   rawArgv: string[],
   compiled = isCompiledExecutable(),
 ): Action {
+  const first = resolveActionFrom(rawArgv, compiled, Number.POSITIVE_INFINITY);
+  const words = first.words;
+  // What is wrong with one of our own options is the person's to act on only
+  // where our options are read. Among their own words that token is their word,
+  // and the line still carries the request they typed.
+  if (first.grammar !== undefined && (words === undefined || first.grammar.at < words)) {
+    return { type: "error", code: 2, message: first.grammar.message };
+  }
+  // Their words begin after the route and the verb. When one of our own flags
+  // sat among them, read the line again and leave that one alone.
+  if (words === undefined) return first.action;
+  if (first.ourFlagsFrom === undefined || first.ourFlagsFrom < words) {
+    return first.action;
+  }
+  return resolveActionFrom(rawArgv, compiled, words).action;
+}
+
+/**
+ * Where our own options stop being ours on this line: the index their words
+ * begin at, or infinity when the line carries none. The same boundary
+ * resolveAction reads, so one answer serves both.
+ */
+function ourFlagLimit(
+  rawArgv: string[],
+  compiled = isCompiledExecutable(),
+): number {
+  return resolveActionFrom(rawArgv, compiled, Number.POSITIVE_INFINITY).words ??
+    Number.POSITIVE_INFINITY;
+}
+
+/**
+ * A request of the person's own rides on one route: `next`, the orchestrator's,
+ * where everything after its verb is a word of theirs. The rest of the grammar
+ * is this engine's own words in a fixed shape (`intent switch <name>`), and
+ * those commands refuse an extra word rather than hand it on, so our options
+ * stay ours there wherever they sit.
+ *
+ * A `next` line that is one of the workspace commands, whole, is one of those
+ * too, by the rule the whole engine reads it with: a leading `intent` or
+ * `space` with that command's own shape after it is its argv, while the same
+ * word opening a sentence is theirs (aidlc-lib.ts, parseNextFlags and the
+ * harness seams). A line that leads with the noun but does not have the shape
+ * is left to the engine to read, with every word of theirs still on it.
+ */
+function theirWordsOn(
+  rawArgv: readonly string[],
+  route: number | undefined,
+  routeArgs: readonly string[] | undefined,
+): number | undefined {
+  if (route === undefined || routeArgs === undefined) return undefined;
+  const [verb, ...rest] = routeArgs;
+  if (verb !== "next") return undefined;
+  const workspace = parseDispatcherWorkspaceCommand(rest).kind;
+  if (workspace !== "not-workspace" && workspace !== "error") return undefined;
+  return theirWordsBegin(rawArgv, route);
+}
+
+interface ResolvedWithRoute {
+  action: Action;
+  /** Leading tokens the resolver read as the route, for a delegate. */
+  route?: number;
+  /** The lowest index in `argv` where one of our own flags was taken. */
+  ourFlagsFrom?: number;
+  /** The first thing wrong with our --project-dir grammar, and where. */
+  grammar?: { at: number; message: string };
+  /** A delegate's argv as the route produced it, before anything of ours. */
+  routeArgs?: readonly string[];
+  /** Where the person's own words begin in `argv`, when the line carries them. */
+  words?: number;
+}
+
+/**
+ * `limit`: our own flags are this launcher's only before this index in `argv`.
+ * At or after it the tokens are the subcommand's, so they pass through whole.
+ */
+function resolveActionFrom(
+  rawArgv: string[],
+  compiled: boolean,
+  limit: number,
+): ResolvedWithRoute {
   const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
   const clean: string[] = [];
   const globalFlags: string[] = [];
   let projectDir: string | undefined;
   let literalArgs = false;
+  let ourFlagsFrom = Number.POSITIVE_INFINITY;
+  let grammar: { at: number; message: string } | undefined;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--") {
       literalArgs = true;
@@ -2120,41 +2248,55 @@ export function resolveAction(
     }
     if (
       !literalArgs &&
+      i < limit &&
       LAUNCHER_GLOBAL_FLAGS.has(argv[i])
     ) {
       globalFlags.push(argv[i]);
+      ourFlagsFrom = Math.min(ourFlagsFrom, i);
       continue;
     }
-    if (!literalArgs && argv[i].startsWith("--project-dir=")) {
-      return {
-        type: "error",
-        code: 2,
+    if (!literalArgs && i < limit && argv[i].startsWith("--project-dir=")) {
+      grammar ??= {
+        at: i,
         message: "aidlc: --project-dir takes a separate path value; use --project-dir <path>\n",
       };
-    }
-    if (literalArgs || argv[i] !== "--project-dir") {
       clean.push(argv[i]);
       continue;
     }
-    const value = argv[++i];
+    if (literalArgs || i >= limit || argv[i] !== "--project-dir") {
+      clean.push(argv[i]);
+      continue;
+    }
+    const value = argv[i + 1];
+    // Nothing is refused from inside this loop: resolveAction holds the
+    // boundary, and only there is it known whether the flag was ours at all.
     if (!value || value.startsWith("--")) {
-      return {
-        type: "error",
-        code: 2,
-        message: "aidlc: --project-dir requires a path value\n",
-      };
+      grammar ??= { at: i, message: "aidlc: --project-dir requires a path value\n" };
+      clean.push(argv[i]);
+      continue;
     }
     if (projectDir !== undefined) {
-      return {
-        type: "error",
-        code: 2,
-        message: "aidlc: --project-dir may be specified only once\n",
-      };
+      grammar ??= { at: i, message: "aidlc: --project-dir may be specified only once\n" };
+      clean.push(argv[i]);
+      continue;
     }
+    ourFlagsFrom = Math.min(ourFlagsFrom, i);
+    i++;
     projectDir = value;
   }
 
   const action = resolveActionWithoutGlobalFlags(clean);
+  // What the resolver read as the route: the clean tokens it did not hand to the
+  // delegate. The boundary for our own flags comes from this, never from a list
+  // of words kept here. A route word that stands for two (`compose` for
+  // `next compose`) hands back more than it read, and one route word is the
+  // least it read, so never below zero.
+  const route = action.type === "delegate"
+    ? Math.max(0, clean.length - action.args.length)
+    : undefined;
+  // Read before anything of ours is put back on the line below.
+  const routeArgs = action.type === "delegate" ? [...action.args] : undefined;
+  const words = theirWordsOn(argv, route, routeArgs);
   if (action.type === "version" && globalFlags.includes("--json")) {
     action.json = true;
   }
@@ -2164,8 +2306,15 @@ export function resolveAction(
       : resolve(process.cwd(), projectDir);
     if (action.type === "delegate") {
       const delimiter = action.args.indexOf("--");
+      // Right after `next`, never after their sentence: the delegate reads its
+      // own option only ahead of the person's words, so one appended behind
+      // them would not be read at all, and no word of theirs is ever read as
+      // its value. Every authored caller builds the line this way too
+      // (aidlc-state.ts, aidlc-continue-workflow.ts, the Kiro IDE adapter).
       if (delimiter >= 0) action.args.splice(delimiter, 0, "--project-dir", absoluteProjectDir);
-      else action.args.push("--project-dir", absoluteProjectDir);
+      else if (action.args[0] === "next") {
+        action.args.splice(1, 0, "--project-dir", absoluteProjectDir);
+      } else action.args.push("--project-dir", absoluteProjectDir);
     } else if (action.type === "hook") {
       action.projectDir = absoluteProjectDir;
       action.path = resolveHookPath(`aidlc-${action.name}.ts`, undefined, absoluteProjectDir);
@@ -2185,7 +2334,7 @@ export function resolveAction(
     // project. Pin the host's project: its project environment, else the
     // directory it launched the command in. The statusline and the adapters
     // resolve a project from their host first and hand it to what they run.
-    action.projectDir = dispatcherProjectDirFrom(argv);
+    action.projectDir = dispatcherProjectDirFrom(argv, limit);
   }
   if (action.type === "delegate") {
     const delimiter = action.args.indexOf("--");
@@ -2194,12 +2343,19 @@ export function resolveAction(
     // so when the caller gave none the resolved directory is pinned ahead of
     // the delimiter. The literal text stays byte-for-byte intact.
     if (delimiter >= 0 && !projectDir) {
-      action.args.splice(delimiter, 0, "--project-dir", dispatcherProjectDirFrom(argv));
+      action.args.splice(delimiter, 0, "--project-dir", dispatcherProjectDirFrom(argv, limit));
     }
     if (delimiter >= 0) action.args.splice(action.args.indexOf("--"), 0, ...globalFlags);
     else action.args.push(...globalFlags);
   }
-  return action;
+  return {
+    action,
+    ...(route === undefined ? {} : { route }),
+    ...(Number.isFinite(ourFlagsFrom) ? { ourFlagsFrom } : {}),
+    ...(grammar === undefined ? {} : { grammar }),
+    ...(routeArgs === undefined ? {} : { routeArgs }),
+    ...(words === undefined ? {} : { words }),
+  };
 }
 // TRANSLATION_LOGIC_END
 
@@ -2212,7 +2368,7 @@ function bunExecutable(): string {
 }
 
 function delegatedProjectDir(args: readonly string[]): string | undefined {
-  return projectDirFlag(args).value;
+  return projectDirFlag(args.slice(0, ourFlagLimit([...args]))).value;
 }
 
 function runDelegateDev(tool: string, args: string[]): number {
@@ -2557,7 +2713,11 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       // Mirror the adapter entry point's dual-generation channel contract.
       // IDE 0.12 provides USER_PROMPT and leaves stdin open forever, so consume
       // a non-empty env payload immediately. IDE 1.x leaves USER_PROMPT empty
-      // and writes+closes stdin; the timeout is only a broken-channel ceiling.
+      // and writes+closes stdin: the read waits for that close, so a message
+      // handed over late is read whole; the limit ends only a channel that
+      // never closes (60 s, Kiro's own default budget for a command hook; the
+      // adapter's stdinTimeoutMs says why). On the limit the read yields "",
+      // never a half payload.
       const legacyPayload = process.env.USER_PROMPT ?? "";
       if (legacyPayload.trim().length > 0) {
         input = legacyPayload;
@@ -2565,7 +2725,7 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
         // AIDLC_IDE_STDIN_TIMEOUT_MS mirrors the adapter's test seam so both
         // entry points share one contract.
         const override = Number(process.env.AIDLC_IDE_STDIN_TIMEOUT_MS ?? "");
-        const ceiling = Number.isFinite(override) && override > 0 ? override : 2000;
+        const ceiling = Number.isFinite(override) && override > 0 ? override : 60_000;
         input = await readStdinWithTimeout(ceiling);
       }
     }
@@ -3097,8 +3257,20 @@ function routePinPolicy(argv: readonly string[]): PinPolicy {
   return route?.pinPolicy ?? "active";
 }
 
-function dispatcherProjectDirFrom(argv: readonly string[]): string {
-  const explicit = projectDirFlag(argv).value;
+/**
+ * `limit`: how far along the line our own options are read, for a caller that
+ * already knows it. Resolving the line computes it, so a caller inside that
+ * resolution must pass its own limit and never ask for it again.
+ */
+function dispatcherProjectDirFrom(
+  argv: readonly string[],
+  limit = ourFlagLimit([...argv]),
+): string {
+  // Only where our own options are read. A token of the person's own that looks
+  // like this one is a word of their request, never a folder to work in: every
+  // reader of the line takes the same slice, so none of them can answer them
+  // about an option they did not use.
+  const explicit = projectDirFlag(argv.slice(0, limit)).value;
   const value = explicit || process.env.AIDLC_PROJECT_DIR ||
     process.env.CLAUDE_PROJECT_DIR || process.env.KIRO_PROJECT_DIR;
   return value
@@ -3548,7 +3720,7 @@ export async function main(rawArgv: string[]): Promise<void> {
     process.on("exit", (code) => hookTrace("exit", { code }));
   }
   configureColor(argv);
-  const projectDirOption = projectDirFlag(argv);
+  const projectDirOption = projectDirFlag(argv.slice(0, ourFlagLimit(argv)));
   if (projectDirOption.error) {
     process.exitCode = renderDispatcherFailure(argv, 2, projectDirOption.error);
     return;
@@ -3719,10 +3891,29 @@ export async function main(rawArgv: string[]): Promise<void> {
 }
 
 if (import.meta.main) {
+  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
+  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
+  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // in Kiro's terminal, so the dispatcher's front gate and the lean projections
+  // keep their import graph.
+  if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {
+    import("./aidlc-kiro-ide-terminal.ts")
+      .then(async (m) => {
+        if (await m.commandPromptReplyTee()) return;
+        m.noteSlowReplyAtExit();
+        run(m.rejoinCommandPromptQuotes(process.argv.slice(2)));
+      })
+      .catch(() => run(process.argv.slice(2)));
+  } else {
+    run(process.argv.slice(2));
+  }
+}
+
+function run(args: string[]): void {
   // Keep pending stdin and async dispatch alive, while leaving this module
   // synchronous to import (completions imports its route table during dispatch).
   const keepAlive = setInterval(() => {}, 1_000);
-  void main(process.argv.slice(2)).catch((error) => {
+  void main(args).catch((error) => {
     // Recorded before the message is rendered, so a failing stderr write
     // still leaves the reason in the trace. Only hook routes are traced.
     if (tracedHookRoute(canonicalizeLegacyCopilotHookArgv(process.argv.slice(2))) !== undefined) {

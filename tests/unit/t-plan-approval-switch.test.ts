@@ -22,6 +22,7 @@ import {
   createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
+  followProposal,
   removeWorkspaceRecord,
   runOrchestrateNext,
   seededRecordDir,
@@ -506,8 +507,11 @@ describe("only the person turns plan approval off", () => {
     // recorded and the same question is still open for the agent to answer.
     expect(auditText(proj)).not.toContain("**Event**: QUESTION_ANSWERED");
     expect(next(proj).kind).toBe("ask");
-    const context = reply(proj, "skip plan approval for this work");
-    expect(context).toContain("Plan Approval changed: on (set by you) to off (set by you)");
+    // Their words are recorded; the agent reads them and runs the setter.
+    expect(reply(proj, "skip plan approval for this work")).not.toContain("Plan Approval changed");
+    expect(planApprovalLine(proj)).toBe("on (set by you)");
+    const lowered = setterOff(proj);
+    expect(lowered.status, lowered.stderr).toBe(0);
     expect(planApprovalLine(proj)).toBe("off (set by you)");
     expect(auditText(proj)).toContain("**Event**: CEREMONY_SET");
     // The open question is dropped and this plan builds.
@@ -520,6 +524,7 @@ describe("only the person turns plan approval off", () => {
   test("guard.plan-approval off is the same switch", () => {
     const proj = project("on");
     reply(proj, "/aidlc config set guard.plan-approval off");
+    expect(setterOff(proj, ["--guard.plan-approval", "off"]).status).toBe(0);
     const state = readFileSync(seededStateFile(proj), "utf-8");
     expect(getField(state, "Plan Approval")).toBe("off (set by you)");
     expect(getField(state, "Guards Off")).toBeNull();
@@ -595,6 +600,23 @@ describe("only the person turns plan approval off", () => {
   });
 });
 
+/** The setter as the agent runs it in the chat. */
+// A refusal's text from the JSON line the utility prints: the encoding doubles
+// a Windows path's backslashes, so the raw output never carries the path.
+function refusalText(stderr: string): string {
+  try {
+    const parsed = JSON.parse(stderr) as { error?: unknown };
+    if (typeof parsed.error === "string") return parsed.error;
+  } catch {
+    // Plain text.
+  }
+  return stderr;
+}
+
+function setterOff(proj: string, args: string[] = ["--plan-approval", "off"]): { status: number; stdout: string; stderr: string } {
+  return utility(proj, ["config-change", ...args]);
+}
+
 /** A workspace with no piece of work yet: where the compose gate and scope confirmation run. */
 function emptyProject(): string {
   const proj = createTestProject();
@@ -637,8 +659,10 @@ describe("asked before the piece of work exists", () => {
   test("the person's own words at the gate turn it off for the work that request creates", () => {
     const proj = emptyProject();
     const asked = requestOf(proj, "build the export");
-    const context = reply(proj, "skip plan approval for this work");
-    expect(context).toContain("Plan approval (it shows you the plan before any code is written) will be off for the piece of work you start now (set by you)");
+    reply(proj, "skip plan approval for this work");
+    const kept = setterOff(proj);
+    expect(kept.status, kept.stderr).toBe(0);
+    expect(kept.stdout).toContain("Plan approval (it shows you the plan before any code is written) will be off for the piece of work you start now (set by you)");
     expect(planApprovalCreationGranted(proj, SESSION, asked.id)).toBe(true);
     // The creation line the person sees, for that request, says what creation will do.
     const line = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "feature", "--request", asked.id], {
@@ -655,6 +679,7 @@ describe("asked before the piece of work exists", () => {
   test("said before the work is described, it answers the next request this chat makes", () => {
     const proj = emptyProject();
     reply(proj, "skip plan approval for this work");
+    expect(setterOff(proj).status).toBe(0);
     const asked = requestOf(proj, "build the export");
     expect(asked.message).toContain("; no plan approval; lead agent only)");
     const made = utility(proj, ["intent-create", "--request", asked.id]);
@@ -682,8 +707,10 @@ describe("asked before the piece of work exists", () => {
       const older = requestOf(proj, "add a settings page");
       askedMinutesAgo(proj, older.id, 5);
       const composition = composeOf(proj, compose);
-      const context = reply(proj, "skip plan approval for this work");
-      expect(context).toContain("Plan approval (it shows you the plan before any code is written) will be off for the piece of work you start now (set by you)");
+      reply(proj, "skip plan approval for this work");
+      const kept = setterOff(proj);
+      expect(kept.status, kept.stderr).toBe(0);
+      expect(kept.stdout).toContain("Plan approval (it shows you the plan before any code is written) will be off for the piece of work you start now (set by you)");
       expect(planApprovalCreationGranted(proj, SESSION, older.id)).toBe(false);
       const asked = approveComposed(proj, composition, "fix the null checks the scan found");
       expect(asked.id).not.toBe(composition);
@@ -698,9 +725,15 @@ describe("asked before the piece of work exists", () => {
     for (const before of [false, true]) {
       const proj = emptyProject();
       // Said at the gate, or just before the composition was asked for.
-      if (before) reply(proj, "skip plan approval for this work");
+      if (before) {
+        reply(proj, "skip plan approval for this work");
+        expect(setterOff(proj).status).toBe(0);
+      }
       composeOf(proj, ["compose", "--report", "sonar.json"]);
-      if (!before) reply(proj, "skip plan approval for this work");
+      if (!before) {
+        reply(proj, "skip plan approval for this work");
+        expect(setterOff(proj).status).toBe(0);
+      }
       // The person rejects that plan and describes other work instead.
       const other = requestOf(proj, "add a settings page");
       expect(other.message).not.toContain("; no plan approval)");
@@ -713,6 +746,7 @@ describe("asked before the piece of work exists", () => {
   test("said just before a report-only compose, it answers the work that compose creates", () => {
     const proj = emptyProject();
     reply(proj, "skip plan approval for this work");
+    expect(setterOff(proj).status).toBe(0);
     const composition = composeOf(proj, ["compose", "--report", "sonar.json"]);
     const asked = approveComposed(proj, composition, "fix the null checks the scan found");
     expect(asked.message).toContain("; no plan approval; lead agent only)");
@@ -746,6 +780,7 @@ describe("asked before the piece of work exists", () => {
     const proj = emptyProject();
     const composition = composeOf(proj, ["compose", "--report", "sonar.json"]);
     reply(proj, "skip plan approval for this work");
+    expect(setterOff(proj).status).toBe(0);
     requestOf(proj, "add a settings page");
     const late = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "feature", "--request", composition, "--", "fix the scan findings"], {
       env: { ...process.env, ...CLEAR },
@@ -785,7 +820,10 @@ describe("asked before the piece of work exists", () => {
       });
       const composition = /--request ([0-9a-f]{8})/.exec(String((dispatch.directive as { message?: unknown } | null)?.message))?.[1];
       if (composition === undefined) throw new Error(`no request in ${dispatch.out}`);
-      expect(reply(proj, "skip plan approval for this work")).toContain("Plan approval (it shows you the plan before any code is written) will be off for the piece of work you start now (set by you)");
+      reply(proj, "skip plan approval for this work");
+      const kept = setterOff(proj);
+      expect(kept.status, kept.stderr).toBe(0);
+      expect(kept.stdout).toContain("Plan approval (it shows you the plan before any code is written) will be off for the piece of work you start now (set by you)");
       const approval = runOrchestrateNext(ORCHESTRATE, proj, [
         "--scope", "feature", "--request", composition, "--sensors", "off", ...(taskless ? ["--", "fix the date parser"] : []),
       ], { env: { ...process.env, ...CLEAR } });
@@ -816,9 +854,7 @@ describe("asked before the piece of work exists", () => {
       const health = hooksHealthDir(proj);
       mkdirSync(health, { recursive: true });
       writeFileSync(join(health, "write-audit-log.last"), new Date().toISOString());
-      expect(reply(proj, "/aidlc --plan-approval off fix the parser")).toContain(
-        "Plan approval (it shows you the plan before any code is written) will be off for the piece of work you start now (set by you)",
-      );
+      expect(reply(proj, "/aidlc --plan-approval off fix the parser")).not.toContain("AIDLC Guard Policy");
       const routing = runOrchestrateNext(ORCHESTRATE, proj, ["--plan-approval", "off", "--", "fix the parser"], {
         env: { ...process.env, ...CLEAR },
       });
@@ -826,15 +862,24 @@ describe("asked before the piece of work exists", () => {
       expect(ask?.ask_type, routing.out).toBe("new-work-routing");
       // The person picks new work.
       const command = String(ask?.new_intent_command);
-      const routed = runOrchestrateNext(ORCHESTRATE, proj, command.slice(command.indexOf(" next ") + 6).split(" "), {
+      // No plan was named with the words, so that answer reaches the plan question
+      // (the agent's proposal, through the test's stand-in reading) before the creation.
+      const offer = followProposal(
+        runOrchestrateNext(ORCHESTRATE, proj, command.slice(command.indexOf(" next ") + 6).split(" "), { env: { ...process.env, ...CLEAR } }),
+        ORCHESTRATE, proj, { env: { ...process.env, ...CLEAR } },
+      );
+      const confirm = String((offer.directive as { confirm_command?: string } | null)?.confirm_command);
+      expect(confirm, offer.out).toContain(" next ");
+      const routed = runOrchestrateNext(ORCHESTRATE, proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" "), {
         env: { ...process.env, ...CLEAR },
       });
       const message = String((routed.directive as { message?: unknown } | null)?.message);
       // The creation line says what creation will do: no plan approval.
       expect(message, routed.out).toMatch(/; no [^);]*plan approval[;)]/);
+      expect(message).toContain("--plan-approval off");
       const id = /--request ([0-9a-f]{8})/.exec(message)?.[1];
       if (id === undefined) throw new Error(`no request in ${routed.out}`);
-      const made = utility(proj, ["intent-create", "--request", id]);
+      const made = utility(proj, ["intent-create", "--request", id, "--plan-approval", "off"]);
       expect(made.status, made.stderr).toBe(0);
       expect(createdPlanApproval(proj)).toBe("off (set by you)");
     }
@@ -853,7 +898,14 @@ describe("asked before the piece of work exists", () => {
     });
     const command = String((routing.directive as { new_intent_command?: string } | null)?.new_intent_command);
     expect(command, routing.out).toContain("--summary-confirmation off");
-    const routed = runOrchestrateNext(ORCHESTRATE, proj, command.slice(command.indexOf(" next ") + 6).split(" "), {
+    // The plan question comes first (no plan was named with the words), then its yes creates.
+    const offer = followProposal(
+      runOrchestrateNext(ORCHESTRATE, proj, command.slice(command.indexOf(" next ") + 6).split(" "), { env: { ...process.env, ...CLEAR } }),
+      ORCHESTRATE, proj, { env: { ...process.env, ...CLEAR } },
+    );
+    const confirm = String((offer.directive as { confirm_command?: string } | null)?.confirm_command);
+    expect(confirm, offer.out).toContain("--summary-confirmation off");
+    const routed = runOrchestrateNext(ORCHESTRATE, proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" "), {
       env: { ...process.env, ...CLEAR },
     });
     const message = String((routed.directive as { message?: unknown } | null)?.message);
@@ -886,6 +938,7 @@ describe("asked before the piece of work exists", () => {
     const proj = emptyProject();
     const first = requestOf(proj, "build the export");
     reply(proj, "skip plan approval for this work");
+    expect(setterOff(proj).status).toBe(0);
     // The person rejects that plan and describes other work instead.
     const other = requestOf(proj, "add a settings page");
     const made = utility(proj, ["intent-create", "--request", other.id]);
@@ -897,6 +950,7 @@ describe("asked before the piece of work exists", () => {
   test("a creation that names no request never takes it", () => {
     const proj = emptyProject();
     reply(proj, "skip plan approval for this work");
+    expect(setterOff(proj).status).toBe(0);
     const made = utility(proj, ["intent-create", "--scope", "feature"]);
     expect(made.status, made.stderr).toBe(0);
     expect(createdPlanApproval(proj)).toBe("on (from scope feature)");
@@ -906,8 +960,10 @@ describe("asked before the piece of work exists", () => {
     const proj = emptyProject();
     const asked = requestOf(proj, "build the export");
     reply(proj, "skip plan approval for this work");
+    expect(setterOff(proj).status).toBe(0);
     expect(planApprovalCreationGranted(proj, SESSION, asked.id)).toBe(true);
     reply(proj, "/aidlc config set plan-approval on");
+    expect(setterOff(proj, ["--plan-approval", "on"]).status).toBe(0);
     expect(planApprovalCreationGranted(proj, SESSION, asked.id)).toBe(false);
   });
 
@@ -925,10 +981,9 @@ describe("asked before the piece of work exists", () => {
   // the person had to say plan approval off again.
   test("typed beside the request's own flags, it counts for the new work too", () => {
     const proj = emptyProject();
-    const context = reply(proj,
-      "/aidlc --project-type greenfield --skip user-stories --collaborators off --guard-policy off --plan-approval off build the export");
-    expect(context).toContain("Plan approval (it shows you the plan before any code is written) will be off for the piece of work you start now (set by you)");
-    expect(context).toContain("Guard Policy (it sets how many checks run) is off for the work you are asking for (set by you).");
+    expect(reply(proj,
+      "/aidlc --project-type greenfield --skip user-stories --collaborators off --guard-policy off --plan-approval off build the export"))
+      .not.toContain("AIDLC Guard Policy");
     const asked = requestOf(proj, "build the export", ["--skip", "user-stories", "--plan-approval", "off"]);
     expect(asked.message).toContain("--plan-approval off");
     const made = utility(proj, ["intent-create", "--request", asked.id, "--skip", "user-stories", "--plan-approval", "off"]);
@@ -956,20 +1011,19 @@ describe("asked before the piece of work exists", () => {
     lockMemory(proj);
     const memory = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
     const asked = requestOf(proj, "build the export");
-    const context = reply(proj, "skip plan approval for this work");
-    expect(context).toContain(`Your team set Guard Policy to strict in ${memory}, so plan approval stays on for everyone on this repo`);
+    // Plain words: the agent reads them and runs the setter on its own reading,
+    // as it does for every check (t-agent-runs-the-check-switch), and relays the
+    // refusal the setter reports as one JSON line.
+    reply(proj, "skip plan approval for this work");
+    const locked = setterOff(proj);
+    expect(locked.status).not.toBe(0);
+    expect(refusalText(locked.stderr)).toContain(
+      `Your team set Guard Policy to strict in ${memory}, so plan approval stays on for everyone on this repo`,
+    );
     expect(planApprovalCreationGranted(proj, SESSION, asked.id)).toBe(false);
     const refused = utility(proj, ["intent-create", "--request", asked.id, "--plan-approval", "off"]);
     expect(refused.status).toBe(1);
-    // Read a JSON refusal's text so the Windows path compares unescaped.
-    let refusal = refused.stderr;
-    try {
-      const parsed = JSON.parse(refused.stderr) as { error?: unknown };
-      if (typeof parsed.error === "string") refusal = parsed.error;
-    } catch {
-      // Plain text refusal.
-    }
-    expect(refusal).toContain(`Your team set Guard Policy to strict in ${memory}`);
+    expect(refusalText(refused.stderr)).toContain(`Your team set Guard Policy to strict in ${memory}`);
   });
 });
 
@@ -994,7 +1048,10 @@ describe("Guard Policy typed before or with the new work", () => {
 
   test("typed before the work is described, it is set on the next piece of work this chat starts", () => {
     const proj = emptyProject();
-    expect(reply(proj, "/aidlc --guard-policy off")).toContain(
+    reply(proj, "/aidlc --guard-policy off");
+    const kept = setterOff(proj, ["--guard-policy", "off"]);
+    expect(kept.status, kept.stderr).toBe(0);
+    expect(kept.stdout).toContain(
       "Guard Policy (it sets how many checks run) is off for the piece of work you start now (set by you).",
     );
     const asked = requestFor(proj, "build the export");
@@ -1005,10 +1062,12 @@ describe("Guard Policy typed before or with the new work", () => {
 
   test.each(["off", "relaxed"] as const)("%s, then strict, before the work: the new work starts strict", (lower) => {
     const proj = emptyProject();
-    expect(reply(proj, `/aidlc --guard-policy ${lower}`)).toContain(
+    reply(proj, `/aidlc --guard-policy ${lower}`);
+    expect(setterOff(proj, ["--guard-policy", lower]).stdout).toContain(
       `Guard Policy (it sets how many checks run) is ${lower} for the piece of work you start now (set by you).`,
     );
     reply(proj, "/aidlc --guard-policy strict");
+    expect(setterOff(proj, ["--guard-policy", "strict"]).status).toBe(0);
     const asked = requestFor(proj, "build the export");
     const made = utility(proj, ["intent-create", "--request", asked.id]);
     expect(made.status, made.stderr).toBe(0);
@@ -1017,9 +1076,7 @@ describe("Guard Policy typed before or with the new work", () => {
 
   test("typed with the description, creation takes it with no refusal", () => {
     const proj = emptyProject();
-    expect(reply(proj, "/aidlc --guard-policy relaxed --scope enterprise -- build the export")).toContain(
-      "Guard Policy (it sets how many checks run) is relaxed for the work you are asking for (set by you).",
-    );
+    expect(reply(proj, "/aidlc --guard-policy relaxed --scope enterprise -- build the export")).not.toContain("AIDLC Guard Policy");
     const asked = requestFor(proj, "build the export", ["--guard-policy", "relaxed"]);
     const made = utility(proj, ["intent-create", "--request", asked.id, "--guard-policy", "relaxed"]);
     expect(made.status, made.stderr).toBe(0);
@@ -1030,46 +1087,102 @@ describe("Guard Policy typed before or with the new work", () => {
     const proj = project();
     setPolicy(proj, "strict");
     const before = readFileSync(seededStateFile(proj), "utf-8");
-    expect(reply(proj, "/aidlc --guard-policy off -- add a CSV export")).toContain(
-      "Guard Policy (it sets how many checks run) is off for the work you are asking for (set by you).",
-    );
+    expect(reply(proj, "/aidlc --guard-policy off -- add a CSV export")).not.toContain("AIDLC Guard Policy");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 
-  test("typed with new work beside open work, the new work it routes to gets it and the person hears so", () => {
+  /** One piece of work open from the terminal, whose session runs AI-DLC's hooks. */
+  const besideOpenWork = (): { proj: string; openState: () => string; openBefore: string } => {
     const proj = emptyProject();
     expect(utility(proj, ["intent-create", "--scope", "poc"]).status).toBe(0);
-    // The open work's session runs AI-DLC's hooks, which left a heartbeat in its record.
     const health = hooksHealthDir(proj);
     mkdirSync(health, { recursive: true });
     writeFileSync(join(health, "write-audit-log.last"), new Date().toISOString());
     const intents = join(proj, "aidlc", "spaces", "default", "intents");
     const open = readFileSync(join(intents, "active-intent"), "utf-8").trim();
-    const openBefore = readFileSync(join(intents, open, "aidlc-state.md"), "utf-8");
-    expect(reply(proj, "/aidlc --guard-policy off enterprise fix the parser")).toContain(
-      "Guard Policy (it sets how many checks run) is off for the work you are asking for (set by you).",
-    );
-    const routing = runOrchestrateNext(
-      ORCHESTRATE, proj, ["--guard-policy", "off", "enterprise", "fix the parser"],
-      { env: { ...process.env, ...CLEAR } },
-    );
-    const ask = routing.directive as { ask_type?: string; new_intent_command?: string } | null;
-    expect(ask?.ask_type, routing.out).toBe("new-work-routing");
-    // The person picks new work.
-    const command = String(ask?.new_intent_command);
-    const routed = runOrchestrateNext(ORCHESTRATE, proj, command.slice(command.indexOf(" next ") + 6).split(" "), {
+    const openState = (): string => readFileSync(join(intents, open, "aidlc-state.md"), "utf-8");
+    return { proj, openState, openBefore: openState() };
+  };
+  const nextOf = (proj: string, command: unknown) => {
+    const text = String(command);
+    return runOrchestrateNext(ORCHESTRATE, proj, text.slice(text.indexOf(" next ") + 6).split(" "), {
       env: { ...process.env, ...CLEAR },
     });
-    // The person hears it with the next step the agent speaks from.
-    expect(pendingPersonLines(proj, SESSION).lines.join(" "), routed.out).toContain(
-      "Guard Policy (it sets how many checks run) is off for the new work (set by you).",
-    );
-    const id = /--request ([0-9a-f]{8})/.exec(String((routed.directive as { message?: unknown } | null)?.message))?.[1];
-    if (id === undefined) throw new Error(`no request in ${routed.out}`);
-    const made = utility(proj, ["intent-create", "--request", id]);
+  };
+  /** The person picks separate work on the routing question; with no plan named, the agent proposes `plan`. */
+  const separateWork = (proj: string, typed: string[], plan?: string) => {
+    const routing = runOrchestrateNext(ORCHESTRATE, proj, typed, { env: { ...process.env, ...CLEAR } });
+    const ask = routing.directive as { ask_type?: string; new_intent_command?: string } | null;
+    expect(ask?.ask_type, routing.out).toBe("new-work-routing");
+    let step = nextOf(proj, ask?.new_intent_command);
+    if (plan !== undefined) {
+      const propose = /`([^`]*next --propose <plan> --request [0-9a-f]{8})`/.exec(
+        String((step.directive as { message?: unknown } | null)?.message),
+      )?.[1];
+      expect(propose, step.out).toBeDefined();
+      const offer = nextOf(proj, (propose as string).replace("<plan>", plan));
+      step = nextOf(proj, (offer.directive as { confirm_command?: unknown } | null)?.confirm_command);
+    }
+    return step;
+  };
+  /** Creation as the agent runs it: the request and every flag the step names. */
+  const createAsPrinted = (proj: string, step: { directive: unknown; out: string }) => {
+    const message = String((step.directive as { message?: unknown } | null)?.message);
+    const request = /--request ([0-9a-f]{8})/.exec(message)?.[1];
+    if (request === undefined) throw new Error(`no request in ${step.out}`);
+    const scope = /--scope ([a-z][a-z-]*)/.exec(message)?.[1];
+    const flags = [...message.matchAll(/--(guard-policy|guard\.[a-z-]+) (strict|relaxed|on|off)/g)].flatMap((m) => [`--${m[1]}`, m[2]]);
+    return utility(proj, ["intent-create", "--request", request, ...(scope === undefined ? [] : ["--scope", scope]), ...flags]);
+  };
+  const heard = (proj: string, step: { directive: unknown }): string =>
+    `${String((step.directive as { narration?: unknown } | null)?.narration ?? "")} ${pendingPersonLines(proj, SESSION).lines.join(" ")}`;
+
+  // Typed with the request, a lowered Guard Policy is the new work's, as a check
+  // typed off is: it rides the creation command, creation applies it once under
+  // the person-turn rule, and the person hears so. Nobody asks them again.
+  test.each([
+    ["the plan they named", ["--guard-policy", "off", "enterprise", "fix the parser"], undefined],
+    ["the plan the agent proposes", ["--guard-policy", "off", "fix the parser"], "enterprise"],
+  ])("typed with new work beside open work, the new work it routes to gets it once: %s", (_label, typed, plan) => {
+    const { proj, openState, openBefore } = besideOpenWork();
+    expect(reply(proj, `/aidlc ${typed.join(" ")}`)).not.toContain("AIDLC Guard Policy");
+    const step = separateWork(proj, typed as string[], plan as string | undefined);
+    const said = heard(proj, step);
+    expect(said, step.out).toContain("Guard Policy (it sets how many checks run) is off for the new work (set by you).");
+    expect(said).not.toContain("Do you want off");
+    const made = createAsPrinted(proj, step);
     expect(made.status, made.stderr).toBe(0);
     expect(createdPolicy(proj)).toBe("off (set by you)");
-    expect(readFileSync(join(intents, open, "aidlc-state.md"), "utf-8")).toBe(openBefore);
+    expect(openState()).toBe(openBefore);
+  });
+
+  test("typed off for new work whose plan already ships off: nothing new is said or asked, and the work keeps its plan's value", () => {
+    const { proj, openState, openBefore } = besideOpenWork();
+    reply(proj, "/aidlc --guard-policy off fix the parser");
+    const step = separateWork(proj, ["--guard-policy", "off", "fix the parser"], "bugfix");
+    const said = heard(proj, step);
+    expect(said, step.out).not.toContain("Do you want off");
+    expect(said).not.toContain("is off for the new work (set by you)");
+    const made = createAsPrinted(proj, step);
+    expect(made.status, made.stderr).toBe(0);
+    expect(createdPolicy(proj)).toBe("off (from scope bugfix)");
+    expect(openState()).toBe(openBefore);
+  });
+
+  test("a team's strict Guard Policy: its line is said once, the new work is still created, at strict", () => {
+    const { proj, openState, openBefore } = besideOpenWork();
+    lockMemory(proj);
+    const memory = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
+    reply(proj, "/aidlc --guard-policy off enterprise fix the parser");
+    const step = separateWork(proj, ["--guard-policy", "off", "enterprise", "fix the parser"]);
+    const said = heard(proj, step);
+    const team = `Your team set Guard Policy to strict in ${memory} (section: Guard Policy)`;
+    expect(said.split(team).length - 1, step.out).toBe(1);
+    expect(said).not.toContain("Do you want off");
+    const made = createAsPrinted(proj, step);
+    expect(made.status, made.stderr).toBe(0);
+    expect(createdPolicy(proj)).toContain("strict");
+    expect(openState()).toBe(openBefore);
   });
 
   test("typed with words beside open work, choosing to continue the open work applies it there", () => {
@@ -1128,8 +1241,12 @@ describe("the memory lock and the machine switch", () => {
     });
     writePlan(proj);
     expect(next(proj).kind).toBe("ask");
-    const context = reply(proj, "/aidlc config set plan-approval off");
-    expect(context).toContain("plan approval stays on for everyone on this repo");
+    // The hook records the line and says nothing; the setter the agent runs
+    // for it is refused with the team's line.
+    expect(reply(proj, "/aidlc config set plan-approval off")).not.toContain("plan approval stays on");
+    const refused = setterOff(proj);
+    expect(refused.status).not.toBe(0);
+    expect(`${refused.stdout}${refused.stderr}`).toContain("plan approval stays on for everyone on this repo");
     expect(planApprovalLine(proj)).toBe("off (from scope poc)");
     expect(utility(proj, ["status"]).stdout).toContain("Plan Approval: on (guard policy strict (from project.md))\n");
   });

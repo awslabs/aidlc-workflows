@@ -43,7 +43,7 @@ import {
   trackedKiroIdeSteeringAsk,
 } from "../tools/aidlc-includes.ts";
 import { kiroIdeWorkflowsAsk } from "../tools/aidlc-kiro-ide-workflows.ts";
-import { kiroIdeTerminalAsk } from "../tools/aidlc-kiro-ide-terminal.ts";
+import { kiroIdeTerminalAsk, kiroIdeTerminalStandingLine, recordKiroTerminalShell } from "../tools/aidlc-kiro-ide-terminal.ts";
 import {
   isBindableIntentRecordName,
   isSafeIntentRecordName,
@@ -86,6 +86,8 @@ import {
   writeSessionIntentUuid,
   writeSessionPidAncestry,
   writeSessionRebindOffer,
+  dropSessionSelectionNotice,
+  SELECTION_NOTICE_FOLLOW,
   writeSessionSelectionNotice,
   clearSessionRebindOffer,
 } from "../tools/aidlc-lib.ts";
@@ -93,6 +95,7 @@ import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import { recordRulesLoad } from "../tools/aidlc-rules-held.ts";
 import { aidlcInvocation, aidlcToolInvocation, entrySkillInvocation, hidesStopNote, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
+import { applyStatusLineDefault, statusLineHarness } from "../tools/aidlc-statusline-choice.ts";
 
 // While a recorded switch keeps one of the person's checks off, every new chat
 // opens by saying so. Never blocks startup.
@@ -327,10 +330,29 @@ if (sessionId && !rebindCheckOnly) {
   } catch {
     // Asked at a later start.
   }
+  // Kiro's terminal is Command Prompt: the question once per machine, and in
+  // every chat the mechanics and the one setter (a chat that was never asked
+  // otherwise knows nothing of it and tells the person it switched when it did not).
   try {
-    if (runtimeHarnessName(projectDir) === "kiro-ide") asks.push(kiroIdeTerminalAsk(aidlcInvocation()));
+    if (runtimeHarnessName(projectDir) === "kiro-ide") {
+      recordKiroTerminalShell();
+      asks.push(kiroIdeTerminalAsk(aidlcInvocation()));
+      asks.push(kiroIdeTerminalStandingLine(aidlcInvocation()));
+    }
   } catch {
     // Asked at a later start.
+  }
+  // AI-DLC's status line asks nothing here: a project that already had it
+  // keeps it for this clone, and the person whose own status line it covers is
+  // told once. Nothing is added anywhere else (#1407).
+  try {
+    const statusHarness = statusLineHarness(runtimeHarnessName(projectDir));
+    const kept = statusHarness ? applyStatusLineDefault(projectDir, statusHarness) : null;
+    if (kept?.line) {
+      asks.push(`TELL ONCE: in your first reply, tell the person this, in their language: "${kept.line}"`);
+    }
+  } catch {
+    // Kept at a later start.
   }
   trackedSteeringAsk = asks.filter(Boolean).join("\n");
 }
@@ -369,12 +391,13 @@ if (!existsSync(stateFile)) {
             `To pick ${slug} up again, run ${command}.`,
         );
       }
+      // This offer is about the same divergence a follow question waiting for
+      // this chat would ask about, so the person is asked once, here.
+      dropSessionSelectionNotice(projectDir, sessionId, SELECTION_NOTICE_FOLLOW);
     }
     process.stdout.write(hookContextLine(
       "SessionStart",
-      `AIDLC Runtime Session: ${sessionId}\n` +
-        "Use this exact value for any Plan Approval --session argument in this conversation. It goes only on a " +
-        "command that asks for --session, never on next." +
+      `AIDLC Runtime Session: ${sessionId}` +
         rejoin +
         (rebindCheckOnly ? "" : switchOffContext(projectDir)) +
         (trackedSteeringAsk ? `\n${trackedSteeringAsk}` : "") +
@@ -494,6 +517,9 @@ if (sessionId) {
             `Move the shared cursor back to ${intentDisplayLabel(was)}? [Y/n] - on Yes, ${switchInstruction}; ` +
             `on No, keep working ${intentDisplayLabel(was)} through this session binding. This changes only machine-local navigation.\n`;
           writeSessionRebindOffer(projectDir, sessionId, signature);
+          // Asked once: this offer and a follow question left by a switch made
+          // somewhere else are the same divergence, read from opposite ends.
+          dropSessionSelectionNotice(projectDir, sessionId, SELECTION_NOTICE_FOLLOW);
           if (rebindCheckOnly) {
             // The prompt that ran this probe goes through on this chat's own
             // work: its binding (or, for a chat stamped by an earlier version,
@@ -636,14 +662,13 @@ Status: ${status}
 Active Agent: ${agent}
 Last Completed: ${last}
 Next Action: ${next}
-${unitLine}${recovery}${driftNote}${switchOffContext(projectDir).trimStart()}A BARE /aidlc re-entry carries on with this work, the same as /aidlc --resume: send the first \`next\` as \`next --resume\` and continue directly, with no resume menu. Then follow the recovery protocol's Session resume, including its one SAY line. When the person asks to redo, jump, or start fresh (at an approval gate too, where it is that request and not the gate's answer), report it with \`report --result resumed --choice <redo|jump|fresh>\` (add \`--target <stage slug>\` for the stage they named, and \`--unit <unit>\` or \`--every-unit\` when they named a Unit or said every Unit) and follow the print it returns. Check the active intent's aidlc-state.md for full context.
+${unitLine}${recovery}${driftNote}${switchOffContext(projectDir).trimStart()}A BARE /aidlc re-entry carries on with this work, with no resume menu. Then follow the recovery protocol's Session resume, including its one SAY line. When the person asks to redo, jump, or start fresh (at an approval gate too, where it is that request and not the gate's answer), report it with \`report --result resumed --choice <redo|jump|fresh>\` (add \`--target <stage slug>\` for the stage they named, and \`--unit <unit>\` or \`--every-unit\` when they named a Unit or said every Unit) and follow the print it returns. Check the active intent's aidlc-state.md for full context.
 
-FORWARDING-LOOP DISCIPLINE (non-negotiable — the engine owns ALL routing):
 - The engine route (\`aidlc engine orchestrate\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, and you report stage-work outcomes. Repeat only when the directive calls for continuation; a terminal directive or required human wait ends the turn. You never re-derive routing yourself.
-- STEP 1: YOUR VERY FIRST ACTION: take everything the user typed after \`/aidlc\` and append it to the first \`next\` call UNCHANGED. The flags ARE the user's intent; dropping them sends the workflow to the wrong place. \`/aidlc --phase ideation\` -> you MUST run \`next --phase ideation\`, never bare \`next\`. \`/aidlc --stage X\` -> \`next --stage X\`. \`/aidlc\` alone -> \`next --resume\` (this work is active). Before running that first \`next\`, verify: if the user's message contained \`--phase\`/\`--stage\`/\`--scope\`/\`--depth\`/freeform text, it MUST appear on your \`next\` command; a bare \`next\` when the user gave arguments is a bug.
-- When a directive is \`{kind:"print"}\` whose message names a command to run (e.g. \`aidlc engine jump execute ...\`, a scope/config change, or \`init\`): that named command is your IMMEDIATE next tool call. Run THAT EXACT command FIRST. Do NOT run \`next\` again, do NOT read more files, do NOT plan a stage — until the named command has run. Re-running the engine before it is a protocol violation that silently skips the move.
+- First: take everything the user typed after \`/aidlc\` and append it to the first \`next\` call UNCHANGED. The flags ARE the user's intent; dropping them sends the workflow to the wrong place. \`/aidlc --phase ideation\` -> you MUST run \`next --phase ideation\`, never bare \`next\`. \`/aidlc --stage X\` -> \`next --stage X\`. Before running that first \`next\`, verify: if the user's message contained \`--phase\`/\`--stage\`/\`--scope\`/\`--depth\`/freeform text, it MUST appear on your \`next\` command; a bare \`next\` when the user gave arguments is a bug.
+- When the reply names a command to run (e.g. \`aidlc engine jump execute ...\`, a scope/config change, or \`init\`): that named command is your IMMEDIATE next tool call. Run THAT EXACT command FIRST. Do NOT run \`next\` again, do NOT read more files, do NOT plan a stage until the named command has run.
 - After the named command, obey the message's ending. If it says "then stop", print the command's output and END THE TURN: no \`next\`, \`report\`, or stage work. In particular, \`/aidlc space default\` and other terminal workspace navigation stop even when the destination has an unfinished intent. Selecting it does not request resuming it. Continue only when the directive explicitly says to continue.
-- If you end a turn while this work still needs you, AI-DLC answers with one line, "AI-DLC is carrying on with <stage>." It is from AI-DLC, not the person: never record it as their answer${sayTheLine} Follow the aidlc skill's "When AI-DLC carries on by itself" steps; in short: if you just asked the person a question you have not recorded, record it with \`log decision\` and end the turn without asking it again or saying anything else; if you were doing the work of a \`run-stage\` you still hold, finish its steps and run the \`report\` built from it (its stage, plus \`--unit\` in team-owned Unit work); otherwise \`continue\` with the rules receipt you hold, or run \`next\`, and follow the step it returns.${trackedSteeringAsk ? `\n\n${trackedSteeringAsk}` : ""}`;
+- If you end a turn while this work still needs you, AI-DLC answers with one line, "AI-DLC is carrying on with <stage>." It is from AI-DLC, not the person: never record it as their answer${sayTheLine} If you just asked the person a question you have not recorded, record it with \`log decision\` and end the turn without asking it again or saying anything else; if you were doing the work of a \`run-stage\` you still hold, finish its steps and run the \`report\` built from it (its stage, plus \`--unit\` in team-owned Unit work); otherwise \`continue\` with the rules receipt you hold, or run \`next\`, and follow the step it returns.${trackedSteeringAsk ? `\n\n${trackedSteeringAsk}` : ""}`;
 
 process.stdout.write(hookContextLine("SessionStart", `${context}${memoryHandoff}`));
 return 0;

@@ -222,10 +222,9 @@ model gates closed; it cannot qualify full-suite or release coverage.
 Nightly and manual `preview-release.yml` runs call the reusable `full-suite.yml`
 even when the source already has a published preview: source-bound native
 Bun/compatibility receipts,
-required hosted Claude/Codex/opencode/release-contract suites, and the scope
+required hosted Claude/Codex/Copilot/opencode/release-contract suites, and the scope
 runs and the guard matrix on Linux, macOS and Windows (the `scope_runs` job). Cursor is excluded
-because its CLI exposes vendor API keys to agent environments; Copilot is
-excluded by account policy. Ordinary Full Suite dispatches accept any requested
+because its CLI exposes vendor API keys to agent environments. Ordinary Full Suite dispatches accept any requested
 branch or commit, including unmerged PRs, with both verification flags false.
 Every job uses the resolved immutable SHA. Stable publication separately
 requires a tagged commit on `main` and trusted workflow evidence.
@@ -252,7 +251,7 @@ All required live jobs must succeed and omitted jobs must be skipped, never
 missing or failed. The stable release workflow does not consume this artifact, even on
 `main`.
 For a focused repeat, add `verification_family=codex` to the dispatch inputs.
-Choices are `all` (default), `claude-sdk`, `claude-tui`, `codex`, and `opencode`.
+Choices are `all` (default), `claude-sdk`, `claude-tui`, `codex`, `copilot`, and `opencode`.
 Non-all choices require manual live verification, select only that family's
 unchanged per-platform shards, and omit the separate Windows release-contract
 job. Results record `verificationFamily`; ordinary release-purpose Full Suite
@@ -273,7 +272,7 @@ but still requires successful tests before reporting that intentional skip.
 
 Live matrices use bounded, duration-balanced shards on the existing platforms: two
 Claude SDK (four on Linux, which alone runs the golden journeys), three Claude
-TUI, one Codex and one opencode shard per OS (**23 live jobs**). Linux allows four
+TUI, one Codex, one Copilot and one opencode shard per OS (**26 live jobs**). Linux allows four
 concurrent live jobs, macOS two and Windows three. Each shard uses up to two
 isolated file workers; Windows Codex files remain serial. A worker starts each
 file/attempt from the original checkout snapshot and fresh home, temporary

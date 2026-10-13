@@ -581,7 +581,9 @@ describe("t343 completed swarm batch checkpoints", () => {
     human(pd, "Approve");
     expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please fix the API", "t343-checkpoint")).toThrow('picked "Approve"');
     human(pd, "Request Changes");
-    for (const reason of ["", " ", "DISMISSED", "first\nsecond"]) {
+    // A reason with no words, or more than one line, is refused; a word such as
+    // "DISMISSED" is what the conductor read from the person, and is a reason.
+    for (const reason of ["", " ", "first\nsecond"]) {
       expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", reason, "t343-checkpoint")).toThrow("reason");
     }
     const rejected = rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please fix the API", "t343-checkpoint");

@@ -11,6 +11,7 @@ import {
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -435,6 +436,40 @@ describe("t304 source and store generation interleavings", () => {
       "The code changed while it was being scanned, so I saved the scan as it was. Do you want me to scan it again?",
     ]);
     expect(readFileSync(join(storeDir(project), "architecture.md"), "utf-8")).toContain("PAYMENTS AS SCANNED");
+  });
+
+  // A read-only bit on a folder does not stop file creation on Windows, and
+  // root ignores it everywhere.
+  test.skipIf(process.platform === "win32" || (process.getuid?.() ?? 1) === 0)("a store the engine cannot write to does not read as code that moved", () => {
+    const project = freshProject();
+    seedStateFile(project, "state-mid-inception.md");
+    const statePath = seededStateFile(project);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      "- **Change Control**: strict (from scope bugfix)",
+      "- **Guard Policy**: off (from scope bugfix)",
+    ));
+    const payments = join(project, "src", "payments");
+    mkdirSync(payments, { recursive: true });
+    writeFileSync(join(payments, "gateway.ts"), "export const payment = 1;\n");
+    const sourcePaths = ["src/payments/"];
+    const candidate = join(project, "still-candidate");
+    // Snapshot, mint and publish all run with the repository's own store
+    // read-only, as under a harness sandbox, before any of this source is in it.
+    const objects = join(project, ".git", "objects");
+    const dirs = [objects, ...readdirSync(objects).map((entry) => join(objects, entry))];
+    for (const dir of dirs) chmodSync(dir, 0o555);
+    let published: ReturnType<typeof publish>;
+    try {
+      const baseline = snapshot(project, sourcePaths);
+      expect(baseline.source_fingerprint).toStartWith("git:");
+      writeCandidate(candidate, "PAYMENTS UNCHANGED", "payments", sourcePaths, ["payments"], currentFingerprint(project, sourcePaths));
+      published = publish(project, candidate, sourcePaths, baseline);
+    } finally {
+      for (const dir of dirs) chmodSync(dir, 0o755);
+    }
+    expect(published.status, published.stderr).toBe(0);
+    expect(JSON.parse(published.stdout).change_notices).toBeUndefined();
+    expect(readFileSync(join(storeDir(project), "architecture.md"), "utf-8")).toContain("PAYMENTS UNCHANGED");
   });
 
   test("source mutation after the snapshot refuses stale prose with a newly minted fingerprint", () => {

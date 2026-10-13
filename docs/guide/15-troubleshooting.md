@@ -22,7 +22,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Cursor: approvals are never recorded | If the project is not in a git repository, run `git init` in it, then fully restart Cursor and trust the folder (see [Cursor project outside a git repository](#cursor-project-outside-a-git-repository)) |
 | Kiro IDE: `deny fs_read matching ".kiro/"` | Run `/aidlc --doctor`; remove the `.kiro/` rule from the ignore file it names (see [Kiro IDE Read Denials](#kiro-ide-read-denials)) |
 | Kiro IDE: AI-DLC's reviews and helpers do not run, the chat shows **Approval needed in agent-aidlc-...** panels, or `/aidlc` is handed to a Kiro workflow | Kiro's Workflows feature is on. Ask the agent to turn it off, or run `aidlc config trust --kiro-workflows off --yes`, then **Developer: Reload Window** (see [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers)) |
-| Kiro IDE on Windows: your words reach AI-DLC split or with their quotes, or every command shows exit code -1 | Kiro's terminal is Command Prompt. Ask the agent to set it to PowerShell, or run `aidlc config trust --kiro-terminal powershell --yes`, then restart Kiro (see [Command Prompt as Kiro's terminal](harnesses/kiro-ide.md#command-prompt-as-kiros-terminal-on-windows)) |
+| Kiro IDE on Windows: command results end at an `AI-DLC reply:` line and steps take extra turns, or every command shows exit code -1 | Kiro's terminal is Command Prompt. Ask the agent to set it to PowerShell, or run `aidlc config trust --kiro-terminal powershell --yes`, then restart Kiro (see [Command Prompt as Kiro's terminal](harnesses/kiro-ide.md#command-prompt-as-kiros-terminal-on-windows)) |
 | Kiro IDE: the agent cites "my memory" and suggests bypassing a check or running a hook by hand | Ignore it and delete that Kiro memory (see [Kiro memories carry old AI-DLC advice](harnesses/kiro-ide.md#kiro-memories-carry-old-ai-dlc-advice)) |
 | State file corrupted | Run `/aidlc --doctor`, compare against state template |
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
@@ -34,7 +34,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Audit log too large | Leave it where it is: a long project's audit file is large by design, and the engine reads it to know what you approved and finished (see [Audit Log Growing Too Large](#audit-log-growing-too-large)) |
 | Hooks appear to hang | Diagnose lock ownership with `/aidlc --doctor`; see [Lock Files Left Behind](#lock-files-left-behind) |
 | Statusline shows "ready" | Check `aidlc-state.md` has a `**Lifecycle Phase**` field |
-| Statusline not appearing | Run `aidlc doctor`; for a copy install, verify `bun` is on PATH |
+| Statusline not appearing | It shows only once you turn it on: `/aidlc --statusline on` (Claude Code and Codex). Then run `aidlc doctor`; for a copy install, verify `bun` is on PATH |
 | Subagent timed out | Run `/aidlc` to retry or run the stage inline |
 | Workflow stuck or misbehaving, need help | Run `/aidlc --doctor --export` and share the produced `.tar.gz` (redacted; no work product) |
 | A Bolt attempt was set aside | Ask the assistant to invoke the saved abort result's `restore_operation` with its exact argv; hints are display-only. Evidence-only attempts have no saved files to restore. See [getting the files back](#a-bolt-attempt-was-set-aside-getting-the-files-back) |
@@ -72,7 +72,7 @@ The fixed Devin CLI version is not yet confirmed. Remove the workaround only aft
 | `a Windows uninstall cleanup is still running` | A cleanup worker was launched in the last few minutes. Wait for it to finish, then rerun the command. |
 | Alpine reports missing `libstdc++.so.6` or `libgcc_s.so.1` | Install the same runtime dependencies required by Bun's and Node.js's musl builds with `apk add libgcc libstdc++`, then rerun the installer or command. Fully static Bun musl compile targets are not available today; the installer reports this remediation but does not install packages. |
 | `Providers` shows `[needs]` with `no recorded answers` although the harness already has its own model access | On Kiro CLI and Kiro IDE the row reads `[ok]` and `aidlc config providers` asks nothing, because model access comes with Kiro. On GitHub Copilot and Cursor the row reads `[ok]` with no answer, because the session brings model access; run `aidlc config providers` only to use your own Amazon Bedrock access (on Cursor, only the IDE takes Bedrock keys; its CLI always uses Cursor's backend). On every other harness the row is genuine: answer `amazon-bedrock`, or choose `keep current` (`--provider current`) to preserve and record the provider already configured for the harness. `--provider other --acknowledge` records a different provider you configured yourself. |
-| `Models` shows `[needs]` with `no recorded policy` | With no policy, most agents inherit your session's model and effort, so a session at high effort runs them at high effort. Record a preset to set agent efforts (`aidlc config models --preset balanced --project --yes`), or leave it to keep inheriting. On Kiro CLI a preset sets one effort for the whole session: `aidlc config models` chooses the session model and saves it with that effort in your personal Kiro settings, and `/model` and `/effort` change them inside Kiro (see [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort)). On GitHub Copilot, Cursor, and Kiro IDE the row reads `[ok]` and names the host instead, because those hosts cannot pin an agent's model or effort: choose them in the host. See [Choosing a Model and Effort](18-install-and-lifecycle.md#choosing-a-model-and-effort). |
+| `Models` shows `[needs]` with `no recorded policy` | With no policy, most agents inherit your session's model and effort, so a session at high effort runs them at high effort. Record a preset to set agent efforts (`aidlc config models --preset balanced --project --yes`), or leave it to keep inheriting. On Kiro CLI a preset sets one effort for the whole interactive session: `aidlc config models` chooses the session model and saves it with that effort in your personal Kiro settings, and `/model` and `/effort` change them inside Kiro (see [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort)). On GitHub Copilot, Cursor, and Kiro IDE the row reads `[ok]` and names the host instead, because those hosts cannot pin an agent's model or effort: choose them in the host. See [Choosing a Model and Effort](18-install-and-lifecycle.md#choosing-a-model-and-effort). |
 | `workspace shell ready` fails in `aidlc doctor` and rerunning `aidlc config` does not fix it | The interactive rerun uses the existing projection and never rebuilds a missing `aidlc/spaces/default/memory/`; while the shell is incomplete it reports a `Workspace` row and offers no sections to fix. Run the command that row names. On a native install that is `aidlc config --harness <name>`, which refreshes from the installed runtime and recreates the workspace shell. A Bun-invoking projection, copied from the `runtime/<name>/` root of `aidlc-copy-runtime-X.Y.Z.tar.gz` or from a checkout's `dist/<name>/` tree, has no installed runtime to refresh from, so its command also carries `--download`, which fetches and verifies `aidlc-copy-runtime-<version>.tar.gz` for the project's release. It never uses the native `aidlc-runtime-X.Y.Z.tar.gz` or `dist-release/` bytes, which would swap the project's hooks to the native command. |
 | `aidlc config` says it needs a release: `this project is pinned to <version>`, `needs the <version> release files`, `is missing aidlc/spaces/default/memory/`, or `no longer has the MCP server list` | The project needs files for a release this machine does not have: a teammate's newer pin, a harness you are adding, or files it lost. Run the `fix:` line: it is your command with `--download`, which fetches exactly that release, verifies its checksum and (when `gh` is installed) its release attestation, and finishes the command. Natively that installs and registers the pinned release, as `aidlc config --pin` does; on a copied project it downloads `aidlc-copy-runtime-<version>.tar.gz`. At a terminal config asks instead. A pinned release already installed is used without asking. Without network access, follow the `offline:` line: fetch the named file elsewhere and pass it with `--from`, or natively `aidlc config --pin <version> --offline --from <release directory>`. `--release-base-url` and `--ca-bundle` choose a mirror. A failed checksum or attestation stops with nothing changed. |
 | `aidlc doctor` asks for Bun on a project you did not install through the copy channel | Copy-channel projections run hooks through Bun; native installs run them through the `aidlc` command. The remediation names which channel the project is on. To stop needing Bun, reinstall through the native release installer and rerun `aidlc config --harness <name>`. |
@@ -94,8 +94,7 @@ The fixed Devin CLI version is not yet confirmed. Remove the workaround only aft
 | `is missing its shipped block copy` | The named harness's install lost `tools/data/root-blocks/<marker>`. Run `aidlc config --harness <name>` to restore it, then rerun the refresh. `--force` writes the block without that harness's entries. |
 | `unowned whole file` from an ordinary `aidlc config` release refresh | Move or merge the existing file manually before refresh. OpenCode's `opencode.json` no longer stops here: config adds AI-DLC's entries to your file and keeps everything else in it. |
 | `opencode.json` stops config with `<key> must be a JSON object` or `must be a JSON array` | AI-DLC adds its entries to `skills.paths`, `instructions`, and `permission`; when one of those has another shape (for example `"permission": "ask"`), config changes nothing. Write it as a map or a list (`"permission": { "bash": "ask" }`), then rerun config. |
-| `legacy root integration ambiguous; move or delete the unmarked AI-DLC content` | Reconcile the unmarked AI-DLC content in the named root file (such as `AGENTS.md`), preserving project-owned text, then rerun `aidlc config`. Unmarked `.gitignore` content is preserved and a fresh managed block appended; no rename or deletion is needed, and a rule that hides committed records gets a warning. See [Root Integrations and Ownership](18-install-and-lifecycle.md#root-integrations-and-ownership). |
-| `gitignore is not valid UTF-8` | Back up `.gitignore` and convert it from its current encoding to UTF-8, preserving the ignore patterns, then rerun config. AI-DLC leaves the original bytes untouched when decoding would lose information. |
+| `<file> is not valid UTF-8; convert its encoding before config` | Back up the named root file (such as `.gitignore` or `AGENTS.md`) and convert it from its current encoding to UTF-8, keeping its content, then rerun config. AI-DLC leaves the original bytes untouched when decoding would lose information. |
 | `managed markers are missing, duplicated, or malformed` | Repair the named root file so it has exactly one matching `BEGIN AI-DLC` / `END AI-DLC` pair, or remove the broken AI-DLC block and rerun `aidlc config`. |
 | `project runtime <version> is incompatible with selected engine <version>` | Run `aidlc use <version>` to install and select the compatible version, or refresh the project intentionally with `aidlc config`. |
 | `this project requires <version>, which is not installed completely` | Install or reinstall the exact strict-semver pin with `aidlc config --pin <version>`. The dispatcher fails closed instead of falling back to the active machine version; use `aidlc config --unpin` only when the team intends to stop pinning the project. |
@@ -314,7 +313,7 @@ If Cursor keeps asking you to approve the same plan, or says your choice did not
 
 ### Reviewer tool calls refused ("This review cannot open ...")
 
-During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the stage-protocol-reviewer.md section 12a read-scope bound); the refusal names the current unit and directs the reviewer to the supplied files and that unit's own path, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), `/aidlc config set guard.reviewer-scope off` lowers just the reviewer read-scope check for the piece of work you are on (recorded as a `GUARD_DISABLED` audit row, back on for the next one), and `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables that read-scope enforcement machine-wide; the prose bound still governs under either. Neither setting permits a claimed team checkout to write another Unit's `construction/` subtree. A general request in chat does not lower the read-scope check: type the switch above so the human-turn hook applies it at prompt time. Changing scope alone never lowers the running policy. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-engine/reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
+During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the stage-protocol-reviewer.md section 12a read-scope bound); the refusal names the current unit and directs the reviewer to the supplied files and that unit's own path, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), `/aidlc config set guard.reviewer-scope off` lowers just the reviewer read-scope check for the piece of work you are on (recorded as a `GUARD_DISABLED` audit row, back on for the next one), and `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables that read-scope enforcement machine-wide; the prose bound still governs under either. Neither setting permits a claimed team checkout to write another Unit's `construction/` subtree. A general request in chat does not lower the read-scope check: type the switch above and the agent runs the setter for it. Changing scope alone never lowers the running policy. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-engine/reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
 
 Ordinary filters such as `grep latency construction/U03-scoring/nfr.md | grep endpoint` are allowed because the second `grep` searches the piped text. A pipe does not exempt commands that still traverse files: recursive `grep`, `rg --files`, and `rg -f -` still need an in-scope search root or, for `rg`, a glob constrained to the current unit. Pattern files supplied with `-f` must also be in scope. When a pathless command falls back to `.` and is refused, the message identifies that root as implicit.
 
@@ -344,7 +343,7 @@ On Claude Code, per-stage token usage and cost tracking is on by default: the fo
 
 Hooks are registered project-wide in the harness's native configuration. On
 Claude, verify that `.claude/settings.json` contains the expected `hooks`
-events and `statusLine`. For a native project, complete active workflows,
+events. For a native project, complete active workflows,
 then run `aidlc config --harness claude` to restore the shipped registrations;
 your own hook entries are kept. A copy-channel project instead uses
 `bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude root you copied from>`.
@@ -352,9 +351,9 @@ No `--force` is needed. Notes tell you when registrations were restored.
 Doctor fails when a flow-altering registration changes its event, matcher, or
 command, or when a shipped hook is no longer wired. Drift in other AI-DLC
 registrations produces a warning. Your own additional hooks do not trigger
-drift warnings. An absent `statusLine` is restored too, but a custom non-AI-DLC
-statusline is kept. Delete that key and refresh if you want the shipped one
-again.
+drift warnings. A status line your team set in that file is kept. AI-DLC's own
+status line is not shipped there: each person turns it on for themselves with
+`/aidlc --statusline on`.
 For a manual copy,
 replace the complete harness root from the same versioned
 `runtime/<harness>/` archive (a copy never replaces your `.gitignore` or
@@ -397,7 +396,7 @@ undo a global `.kiro/` rule, even when `git check-ignore` reports the path as no
 ignored. A `permissions.yaml` `fs_read` allow does **not** clear the denial:
 [Kiro applies deny-overrides across scopes](https://kiro.dev/docs/permissions/).
 
-Run `/aidlc --doctor`. For an IDE install (`.kiro/agents/aidlc.md` present), it
+Run `/aidlc --doctor`. For an IDE install (`.kiro/agents/aidlc-aidlc.md` present), it
 reports the offending source as:
 
 ```text
@@ -411,7 +410,7 @@ holds inline (at Standard and Minimal depth, within the directive's 8 KiB
 `inline_context_paths` cap), plus `stage-protocol.md` and its
 `stage-protocol-<name>.md` modules and the files beside each skill's `SKILL.md`.
 Plugins count however they were composed. Contributor-only protocol files such as
-`stage-definition.md` are not loaded. `SKILL.md` files, the IDE conductor agent (`agents/aidlc.md`),
+`stage-definition.md` are not loaded. `SKILL.md` files, the IDE conductor agent (`agents/aidlc-aidlc.md`),
 `aidlc-common/conductor.md`, and `tools/`, `sensors/`, `hooks/`, `scopes/`, and
 `steering/` are loaded by the IDE or the engine, not through `fs_read`, and are
 not counted. A rule that hides only some of them is
@@ -557,6 +556,23 @@ output-document bytes does not clear audit-recorded artifact staleness. After a
 session restart, retry the same pending request before replacing the Review
 section. The gate remains closed until the matching verdict is recorded.
 
+### Code Generation cannot complete because files changed that no Unit covers
+
+**Symptom**: Approving Code Generation answers with "N changes made during Code
+Generation that no Unit's review covers (...)".
+
+Something changed in the workspace during the stage that no Unit's source
+manifest lists. The line names the three ways through, and the assistant takes
+the one that fits: the Unit that made the change lists the path and is
+reviewed once more; a change nobody meant is undone; a path that
+is not source (a tool's cache written inside the repo, a build output, a nested
+repository that is not this project's code) is left out of the source checks by
+naming it under `exclude` in `.aidlc-source-paths.json` (the file in that repo's
+own folder for a recorded repo). The exclude works at once, with no further
+review; remove the line to put the path back. A path the project's `.gitignore`
+already ignores is never counted. Under Guard Policy relaxed or off the change
+is kept and said once instead.
+
 ### Plan Approval asked twice for the same plan
 
 **Symptom**: Code Generation presents the Plan Approval question again for a plan
@@ -641,10 +657,10 @@ build the edited plan.
 **Legacy Kiro IDE windows.** A Kiro IDE build that passes no typed text to
 AI-DLC approves plans with the picker only, through the older recorded
 decision and answer steps. There an answer binds to the chat session it was
-given in, and the break-glass exit remains: type exactly `Override Plan
-Approval: <your reason>` as a chat message and the assistant re-runs the answer
-command with that reason. Updating Kiro IDE lets you answer in your own words,
-from any chat, or edit the files.
+given in. When the project's files cannot be checked, you can still ask the
+assistant to build the plan anyway, by picking that or saying so, and it is
+recorded as your approval with no check of the files. Updating Kiro IDE lets
+you answer in your own words, from any chat, or edit the files.
 
 ---
 
@@ -882,9 +898,12 @@ Expected behavior — the statusline updates when the state file is next written
 
 ### Not appearing at all
 
-1. Run `aidlc doctor` and repair the reported native command or host wiring.
-2. On a copy install, verify Bun is on the host process PATH.
-3. On Claude, verify the `.claude/settings.json` `statusLine` entry exists.
+1. AI-DLC's status line shows only when you chose it at setup or turned it on:
+   run `/aidlc --statusline on` (`$aidlc --statusline on` on Codex). On Claude
+   Code it goes into your own `.claude/settings.local.json`; a status line your
+   organization's managed settings choose still wins.
+2. Run `aidlc doctor` and repair the reported native command or host wiring.
+3. On a copy install, verify Bun is on the host process PATH.
 4. With no state file, `[AIDLC] ready` is the expected output.
 
 ---

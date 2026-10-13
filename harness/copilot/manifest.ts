@@ -178,6 +178,14 @@ const manifest: HarnessManifest = {
           // The variant shipped before the method include read aidlc/active-memory/
           // (the engine's copy of the active space's method).
           "sha256:2a818c7c6a39421df576d70829d4d2c960809df3d60b32ca1a0659965c56433a",
+          // The variant shipped by the Devin-harness work before the upstream
+          // merge.
+          "sha256:630438af52f221fcb89cf41b16ed3a1c042a496d2839311f9921a6c4e0a8ede5",
+          // The variant whose onboarding said the init runner with a scope
+          // always creates the work in one step (a scope alone now asks first).
+          "sha256:0274b7bd2c26f8fc6158aafd6632a99aced247305d2aa09d1c60312283de7e69",
+          // The variant shipped upstream at the merge point.
+          "sha256:6130b11ceb91e334f30940d3a3a1f40b41e82519ac777b0177c089b35f348442",
         ],
       },
     },

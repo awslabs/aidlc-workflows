@@ -36,7 +36,7 @@ The scope frontmatter fields are:
 | `depth` | Yes | The default detail level — `Minimal`, `Standard`, or `Comprehensive`. |
 | `testStrategy` | No | Overrides test volume independent of depth. Defaults to matching `depth`. |
 | `review_cap` | No | Maximum review class under this scope: `adversarial`, `advisory`, or `none`. Absence means no scope-level lowering. A cap can lower but never raise a stage's `review_class`; a per-work `--review` level replaces the cap for that piece of work; autonomous swarm reviews retain the stage's declared class. |
-| `keywords` | No | Natural-language triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form; an empty list opts out. |
+| `keywords` | No | Hint words the agent reads when it proposes a plan for `/aidlc <freeform text>` (no tool matches them). Flat string lists may use block (`- item`) or flow (`[item, item]`) form; an empty list opts out. |
 | `description` | No | The one-liner rendered in `/aidlc --help`. (The compiled scope-table in SKILL.md shows only Scope / Depth / TestStrategy / EXECUTE / Total, leaving the description out.) |
 | `skeleton` | No | `on` opts the scope into the walking-skeleton ceremony when practices are scope-dependent; `off` or absence opts out. |
 | `existing_code` | No | `true` marks a scope that changes code that already exists, so a new project's custom plan runs on another scope when one fits; `false` or absence means the scope suits new work too. Any other value is rejected. |
@@ -172,7 +172,7 @@ Suppose your team wants a `hotfix` scope — leaner than `bugfix`, for the urgen
 
 ### Steps
 
-1. **Drop `core/scopes/aidlc-hotfix.md`.** Copy `aidlc-bugfix.md` (the closest existing scope) and edit the frontmatter: set `name: hotfix`, pick `depth`, add `keywords` if you want freeform auto-detection (`[hotfix, urgent]`), a `description` for the help text, `skeleton: on|off` for the scope-dependent Construction ceremony default, keep `existing_code: true` from `aidlc-bugfix.md`, since a hotfix changes code that already exists, `freeform_default: true` only if this is the selected install's unique fallback nomination, `testStrategy` only if it should diverge from `depth`, and `review_cap` only if the scope should lower stage reviews. Write a short prose body explaining the intent.
+1. **Drop `core/scopes/aidlc-hotfix.md`.** Copy `aidlc-bugfix.md` (the closest existing scope) and edit the frontmatter: set `name: hotfix`, pick `depth`, add `keywords` as hints the agent reads when proposing a plan for freeform text (`[hotfix, urgent]`), a `description` for the help text, `skeleton: on|off` for the scope-dependent Construction ceremony default, keep `existing_code: true` from `aidlc-bugfix.md`, since a hotfix changes code that already exists, `freeform_default: true` only if this is the selected install's unique fallback nomination, `testStrategy` only if it should diverge from `depth`, and `review_cap` only if the scope should lower stage reviews. Write a short prose body explaining the intent.
    Set `sensors`, `learnings`, and `summary_confirmation` to `off` only for ceremonies the scope should omit; absent keys stay on. Intent overrides and global kill switches use the table above.
 
 2. **Tag the stages that should run under `hotfix`.** In each stage you want `EXECUTE` (under `core/aidlc-common/stages/<phase>/`), add `hotfix` to its frontmatter `scopes:` list. A stage you don't tag is `SKIP` for the scope. The 3 initialization stages must include it (they always run).
@@ -181,7 +181,7 @@ Suppose your team wants a `hotfix` scope — leaner than `bugfix`, for the urgen
 
 4. **Verify the scope resolves and is accepted.** Run `/aidlc --doctor`. Then confirm an init under the new scope produces a state file with the right `Scope:` line, and that it's accepted as an env default and as a mid-workflow `--scope` change.
 
-5. **Verify keyword inference** (only if you populated `keywords`). Confirm a freeform phrase containing one of your triggers detects the new scope rather than falling through to `feature`.
+5. **Check the plan's hints** (only if you populated `keywords`; the agent reads them in the plan proposal step, no tool matches them). Confirm the plan proposal step for a freeform phrase lists your scope with those hints, so the agent can propose it.
 
 6. **Update the scope-aware docs and add a routing test.** Several docs enumerate scopes by hand — the User Guide's scope reference and routing table, the customization chapter's valid-values list, and the orchestrator reference's scope-to-stage mapping. Update them in the same change. If your scope skips stages in a pattern no existing scope uses, add a workflow test modeled on the existing per-scope tests.
 
@@ -193,7 +193,7 @@ This implementation derives the valid-scope list from `.claude/scopes/*.md` pres
 
 - The scope is valid everywhere at once — `init`, `--scope` change, env-default resolution, and `doctor` all consult the same helper, so none of them needs a code edit.
 - Error messages list your scope in alphabetical order with no change.
-- If you gave it `keywords`, freeform `/aidlc <text>` auto-detects it as soon as the frontmatter list is populated — no SKILL.md prose edit, just the table regeneration.
+- If you gave it `keywords`, they appear as hints in the plan proposal step the agent reads for freeform `/aidlc <text>` as soon as the frontmatter list is populated — no SKILL.md prose edit, just the table regeneration.
 - Packaging always derives the grid from the current stage YAML, so stale local generated bytes are not release inputs.
 
 ### What does NOT validate automatically

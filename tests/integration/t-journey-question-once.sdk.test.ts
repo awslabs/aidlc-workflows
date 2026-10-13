@@ -24,8 +24,9 @@
 //           question and end its turn without asking it again or going back to
 //           Feasibility.
 //   turn 2: the person answers in their own message: the number of the
-//           option shown for separate new work, and those words. The drive
-//           stops when that work is created.
+//           option shown for separate new work (found by its label, or by the
+//           description when the agent worded the label its own way), and
+//           those words. The drive stops when that work is created.
 //
 // Pass/fail reads only what the engine recorded, the pickers the person was
 // shown, and the Stop hook's own verdicts, NEVER the agent's prose:
@@ -50,7 +51,9 @@ import {
 import { describe, expect, test } from "bun:test";
 import { assertToolResultContains } from "../harness/assert.ts";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
-import { type CapturedAskUserQuestion, driveAidlc, readAuditEvents, readStateFile } from "../harness/sdk-drive.ts";
+import {
+  type CapturedAskUserQuestion, driveAidlc, readAuditEvents, readStateFile, separateWorkOptionIndex,
+} from "../harness/sdk-drive.ts";
 import { readIntentRegistry, turnEndIsOpen } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
@@ -86,10 +89,12 @@ const ANSWER_ROWS = [
 
 const FEASIBILITY_IN_PROGRESS = /^- \[-\] feasibility\b/m;
 
+// The option for separate new work, as the agent worded it (found by
+// separateWorkOptionIndex, which t176 shares). The meaning is the agent's to
+// word; the test checks the right option was offered and picks it by the
+// picker's number.
 function separateWorkReply(menu: CapturedAskUserQuestion | undefined): string {
-  const options = menu?.questions[0]?.options ?? [];
-  let at = options.findIndex((o) => /^yes\b/i.test(o.label));
-  if (at < 0) at = options.findIndex((o) => /separate/i.test(o.label));
+  const at = separateWorkOptionIndex(menu?.questions[0]?.options ?? []);
   return at < 0 ? SEPARATE : `${at + 1}, ${SEPARATE}`;
 }
 
@@ -98,6 +103,34 @@ function countRows(events: string[] | undefined): Map<string, number> {
   for (const event of events ?? []) counts.set(event, (counts.get(event) ?? 0) + 1);
   return counts;
 }
+
+// The option for separate new work in the pickers recorded on 10-08 and
+// 10-10 (the label in the agent's words, the route in the description), and
+// the two edges: a description that says "do not change the current work"
+// beside the route, and one that negates the route on another option.
+// Deterministic; the live journey below drives the real picker.
+test("the separate option is found by its label or its description, never by a negated route", () => {
+  const menu = (options: Array<{ label: string; description?: string }>): CapturedAskUserQuestion =>
+    ({ questions: [{ question: "How should I handle it?", options }], answers: {} });
+  expect(separateWorkReply(menu([{ label: "Yes - start a second intent" }, { label: "No, keep going" }]))).toBe(`1, ${SEPARATE}`);
+  expect(separateWorkReply(menu([{ label: "Part of the active work" }, { label: "Separate new piece of work" }]))).toBe(`2, ${SEPARATE}`);
+  for (const description of [
+    "Set up the NOAA weather CLI as a new, separate piece of work (classic plan, 14 stages) without touching the current widget work.",
+    "Start the NOAA CLI as a separate new piece of work (sized as \"classic\", ~14 stages) without changing the current widget work.",
+    "Start the NOAA weather CLI as a separate new piece of work (classic plan, ~14 stages), leaving the current widget-feature work untouched.",
+    "Create a separate new piece of work; do not change the active work.",
+  ]) {
+    expect(separateWorkReply(menu([
+      { label: "Start it alongside", description },
+      { label: "Part of current work", description: "Treat this as a continuation of the active widget-feature workflow." },
+      { label: "Reshape current plan", description: "Interpret this as a request to change how the remaining widget-feature plan is shaped." },
+    ])), description).toBe(`1, ${SEPARATE}`);
+  }
+  expect(separateWorkReply(menu([
+    { label: "Fold it in", description: "Not a separate new piece of work: part of the current one." },
+    { label: "Start it alongside", description: "Set it up as a separate piece of work beside the current one." },
+  ]))).toBe(`2, ${SEPARATE}`);
+});
 
 describe("t-journey-question-once (sdk): a question still open at the end of a turn is asked once", () => {
   test(

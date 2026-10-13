@@ -286,8 +286,9 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(nativeRules).toEqual(["default.rules"]);
     const defaultRules = readFileSync(join(CODEX_DST, "rules", "default.rules"), "utf-8");
     expect(defaultRules).toContain(
-      'prefix_rule(pattern = ["bun", ".codex/tools/"], decision = "allow")',
+      `prefix_rule(pattern = ["bun", ".codex/tools/aidlc.ts", "${TRUSTED_ROUTE_NAMESPACE}"], decision = "allow")`,
     );
+    expect(defaultRules).not.toContain('pattern = ["bun", ".codex/tools/"]');
     expect(defaultRules).not.toContain('prefix_rule(pattern = ["aidlc"]');
     // No resolver seam: the engine reads the active space directly.
     const config = readFileSync(join(CODEX_DST, "config.toml"), "utf-8");

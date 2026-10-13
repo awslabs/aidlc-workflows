@@ -30,7 +30,7 @@ flowchart TD
     OTHER["You ask to redo, jump,\nor start fresh"]
     JUMP["Jump to named stage"]
     NO_STATE["Error: no workflow state"]
-    SCOPE_DETECT["Detect scope,\nstart new workflow"]
+    SCOPE_DETECT["Propose a plan,\nstart new workflow"]
 
     START --> MODE
     MODE -->|"bare /aidlc"| STATE_EXISTS
@@ -57,7 +57,7 @@ flowchart TD
     style NO_STATE fill:#ffcdd2,stroke:#c62828,color:#000
 ```
 
-<!-- Text fallback: bare /aidlc with state checks the recovery breadcrumb and carries on like /aidlc --resume; you can ask to redo, jump, or start fresh at any time; without state it starts scope detection. /aidlc --resume with state clears a park marker if needed and continues directly; without state it errors. /aidlc --resume --stage jumps to the named stage. -->
+<!-- Text fallback: bare /aidlc with state checks the recovery breadcrumb and carries on like /aidlc --resume; you can ask to redo, jump, or start fresh at any time; without state it starts with a plan proposal. /aidlc --resume with state clears a park marker if needed and continues directly; without state it errors. /aidlc --resume --stage jumps to the named stage. -->
 
 Park from the command surface with `/aidlc park`; the engine names the park command and the conductor reports where it stopped. `/aidlc --resume` brings it back.
 

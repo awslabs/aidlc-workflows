@@ -656,8 +656,10 @@ describe("t326 pinned team Unit merge", () => {
       seed,
       true,
     );
+    // "Cancelled" is a word a person could type, so it is judged like any other
+    // --user-input: here no human turn backs it yet.
     expect(cancelled.status).not.toBe(0);
-    expect(cancelled.out).toContain("cancellation boilerplate");
+    expect(cancelled.out).toContain("typed human turn");
     const attributed = runMergeTool(
       UNIT,
       [

@@ -141,10 +141,10 @@ function captureWorkflowStatusline(): string {
   // line. Purely state-driven — no prompt, no tokens.
   const sandbox = setupTuiProject({ withState: "state-mid-ideation.md" });
   try {
-    // The statusLine key is what wires aidlc-statusline.ts into the TUI; a copy
-    // that dropped it would render no [AIDLC] line at all.
+    // The statusLine key is what wires aidlc-statusline.ts into the TUI; it is
+    // the person's own choice, in .claude/settings.local.json (#1407).
     expect(
-      readFileSync(join(sandbox, ".claude", "settings.json"), "utf8"),
+      readFileSync(join(sandbox, ".claude", "settings.local.json"), "utf8"),
     ).toContain('"statusLine"');
 
     // --- launch the claude TUI ----------------------------------------------
@@ -160,6 +160,10 @@ function captureWorkflowStatusline(): string {
       "40",
       "--",
       "claude",
+      // AI-DLC's status line is the person's choice, in their own
+      // .claude/settings.local.json (#1407): load it beside the project file.
+      "--setting-sources",
+      "project,local",
       "--dangerously-skip-permissions",
     ]);
     expect(started.rc).toBe(0);

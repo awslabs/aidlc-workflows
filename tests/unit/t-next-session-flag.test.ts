@@ -21,6 +21,7 @@ import {
   createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
+  followProposal,
   removeWorkspaceRecord,
   runOrchestrateNext,
   seededStateFile,
@@ -70,7 +71,9 @@ function emptyProject(): string {
 }
 
 function next(proj: string, args: string[]): { directive: Record<string, unknown>; out: string } {
-  const result = runOrchestrateNext(ORCHESTRATE, proj, args, { env: { ...process.env, ...ENV } });
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const options = { env: { ...process.env, ...ENV } };
+  const result = followProposal(runOrchestrateNext(ORCHESTRATE, proj, args, options), ORCHESTRATE, proj, options);
   expect(result.directive, result.out).not.toBeNull();
   return { directive: result.directive as Record<string, unknown>, out: result.out };
 }
@@ -145,7 +148,7 @@ describe("t-next-session-flag: what the step is", () => {
 });
 
 describe("t-next-session-flag: the session line at the start of a chat", () => {
-  test("says the id goes only where a command asks for --session, never on next", () => {
+  test("hands the chat its session and asks nothing of the agent", () => {
     const proj = createTestProject();
     created.push(proj);
     const fired = Bun.spawnSync({
@@ -160,9 +163,10 @@ describe("t-next-session-flag: the session line at the start of a chat", () => {
     });
     const context = String((JSON.parse(new TextDecoder().decode(fired.stdout).trim()) as { additionalContext?: unknown })
       .additionalContext);
-    expect(context).toContain(
-      `AIDLC Runtime Session: ${SESSION}\nUse this exact value for any Plan Approval --session argument in this ` +
-        "conversation. It goes only on a command that asks for --session, never on next.",
-    );
+    // The id is there for a refusal that cannot resolve the session to point at.
+    // Nothing asks the agent to carry it: every command that takes --session
+    // finds the session it runs in (t-no-step-names-a-session owns that pin).
+    expect(context).toContain(`AIDLC Runtime Session: ${SESSION}`);
+    expect(context).not.toContain("--session");
   });
 });

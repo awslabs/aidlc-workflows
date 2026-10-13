@@ -1707,8 +1707,9 @@ describe("t278 engine-emitted wave contract", () => {
 function expectWaveProse(body: string): void {
   expect(body).toContain("**Per-unit batch waves (optional).**");
   expect(body).toContain("directive.wave");
+  // The row branches by what the step is (a wave before the ordinary step with its gate), in its own words.
   expect(body).toContain(
-    "then `directive.wave` when present, otherwise `directive.gate`",
+    "an isolated run, a settled swarm, a wave, or the ordinary step with its gate",
   );
   expect(body).toContain("parent Unit fields are only a projection");
   expect(body).toContain("every `inline_context_paths` file");

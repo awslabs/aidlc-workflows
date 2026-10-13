@@ -87,7 +87,7 @@ const KIRO_KAS_LAYOUT = (() => {
   } catch {
     // A tree without readable metadata still has its conductor file.
   }
-  return existsSync(join(HARNESS_DIR, "agents", "aidlc.md"));
+  return existsSync(join(HARNESS_DIR, "agents", "aidlc-aidlc.md")) || existsSync(join(HARNESS_DIR, "agents", "aidlc.md"));
 })();
 const IS_COPILOT = HARNESS_NAME === "copilot";
 const IS_OPENCODE = HARNESS_NAME === "opencode";
@@ -1287,13 +1287,16 @@ function validIdePermissionRule(
         : blockYamlListHasValue(lines, i + 1, indent, end);
     }
   }
-  return Boolean(capability && (effect === "allow" || effect === "deny") && match);
+  return Boolean(capability && (effect === "allow" || effect === "ask" || effect === "deny") && match);
 }
 
 // Kiro IDE dispatches Markdown agents only when their frontmatter carries a
 // non-empty tools grant and a permissions.rules list made entirely of
-// capability/effect/match entries. Fail closed on empty maps/lists and partial
-// entries: those files exist but do not grant a usable dispatch surface.
+// capability/effect/match entries whose effect is allow, ask, or deny. Core's
+// own personas carry all three: ask keeps the engine commands that change a
+// setting asking the person. Fail closed on empty maps/lists, partial entries,
+// and any other effect: those files exist but do not grant a usable dispatch
+// surface.
 function installedIdeAgentIsDispatchable(agentsDir: string, agent: string): boolean {
   let content = "";
   try {

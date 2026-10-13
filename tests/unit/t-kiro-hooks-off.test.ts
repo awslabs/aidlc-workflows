@@ -55,7 +55,7 @@ function seedKiroIde(): void {
     writeFileSync(join(hooks, `${name}.json`), readFileSync(join(SHIPPED_HOOKS, `${name}.json`), "utf-8"));
   }
   mkdirSync(join(proj, ".kiro", "agents"), { recursive: true });
-  writeFileSync(join(proj, ".kiro", "agents", "aidlc.md"), "---\nname: aidlc\n---\n# AI-DLC conductor\n");
+  writeFileSync(join(proj, ".kiro", "agents", "aidlc-aidlc.md"), "---\nname: aidlc\n---\n# AI-DLC conductor\n");
 }
 
 // What Kiro IDE 1.2.4 writes when the person switches a hook off in Agent

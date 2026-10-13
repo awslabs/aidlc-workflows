@@ -977,7 +977,7 @@ describe("t243 project initialization", () => {
     expect(layout()).toBe("kas");
     expect(JSON.parse(readFileSync(join(project, ".kiro", "settings", "cli.json"), "utf-8"))["chat.agentEngine"])
       .toBe("v3");
-    expect(existsSync(join(project, ".kiro", "agents", "aidlc.md"))).toBe(true);
+    expect(existsSync(join(project, ".kiro", "agents", "aidlc-aidlc.md"))).toBe(true);
     expect(existsSync(join(project, ".kiro", "hooks", "aidlc-record-human-turn.json"))).toBe(true);
     expect(existsSync(join(project, ".kiro", "agents", "aidlc.json"))).toBe(false);
     expect(existsSync(join(project, ".kiro", "agents", "aidlc-developer-agent.json"))).toBe(false);
@@ -997,7 +997,7 @@ describe("t243 project initialization", () => {
     expect(stamp()).toBe("kiro");
     expect(layout()).toBe("agent-v1");
     expect(existsSync(join(project, ".kiro", "agents", "aidlc.json"))).toBe(true);
-    expect(existsSync(join(project, ".kiro", "agents", "aidlc.md"))).toBe(false);
+    expect(existsSync(join(project, ".kiro", "agents", "aidlc-aidlc.md"))).toBe(false);
     expect(existsSync(join(project, ".kiro", "hooks", "aidlc-record-human-turn.json"))).toBe(false);
     expect(readFileSync(memoryNote, "utf-8")).toContain("- Project-owned note.");
     expect(readFileSync(ownSteering, "utf-8")).toBe("# Team notes\n");
@@ -2762,7 +2762,12 @@ describe("t243 project initialization", () => {
     const copyRuntime = temp("aidlc-t243-vscode-copy-runtime-");
     cpSync(COPILOT_RELEASE, copyRuntime, { recursive: true });
     rmSync(join(copyRuntime, ".vscode"), { recursive: true, force: true });
-    for (const start of [null, '{\n  "editor.tabSize": 2\n}\n']) {
+    // The last start has a legacy byte in a comment: the file is left alone
+    // either way, so its encoding stops nothing.
+    const legacyComment = Buffer.concat([
+      Buffer.from("{\n  // caf"), Buffer.from([0xe9]), Buffer.from("\n  \"editor.tabSize\": 2\n}\n"),
+    ]);
+    for (const start of [null, '{\n  "editor.tabSize": 2\n}\n', legacyComment]) {
       const project = temp("aidlc-t243-vscode-copy-");
       mkdirSync(join(project, ".git"));
       if (start !== null) {
@@ -2772,7 +2777,7 @@ describe("t243 project initialization", () => {
       const configured = configCopilot(project, copyRuntime);
       expect(configured.status, configured.stdout + configured.stderr).toBe(0);
       if (start === null) expect(existsSync(join(project, VSCODE_SETTINGS))).toBe(false);
-      else expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(start);
+      else expect(readFileSync(join(project, VSCODE_SETTINGS))).toEqual(Buffer.from(start));
     }
     // A project that AI-DLC already gave the value keeps it and its record.
     const owned = temp("aidlc-t243-vscode-copy-owned-");
@@ -3239,7 +3244,6 @@ describe("t243 project initialization", () => {
     expect(baseline.entries[".claude/settings.json"]).toEqual(expect.objectContaining({
       companyAnnouncements: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       permissions: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
-      statusLine: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       hooks: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       hooksAidlc: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
     }));
@@ -4528,11 +4532,69 @@ describe("t243 project initialization", () => {
       ], project);
       expect(refused.status, refused.stdout + refused.stderr).toBe(4);
       expect(refused.stdout).toContain(
-        "gitignore is not valid UTF-8; convert its encoding before config",
+        ".gitignore is not valid UTF-8; convert its encoding before config",
       );
       expect(readFileSync(path)).toEqual(original);
       expect(readdirSync(project).sort()).toEqual([".git", ".gitignore"]);
       expect(readdirSync(join(project, ".git"))).toEqual([]);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Session start leaves a root file that is not valid UTF-8 alone; config did
+  // not, and wrote the team's AGENTS.md back with each such byte replaced.
+  test("an AGENTS.md that is not valid UTF-8 refuses without changing its bytes even with --force", () => {
+    const project = temp("aidlc-t243-agents-encoding-");
+    mkdirSync(join(project, ".git"));
+    const path = join(project, "AGENTS.md");
+    const original = Buffer.concat([
+      Buffer.from("# Caf"),
+      Buffer.from([0xe9]),
+      Buffer.from("\n\nWe use AI-DLC.\n"),
+    ]);
+    writeFileSync(path, original);
+    for (const flags of [["--dry-run", "--verbose"], ["--force"]]) {
+      const refused = run(INIT, [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        KIRO_RELEASES[0],
+        "--harness",
+        "kiro",
+        ...flags,
+      ], project);
+      expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+      expect(refused.stdout).toContain(
+        "AGENTS.md is not valid UTF-8; convert its encoding before config",
+      );
+      expect(readFileSync(path)).toEqual(original);
+      expect(readdirSync(project).sort()).toEqual([".git", "AGENTS.md"]);
+      expect(readdirSync(join(project, ".git"))).toEqual([]);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A file config would leave as it is needs no conversion: an AGENTS.md that
+  // already holds AI-DLC's current block, with a legacy byte in the team's own
+  // text, is kept byte for byte and config carries on.
+  test("an AGENTS.md that is not valid UTF-8 but already holds the current block is kept and config carries on", () => {
+    const project = temp("aidlc-t243-agents-encoding-kept-");
+    mkdirSync(join(project, ".git"));
+    const path = join(project, "AGENTS.md");
+    writeFileSync(path, "# Cafe\n\nWe use AI-DLC.\n");
+    const args = ["config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--json"];
+    const first = run(INIT, args, project);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    const installed = readFileSync(path);
+    const at = installed.indexOf("Cafe") + 3;
+    const legacy = Buffer.concat([installed.subarray(0, at), Buffer.from([0xe9]), installed.subarray(at + 1)]);
+    writeFileSync(path, legacy);
+    type ConfigPlan = { data: { actions: Array<{ path: string; action: string; detail?: string }> } };
+    for (const extra of [[], ["--dry-run", "--verbose"]]) {
+      const refreshed = run(INIT, [...args, ...extra], project);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      const plan = JSON.parse(refreshed.stdout) as ConfigPlan;
+      expect(plan.data.actions.find((action) => action.path === "AGENTS.md")?.action).toBe("preserve");
+      expect(readFileSync(path)).toEqual(legacy);
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -4583,13 +4645,15 @@ describe("t243 project initialization", () => {
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  test("modified unmarked AGENTS.md still refuses as ambiguous even with --force", () => {
+  // An unmarked file that is not exactly a release's is the team's text, whatever
+  // it says about AI-DLC: config keeps it and adds the marked block after it.
+  test("a modified unmarked AGENTS.md is kept as the team's text and gets the marked block after it", () => {
     const project = temp("aidlc-t243-agents-ambiguous-");
     mkdirSync(join(project, ".git"));
     const path = join(project, "AGENTS.md");
     const original = `${readFileSync(join(KIRO_RELEASES[0], "AGENTS.md"), "utf-8")}\n# Local AI-DLC instructions\n`;
     writeFileSync(path, original);
-    const refused = run(INIT, [
+    const configured = run(INIT, [
       "config",
       "--project-dir",
       project,
@@ -4599,11 +4663,32 @@ describe("t243 project initialization", () => {
       "kiro",
       "--force",
     ], project);
-    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
-    expect(refused.stdout).toContain("legacy root integration ambiguous");
-    expect(readFileSync(path, "utf-8")).toBe(original);
-    expect(readdirSync(project).sort()).toEqual([".git", "AGENTS.md"]);
-    expect(readdirSync(join(project, ".git"))).toEqual([]);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const merged = readFileSync(path, "utf-8");
+    expect(merged.startsWith(original)).toBe(true);
+    expect(merged.match(/<!-- BEGIN AI-DLC:agents -->/g)).toHaveLength(1);
+    expect(merged.match(/<!-- END AI-DLC:agents -->/g)).toHaveLength(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The person's own AGENTS.md names AI-DLC in their words (the path a team
+  // meets before its first config, or after removing the block): their text is
+  // theirs, the block goes after it, and a second config changes nothing.
+  test("a team's AGENTS.md that mentions AI-DLC in its own words is kept, and the block is added after it", () => {
+    const project = temp("aidlc-t243-agents-mentions-aidlc-");
+    mkdirSync(join(project, ".git"));
+    const path = join(project, "AGENTS.md");
+    const theirs = "# Team notes\n\nWe run specs through AI-DLC; the aidlc folder holds the records.\n";
+    writeFileSync(path, theirs);
+    const args = ["config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro"];
+    const configured = run(INIT, args, project);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    expect(configured.stdout + configured.stderr).not.toContain("ambiguous");
+    const merged = readFileSync(path, "utf-8");
+    expect(merged.startsWith(theirs)).toBe(true);
+    expect(merged.match(/<!-- BEGIN AI-DLC:agents -->/g)).toHaveLength(1);
+    const again = run(INIT, args, project);
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    expect(readFileSync(path, "utf-8")).toBe(merged);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("--force does not replace a pre-existing user-owned JSON entry", () => {
@@ -4866,16 +4951,19 @@ describe("t243 project initialization", () => {
       .replace("<!-- BEGIN AI-DLC:agents -->\n", "")
       .replace("<!-- END AI-DLC:agents -->\n", "") + "\nTeam note: aidlc conventions apply here.\n";
     writeFileSync(modifiedPath, modified);
-    const refused = run(INIT, [
+    // With the markers gone and a team note added, the text is the team's: it
+    // stays, and the marked block is added after it.
+    const merged = run(INIT, [
       "config",
       "--project-dir",
       modifiedProject,
       "--from",
       KIRO_RELEASES[0],
     ], modifiedProject);
-    expect(refused.status).toBe(4);
-    expect(refused.stdout).toContain("legacy root integration ambiguous");
-    expect(readFileSync(modifiedPath, "utf-8")).toBe(modified);
+    expect(merged.status, merged.stdout + merged.stderr).toBe(0);
+    const text = readFileSync(modifiedPath, "utf-8");
+    expect(text.startsWith(modified)).toBe(true);
+    expect(text.match(/<!-- BEGIN AI-DLC:agents -->/g)).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("two managed AGENTS blocks from different versions are a conflict", () => {
@@ -8401,6 +8489,9 @@ describe("t243 projection channel", () => {
           "sha256:3979d69468a5997423ef8fe3b7d9f9bc948ddf34524ca39e1c10112a6a80f835",
           "sha256:2a818c7c6a39421df576d70829d4d2c960809df3d60b32ca1a0659965c56433a",
           "sha256:630438af52f221fcb89cf41b16ed3a1c042a496d2839311f9921a6c4e0a8ede5",
+          "sha256:0274b7bd2c26f8fc6158aafd6632a99aced247305d2aa09d1c60312283de7e69",
+          "sha256:6130b11ceb91e334f30940d3a3a1f40b41e82519ac777b0177c089b35f348442",
+          "sha256:2821ab2aa7bed053d82a2dbe31b8629bb3cba8e051207e1a8eb49f00e2d4b258",
         ],
       },
     };
@@ -8524,7 +8615,7 @@ describe("t243 projection channel", () => {
     // The unified Kiro row carries its native grant in the Markdown
     // conductor's permissions, not in .vscode settings Kiro IDE 1.x ignores.
     expect(existsSync(join(KIRO_IDE_RELEASE, ".vscode"))).toBe(false);
-    const ideConductor = readFileSync(join(KIRO_IDE_RELEASE, ".kiro", "agents", "aidlc.md"), "utf-8");
+    const ideConductor = readFileSync(join(KIRO_IDE_RELEASE, ".kiro", "agents", "aidlc-aidlc.md"), "utf-8");
     expect(ideConductor).toContain(`        - "${trustedCommand("*")}"`);
     // A settings change and the per-harness hook entry still show an approval
     // card: ask outranks the broad allow, so the model cannot switch a

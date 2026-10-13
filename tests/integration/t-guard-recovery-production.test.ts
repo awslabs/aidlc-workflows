@@ -367,6 +367,21 @@ class Journey {
     this.transcript.push({ type: "user", message: { role: "user", content: prompt } });
   }
 
+  /**
+   * The person types a setting: the hook records the line and applies nothing,
+   * the agent runs `next` with their line, and then the setter that step names.
+   * The setter's output is what the person reads.
+   */
+  typedSetting(prompt: string): Run {
+    this.humanPrompt(prompt);
+    const step = json(this.tool("orchestrate", ["next", ...prompt.replace(/^\/aidlc\s+/, "").split(/\s+/)]));
+    const named = /Run `([^`]+)` to update the configuration/.exec(String(step.message))?.[1];
+    expect(named, JSON.stringify(step)).toBeDefined();
+    const [bun, tool, ...args] = named!.split(/\s+/);
+    expect(bun, named).toBe("bun");
+    return succeeded(this.command([BUN, join(this.dir, tool), ...args]), `Run the setter next names: ${named}`);
+  }
+
   pick(question: string, labels: string[], choice: string): void {
     const questions = [{ question, options: labels.map((label) => ({ label })) }];
     succeeded(this.hook("record-human-turn", {
@@ -571,11 +586,11 @@ describe("production guards: summary, terminal review, and recovery compose", ()
   productionTest("a refused verdict announces persisted acceptance so its retry does not lose the notice", () => {
     const p = new Journey("verdict-refusal-keeps-notice");
     succeeded(p.tool("orchestrate", ["next"]), "Issue the engine directive before the policy choice");
-    p.humanPrompt("/aidlc --guard-policy relaxed");
+    const set = p.typedSetting("/aidlc --guard-policy relaxed");
+    expect(set.stdout).toContain("is relaxed for this piece of work, as you asked in the chat");
     expect(p.state()).toContain("- **Guard Policy**: relaxed (set by you)");
     expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
-    const unchanged = succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Repeat the hook-applied Guard Policy");
-    expect(unchanged.stdout).toMatch(/Guard Policy changed: \w+ to relaxed \(set by you\)/);
+    succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Repeat the person's Guard Policy");
     expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
     p.confirm();
     p.write(p.artifact, artifactBody());
@@ -599,11 +614,11 @@ describe("production guards: summary, terminal review, and recovery compose", ()
   productionTest("terminal review records relaxed summary acceptance and announces it once", () => {
     const p = new Journey("verdict-relaxed-acceptance");
     succeeded(p.tool("orchestrate", ["next"]), "Issue the engine directive before the policy choice");
-    p.humanPrompt("/aidlc --guard-policy relaxed");
+    const set = p.typedSetting("/aidlc --guard-policy relaxed");
+    expect(set.stdout).toContain("is relaxed for this piece of work, as you asked in the chat");
     expect(p.state()).toContain("- **Guard Policy**: relaxed (set by you)");
     expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
-    const unchanged = succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Repeat the hook-applied Guard Policy");
-    expect(unchanged.stdout).toMatch(/Guard Policy changed: \w+ to relaxed \(set by you\)/);
+    succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Repeat the person's Guard Policy");
     expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
     const original = p.confirm();
     p.write(p.artifact, artifactBody());
@@ -628,11 +643,11 @@ describe("production guards: summary, terminal review, and recovery compose", ()
   productionTest("terminal review retains its pending request when relaxed acceptance cannot be recorded", () => {
     const p = new Journey("verdict-acceptance-ledger-failure");
     succeeded(p.tool("orchestrate", ["next"]), "Issue the engine directive before the policy choice");
-    p.humanPrompt("/aidlc --guard-policy relaxed");
+    const set = p.typedSetting("/aidlc --guard-policy relaxed");
+    expect(set.stdout).toContain("is relaxed for this piece of work, as you asked in the chat");
     expect(p.state()).toContain("- **Guard Policy**: relaxed (set by you)");
     expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
-    const unchanged = succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Repeat the hook-applied Guard Policy");
-    expect(unchanged.stdout).toMatch(/Guard Policy changed: \w+ to relaxed \(set by you\)/);
+    succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Repeat the person's Guard Policy");
     expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
     p.confirm();
     p.write(p.artifact, artifactBody());

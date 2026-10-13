@@ -677,10 +677,9 @@ function linesAboveOwnSection(text: string, nextBody: string, newline: string): 
 }
 
 // The one rule for AI-DLC's part of a team file: replace the text between its
-// markers, adopt an unmarked file that is exactly a release's, refuse unmarked
-// AI-DLC text it cannot tell from the team's (except in .gitignore), and
-// otherwise add the marked part after the team's content (a missing file gets
-// only that part). Used by config and by the engine for a copy that was never
+// markers, adopt an unmarked file that is exactly a release's, and otherwise
+// add the marked part after the team's content (a missing file gets only that
+// part). Used by config and by the engine for a copy that was never
 // configured.
 export function mergeBlock(
   path: string,
@@ -745,11 +744,8 @@ export function mergeBlock(
       ...(kept ? { keptOwnLines: true } : {}),
     };
   }
-  // Ignore rules can remain user-owned even when they mention AI-DLC. Append
-  // our marked block without claiming or rewriting that existing prefix.
-  if (path !== ".gitignore" && /\baidlc\b|AI-DLC/i.test(current)) {
-    return { error: "legacy root integration ambiguous; move or delete the unmarked AI-DLC content" };
-  }
+  // Any other unmarked text is the team's, whatever it says about AI-DLC: it
+  // stays as it is, and the marked part goes after it.
   const prefix = current.length === 0 || current.endsWith(newline) ? current : `${current}${newline}`;
   return {
     value: `${prefix}${prefix ? newline : ""}${block}${newline}`,
@@ -1089,9 +1085,11 @@ export function removeJsoncSetting(text: string, key: string): string | null {
 // string in a string array. AI-DLC adds each of its entries that is absent,
 // follows one it added while nobody changed it, and removes only those; every
 // other key, value, comment, and layout byte stays the team's. A permission
-// map's "*" rule is one more entry, so AI-DLC's is added only to a map that has
-// none, and first in it: opencode applies the last matching rule, so the
-// team's own rules after it still decide.
+// rule for the team's own commands (an ask before a recursive delete or a
+// push) is a default: it is added only to a map that lacks it, and first in
+// the map, because opencode applies the last matching rule, so the team's
+// own rules after it still decide. AI-DLC's rules for its own commands and
+// files go last.
 
 type JsoncNode = {
   kind: "object" | "array" | "value";
@@ -1450,7 +1448,10 @@ function applyJsonEntry(
     const member = node.members.findLast((candidate) => candidate.key === key);
     if (!member) {
       next[entry.id] = entry.hash;
-      return { text: insertJsoncEntry(text, layout, node, parentInline, key, entry.value, key === "*") };
+      // A permission rule for the team's own commands or files (not AI-DLC's)
+      // goes first, so the team's rules after it still decide.
+      const teamDefault = entry.path[0] === "permission" && !aidlcOwnEntry(entry);
+      return { text: insertJsoncEntry(text, layout, node, parentInline, key, entry.value, teamDefault) };
     }
     const currentHash = sha256Bytes(canonical(jsoncNodeValue(text, member.node)));
     const priorHash = prior[entry.id];

@@ -7,6 +7,15 @@
 > IDE-targeted distribution is documented separately in
 > [Running AI-DLC on Kiro IDE](kiro-ide.md).
 
+> [!IMPORTANT]
+> This page covers the legacy `kiro` row, which pins no Kiro engine. On Kiro
+> CLI 2.24.1 or later, use the `kiro-ide` row instead: it pins Kiro's v3
+> engine and runs in Kiro CLI as well as Kiro IDE, and the interactive
+> `aidlc config` prefers it to this row when both are detected. This row stays for
+> older Kiro CLI versions and existing projects. In an existing `kiro`
+> project, `aidlc config --harness kiro-ide` switches `.kiro/` to it in place
+> and keeps `aidlc/`.
+
 One of the framework's harnesses: the Kiro runtime runs the same AI-DLC
 methodology on [Kiro CLI](https://kiro.dev/docs/cli/). One deterministic core
 — the tools, 33 stage files, protocols, knowledge, sensors, scopes, and rules
@@ -16,7 +25,8 @@ configs, hook wiring, activation) differs.
 Harness-specific onboarding lives in `.kiro/steering/aidlc-onboarding.md`,
 loaded through the conductor agent's `resources`. The root `AGENTS.md` block
 is harness-neutral and shared with other installed harnesses; engine directories
-must still differ (Kiro CLI and Kiro IDE cannot share one `.kiro/` install).
+must still differ (the `kiro` and `kiro-ide` rows cannot share one `.kiro/`
+install).
 
 ## Prerequisites
 
@@ -128,7 +138,9 @@ First-run setup's step 2, "Session model", lists the models your Kiro account
 offers, in Kiro's order, with each model's credit multiplier and a `preview` or
 `internal` tag. Under Kiro auto (Kiro's own default, where Kiro picks the model
 for each task), AI-DLC recommends choosing a model, so your effort preset
-applies to it. The preset then sets one effort for the whole session:
+applies to it. The preset then sets one effort for the whole interactive
+session (Kiro CLI 2.28.0 does not apply the saved effort to a
+`kiro-cli chat --no-interactive` run; pass `--effort` there):
 
 | Preset | Session effort |
 |--------|----------------|
@@ -137,15 +149,23 @@ applies to it. The preset then sets one effort for the whole session:
 | `thorough` | `xhigh` (extra-high) |
 
 A model without that level gets its next level down, and a model with no
-effort setting keeps only the model. `aidlc config models` offers the same
+effort setting keeps only the model. The recommended defaults fill the effort
+only where you have not saved one for your model: an effort you already saved
+stays, and setup says so in one line when it differs from the preset. Choosing
+a preset yourself (in step 3 or with `aidlc config models`) or a session model
+with `aidlc config models` sets the preset's effort; an agent or group setting
+leaves it alone. `aidlc config models` offers the same
 choice later ("1 session model, 2 preset"), and
 `aidlc config models --session-model <id>` saves a model from your account's
 list without prompts. A saved model your account no longer offers fails every
 prompt, so setup asks for another instead of keeping it. `--dry-run` shows the
 personal Kiro settings change too and writes nothing. When Kiro refuses a write,
 AI-DLC says exactly what was saved and `config models` exits 5 (action needed).
-`aidlc doctor` checks the live setting: the model is still offered, the effort
-matches the preset, and no project file overrides it. Refreshing a project set
+`aidlc doctor` checks the live setting: the model is still offered, its saved
+effort is one the model offers (when a preset is recorded and Kiro lists the
+model's effort levels), and no project file overrides it. An effort you saved
+that differs from the preset is yours: doctor names the preset's level and the
+command that applies it, without a warning. Refreshing a project set
 up by an earlier release removes AI-DLC's old effort map (`claude-opus-4.8` at
 extra-high) from `.kiro/settings/cli.json` and says so; run
 `aidlc config models` to choose the session model.
@@ -210,15 +230,16 @@ does not start with a dot. Their writes into `.kiro/` (apart from the `aidlc` ag
 `.kiro/sensors/` files), `.git/`, or any other
 top-level dot entry, and anything outside the project, still ask. Your
 project's own test and build commands (`bun test`, `npm test`, `pytest`, and so
-on) still ask, so you see each one before it runs.
+on), a `git push` and a recursive delete still ask, so you see each one before
+it runs.
 
 **Sessions with no approver stall rather than prompt.** Anything outside the
 pre-approved set needs an interactive answer. Under `kiro-cli chat
 --no-interactive` there is nobody to ask, so Kiro refuses the command outright
 with `non-interactive mode (no user to approve)`. Over ACP, your client must
 answer `session/request_permission`; a client that ignores those requests looks
-exactly like a permission failure. `--trust-all-tools` bypasses both the allow
-and deny lists, including the recursive-`rm` and `git push` denials. Use it only
+exactly like a permission failure. `--trust-all-tools` runs every command
+without asking, a `git push` and a recursive delete included. Use it only
 inside a disposable sandbox where blanket shell access is acceptable.
 
 **The hooks run on Kiro CLI's v2 engine, including over ACP.** This

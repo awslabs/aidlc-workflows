@@ -31,8 +31,8 @@ This applies to **every** structured-question site, including but not limited to
 
 - approval gates (every stage completion);
 - the questions interaction-mode choice (Guide me / I'll edit the file / Chat),
-  when `directive.answer_mode.ask` is true (otherwise print its one-line
-  `notice` and use `answer_mode.mode`; stage-protocol.md §3 Step 2);
+  when the step asks for it (otherwise say the step's notice and take the
+  questions the way it says; stage-protocol.md §3 Step 2);
 - the ladder prompt (autonomy mode after the walking skeleton);
 - halt-and-ask on Bolt failure (Retry / Skip / Abort);
 - consolidated-summary confirmation before artifact generation;
@@ -78,7 +78,7 @@ Reply with a number (or just tell me).
 
 The interaction-mode question is the most common three-option spec and MUST
 render with the synthesized Other escape as visible option `4`. It is asked only
-when `directive.answer_mode.ask` is true. Render it like this:
+when the step asks for it. Render it like this:
 
 ```
 **Questions** — I've created [N] questions at `[file path]`. How would you like to answer them?
@@ -109,71 +109,23 @@ remapped to the final number; do not synthesize another row. A prose mention,
 tip, or instruction about Other outside the numbered list never satisfies this
 invariant.
 
-## Engine-emitted ask directives
+## Questions AI-DLC asks
 
-An engine `ask` directive is already the routing decision. Do not run another
-query, inspect intent state, add a recommendation, or replace it with a newly
-derived question before rendering. Typed asks other than `new-work-routing`
-use `directive.question`; that subtype uses the engine-authored numbered field
-below. This prose-only
-path is the compatibility contract for older and newer Kiro IDE versions.
+A question AI-DLC asks arrives rendered: the prompt, the numbered choices, the
+Other line and the reply hint. Print it as given and END THE TURN. Do not
+re-derive it from the question's text, paraphrase it, remove its numbers,
+collapse its choices into Yes/No, add a recommendation, or run another tool or
+read state first: the question is the routing decision already.
 
-Every engine-ask render is invalid until its final displayed option is the next
-number followed by `**Other** — describe what you want instead`. A trailing
-sentence such as "or tell me" is not the Other option and must not replace it.
+Every such render is invalid until its final displayed option is the next
+number followed by `**Other** — describe what you want instead`. A trailing sentence such as "or tell
+me" is not the Other option and must not replace it.
 
-For `ask_type: "new-work-routing"`, do not derive a rendering from
-`directive.question`. Print `directive.numbered_prose_question` verbatim and END
-THE TURN. The engine-authored field already contains the prompt, options 1-3,
-`4. **Other** — describe what you want instead`, and the reply hint. Do not
-paraphrase it, remove its numbers, collapse the routes into Yes/No, add a
-recommendation, or call `intent --json`; the typed ask and its
-`response_route: "next"` metadata remain authoritative for the next human
-answer.
-
-If that answer is only `4` or `Other`, ask exactly
-**"What would you like me to do instead?"** and END THE TURN without calling a
-tool. Forward the human's subsequent substantive alternative unchanged through
-`next "<human alternative>"`; never use `report` for this response route.
-
-For `ask_type: "intent-pick"`, keep the complete `directive.question` as the
-prompt, render each exact `directive.available_intents` selector as one numbered
-option in the same order, then write option `N+1` as the required Other option
-above, and END THE TURN. Do not query the
-registry or use pending prose to invent a new-work offer. After the human
-chooses, find the `directive.select_commands` entry whose `selector` equals
-that exact selected value and execute its complete `command` verbatim; never
-interpolate a selector into shell text. Follow the returned `print` and stop
-when it says to stop.
-
-For `scope-confirm` and `compose-offer`, follow the chosen `confirm_command`
-(when present), `compose_command`, or the `scope_commands` entry whose `scope`
-equals the chosen plan; a name with no entry is not a valid scope. Keep the
-complete invocation's `--request <8hex id>` intact, never append
-the request text, and never use `report` for these answers. The ask names the
-request only by id (a pasted `<document>` block stays in the
-question store as data); the question echoes at most 240 characters,
-ending in `...` when truncated. With existing intents but no selected cursor,
-pending work remains `new-work-routing` on every harness, including after
-scope confirmation; its full `new_work_description`, proposed scope, and
-route fields (`new_intent_command`, `scope_commands`, `compose_command`,
-`continue_command` when present, `select_commands`, `reshape_commands`) must survive selection and composition.
-No-pending selection alone uses `intent-pick`. The engine preserves the runtime
-request through composer/creation handoffs until successful intent creation.
-
-For `unit-paused` (`response_route: "command"`), execute `resume_command`
-verbatim only when the human chooses to resume, then re-run `next`; otherwise
-take no engine action and wait for their direction. For `project-type`
-(`response_route: "command"`), execute `existing_code_command` verbatim when
-the person says the folder holds existing code to work on, or
-`new_project_command` when they say it is a new project, and act on the
-directive it returns; when the reply says neither, ask again. `claim` follows the Unit
-claim contract and
-`execute-remedy` follows only the human-selected executable guard remedy's
-command or action; empty remedies remain terminal. These routes do not fall
-back to reporting an ask answer. A redo, jump, or start-fresh request on re-entry alone
-uses non-stage `report --result resumed --choice <redo|jump|fresh>`; explicit
-guard-remedy stage reports retain their existing contract.
+A reply that picks a choice runs that choice's command, as the step says; a
+continue or reshape answer that needs the piece of work named first gets only
+the pieces listed, as a numbered list with Other, and the turn ends. A redo,
+jump, or start-fresh request on re-entry alone uses the non-stage
+`report --result resumed --choice <redo|jump|fresh>`; never use `report` for a question's answer.
 
 ## Mandatory consolidated-summary checkpoint
 

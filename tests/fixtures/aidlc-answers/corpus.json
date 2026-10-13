@@ -265,7 +265,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the person probably means the first option, and the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -292,7 +291,6 @@
   "meaning": "ambiguous: \"b\" is not an offered label and no letters were shown; the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -1159,21 +1157,23 @@
   "shown": "picker",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -1184,21 +1184,23 @@
   "shown": "picker",
   "via": "chat",
   "input": "timed out",
-  "meaning": "nothing: a host timeout is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"timed out\" (no host writes this text; a question box that runs out sends no answers): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "timed out",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -1743,7 +1745,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the person probably means the first option, and the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -2170,21 +2171,23 @@
   "shown": "picker",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -2591,7 +2594,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the person probably means the first option, and the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -2618,7 +2620,6 @@
   "meaning": "ambiguous: \"b\" is not an offered label and no letters were shown; the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -3435,21 +3436,23 @@
   "shown": "picker",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -3460,21 +3463,23 @@
   "shown": "picker",
   "via": "chat",
   "input": "timed out",
-  "meaning": "nothing: a host timeout is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"timed out\" (no host writes this text; a question box that runs out sends no answers): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "timed out",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -4024,7 +4029,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the person probably means the first option, and the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -4426,21 +4430,23 @@
   "shown": "picker",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -4644,7 +4650,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the person probably means the first option, and the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -5072,21 +5077,23 @@
   "shown": "picker",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -5324,7 +5331,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the person probably means the first option, and the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -5752,21 +5758,23 @@
   "shown": "picker",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -5969,7 +5977,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the person probably means the first option, and the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -6397,21 +6404,23 @@
   "shown": "picker",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -6614,7 +6623,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the person probably means the first option, and the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -7015,21 +7023,23 @@
   "shown": "picker",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -7232,7 +7242,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the person probably means the first option, and the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -7659,21 +7668,23 @@
   "shown": "picker",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -7957,7 +7968,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -8057,21 +8067,23 @@
   "shown": "picker",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -8312,7 +8324,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -8412,21 +8423,23 @@
   "shown": "numbered",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -8853,7 +8866,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -8953,21 +8965,23 @@
   "shown": "picker",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -9316,7 +9330,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -9416,21 +9429,23 @@
   "shown": "numbered",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -9822,7 +9837,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -9922,21 +9936,23 @@
   "shown": "numbered",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -10199,13 +10215,13 @@
   "question": "scope-confirm",
   "shown": "numbered",
   "via": "chat",
-  "input": "2",
-  "meaning": "the person means: pick option 2 (Tailor a plan to this task)",
+  "input": "3",
+  "meaning": "the person means: pick option 3 (Tailor a plan to this task)",
   "reader": "agent",
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": "2",
+    "words": "3",
     "step": "none",
     "no_ask": true
    },
@@ -10224,13 +10240,13 @@
   "question": "scope-confirm",
   "shown": "numbered",
   "via": "chat",
-  "input": "2. Tailor a plan to this task",
+  "input": "3. Tailor a plan to this task",
   "meaning": "the person means: Tailor a plan to this task (the numbered line as shown)",
   "reader": "agent",
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": "2. Tailor a plan to this task",
+    "words": "3. Tailor a plan to this task",
     "step": "none",
     "no_ask": true
    },
@@ -10249,13 +10265,13 @@
   "question": "scope-confirm",
   "shown": "numbered",
   "via": "chat",
-  "input": "the second one",
-  "meaning": "the person means: option 2 (Tailor a plan to this task), said in words; the agent reads the order the options were shown in",
+  "input": "the third one",
+  "meaning": "the person means: option 3 (Tailor a plan to this task), said in words; the agent reads the order the options were shown in",
   "reader": "agent",
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": "the second one",
+    "words": "the third one",
     "step": "none",
     "no_ask": true
    },
@@ -10278,7 +10294,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -10378,21 +10393,23 @@
   "shown": "numbered",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -10606,7 +10623,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -10706,21 +10722,23 @@
   "shown": "numbered",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -10987,7 +11005,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -11087,21 +11104,23 @@
   "shown": "prose",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -11368,7 +11387,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -11468,21 +11486,23 @@
   "shown": "prose",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -11722,7 +11742,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -11822,21 +11841,23 @@
   "shown": "numbered",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -12004,21 +12025,23 @@
   "shown": "prose",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the work carries on where it picked up",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the work carries on at NFR Requirements"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -12436,7 +12459,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -12536,21 +12558,23 @@
   "shown": "picker",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -12816,7 +12840,6 @@
   "meaning": "ambiguous: \"a\" is not an offered label and no letters were shown; the agent asks once which one they meant",
   "reader": "agent",
   "ambiguous": true,
-  "after": "pending",
   "expected": {
    "engine": {
     "recorded": "none",
@@ -12916,21 +12939,23 @@
   "shown": "picker",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }
@@ -13070,21 +13095,23 @@
   "shown": "prose",
   "via": "chat",
   "input": "Cancelled",
-  "meaning": "nothing: the host's cancellation text is no answer; nothing is recorded and the question stands",
+  "meaning": "the person typed \"Cancelled\" (no host writes this text; a dismissed question box sends no reply at all): their word, kept as their reply; the agent reads what they meant, most likely to stop here, and asks once if it is unclear",
   "reader": "agent",
+  "unsure": true,
   "expected": {
    "engine": {
     "recorded": "none",
-    "words": null,
+    "words": "Cancelled",
     "step": "none",
     "no_ask": true
    },
    "end": {
     "recorded": "none",
-    "words": false,
-    "asks": 0,
+    "words": true,
+    "asks": 1,
+    "asks_up_to": true,
     "says": [
-     "the same question, still open"
+     "their word is on the record; the agent stops or pauses as they meant, or asks once what they meant"
     ]
    }
   }

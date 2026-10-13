@@ -20,11 +20,10 @@
 //      second-precision timestamp with any latest resolution in a DIFFERENT
 //      shard (filename order carries no execution order), while same-shard
 //      same-second sequences keep append order.
-//   4. Cancellation boilerplate is not a decision: `aidlc-log answer` refuses
-//      it as an interview answer (including the issue's named repro:
-//      status=completed with answer "Cancelled"), `approve --user-input` and
-//      `reject --feedback` refuse it at the gate. Substantive answers that
-//      merely CONTAIN a cancellation word pass.
+//   4. An answer with no words in it is not a decision: `aidlc-log answer`
+//      refuses it. A cancellation word ("Cancelled", "Timed out") is what the
+//      person typed (no host writes one into a reply), so it is recorded as
+//      their answer, and `approve --user-input` and `reject --feedback` take it.
 //   5. A conductor-AUTHORED decision is not a human decision either (issue
 //      742). humanActedSinceGate proves PRESENCE, not INTENT, so a deadlocked
 //      conductor can satisfy it while writing the human's decision itself —
@@ -681,22 +680,31 @@ describe("t261 an implied confirmation is nobody's decision", () => {
   });
 });
 
-describe("t261 cancellation boilerplate is not a decision", () => {
+describe("t261 an answer with no words is not a decision; a cancellation word is one", () => {
   function ideationProject(): string {
     const p = createTestProject();
     seedStateFile(p, join(FIXTURES, "state-mid-ideation.md"));
     return p;
   }
 
-  test("answer 'Cancelled' (the completed-widget repro) refuses; empty refuses", () => {
+  test("an answer with no words in it refuses; a cancellation word is the person's answer like any other", () => {
     proj = ideationProject();
     mintHumanTurn(proj);
-    for (const details of ["Cancelled", "cancelled", "user dismissed", "Timed out", "   "]) {
+    for (const details of ["   ", "\t"]) {
       const r = guarded(LOG, ["answer", "--stage", "feasibility", "--details", details], proj);
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("Cannot record reply");
     }
     expect(readAllAuditShards(proj)).not.toContain("QUESTION_ANSWERED");
+    // No host hands the hook dismissal text (measured on Claude Code and Codex,
+    // 2026-10-12), so these are words a person typed, and the agent's reading of
+    // them is recorded as any other answer.
+    for (const details of ["Cancelled", "cancelled", "user dismissed", "Timed out"]) {
+      mintHumanTurn(proj);
+      const r = guarded(LOG, ["answer", "--stage", "feasibility", "--details", details], proj);
+      expect(r.rc, r.out).toBe(0);
+      expect(r.out).toContain("QUESTION_ANSWERED");
+    }
   });
 
   test("summary confirmation refusal quotes and truncates the reply and names both valid choices", () => {
@@ -737,39 +745,32 @@ describe("t261 cancellation boilerplate is not a decision", () => {
     expect(r.out).toContain("QUESTION_ANSWERED");
   });
 
-  test("approve --user-input and reject --feedback refuse cancellation boilerplate", () => {
+  // The person's words at a gate are theirs whatever they are: "cancelled" and
+  // "Timed out" are what they typed, and the agent's reading of them is recorded.
+  test("reject --feedback that is a cancellation word records it as the person's feedback", () => {
     proj = ideationProject();
     const direct = { AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_ARTIFACT_GUARD: "1" };
     expect(guarded(STATE, ["gate-start", "feasibility"], proj, direct).rc).toBe(0);
     mintHumanTurn(proj);
-
-    const ap = guarded(STATE, ["approve", "feasibility", "--user-input", "cancelled"], proj, direct);
-    expect(ap.rc).not.toBe(0);
-    expect(ap.out).toContain('the reply \\"cancelled\\"');
-    expect(ap.out).toContain("cancellation boilerplate");
-    expect(ap.out).toContain("original held gate with every offered choice");
-
     const rj = guarded(
       STATE,
-      [
-        "reject",
-        "feasibility",
-        "--user-input",
-        "Request Changes",
-        "--feedback",
-        "Timed out",
-      ],
+      ["reject", "feasibility", "--user-input", "Request Changes", "--feedback", "Timed out"],
       proj,
       direct,
     );
-    expect(rj.rc).not.toBe(0);
-    expect(rj.out).toContain('revision feedback \\"Timed out\\"');
-    expect(rj.out).toContain("cancellation boilerplate");
-    expect(rj.out).toContain("original held gate with every offered choice");
+    expect(rj.rc, rj.out).toBe(0);
+    const audit = readAllAuditShards(proj);
+    expect(audit).toContain("GATE_REJECTED");
+    expect(audit).toContain("Timed out");
+  });
 
-    // the real choice still commits (same turn: neither refusal consumed it)
-    const ok = guarded(STATE, ["approve", "feasibility", "--user-input", "Approve"], proj, direct);
-    expect(ok.rc).toBe(0);
+  test("approve --user-input that is a cancellation word is the agent's reading of their words, and commits", () => {
+    proj = ideationProject();
+    const direct = { AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_ARTIFACT_GUARD: "1" };
+    expect(guarded(STATE, ["gate-start", "feasibility"], proj, direct).rc).toBe(0);
+    mintHumanTurn(proj);
+    const ap = guarded(STATE, ["approve", "feasibility", "--user-input", "cancelled"], proj, direct);
+    expect(ap.rc, ap.out).toBe(0);
     expect(readAllAuditShards(proj)).toContain("GATE_APPROVED");
   });
 });

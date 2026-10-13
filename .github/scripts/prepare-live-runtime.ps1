@@ -4,7 +4,7 @@
 param(
     [ValidateSet('prepare', 'prove', 'run', 'smoke', 'collect')]
     [string]$Mode = 'prepare',
-    [ValidateSet('claude-sdk', 'claude-tui', 'codex', 'opencode', 'release-contract', 'isolation')]
+    [ValidateSet('claude-sdk', 'claude-tui', 'codex', 'copilot', 'opencode', 'release-contract', 'isolation')]
     [string]$Family = 'isolation',
     [ValidatePattern('^[1-9][0-9]*/[1-9][0-9]*$')]
     [string]$Shard,
@@ -2982,6 +2982,7 @@ try {
         switch ($Family) {
             { $_ -in @('claude-sdk', 'claude-tui') } { $package = '@anthropic-ai/claude-code'; $pinName = 'CLAUDE_CODE_VERSION' }
             'codex' { $package = '@openai/codex'; $pinName = 'CODEX_VERSION' }
+            'copilot' { $package = '@github/copilot'; $pinName = 'COPILOT_VERSION' }
             'opencode' { $package = 'opencode-ai'; $pinName = 'OPENCODE_VERSION' }
         }
         if ($package) {

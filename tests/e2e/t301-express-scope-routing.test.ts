@@ -1,8 +1,11 @@
-// covers: scope:express, scope:classic, subcommand:aidlc-utility:detect-scope, subcommand:aidlc-utility:intent-create
+// covers: scope:express, scope:classic, subcommand:aidlc-utility:intent-create
 //
 // Deterministic routed journey for the express scope. No SDK/TUI driver and no
 // live harness variables: every assertion crosses the shipped CLI boundary and
 // reads the compiled routing result or the state written by intent-create.
+// The keyword routing cases (`detect-scope --from-text`) went with the
+// classifier: the engine no longer reads the person's words for a plan; the
+// agent proposes it (t-plan-proposed-by-the-agent).
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -219,46 +222,7 @@ function runThroughBuild(p: string): void {
   expect(stateField(p, "Lifecycle Phase")).toBe("OPERATION");
 }
 
-function detectedScope(input: string): {
-  scope: string;
-  source: string;
-} {
-  const fixtureStarted = performance.now();
-  const p = project();
-  const fixtureMs = Math.ceil(performance.now() - fixtureStarted);
-  console.error(`t301 detect-scope fixture: ${JSON.stringify({ input, fixtureMs })}`);
-  const childStarted = performance.now();
-  const result = utility(p, ["detect-scope", "--from-text", "--input", input]);
-  const diagnostic = JSON.stringify({
-    input,
-    fixtureMs,
-    childMs: Math.ceil(performance.now() - childStarted),
-    status: result.status,
-    signal: result.signal,
-    error: result.error ? {
-      message: result.error.message,
-      code: (result.error as NodeJS.ErrnoException).code,
-    } : null,
-    stdout: result.stdout,
-    stderr: result.stderr,
-  });
-  console.error(`t301 detect-scope child: ${diagnostic}`);
-  expect(result.error, diagnostic).toBeUndefined();
-  expect(result.status, diagnostic).toBe(0);
-  return JSON.parse(result.stdout.trim()) as {
-    scope: string;
-    source: string;
-  };
-}
-
 describe("t301 express scope routing (deterministic CLI journey)", () => {
-  test('keyword "express" routes to express', () => {
-    expect(detectedScope("express")).toMatchObject({
-      scope: "express",
-      source: "keyword",
-    });
-  });
-
   test("explicit --scope express writes the exact 10-stage plan", () => {
     const p = project();
     const result = utility(p, [
@@ -283,15 +247,6 @@ describe("t301 express scope routing (deterministic CLI journey)", () => {
       .map(([slug]) => slug)
       .sort();
     expect(execute).toEqual(EXPRESS_STAGES);
-  });
-
-  test("freeform text with no scope keyword falls back to the classic default", () => {
-    expect(detectedScope("build a simple task tracker")).toMatchObject(
-      {
-        scope: "classic",
-        source: "freeform",
-      },
-    );
   });
 
   test("engine completes Express when the conditional deploy tail does not apply", () => {

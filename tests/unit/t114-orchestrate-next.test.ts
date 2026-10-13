@@ -79,11 +79,12 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, write
 import { join } from "node:path";
 import {
   AIDLC_SRC,
-  REPO_ROOT,
   cleanupTestProject,
   createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
+  followProposal,
+  REPO_ROOT,
   resetAidlcEnv,
   runOrchestrateNext,
   seededAuditDir,
@@ -135,10 +136,9 @@ function runNext(
   args: string[],
   extraEnv: Record<string, string> = {},
 ): RunResult {
-  const res = runOrchestrateNext(TOOL, proj, args, {
-    cwd: proj,
-    env: { ...process.env, ...extraEnv },
-  });
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const options = { cwd: proj, env: { ...process.env, ...extraEnv } };
+  const res = followProposal(runOrchestrateNext(TOOL, proj, args, options), TOOL, proj, options);
   return { rc: res.status, out: res.out };
 }
 
@@ -353,17 +353,24 @@ describe("t114 scope precedence + validation", () => {
       d.kind === "ask"
         ? `ask ${d.ask_type}`
         : `${d.kind} ${String(d.message ?? d.reason ?? "").match(
-          /intent create --scope \w+|Dispatch the composer agent|Workflow complete/,
+          /intent create --scope \w+|Dispatch the composer agent|Workflow complete|cannot tell which they meant/,
         )?.[0] ?? ""}`;
     const newWork = (scope: string) => {
-      proj = createOrchestrationTestProject();
-      seedStateFile(proj, "state-completed.md");
-      const statePath = seededStateFile(proj);
-      writeFileSync(
-        statePath,
-        readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*$/m, `- **Scope**: ${scope}`),
-        "utf-8",
-      );
+      // Each of the two entry forms gets its own project: an offer one form
+      // leaves open is a question of ours that the next form's words would be
+      // read as a reply to, which is the point of the three ways to read a line.
+      const seeded = (): string => {
+        const dir = createOrchestrationTestProject();
+        seedStateFile(dir, "state-completed.md");
+        const statePath = seededStateFile(dir);
+        writeFileSync(
+          statePath,
+          readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*$/m, `- **Scope**: ${scope}`),
+          "utf-8",
+        );
+        return dir;
+      };
+      proj = seeded();
       const run = (args: string[]) =>
         JSON.parse(runNext(proj, args).out.trim().split("\n").at(-1) ?? "{}") as Record<string, unknown>;
       const answer = (command: unknown) => {
@@ -372,11 +379,14 @@ describe("t114 scope precedence + validation", () => {
       };
       const initOffer = run(["--new-intent", "fix the login redirect"]);
       const initComposed = answer(initOffer.compose_command);
+      const initConfirmed = answer(initOffer.confirm_command);
+      cleanupTestProject(proj);
+      proj = seeded();
       const freeTextOffer = run(["fix the login redirect"]);
       const freeTextComposed = answer(freeTextOffer.compose_command);
       const seen = {
         initOffer: shape(initOffer),
-        initConfirmed: shape(answer(initOffer.confirm_command)),
+        initConfirmed: shape(initConfirmed),
         initComposed: shape(initComposed),
         initComposedInFlight: String(initComposed.message).includes("mode in-flight"),
         freeTextOffer: shape(freeTextOffer),
@@ -402,6 +412,10 @@ describe("t114 scope precedence + validation", () => {
       freeTextComposed: "print Dispatch the composer agent",
       freeTextComposedInFlight: false,
       typedScope: "print intent create --scope bugfix",
+      // A plan's name in its own argument with the request in one more is the
+      // naming the orchestrator skill asks the agent for, so it still acts; a
+      // raw line of loose words after a plan word is the ambiguous form
+      // (t-three-ways-to-read-a-line).
       positionalScope: "print intent create --scope bugfix",
     });
     expect(newWork("retired-lane")).toEqual(known);
@@ -497,14 +511,27 @@ describe("t114 in-session config alias", () => {
 
   test("a modifier next refuses stays terminal over an active workflow", () => {
     // Full Suite 36549553601: `/aidlc --depth extreme` must not count as
-    // engagement on the marker path (Kiro CLI, opencode) either.
+    // engagement on the marker path (Kiro CLI, opencode) either. The value its
+    // table does not hold goes to the agent as a reading step naming the words
+    // it does hold, which is still no workflow work.
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     const before = readFileSync(seededStateFile(proj), "utf-8");
-    for (const args of [["--depth", "extreme"], ["--review", "loud"], ["--guard-policy", "loose"]]) {
+    const rows: Array<[string[], string, string]> = [
+      [["--depth", "extreme"], "--depth", "extreme"],
+      [["--review", "loud"], "--review", "loud"],
+      [["--guard-policy", "loose"], "--guard-policy", "loose"],
+      // Full Suite 38087105892: the agent sent the person's typed value beside
+      // its own `--resume`. next answers the same reading step and takes
+      // nothing else from the line, so the marker stays untouched here too.
+      [["--resume", "--depth", "extreme"], "--depth", "extreme"],
+      [["--depth", "extreme", "--resume"], "--depth", "extreme"],
+    ];
+    for (const [args, flag, value] of rows) {
       const out = runNext(proj, args).out;
-      expect(out, args.join(" ")).toContain('"kind":"error"');
-      expect(out, args.join(" ")).toContain(`${args[0]} requires <`);
+      expect(out, args.join(" ")).toContain('"kind":"print"');
+      expect(out, args.join(" ")).toContain(`takes \`${flag}\` with`);
+      expect(out, args.join(" ")).toContain(`does not take ${JSON.stringify(JSON.stringify(value)).slice(1, -1)}`);
       expect(existsSync(engineTouchMarkerPath(proj)), args.join(" ")).toBe(false);
     }
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
@@ -1002,7 +1029,7 @@ describe("t114 parked branch (#367)", () => {
     expect(out).toContain("unpark");
   });
 
-  test("--new-intent bypasses the parked terminal and keeps its description guard", () => {
+  test("--new-intent bypasses the parked terminal and, with nothing said about the work, asks what it is for", () => {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
     park(proj);
@@ -1017,9 +1044,11 @@ describe("t114 parked branch (#367)", () => {
     expect(valid).toContain("intent create --scope bugfix");
     expect(valid).not.toContain('"kind":"parked"');
 
+    // Nothing said about the new work: the person is asked what it is for
+    // (#2355), and nothing is created.
     const missing = runNext(proj, ["--new-intent", "--scope", "bugfix"]).out;
-    expect(missing).toContain('"kind":"error"');
-    expect(missing).toContain("requires a nonblank new-work description");
+    expect(missing).toContain("What should I work on?");
+    expect(missing).not.toContain("intent create");
     expect(missing).not.toContain('"kind":"parked"');
   });
 
@@ -1128,13 +1157,14 @@ describe("t114 parked branch (#367)", () => {
 describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
   // Words alone over active work may ask to redo, jump, or start fresh: the
   // engine hands the conductor both readings, and `next --request` is the
-  // routing ask with the words kept.
-  function askedAbout(words: string): string {
+  // routing ask with the words kept. The agent names the plan it read for the
+  // words beside the request (`--propose <plan>`), so the question names it.
+  function askedAbout(words: string, plan = "feature"): string {
     const read = JSON.parse(runNext(proj, [words]).out) as { kind: string; message: string };
     expect(read.kind, read.message).toBe("print");
     const request = /`[^`]* next (--request [0-9a-f]{8})`/.exec(read.message)?.[1];
     expect(request, read.message).toBeDefined();
-    return runNext(proj, request!.split(" ")).out;
+    return runNext(proj, [...request!.split(" "), "--propose", plan]).out;
   }
 
   test("words alone over an active workflow may be a redo, jump, or fresh start: both readings, the words kept", () => {
@@ -1198,6 +1228,10 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
       "1. **Part of the active work**",
     );
     expect(directive.numbered_prose_question).toContain("4. **Other**");
+    // The question the person reads opens with the work in progress, not with a heading in the engine's words
+    // ("routing" is a reserved word in the voice contract; live on Kiro CLI and Codex the heading was what they saw).
+    expect(directive.numbered_prose_question).not.toContain("New work routing");
+    expect(directive.numbered_prose_question).toMatch(/^Work is already in progress on: /);
     expect(directive.question).toContain(
       `as "${directive.proposed_scope}" work`,
     );
@@ -1206,7 +1240,7 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
   test("keyword-matching prose names the scope a confirmed new intent would get", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
-    const out = askedAbout("fix the broken login button");
+    const out = askedAbout("fix the broken login button", "bugfix");
     expect(out).toContain('"kind":"ask"');
     expect(out).toContain('as \\"bugfix\\" work');
     expect(out).toContain('"proposed_scope":"bugfix"');
@@ -1417,8 +1451,11 @@ describe("t114 Branch 9c: replies that are not new work", () => {
   // The engine's own command, run as emitted (every word after `next`).
   const runCommand = (command: string) =>
     directive(command.slice(command.indexOf(" next ") + " next ".length).split(" ").filter(Boolean));
+  // The `next --request` the reading print names, with the plan the agent read
+  // for the words beside it (`--propose <plan>`), so the routing question names
+  // the plan and its separate-work answer creates at once.
   const requestCommand = (message: string): string =>
-    (message.match(/`([^`]*next --request [0-9a-f]{8})`/) ?? [])[1] ?? "";
+    `${(message.match(/`([^`]*next --request [0-9a-f]{8})`/) ?? [])[1] ?? ""} --propose feature`;
   // Words alone over active work first get the re-entry readings (a redo,
   // jump, or fresh start, or else this); their `next --request` asks about
   // them as work, the words kept.
@@ -1777,6 +1814,53 @@ describe("t114 retired flags are consumed, not description text", () => {
     ]).out;
     expect(out).toContain("intent create");
     expect(pendingDescription(proj, out)).toBe("a dashboard with --dark-mode");
+  });
+
+  // `--project-dir` is how every caller tells this engine which project to work
+  // in, and it rides ahead of their words. Among their words the same token is
+  // a word of their request: taking it there cut their line in half and made a
+  // folder in their project named after the word that followed it.
+  test("a request naming --project-dir keeps every word and makes no folder", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["add", "a", "--project-dir", "flag", "to", "the", "CLI"]).out;
+    // No word of theirs is read as a folder to work in, and none is made.
+    expect(existsSync(join(proj, "flag"))).toBe(false);
+    // Their line comes back whole, as the step for a flag this engine does not
+    // take among their words, and no work is started on a cut-down sentence.
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("does not take `--project-dir flag`");
+    expect(out).not.toContain("intent create");
+    // Marked as theirs, every token reaches creation.
+    const marked = runNext(proj, [
+      "--new-intent",
+      "--scope",
+      "poc",
+      "--",
+      "add a --project-dir flag to the CLI",
+    ]).out;
+    expect(pendingDescription(proj, marked)).toBe("add a --project-dir flag to the CLI");
+  });
+
+  // The same with a value that does name a folder of theirs: the word they
+  // typed must not move the engine into it, or their work lands somewhere they
+  // never named and the record of their request goes with it.
+  test("a request naming a folder of theirs does not move the engine into it", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    mkdirSync(join(proj, "docs"), { recursive: true });
+    const out = runNext(proj, ["support", "--project-dir", "docs", "in", "the", "CLI"]).out;
+    expect(existsSync(join(proj, "docs", "aidlc"))).toBe(false);
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("does not take `--project-dir docs`");
+    expect(out).not.toContain("intent create");
+  });
+
+  test("--project-dir ahead of their words is still this engine's own", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["--project-dir", proj, "add", "a", "flag"]).out;
+    expect(pendingDescription(proj, out)).toBe("add a flag");
   });
 
   test("the -- delimiter still passes a literal --init through as text", () => {

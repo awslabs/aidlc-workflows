@@ -1526,7 +1526,8 @@ describe("t304 first-run prompt and detection safety", () => {
   });
 
   test("recommended defaults preserve the current provider without credentials", () => {
-    const result = runWizard("1\n\n", { hasCredentials: false });
+    // Claude Code, the recommended defaults, then the status line question (#1407).
+    const result = runWizard("1\n\n\n", { hasCredentials: false });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("current model provider preserved");
     expect(result.stdout).not.toContain("Choose and configure a model provider");
@@ -1576,7 +1577,8 @@ describe("t304 first-run prompt and detection safety", () => {
     // Kiro CLI first (6 — Devin CLI joined the harness list at 5), customize
     // (2), accept every step (step 2 asks nothing when Kiro's settings cannot
     // be read), then edit step 1 to Claude Code (1) and apply.
-    const toClaude = runWizard("6\n2\n\n\n\n\n\n1\n1\n\n");
+    // Ending on Claude Code, setup then asks the status line question (#1407).
+    const toClaude = runWizard("6\n2\n\n\n\n\n\n1\n1\n\n\n");
     expect(toClaude.status, toClaude.stdout + toClaude.stderr).toBe(0);
     expect(toClaude.stdout).not.toContain("Claude Code provides its own model access");
     expect(toClaude.stdout).toContain("2. Provider     keep current");
@@ -1606,7 +1608,8 @@ describe("t304 first-run prompt and detection safety", () => {
     // Cursor first (4), customize (2), accept every step (step 3 defaults to
     // unchanged there, so step 6 asks nothing), then edit step 1 to Claude Code
     // (1) and apply.
-    const toClaude = runWizard("4\n2\n\n\n\n\n\n1\n1\n\n");
+    // Ending on Claude Code, setup then asks the status line question (#1407).
+    const toClaude = runWizard("4\n2\n\n\n\n\n\n1\n1\n\n\n");
     expect(toClaude.status, toClaude.stdout + toClaude.stderr).toBe(0);
     expect(toClaude.stdout).toContain("4. unchanged   records no preset (recommended, default)");
     expect(toClaude.stdout).toContain("3. Preset       balanced");

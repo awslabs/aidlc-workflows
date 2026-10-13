@@ -90,6 +90,8 @@ import {
   loadStageGraphAll,
   isNonAnswer,
   ANSWER_MODE_LABELS,
+  ANSWER_MODE_QUESTION_KIND,
+  QUESTION_KIND_FIELD,
   answerModeFromReply,
   isAnswerModeDecision,
   openDecisionBlock,
@@ -125,8 +127,10 @@ import {
   editedReviewNotice,
   REVIEW_EDITED_FIELD,
   dictatedReviewNotice,
-  dispatchDictatedVerdict,
   REVIEW_DICTATED_FIELD,
+  noAgentFinishedSinceReview,
+  noReviewerNotice,
+  REVIEWER_FINISHED_FIELD,
   recordFileTargetOrThrow,
   relativeRecordDir,
   recoveryGuidance,
@@ -205,12 +209,15 @@ import {
   renderReadableReviewCopy,
 } from "./aidlc-review-brief.js";
 import {
-  authorizingPlanApprovalOverrideRequest,
   codeGenerationPlanApprovalQuestionEvidence,
   type CodeGenerationTarget,
+  notePlanApprovalOverrideOffered,
+  offersPlanApprovalOverride,
   PLAN_APPROVAL_CHECKPOINT,
   PLAN_APPROVAL_BATCH_FALLBACK,
-  PLAN_APPROVAL_OVERRIDE_HUMAN_ONLY,
+  personAskedForPlanApprovalOverride,
+  planApprovalOverrideHumanOnly,
+  planApprovalOverridePersonReply,
   PlanApprovalOverrideHumanOnlyError,
   type PlanApprovalOverrideReceiptResult,
   PlanApprovalSourceDriftError,
@@ -464,6 +471,7 @@ const DECISION_OPTIONS: ReadonlySet<string> = new Set([
   "--decision",
   "--rationale",
   "--exact-option-labels",
+  "--question-kind",
 ]);
 // --units, --reason and --park: the engine's Plan Approval question, recorded as
 // the person chose (which Units, what to change, and whether to stop for now).
@@ -902,7 +910,7 @@ function demoteReviewHeadings(body: Buffer): { bytes: Buffer; changed: string[] 
 
 // --- Subcommand: decision ---
 // Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>]
-//   [--rationale <text>] [--checkpoint summary-confirmation
+//   [--rationale <text>] [--question-kind answer-mode] [--checkpoint summary-confirmation
 //   --questions-file <path> [--unit <unit>] [--single]]
 //
 // Fires BEFORE AskUserQuestion, recording what options will be shown.
@@ -957,9 +965,22 @@ function messageIsReply(rows: AuditShardEvent[], message: StoredMessage): boolea
   return true;
 }
 
-// The chats that have sent messages since the last spending row.
-function chatsSince(pd: string, spentAt: string | null): Set<string> {
-  return new Set(listMessages(pd).filter((m) => spentAt === null || m.at >= spentAt).map((m) => m.session ?? "terminal"));
+// The chats that have spoken on this work since the last spending row. A message
+// counts when a HUMAN_TURN row of this record names it: the hook wrote that row
+// only while the chat was on the work, so a chat that joined through its turn
+// alone counts from that turn, and words a chat typed while it was on nothing
+// (before the work was chosen here, or a cold workspace) never count, however
+// the chat stands now. A message no hook minted a row for (none exists today
+// besides those) is read as before.
+function chatsSince(rows: AuditShardEvent[], pd: string, spentAt: string | null): Set<string> {
+  const named = new Set<string>();
+  for (const row of rows) {
+    const id = row.event === "HUMAN_TURN" ? auditBlockField(row.block, "Message Id") : null;
+    if (id !== null) named.add(id);
+  }
+  return new Set(listMessages(pd)
+    .filter((m) => (spentAt === null || m.at >= spentAt) && (m.session === null || named.has(m.id)))
+    .map((m) => m.session ?? "terminal"));
 }
 
 function proveMessage(pd: string, id: string, what: "answer" | "decision"): { message: StoredMessage } | { refusal: string } {
@@ -995,7 +1016,7 @@ function proveMessage(pd: string, id: string, what: "answer" | "decision"): { me
     }
     return { message };
   }
-  const chats = chatsSince(pd, spentAt);
+  const chats = chatsSince(rows, pd, spentAt);
   if (chats.size > 1) {
     return {
       refusal: `Cannot record this ${what}: the engine cannot tell which chat this command serves, and more than ` +
@@ -1035,7 +1056,7 @@ function messagesBeforeQuestion(pd: string, stage: string, unit: string | undefi
   const spentAt = latestSpendingTimestamp(rows);
   const chat = invokingChat(pd);
   // With no chat the engine can name, the hint follows the proof's one-chat rule.
-  if (chat === null && chatsSince(pd, spentAt).size > 1) return [];
+  if (chat === null && chatsSince(rows, pd, spentAt).size > 1) return [];
   const turnOf = new Map<string, AuditShardEvent>();
   for (const row of rows) {
     if (row.event !== "HUMAN_TURN") continue;
@@ -1183,6 +1204,18 @@ function handleDecision(args: string[]): void {
         : flags.options;
   }
   if (flags.rationale) fields.Rationale = flags.rationale;
+  // Which of the engine's own questions this is, as the step note's command
+  // names it; the answer reads the field, never the question's words.
+  if (flags["question-kind"] !== undefined) {
+    if (flags["question-kind"] !== ANSWER_MODE_QUESTION_KIND) {
+      error(
+        `--question-kind ${JSON.stringify(flags["question-kind"])} is not a kind log decision records. Its one kind ` +
+          `is "${ANSWER_MODE_QUESTION_KIND}", for the question of how the person answers a stage's questions; leave ` +
+          "the flag off for any other question.",
+      );
+    }
+    fields[QUESTION_KIND_FIELD] = ANSWER_MODE_QUESTION_KIND;
+  }
   if (flags.checkpoint === "summary-confirmation") {
     fields.Checkpoint = SUMMARY_CONFIRMATION_CHECKPOINT;
     fields["Questions File"] = summaryEvidence!.relativePath;
@@ -1382,7 +1415,7 @@ function handleAnswers(args: string[]): void {
       const paired = !cycle && candidates.length > 0 && candidates.every((question) =>
         !uncertain.has(question) &&
         attemptEventDefinitelyBefore(question, answer) &&
-        // A tied cancellation carries no answer, so it never competes with one.
+        // A tied answer with no words carries no answer, so it never competes with one.
         ![...pending].some(
           (other) => other !== answer && !isNonAnswer(auditBlockField(other.block, "Details")) &&
             couldOwn(question, other) && !attemptEventDefinitelyBefore(answer, other),
@@ -1942,7 +1975,7 @@ function handleAnswer(args: string[]): void {
   }
   // --details names the choice the person made, which the conductor read from
   // their reply; the engine records it beside their own words and never reads
-  // meaning into them. A dismissed widget keeps its own refusal below.
+  // meaning into them. An answer with no words keeps its own refusal below.
   const reply = flags.details;
   if ((policyCheckpoint || verificationCheckpoint) && !isNonAnswer(reply)) {
     const picked = offeredChoiceLabel(reply, APPROVAL_GATE_CHOICES);
@@ -2003,8 +2036,8 @@ function handleAnswer(args: string[]): void {
         'Valid choices are "Approve Plan" or "Request Changes".',
     );
   }
-  // Break-glass (human only). The flag alone authorizes nothing: half A is the
-  // typed phrase the human-turn hook recorded for this session, checked below
+  // Break-glass (human only). The flag alone authorizes nothing: the person's
+  // own reply after the refusal that offered it is checked below and again
   // under the lock. Here only the shape is validated. --override-file carries
   // the reason in a file the conductor wrote with its file tool, so the
   // person's words never pass through shell text; --override stays for
@@ -2023,8 +2056,8 @@ function handleAnswer(args: string[]): void {
     }
     if (overrideReason.length === 0) {
       error(
-        "Plan Approval override requires a nonblank --override reason: the reason the " +
-          "human typed after `Override Plan Approval:`, verbatim.",
+        "Plan Approval override requires a nonblank --override reason: the person's reason, " +
+          "in their own words.",
       );
     }
     if (flags.details !== "Approve Plan") {
@@ -2032,13 +2065,12 @@ function handleAnswer(args: string[]): void {
     }
   }
 
-  // A cancelled/dismissed/auto-resolved question widget is not an answer.
-  // Some harnesses return a completed-looking object for a dismissed question.
+  // A reply with no words in it is nobody's answer.
   if (isNonAnswer(flags.details)) {
     error(
-      `Cannot record reply ${formatReceivedReply(flags.details)} because it represents a ` +
-        `dismissed question, not a human answer. Re-present the question and wait for a real ` +
-        `response before trying again.`,
+      `Cannot record reply ${formatReceivedReply(flags.details)} because it has no words in it. ` +
+        "Pass the choice the person made, as you read it from their reply; with no reply of theirs yet, " +
+        "show the question again and wait for one.",
     );
   }
 
@@ -2082,16 +2114,12 @@ function handleAnswer(args: string[]): void {
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
   if (planCheckpoint) {
     fields.Session = resolvePlanApprovalSession(pd, flags);
-    // Half A of the break-glass pairing is checked before anything else is
-    // read and before any lock is held: without the human's typed request the
-    // only answer is the human-only guidance, whatever else the plan or its
-    // answer look like. The intent binding and the consumption happen again
-    // inside the receipt transaction, where the evidence names the intent.
-    if (
-      overrideReason !== null &&
-      authorizingPlanApprovalOverrideRequest(pd, fields.Session, overrideReason, null) === null
-    ) {
-      error(PLAN_APPROVAL_OVERRIDE_HUMAN_ONLY);
+    // The person's reply after the offer is checked before anything else is
+    // read and before any lock is held: without it the only answer is the
+    // step to ask them, whatever else the plan or its answer look like. It is
+    // checked again inside the receipt transaction.
+    if (overrideReason !== null && !personAskedForPlanApprovalOverride(pd)) {
+      error(planApprovalOverrideHumanOnly(pd));
     }
   }
 
@@ -2127,7 +2155,7 @@ function handleAnswer(args: string[]): void {
       flags.single === "true" ? `single-stage:${flags.stage}` : undefined;
 
     // Authorship floor (issue 742): the same interview answer the conductor
-    // wrote for itself. isNonAnswer above rejects a DISMISSED widget; this
+    // wrote for itself. isNonAnswer above rejects an answer with no words; this
     // rejects a self-attributed one ("A. Nothing to add - CONDUCTOR DEFAULT,
     // session unattended"), which the presence check below cannot catch because
     // a human is in the session, just not at this question. Autonomous
@@ -2329,20 +2357,22 @@ function handleAnswer(args: string[]): void {
     }
 
     if (planCheckpoint && overrideReason !== null) {
-      // Half B of the break-glass pairing. Autonomous Construction has no human
-      // at the keyboard, so nobody could have typed the phrase.
+      // The break glass. Autonomous Construction has no person at the
+      // keyboard, so nobody could have asked for it.
       if (autonomousDecision) {
         error(
           "Plan Approval override is refused under autonomous Construction mode: " +
-            "the break-glass phrase must be typed by a human in an attended session.",
+            "the person must ask for it in an attended chat.",
         );
       }
-      // Effects, in order: the typed request is re-validated against the
-      // evidence's intent and consumed inside the receipt transaction; the
-      // normal path is attempted; when it refuses, the PLAN_APPROVAL_OVERRIDDEN
-      // row is appended BEFORE the override receipt is written (a ledger that
-      // cannot take the row leaves no receipt and spends no request); then the
-      // receipt; then PLAN_APPROVAL_RECORDED with Override: yes.
+      // Their words go on the record: their latest reply since the offer.
+      const personReply = planApprovalOverridePersonReply(pd);
+      if (personReply) fields["Person Reply"] = personReply;
+      // Effects, in order: the person's reply is checked again inside the
+      // receipt transaction; the normal path is attempted; when it refuses, the
+      // PLAN_APPROVAL_OVERRIDDEN row is appended BEFORE the override receipt is
+      // written (a ledger that cannot take the row leaves no receipt and ends
+      // no offer); then the receipt; then PLAN_APPROVAL_RECORDED with Override: yes.
       let recorded: PlanApprovalOverrideReceiptResult;
       try {
         recorded = recordPlanApprovalOverrideReceipt(
@@ -2358,6 +2388,7 @@ function handleAnswer(args: string[]): void {
               Session: fields.Session,
               Unit: flags.unit ?? "stage-level",
               Fingerprint: planEvidence!.fingerprint,
+              ...(personReply ? { "Person Reply": personReply } : {}),
             });
           },
         );
@@ -2379,7 +2410,10 @@ function handleAnswer(args: string[]): void {
           stage: flags.stage,
           override: recorded.overridden,
           ...(recorded.overridden
-            ? { failed_checks: recorded.failedChecks }
+            ? {
+              failed_checks: recorded.failedChecks,
+              say: "Recorded that you approved building this plan with no check of the project's files.",
+            }
             : { note: "the normal receipt path succeeded, so the override was not needed and nothing was overridden" }),
           ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
         }),
@@ -2400,6 +2434,7 @@ function handleAnswer(args: string[]): void {
         );
         changeNotices.push(...recorded.changeNotices);
       } catch (e) {
+        if (offersPlanApprovalOverride(e)) notePlanApprovalOverrideOffered(pd);
         if (e instanceof PlanApprovalSourceDriftError) {
           console.error(JSON.stringify({ remedy: e.remedy }));
           error(e.message);
@@ -3877,6 +3912,12 @@ function handleReview(args: string[]): void {
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
+      // The UTC time the reviewer's own `**Date:**` line carries. The
+      // reviewer used to run `engine now` for it, which on Claude Code is an
+      // absolute-path call to the engine from a subagent, so the person was
+      // asked to allow an AI-DLC internal step (two live runs). The request
+      // the conductor already runs hands the time over instead.
+      reviewed_at: isoTimestamp(),
       agent_note: reviewRequestNote(flags.reviewer, reviewFile ?? "the review file this request opened", recordVerdict),
       ...(retried ? { retry: "pending-request" } : {}),
       ...(upgraded ? { upgrade: "legacy-request" } : {}),
@@ -4114,9 +4155,12 @@ function handleReview(args: string[]): void {
       // verdict). The verdict still records, as the file reads, and the row
       // says the review was edited after the reviewer finished: under strict
       // the gate tells the person in one line; under relaxed or off the change
-      // is accepted and said once here, like every other accepted change. No
-      // completion row since the request, or one without the digest, is no
-      // evidence, and the row carries nothing.
+      // is accepted and said once here, like every other accepted change. A
+      // completion row without the digest is no evidence, and the row carries
+      // nothing. No completion of any agent since the request is evidence only
+      // where noAgentFinishedSinceReview says so (on Claude Code, outside a
+      // worktree, with no background agent sent since): there the row says no
+      // reviewer had finished, said once here, and at the gate under strict.
       if (body !== null && requestBinding.requestId !== null) {
         const events = readAuditShardEvents(pd, intent, space);
         const request = openReviewRequests(events)
@@ -4146,18 +4190,10 @@ function handleReview(args: string[]): void {
             verdictChangeNotices.push(notice);
           }
         }
-        // The verdict the reviewer's dispatch already carried (a rendered
-        // verdict line in its brief, recorded by the plan-approval guard as
-        // REVIEW_VERDICT_DICTATED) is not the reviewer's own judgement when the
-        // reviewer wrote that same verdict: the row says so, and the person
-        // hears it once (with the verdict here; at the gate under strict). A
-        // reviewer that wrote the other verdict judged for itself: nothing.
-        if (
-          request !== undefined &&
-          dispatchDictatedVerdict(events, flags.reviewer, request, verdict as ReviewVerdict)
-        ) {
-          fields[REVIEW_DICTATED_FIELD] = "yes";
-          verdictChangeNotices.push(dictatedReviewNotice(node.name, flags.unit));
+        if (request !== undefined && finished === null &&
+          noAgentFinishedSinceReview(pd, events, request.row, selection)) {
+          fields[REVIEWER_FINISHED_FIELD] = "no";
+          verdictChangeNotices.push(noReviewerNotice(node.name, flags.unit));
         }
       }
       let reviewBytes = body ?? snapshot.appendix;
@@ -4192,6 +4228,17 @@ function handleReview(args: string[]): void {
           refuseReview(
             `Refusing REVIEW_COMPLETED for "${flags.stage}": ${validity.reason}.`,
           );
+        }
+        // The reviewer's own answer to whether its brief told it what to
+        // conclude, recorded as written. `yes` is not the reviewer's judgement
+        // alone, and the person hears that once (with the verdict here; at the
+        // gate under strict). The reviewer read its brief for that; the tool
+        // reads only the line, and a missing or unreadable one records nothing.
+        if (validity.verdictDictated !== null) {
+          fields[REVIEW_DICTATED_FIELD] = validity.verdictDictated;
+          if (validity.verdictDictated === "yes") {
+            verdictChangeNotices.push(dictatedReviewNotice(node.name, flags.unit));
+          }
         }
       }
 
@@ -4535,7 +4582,14 @@ export function main(argv: string[]): void {
     // A Plan Approval source-drift refusal is the human sentence; the
     // conductor's remedy (which command reopens approval) rides beside it. An
     // unbindable source boundary rides its ordered remedies the same way, repair
-    // first and break glass last.
+    // first and break glass last, and keeps when building anyway was offered.
+    if (offersPlanApprovalOverride(e)) {
+      try {
+        notePlanApprovalOverrideOffered(resolveActiveProjectDir(projectDir));
+      } catch {
+        // The refusal is said either way.
+      }
+    }
     if (e instanceof PlanApprovalSourceDriftError) {
       console.error(JSON.stringify({ remedy: e.remedy }));
     }
@@ -4559,5 +4613,24 @@ function error(msg: string, changeNotices: readonly string[] = []): never {
 }
 
 if (import.meta.main) {
-  main(process.argv.slice(2));
+  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
+  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
+  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // in Kiro's terminal, so the dispatcher's front gate and the lean projections
+  // keep their import graph.
+  if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {
+    import("./aidlc-kiro-ide-terminal.ts")
+      .then(async (m) => {
+        if (await m.commandPromptReplyTee()) return;
+        m.noteSlowReplyAtExit();
+        run(m.rejoinCommandPromptQuotes(process.argv.slice(2)));
+      })
+      .catch(() => run(process.argv.slice(2)));
+  } else {
+    run(process.argv.slice(2));
+  }
+}
+
+function run(args: string[]): void {
+  main(args);
 }

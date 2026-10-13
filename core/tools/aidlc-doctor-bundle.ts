@@ -353,8 +353,10 @@ export interface Timeline {
   workflowStartedRaw: string | typeof UNKNOWN;
   workflowStatus: string; // from state file, or "unknown"
   // True when the LATEST run (the scoped slice, not the whole buffer) recorded a
-  // WORKFLOW_COMPLETED. Rule 3 (state/audit drift) reads this so it never fires
-  // on an old completion left in the buffer by a completed-then-restarted run.
+  // WORKFLOW_COMPLETED that no later STAGE_STARTED reopened. Rule 3 (state/audit
+  // drift) reads this so it never fires on an old completion left in the buffer
+  // by a completed-then-restarted run, nor on finished work a scope change
+  // reopened at the stage it added (#2261).
   workflowCompleted: boolean;
   notes: string[];
 }
@@ -487,7 +489,8 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
     stages,
     workflowStartedRaw: workflowStarted?.timestampRaw ?? UNKNOWN,
     workflowStatus: status,
-    workflowCompleted: events.some((e) => e.event === "WORKFLOW_COMPLETED"),
+    workflowCompleted: lastEventIndex(events, "WORKFLOW_COMPLETED") !== -1 &&
+      lastEventIndex(events, "WORKFLOW_COMPLETED") > lastEventIndex(events, "STAGE_STARTED"),
     notes,
   };
 }

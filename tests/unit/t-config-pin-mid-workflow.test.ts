@@ -2,10 +2,10 @@
 //
 // `config --pin` switches the engine that serves a project at once,
 // while the project's own files stay at the version its harness tree was last
-// refreshed to until the next `aidlc config`. A pin or unpin while work is
-// open is done, and when the files are on another version than the one the
-// project now follows, it says to run `aidlc config` to finish. A tree from
-// before stamps records no version, so it never counts as a match.
+// refreshed to until the next `aidlc config`. A pin or unpin is done, also
+// while work is open, and when the files are on another version than the one
+// the project now follows, it says to run `aidlc config` to finish. A tree
+// from before stamps records no version, so it never counts as a match.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -14,12 +14,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { writeReleaseFixture } from "../harness/release-fixture.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
 const KIRO_RELEASE = join(REPO_ROOT, "dist-release", "kiro");
 const OTHER_VERSION = "9.9.9";
+const EARLIER_VERSION = "2.10.0";
 
 const created: string[] = [];
 afterAll(() => {
@@ -83,6 +85,8 @@ function config(proj: { dir: string; installRoot: string }, args: string[]) {
       AIDLC_INSTALL_ROOT: proj.installRoot,
       AIDLC_BIN_DIR: join(proj.installRoot, "bin"),
       AIDLC_OFFLINE: "1",
+      // No GitHub CLI: a fixture release is bound by its checksums alone.
+      AIDLC_GH_BIN: join(proj.installRoot, "no-gh"),
     },
     encoding: "utf-8",
   });
@@ -111,11 +115,11 @@ describe("config --pin while a workflow is running (#1418)", () => {
     expect(existsSync(join(proj.dir, ".aidlc-version"))).toBe(false);
   });
 
-  test("with no workflow running, an unpin says nothing more", () => {
+  test("with no workflow running, an unpin says to finish the update too", () => {
     const proj = pinnedAwayFromMachine(false);
     const result = config(proj, ["--unpin"]);
     expect(result.status, result.output).toBe(0);
-    expect(result.output).not.toContain(FINISH);
+    expect(result.output).toContain(FINISH);
   });
 
   test("an unpin to the version the files are from says nothing more", () => {
@@ -143,6 +147,18 @@ describe("config --pin while a workflow is running (#1418)", () => {
     const both = config(proj, ["--unpin"]);
     expect(both.status, both.output).toBe(0);
     expect(both.output).toMatch(/Run `[^`]* config --harness claude` and `[^`]* config --harness kiro` to finish updating this project\./);
+  });
+
+  test("with no workflow running, a pin to an earlier release says the step that brings the files to it", () => {
+    const proj = project(false);
+    const release = temp("aidlc-pin-release-");
+    writeReleaseFixture({ root: release, version: EARLIER_VERSION, binary: "bytes", distributions: ["claude"] });
+    const result = config(proj, ["--pin", EARLIER_VERSION, "--from", release, "--yes"]);
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain(
+      `Pinned this project to aidlc ${EARLIER_VERSION}. Commit .aidlc-version to share the pin. Run \``,
+    );
+    expect(result.output).toContain(FINISH);
   });
 
   test("a pin while work is open is never refused, and its dry run plans it the usual way", () => {

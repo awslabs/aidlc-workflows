@@ -4,12 +4,12 @@
   "instructions": [".aidlc/onboarding.md", "aidlc/active-memory/**/*.md"],
   "permission": {
     "edit": {
-      "*": "allow",
       ".aidlc/tools/**": "ask",
       ".aidlc/hooks/**": "ask"
     },
     "bash": {
-      "*": "ask",
+      "rm -r*": "ask",
+      "git push *": "ask",
       "{{TOOL_PREFIX}}*": "allow"
     }
   }

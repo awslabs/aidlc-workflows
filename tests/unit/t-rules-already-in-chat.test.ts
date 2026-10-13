@@ -59,6 +59,7 @@ const HOST_ENV = [
 
 type Printed = {
   kind: string;
+  narration?: string;
   conductor_persona?: string;
   receipt?: string;
   rules_content?: Array<{ path: string; text: string }>;
@@ -423,6 +424,9 @@ describe("Codex: this thread was given the bundle and nothing since could have d
     await sessionStart(proj, "codex", sid, "startup", { TRANSCRIPT: rollout.path });
     const first = await next(proj, "codex", env, rollout);
     expect(sentInFull(first)).toBe(true);
+    // The step opens with its line for the person, so the rollout is read for
+    // the step itself, wherever its kind sits in the line.
+    expect(first.final.narration).toBeDefined();
     const second = await next(proj, "codex", env, rollout);
     expect(pointerOnly(second)).toBe(true);
     expect(second.bytes).toBeLessThan(first.bytes);

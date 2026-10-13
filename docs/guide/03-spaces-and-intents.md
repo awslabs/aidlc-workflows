@@ -42,8 +42,8 @@ my-project/
 │       ├── default/              ★ the only space most people ever see
 │       │   ├── memory/           THE METHOD — how this team works (committed)
 │       │   │   ├── org.md          framework defaults
-│       │   │   ├── team.md         your team's practices  (overrides org)
-│       │   │   ├── project.md      project-specific practices (overrides team)
+│       │   │   ├── team.md         your team's practices  (adds to org)
+│       │   │   ├── project.md      project-specific practices (adds to org and team)
 │       │   │   ├── phases/         phase-scoped rules
 │       │   │   └── templates/      your output-format overrides, one per artifact
 │       │   │
@@ -151,10 +151,11 @@ the export endpoint". What should I do?
 - Choose **3** and AI-DLC works out how to reshape the active intent's
   remaining plan with you.
 
-Saying only that the work should go on (`/aidlc carry on`, "continue", "keep
-going", "go on" or "resume", with or without "please") asks nothing: AI-DLC
-carries on with the active work. With work in the project but none selected
-yet, it asks which piece to pick up.
+Saying only that the work should go on (`/aidlc carry on`, "proceed", "keep
+going", in your own words) asks nothing: AI-DLC reads your words and carries on
+with the active work. With work in the project but none selected yet, it asks
+which piece to pick up; name the piece with your words (`/aidlc continue auth`)
+and it picks that piece up and carries on with it at once.
 
 Settings you type with the new work go with the work you choose.
 `/aidlc --depth minimal --learnings off Fix the timeout on the export endpoint`
@@ -165,6 +166,9 @@ and any other setting typed in the same message, applies to the active intent
 as you send the message; the new intent starts at the default Guard Policy, and
 AI-DLC says so when it creates it. Naming the plan first
 (`/aidlc bugfix Fix the timeout`) asks the same question, proposing that plan.
+When a plan's name is also your own first word (`classic car rental website`),
+the assistant reads which you meant and may ask you once, so your word is never
+spent on a plan you did not choose.
 So does a scope that differs from the active intent's, typed with a
 description (`/aidlc --scope express "add a health endpoint"`), with new work
 first: choose **1** and the description starts new express work, the active
@@ -207,7 +211,11 @@ as joining it: in a fresh clone, where a teammate's intent record is committed b
 your `active-intent` cursor is not, the lone record resolves but no session has
 joined it. The first `/aidlc` asks which intent to work on, and AI-DLC's hooks leave
 that record alone until the session runs `/aidlc intent <slug>` (or creates its own
-intent). A session bound by an earlier version keeps working its intent when your
+intent), or until this machine chooses that record (your `active-intent` cursor
+names it, from another chat or your terminal): then the chat joins it on its next
+turn, silently, as a chat opened after the choice would. What you type in a chat
+that has not joined is still kept, on that chat's own message record outside the
+intent record. A session bound by an earlier version keeps working its intent when your
 cursor names the same record; otherwise it is offered a rebind to that intent. A
 session an earlier version stamped but never bound follows its stamp when it
 resumes, so a chat left open across an upgrade continues its own intent.
@@ -241,8 +249,10 @@ SessionStart for it, or hooks installed after the chat opened) is bound at first
 contact by the same rule SessionStart applies to a new chat: to the work the
 shared cursor names when this machine has joined it, else to no record, silently.
 From then on the chat stays on that work; a switch typed in another window moves
-the cursor, not the chat. A command with no session identity at all (your own
-terminal) keeps following the cursor.
+the cursor, not the chat. A chat bound to no record only because the lone record
+here had not been chosen yet is read again at every entry: once the cursor names
+a record, it joins that work the same way, silently. A command with no session
+identity at all (your own terminal) keeps following the cursor.
 
 Once identity is known, an explicit space or intent selector wins, followed by
 that session's binding, then the shared `active-space` and `active-intent`

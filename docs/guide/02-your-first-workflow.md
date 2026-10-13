@@ -4,9 +4,10 @@ This chapter walks through a complete AI-DLC workflow run, explaining what you s
 
 > **Note**: The transcripts in this chapter show **Claude Code**. On Kiro CLI,
 > Kiro IDE, Codex CLI, and opencode the workflow - stages, agents, gates,
-> artifacts - is identical, but the Claude-only welcome banner and custom
-> AI-DLC statusline do not appear. Use `/aidlc --status` on Kiro and opencode;
-> Codex uses `$aidlc --status` and its built-in `update_plan` progress display.
+> artifacts - is identical, but the Claude-only welcome banner does not appear,
+> and AI-DLC's status line shows only on Claude Code and Codex, once you turn it
+> on. Use `/aidlc --status` on Kiro and opencode; Codex uses `$aidlc --status`
+> and its built-in `update_plan` progress display.
 > Your harness's chapter under
 > [Running on other harnesses](harnesses/README.md) lists every difference.
 
@@ -30,7 +31,7 @@ while keeping you in control at every decision point.
 ## How It Works
 
 - **You decide, AI executes.** Every material decision goes through an approval gate.
-- **Adaptive scope.** Choose a scope or let AI auto-detect from your intent.
+- **Adaptive scope.** Choose a scope or let the agent propose a plan from your words.
 - **Traceable artifacts.** Every stage produces versioned documents in the intent's record dir.
 - **11 domain experts.** Specialized agent personas guide each stage.
 ```
@@ -137,13 +138,13 @@ Your word wins over the scan. Start with `/aidlc --project-type brownfield "<wha
 The orchestrator writes the intent's `aidlc-state.md` (under its record dir) with the full stage plan based on your scope, depth, test strategy, and the scanner's classification. It also analyzes your input and confirms a scope:
 
 ```
-─── Scope Detection ───────────────────────────────────────────────────────────
-Detected scope: feature (Standard depth, Standard test strategy, all 33 stages)
+─── Plan ──────────────────────────────────────────────────────────────────────
+Proposed plan: feature (Standard depth, Standard test strategy, all 33 stages)
 ▸ Approve scope? [Yes / Change scope / Change depth / Change test strategy]
 > Yes
 ```
 
-You can accept the detected scope, change to a different scope (e.g., `mvp`), or adjust the depth level or test strategy. See [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) for guidance.
+You can accept the proposed plan, change to a different scope (e.g., `mvp`), or adjust the depth level or test strategy. See [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) for guidance.
 
 ---
 
@@ -153,7 +154,7 @@ After Initialization, the workflow enters Ideation. Each stage from here on runs
 
 ### Stage 1.1: Intent Capture (aidlc-product-agent)
 
-On Claude Code, the custom AI-DLC status line at the bottom of your terminal updates (Kiro and opencode use `/aidlc --status`; Codex uses `$aidlc --status` and its built-in `update_plan` progress display):
+On Claude Code, when you chose AI-DLC's status line at setup (or turned it on with `/aidlc --statusline on`), the status line at the bottom of your terminal updates (Kiro and opencode use `/aidlc --status`; Codex uses `$aidlc --status` and its built-in `update_plan` progress display):
 
 ```
 [AIDLC] IDEATION > Intent Capture [▓▓▓▓▓░░░░░] 4/7 -- product
@@ -283,6 +284,11 @@ with `<verification_command>` (exit 0)** before you approve the skeleton and
 later Units start. Reviewing only the first design stage does not demonstrate a
 working skeleton.
 
+If you ask to leave planned work out of a build ("skip the remaining stories"),
+the build goes on without it and its approval says what was left out, for
+example "Left out of this build: AC2.1.1, AC2.1.2 and AC2.2.1." The Unit's
+`traceability.json` keeps each of those items as `Deferred`, with your words.
+
 If no autonomy choice is already recorded, the workflow then asks:
 
 ```
@@ -399,7 +405,7 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/
 
 ## Status Line
 
-Throughout the workflow on Claude Code, the custom AI-DLC status line shows your current position (Kiro and opencode use `/aidlc --status` and the progress line at each gate; Codex uses `$aidlc --status` and its built-in `update_plan` progress display):
+Throughout the workflow on Claude Code, AI-DLC's status line (once you turn it on: setup asks, or `/aidlc --statusline on`) shows your current position (Kiro and opencode use `/aidlc --status` and the progress line at each gate; Codex uses `$aidlc --status` and its built-in `update_plan` progress display):
 
 ```
 [AIDLC] IDEATION > Intent Capture [▓▓▓▓▓░░░░░] 4/7 -- product

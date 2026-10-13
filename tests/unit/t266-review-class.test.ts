@@ -275,14 +275,25 @@ describe("t266 review class", () => {
     const fresh = createTestProject();
     tempDirs.push(fresh);
     removeWorkspaceRecord(fresh);
-    const creation = runOrchestrateNext(
+    // A scope named alone first asks what the work is for (#2355): the step
+    // names the command the answer runs, and that command creates with it.
+    const asked = runOrchestrateNext(
       ORCHESTRATE,
       fresh,
       ["--scope", "feature", "--review", "none"],
     );
+    expect(asked.status).toBe(0);
+    expect(String(asked.directive?.message)).toContain(
+      "next --scope feature --review none -- <their words>",
+    );
+    const creation = runOrchestrateNext(
+      ORCHESTRATE,
+      fresh,
+      ["--scope", "feature", "--review", "none", "--", "add a CSV export"],
+    );
     expect(creation.status).toBe(0);
-    expect(String(creation.directive?.message)).toContain(
-      "intent create --scope feature --review none",
+    expect(String(creation.directive?.message)).toMatch(
+      /intent create --scope feature --request [0-9a-f]{8} .*--review none/,
     );
 
     const active = projectWithState();

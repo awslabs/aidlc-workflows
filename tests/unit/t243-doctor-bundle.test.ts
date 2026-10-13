@@ -630,6 +630,28 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(reconstructTimeline(audit, "").workflowCompleted).toBe(false);
   });
 
+  test("14b: a STAGE_STARTED after the completion is a reopened run, not a completed one (#2261)", () => {
+    const row = (heading: string, ts: string, event: string, stage?: string) => [
+      `## ${heading}`, `**Timestamp**: ${ts}`, `**Event**: ${event}`, ...(stage ? [`**Stage**: ${stage}`] : []), "",
+    ];
+    // A scope change on finished work started a stage after WORKFLOW_COMPLETED:
+    // the run is open again, so Rule 3 must not read Status Running as drift.
+    const reopened = [
+      ...row("started", "2026-01-01T00:00:00Z", "WORKFLOW_STARTED"),
+      ...row("completed", "2026-01-01T05:00:00Z", "WORKFLOW_COMPLETED"),
+      ...row("scope", "2026-01-02T00:00:00Z", "SCOPE_CHANGED"),
+      ...row("start", "2026-01-02T00:00:01Z", "STAGE_STARTED", "observability-setup"),
+    ].join("\n");
+    expect(reconstructTimeline(reopened, "").workflowCompleted).toBe(false);
+    // The completion is the last lifecycle word: still completed.
+    const completed = [
+      ...row("started", "2026-01-01T00:00:00Z", "WORKFLOW_STARTED"),
+      ...row("start", "2026-01-01T01:00:00Z", "STAGE_STARTED", "deployment-execution"),
+      ...row("completed", "2026-01-01T05:00:00Z", "WORKFLOW_COMPLETED"),
+    ].join("\n");
+    expect(reconstructTimeline(completed, "").workflowCompleted).toBe(true);
+  });
+
   test("15: seedCustomIdentifiers hashes a custom lead_agent in the graph (Arden r2 #6)", () => {
     // A custom (non-core) lead agent must be hashed, not serialized raw. Exercised
     // through the export: build a shipped-graph project, inject a custom lead.

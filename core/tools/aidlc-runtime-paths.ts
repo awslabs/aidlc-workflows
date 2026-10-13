@@ -387,7 +387,7 @@ export function kiroTreeLayout(harnessRoot: string): KiroLayout | null {
   } catch {
     // A tree without readable metadata still has its conductor file.
   }
-  if (existsSync(join(harnessRoot, "agents", "aidlc.md"))) return "kas";
+  if (existsSync(join(harnessRoot, "agents", "aidlc-aidlc.md")) || existsSync(join(harnessRoot, "agents", "aidlc.md"))) return "kas";
   if (existsSync(join(harnessRoot, "agents", "aidlc.json"))) return "agent-v1";
   return null;
 }

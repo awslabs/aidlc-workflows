@@ -260,6 +260,9 @@ Generation.
 - Apply changes to current stage artifacts
 - Re-present completion message
 
+### Leaving planned work out (within current stage):
+- Do what the person asked and carry on with the rest; in Code Generation, record what was left out as its traceability step says
+
 ### Major changes (affects prior stages):
 1. Identify which prior stages are affected
 2. Present impact analysis to the user via a structured question

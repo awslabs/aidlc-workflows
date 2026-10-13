@@ -198,7 +198,25 @@ import {
   type KiroWorkflowsAnswer,
 } from "./aidlc-kiro-ide-workflows.ts";
 import {
+  applyStatusLineAnswer,
+  applyStatusLineDefault,
+  CODEX_STATUS_LINE_PATH,
+  CLAUDE_STATUS_LINE_QUESTION,
+  claudeStatusLineAnswers,
+  CODEX_STATUS_LINE_QUESTION,
+  codexStatusLineAnswers,
+  hasOwnStatusLine,
+  isAidlcClaudeStatusLine,
+  noStatusLineLine,
+  readStatusLineChoice,
+  statusLineEntry,
+  statusLineHarness,
+  type StatusLineHarness,
+  switchStatusLine,
+} from "./aidlc-statusline-choice.ts";
+import {
   KIRO_TERMINAL_ISSUE_ID,
+  KIRO_TERMINAL_POWERSHELL,
   KIRO_TERMINAL_QUESTION,
   kiroTerminalKeptLine,
   kiroTerminalQuestionDue,
@@ -260,6 +278,7 @@ import {
   managedBlockMarkers,
   normalizeProvidersRecord,
   openCodeFileProvider,
+  openCodeGlobalShortFormNote,
   openCodeProviderEntryIds,
   withRecordedMcpRegion,
   normalizeProjectChoicesRecord,
@@ -306,6 +325,7 @@ import {
   resolveAidlcSettingsWithOverride,
   serializeAidlcSettings,
   settingsModelsFromHarnessPolicy,
+  localSettingsPath,
   settingsPathForTarget,
   settingsSource,
   updateSettingsSection,
@@ -340,6 +360,10 @@ type Baseline = {
   shippedOnly?: true;
   entries?: Record<string, Record<string, string>>;
   rootContributions: Record<string, RootContribution>;
+  // The project had AI-DLC's status line in its shared .claude/settings.json
+  // before it moved to each person's own settings (#1407): every clone keeps
+  // it (C1) until that person turns it off.
+  statusLineKept?: true;
 };
 
 type PreparedRefreshSource = {
@@ -431,6 +455,7 @@ type SettingsMutation = {
 
 const CONFIG_VALUE_FLAGS = new Set([
   "--agent",
+  "--statusline",
   "--kiro-workflows",
   "--kiro-terminal",
   "--ca-bundle",
@@ -577,6 +602,7 @@ const ROOT_CONFIG_FLAGS = new Set([
   "--project-dir",
   "--quiet",
   "--release-base-url",
+  "--statusline",
   "--unpin",
   "--verbose",
   "--yes",
@@ -920,8 +946,23 @@ function validateRootShowArgs(argv: readonly string[]): string | null {
   return argv.filter((token) => token === "--show").length > 1 ? "--show may be specified only once" : null;
 }
 
+// `config --statusline on|off` switches AI-DLC's status line and nothing else.
+function validateStatusLineSwitchArgs(argv: readonly string[]): string | null {
+  const grammar = validateConfigOptionGrammar(argv, "config --statusline", {
+    values: new Set(["--statusline", "--harness", "--project-dir"]),
+    bare: new Set(["--dry-run", "--help", "--json", "--no-color", "--quiet", "--verbose", "--yes"]),
+    invalidKnownFlags: ROOT_CONFIG_FLAGS,
+    invalidKnownMessage: (flag) => `${flag} is not valid with config --statusline`,
+  });
+  if (grammar) return grammar;
+  const value = valueAfter([...argv], "--statusline");
+  if (value !== "on" && value !== "off") return "--statusline must be on or off";
+  return validateConfigOutputMode(argv);
+}
+
 function validateRootConfigArgs(argv: readonly string[]): string | null {
   if (argv.includes("--show")) return validateRootShowArgs(argv);
+  if (argv.includes("--statusline")) return validateStatusLineSwitchArgs(argv);
   const hasPin = argv.includes("--pin");
   const hasUnpin = argv.includes("--unpin");
   if (hasPin && hasUnpin) return "--pin and --unpin are mutually exclusive";
@@ -1031,9 +1072,10 @@ function modelPolicyHelp(): string {
     "",
     heading("KIRO CLI", out),
     "  Kiro CLI runs each session on one model, so a preset sets one effort for the whole",
-    "  session (minimal low, balanced medium, thorough extra-high), saved with the model in",
-    "  your personal Kiro settings. A model without that level gets its next level down.",
+    "  interactive session (minimal low, balanced medium, thorough extra-high), saved with the",
+    "  model in your personal Kiro settings. A model without that level gets its next level down.",
     "  --session-model <id>  save this model from your Kiro account's list as your session model",
+    "                        (on Kiro IDE's row, the model only: Kiro IDE uses its own model picker)",
     "",
     heading("WRITE TARGET", out),
     "  --project  committed team policy (recommended in a repository)",
@@ -2232,6 +2274,55 @@ function diagnosticWizard(
     : records.trust;
 }
 
+// AI-DLC's status line, switched by the person (#1407): `config --statusline
+// on|off`, which `/aidlc --statusline on|off` runs from the chat. It asks
+// nothing (they typed it), applies once to every harness of the project with a
+// status line (or the one --harness names), and says in one line each what
+// changed and the way back. On Claude Code it is this person's own setting; on
+// Codex it is the project's, and the line says it applies to everyone.
+function statusLineSwitch(argv: readonly string[]): CommandResult {
+  const value = valueAfter([...argv], "--statusline");
+  if (value !== "on" && value !== "off") return usage("--statusline must be on or off", configCommand("--help"));
+  const on = value === "on";
+  const projectDir = projectDirFrom(argv);
+  const requested = valueAfter([...argv], "--harness");
+  const installed = discoverProjectHarnesses(projectDir);
+  const named = requested ? installed.filter((harness) => harness.distribution === requested) : installed;
+  if (requested && named.length === 0) {
+    return usage(`this project is not set up for ${requested}`, configCommand(`--harness ${requested}${projectTarget(projectDir)}`));
+  }
+  const targets = [...new Set(
+    named.map((harness) => statusLineHarness(harness.distribution)).filter((harness): harness is StatusLineHarness => harness !== null),
+  )];
+  if (targets.length === 0) {
+    const distribution = named[0]?.distribution;
+    const product = distribution
+      ? HARNESS_PRODUCT_NAMES[distribution as keyof typeof HARNESS_PRODUCT_NAMES] ?? distribution
+      : "This project";
+    return success(noStatusLineLine(product, "/aidlc"), { statusline: [] });
+  }
+  if (argv.includes("--dry-run")) {
+    return success(
+      targets.map((harness) =>
+        `would turn AI-DLC's status line ${value} for ${HARNESS_PRODUCT_NAMES[harness]}${harness === "codex" ? " (for everyone working in this project)" : ""}`
+      ).join("\n"),
+      { statusline: targets.map((harness) => ({ harness, on, changed: false })) },
+    );
+  }
+  const lines: string[] = [];
+  const data: Array<{ harness: StatusLineHarness; on: boolean; changed: boolean }> = [];
+  for (const harness of targets) {
+    try {
+      const result = switchStatusLine(projectDir, harness, on);
+      lines.push(result.line);
+      data.push({ harness, on, changed: result.changed });
+    } catch (error) {
+      return failure(error instanceof Error ? error.message : String(error), EXIT.failure);
+    }
+  }
+  return success(lines.join("\n"), { statusline: data });
+}
+
 // Kiro IDE's Workflows switch is the person's Kiro setting for all their
 // projects, outside this project: it is set on its own, never inside the
 // project's transaction, and only when they ask for it.
@@ -2325,6 +2416,12 @@ function kiroTerminalSwitch(
   const data = (answer: KiroTerminalAnswer | null) => ({
     kiroTerminal: { commandPrompt: false, profile: "PowerShell", settingsPath: state.settingsPath, answer },
   });
+  // Nothing to set: the profile is PowerShell by name, or Kiro's default (no key).
+  // No question, no write; the answer is kept so no chat asks about it.
+  if (state.readable && !state.commandPrompt && (state.profile === null || state.profile === KIRO_TERMINAL_POWERSHELL)) {
+    if (!argv.includes("--dry-run")) recordKiroTerminalAnswer("powershell");
+    return success("Kiro's terminal is already PowerShell.", data(argv.includes("--dry-run") ? readKiroTerminalAnswer() : "powershell"));
+  }
   if (argv.includes("--dry-run")) {
     return success(`would set Kiro's terminal to PowerShell in ${state.settingsPath}`, data(readKiroTerminalAnswer()));
   }
@@ -4936,6 +5033,8 @@ const HARNESS_IDENTITY_KEYS = new Set([
   "directiveMaxBytes",
   "harnessDir",
   "rulesSubdir",
+  "statusLine",
+  "agentFinishRecorded",
 ]);
 
 const CLAUDE_SHIPPED_KEYS = [
@@ -4944,6 +5043,18 @@ const CLAUDE_SHIPPED_KEYS = [
   "statusLine",
   "hooks",
 ];
+
+// The project's shared .claude/settings.json carries AI-DLC's status line and
+// the staged release no longer does: this refresh takes it out of there.
+function claudeStatusLineLeavesTeamFile(projectDir: string, stagedRoot: string, harnessDir: string): boolean {
+  try {
+    const current = readJsonFile(join(projectDir, harnessDir, "settings.json")) as Record<string, unknown>;
+    const staged = readJsonFile(join(stagedRoot, harnessDir, "settings.json")) as Record<string, unknown>;
+    return isAidlcClaudeStatusLine(current.statusLine, projectDir) && staged.statusLine === undefined;
+  } catch {
+    return false;
+  }
+}
 
 // Exact Claude dist bytes present in version tags before these direct hooks
 // were retired. A manifestless file is removable only when its hash is here;
@@ -5090,15 +5201,13 @@ function preserveClaudeProviderFields(
   const shippedChanged = (key: string): boolean =>
     priorEntries?.[key] === undefined ||
     sha256Bytes(canonical(staged[key])) !== priorEntries[key];
+  // A status line the team set in the shared file is theirs and stays. AI-DLC's
+  // own is no longer shipped there: it leaves with this refresh, and each
+  // clone keeps it in its own settings.local.json (aidlc-statusline-choice.ts).
   if (
     Object.hasOwn(current, "statusLine") &&
     isCustomClaudeStatusLine(current.statusLine, projectDir)
   ) {
-    if (shippedChanged("statusLine")) {
-      notes.push(
-        "kept your statusLine in .claude/settings.json; this release ships a different one. Delete the key and refresh to take it.",
-      );
-    }
     staged.statusLine = current.statusLine;
   }
   // A value equal to this release's own is AI-DLC's, not the person's: a
@@ -5779,6 +5888,9 @@ function planCodexEntries(
       if (!entry.startsWith(CODEX_VALUE_ENTRY_PREFIX)) continue;
       const path = JSON.parse(entry.slice(CODEX_VALUE_ENTRY_PREFIX.length)) as string[];
       if (shippedLeaves.has(JSON.stringify(path)) || entry === codexValueEntry(CODEX_SPACE_POINTER_PATH)) continue;
+      // AI-DLC's status line, which earlier releases shipped, is now the
+      // project's choice: a project that has it keeps it (C1).
+      if (JSON.stringify(path) === JSON.stringify(CODEX_STATUS_LINE_PATH)) continue;
       const now = tomlPathValue(currentObject, path);
       if (now.found && sha256Bytes(codexValueText(now.value)) === hash) retired.push(path);
     }
@@ -5795,6 +5907,7 @@ function planCodexEntries(
       const inSection = statement.table.length === 0 ? statement.path.length === 1 : statement.table.length === 1;
       if (!inSection || !ownedSection(statement.path[0])) continue;
       if (tomlPathValue(stagedObject, statement.path).found) continue;
+      if (pathStartsWith(statement.path, CODEX_STATUS_LINE_PATH)) continue;
       if (leaves.some((leaf) => pathStartsWith(leaf, statement.path))) continue;
       retired.push(statement.path);
     }
@@ -7355,13 +7468,16 @@ type FirstRunChoices = {
   target: SettingsTarget;
   providerVerified: boolean;
   opencodeDefault: boolean;
-  // Kiro CLI only: the person's session model, read from their personal Kiro
-  // settings. null means Kiro could not be read, so the session is left alone.
+  // Kiro CLI, or Kiro IDE's row with kiro-cli found: the person's session model,
+  // read from their personal Kiro settings. null means Kiro could not be read,
+  // so the session is left alone.
   kiro?: FirstRunKiroSession | null;
   // Kiro IDE only, asked while its Workflows feature is on: true turns it off.
   kiroWorkflowsOff?: boolean;
   // Kiro IDE on Windows only, asked while its terminal is Command Prompt: true sets PowerShell.
   kiroTerminalPowerShell?: boolean;
+  // Claude Code and Codex, asked once: true shows AI-DLC's progress in the status line.
+  statusLineOn?: boolean;
 };
 
 type FirstRunKiroSession = {
@@ -7371,6 +7487,11 @@ type FirstRunKiroSession = {
   setModel?: KiroModel;
   // The account's models, fetched once when first needed.
   models?: KiroModelList;
+  // Recommended defaults: an effort the person saved for the model stays.
+  fillEffortOnly?: boolean;
+  // Kiro auto left without asking (setup ran in Kiro IDE's terminal), so the
+  // ending says where each Kiro host chooses its model.
+  unasked?: boolean;
 };
 
 // A question config asked got no answer: the person cancelled it, or the
@@ -7643,6 +7764,17 @@ function detectedCandidateChoices(
   const detected = candidates.filter((candidate) =>
     detection.harnesses[candidate.stamp.distribution]?.found
   );
+  // Both Kiro rows count a supported `kiro-cli`. The kiro-ide row pins Kiro's
+  // v3 engine in its settings/cli.json and the kiro row pins none, so Kiro
+  // picks that row's engine; when both are found, kiro-ide comes first of the
+  // two. Every other harness keeps its order, and the editor lead below still
+  // comes first.
+  const kiro = detected.findIndex((candidate) => candidate.stamp.distribution === "kiro");
+  const kiroIde = detected.findIndex((candidate) => candidate.stamp.distribution === "kiro-ide");
+  if (kiro !== -1 && kiroIde > kiro) {
+    const [preferred] = detected.splice(kiroIde, 1);
+    detected.splice(kiro, 0, preferred);
+  }
   // In the terminal of a harness's own editor, that harness leads: it is
   // chosen outright when no other harness CLI is found, and is the default
   // when one is.
@@ -7928,6 +8060,8 @@ function firstRunMutationPaths(
     ),
     join(projectDir, ".gitignore"),
     settingsPathForTarget(projectDir, choices.target),
+    // Where the status line answer is kept.
+    localSettingsPath(projectDir),
   ].map((path) => resolve(path)))];
 }
 
@@ -8050,16 +8184,26 @@ function snapshotFirstRunMutationPaths(
 
 async function applyFirstRunKiroSession(choices: FirstRunChoices): Promise<KiroSessionResult | null> {
   const kiro = choices.kiro;
-  if (!kiro || choices.candidate.stamp.distribution !== "kiro") return null;
+  const distribution = choices.candidate.stamp.distribution;
+  if (!kiro || !kiroSessionRow(distribution)) return null;
   const result = await applyKiroSessionPlan({
     cli: kiro.cli,
     session: kiro.session,
     ...(kiro.setModel ? { setModel: kiro.setModel.id } : {}),
-    preset: choices.preset === "unchanged" ? null : choices.preset,
+    ...kiroSessionRowPlan(distribution, choices.preset === "unchanged" ? null : choices.preset),
     fetchLevels: true,
-    modelsCommand: configCommand("models"),
+    ...(kiro.fillEffortOnly ? { fillEffortOnly: true } : {}),
+    modelsCommand: kiroSessionModelsCommand(distribution),
+    retryCommand: kiroSessionRetryCommand(distribution, kiro.setModel?.id),
     doctorCommand: `${aidlcInvocation()} doctor`,
   });
+  if (kiro.unasked && result.model === null) {
+    result.lines.push(
+      `Kiro CLI session model: Kiro auto, kept. Kiro IDE uses its own model picker; run \`${
+        kiroSessionModelsCommand(distribution)
+      }\` to choose one for Kiro CLI.`,
+    );
+  }
   return result;
 }
 
@@ -8125,7 +8269,7 @@ function renderFirstRunEnding(
           section: "models" as const,
           id: "kiro-session-unsaved",
           message: (kiro.lines.at(-1) ?? "Kiro did not save your session model.").replace(/ Run `[^`]+` to try again\.$/, ""),
-          command: configCommand("models"),
+          command: kiroSessionRetryCommand(choices.candidate.stamp.distribution, choices.kiro?.setModel?.id),
         }]
       : []),
   ];
@@ -8188,8 +8332,39 @@ function renderFirstRunEnding(
 // Kiro settings (see aidlc-kiro-session.ts). These prompts are shared by first-run
 // setup and `config models`; nothing here writes.
 
+// Kiro CLI keeps the session model in personal Kiro settings on both Kiro
+// rows: the old row runs only in Kiro CLI, Kiro IDE's row in Kiro CLI too.
+function kiroSessionRow(distribution: string): boolean {
+  return distribution === "kiro" || distribution === "kiro-ide";
+}
+
+// Kiro IDE's row saves only Kiro CLI's model: its preset changes nothing in
+// Kiro IDE, so no effort is written, and its lines name Kiro CLI.
+function kiroSessionRowPlan(
+  distribution: string,
+  preset: KiroPreset | null,
+): { preset: KiroPreset | null; kiroCliOnly?: true } {
+  if (distribution === "kiro") return { preset };
+  return distribution === "kiro-ide" ? { preset: null, kiroCliOnly: true } : { preset: null };
+}
+
+// The command that chooses the session model later. `config models` asks for it
+// on Kiro CLI's row; on Kiro IDE's row its menu is the preset one, so the
+// session model is named with --session-model.
+function kiroSessionModelsCommand(distribution: string): string {
+  return configCommand(distribution === "kiro-ide" ? "models --session-model <id>" : "models");
+}
+
+// What repeats a session request Kiro refused: on Kiro IDE's row, where
+// `config models` offers no session model, the model the person chose.
+function kiroSessionRetryCommand(distribution: string, model: string | undefined): string {
+  return distribution === "kiro-ide" && model
+    ? configCommand(`models --session-model ${model}`)
+    : kiroSessionModelsCommand(distribution);
+}
+
 function kiroSessionFor(distribution: string): FirstRunKiroSession | null {
-  if (distribution !== "kiro") return null;
+  if (!kiroSessionRow(distribution)) return null;
   const cli = kiroCliPath();
   if (!cli) return null;
   const session = readKiroPersonalSession(cli);
@@ -8203,6 +8378,15 @@ function kiroModelRetired(kiro: FirstRunKiroSession): boolean {
   if (!current) return false;
   kiro.models ??= listKiroModels(kiro.cli);
   return kiro.models.ok && !kiro.models.models.some((model) => model.id === current);
+}
+
+// On Kiro IDE's row the session model is Kiro CLI's alone (Kiro IDE does not
+// read it), and no preset effort comes with it, so nothing is recommended
+// over Kiro auto.
+const KIRO_IDE_ROW_SESSION_NOTE = "This is a Kiro CLI setting; Kiro IDE uses its own model picker.";
+
+function kiroIdeRowAutoIntro(): string {
+  return `You're on ${KIRO_AUTO_DEFINITION}. ${KIRO_IDE_ROW_SESSION_NOTE} Choose the Kiro CLI session model (Enter keeps Kiro auto):`;
 }
 
 function kiroRetiredIntro(model: string): string {
@@ -8224,6 +8408,8 @@ function chooseKiroSessionModel(
   kiro: FirstRunKiroSession,
   preset: KiroPreset | null,
   intro?: string,
+  // Kiro IDE's row: Enter keeps a model the account offers, Kiro auto included.
+  modelOnly = false,
 ): KiroModel | undefined {
   kiro.models ??= listKiroModels(kiro.cli);
   const list = kiro.models;
@@ -8233,8 +8419,8 @@ function chooseKiroSessionModel(
       "  ",
       `Could not fetch your Kiro models (offline or Kiro did not answer), so ${
         current ?? "Kiro auto"
-      } stays for now.${current ? "" : ` ${kiroAutoRecommendation(preset)}`} Run \`${
-        configCommand("models")
+      } stays for now.${current || modelOnly ? "" : ` ${kiroAutoRecommendation(preset)}`} Run \`${
+        kiroSessionModelsCommand(modelOnly ? "kiro-ide" : "kiro")
       }\` later to choose one.`,
     );
     process.stdout.write("\n");
@@ -8245,7 +8431,9 @@ function chooseKiroSessionModel(
   // Enter never keeps a model the account no longer offers: with only preview
   // or internal models left, the first one offered is recommended.
   const retired = current !== null && !models.some((model) => model.id === current);
-  const recommended = recommendedKiroModel(models, current) ?? (retired ? models[0]?.id ?? null : null);
+  const recommended = modelOnly && !retired
+    ? null
+    : recommendedKiroModel(models, current) ?? (retired ? models[0]?.id ?? null : null);
   const keepLabel = current ? `keep ${current}` : "keep Kiro auto";
   const idWidth = Math.max(keepLabel.length, ...models.map((model) => model.id.length)) + 2;
   const numberWidth = String(models.length + 1).length;
@@ -8261,11 +8449,11 @@ function chooseKiroSessionModel(
   process.stdout.write(
     `    ${number(models.length + 1)} ${keepLabel.padEnd(idWidth)}${
       !current
-        ? "Kiro keeps picking the model; no effort preset"
+        ? modelOnly ? "Kiro keeps picking the model" : "Kiro keeps picking the model; no effort preset"
         : retired
         ? "not offered on your Kiro account any more"
         : "your current model"
-    }\n`,
+    }${modelOnly && recommended === null ? "  (default)" : ""}\n`,
   );
   writeMenuRow(
     "  ",
@@ -8288,17 +8476,24 @@ function chooseKiroSessionModel(
   return model;
 }
 
-// The session-model question: keep or choose. Kiro auto recommends choosing.
-function askKiroSessionModel(kiro: FirstRunKiroSession, preset: KiroPreset | null): void {
+// The session-model question: keep or choose. Kiro auto recommends choosing,
+// except on Kiro IDE's row (modelOnly), where Enter keeps it.
+function askKiroSessionModel(kiro: FirstRunKiroSession, preset: KiroPreset | null, modelOnly = false): void {
   const current = kiro.session.model;
   if (current && kiroModelRetired(kiro)) {
     kiro.setModel = chooseKiroSessionModel(kiro, preset, kiroRetiredIntro(current));
     return;
   }
+  if (!current && modelOnly) {
+    kiro.setModel = chooseKiroSessionModel(kiro, null, kiroIdeRowAutoIntro(), true);
+    return;
+  }
   if (current) {
     writeMenuRow(
       "  ",
-      `Kiro CLI runs each AI-DLC session on one model. You're on ${current}, from your personal Kiro settings.`,
+      `Kiro CLI runs each AI-DLC session on one model. You're on ${current}, from your personal Kiro settings.${
+        modelOnly ? ` ${KIRO_IDE_ROW_SESSION_NOTE}` : ""
+      }`,
     );
     writeMenuRow(`    1. keep ${current}   `, "(recommended, default)");
     writeMenuRow("    2. choose another model   ", "list the models your Kiro account offers");
@@ -8328,18 +8523,19 @@ function askKiroSessionModel(kiro: FirstRunKiroSession, preset: KiroPreset | nul
       return;
     }
   }
-  kiro.setModel = chooseKiroSessionModel(kiro, preset);
+  kiro.setModel = chooseKiroSessionModel(kiro, preset, undefined, modelOnly);
 }
 
-// The preset step's wording on Kiro CLI: one effort for the whole session.
+// The preset step's wording on Kiro CLI: one effort for the whole interactive
+// session (a --no-interactive run does not apply the saved effort).
 // Setup runs on a project with no preset yet; `config models` keeps the
 // recorded one (removing it is `--reset`).
 function writeKiroPresetRows(model: string | null, context: "setup" | "models" = "setup"): void {
   writeMenuRow(
     "  ",
     model
-      ? `On Kiro CLI the preset sets one effort for the whole session on ${model}.`
-      : "On Kiro CLI the preset sets one effort for the whole session. Under Kiro auto it applies once you choose a model.",
+      ? `On Kiro CLI the preset sets one effort for the whole interactive session on ${model}.`
+      : "On Kiro CLI the preset sets one effort for the whole interactive session. Under Kiro auto it applies once you choose a model.",
   );
   writeMenuRow("    1. balanced    ", `${KIRO_EFFORT_LABEL[KIRO_PRESET_EFFORT.balanced]} effort  (recommended, default)`);
   writeMenuRow("    2. thorough    ", `${KIRO_EFFORT_LABEL[KIRO_PRESET_EFFORT.thorough]} effort: deeper and slower, costs more`);
@@ -8423,6 +8619,15 @@ function customizeFirstRun(
     }
     if (step === 2) {
       const distribution = choices.candidate.stamp.distribution;
+      // Kiro IDE's row asks only when kiro-cli is there to read; without it
+      // the step says model access comes with Kiro IDE, as before.
+      if (distribution === "kiro-ide" && choices.kiro === undefined) choices.kiro = kiroSessionFor(distribution);
+      if (distribution === "kiro-ide" && choices.kiro) {
+        process.stdout.write("  Step 2 of 6 - Session model\n");
+        choices.provider = "harness-managed";
+        askKiroSessionModel(choices.kiro, null, true);
+        return;
+      }
       if (distribution === "kiro") {
         process.stdout.write("  Step 2 of 6 - Session model\n");
         choices.provider = "harness-managed";
@@ -8594,11 +8799,14 @@ function customizeFirstRun(
     process.stdout.write("  Your choices - Enter to apply, or a number to change:\n");
     process.stdout.write(`    1. Harness      ${choices.candidate.descriptor.productName}\n`);
     const kiroCli = choices.candidate.stamp.distribution === "kiro";
-    if (kiroCli) {
-      // A harness changed to Kiro CLI here has not visited step 2: show the
-      // session it would keep, read now; step 2 is one number away.
-      if (choices.kiro === undefined) choices.kiro = kiroSessionFor("kiro");
-      writeMenuRow("    2. Model        ", firstRunKiroSummary(choices.kiro));
+    // A harness changed to a Kiro row here has not visited step 2: show the
+    // session it would keep, read now; step 2 is one number away. Kiro IDE's
+    // row shows it only when kiro-cli was there to read.
+    if (kiroSessionRow(choices.candidate.stamp.distribution) && choices.kiro === undefined) {
+      choices.kiro = kiroSessionFor(choices.candidate.stamp.distribution);
+    }
+    if (kiroCli || (choices.candidate.stamp.distribution === "kiro-ide" && choices.kiro)) {
+      writeMenuRow(`    2. ${kiroCli ? "Model        " : "Kiro CLI     "}`, firstRunKiroSummary(choices.kiro));
     } else {
       writeMenuRow("    2. Provider     ", `${
         choices.provider === "amazon-bedrock"
@@ -8637,6 +8845,21 @@ function customizeFirstRun(
     }
     process.stdout.write("\n  Enter y, n, or a step number from 1 to 6.\n\n");
   }
+}
+
+// The status line question, asked once at first-run setup on the two hosts
+// that have one; the recommended answer comes first.
+function askStatusLine(projectDir: string, harness: StatusLineHarness): boolean {
+  const hasOwn = hasOwnStatusLine(projectDir, harness);
+  const answers = harness === "claude" ? claudeStatusLineAnswers(hasOwn) : codexStatusLineAnswers(hasOwn);
+  process.stdout.write("\n");
+  writeMenuRow("  ", harness === "claude" ? CLAUDE_STATUS_LINE_QUESTION : CODEX_STATUS_LINE_QUESTION);
+  process.stdout.write("\n");
+  for (const [index, answer] of answers.entries()) {
+    writeMenuRow(`    ${index + 1}. `, `${answer.label}${index === 0 ? "  (recommended)" : ""}`);
+  }
+  process.stdout.write("\n");
+  return answers[promptChoice("  Choice", answers.length, 1) - 1].on;
 }
 
 async function runFirstRunWizard(projectDir: string): Promise<boolean> {
@@ -8755,7 +8978,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   } else if (candidate.stamp.distribution === "kiro") {
     writeMenuRow(
       recommendedDetail,
-      "Records balanced (default): medium effort for the whole Kiro session, saved in your personal Kiro settings for every Kiro project.",
+      "Records balanced (default): medium effort for the whole interactive Kiro CLI session, saved in your personal Kiro settings for every Kiro project; an effort you already saved for your model stays.",
     );
   } else if (sessionSetsAgentModels(modelHarness(candidate.stamp.distribution))) {
     writeMenuRow(
@@ -8797,9 +9020,11 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
       opencodeDefault: true,
     };
     // The recommended defaults include a named session model, so Kiro auto
-    // asks the one model question; a named model asks nothing.
+    // asks the one model question; a named model asks nothing, and its saved
+    // effort stays (the preset only fills one the person has not saved).
     if (candidate.stamp.distribution === "kiro") {
       choices.kiro = kiroSessionFor(candidate.stamp.distribution);
+      if (choices.kiro) choices.kiro.fillEffortOnly = true;
       const current = choices.kiro?.session.model ?? null;
       if (choices.kiro && (!current || kiroModelRetired(choices.kiro))) {
         process.stdout.write("\n");
@@ -8814,6 +9039,23 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
         );
       }
     }
+    // Kiro IDE's row saves only Kiro CLI's model. In Kiro IDE's own terminal,
+    // where the person is setting up Kiro IDE, nothing is asked and Kiro's
+    // model list is not fetched. Elsewhere a retired model is asked for again,
+    // and Kiro auto is asked with Enter keeping it.
+    if (candidate.stamp.distribution === "kiro-ide") {
+      choices.kiro = kiroSessionFor(candidate.stamp.distribution);
+      const current = choices.kiro?.session.model ?? null;
+      if (choices.kiro && inEditor) {
+        choices.kiro.unasked = true;
+      } else if (choices.kiro && current && kiroModelRetired(choices.kiro)) {
+        process.stdout.write("\n");
+        choices.kiro.setModel = chooseKiroSessionModel(choices.kiro, null, kiroRetiredIntro(current));
+      } else if (choices.kiro && !current) {
+        process.stdout.write("\n");
+        choices.kiro.setModel = chooseKiroSessionModel(choices.kiro, null, kiroIdeRowAutoIntro(), true);
+      }
+    }
   } else {
     choices = customizeFirstRun(projectDir, candidate, candidates, detection);
   }
@@ -8823,6 +9065,10 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   }
   if (choices.candidate.stamp.distribution === "kiro-ide" && kiroTerminalQuestionDue()) {
     choices.kiroTerminalPowerShell = promptYesDefault(`\n  ${KIRO_TERMINAL_QUESTION}`, true);
+  }
+  const statusHarness = statusLineHarness(choices.candidate.stamp.distribution);
+  if (statusHarness && readStatusLineChoice(projectDir) === null) {
+    choices.statusLineOn = askStatusLine(projectDir, statusHarness);
   }
   const snapshot = snapshotFirstRunMutationPaths(projectDir, choices);
   let preserveSnapshot = false;
@@ -8840,6 +9086,10 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     if (choices.kiroTerminalPowerShell !== undefined) {
       process.stdout.write("\n");
       writeMenuRow("  ", applyKiroTerminalAnswer(projectDir, choices.kiroTerminalPowerShell));
+    }
+    if (statusHarness && choices.statusLineOn !== undefined) {
+      process.stdout.write("\n");
+      writeMenuRow("  ", applyStatusLineAnswer(projectDir, statusHarness, choices.statusLineOn));
     }
     renderFirstRunEnding(projectDir, choices, kiroResult);
   } catch (error) {
@@ -9303,14 +9553,17 @@ function planRootIntegrations(
     }
     const currentBytes = targetRegular ? readFileSync(targetPath) : Buffer.alloc(0);
     const current = currentBytes.toString("utf-8");
-    if (integration.path === ".gitignore" && !Buffer.from(current, "utf-8").equals(currentBytes)) {
+    // A file that is not valid UTF-8 would be written back with each such byte
+    // replaced, so config writes none (session start leaves it alone too,
+    // aidlc-includes.ts). One config would leave as it is stays as it is.
+    const lossless = Buffer.from(current, "utf-8").equals(currentBytes);
+    const notUtf8 = (): void => {
       actions.push({
-        path: integration.path,
+        path: targetRel,
         action: "conflict",
-        detail: "gitignore is not valid UTF-8; convert its encoding before config",
+        detail: `${targetRel} is not valid UTF-8; convert its encoding before config`,
       });
-      continue;
-    }
+    };
     const priorContribution = prior?.rootContributions[integration.path];
     if (integration.policy === "managed-block") {
       const marker = integration.marker || basename(integration.path);
@@ -9451,6 +9704,8 @@ function planRootIntegrations(
       };
       if (value === current) {
         actions.push({ path: integration.path, action: "preserve", detail: keptTitle ? KEPT_TITLE_LINE_DETAIL : undefined });
+      } else if (!lossless) {
+        notUtf8();
       } else {
         operations.push(writeOperation(integration.path, value, expected(targetPath)));
         actions.push({
@@ -9582,6 +9837,8 @@ function planRootIntegrations(
       const semanticChanged = canonical(targetValue) !== canonical(current ? JSON.parse(withoutBom(current)) : {});
       if (!semanticChanged) {
         actions.push({ path: integration.path, action: "preserve" });
+      } else if (!lossless) {
+        notUtf8();
       } else {
         const value = jsonFileText(target, current);
         operations.push(writeOperation(integration.path, value, expected(targetPath)));
@@ -9656,6 +9913,8 @@ function planRootIntegrations(
       };
       if (value === current) {
         actions.push({ path: integration.path, action: "preserve" });
+      } else if (!lossless) {
+        notUtf8();
       } else {
         operations.push(writeOperation(integration.path, value, expected(targetPath)));
         actions.push({ path: integration.path, action: targetExists ? "merge" : "create" });
@@ -9703,6 +9962,8 @@ function planRootIntegrations(
       };
       if (merged.text === current) {
         actions.push({ path: targetRel, action: "preserve" });
+      } else if (!lossless) {
+        notUtf8();
       } else {
         operations.push(writeOperation(targetRel, merged.text, expected(targetPath)));
         actions.push({
@@ -9767,6 +10028,8 @@ function planRootIntegrations(
       const semanticChanged = canonical(targetValue) !== canonical(current ? JSON.parse(withoutBom(current)) : {});
       if (!semanticChanged) {
         actions.push({ path: integration.path, action: "preserve" });
+      } else if (!lossless) {
+        notUtf8();
       } else {
         operations.push(writeOperation(
           integration.path,
@@ -9970,6 +10233,7 @@ type KiroModelsPlan =
 // The Kiro CLI session write for a `config models` run. Setup's own children
 // defer it: first-run setup writes the session itself, last.
 function kiroModelsPlan(input: {
+  distribution: string;
   setModel?: string;
   preset: KiroPreset | null;
   fetchLevels: boolean;
@@ -9981,7 +10245,7 @@ function kiroModelsPlan(input: {
   if (process.env.AIDLC_CONFIG_DEFER_KIRO_SESSION === "1" && !setByDotenvFile("AIDLC_CONFIG_DEFER_KIRO_SESSION")) {
     return { plan: null };
   }
-  const kiro = input.kiro ?? kiroSessionFor("kiro");
+  const kiro = input.kiro ?? kiroSessionFor(input.distribution);
   if (!kiro) {
     if (input.setModel) {
       return {
@@ -9994,7 +10258,7 @@ function kiroModelsPlan(input: {
     }
     return {
       plan: null,
-      ...(input.preset
+      ...(kiroSessionRowPlan(input.distribution, input.preset).preset
         ? {
           note: `Kiro CLI settings could not be read, so the ${input.preset} preset's session effort was not saved. Run \`${
             configCommand("models")
@@ -10018,7 +10282,7 @@ function kiroModelsPlan(input: {
       return {
         error: usage(
           `${input.setModel} is not offered on your Kiro account`,
-          configCommand("models"),
+          kiroSessionModelsCommand(input.distribution),
         ),
       };
     }
@@ -10028,10 +10292,11 @@ function kiroModelsPlan(input: {
       cli: kiro.cli,
       session: kiro.session,
       ...(input.setModel ? { setModel: input.setModel } : {}),
-      preset: input.preset,
+      ...kiroSessionRowPlan(input.distribution, input.preset),
       fetchLevels: input.fetchLevels,
       keepExistingEffort: input.keepExistingEffort,
-      modelsCommand: configCommand("models"),
+      modelsCommand: kiroSessionModelsCommand(input.distribution),
+      retryCommand: kiroSessionRetryCommand(input.distribution, input.setModel),
       doctorCommand: `${aidlcInvocation()} doctor`,
     },
   };
@@ -10089,6 +10354,7 @@ function kiroSessionData(result: KiroSessionResult): Record<string, unknown> {
       model: result.model,
       effort: result.effort,
       saved: result.saved,
+      ...(result.wouldSave ? { wouldSave: result.wouldSave } : {}),
       lines: result.lines,
     },
   };
@@ -10097,21 +10363,27 @@ function kiroSessionData(result: KiroSessionResult): Record<string, unknown> {
 async function emitKiroSessionResult(
   result: KiroSessionResult,
   options: ReturnType<typeof globalOptions>,
+  plan: KiroSessionPlan,
 ): Promise<void> {
   if (options.mode === "human") writeKiroSessionLines(result.lines);
+  const sessionModel = plan.kiroCliOnly ? "Kiro CLI session model" : "Kiro session model";
   emitResult(
     result.ok
       ? success(
-        result.saved.model || result.saved.effort ? "saved the Kiro session model" : "session model unchanged",
+        result.wouldSave?.model || result.wouldSave?.effort
+          ? `would save the ${sessionModel}`
+          : result.saved.model || result.saved.effort
+          ? `saved the ${sessionModel}`
+          : "session model unchanged",
         kiroSessionData(result),
       )
       : {
         ...failure(
           result.saved.model
             ? `Kiro saved the session model ${result.saved.model} but not its effort`
-            : "the Kiro session model was not saved",
+            : `the ${sessionModel} was not saved`,
           EXIT.actionNeeded,
-          configCommand("models"),
+          plan.retryCommand ?? plan.modelsCommand,
         ),
         status: "action-needed",
         data: kiroSessionData(result),
@@ -10222,10 +10494,12 @@ function prepareModelsSection(
   }
 
   const kiroCli = selected.distribution === "kiro";
+  // Kiro IDE's row takes a session model for Kiro CLI too, the model only.
+  const kiroIdeRow = selected.distribution === "kiro-ide";
   const sessionModel = valueAfter(argv, "--session-model");
-  if (sessionModel !== undefined && !kiroCli) {
+  if (sessionModel !== undefined && !kiroCli && !kiroIdeRow) {
     emitResult(
-      usage("--session-model applies to Kiro CLI projects only", configCommand("models --help")),
+      usage("--session-model applies to Kiro projects only", configCommand("models --help")),
       options,
     );
     return null;
@@ -10256,6 +10530,7 @@ function prepareModelsSection(
         return null;
       }
       const planned = kiroModelsPlan({
+        distribution: selected.distribution,
         kiro,
         setModel: kiro.setModel.id,
         preset: currentKiroPreset,
@@ -10278,6 +10553,7 @@ function prepareModelsSection(
   );
   if (sessionModel !== undefined && !policyFlagGiven) {
     const planned = kiroModelsPlan({
+      distribution: selected.distribution,
       setModel: sessionModel,
       preset: currentKiroPreset,
       fetchLevels: true,
@@ -10334,11 +10610,17 @@ function prepareModelsSection(
     targetModels,
   );
   const fetchKiroLevels = sessionModel !== undefined || (configInputIsTty() && !options.yes);
+  // Only a request about the session (a preset, a preset applied with --from,
+  // or a session model) writes the person's Kiro session; an agent or group
+  // setting leaves their saved effort alone.
+  const kiroSessionRequest = sessionModel !== undefined ||
+    (kiroCli && (argv.includes("--preset") || argv.includes("--from")));
   if (canonical(targetCurrentSettings) === canonical(targetNextSettings)) {
     // The recorded policy is already this, but the person's Kiro session may
     // not carry it yet (a new model, or an effort changed inside Kiro).
-    if (kiroCli && (sessionModel !== undefined || currentKiroPreset)) {
+    if (kiroSessionRequest && (sessionModel !== undefined || currentKiroPreset)) {
       const planned = kiroModelsPlan({
+        distribution: selected.distribution,
         ...(sessionModel !== undefined ? { setModel: sessionModel } : {}),
         preset: currentKiroPreset,
         fetchLevels: fetchKiroLevels,
@@ -10361,9 +10643,10 @@ function prepareModelsSection(
   const next = modelPolicyForHarness(nextResolved.models, harness);
   let kiroPlan: KiroSessionPlan | undefined;
   let kiroNote: string | undefined;
-  if (kiroCli) {
+  if (kiroSessionRequest) {
     const nextKiroPreset = isKiroPreset(next?.preset) ? next.preset : null;
     const planned = kiroModelsPlan({
+      distribution: selected.distribution,
       ...(sessionModel !== undefined ? { setModel: sessionModel } : {}),
       preset: nextKiroPreset,
       fetchLevels: fetchKiroLevels,
@@ -11567,6 +11850,7 @@ export async function main(
             dryRun: argv.includes("--dry-run"),
           }),
           options,
+          preparedModels.kiroOnly,
         );
         return;
       }
@@ -11664,9 +11948,12 @@ export async function main(
     emitResult(configureChannel(argv), options);
     return;
   }
+  if (argv.includes("--statusline")) {
+    emitResult(statusLineSwitch(argv), options);
+    return;
+  }
   if (argv.includes("--pin") || argv.includes("--unpin")) {
     emitResult(await configureProjectPin(argv, {
-      activeWorkflows: activeWorkflowDescriptions,
       // A project with several harnesses refreshes each one by name.
       refreshCommands: (dir) => {
         const harnesses = discoverProjectHarnesses(dir).map((harness) => harness.distribution).sort();
@@ -12173,6 +12460,11 @@ export async function main(
       diagnosticsContext?.overrides ?? choicesContext?.overrides,
     );
     prepared.notes.unshift(...sourceNotes);
+    // A release that no longer ships AI-DLC's status line in the shared Claude
+    // Code settings takes it out of there; the baseline then says the project
+    // had it, so each clone keeps it in its own settings (C1).
+    const statusLineKept = prior?.statusLineKept === true ||
+      (descriptor.distribution === "claude" && claudeStatusLineLeavesTeamFile(projectDir, prepared.root, descriptor.harnessDir));
     const preparedRoot = prepared.root;
     const preparedRegenerated = prepared.regenerated;
     let recordedProjectMcp: "defaults" | "none" | undefined;
@@ -12450,7 +12742,11 @@ export async function main(
     // Quiet output is one line when clean. Like the outstanding-actions line,
     // each record-hiding rule and each switch warning adds one Warning line, on
     // dry run and apply.
-    const quietWarnings = [...hiddenRecords, ...switchWarnings];
+    // opencode replaces a global short-form permission rule with the bash or
+    // edit map AI-DLC writes into this project; the person hears it once here.
+    const shortForm = stamp.distribution === "opencode" ? openCodeGlobalShortFormNote() : null;
+    if (shortForm) prepared.notes.push(shortForm);
+    const quietWarnings = [...hiddenRecords, ...switchWarnings, ...(shortForm ? [shortForm] : [])];
     const withQuietWarnings = (message: string): string =>
       options.mode === "quiet" && quietWarnings.length > 0
         ? `${message}${quietWarnings.map((warning) => `\nWarning: ${warning}`).join("")}`
@@ -12465,6 +12761,7 @@ export async function main(
       ...(!selected.projectProjection || prior?.shippedOnly ? { shippedOnly: true as const } : {}),
       entries: prepared.entries,
       rootContributions,
+      ...(statusLineKept ? { statusLineKept: true as const } : {}),
     };
     const baselineRel = join(descriptor.harnessDir, "tools", "data", "aidlc-manifest.json");
     operations.push(writeOperation(
@@ -12818,6 +13115,21 @@ export async function main(
     ) {
       changes.push(applyKiroTerminalAnswer(projectDir, true));
     }
+    // AI-DLC's status line asks nothing here: a project that already had it
+    // keeps it for this person (said once when it covers their own), and a
+    // project that did not gets none until someone chooses it.
+    const statusHarness = statusLineHarness(descriptor.distribution);
+    if (statusHarness && !recordOnly) {
+      try {
+        const kept = applyStatusLineDefault(projectDir, statusHarness);
+        if (kept?.line) prepared.notes.push(kept.line);
+      } catch (error) {
+        prepared.notes.push(
+          `AI-DLC's status line was not kept for you (${error instanceof Error ? error.message : String(error)}); ` +
+            `${statusLineEntry(statusHarness)} --statusline on puts it back.`,
+        );
+      }
+    }
     if (options.mode === "human") writeMenuLines("", changes.map((line) => `  ${line}`));
     // Cursor may skip project hooks in a folder outside any git repository
     // (issue #976), so such a project gets `git init` as its first next step,
@@ -12941,7 +13253,13 @@ export async function main(
     );
     emitResult(
       kiroUnsaved
-        ? { ...configured, ok: false, code: EXIT.actionNeeded, status: "action-needed", remediation: configCommand("models") }
+        ? {
+          ...configured,
+          ok: false,
+          code: EXIT.actionNeeded,
+          status: "action-needed",
+          remediation: pendingKiroSession?.retryCommand ?? configCommand("models"),
+        }
         : configured,
       options,
     );
