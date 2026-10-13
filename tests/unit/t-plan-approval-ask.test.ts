@@ -365,6 +365,25 @@ describe("the engine asks for Plan Approval", () => {
       .toBe("Already changed before you approved (2 files): src/extra.ts, src/more.ts.");
   });
 
+  // An AI-DLC update while the plan waits rewrites AI-DLC's own files (Codex's
+  // skill under .agents/skills/): nothing ran ahead of the plan, so the
+  // question names only the person's source.
+  test("the plan question never names AI-DLC's own files an update changed", () => {
+    const proj = project();
+    const skill = join(proj, ".agents", "skills", "aidlc", "SKILL.md");
+    mkdirSync(dirname(skill), { recursive: true });
+    writeFileSync(skill, "AI-DLC 1\n", "utf-8");
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    askFor(proj);
+    writeFileSync(skill, "AI-DLC 2\n", "utf-8");
+    const updated = next(proj);
+    expect(updated.kind, JSON.stringify(updated)).toBe("ask");
+    expect((updated.plan_approval.targets ?? [])[0].summary.some((line) => line.startsWith("Already changed"))).toBe(false);
+    writeFileSync(join(proj, "src", "extra.ts"), "export const extra = 1;\n", "utf-8");
+    expect(next(proj).plan_approval.targets?.[0].summary.at(-1)).toBe("Already changed before you approved: src/extra.ts.");
+  });
+
   // The line measures from the stage's start or from the previous plan approval,
   // whichever is later, and leaves out what the plans approved since then name:
   // an earlier Unit's approved build is not something that ran ahead.

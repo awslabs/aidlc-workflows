@@ -6028,6 +6028,127 @@ process.stdin.on("end", () => server.stop(true));
     expect(currentSwarmSourceMergeChain(proj, "code-generation").state).toBe("ready");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  // An AI-DLC update the person takes during the build rewrites AI-DLC's own
+  // files in the main checkout (Codex's skill under .agents/skills/). None of
+  // them is a Unit's source, so under strict the landing, the next Unit's
+  // landing and the stage's completion carry on as if nothing changed.
+  function installSkill(proj: string, text: string): void {
+    mkdirSync(join(proj, ".agents", "skills", "aidlc"), { recursive: true });
+    writeFileSync(join(proj, ".agents", "skills", "aidlc", "SKILL.md"), text, "utf-8");
+  }
+
+  function installedProject(): string {
+    const proj = makeFixture();
+    installSkill(proj, "AI-DLC 1\n");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "install AI-DLC"]);
+    restartBaseline(proj);
+    return proj;
+  }
+
+  function mergeUnit(proj: string, unit: string) {
+    const merge = spawnSync(BUN, [
+      WORKTREE_TOOL, "merge", "--slug", unit, "--target", "main", "--strategy", "squash", "--project-dir", proj,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
+    return { status: merge.status, out: `${merge.stdout}${merge.stderr}` };
+  }
+
+  test("under strict, an AI-DLC update during the build never stops the merge", () => {
+    const proj = installedProject();
+    finalizeKeptUnit(proj);
+    installSkill(proj, "AI-DLC 2\n");
+    const merged = mergeUnit(proj, "kept");
+    expect(merged.status, merged.out).toBe(0);
+    expect(currentSwarmSourceMergeChain(proj, "code-generation").state).toBe("ready");
+    expect(readFileSync(join(proj, ".agents", "skills", "aidlc", "SKILL.md"), "utf-8")).toBe("AI-DLC 2\n");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, an AI-DLC update between two Units' merges never stops the second", () => {
+    const proj = installedProject();
+    const units = ["alpha", "beta"];
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", units.join(","), "--base", "main"]);
+    for (const unit of units) {
+      writeFileSync(join(wtPath(proj, unit), `${unit}.ts`), `export const ${unit} = 1;\n`, "utf-8");
+      recordReview(wtPath(proj, unit), "code-generation", REVIEWER, unit);
+    }
+    const finalized = runSwarm(proj, [
+      "finalize", "--batch", "1", "--units", units.join(","), "--claimed", units.join(","),
+      "--check-cmd", `"${process.execPath}" -e "0"`,
+    ]);
+    expect(finalized.rc, finalized.diagnostic).toBe(0);
+    const first = mergeUnit(proj, "alpha");
+    expect(first.status, first.out).toBe(0);
+    installSkill(proj, "AI-DLC 2\n");
+    const second = mergeUnit(proj, "beta");
+    expect(second.status, second.out).toBe(0);
+    expect(currentSwarmSourceMergeChain(proj, "code-generation").state).toBe("ready");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, an AI-DLC update after the last merge does not stop the stage completing", () => {
+    const proj = installedProject();
+    finalizeKeptUnit(proj);
+    const merged = mergeUnit(proj, "kept");
+    expect(merged.status, merged.out).toBe(0);
+    const path = seededStateFile(proj);
+    writeFileSync(path, readFileSync(path, "utf-8").replace(
+      /^- \*\*Construction Autonomy Mode\*\*: .*$/m, "- **Construction Autonomy Mode**: autonomous"));
+    installSkill(proj, "AI-DLC 2\n");
+    const r = guarded(proj, ["gate-start", "code-generation"]);
+    expect(r.out).not.toContain("no longer matches the final reviewed swarm merge");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, the person's own edit beside an AI-DLC update is the only file the merge names", () => {
+    const proj = installedProject();
+    finalizeKeptUnit(proj);
+    installSkill(proj, "AI-DLC 2\n");
+    writeFileSync(join(proj, "notes.ts"), "export const notes = 1;\n", "utf-8");
+    const refused = mergeUnit(proj, "kept");
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("the main checkout source changed since the stage-entry baseline (notes.ts).");
+    // Undoing their own edit is enough: the update stays.
+    rmSync(join(proj, "notes.ts"));
+    const retry = mergeUnit(proj, "kept");
+    expect(retry.status, retry.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("with Guard Policy relaxed, an AI-DLC update alone is not kept as the person's change", () => {
+    const proj = installedProject();
+    setPolicy(proj, "relaxed (set by you)");
+    finalizeKeptUnit(proj);
+    installSkill(proj, "AI-DLC 2\n");
+    const merged = mergeUnit(proj, "kept");
+    expect(merged.status, merged.out).toBe(0);
+    expect(merged.out).not.toContain("during the build; kept them");
+    expect(readAllAuditShards(proj)).not.toContain("**Event**: CHANGE_ACCEPTED");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // A landing recorded by an earlier release kept no listing: the next one
+  // compares fingerprints as it always did.
+  test("a landing recorded without its listing keeps the fingerprint compare for the next Unit", () => {
+    const proj = installedProject();
+    const units = ["alpha", "beta"];
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", units.join(","), "--base", "main"]);
+    for (const unit of units) {
+      writeFileSync(join(wtPath(proj, unit), `${unit}.ts`), `export const ${unit} = 1;\n`, "utf-8");
+      recordReview(wtPath(proj, unit), "code-generation", REVIEWER, unit);
+    }
+    const finalized = runSwarm(proj, [
+      "finalize", "--batch", "1", "--units", units.join(","), "--claimed", units.join(","),
+      "--check-cmd", `"${process.execPath}" -e "0"`,
+    ]);
+    expect(finalized.rc, finalized.diagnostic).toBe(0);
+    expect(mergeUnit(proj, "alpha").status).toBe(0);
+    expect(readAllAuditShards(proj)).toContain("**Source Listing**: sha256:");
+    for (const name of readdirSync(seededAuditDir(proj)).filter((file) => file.endsWith(".md"))) {
+      const shard = join(seededAuditDir(proj), name);
+      writeFileSync(shard, readFileSync(shard, "utf-8").replace(/^\*\*Source Listing\*\*: .*\r?\n/gm, ""), "utf-8");
+    }
+    installSkill(proj, "AI-DLC 2\n");
+    const second = mergeUnit(proj, "beta");
+    expect(second.status).not.toBe(0);
+    expect(second.out).toContain("the main checkout source changed after the previous reviewed-source merge");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("with Guard Policy off, a changed protected test file is said, not refused", () => {
     for (const policy of ["strict", "off"]) {
       const proj = makeFixture();
