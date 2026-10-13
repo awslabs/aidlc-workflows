@@ -558,6 +558,22 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     expect(r.out).not.toMatch(/fail {2}Keyword overlap/);
   });
 
+  // scope save keeps a hint lowercased and calls `CVE` and `cve` one hint, so
+  // doctor does too.
+  test("15b: two scopes share a hint in different case -> the same warning", () => {
+    const p = track(createTestProject());
+    const mapping = fixtureFile(
+      "kw-mapping-case",
+      JSON.stringify({
+        "security-patch": { depth: "Minimal", keywords: ["CVE"], description: "fixture A", stages: {} },
+        "cve-fix": { depth: "Minimal", keywords: ["cve"], description: "fixture B", stages: {} },
+      }),
+    );
+    const r = doctor(p, { AIDLC_SCOPE_MAPPING: mapping });
+    expect(r.out).toMatch(/warn {2}Keyword overlap: 1 shared hint/);
+    expect(r.out).toContain('"cve" is a hint of cve-fix, security-patch');
+  });
+
   // Claude Code's hooks leave a heartbeat on the person's first chat message,
   // so before any heartbeat doctor names its first-chat step instead.
   test("16: heartbeat advisory on fresh install -> 'have not run in this project yet'", () => {

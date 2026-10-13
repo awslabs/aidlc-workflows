@@ -2003,23 +2003,32 @@ export function killSwitchAdvisories(
   );
 }
 
+/** Every plan's hints, lowercased, each with the plans that have it, sorted:
+ *  the one comparison behind keywordCollisions and doctor's Keyword overlap
+ *  row (case-insensitive exact equality, as scope save lowercases a hint). */
+export function hintHolders(): Map<string, string[]> {
+  const holders = new Map<string, string[]>();
+  for (const [scope, def] of Object.entries(loadScopeMapping())) {
+    for (const kw of def.keywords ?? []) {
+      const list = holders.get(kw.toLowerCase()) ?? [];
+      if (!list.includes(scope)) list.push(scope);
+      holders.set(kw.toLowerCase(), list);
+    }
+  }
+  for (const list of holders.values()) list.sort();
+  return holders;
+}
+
 /** Check proposed (granted-at-the-gate) keywords against the keywords the
  *  existing scopes already have - the same loadScopeMapping data the plan
  *  proposal step lists as each plan's hints for the agent to weigh. Nothing
  *  picks a plan by a hint any more, so a shared one is a note naming the other
- *  plans, never a refusal: one line per shared hint. Comparison is
- *  case-insensitive exact equality. */
+ *  plans, never a refusal: one line per shared hint. */
 export function keywordCollisions(granted: string[]): string[] {
-  const mapping = loadScopeMapping();
+  const all = hintHolders();
   const notes: string[] = [];
   for (const kw of granted) {
-    const holders = Object.keys(mapping)
-      .filter((scope) =>
-        (mapping[scope]?.keywords ?? []).some(
-          (k) => k.toLowerCase() === kw.toLowerCase()
-        )
-      )
-      .sort();
+    const holders = all.get(kw.toLowerCase()) ?? [];
     if (holders.length === 1) {
       notes.push(`The hint "${kw}" is also ${holders[0]}'s; the plan proposal lists it under both.`);
     } else if (holders.length > 1) {
@@ -3960,7 +3969,7 @@ Common forms:
                                        Validate an arbitrary EXECUTE/SKIP grid
                                        (no --proposal reads the proposalPath detect --json prints;
                                        --strict rejects a starved required input;
-                                       --keywords rejects keywords an existing scope claims;
+                                       --keywords notes a keyword another scope has, as an advisory;
                                        --report matches a code-findings report to bugfix or security-patch only)
   aidlc-graph ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]
                                        Deterministic ARS arithmetic: composite + bands,

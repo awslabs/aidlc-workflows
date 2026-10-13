@@ -101,6 +101,7 @@ import {
   loadComposedScopeRecords,
   loadGraph,
   loadRules,
+  hintHolders,
   keywordCollisions,
   loadScopeGrid,
   saveComposedScope,
@@ -6839,18 +6840,7 @@ export async function collectDoctorReport(
   // hint any more (the plan proposal lists every plan's hints for the agent to
   // weigh), so a shared one is a warning, not a failure.
   try {
-    const keywordToScopes = new Map<string, string[]>();
-    const mapping = loadScopeMapping();
-    for (const [scope, def] of Object.entries(mapping)) {
-      for (const kw of def.keywords ?? []) {
-        const list = keywordToScopes.get(kw) ?? [];
-        list.push(scope);
-        keywordToScopes.set(kw, list);
-      }
-    }
-    const conflicts = [...keywordToScopes.entries()].filter(
-      ([, scopes]) => scopes.length > 1
-    );
+    const conflicts = [...hintHolders().entries()].filter(([, scopes]) => scopes.length > 1);
     results.push({
       pass: conflicts.length === 0,
       ...(conflicts.length > 0 ? { severity: "warn" as const } : {}),
