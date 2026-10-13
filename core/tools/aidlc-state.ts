@@ -71,6 +71,8 @@ import {
   resolveChangeControl,
   resolveCeremony,
   claimAttemptFields,
+  boltAbortedFields,
+  reviewAttemptWindow,
   codekbDir,
   codekbRepoName,
   codekbStoreIsCurrent,
@@ -1233,11 +1235,25 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
     if (updated !== content) {
       const words = requireHumanConstructionPolicyChange(pd, content, field, args[0]);
       emitConstructionPolicySet(pd, content, updated, field, args[0], words);
+      if (field === "Construction Execution" && args[0] === "serial") closePreparedBolts(pd, updated);
     }
     writeStateFile(pd, updated);
     keepPlanQuestionOver(pd, content, updated);
     console.log(JSON.stringify({ updated: true, field, value: args[0], ...constructionPolicyNotice(content, updated, field) }));
   });
+}
+
+// Built one after another, each Unit is built in the project itself: the Bolts
+// a side-by-side build prepared and never landed are closed, their worktrees
+// left as they are, so each Unit's checkpoint reads its own build.
+function closePreparedBolts(pd: string, state: string): void {
+  const view = reviewAttemptWindow(pd, state, findStageBySlug("code-generation")!);
+  for (const unit of view.openBoltUnits) {
+    const started = view.events.findLast((row) => row.event === "BOLT_STARTED" &&
+      (auditBlockField(row.block, "Bolt names") ?? "").split(",").map((name) => name.trim()).includes(unit));
+    const slug = started ? auditBlockField(started.block, "Bolt slug") : null;
+    if (slug) emitAudit(pd, "BOLT_FAILED", boltAbortedFields(pd, unit, slug, "the Units are built one after another now"));
+  }
 }
 
 // Asked for while the code plan's question waits, a change to how Construction

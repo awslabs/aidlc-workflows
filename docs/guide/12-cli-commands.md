@@ -1892,6 +1892,11 @@ back, or turning checkpoints off while stage-major), keeps them too. A Unit you
 reopened before the switch (a jump back, Redo, or a checkpoint's Request Changes)
 still gets its redo, and keeps it once it is done.
 
+Switching to serial after a side-by-side build was prepared (for example "build them
+one at a time instead" after the parallel start stopped) keeps the plans you approved:
+each Unit is built from its plan in the project itself, with no new plan question. The
+worktrees that build prepared stay where they are; their Bolts are recorded as closed.
+
 Execution is separate from approval: swarm works with guided (`gated`) or
 automatic (`autonomous`) completion. Unit-major stays serial and refuses a
 contradictory swarm setting; run `aidlc engine state set-construction-execution serial` before

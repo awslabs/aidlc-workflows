@@ -934,7 +934,7 @@ and do not enforce that scope comparison.
 |---|---|---|
 | `BOLT_STARTED` | `tools/aidlc-bolt.ts` | Accepts CSV bolt names for parallel batches; a modern `--worktree` row propagates the immutable Base commit and content-addressed raw-aware Base Source Listing attested at worktree creation |
 | `BOLT_COMPLETED` | `tools/aidlc-bolt.ts` | Paired with a prior `BOLT_STARTED` |
-| `BOLT_FAILED` | `tools/aidlc-bolt.ts` (`fail` + `abort`) | `--succeeded-siblings` captures parallel-batch survivors; `abort` adds `Reason: aborted` field for sub-classification |
+| `BOLT_FAILED` | `tools/aidlc-bolt.ts` (`fail` + `abort`), `tools/aidlc-state.ts` (`set-construction-execution serial`) | `--succeeded-siblings` captures parallel-batch survivors; `abort` adds `Reason: aborted` field for sub-classification, and the switch to serial writes the same row for each Bolt a side-by-side build prepared and never landed |
 | `AUTONOMY_MODE_SET` | `tools/aidlc-bolt.ts` | Atomically updates `Construction Autonomy Mode` field; validates field exists first (audit-first) |
 
 ### Session

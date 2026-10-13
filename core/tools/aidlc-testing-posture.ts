@@ -45,6 +45,7 @@ import {
   clearEngineAskMark,
   clearPlanApprovalReceipt,
   readActiveDirectiveMarker,
+  readIssuedDirectiveMarker,
   readAuditShardEvents,
   readBaselineSourceSnapshot,
   readPlanApprovalChallenge,
@@ -2612,7 +2613,12 @@ function codeGenerationAuthority(
     throw new Error("Code Generation approval authority requires an active workflow state");
   }
   const state = readFileSync(statePath, "utf-8");
-  const marker = readActiveDirectiveMarker(projectDir, state);
+  // While `next` asks about the step it is about to issue, a state write since
+  // the engine's last step (a Construction setting, the walking-skeleton
+  // stance, the verification command) made that step out of date, not the
+  // person's approval: it binds the plan, the Unit and the attempt, below.
+  const marker = readActiveDirectiveMarker(projectDir, state) ??
+    (issued ? readIssuedDirectiveMarker(projectDir) : null);
   if (marker?.version !== 2) {
     throw new Error(
       "Code Generation approval authority is unavailable because the active directive is missing, stale, or legacy; run a fresh `next`",

@@ -44,6 +44,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
+  boltAbortedFields,
   boltSlugForUnit,
   BOLT_INTENT_ID8_REGEX,
   emitError,
@@ -921,13 +922,7 @@ function handleAbort(args: string[]): void {
   // recoverable drift that doctor reconciles via the worktree's local
   // audit if it survived, or by orphan-worktree detection if not.
   try {
-    emitAudit(pd, "BOLT_FAILED", {
-      "Failed Bolt": flags.name,
-      "Bolt slug": flags.slug,
-      "Error summary": `aborted: ${flags.reason}`,
-      Reason: "aborted",
-      ...claimAttemptFields(pd, flags.slug),
-    }, flags.intent, flags.space);
+    emitAudit(pd, "BOLT_FAILED", boltAbortedFields(pd, flags.name, flags.slug, flags.reason), flags.intent, flags.space);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }

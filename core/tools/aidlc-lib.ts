@@ -9954,6 +9954,21 @@ export function readActiveDirectiveMarker(
   }
 }
 
+// The Code Generation step the engine issued last for this work, even when a
+// state write since then made it out of date: the write retired the step, not
+// the work it named. Only a Code Generation step of the current intent; null
+// for any other.
+export function readIssuedDirectiveMarker(projectDir: string): ActiveDirectiveMarker | null {
+  try {
+    const target = resolveActiveDirectiveTarget(projectDir);
+    const marker = readActiveDirectiveMarkerRaw(target.markerPath);
+    return marker?.stage === "code-generation" && (marker.intent_uuid ?? null) === target.intentUuid
+      ? marker : null;
+  } catch {
+    return null;
+  }
+}
+
 // Read the shared/sessionless resume wait under the active-directive lock. The
 // marker is read before state while refreshActiveDirectiveMarker uses the same
 // lock after writing state, so a concurrent state transition either linearizes
@@ -29290,6 +29305,23 @@ export function claimAttemptFields(
   const stamp = applicableTeamUnitScopeStamp(projectDir);
   if (!stamp || (unit !== undefined && stamp.unit !== unit)) return {};
   return { "Attempt Generation": String(stamp.generation) };
+}
+
+// The BOLT_FAILED row that closes a Bolt as aborted: `bolt abort`, and the
+// switch to building the Units one after another. It leaves the worktree as it is.
+export function boltAbortedFields(
+  projectDir: string,
+  name: string,
+  slug: string,
+  reason: string,
+): Record<string, string> {
+  return {
+    "Failed Bolt": name,
+    "Bolt slug": slug,
+    "Error summary": `aborted: ${reason}`,
+    Reason: "aborted",
+    ...claimAttemptFields(projectDir, slug),
+  };
 }
 
 export function eventMatchesClaimAttempt(
