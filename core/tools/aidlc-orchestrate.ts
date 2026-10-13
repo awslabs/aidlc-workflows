@@ -3204,7 +3204,7 @@ function approvedPlanUndoReading(projectDir: string, stateContent: string): stri
 // change to this work: the conductor reads which, the same split as
 // openGateReplyDirective. The person's words never travel in the re-entry
 // report; the engine kept them for the other reading.
-function reentryReplyDirective(requestId: string, undo = "", work: string[] = []): PrintDirective {
+function reentryReplyDirective(requestId: string, undo = "", work: string[] = [], openWork = ""): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   // The pieces of work here by exact name, the one in progress marked: the
   // agent reads whether the words name exactly one ("the auth one" with auth
@@ -3216,8 +3216,10 @@ function reentryReplyDirective(requestId: string, undo = "", work: string[] = []
     `\`${aidlcDispatcherInvocation("intent")} switch <name>\`, say the line it prints, then stop: no \`next\`, no stage, ` +
     "no offer to resume. If their words fit more than one (a word several names share, such as a name that is part " +
     "of another), ask them once in plain words which they meant, then stop.";
+  // One piece here: its name, so the agent compares their words with it.
+  const on = work.length < 2 && openWork !== "" ? ` on "${openWork}"` : "";
   return printDirective(
-    `${undo}Work is in progress, and the person's words may ask to redo, jump to a stage, or start fresh, or may only ` +
+    `${undo}Work is in progress${on}, and the person's words may ask to redo, jump to a stage, or start fresh, or may only ` +
       "ask for it to go on. Read them. If they only ask for the work to go on (such as \"carry on\", \"proceed\" or " +
       `"keep going"), run \`${orchestrate} next\` with nothing after it: the work continues where it stands. If they ` +
       `ask to redo, jump or start fresh, run \`${orchestrate} report --result resumed --choice <redo|jump|fresh>\` with ` +
@@ -7685,10 +7687,11 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 // same holds for the agent's first step after their line, a bare `next` or the
 // `next --resume` a re-entry sends (measured on Claude Code: the open stage came
 // back and their new work was gone): `--resume` is the agent's, never theirs. A
-// later bare `next` is the work in hand. Nothing happens without a chat identity
+// later bare `next` is the work in hand. Their `/aidlc` alone over work in hand
+// is a resume whichever the agent sent. Nothing happens without a chat identity
 // (no record is read), on a read-only probe (an observer learns the directive and
 // never asks), once anything is recorded after their line, or with any other
-// message last (a reply in plain words, a bare `/aidlc`, a utility). Returns
+// message last (a reply in plain words, a utility). Returns
 // their line's arguments when it took them, for the readings that look at the
 // command as typed.
 function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
@@ -7706,11 +7709,17 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
     // hand.
     if (stateContent !== null && !turnIsLatestRow(pd, message.id)) return null;
   } else {
+    // The entry word alone over work in hand picks it back up, as `--resume`
+    // does, whichever the agent sent first: the line decides, not the agent.
+    if (message.settings.length === 0) {
+      if (stateContent === null || aidlcEntryWords(message.text) !== "" || !turnIsLatestRow(pd, message.id)) return null;
+      flags.resume = true;
+      return ["--resume"];
+    }
     // A line of settings alone ("/aidlc --plan-approval off"): `next` names the
     // setter for it, with or without work, once. After the setter has run (its
     // rows follow the turn, or its record is newer than the message) a bare
     // `next` is the work's again.
-    if (message.settings.length === 0) return null;
     if (lineHandedOut(pd, engineSessionId, message.id)) return null;
     if (stateContent !== null ? !turnIsLatestRow(pd, message.id) : settingsKeptSince(pd, engineSessionId, message.at)) return null;
   }
@@ -9567,7 +9576,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
-      emit(reentryReplyDirective(words.id, undo, workNamesHere(pd, selection)));
+      emit(reentryReplyDirective(words.id, undo, workNamesHere(pd, selection), activeWorkLabel(stateContent)));
       return;
     }
   }
