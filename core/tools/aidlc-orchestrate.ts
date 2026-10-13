@@ -12841,21 +12841,33 @@ function unitMajorFinishedWalk(
   return { step: { kind: "covered" }, block, context };
 }
 
-// The step the solo Unit walk has a Unit on, for a plan change the person
-// typed: that Unit, the walk's steps in order, and whether another Unit still
-// owes the step (so "this Unit" and "every Unit from here" differ). Null when
-// the walk is not on a Unit's step.
-type PlanChangeWalk = { stage: string; unit: string; steps: string[]; others: boolean };
+// Where the solo Unit walk has a Unit, for a plan change the person typed:
+// that Unit, the step it is on and how (working on it, or stopped at its
+// summary, paused on it, or at its checkpoint), the walk's steps in order, and
+// whether another Unit still owes the step (so "this Unit" and "every Unit
+// from here" differ). Null when the walk is not on a Unit.
+type PlanChangeWalk = {
+  stage: string;
+  unit: string;
+  at: "work" | "summary" | "paused" | "checkpoint";
+  steps: string[];
+  others: boolean;
+};
 function planChangeWalk(projectDir: string, scope: string, stateContent: string): PlanChangeWalk | null {
   const current = (getField(stateContent, "Current Stage") ?? "").trim();
   const walk = current === "" ? null : unitMajorWalkBeat(projectDir, scope, stateContent, current);
-  if (walk === null || walk.step.kind !== "work") return null;
+  if (walk === null || walk.step.kind === "covered") return null;
+  const steps = walk.block.map((step) => step.slug);
+  if (walk.step.kind === "checkpoint") return { stage: "", unit: walk.step.unit, at: "checkpoint", steps, others: true };
+  if (walk.step.kind === "paused") {
+    return { stage: walk.step.stage, unit: walk.step.checkpoint.unit, at: "paused", steps, others: true };
+  }
   const { stage, unit } = walk.step;
   const done = new Set(unitsWithStageWork(projectDir, stage, walk.context));
   const skipped = unitSkippedUnits(projectDir, stage.slug, undefined, stateContent);
   const others = walk.context.units.some((u) => u !== unit && !done.has(u) && !skipped.has(u) &&
     !kindVacuous(stage, walk.context.kinds?.get(u) ?? null));
-  return { stage: stage.slug, unit, steps: walk.block.map((step) => step.slug), others };
+  return { stage: stage.slug, unit, at: walk.step.kind, steps, others };
 }
 
 // What the stage-work check needs about the Unit DAG, resolved once per call.
@@ -13765,17 +13777,25 @@ function planChangeDirective(
     : null;
   const gateOpen = currentState === "awaiting-approval" && !skip.includes(current) ? current : null;
   // On the Unit walk Current Stage stays on the walk's first step while a
-  // Unit is on a later one: the step the Unit is on is skipped for that Unit
-  // where it stands, or, when the person means every Unit from here, taken
-  // off the plan; another step of the walk named here is a plan change, which
-  // covers every Unit.
+  // Unit is on a later one: the step the Unit is working on is skipped for
+  // that Unit where it stands, or, when the person means every Unit from
+  // here, taken off the plan; another step of the walk named here, or any step
+  // while the Unit is stopped (at a summary, paused, at its checkpoint), is a
+  // plan change, which covers every Unit.
   const walk = plan?.walk ?? null;
-  const unitStep = walk !== null && skip.includes(walk.stage) && walk.stage !== started ? walk : null;
+  const unitStep = walk?.at === "work" && skip.includes(walk.stage) && walk.stage !== started ? walk : null;
   const everyUnit = walk === null ? [] : skip.filter((slug) =>
-    slug !== started && walk.steps.includes(slug) && (slug !== walk.stage || walk.others));
-  const ahead = walk === null ? [] : everyUnit.filter((slug) =>
-    walk.steps.indexOf(slug) > walk.steps.indexOf(walk.stage));
+    slug !== started && walk.steps.includes(slug) && (slug !== unitStep?.stage || unitStep.others));
+  // The walk steps a one-Unit request cannot be carried out for here: those
+  // the Unit has not reached, or every one while it is stopped.
+  const notHere = walk === null ? [] : everyUnit.filter((slug) =>
+    walk.at !== "work" || walk.steps.indexOf(slug) > walk.steps.indexOf(walk.stage));
   const unitName = walk === null ? "" : unitPlainName(walk.unit);
+  const unitIsAt = walk === null ? ""
+    : walk.at === "summary" ? `done with ${name(walk.stage)} and at its summary`
+    : walk.at === "paused" ? `paused on ${name(walk.stage)}`
+    : walk.at === "checkpoint" ? "at its checkpoint"
+    : `on ${name(walk.stage)}`;
   const planSkip = skip.filter((slug) => slug !== started && (unitStep === null || slug !== unitStep.stage || unitStep.others));
   const flips = (skipped: string[], added: string[]): string => [
     ...(skipped.length > 0 ? [`--skip ${skipped.join(",")}`] : []),
@@ -13804,25 +13824,50 @@ function planChangeDirective(
       `--reason ${shellArg(PERSON_ASKED_SKIP_REASON)}`;
   const forTheUnit = unitStep === null ? ""
     : `It can still be run for that Unit with \`${entrySkillInvocation()} --stage ${unitStep.stage} --unit ${unitStep.unit}\`.`;
-  // The Unit's own step named while another Unit still owes it: the agent
-  // reads from the person's words whether they mean that Unit only or every
-  // Unit from here, and asks once only when their words do not say.
-  if (unitStep?.others) {
+  // The Unit's own step named while another Unit still owes it, or with
+  // another walk step: the agent reads from the person's words whether they
+  // mean that Unit only or every Unit from here, and asks once only when their
+  // words do not say.
+  if (unitStep !== null && (unitStep.others || notHere.length > 0)) {
     const runs = (list: (string | null)[]): string =>
       list.filter((c): c is string => c !== null).map((c) => `\`${c}\``).join(", then ");
+    // For that Unit only: its own step is skipped for it, another walk step
+    // named with it is left for that Unit to skip when it gets there, and any
+    // other change is made for the plan; the line names each.
     const rest = planSkip.filter((slug) => slug !== unitStep.stage);
-    const onlyUnit = runs([unitSkip, rest.length > 0 || add.length > 0 ? replan(rest) : null, startedSkip]);
-    const fromHere = runs([replan(planSkip), startedSkip]);
+    const restWalk = rest.filter((slug) => walk!.steps.includes(slug));
+    const restOther = rest.filter((slug) => !walk!.steps.includes(slug));
+    // With no other Unit left to take it, the Unit's own step is skipped for
+    // it either way.
+    const onlyUnit = runs([unitSkip, restOther.length > 0 || add.length > 0 ? replan(restOther) : null, startedSkip]);
+    const fromHere = runs([unitStep.others ? null : unitSkip, replan(planSkip), startedSkip]);
     const step = name(unitStep.stage);
+    const added = add.length > 0 ? `; added ${named(add)}` : "";
+    const stillGet = unitStep.others
+      ? `; the other Units still get ${rest.length > 0 || add.length > 0 ? step : "it"}`
+      : "";
+    const onlyLine = `Skipped ${listed([`${step} for the ${unitName} Unit`, ...restOther.map(name)])}${added}${stillGet}. ` +
+      `${forTheUnit}${restOther.length > 0 || add.length > 0 ? " You can undo the rest any time." : ""}` +
+      (restWalk.length > 0
+        ? ` ${listed(restWalk.map(name))} can be skipped for one Unit while that Unit is working on it.`
+        : "");
+    const walkNamed = planSkip.filter((slug) => walk!.steps.includes(slug));
+    const otherNamed = planSkip.filter((slug) => !walk!.steps.includes(slug));
+    const everyLine = `Skipped ${unitStep.others ? "" : `${step} for the ${unitName} Unit, and `}` +
+      `${listed(walkNamed.map(name))} for every Unit from here` +
+      `${otherNamed.length > 0 ? `, and ${listed(otherNamed.map(name))}` : ""}${added}. ` +
+      (unitStep.others ? "You can undo that any time." : `${forTheUnit} You can undo the rest any time.`);
+    // What their words must say: for which Units the step that waits on them.
+    const asked = unitStep.others ? step : listed(restWalk.map(name));
     return kept(turnEndingPrint(
       `${before === null ? "" : `Run \`${before}\` and print its output verbatim. `}` +
-        `The person asked to skip ${step}, which the ${unitName} Unit is on now. ` +
+        `The person asked to skip ${listed(skip.map(name))}, and the ${unitName} Unit is on ${step} now. ` +
         `If their words mean the ${unitName} Unit only, run ${onlyUnit}, then tell the person in one line: ` +
-        `"Skipped ${step} for the ${unitName} Unit; the other Units still get it. ${forTheUnit}${parkedTail}" ` +
+        `"${onlyLine}${parkedTail}" ` +
         "and re-run `next` to carry on with the work. " +
         `If they mean every Unit from here, the ${unitName} Unit included, run ${fromHere}, then tell the person ` +
-        `in one line: "Skipped ${step} for every Unit from here. You can undo that any time.${parkedTail}" and stop. ` +
-        `If their words do not say which, ask them once: "Skip ${step} for the ${unitName} Unit only, or for every ` +
+        `in one line: "${everyLine}${parkedTail}" and stop. ` +
+        `If their words do not say which, ask them once: "Skip ${asked} for the ${unitName} Unit only, or for every ` +
         "Unit from here?\" and stop. Do not show a command's output. If a command refuses, tell the person in plain " +
         "words why it could not, and the way it names to do it instead, then stop. If they later ask to undo " +
         `skipping it for every Unit, run \`${aidlcDispatcherInvocation("recompose")} ${flips(add, planSkip)}\`.${resume}`,
@@ -13844,14 +13889,13 @@ function planChangeDirective(
   const run = commands
     .map(({ command, why }, at) => `${at === 0 && before === null ? "Run" : "then run"} \`${command}\` ${why}`)
     .join(", ");
-  // A step of the walk the Unit has not reached yet: the plan change covers
+  // A step of the walk the Unit is not working on: the plan change covers
   // every Unit, so a request for one Unit is answered, not carried out as all.
-  const aheadNote = ahead.length === 0 ? ""
-    : `${listed(ahead.map(name))} ${ahead.length === 1 ? "is a step" : "are steps"} each Unit takes, and the ` +
-      `${unitName} Unit has not reached ${ahead.length === 1 ? "it" : "them"} yet, so this change covers every Unit. ` +
-      `If the person's words mean one Unit only, run nothing and tell them in one line: "${listed(ahead.map(name))} ` +
-      `can be skipped for one Unit when that Unit gets to it; the ${unitName} Unit is on ${name(walk!.stage)} now." ` +
-      "and stop. Otherwise: ";
+  const aheadNote = notHere.length === 0 ? ""
+    : `${listed(notHere.map(name))} ${notHere.length === 1 ? "is a step" : "are steps"} each Unit takes, so this ` +
+      "change covers every Unit. If the person's words mean one Unit only, run nothing and tell them in one line: " +
+      `"${listed(notHere.map(name))} can be skipped for one Unit while that Unit is working on it; the ${unitName} Unit is ` +
+      `${unitIsAt} now." and stop. Otherwise: `;
   const lead = `${aheadNote}${before === null ? run : `Run \`${before}\` and print its output verbatim, ${run}`}`;
   // The way back: a plan flip is undone by the opposite flip while the work
   // runs; a stage skipped where it stood is run on its own, the route

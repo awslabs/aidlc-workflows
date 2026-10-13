@@ -268,7 +268,7 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     const step = next(proj, ["--skip", "code-generation"]);
     expect(named(step)).toEqual([EVERY_UNIT]);
     expect(step.message).toContain("covers every Unit");
-    expect(step.message).toContain('"Code Generation can be skipped for one Unit when that Unit gets to it; the alpha Unit is on Functional Design now."');
+    expect(step.message).toContain('"Code Generation can be skipped for one Unit while that Unit is working on it; the alpha Unit is on Functional Design now."');
     expect(step.message).toContain('"Skipped Code Generation for every Unit from here. You can undo that any time."');
   });
 
@@ -369,5 +369,73 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     expect(own.status, own.out).toBe(0);
     expect(own.out).toContain('for unit \\"alpha\\" only');
     expect(kept()).toContain("the team's usual pipeline");
+  });
+
+  // What the person asks for one Unit is done for that Unit only: another
+  // step of the walk named with it is not taken off the plan for every Unit,
+  // and the one line names every change that is made.
+  test("this Unit only, with another walk step and a stage after the walk named too: only the Unit's step is skipped for it, and the line names every change", () => {
+    const proj = walk(["alpha", "beta"], 1);
+    const message = String(next(proj, ["--skip", "nfr-requirements,code-generation,build-and-test"]).message);
+    const only = message.slice(message.indexOf("If their words mean the alpha Unit only"), message.indexOf("If they mean every Unit from here"));
+    expect(only, message).toContain("report --stage nfr-requirements --unit alpha --result skipped");
+    expect(only).toContain(`engine recompose --skip build-and-test --reason '${PERSON}'`);
+    expect(only).not.toMatch(/recompose --skip [^`]*code-generation/);
+    expect(only).toContain(
+      '"Skipped NFR Requirements for the alpha Unit and Build and Test; the other Units still get NFR Requirements. ' +
+        "It can still be run for that Unit with `/aidlc --stage nfr-requirements --unit alpha`. You can undo the rest any time. " +
+        'Code Generation can be skipped for one Unit while that Unit is working on it."',
+    );
+    const every = message.slice(message.indexOf("If they mean every Unit from here"));
+    expect(every).toContain(`engine recompose --skip nfr-requirements,code-generation,build-and-test --reason '${PERSON}'`);
+    expect(every).toContain(
+      '"Skipped NFR Requirements and Code Generation for every Unit from here, and Build and Test. You can undo that any time."',
+    );
+  });
+
+  // A Unit stopped on its step (paused, at its summary or its checkpoint) is
+  // still that Unit's: a step of the walk named then covers every Unit, and
+  // the step says so, as for a step the Unit has not reached.
+  test("a walk step named while the Unit is paused on it: the step says it covers every Unit", () => {
+    const proj = walk(["alpha", "beta"], 1);
+    for (const args of [
+      ["unit", "start", "--stage", "nfr-requirements", "--unit", "alpha"],
+      ["unit", "pause", "--stage", "nfr-requirements", "--unit", "alpha", "--reason", "waiting on the security team",
+        "--next-action", "write the security requirements"],
+    ]) {
+      const done = run(proj, "aidlc-state.ts", args);
+      expect(done.status, done.out).toBe(0);
+    }
+    const step = next(proj, ["--skip", "nfr-requirements"]);
+    expect(named(step)).toEqual([`bun .claude/tools/aidlc.ts engine recompose --skip nfr-requirements --reason '${PERSON}'`]);
+    expect(step.message).toContain("covers every Unit");
+    expect(step.message).toContain(
+      '"NFR Requirements can be skipped for one Unit while that Unit is working on it; the alpha Unit is paused on NFR Requirements now."',
+    );
+    expect(step.message).toContain('"Skipped NFR Requirements for every Unit from here. You can undo that any time."');
+  });
+
+  // With no other Unit left to take the step, the Unit's own step is skipped
+  // either way; only the other walk step named with it depends on the words.
+  test("the last Unit to take its step, with another walk step named too: its own step is skipped either way, and the line names it", () => {
+    const proj = walk(["alpha"], 1);
+    const message = String(next(proj, ["--skip", "nfr-requirements,code-generation"]).message);
+    const unitSkip = `report --stage nfr-requirements --unit alpha --result skipped --reason '${PERSON}'`;
+    const only = message.slice(message.indexOf("If their words mean the alpha Unit only"), message.indexOf("If they mean every Unit from here"));
+    expect(only, message).toContain(unitSkip);
+    expect(only).not.toMatch(/recompose --skip [^`]*code-generation/);
+    expect(only).toContain(
+      '"Skipped NFR Requirements for the alpha Unit. It can still be run for that Unit with `/aidlc --stage nfr-requirements --unit alpha`. ' +
+        'Code Generation can be skipped for one Unit while that Unit is working on it."',
+    );
+    const every = message.slice(message.indexOf("If they mean every Unit from here"));
+    expect(every).toContain(unitSkip);
+    expect(every).toContain(`engine recompose --skip code-generation --reason '${PERSON}'`);
+    expect(every).toContain(
+      '"Skipped NFR Requirements for the alpha Unit, and Code Generation for every Unit from here. It can still be run for that Unit with ' +
+        '`/aidlc --stage nfr-requirements --unit alpha`. You can undo the rest any time."',
+    );
+    expect(message).toContain('"Skip Code Generation for the alpha Unit only, or for every Unit from here?"');
+    expect(message).not.toContain("run nothing");
   });
 });
