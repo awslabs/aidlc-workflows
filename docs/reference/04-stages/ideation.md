@@ -30,8 +30,8 @@ subagent for one advisory pass before the gate unless reviews are set to
 **Scope-driven stage inclusion:**
 
 The compiled plan for a scope lists its stages in order. For mvp, Ideation
-ends at Rough Mockups (or at Scope Definition when Rough Mockups does not
-apply) and Inception follows (output trimmed):
+ends at Rough Mockups, and its approval, or its skip recorded when it does not
+apply, hands off to Inception (output trimmed):
 
 ```text
 $ aidlc engine graph scope mvp
@@ -411,7 +411,7 @@ Special 3-option gate:
 ### Handoff to Inception
 
 Upon approval of the last Ideation stage the plan runs (1.7 in enterprise and
-feature, 1.6 in mvp or 1.4 when Rough Mockups does not apply, 1.1 in poc), the framework transitions to the Inception
+feature, 1.6 in mvp, whether approved or recorded as skipped, 1.1 in poc), the framework transitions to the Inception
 phase. Inception begins with Stage 2.1 Reverse Engineering on brownfield work.
 On greenfield work it begins with Stage 2.2 Practices Discovery in enterprise,
 feature and mvp, and with Stage 2.3 Requirements Analysis in poc, which runs no
