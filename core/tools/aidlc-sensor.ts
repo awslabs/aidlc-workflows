@@ -60,6 +60,7 @@ import {
 } from "./aidlc-graph.ts";
 import {
 	artifactFilename,
+	asksForHelp,
 	auditLockDir,
 	codekbDir,
 	errorMessage,
@@ -68,6 +69,7 @@ import {
 	isoTimestamp,
 	isPlainObject,
 	KNOWN_CODEKB_STAGES,
+	printUsageAndExit,
 	readRegularFileNoFollowOrThrow,
 	readStateFile,
 	recordDir,
@@ -78,6 +80,7 @@ import {
 	withAuditLock,
 } from "./aidlc-lib.ts";
 import {
+	aidlcDispatcherInvocation,
 	compiledExecutable,
 	resolveHarnessPath,
 } from "./aidlc-runtime-paths.ts";
@@ -1191,33 +1194,39 @@ function globToRegex(glob: string): RegExp {
 
 // --- Help ---
 
-function printHelp(): void {
-	console.log(`Usage: aidlc-sensor <subcommand>
-
-Subcommands:
-  list                              List framework sensors
-  describe <id>                     Print manifest fields
-  fire <id> --stage <slug>          Fire a sensor against an output;
-       --output-path <path>           emits SENSOR_FIRED + paired terminal row
-       [--unit <name>]                (the Unit, when named, is on both rows)
-
-  --help, -h                        Show this message`);
+// What `--help` prints, for the tool or one subcommand (#2449).
+function sensorUsage(subcommand: string | undefined): string {
+	const invoke = (verb: string) => aidlcDispatcherInvocation(`sensor ${verb}`);
+	const usage: Record<string, string[]> = {
+		list: [invoke("list"), "  Lists the framework sensors: id, kind and description."],
+		describe: [
+			`${invoke("describe")} <id>`,
+			"  Prints one sensor's manifest fields. Required: <id>.",
+		],
+		fire: [
+			`${invoke("fire")} <id> --stage <slug> --output-path <path>`,
+			"  Fires a sensor against a stage output; emits SENSOR_FIRED and its paired result row.",
+			"  Required: <id>, --stage, --output-path. Options: --unit <name> (named on both rows)",
+		],
+	};
+	if (subcommand !== undefined && usage[subcommand]) return usage[subcommand].join("\n");
+	return `Usage: aidlc-sensor <subcommand>\n\n${Object.values(usage)
+		.map((lines) => lines.join("\n"))
+		.join("\n\n")}`;
 }
 
 // --- main ---
 
 export function main(argv: string[]): void {
 	const [cmd, ...args] = argv;
-	if (cmd === "--help" || cmd === "-h") {
-		printHelp();
-		return;
-	}
+	if (cmd !== undefined && asksForHelp([cmd])) printUsageAndExit(sensorUsage(undefined));
 	if (cmd === undefined) {
 		process.stderr.write(
 			"Usage: aidlc-sensor <subcommand>. Valid: describe, fire, list. Run with --help for detail.\n",
 		);
 		process.exit(1);
 	}
+	if (asksForHelp(args)) printUsageAndExit(sensorUsage(cmd));
 	switch (cmd) {
 		case "list":
 			handleList();

@@ -1218,6 +1218,7 @@ export type Action =
   | { type: "version"; json: boolean }
   | { type: "stub"; message: string; code: number }
   | { type: "help"; scope: "human" | "engine" | "system" | "all" | "config" }
+  | { type: "noun-help"; message: string }
   | { type: "error"; message: string; humanMessage?: string; code: number };
 
 function text(fd: number, value: string | Uint8Array): void {
@@ -1734,6 +1735,17 @@ function nounError(noun: string, verb: string | undefined, namespace: "engine" |
   };
 }
 
+// `engine <noun> --help` (#2449): the noun's verbs, from the route that owns
+// them; each verb's tool owns its own flags and answers `<verb> --help`.
+function nounHelp(noun: string, verbs: readonly string[], namespace: "engine" | "system"): Action {
+  const invoke = `${aidlcInvocation()} ${namespace} ${noun}`;
+  return {
+    type: "noun-help",
+    message: `usage: ${invoke} <verb> [flags]\nverbs: ${verbs.join(", ")}\n` +
+      `For a verb's flags, run '${invoke} <verb> --help'.\n`,
+  };
+}
+
 function requireValue(noun: string, verb: string, value: string | undefined): Action | undefined {
   if (value) return undefined;
   return nounError(noun, verb);
@@ -1986,6 +1998,9 @@ function resolveNoun(argv: string[], namespace: Exclude<RouteNamespace, "public"
 
   const custom = routes.find((route) => route.kind === "custom");
   if (custom) return handleCustom(custom, argv);
+  if (argv[1] === "--help" || argv[1] === "-h" || argv[1] === "help") {
+    return nounHelp(noun, routes.flatMap((route) => route.verbs), namespace);
+  }
   return nounError(noun, argv[1], namespace);
 }
 
@@ -2995,6 +3010,10 @@ async function execute(action: Action): Promise<number> {
         // Ambient discovery never makes help fail.
       }
     }
+    return 0;
+  }
+  if (action.type === "noun-help") {
+    text(1, action.message);
     return 0;
   }
   if (action.type === "version") {

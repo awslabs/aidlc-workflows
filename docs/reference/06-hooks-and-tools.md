@@ -2082,6 +2082,12 @@ In source-generated `dist/` projections, `{{INVOKE}}` expands that call to
 projects it expands to `aidlc`. Do not author a harness-specific direct script
 path for a framework command.
 
+`aidlc engine <noun> --help` lists a noun's verbs, and
+`aidlc engine <noun> <verb> --help` (or `-h`) prints that verb's flags,
+required ones first, with the values a fixed-value flag such as `--checkpoint`
+accepts. The tool owns its own flags, so the usage is built from the lists its
+checks use. Help exits 0 and records nothing in the audit.
+
 ### Implemented Subcommands
 
 | Subcommand | Purpose | Emits |

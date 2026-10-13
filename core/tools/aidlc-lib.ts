@@ -39637,6 +39637,22 @@ function waitAtErrorEmitSelectionBarrier(selection: WorkflowSelection): void {
   }
 }
 
+/**
+ * An engine subcommand's arguments ask for its usage (#2449). Read before any
+ * flag parsing, so `--help` never needs a value, is never an error, and adds no
+ * audit row. `--help` counts anywhere, since no flag takes a value that starts
+ * with `--`; `-h` and `help` count only first, where no flag waits for a value.
+ */
+export function asksForHelp(args: readonly string[]): boolean {
+  return args[0] === "-h" || args[0] === "help" || args.includes("--help");
+}
+
+/** Print a subcommand's usage and exit 0: help is never an error. */
+export function printUsageAndExit(usage: string): never {
+  process.stdout.write(usage.endsWith("\n") ? usage : `${usage}\n`);
+  process.exit(0);
+}
+
 // Failures are swallowed: we're already exiting, the caller gets the JSON
 // error on stderr regardless.
 //
