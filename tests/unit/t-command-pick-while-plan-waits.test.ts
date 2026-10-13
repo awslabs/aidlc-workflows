@@ -6,7 +6,8 @@
 // answers it, never the plan question beneath: "1" there records the command,
 // no plan approval, and the plan question still waits for its own answer.
 // A picker names its own question, and a plan question shown again is the
-// newest one on screen.
+// newest one on screen in the chat it is shown in: another chat showing it
+// leaves this chat's question the newest here.
 
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";

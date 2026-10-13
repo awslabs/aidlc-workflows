@@ -2002,7 +2002,7 @@ function emit(requested: Directive): void {
           prepared.transported.kind === "ask" &&
           prepared.transported.ask_type === PLAN_APPROVAL_ASK_TYPE
         ) {
-          publishPlanApprovalAsk(projectDir, prepared.transported);
+          publishPlanApprovalAsk(projectDir, prepared.transported, engineSessionId);
         } else {
           recordPlanBuiltWithoutAsking(projectDir, prepared.transported);
         }
