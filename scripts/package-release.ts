@@ -22,6 +22,7 @@ import {
   releaseCopyRuntimeAsset,
   releaseRuntimeAsset,
   type ReleaseAsset,
+  ROOT_LIFECYCLE_CAPABILITY,
   type ReleaseManifest,
 } from "../core/tools/aidlc-release.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
@@ -440,6 +441,7 @@ function build(argv: string[]): void {
     sourceDigest: releaseSourceDigest(),
     distributions,
     assets,
+    capabilities: [ROOT_LIFECYCLE_CAPABILITY],
   };
   writeFileSync(join(output, "version.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   writeFileSync(

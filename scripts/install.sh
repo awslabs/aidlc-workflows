@@ -132,14 +132,19 @@ fi
 # sandboxes where root is the only user). Even then, a root shell reached
 # from a normal account (sudo, or a home not owned by root) stays refused,
 # so `sudo sh install.sh` keeps failing as before.
+ROOT_INSTALL=0
 if [ "$(id -u)" -eq 0 ]; then
   [ "$ALLOW_ROOT" -eq 1 ] ||
     fail 4 failed "refusing a root install; run as the target user, or pass --allow-root where root is the only user"
   [ -z "${SUDO_USER:-}" ] ||
     fail 4 failed "refusing a root install under sudo; run install.sh as $SUDO_USER without sudo"
-  home_uid=$(ls -ldn "$HOME" 2>/dev/null | awk '{print $3}')
+  [ -n "${HOME:-}" ] ||
+    fail 4 failed "refusing a root install with HOME unset; set HOME to root's home directory"
+  # -L follows a symlinked home, so the owner checked is the real directory's.
+  home_uid=$(ls -ldnL "$HOME" 2>/dev/null | awk '{print $3}')
   [ "$home_uid" = 0 ] ||
     fail 4 failed "refusing a root install into a home directory not owned by root: $HOME"
+  ROOT_INSTALL=1
 fi
 if [ -n "$VERSION" ] && ! printf '%s\n' "$VERSION" | grep -Eq "$VERSION_PATTERN"; then
   usage "invalid --version: $VERSION"
@@ -185,6 +190,21 @@ case "$INSTALL_ROOT" in
   /*) ;;
   *) fail 4 failed "AIDLC_INSTALL_ROOT must be an absolute path" ;;
 esac
+# A root install stays per-user: both destinations live under root's own home,
+# never in a shared system directory (#722).
+inside_home() {
+  case "$1/" in
+    */../*|*/./*) return 1 ;;
+    "${HOME%/}"/?*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+if [ "$ROOT_INSTALL" -eq 1 ]; then
+  inside_home "$BIN_DIR" ||
+    fail 4 failed "refusing a root install with AIDLC_BIN_DIR outside root's home: $BIN_DIR"
+  inside_home "$INSTALL_ROOT" ||
+    fail 4 failed "refusing a root install with AIDLC_INSTALL_ROOT outside root's home: $INSTALL_ROOT"
+fi
 
 resolve_command_path() {
   path=$1
@@ -444,6 +464,13 @@ if [ -n "$requested_version" ] && [ "$requested_version" != "$candidate_version"
   fail 4 failed "release endpoint returned $candidate_version, not requested $requested_version"
 fi
 VERSION=$candidate_version
+# A root install must be removable by the release it activates. Releases that
+# predate --allow-root refuse root uninstall, so they are not installed as root.
+if [ "$ROOT_INSTALL" -eq 1 ] && ! grep -Fq '"root-lifecycle"' "$TMP/version.json"; then
+  fail 4 failed \
+    "AI-DLC $VERSION cannot be uninstalled as root, so it is not installed as root" \
+    "install a release that supports --allow-root, such as the latest: sh install.sh --allow-root"
+fi
 BINARY="aidlc-$TARGET"
 RUNTIME_ASSET="aidlc-runtime-$VERSION.tar.gz"
 ASSETS="$BINARY $RUNTIME_ASSET"

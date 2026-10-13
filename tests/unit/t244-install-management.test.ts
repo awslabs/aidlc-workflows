@@ -42,6 +42,8 @@ import {
   previousWindowsShimHelpers,
   previousWindowsShimHelperState,
   replacePreviousWindowsShimHelper,
+  rootActivationRefusal,
+  rootDestinationRefusal,
   rootUninstallRefusal,
   validatePublicLifecycleArgs,
   windowsPosixShim,
@@ -60,6 +62,7 @@ import {
 } from "../../core/tools/aidlc-update.ts";
 import { _resetSettingsCacheForTests } from "../../core/tools/aidlc-settings.ts";
 import { transactionState } from "../../core/tools/aidlc-transaction.ts";
+import { releaseSupportsRootLifecycle, ROOT_LIFECYCLE_CAPABILITY } from "../../core/tools/aidlc-release.ts";
 import { assertSafeUninstallRoot } from "../../core/tools/aidlc-uninstall-plan.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
@@ -1780,6 +1783,32 @@ describe("t244 management lifecycle", () => {
     expect(rootUninstallRefusal(["--allow-root"], 0, { SUDO_USER: "alice" }, rootHome)).toContain("under sudo");
     expect(rootUninstallRefusal(["--allow-root"], 0, {}, userHome)).toContain("not owned by root");
     expect(rootUninstallRefusal(["--allow-root"], 0, {}, () => undefined)).toContain("not owned by root");
+  });
+
+  test("a root install keeps its command and install directories inside root's home", () => {
+    const home = temp("aidlc-t244-root-home-");
+    const inside = [
+      { name: "AIDLC_BIN_DIR", path: join(home, ".local", "bin") },
+      { name: "AIDLC_INSTALL_ROOT", path: join(home, ".local", "share", "aidlc") },
+    ];
+    expect(rootDestinationRefusal(home, inside)).toBeNull();
+    for (const outside of [tmpdir(), "/usr/local/bin", join(home, "..", "elsewhere"), home]) {
+      expect(rootDestinationRefusal(home, [{ name: "AIDLC_BIN_DIR", path: outside }]))
+        .toContain("AIDLC_BIN_DIR outside root's home");
+    }
+  });
+
+  test("as root, only a release that can uninstall as root is activated", () => {
+    const supports = (version: string) => version === "9.9.9";
+    expect(rootActivationRefusal("1.0.0", 501, supports)).toBeNull();
+    expect(rootActivationRefusal("9.9.9", 0, supports)).toBeNull();
+    expect(rootActivationRefusal("1.0.0", 0, supports)).toContain("cannot be uninstalled as root");
+  });
+
+  test("the release manifest marks root lifecycle support and rejects malformed capabilities", () => {
+    expect(releaseSupportsRootLifecycle({ capabilities: [ROOT_LIFECYCLE_CAPABILITY] })).toBe(true);
+    expect(releaseSupportsRootLifecycle({})).toBe(false);
+    expect(releaseSupportsRootLifecycle({ capabilities: ["other"] })).toBe(false);
   });
 
   test("uninstall accepts --allow-root in its public grammar", () => {

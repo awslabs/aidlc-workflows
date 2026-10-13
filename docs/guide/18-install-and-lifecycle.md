@@ -24,10 +24,14 @@ Native installs are per-user. The Unix installer refuses root and does not need
 `sudo`. Where root is the only user, such as a container image without `USER`,
 a CI container job, or a cloud agent sandbox whose setup script runs as root,
 pass `--allow-root` (or set `AIDLC_ALLOW_ROOT=1`) to install under root's own
-`$HOME`. The opt-in is still refused under `sudo` (`SUDO_USER` is set) and when
-`$HOME` is not owned by root, so `sudo sh install.sh` from a normal account
-keeps failing. `aidlc uninstall` takes the same `--allow-root` opt-in with the
-same limits. Windows installation targets the account running PowerShell. Run it
+`$HOME`. The opt-in is still refused under `sudo` (`SUDO_USER` is set), when
+`$HOME` is unset or not owned by root (a symlinked home is followed), and when
+`AIDLC_BIN_DIR` or `AIDLC_INSTALL_ROOT` points outside root's home, so
+`sudo sh install.sh` from a normal account keeps failing and a root install never
+becomes system-wide. Only a release that can also be uninstalled as root is
+installed this way; as root, `aidlc use`, `update` and `rollback` refuse to
+activate an older release that cannot. `aidlc uninstall` takes the same
+`--allow-root` opt-in with the same limits. Windows installation targets the account running PowerShell. Run it
 from a normal PowerShell window. A window opened with "Run as administrator"
 under UAC is warned that installing as administrator is less safe, because
 another program running as the same account could interfere with files the
@@ -202,6 +206,7 @@ installation uses `status: "failed"`, exit code 1, `data.installed: true`, and
 | `--ca-bundle <absolute-path>` | `-CaBundle <absolute-path>` | Use a custom CA bundle |
 | `--profile <absolute-path>` | Not available | Transactionally add the Unix PATH block |
 | Not available | `-NoModifyPath` | Skip persistent User PATH and current-process PATH changes; print a direct command |
+| `--allow-root` (or `AIDLC_ALLOW_ROOT=1`) | Not available | Install as root where root is the only user (container, CI job, agent sandbox). Still refused under `sudo`, with `$HOME` unset or not owned by root, with `AIDLC_BIN_DIR` or `AIDLC_INSTALL_ROOT` outside root's home, and for a release that cannot be uninstalled as root |
 | `--yes` | `-Yes` | Automation mode; it does not bypass integrity checks. On Windows it also replaces an `aidlc` in the bin directory that AI-DLC did not write, keeping that file as a backup |
 | `--quiet` | `-Quiet` | Suppress progress and emit one result line |
 | `--json` | `-Json` | Suppress progress and emit one schema-versioned JSON result |

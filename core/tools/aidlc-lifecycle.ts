@@ -64,6 +64,7 @@ import {
   installedExecutablePath,
   inspectProjectPinTarget,
   inspectInstalledVersion,
+  binRoot,
   installRoot,
   machineTransactionRoot,
   packageManagerForExecutable,
@@ -92,7 +93,9 @@ import {
 import {
   acquireRelease,
   digest,
+  readReleaseManifest,
   releaseRuntimeAsset,
+  releaseSupportsRootLifecycle,
   ReleaseUnavailableError,
   resolvePreviewVersion,
 } from "./aidlc-release.ts";
@@ -1212,6 +1215,8 @@ export function activate(
   version: string,
   options: { failAfter?: number; replaceLauncher?: LauncherReplacement } = {},
 ): void {
+  const rootRefusal = rootActivationRefusal(version, currentUid(), retainedReleaseSupportsRootLifecycle);
+  if (rootRefusal) throw new Error(rootRefusal);
   const releaseReservation = reserveVersion(version);
   try {
     // The person's file moves only now, and comes back if activation fails.
@@ -2037,6 +2042,52 @@ export function rootUninstallRefusal(
   return null;
 }
 
+// A root install stays per-user (#722): its command and install directories
+// must sit under root's own home, never in a shared system directory.
+export function rootDestinationRefusal(
+  home: string,
+  destinations: ReadonlyArray<{ name: string; path: string }>,
+): string | null {
+  const base = canonicalPolicyPath(home);
+  for (const { name, path } of destinations) {
+    const rel = relative(base, canonicalPolicyPath(path));
+    if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      return `refusing a root lifecycle operation with ${name} outside root's home: ${path}`;
+    }
+  }
+  return null;
+}
+
+function rootDestinations(): Array<{ name: string; path: string }> {
+  return [
+    { name: "AIDLC_BIN_DIR", path: binRoot() },
+    { name: "AIDLC_INSTALL_ROOT", path: installRoot() },
+  ];
+}
+
+// Under root, a release is activated only if it can also remove itself as
+// root. Releases from before --allow-root refuse root uninstall.
+export function rootActivationRefusal(
+  version: string,
+  uid: number | undefined,
+  supportsRootLifecycle: (version: string) => boolean,
+): string | null {
+  if (uid !== 0 || supportsRootLifecycle(version)) return null;
+  return `refusing to activate AI-DLC ${version} as root: that release cannot be uninstalled as root`;
+}
+
+function retainedReleaseSupportsRootLifecycle(version: string): boolean {
+  try {
+    return releaseSupportsRootLifecycle(readReleaseManifest(versionRoot(version)));
+  } catch {
+    return false;
+  }
+}
+
+function currentUid(): number | undefined {
+  return typeof process.getuid === "function" ? process.getuid() : undefined;
+}
+
 function homeDirectoryOwnerUid(): number | undefined {
   try {
     return statSync(homedir()).uid;
@@ -2060,12 +2111,9 @@ function uninstallCommand(argv: string[]): CommandResult {
       manager.remediation,
     );
   }
-  const rootRefusal = rootUninstallRefusal(
-    argv,
-    typeof process.getuid === "function" ? process.getuid() : undefined,
-    process.env,
-    homeDirectoryOwnerUid,
-  );
+  const uid = currentUid();
+  const rootRefusal = rootUninstallRefusal(argv, uid, process.env, homeDirectoryOwnerUid) ??
+    (uid === 0 ? rootDestinationRefusal(homedir(), rootDestinations()) : null);
   if (rootRefusal) return failure(rootRefusal, EXIT.integrity);
   const purge = argv.includes("--purge");
   // The cleanup worker inherits this window's token. A UAC-elevated window is
