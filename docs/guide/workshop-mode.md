@@ -139,7 +139,9 @@ When Inception ends with two or more Units, the first step into Construction
 asks who builds them, once, in every scope and in a composed workflow: **Just
 me** records `Unit Ownership: solo` and this session builds the Units;
 **Several teams** records `Unit Ownership: team`, switching a stage-by-stage
-plan to one Unit at a time on the way. A plan with one Unit, no Unit plan, or
+plan to one Unit at a time on the way (the choice says so, and says that each
+team approves its Unit after every stage unless the lead asks for one approval
+at the end of each Unit). A plan with one Unit, no Unit plan, or
 Construction already under way is never asked. A reply that picks neither
 leaves this session building, and the first step says to ask for teams before
 the first Unit is built. Team approvals come after every stage (`per-stage`)

@@ -247,6 +247,8 @@ describe("who builds the Units is asked once as Inception ends", () => {
     expect(ask.choices?.map((c) => c.label)).toEqual(["Just me", "Several teams"]);
     expect(String(ask.choices?.[0].command)).toEndWith("aidlc-state.ts set-unit-ownership solo");
     expect(String(ask.choices?.[1].command)).toEndWith("aidlc-state.ts set-unit-ownership team");
+    // How team approvals go is read before the pick, in the question itself.
+    expect(String(ask.choices?.[1].detail)).toContain("approves it after every stage, or once at the end of the Unit");
     expect(ask.numbered_prose_question).toContain("1. **Just me**");
     expect(ask.numbered_prose_question).toContain("2. **Several teams**");
     // Asking records nothing as the person's.

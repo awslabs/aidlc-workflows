@@ -3546,7 +3546,8 @@ function constructionStaffingAsk(
       { label: "Just me", detail: `This session builds the Units ${order}.`, command: `${state} set-unit-ownership solo` },
       {
         label: "Several teams",
-        detail: "Each team owns one Unit, builds it in its own copy of this project and approves its work." +
+        detail: "Each team owns one Unit, builds it in its own copy of this project and approves it after every " +
+          "stage, or once at the end of the Unit if you say so." +
           (order === "stage by stage" ? " Each Unit is then built start to finish, one at a time, instead of stage by stage." : ""),
         command: `${state} set-unit-ownership team`,
       },
