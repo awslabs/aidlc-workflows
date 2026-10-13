@@ -4691,13 +4691,6 @@ export async function collectDoctorReport(
             },
       );
     }
-    // Headless reminder (advisory pass-with-label): -p/prompt-mode runs skip
-    // repo hooks unless the env var opts in.
-    results.push({
-      pass: true,
-      label:
-        "headless runs: set GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1 for `copilot -p` sessions - repo hooks are off by default in prompt mode",
-    });
   } else if (harness === ".cursor") {
     // Cursor: hooks.json (the hook wiring), cli.json (permissions), and the
     // standing + phase method rule pointers are all inside .cursor/.

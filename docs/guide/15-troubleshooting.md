@@ -272,7 +272,8 @@ started.
    authors; trust it. If your organization has switched Chat: Use Hooks off,
    only your administrator can turn it back on.
 2. In the Copilot CLI, trust the folder when it asks. A headless `copilot -p`
-   run also needs `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1` in its environment.
+   run never asks: start `copilot` in the folder once and choose "Yes, and
+   remember this folder for future sessions".
 
 See [GitHub Copilot](harnesses/copilot.md) for the folder trust details.
 

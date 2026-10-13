@@ -600,6 +600,17 @@ describe("documentation parity derives current behavior from authored implementa
     expect(copies).toEqual([]);
   });
 
+  test("no copy says headless copilot -p runs need GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS", () => {
+    // Trust alone runs the hooks in `copilot -p` on Copilot CLI 1.0.74 and 1.0.96, and `=1` does nothing.
+    const copies = [...filesBelow(at("docs"), ".md"), at("README.md")]
+      .filter((file) => readFileSync(file, "utf8").includes("GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS"));
+    expect(copies).toEqual([]);
+    expect(normalized(read("docs", "guide", "15-troubleshooting.md"))).toContain(
+      'A headless `copilot -p` run never asks: start `copilot` in the folder once and choose "Yes, and remember ' +
+        'this folder for future sessions".',
+    );
+  });
+
   test("a review the person asks for is recorded under every Guard Policy, and no copy reads as needing strict", () => {
     const reviewer = readFileSync(at("core", "aidlc-common", "protocols", "stage-protocol-reviewer.md"), "utf8")
       .replace(/\s+/g, " ");
