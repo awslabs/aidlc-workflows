@@ -594,7 +594,9 @@ Claude Opus 4.8. Where you set the model and effort depends on the harness:
 - **Kiro CLI:** the session model and its one effort. `aidlc config models`
   saves them in your personal Kiro settings (a preset sets the effort:
   `minimal` low, `balanced` medium, `thorough` extra-high); `/model` and
-  `/effort` change them inside Kiro. Recommended setup keeps an effort you
+  `/effort` change them inside Kiro. A `/model` switch reaches the agents the
+  conductor dispatches only once you save it with
+  `/model set-current-as-default`. Recommended setup keeps an effort you
   already saved for your model. On Kiro IDE's row setup saves Kiro CLI's
   session model only. See
   [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
