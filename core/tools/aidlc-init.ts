@@ -145,7 +145,7 @@ import {
 } from "./aidlc-lib.ts";
 import { cutPluginFragment, editTomlInstructions, personaTwinRels } from "./aidlc-plugin.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
-import { KIRO_IDE_STEERING, kiroIdeSteering } from "./aidlc-includes.ts";
+import { KIRO_IDE_STEERING, kiroIdeSteering, refreshActiveMemory } from "./aidlc-includes.ts";
 import {
   activeWorkflowPluginDependencies,
   canonicalScopeTableRegion,
@@ -13066,6 +13066,17 @@ export async function main(
       );
     } else {
       executeSettingsAndProjectMutation(settingsMutation, plan);
+    }
+    // The copy of the active space's memory that the harness includes read is
+    // written now, before a chat loads them, so the first chat holds the rules
+    // it loaded and is not handed them again on every step (#1330). Best-effort,
+    // as at every session start, which writes it otherwise.
+    if (!recordOnly) {
+      try {
+        refreshActiveMemory(projectDir);
+      } catch {
+        // The first session start writes it.
+      }
     }
     // Said as soon as it is done, so no later step can leave it unsaid.
     if (options.mode === "human") {

@@ -16,9 +16,10 @@
 //     and brings the copy up to date for the next request.
 //   - Claude Code (the `.claude/rules/aidlc.md` @-import) loads them at startup,
 //     resume, clear, compact and fork, but not after a mid-chat edit, and it can
-//     clear old tool results with no hook. The proof is that the files still
-//     have the hashes the session start recorded for this chat. A resume or a
-//     fork may also carry older copies, so after an edit it proves nothing.
+//     clear old tool results with no hook. The proof is that each file of the
+//     step's rules still has the hash the session start recorded for this chat.
+//     A resume may also carry older copies of a file edited since the chat's
+//     last load, so that file proves nothing; after a fork none does.
 //   - Codex has no include and a compaction drops every tool result. The proof
 //     is that this thread was handed the bundle, that no session start or
 //     compaction hook ran since, and that its rollout shows no compaction after.
@@ -27,13 +28,14 @@
 //     before its SessionStart hook runs, and keeps that copy through summaries
 //     and reloads; a mid-chat edit is never read (live on 1.2.4). AI-DLC writes
 //     the memory text into that file (aidlc-includes.ts). The proof is that the
-//     chat's session start found the file as the memory files make it now and
-//     did not rewrite it, and that the file is still exactly that. Kiro IDE
-//     gives the agent's shell no chat id, so which chat ran a command is known
-//     only from the process tree, where the latest chat to start wins. So the
-//     pointer also needs every chat with an open turn (a prompt with no Stop
-//     since) to hold the same file; Kiro CLI v3 names the chat in
-//     KIRO_SESSION_ID instead.
+//     chat's session start found the file as the memory files made it then and
+//     did not rewrite it, that each file of the step's rules is as it was then,
+//     and that the file on disk is the memory text now (a helper Kiro starts now
+//     reads it). Kiro IDE gives the agent's shell no chat id, so which chat ran
+//     a command is known only from the process tree, where the latest chat to
+//     start wins. So the pointer also needs every chat with an open turn (a
+//     prompt with no Stop since) to hold the same files; Kiro CLI v3 names the
+//     chat in KIRO_SESSION_ID instead.
 //   - Cursor and Copilot have no proven copy, so they always get the text.
 //
 // The host is identified twice: by the installed tree that wrote the record and
@@ -55,9 +57,11 @@ type LoadRecord = {
   at: string;
   space: string;
   // per-request: the host re-reads every file under `dir` on each request.
-  // at-load: the host read `files` (sha256 by path) when this chat last loaded.
+  // at-load: the host read `files` (sha256 by path; "" for a file it did not
+  // read, or one a resume may hold in two versions) when this chat last loaded.
   // at-start: the chat holds the steering file it captured when it started
-  // (`steering`, its sha256), whatever happens later.
+  // (`steering`, its sha256), whatever happens later, and with it the text of
+  // `files` (the memory files it carried, sha256 by path).
   refresh: "per-request" | "at-load" | "at-start" | "none";
   dir?: string;
   files?: Record<string, string>;
@@ -149,6 +153,18 @@ function sha256File(path: string): string {
   } catch {
     return "";
   }
+}
+
+function fileHashes(projectDir: string, rels: string[]): Record<string, string> {
+  return Object.fromEntries(rels.map((rel) => [rel, sha256File(join(projectDir, rel))]));
+}
+
+// Each file of a step's rules is as the chat loaded it. The other files the
+// host loaded (another phase's file, a template that carries no rule) do not
+// decide what this step needs.
+function filesUnchanged(projectDir: string, files: Record<string, string> | undefined, paths: string[]): boolean {
+  return files !== undefined &&
+    paths.every((path) => Object.hasOwn(files, path) && files[path] === sha256File(join(projectDir, path)));
 }
 
 // AI-DLC's own records are plain JSON; the team's opencode.jsonc may hold
@@ -262,17 +278,22 @@ export function recordRulesLoad(
     // This start rewrote the file, or it does not carry the memory text: the
     // chat holds an older copy, or none.
     const current = !includeChanged && inlined.length > 0 && steering === sha256Text(text);
-    record = { ...base, refresh: "at-start", steering, ...(current ? {} : { stale: true as const }) };
+    record = current
+      ? { ...base, refresh: "at-start", steering, files: fileHashes(projectDir, inlined) }
+      : { ...base, refresh: "at-start", steering, stale: true };
   } else if (harness === "claude") {
-    const files: Record<string, string> = {};
-    for (const rel of claudeImportedFiles(projectDir, runtimeHarnessDir(projectDir), space)) {
-      files[rel] = sha256File(join(projectDir, rel));
-    }
+    const files = fileHashes(projectDir, claudeImportedFiles(projectDir, runtimeHarnessDir(projectDir), space));
     const previous = readJson<LoadRecord>(path);
-    const sameAsBefore = previous !== null && previous.stale !== true && previous.files !== undefined &&
-      JSON.stringify(previous.files) === JSON.stringify(files);
+    const known = previous !== null && previous.stale !== true && previous.files !== undefined;
+    // A resume replays the chat as it was: a file whose text changed since the
+    // chat's last load may be in it twice, old and new, so it proves nothing.
+    if (source === "resume" && known) {
+      for (const rel of Object.keys(files)) {
+        if (previous?.files?.[rel] !== files[rel]) files[rel] = "";
+      }
+    }
     const stale = includeChanged || source === "fork" ||
-      (source === "resume" && !sameAsBefore) ||
+      (source === "resume" && !known) ||
       !["startup", "clear", "compact", "resume"].includes(source);
     record = { ...base, refresh: "at-load", files, ...(stale ? { stale: true as const } : {}) };
   } else if (harness === "kiro" || harness === "opencode") {
@@ -368,9 +389,9 @@ export function noteKiroIdeTurn(projectDir: string, sessionId: string | undefine
 }
 
 // Kiro IDE: whether this chat has an open turn and every other chat with an
-// open turn holds `steering` too, so whichever of them ran the command holds
-// it.
-function openTurnsHold(projectDir: string, sid: string, space: string, steering: string): boolean {
+// open turn holds the files of `paths` as they are now too, so whichever of
+// them ran the command holds them.
+function openTurnsHold(projectDir: string, sid: string, space: string, paths: string[]): boolean {
   const now = Date.now();
   let own = false;
   for (const name of readdirSync(sessionsDir(projectDir))) {
@@ -384,7 +405,7 @@ function openTurnsHold(projectDir: string, sid: string, space: string, steering:
     const record = readJson<LoadRecord>(loadRecordPath(projectDir, other));
     if (
       record?.v !== 1 || record.harness !== "kiro-ide" || record.refresh !== "at-start" ||
-      record.stale === true || record.space !== space || record.steering !== steering
+      record.stale === true || record.space !== space || !filesUnchanged(projectDir, record.files, paths)
     ) {
       return false;
     }
@@ -585,12 +606,13 @@ export function chatHoldsRules(
     // agent in a new chat once ignored a team rule its steering held).
     if (delivered === null || delivered.last !== bundle) return false;
     if (record.refresh === "at-start") {
-      if (record.stale === true || !record.steering) return false;
+      if (record.stale === true || !record.steering || !filesUnchanged(projectDir, record.files, paths)) return false;
+      // A helper Kiro starts now reads the file on disk: it carries these files
+      // as they are now.
       const { text, inlined } = kiroIdeSteering(projectDir, space);
-      const steering = sha256Text(text);
-      if (record.steering !== steering || !paths.every((path) => inlined.includes(path))) return false;
-      if (sha256File(join(projectDir, KIRO_IDE_STEERING)) !== steering) return false;
-      return process.env.KIRO_SESSION_ID ? true : openTurnsHold(projectDir, sid, space, steering);
+      if (!paths.every((path) => inlined.includes(path))) return false;
+      if (sha256File(join(projectDir, KIRO_IDE_STEERING)) !== sha256Text(text)) return false;
+      return process.env.KIRO_SESSION_ID ? true : openTurnsHold(projectDir, sid, space, paths);
     }
     if (record.refresh === "per-request") {
       const dir = record.dir ?? "";
@@ -608,9 +630,7 @@ export function chatHoldsRules(
       return paths.every((path) => path.startsWith(dir) && path.endsWith(".md"));
     }
     if (record.refresh === "at-load") {
-      const files = record.files ?? {};
-      if (record.stale === true || !paths.every((path) => path in files)) return false;
-      return Object.entries(files).every(([rel, hash]) => sha256File(join(projectDir, rel)) === hash);
+      return record.stale !== true && filesUnchanged(projectDir, record.files, paths);
     }
     if (harness === "codex") {
       const full = delivered?.full;
