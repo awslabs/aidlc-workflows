@@ -795,8 +795,9 @@ export function applyIntentSettings(
         : "Each code plan is now shown for approval before it is built.");
     }
     // The line said for it ends with the one wider place (the line said as
-    // they asked carries it below instead).
-    if (value === "off" && !saidAsAsked(flag) && !atTheirTerminal && lines.length > 0) {
+    // they asked carries it below instead). A value the scope set is nobody's
+    // request to turn the check off, so it offers nothing.
+    if (value === "off" && !scopeDefault(flag) && !saidAsAsked(flag) && !atTheirTerminal && lines.length > 0) {
       const offer = widerPlaceOffer(projectDir, CEREMONY_ENV[key], "work");
       if (offer) lines[lines.length - 1] = `${lines[lines.length - 1]} ${offer}`;
     }

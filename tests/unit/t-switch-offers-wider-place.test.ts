@@ -34,6 +34,7 @@ afterEach(() => {
 });
 
 function workspace(): {
+  proj: string;
   run: (args: string[], extra?: Record<string, string | undefined>) => string;
   said: (words: string) => void;
 } {
@@ -64,6 +65,7 @@ function workspace(): {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return {
+    proj,
     run: (args, extra = {}) => {
       const r = spawn(args, undefined, extra);
       expect(r.exitCode, `${args.join(" ")}: ${r.stdout}${r.stderr}`).toBe(0);
@@ -135,6 +137,20 @@ describe("t-switch-offers-wider-place: the switch's own line carries the one wid
     said("turn summary confirmation off");
     const summary = run(["engine", "config", "set", "summary-confirmation", "off", "--person-words", "turn summary confirmation off"]);
     expect(lastLine(summary)).toEndWith(PROJECT_OFFER);
+  });
+
+  test("a scope change that turns a check off asks nothing: nobody asked to turn that check off", () => {
+    const { proj, run, said } = workspace();
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8").replace(
+      "- **Change Control**: strict (from scope feature)",
+      "- **Change Control**: strict (from scope feature)\n- **Plan Approval**: on (from scope feature)\n" +
+        "- **Summary Confirmation**: on (from scope feature)",
+    ));
+    said("change the scope to express");
+    const out = run(["engine", "scope", "change", "--scope", "express", "--person-words", "change the scope to express"]);
+    expect(out).toContain("Plan Approval changed");
+    expect(out).not.toContain("?");
   });
 
   test("a wider place that already has it off is not offered", () => {
