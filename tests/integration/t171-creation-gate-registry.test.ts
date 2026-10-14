@@ -3,17 +3,16 @@
 // Mechanism: cli (spawned dist tools) — creation + `next` run end-to-end the way
 // the conductor runs them.
 //
-// Blocker B1 — the no-state creation gate (Branch 7b valid-scope positional /
-// Branch 9a explicit --scope flag) fires purely on `!stateContent`, but
-// stateContent is empty in TWO worlds: a truly empty workspace (zero intents →
-// creation) AND a workspace that already holds intents whose per-user
-// active-intent CURSOR is unset (a fresh clone of a >1-intent workspace — the
-// cursor is gitignored). Without the guard the gate would mint a DUPLICATE
-// intent over the existing ones, violating "auto-create fires only on ZERO
-// intents". The fix: before creating, consult listIntents over the active
-// space; if intents EXIST but none is flagged active, emit an `ask` directive
-// that lists them and asks the human to pick one via `/aidlc intent <name>`,
-// instead of the creation `print`. The zero-intent case STILL creates unchanged.
+// The no-state creation gate (valid-scope positional / explicit --scope flag)
+// sees `!stateContent`, but stateContent is empty in TWO worlds: a truly empty
+// workspace (zero intents -> creation) AND a workspace that already holds
+// intents whose per-user active-intent CURSOR is unset (a fresh clone of a
+// >1-intent workspace - the cursor is gitignored). Without the guard the gate
+// would mint a DUPLICATE intent over the existing ones. So before creating,
+// consult listIntents over the active space; if selectable in-flight intents
+// EXIST but none is flagged active, emit an `ask` directive that lists them and
+// asks the human to pick one via `/aidlc intent <name>`, instead of the
+// creation `print`. With no selectable intent the gate creates.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -51,7 +50,7 @@ const UTIL_SH = `bun '${toPosix(UTIL)}'`;
 let proj: string;
 beforeEach(() => {
   proj = createTestProject();
-  // P9: the creation gate's whole point is consulting an EMPTY registry (zero
+  // The creation gate's whole point is consulting an EMPTY registry (zero
   // intents → creation; >0 intents + no cursor → prompt). createTestProject seeds
   // ONE default intent record + registry row, so strip it to restore the
   // zero-intent baseline every case here assumes. (Mirrors t160's beforeEach.)
@@ -316,13 +315,13 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
 
     test("Branch 7b (bare valid-scope positional) also prompts, not creates", () => {
       seedTwoIntentsNoCursor();
-      const r = next(["poc"]); // positional valid-scope name, no --scope flag
+      const r = next(["poc"]);
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("ask");
       expect(d.message ?? "").not.toContain("intent create");
       expect(d.question).toContain("Pick one to carry on.");
       expect(d.available_intents).toHaveLength(2);
-      expect(recordDirs(proj).length).toBe(2); // no duplicate created
+      expect(recordDirs(proj).length).toBe(2);
     });
 
     test("a cursor-less space whose every intent is complete routes to creation, not the picker", () => {
@@ -1369,7 +1368,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
   });
 
   // ----------------------------------------------------------------
-  // (2) ZERO intents → STILL creates exactly as before
+  // (2) ZERO intents -> creates
   // ----------------------------------------------------------------
   describe("a fresh empty workspace still names intent-create (unchanged)", () => {
     // 27,000 and 40,000 exceed what a question carrying the full request could hold.
@@ -1452,7 +1451,6 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(confirmed.kind).toBe("print");
     });
 
-    // A scope-confirm answer and the creation command it prints.
     interface ScopeConfirm {
       confirm_command: string;
       proposed_scope: string;
@@ -1684,7 +1682,6 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const ask = JSON.parse(next([request]).stdout.trim());
       expect(ask.kind).toBe("ask");
       expect(ask.intent_text).toBeUndefined();
-      // The person's own spaces on either side of the span stay as typed.
       expect(ask.question).toContain('"summarize the incident report  in two pages"');
       expect(ask.question).toContain(
         "I read everything from the first <document> to the last </document> as your pasted document, and only the text outside it as your instructions.",
@@ -1951,7 +1948,6 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
     // position and advances; it must NOT re-name intent-create nor prompt to pick.
     expect(d.kind).not.toBe("ask");
     if (d.kind === "print") expect(d.message).not.toContain("intent create");
-    // The cursor was never disturbed.
     const cursor = readFileSync(cursorPath(proj), "utf-8").trim();
     expect(recordDirs(proj)).toContain(cursor);
   });

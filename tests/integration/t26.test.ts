@@ -1,11 +1,10 @@
 // covers: subcommand:aidlc-jump:execute
 //
-// t26.test.ts — SDK-harness port of tests/integration/t26-integration-backward-jump.sh
-// (TAP plan 8). Drives the real `/aidlc --stage intent-capture`
-// through the Claude Agent SDK from a CONSTRUCTION-phase state and asserts ONLY
-// on deterministic surfaces (the jump tool's verbatim stdout JSON in the Bash
-// tool_result, parsed audit events, raw audit-file bytes, and the NOW-STABLE
-// on-disk state fields the jump tool wrote) — NEVER on assistantText.
+// t26.test.ts - drives the real `/aidlc --stage intent-capture` through the
+// Claude Agent SDK from a CONSTRUCTION-phase state and asserts ONLY on
+// deterministic surfaces (the jump tool's verbatim stdout JSON in the Bash
+// tool_result, parsed audit events, and raw audit-file bytes) - NEVER on
+// assistantText.
 //
 // SIBLING NOTE. t25.test.ts is the SAME backward-to-intent-capture journey via
 // `--phase ideation`; this is the `--stage intent-capture` twin. Both route
@@ -14,21 +13,14 @@
 // directly; --phase routes through firstInScopeStageOfPhase, jump.ts:121-136);
 // the EXECUTE emission and every deterministic surface below are identical.
 //
-// ⛔ WHY THE STATE READ IS STABLE. The backward
-// jump LANDS at the target and STOPS: the run terminates cleanly and the post-jump
-// state is STABLE (Current Stage=intent-capture, NOT auto-advanced). So we assert
-// that stable state DIRECTLY — STRONGER than the audit-only fallback an earlier
-// port resorted to — plus the audit STAGE_JUMPED/Target/Direction bytes and the
-// jump-tool stdout the .sh's bounds covered.
-//
-// THE JOURNEY (verified against the SHIPPED tool, AND a live bounded probe —
-// tmp/phase2/probe-t26-stage.ts, 2026-06-05). The seeded fixture
+// THE JOURNEY (verified against the SHIPPED tool). The seeded fixture
 // (state-construction.md) sits at Lifecycle Phase=CONSTRUCTION, Current
 // Stage=functional-design, Scope=feature, Completed=20. `--stage intent-capture`
-// resolves directly to intent-capture (graph stage 1.1), whose display order is
-// BEFORE functional-design (index 18), so direction = backward
+// resolves directly to intent-capture, whose display order is BEFORE
+// functional-design, so direction = backward
 // (aidlc-jump.ts:143-145). The SKILL.md Stage/Phase Jump handler routes this
-// through `aidlc-jump.ts execute --direction backward`, which atomically:
+// through `aidlc-jump.ts execute --direction backward` (as first ported; today
+// the engine names that command in a print directive), which atomically:
 //   - resets target + downstream EXECUTE stages [x]/[-]/[S] -> [ ] (jump.ts:268-285),
 //   - sets target intent-capture -> [-] in-progress (jump.ts:295),
 //   - rewrites Lifecycle Phase=IDEATION, Current Stage=intent-capture,
@@ -42,49 +34,34 @@
 //     Target=intent-capture / Scope=feature (jump.ts:374-380),
 //   - appends STAGE_STARTED for the target (Stage=intent-capture,
 //     Agent=aidlc-product-agent; jump.ts:386-390).
-// The run STOPS at the jump target: the live probe observed
-// subtype=success, is_error=false, ~286s, 37 turns, and a STABLE final state
-// (Lifecycle Phase=IDEATION, Current Stage=intent-capture, In Progress=
-// intent-capture, Completed=4, Status=Running, [x] count=4). One AskUserQuestion
-// gate fired on the landing and was answered with the default option-1 policy;
-// the run still stopped stable at intent-capture (no auto-advance). An
-// optional-field read (e.g. get "Initial Intent") writes no ERROR_LOGGED row
+// An optional-field read (e.g. get "Initial Intent") writes no ERROR_LOGGED row
 // (#2264); we do NOT assert on ERROR_LOGGED.
 //
 // THE KNOWN-ANSWER COUNT. countCheckboxes("completed") after a backward reset to
 // intent-capture leaves exactly 4 [x] (jump.ts:330-331). Verified by both the
-// shipped tool's stdout (completed_count:4) and the live probe's post-run state
-// ([x] count=4, Completed=4). The 3 init stages (workspace-scaffold/
-// workspace-detection/state-init, UPSTREAM of intent-capture) survive, AND the
-// fixture's per-unit-duplicate `widget-cart` nfr-requirements [x] (state line 72)
-// survives — the reset is slug-indexed, so the duplicate per-unit checkbox at a
-// different state-file position is not reached. So completed_count = 4. The .sh's
-// loose `assert_lt 20` / `assert_lt 15` only BOUNDED this; we pin the exact value
-// 4 on the jump-tool stdout AND on the now-stable post-run state.
+// shipped tool's stdout (completed_count:4) and the reset arithmetic: the 3
+// init stages (workspace-scaffold/workspace-detection/state-init, UPSTREAM of
+// intent-capture) survive, AND the fixture's per-unit-duplicate `widget-cart`
+// nfr-requirements [x] survives - the reset is slug-indexed, so the duplicate
+// per-unit checkbox at a different state-file position is not reached. So
+// completed_count = 4. We pin the exact value 4 on the jump-tool stdout.
 //
-// ASSERTION MAP (.sh test -> deterministic SDK surface, equal-or-stronger):
+// ASSERTION MAP (.sh test -> deterministic SDK surface):
 //   1 assert_lt COMPLETED 20 (grep 'Completed'|head -1)
 //       -> Bash tool_result contains `"completed_count":4` (jump.ts:415 stdout
-//          JSON). STRONGER: exact known-answer 4 (satisfies <20). ALSO: the
-//          now-stable on-disk readStateField(state,"Completed") === "4" (the .sh
-//          read this field but only bounded it <20; it is
-//          stable so we pin the exact 4 — and still assert <20 to preserve the
-//          .sh's exact surface+bound).
+//          JSON): the exact known-answer 4 (satisfies <20).
 //   2 assert_grep AUDIT 'intent-capture'
 //       -> raw audit.md bytes contain "**Target**: intent-capture" (jump.ts:377)
-//          AND the now-stable on-disk Current Stage === "intent-capture"
+//          beside the tool's own Current Stage rewrite
 //          (jump.ts:313). The audit Target line is the immutable origin; the
-//          on-disk Current Stage is STABLE (no
-//          auto-advance), so we assert BOTH, the stronger surface the stable
-//          landing unlocks. (audit-sample.md baseline does NOT contain intent-capture,
+//          post-run state file is not re-read (the driver stops on the jump
+//          output). (audit-sample.md baseline does NOT contain intent-capture,
 //          no vacuous pass.)
-//   3 assert_lt X_COUNT 15 (grep -c '^- [x]')
-//       -> count of `- [x]` lines in the post-run state < 15. The jump tool sets
-//          this to 4; the .sh's <15 bound is preserved, and we ALSO pin === 4.
-//   4 assert_eq X_COUNT COMPLETED (counter matches actual [x] count)
-//       -> on-disk: count of `- [x]` lines === parsed-int Completed field. The
+//   3 assert_lt X_COUNT 15 / 4 assert_eq X_COUNT COMPLETED
+//       -> the `- [x]` count and the Completed field after the reset: the
 //          jump tool keeps these in lockstep (jump.ts:330-331); asserts internal
-//          state consistency on disk. Both === 4 now.
+//          consistency through the stdout `"completed_count":4` (the on-disk
+//          count is not re-read).
 //   5 assert_grep AUDIT 'STAGE_JUMPED'
 //       -> assertAuditEvent(r,"STAGE_JUMPED") (parsed **Event**: line; jump.ts:374).
 //   6 assert_grep AUDIT 'BACKWARD'
@@ -92,22 +69,17 @@
 //   7 assert_grep AUDIT 'Timestamp'
 //       -> raw audit.md bytes contain "**Timestamp**:" (audit.ts:257, every block).
 //   8 Status=Running AND Current Stage == In Progress (read from FINAL state)
-//       -> DIRECTLY ASSERTABLE. The backward jump
-//          lands and STOPS, so the post-run state is stable: Status === "Running",
-//          Current Stage === "intent-capture", In Progress === "intent-capture"
+//       -> the jump tool writes Status, Current Stage and In Progress together
 //          (jump.ts:313,316,321) — the EXACT three-way consistency the .sh read.
 //          ALSO the jump-tool stdout `"workflow_stopped":false` (jump.ts:416, the
-//          deterministic origin) AND the STAGE_STARTED audit event for the target.
-//          This is the surface the .sh ALWAYS intended.
+//          deterministic origin) AND the STAGE_STARTED audit event for the target
+//          are asserted; the final state file is not re-read.
 //
-// Known-answer literals are READ from the SHIPPED handlers (cited inline) and
-// CONFIRMED by the live probe (tmp/phase2/probe-t26-stage.ts): completed_count=4,
-// the audit field bytes, workflow_stopped=false, and the stable final state were
-// all observed against this exact fixture. The backward jump lands at a stage with
-// one AskUserQuestion gate; answerScript stays "default" (option 1) and the run
-// still stops stable at intent-capture — this is a §5-A2 LOGIC journey (an sdk port).
+// Known-answer literals are READ from the SHIPPED handlers (cited inline).
+// The driver stops on the jump tool's output; post-run live state is not
+// asserted.
 //
-// It SPENDS TOKENS — driveAidlc drives the real /aidlc on Opus/Bedrock (~286s).
+// It SPENDS TOKENS - driveAidlc drives the real /aidlc on Opus/Bedrock.
 // Re-run alone if the suite is under load.
 
 import {
@@ -130,7 +102,6 @@ import {
   stateFilePathFor,
 } from "../harness/sdk-drive.ts";
 
-// ---------------------------------------------------------------------------
 // The case and file own the work budget; each SDK call uses what remains.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
 const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
@@ -138,20 +109,18 @@ const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
 // Setup and cleanup allowances belong to the case; calls share its remaining work.
 const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
-// Known-answer literals, read from the SHIPPED jump/audit handlers (see header)
-// and confirmed by the live probe against state-construction.md.
 // Known-answer literals, read from the SHIPPED jump/audit handlers (see header).
 // The deterministic jump EMISSION is what this sdk test asserts: the tool's own
 // stdout JSON + the immutable audit STAGE_JUMPED block. Post-run live state is a
 // moving target (the workflow continues after the jump) and is NOT asserted here.
 const TARGET_STAGE = "intent-capture"; // resolve --stage intent-capture (stage 1.1)
-const JUMP_COMPLETED_COUNT = '"completed_count":4'; // jump.ts:415 stdout JSON
-const JUMP_WORKFLOW_STOPPED = '"workflow_stopped":false'; // jump.ts:416 (BACKWARD never terminates, jump.ts:309)
-const JUMP_DIRECTION = '"direction":"backward"'; // jump.ts:407 stdout JSON
+const JUMP_COMPLETED_COUNT = '"completed_count":4'; // aidlc-jump.ts handleExecute stdout JSON
+const JUMP_WORKFLOW_STOPPED = '"workflow_stopped":false'; // aidlc-jump.ts handleExecute (BACKWARD never terminates the workflow)
+const JUMP_DIRECTION = '"direction":"backward"'; // aidlc-jump.ts handleExecute stdout JSON
 const STOP_AFTER_JUMP = { toolName: "Bash", resultIncludes: JUMP_COMPLETED_COUNT } as const;
-const AUDIT_TARGET_LINE = `**Target**: ${TARGET_STAGE}`; // jump.ts:377 Target field, audit.ts:265 **key**:
-const AUDIT_DIRECTION_LINE = "**Direction**: BACKWARD"; // jump.ts:375 direction.toUpperCase()
-const AUDIT_TIMESTAMP_PREFIX = "**Timestamp**:"; // audit.ts:257, on every block
+const AUDIT_TARGET_LINE = `**Target**: ${TARGET_STAGE}`; // handleExecute Target field; aidlc-audit.ts renderAuditBlock **key**: line
+const AUDIT_DIRECTION_LINE = "**Direction**: BACKWARD"; // aidlc-jump.ts handleExecute direction.toUpperCase()
+const AUDIT_TIMESTAMP_PREFIX = "**Timestamp**:"; // aidlc-audit.ts renderAuditBlock, on every block
 
 describe("t26 /aidlc --stage intent-capture backward jump (sdk)", () => {
   // -------------------------------------------------------------------------
@@ -173,10 +142,8 @@ describe("t26 /aidlc --stage intent-capture backward jump (sdk)", () => {
       try {
         // Precondition: the seed truly starts at CONSTRUCTION / Completed=20, so
         // the jump genuinely crosses backward (no vacuous pass on a pre-seeded
-        // ideation state). Read straight off the seeded file. P4: the jump tool
-        // does NOT migrate (only intent-create does, aidlc-utility.ts:2022) — the
-        // seed stays at the flat layout, so stateFilePathFor resolves it via the
-        // flat fallback (no intent created yet).
+        // ideation state). Read straight off the seeded file. seedStateFile writes
+        // under the active intent's record, so stateFilePathFor resolves that record.
         const seedState = readFileSync(stateFilePathFor(proj), "utf8");
         expect(readStateField(seedState, "Lifecycle Phase")).toBe("CONSTRUCTION");
         expect(readStateField(seedState, "Completed")).toBe("20");
@@ -184,9 +151,9 @@ describe("t26 /aidlc --stage intent-capture backward jump (sdk)", () => {
           "functional-design",
         );
 
-        // The backward jump lands at the target and STOPS. answerScript "default"
-        // answers the single landing gate with option 1; the run still stops
-        // stable at intent-capture (verified by tmp/phase2/probe-t26-stage.ts).
+        // The driver stops after the jump tool's output. answerScript "default"
+        // answers any preceding question with option 1; the test does not wait for
+        // post-jump workflow continuation.
         const r = await driveAidlc("/aidlc --stage intent-capture", {
           projectDir: proj,
           answerScript: "default",
@@ -201,58 +168,49 @@ describe("t26 /aidlc --stage intent-capture backward jump (sdk)", () => {
         // refuses to pass vacuously if Bash never fired — so this is also proof
         // the backward-jump path RAN, not that prose mentioned a jump.
         //
-        // .sh test 1 (assert_lt COMPLETED 20): the count the TOOL computed is the
-        // known-answer 4. STRONGER than the .sh's <20 bound — pins the exact reset.
+        // The count the TOOL computed is the known-answer 4; pins the exact reset.
         assertToolResultContains(r, "Bash", JUMP_COMPLETED_COUNT);
-        // .sh test 8 (Status=Running): the tool's workflow_stopped flag is the
-        // deterministic origin of Status=Running — false for a BACKWARD jump
-        // (jump.ts:309). The on-disk Status is also asserted below (now stable).
+        // The tool's workflow_stopped flag is the deterministic origin of
+        // Status=Running - false for a BACKWARD jump (aidlc-jump.ts handleExecute).
         assertToolResultContains(r, "Bash", JUMP_WORKFLOW_STOPPED);
-        // The direction the tool resolved is backward (jump.ts:407 stdout).
         assertToolResultContains(r, "Bash", JUMP_DIRECTION);
 
-        // The state file must exist post-run (the jump tool rewrote it).
         expect(r.stateFile).toBeDefined();
 
-        // .sh test 2 (audit half): the STAGE_JUMPED block names intent-capture as
-        // the jump Target. Read the raw audit.md the tool appended and assert the
-        // verbatim field line. audit-sample.md baseline does NOT contain
-        // intent-capture, so this can't pass on the seed.
+        // The STAGE_JUMPED block names intent-capture as the jump Target. Read the raw
+        // audit text the tool appended and assert the verbatim field line.
+        // audit-sample.md baseline does NOT contain intent-capture, so this can't pass
+        // on the seed.
         const auditRaw = readAuditText(proj);
         expect(auditRaw).toContain(AUDIT_TARGET_LINE);
 
-        // POST-RUN LIVE STATE IS NOT ASSERTED (deliberate). The .sh's test-8 read
-        // final-state Current Stage / In Progress / Status / Completed and the
-        // x-checkbox count off the FINAL file. Those are a MOVING TARGET: a
-        // jump leaves Status=Running (aidlc-jump.ts:309, a jump never
-        // terminates), and SKILL.md:255 step 13c then has the
-        // orchestrator "Enter Stage Advancement. Normal workflow continues." So the
-        // LLM keeps running the workflow after the jump and may advance Current
-        // Stage off intent-capture (a stability gate caught it reading
+        // POST-RUN LIVE STATE IS NOT ASSERTED (deliberate). Final-state Current Stage
+        // / In Progress / Status / Completed and the x-checkbox count are a MOVING
+        // TARGET: a backward jump leaves Status=Running (aidlc-jump.ts movedState),
+        // and the Forwarding Loop (SKILL.md) carries on while the directive permits
+        // continuation. So the LLM keeps running the workflow after the jump and may
+        // advance Current Stage off intent-capture (a stability gate caught it reading
         // "market-research" on a fraction of runs). The jump TOOL is deterministic
-        // and correct (run directly 3/3: intent-capture / Status=Running /
-        // completed_count=4) — only the orchestrator's CONTINUATION is LLM-paced.
-        // That continuation is a Phase-3 tui journey, not this single-transition
-        // sdk check. So the deterministic outcome fields (completed_count=4,
-        // workflow_stopped=false, direction=backward) are asserted ABOVE on the
-        // jump tool's OWN stdout (immune to the continuation) instead of re-read
-        // off the moving post-run state.
+        // only the orchestrator's CONTINUATION is LLM-paced. That continuation is a
+        // Phase-3 tui journey, not this single-transition sdk check. So the
+        // deterministic outcome fields (completed_count=4, workflow_stopped=false,
+        // direction=backward) are asserted ABOVE on the jump tool's OWN stdout (immune
+        // to the continuation) instead of re-read off the moving post-run state.
 
-        // .sh test 5 (assert_grep AUDIT 'STAGE_JUMPED'): audit recorded the event.
-        // Re-expressed on parsed auditEvents (the **Event**: lines), so a prose
-        // mention can't satisfy it — this is the tool's emitted event-type.
+        // Audit recorded STAGE_JUMPED. Asserted on parsed auditEvents (the **Event**:
+        // lines), so a prose mention can't satisfy it - this is the tool's emitted
+        // event-type.
         assertAuditEvent(r, "STAGE_JUMPED");
-        // The target entered the active state — STAGE_STARTED for intent-capture
-        // is the audit-side proof the jump drove the workflow INTO the target
-        // (jump.ts:386-390), the symmetric partner of Status=Running / In Progress.
+        // The target entered the active state - STAGE_STARTED for intent-capture is
+        // the audit-side proof the jump drove the workflow INTO the target
+        // (aidlc-jump.ts handleExecute), the symmetric partner of Status=Running / In
+        // Progress.
         assertAuditEvent(r, "STAGE_STARTED");
 
-        // .sh test 6 (assert_grep AUDIT 'BACKWARD'): the STAGE_JUMPED block tags
-        // the direction BACKWARD. Verbatim field bytes from the raw audit.
         expect(auditRaw).toContain(AUDIT_DIRECTION_LINE);
 
-        // .sh test 7 (assert_grep AUDIT 'Timestamp'): every audit block carries a
-        // Timestamp line (audit.ts:257). Assert the verbatim prefix in the raw audit.
+        // Every audit block carries a Timestamp line (aidlc-audit.ts renderAuditBlock).
+        // Assert the verbatim prefix in the raw audit.
         expect(auditRaw).toContain(AUDIT_TIMESTAMP_PREFIX);
 
         // The driver intentionally aborts once the deterministic jump stdout

@@ -29,7 +29,7 @@
 //   (c) a gate fired (askedQuestions >= 1) and the run stopped there;
 //   (d) NOTHING was written: no aidlc-state.md (no creation), no composed scope
 //       file in .claude/scopes/ beyond the 11 stock ones, scope-grid.json
-//       still has exactly 10 keys. P0 stops at render - the write is P2.
+//       still has exactly 11 keys. P0 stops at render - the write is P2.
 //   (e) the composer's returned proposal carries the ARS contract: the
 //       Task/Agent tool-result names the entropy components (at least CSU)
 //       and the evidence method (codekb | fallback). The dispatch print and

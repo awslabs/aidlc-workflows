@@ -1,8 +1,7 @@
 // covers: subcommand:aidlc-state:approve
 //
-// CLI-contract port of tests/integration/t51-bugfix-event-parity.sh (TAP plan 15),
-// mechanism = cli. End-to-end event-parity walk of the bugfix scope on a
-// greenfield project, driven entirely by SPAWNING the real binaries via
+// CLI-contract test, mechanism = cli. End-to-end event-parity walk of the bugfix
+// scope on a greenfield project, driven entirely by SPAWNING the real binaries via
 // node:child_process spawnSync — `aidlc-utility.ts init` to bootstrap, then
 // `aidlc-state.ts gate-start` / `aidlc-state.ts approve` per gated stage. The
 // covers id pins `subcommand:aidlc-state:approve` because `approve` is the
@@ -11,45 +10,18 @@
 // the phase-boundary and workflow-completion events). Every count asserted here
 // is produced by the approve auto-advance chain plus the init bootstrap.
 //
-// MECHANISM: spawn (the .sh shelled out to `bun "$UTIL" init` and `bun "$STATE"
-// gate-start|approve`; we reproduce that exact PROCESS boundary). The contract
-// under test is the audit.md the tools write across the full walk plus the
-// terminal aidlc-state.md, so it stays a spawn — an in-process twin would lose
-// the cross-tool init->gate-start->approve sequencing the audit stream encodes.
+// MECHANISM: spawn (the exact PROCESS boundary). The contract under test is the
+// audit trail the tools write across the full walk plus the terminal
+// aidlc-state.md, so it stays a spawn - an in-process twin would lose the
+// cross-tool init->gate-start->approve sequencing the audit stream encodes.
 //
-// FIXTURE DISCIPLINE (mirrors the .sh's create_test_project + cleanup_test_project):
-// the whole walk runs against ONE fresh temp project (createTestProject, which
-// toPortablePath-converts on Windows so the audit.md the tools write via
-// forward-slash helpers round-trips when read back). The .sh runs a single
-// project through the entire walk and asserts on the accumulated audit; we do
-// the same in a beforeAll so the expensive multi-process walk runs once. The
-// temp dir is cleaned in afterAll. NOTHING is seeded — init bootstraps the
-// audit from scratch (the .sh does not seed either), so post-walk counts are
-// unambiguous.
-//
-// PARITY NOTES (every .sh `ok`/`assert_*` line maps to an expect() below; the
-// ordering case is STRONGER than the original):
-//   - .sh L104 count_event WORKFLOW_STARTED == 1        -> "WORKFLOW_STARTED fires once".
-//   - .sh L105 count_event WORKFLOW_COMPLETED == 1       -> "WORKFLOW_COMPLETED fires once".
-//   - PHASE_STARTED == 4                                 -> "PHASE_STARTED fires 4x".
-//   - PHASE_COMPLETED == 4                               -> "PHASE_COMPLETED fires 4x".
-//   - PHASE_VERIFIED == 4                                -> "PHASE_VERIFIED fires 4x".
-//   - PHASE_SKIPPED == 1                                 -> "PHASE_SKIPPED fires once".
-//   - STAGE_STARTED == 8                                 -> "STAGE_STARTED fires 8x".
-//   - STAGE_COMPLETED == 8                               -> "STAGE_COMPLETED fires 8x".
-//   - STAGE_AWAITING_APPROVAL == 5                       -> "STAGE_AWAITING_APPROVAL fires 5x".
-//   - GATE_APPROVED == 5                                 -> "GATE_APPROVED fires 5x".
-//   - .sh L123 first event == WORKFLOW_STARTED           -> "WORKFLOW_STARTED is first event".
-//   - .sh L127 last event == WORKFLOW_COMPLETED          -> "WORKFLOW_COMPLETED is last event".
-//   - .sh L131-138 final-stage GATE_APPROVED line < STAGE_COMPLETED line ->
-//       "GATE_APPROVED precedes STAGE_COMPLETED for final stage" (same observable,
-//       last-occurrence line ordering) PLUS a STRONGER per-gated-stage check that
-//       EVERY GATE_APPROVED precedes its paired STAGE_COMPLETED in the stream.
-//   - .sh L142 state Status=Completed                    -> "Status=Completed".
-//   - final state has 8 stages marked [x]                -> "8 stages marked [x]".
-//
-// 15 .sh asserts -> 15 expect()-bearing test() cases (the ordering case adds a
-// stronger second expect within the same case; no observable dropped).
+// FIXTURE DISCIPLINE: the whole walk runs against ONE fresh temp project
+// (createTestProject, which toPortablePath-converts on Windows so the audit
+// shards the tools write via forward-slash helpers round-trip when read back).
+// A single project runs through the entire walk in a beforeAll and the tests
+// assert on the accumulated audit, so the expensive multi-process walk runs
+// once. The temp dir is cleaned in afterAll. NOTHING is seeded - init
+// bootstraps the audit from scratch, so post-walk counts are unambiguous.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { setDefaultTimeout, afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -67,19 +39,18 @@ import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const UTIL = join(TOOLS, "aidlc-utility.ts");
 const STATE = join(TOOLS, "aidlc-state.ts");
 const LOG = join(TOOLS, "aidlc-log.ts");
 
-// P4: init creates a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/);
+// init creates a per-intent record (aidlc/spaces/<space>/intents/<YYMMDD>-<slug>/);
 // state lands at <record>/aidlc-state.md and audit in per-clone shards under
-// <record>/audit/<host>-<pid>.md, NOT the flat aidlc-docs/. The active-intent
-// cursor follows the created record, so the whole gate-start/approve walk resolves
-// to it. Fall back to flat for a not-yet-created project. The event stream + final
-// checkbox state are unchanged — only the LOCATION moved.
+// <record>/audit/<host>-<clone>.md. The active-intent cursor follows the created
+// record, so the whole gate-start/approve walk resolves to it. Fall back to flat
+// for a not-yet-created project.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -96,7 +67,7 @@ function recordDirOf(p: string): string {
   return join(p, "aidlc-docs");
 }
 const statePath = (p: string): string => join(recordDirOf(p), "aidlc-state.md");
-// Audit is sharded under <record>/audit/<host>-<pid>.md; concat every shard for
+// Audit is sharded under <record>/audit/<host>-<clone>.md; concat every shard for
 // a content read, falling back to the flat audit.md for a not-yet-created project.
 function readAudit(p: string): string {
   const auditDir = join(recordDirOf(p), "audit");
@@ -110,7 +81,6 @@ function readAudit(p: string): string {
   return existsSync(flat) ? readFileSync(flat, "utf-8") : "";
 }
 
-/** init --scope bugfix (mirrors the .sh bootstrap, L78-79). */
 function runInit(proj: string): void {
   const res = spawnSync(BUN, [UTIL, "intent-create", "--scope", "bugfix", "--project-dir", proj], {
     encoding: "utf-8",
@@ -121,7 +91,6 @@ function runInit(proj: string): void {
   }
 }
 
-/** gate-start <slug> then approve <slug> (mirrors the .sh walk_stage helper, L88-92). */
 function walkStage(proj: string, slug: string): void {
   const env = {
     ...process.env,
@@ -232,13 +201,11 @@ function walkStage(proj: string, slug: string): void {
   }
 }
 
-/** Count audit blocks with `**Event**: <ev>` in audit CONTENT (shard-concat). Mirrors the .sh count_event grep (L99-101). */
 function countEvent(content: string, ev: string): number {
   const re = new RegExp(`^\\*\\*Event\\*\\*: ${ev}$`);
   return content.split("\n").filter((l) => re.test(l)).length;
 }
 
-/** Ordered list of event names as they appear in audit CONTENT (header `**Event**: X` rows). */
 function eventStream(content: string): string[] {
   const out: string[] = [];
   for (const line of content.split("\n")) {
@@ -247,8 +214,8 @@ function eventStream(content: string): string[] {
   return out;
 }
 
-// One project, walked once — the multi-process bugfix walk is expensive, and
-// the .sh asserts on the single accumulated audit, so we share it.
+// One project, walked once - the multi-process bugfix walk is expensive, so
+// we share it.
 let PROJ: string;
 
 beforeAll(() => {
@@ -273,7 +240,7 @@ afterAll(() => {
 
 describe("t51 bugfix event parity — CLI contract (migrated from t51-bugfix-event-parity.sh, plan 15)", () => {
   // ============================================================
-  // Event counts (.sh L104-118)
+  // Event counts
   // ============================================================
 
   test("1: WORKFLOW_STARTED fires once", () => {
@@ -320,7 +287,7 @@ describe("t51 bugfix event parity — CLI contract (migrated from t51-bugfix-eve
   });
 
   // ============================================================
-  // Ordering (.sh L120-138)
+  // Ordering
   // ============================================================
 
   test("11: WORKFLOW_STARTED is first event", () => {
@@ -335,18 +302,15 @@ describe("t51 bugfix event parity — CLI contract (migrated from t51-bugfix-eve
 
   test("13: GATE_APPROVED precedes STAGE_COMPLETED for final stage", () => {
     const stream = eventStream(readAudit(PROJ));
-    // Same observable as the .sh: the LAST GATE_APPROVED occurs before the LAST
-    // STAGE_COMPLETED in the audit stream.
     const lastGate = stream.lastIndexOf("GATE_APPROVED");
     const lastCompleted = stream.lastIndexOf("STAGE_COMPLETED");
     expect(lastGate).toBeGreaterThanOrEqual(0);
     expect(lastCompleted).toBeGreaterThanOrEqual(0);
     expect(lastGate).toBeLessThan(lastCompleted);
 
-    // STRONGER than the .sh (which only checked the final stage): every
-    // GATE_APPROVED must be immediately followed by a STAGE_COMPLETED — the
+    // Every GATE_APPROVED must be immediately followed by a STAGE_COMPLETED - the
     // approve invariant (GATE_APPROVED then STAGE_COMPLETED, audit-first) holds
-    // for ALL 5 gated stages, not just the last.
+    // for ALL 5 gated stages.
     for (let i = 0; i < stream.length; i++) {
       if (stream[i] === "GATE_APPROVED") {
         expect(stream[i + 1]).toBe("STAGE_COMPLETED");
@@ -355,7 +319,7 @@ describe("t51 bugfix event parity — CLI contract (migrated from t51-bugfix-eve
   });
 
   // ============================================================
-  // Terminal state (.sh L140-145)
+  // Terminal state
   // ============================================================
 
   test("14: Status=Completed", () => {

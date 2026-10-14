@@ -1,13 +1,13 @@
 // covers: hook:aidlc-session-start function:writeSessionPidAncestry subcommand:aidlc-utility:intent subcommand:aidlc-utility:space subcommand:aidlc-utility:intent-create subcommand:aidlc-utility:space-create
 //
 // Serial by design: SessionStart maps PID ancestors inside a 50 ms best-effort
-// budget, one `ps` per hop on macOS (8a5664214 made it one and moved GC after
-// the write). This assertion is bound to a wall-clock budget, so the file runs
-// alone (`.serial.`) instead of beside workers whose churn can delay a spawn.
-// The registration case tests that publication directly. CLI writer scenarios
-// seed their real caller PID so publication timing is not a second prerequisite.
+// budget, one `ps` per hop on macOS. This assertion is bound to a wall-clock
+// budget, so the file runs alone (`.serial.`) instead of beside workers whose
+// churn can delay a spawn. The registration case tests that publication
+// directly. CLI writer scenarios seed their real caller PID so publication
+// timing is not a second prerequisite.
 //
-// Real subprocess coverage for every increment-1 binding writer. PID ancestry
+// Real subprocess coverage for every binding writer. PID ancestry
 // must beat the legacy fixed-name marker while shared cursors remain write-through.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";

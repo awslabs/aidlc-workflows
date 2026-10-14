@@ -62,7 +62,6 @@ describe("a second tool installed while a Unit is open", () => {
       ]);
       const final = agent.drive(first);
       expect(installed).toBe(true);
-      // The install wrote its own files mid-Unit.
       expect(existsSync(join(proj, "AGENTS.md"))).toBe(true);
       expect(readFileSync(join(proj, ".gitignore"), "utf-8")).not.toBe(gitignoreBefore);
       expect(final.kind).toBe("done");

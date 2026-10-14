@@ -1,20 +1,20 @@
 // covers: subcommand:aidlc-utility:intent-create, file:skills/aidlc/SKILL.md
 //
-// t176-new-work-offer-second-intent.test.ts — the P4 OFFER beat (sdk).
+// t176-new-work-offer-second-intent.test.ts - the OFFER beat (sdk).
 //
 // The deterministic half of "a second intent alongside an active one" is pinned
 // by t165 (intent-create mints a 2nd record while one is active; two isolated
-// rows; distinct uuids; B's creation never mutates A's shard). What was NEVER
-// exercised is the CONVERSATIONAL beat the vision promised: with an intent
-// already active, describing a GENUINELY NEW, UNRELATED piece of work prompts
-// the orchestrator to OFFER a second intent (you confirm), rather than blindly
-// advancing the active intent. RECOGNISING new-work + phrasing the offer is
-// conductor PROSE (knowledge→LLM, in skills/aidlc/SKILL.md); on CONFIRM the prose
-// routes through `next --new-intent`, so the read-only engine emits the SAME
-// creation directive the fresh-start path does (carrying the `--label` seam) rather
-// than the conductor hand-building intent-create. Either way it can only be
-// verified LIVE, the way the codebase verifies every conductor behaviour: the
-// Claude Agent SDK driver answering the offer Y/n on a structured callback.
+// rows; distinct uuids; B's creation never mutates A's shard). This exercises
+// the CONVERSATIONAL beat: with an intent already active, describing a
+// GENUINELY NEW, UNRELATED piece of work prompts the orchestrator to OFFER a
+// second intent (you confirm), rather than blindly advancing the active intent.
+// RECOGNISING new-work + phrasing the offer is conductor PROSE (knowledge->LLM,
+// in skills/aidlc/SKILL.md); on CONFIRM the prose routes through
+// `next --new-intent`, so the read-only engine emits the SAME creation
+// directive the fresh-start path does (carrying the `--label` seam) rather than
+// the conductor hand-building intent-create. Either way it can only be verified
+// LIVE, the way the codebase verifies every conductor behaviour: the Claude
+// Agent SDK driver answering the offer on a structured callback.
 //
 // Journey (one interactive run):
 //   seed:      ONE active intent mid-ideation (subject: a widget feature) +
@@ -22,8 +22,9 @@
 //   drive:     `/aidlc "<a clearly unrelated new piece of work>"`.
 //   conductor: recognises the input is NEW-WORK (not a continuation of the
 //              widget intent), OFFERS a second intent via AskUserQuestion (the
-//              answerScript confirms YES), then runs `intent-create` and re-enters
-//              the loop — the run-then-continue shape the offer prose names.
+//                answerScript confirms separate new work), then runs
+//                `intent-create` and re-enters the loop - the run-then-continue
+//                shape the offer prose names.
 //   disk:      the registry now carries TWO in-flight intents (the offer was
 //              confirmed and the creation fired into the active space).
 //
@@ -39,12 +40,10 @@
 //       `State initialized:` summary, emitted ONLY inside handleIntentCreate,
 //       landed as a Bash tool-result; a continuation path never emits it);
 //   (c) a SECOND intent exists on disk — readIntentRegistry has 2 rows.
-// (b)+(c) are airtight: with an intent already active the engine advances it
-// (Branch 10, !stateContent-gated creates), so a 2nd intent can ONLY arise from
-// the conductor's offer -> confirm -> intent-create. The answerScript takes the option
-// for separate new work wherever the agent shows it (the engine's routing
-// question or the skill's Yes/No offer); a menu with none fails SAFE (option 1,
-// no creation, (b)+(c) RED), never a false green.
+// The answerScript takes the option for separate new work wherever the agent
+// shows it (the engine's routing question or the skill's Yes/No offer); a menu
+// with none fails SAFE (option 1, no creation, (b)+(c) RED), never a false
+// green.
 //
 // It SPENDS TOKENS — driveAidlc drives the real /aidlc on Opus/Bedrock. The run
 // stops the instant the creation tool-result lands (stopAfterToolResult), or at
@@ -79,7 +78,7 @@ const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
 // Setup and cleanup allowances belong to the case; calls share its remaining work.
 const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
-// Verbatim creation stdout summary (aidlc-utility.ts handleIntentCreate :2400) - the
+// Verbatim creation stdout summary (aidlc-utility.ts handleIntentCreate) - the
 // deterministic surface that proves the offer was CONFIRMED and the creation ran.
 const INIT_STATE_SUMMARY = "State initialized:";
 const STOP_AFTER_CREATION = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
@@ -109,8 +108,7 @@ const CONFIRM_OFFER: AnswerScript = {
 const SEEDED_STAGE_STEP = (results: readonly CapturedToolResult[]): boolean =>
   results.some((r) => r.toolName === "Bash" && /"kind":\s*"run-stage"/.test(r.resultText));
 
-// The engine's routing question in its own order, as the agent showed it in the
-// dev-3 runs of 2026-10-12 (02:18Z and 02:50Z): the separate-work option is the
+// The engine's routing question in its own order: the separate-work option is the
 // second one, and the person's answer is that option wherever it is shown.
 // Deterministic; the live journey below drives the real picker.
 test("the answer is the separate-work option wherever the agent puts it", () => {
@@ -141,7 +139,6 @@ describe("t176 P4 new-work offer (orchestrator offers a 2nd intent, sdk live)", 
         stripEnvScope: true,
       });
       try {
-        // Sanity: exactly one intent before the run.
         expect(readIntentRegistry(proj).length).toBe(1);
 
         const r = await driveAidlc(`/aidlc "${NEW_WORK}"`, {
@@ -160,19 +157,15 @@ describe("t176 P4 new-work offer (orchestrator offers a 2nd intent, sdk live)", 
         // was asked BEFORE the creation - i.e. it is the OFFER gating the creation, not
         // a later stage gate (a continuation that ran feasibility would gate but
         // never create, failing (b)+(c)). We deliberately do NOT assert the offer's
-        // question TEXT — it is non-deterministic LLM prose (verified: live runs
-        // phrase it "...unrelated pieces of work. How should I proceed?" with no
-        // fixed token); the deterministic offer surface is the affirmative option
-        // label the prose pins to "Yes", which the answerScript keys on below.
+        // question TEXT - it is non-deterministic LLM prose; the answerScript selects
+        // the separate-work option wherever it appears.
         expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
 
         // (b) The conductor ACTED on the confirm — the named intent-create tool
         // ran and its verbatim summary landed as a Bash tool-result. This literal
         // is emitted ONLY inside handleIntentCreate, so a continuation path (which
-        // creates nothing) never produces it. (b)+(c) are the airtight proof the
-        // offer was CONFIRMED: with an intent already active the engine advances
-        // it (Branch 10) and every creation arm is !stateContent-gated, so a 2nd
-        // intent can ONLY appear via the conductor's offer→confirm→intent-create.
+        // creates nothing) never produces it. Together with the earlier question and
+        // (c), this proves the offer was CONFIRMED and separate work was created.
         assertToolResultContains(r, "Bash", INIT_STATE_SUMMARY);
 
         // (c) A SECOND intent now exists on disk (the creation fired into the

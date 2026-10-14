@@ -1,12 +1,12 @@
 // covers: scope:classic, subcommand:aidlc-orchestrate:next, subcommand:aidlc-state:set-unit-ownership, audit:UNIT_OWNERSHIP_SET
 //
 // Who builds the Units, in a scope run with no model (tests/harness/scope-run.ts).
-// Seen on origin/main before the fix: a feature, a workshop and a composed run
-// with two Units each reached Construction with nobody asked, because the
-// question lived in one paragraph of Delivery Planning prose and nothing in
-// the engine asked it. Here a plan with Delivery Planning and one without it
-// both put the question to the person once, after Inception's last approval
-// and before the first Unit is built, and never again for the rest of the run.
+// The incident: a feature, a workshop and a composed run with two Units each
+// reached Construction with nobody asked, because the question lived in one
+// paragraph of Delivery Planning prose and nothing in the engine asked it. Here
+// a plan with Delivery Planning and one without it both put the question to the
+// person once, after Inception's last approval and before the first Unit is
+// built, and never again for the rest of the run.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";

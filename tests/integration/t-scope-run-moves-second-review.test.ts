@@ -1,7 +1,7 @@
 // covers: scope:classic, audit:REVIEW_REQUESTED
 //
 // A person move in a scope run, with no model (tests/harness/scope-run.ts): at
-// the second Unit's checkpoint the person asks for another review, which the
+// the second Unit's checkpoint the agent asks for another review, which the
 // stage's one review pass refuses. The way out the refusal offers is a step the
 // engine accepts in that state, and the run reaches done. The remedy wording is
 // owned by t331; this run checks it against the real engine and hooks.
@@ -27,7 +27,7 @@ const SKIPPED = [
   "delivery-planning", "functional-design", "nfr-requirements", "nfr-design", "infrastructure-design",
 ];
 
-/** The person's ask at extra's checkpoint, taken before they answer it. */
+/** The agent's request at extra's checkpoint, taken before the person answers it. */
 class SecondReviewAsked extends Error {}
 
 interface Remedy {
@@ -101,7 +101,6 @@ describe("a second review the review cap refuses at a Unit's checkpoint", () => 
       expect(gate, refused.stdout + refused.stderr).toBeDefined();
       expect(gate!.executableNow).toBe(true);
 
-      // The person picks it, and the agent runs the step it names.
       person.pick("How would you like to go on?", remedies.map((remedy) => remedy.op), "present-approval-gate");
       const named = /`(bun \.claude\/tools\/[^`]+)`/.exec(gate!.action)?.[1];
       expect(named, gate!.action).toBeDefined();

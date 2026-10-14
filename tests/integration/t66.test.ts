@@ -4,30 +4,16 @@
 //         function:resolveRulesForStage, function:loadSensors, function:resolveSensorsForStage,
 //         function:compileStageGraph
 //
-// NOTE: this file also spawns the `aidlc-graph compile` / `export` CLIs (see MECHANISM
-// SPLIT below), but those are `subcommand` units with minMechanism: cli and CANNOT be
-// credited from a `.none` file — the ladder requires a `.cli` test. They are exercised
-// for behavioural parity, not claimed in covers:, exactly as t89.none.test.ts does.
-//
-// Bun migration of tests/integration/t66-graph-library.sh (plan 88).
-// The .sh spawned `bun -e "..."` and `bun aidlc-state.ts lookup ...` / `bun aidlc-graph.ts
-// compile|export` dozens of times and inspected stdout / on-disk graphs with jq + shasum.
-// This port IMPORTS aidlc-graph.ts / aidlc-lib.ts / aidlc-stage-schema.ts and calls the pure
-// functions directly (no subprocess), then asserts the SAME observable behaviour. The
-// genuine CLI-boundary assertions — those that prove a process exit code, a module-load
-// env read, byte-identical CLI stdout, or parallel-process concurrency serialisation —
-// stay as spawnSync(BUN, [...]) cases, exactly as t89.none.test.ts does.
-//
-// MECHANISM SPLIT (mirrors the .sh assertion-by-assertion):
+// MECHANISM SPLIT:
 //   IN-PROCESS (import + call): API-surface typeofs, producersOf/consumersOf, topoSort,
 //     findCycles (real + synthetic + disjoint + per-scope), subgraphForScope (shape /
 //     per-scope sizes / unknown / empty), graph traversal (6 full-graph + 3 per-scope),
-//     nextInScopeStage state-file semantics (3), circular-import load, validateScope (5),
+//     nextInScopeStage state-file semantics (3), circular-import load, validateScope,
 //     compile round-trip hash, edge-local invariant, for_each preservation,
 //     duplicate-slug detection logic, schema-validation invalid case, canonical emitter
 //     pin (2), rules_in_context / sensors_applicable array + FIELD_ORDER shape,
 //     resolveSensorsForStage declared-order, withAuditLock reentrancy (2).
-//   MUST STAY SPAWN (process.exit / module-load env read / CLI stdout / parallel-process):
+//   MUST STAY SPAWN (process.exit / fresh-process env read / CLI stdout / parallel-process):
 //     plan-identity parity (11 scopes via `state lookup stages-in-scope` byte-exact),
 //     AIDLC_GRAPH_RESOLVE=1 `resolve <scope> --stdout` cutover parity (11 scopes byte-exact
 //       vs mr9-parity fixtures) + the gate (no flag -> exit 1, stderr), env-seam read,
@@ -38,15 +24,14 @@
 //     AIDLC_RULES_DIR populate-from-disk + --check drift, AIDLC_SENSORS_DIR populate +
 //     --check drift, designer export byte-identical-to-golden + counts + determinism +
 //     env-seam + export --check, concurrency (two PARALLEL compiles serialise byte-equal).
-//   GREP-THE-SOURCE (port as readFileSync + includes / regex count):
+//   GREP-THE-SOURCE (readFileSync + includes / regex count):
 //     'Pre-seed new rows' GONE + 'maxIndexByPhasePrefix' present (#364 auto-seed);
 //     '${filePath}:' >= 2 sites.
 //
-// FIXTURE DISCIPLINE: every mktemp/heredoc the .sh built is rebuilt here with
-// mkdtempSync(tmpdir(), ...) + writeFileSync and torn down in afterEach. NOTHING is
-// written under tests/fixtures/** (the designer-export golden is READ only). Each spawn
-// CLI compile/check seeds a fresh tempfile from the committed stage-graph.json — never
-// the real graph — exactly as the .sh did.
+// FIXTURE DISCIPLINE: every temp fixture is built with mkdtempSync(tmpdir(), ...) +
+// writeFileSync and torn down in afterEach. NOTHING is written under tests/fixtures/**
+// (the designer-export golden is READ only). Each spawn CLI compile/check seeds a fresh
+// tempfile from the shipped stage-graph.json - never the real graph.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { setDefaultTimeout, afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -93,7 +78,7 @@ const REAL_SENSORS = join(AIDLC_SRC, "sensors");
 const PARITY_DIR = join(import.meta.dir, "..", "fixtures", "mr9-parity");
 const EXPORT_FIXTURE = join(import.meta.dir, "..", "fixtures", "designer-export", "export.json");
 
-const BUN = process.execPath; // the bun binary running this test, for CLI-boundary checks
+const BUN = process.execPath;
 
 const SCOPES = [
   "enterprise",
@@ -110,7 +95,7 @@ const SCOPES = [
 ] as const;
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"] as const;
 
-// --- env-seam + cache harness (mirrors the .sh per-case env discipline) -------
+// --- env-seam + cache harness -------
 // compileStageGraph()/loadGraph()/loadSensors() read AIDLC_* env at call time.
 // __resetGraphCache() before each test so the module-level _graph cache cannot
 // leak a fixture between cases. Nothing in-process WRITES the real graph.
@@ -133,8 +118,8 @@ afterEach(() => {
   }
 });
 
-/** Seed a fresh per-test stage-graph.json tempfile from the committed graph and
- *  return its path. Never touches the real graph (matches the .sh's mktemp+cp).
+/** Seed a fresh per-test stage-graph.json tempfile from the shipped graph and
+ *  return its path. Never touches the real graph.
  *  A scope-grid.json copy sits beside it for compileEnv. */
 function seedGraphCopy(): string {
   const dir = mkdtempSync(join(tmpdir(), "t66-graph-"));
@@ -169,7 +154,7 @@ function numericOrder(a: string, b: string): number {
 }
 
 // =============================================================================
-// API surface — 8 exports callable (.sh:32-39, 8 assertions -> 1 grouped test)
+// API surface - 8 exports callable
 // =============================================================================
 
 describe("t66 API surface (in-process: 8 exports are functions)", () => {
@@ -191,39 +176,33 @@ describe("t66 API surface (in-process: 8 exports are functions)", () => {
 });
 
 // =============================================================================
-// producersOf / consumersOf — known + unknown artifact (.sh:45-73, 4 assertions)
+// producersOf / consumersOf - known + unknown artifact
 // =============================================================================
 
 describe("t66 producersOf / consumersOf (in-process)", () => {
-  // .sh:46-50
   test("producersOf(code-summary) == [code-generation]", () => {
     expect(producersOf("code-summary").map((s) => s.slug).sort().join(",")).toBe("code-generation");
   });
-  // .sh:52-56
   test("producersOf(unknown) returns empty", () => {
     expect(producersOf("no-such-artifact-xyz").length).toBe(0);
   });
-  // .sh:59-67 — requirements has 3+ consumers
   test("consumersOf(requirements) has 3+ consumers", () => {
     expect(consumersOf("requirements").length).toBeGreaterThanOrEqual(3);
   });
-  // .sh:69-73
   test("consumersOf(unknown) returns empty", () => {
     expect(consumersOf("no-such-artifact-xyz").length).toBe(0);
   });
 });
 
 // =============================================================================
-// topoSort — known-good graph + cycle input (.sh:79-95, 2 assertions)
+// topoSort - known-good graph + cycle input
 // =============================================================================
 
 describe("t66 topoSort (in-process)", () => {
-  // .sh:79-84
   test("topoSort(loadGraph()) returns 33 stages starting with workspace-scaffold", () => {
     const order = topoSort(loadGraph());
     expect(`${order.length}:${order[0]}`).toBe("33:workspace-scaffold");
   });
-  // .sh:86-95
   test("topoSort throws on cycle input", () => {
     const stages = [
       { slug: "a", number: "1.1", requires_stage: ["b"] },
@@ -234,15 +213,13 @@ describe("t66 topoSort (in-process)", () => {
 });
 
 // =============================================================================
-// findCycles — real graph + synthetic fixtures + disjoint (.sh:101-136, 4 assertions)
+// findCycles - real graph + synthetic fixtures + disjoint
 // =============================================================================
 
 describe("t66 findCycles (in-process)", () => {
-  // .sh:101-105
   test("findCycles(loadGraph()) returns [] for today's 32-stage graph", () => {
     expect(findCycles(loadGraph()).length).toBe(0);
   });
-  // .sh:107-115 — A->B->A
   test("findCycles detects A->B->A cycle", () => {
     const cs = findCycles([
       { slug: "a", number: "1.1", requires_stage: ["b"] },
@@ -250,14 +227,12 @@ describe("t66 findCycles (in-process)", () => {
     ] as unknown as GraphStage[]);
     expect(`${cs.length}:${cs[0].sort().join(",")}`).toBe("1:a,b");
   });
-  // .sh:117-124 — self-loop A->A
   test("findCycles detects self-loop A->A", () => {
     const cs = findCycles([
       { slug: "a", number: "1.1", requires_stage: ["a"] },
     ] as unknown as GraphStage[]);
     expect(`${cs.length}:${cs[0].join(",")}`).toBe("1:a");
   });
-  // .sh:126-136 — disjoint subgraph A->B, C->D
   test("disjoint subgraph (A->B, C->D) has no cycles and topo returns 4 nodes", () => {
     const stages = [
       { slug: "a", number: "1.1", requires_stage: ["b"] },
@@ -267,28 +242,24 @@ describe("t66 findCycles (in-process)", () => {
     ] as unknown as GraphStage[];
     expect(`${findCycles(stages).length}:${topoSort(stages).length}`).toBe("0:4");
   });
-  // .sh:142-146 — per-scope cycle check
   test("findCycles(subgraphForScope(enterprise)) returns []", () => {
     expect(findCycles(subgraphForScope("enterprise")).length).toBe(0);
   });
 });
 
 // =============================================================================
-// subgraphForScope shape + per-scope sizes + unknown + empty (.sh:152-217, 5 assertions)
+// subgraphForScope shape + per-scope sizes + unknown + empty
 // =============================================================================
 
 describe("t66 subgraphForScope (in-process)", () => {
-  // .sh:153-159 — subset of full graph
   test("subgraphForScope returns subset of full graph (bugfix < 32)", () => {
     expect(subgraphForScope("bugfix").length).toBeLessThan(loadGraph().length);
   });
-  // .sh:162-173 — numeric order
   test("subgraphForScope returns path in numeric order", () => {
     const nums = subgraphForScope("bugfix").map((s) => s.number);
     const sorted = [...nums].sort(numericOrder);
     expect(nums).toEqual(sorted);
   });
-  // .sh:176-189 — per-scope sizes match EXECUTE count for all 11 scopes
   test("subgraphForScope size matches EXECUTE count for all 11 scopes", () => {
     const mapping = loadScopeMapping();
     const mismatches: string[] = [];
@@ -299,11 +270,10 @@ describe("t66 subgraphForScope (in-process)", () => {
     }
     expect(mismatches).toEqual([]);
   });
-  // .sh:192-197 — unknown scope throws
   test("subgraphForScope throws on unknown scope", () => {
     expect(() => subgraphForScope("bogus-scope-xyz")).toThrow();
   });
-  // .sh:207-217 — empty-EXECUTE path yields [] (filter+sort contract safe on 0 nodes)
+  // Empty-EXECUTE path yields [] (filter+sort contract safe on 0 nodes).
   test("empty-EXECUTE path yields [] (filter+sort contract safe on 0 nodes)", () => {
     const filtered = loadGraph().filter(() => false);
     expect(filtered.length).toBe(0);
@@ -311,11 +281,10 @@ describe("t66 subgraphForScope (in-process)", () => {
 });
 
 // =============================================================================
-// Graph traversal — full graph (.sh:224-330, 6 assertions)
+// Graph traversal - full graph
 // =============================================================================
 
 describe("t66 graph traversal — full graph (in-process)", () => {
-  // .sh:224-236 — every requires_stage edge resolves to a known slug
   test("every requires_stage edge resolves to a known slug", () => {
     const graph = loadGraph();
     const slugs = new Set(graph.map((s) => s.slug));
@@ -328,7 +297,6 @@ describe("t66 graph traversal — full graph (in-process)", () => {
     expect(bad).toEqual([]);
   });
 
-  // .sh:239-255 — no cross-phase forward edges
   test("no cross-phase forward edges", () => {
     const PHASE_ORDER: Record<string, number> = {
       initialization: 0,
@@ -351,7 +319,6 @@ describe("t66 graph traversal — full graph (in-process)", () => {
     expect(bad).toEqual([]);
   });
 
-  // .sh:258-274 — fan-in at code-generation reaches the four design ancestors
   test("code-generation fan-in reaches units-generation, functional/nfr/infrastructure design", () => {
     const graph = loadGraph();
     const bySlug = new Map(graph.map((s) => [s.slug, s]));
@@ -367,7 +334,7 @@ describe("t66 graph traversal — full graph (in-process)", () => {
     expect(expected.filter((e) => !ancestors.has(e))).toEqual([]);
   });
 
-  // .sh:280-303 — reverse-engineering is independent of ideation (brownfield fan-out root)
+  // reverse-engineering is independent of ideation (brownfield fan-out root).
   test("reverse-engineering is independent of ideation (fan-out root for brownfield path)", () => {
     const graph = loadGraph();
     const bySlug = new Map(graph.map((s) => [s.slug, s]));
@@ -390,7 +357,6 @@ describe("t66 graph traversal — full graph (in-process)", () => {
     expect(linked).toEqual([]);
   });
 
-  // .sh:306-316 — producersOf/consumersOf return arrays for every registered artifact
   test("producersOf/consumersOf return arrays for every registered artifact", () => {
     const arts = [...artifactsRegistry()];
     let errors = 0;
@@ -401,7 +367,6 @@ describe("t66 graph traversal — full graph (in-process)", () => {
     expect(errors).toBe(0);
   });
 
-  // .sh:319-330 — every consumed artifact has a producer somewhere
   test("every consumed artifact has a producer somewhere in the graph", () => {
     const graph = loadGraph();
     const orphans = new Set<string>();
@@ -415,15 +380,14 @@ describe("t66 graph traversal — full graph (in-process)", () => {
 });
 
 // =============================================================================
-// Graph traversal — per-scope sub-DAG (.sh:337-375, 3 assertions)
+// Graph traversal - per-scope sub-DAG
 // =============================================================================
 
 describe("t66 graph traversal — per-scope sub-DAG (in-process)", () => {
-  // .sh:337-341 — enterprise sub-DAG is the full graph
   test("enterprise sub-DAG equals full graph", () => {
     expect(subgraphForScope("enterprise").length).toBe(loadGraph().length);
   });
-  // .sh:344-356 — bugfix sub-DAG has sawed-off edges (producers off-path)
+  // bugfix sub-DAG has sawed-off edges (producers off-path).
   test("bugfix sub-DAG has sawed-off edges (producers off-path)", () => {
     const path = subgraphForScope("bugfix");
     const onPath = new Set(path.map((s) => s.slug));
@@ -435,7 +399,6 @@ describe("t66 graph traversal — per-scope sub-DAG (in-process)", () => {
     }
     expect(sawed).toBeGreaterThan(0);
   });
-  // .sh:359-375 — feature sub-DAG edges are a subset of full-graph edges
   test("feature sub-DAG edges are a subset of full-graph edges", () => {
     const featurePath = subgraphForScope("feature");
     const fullBySlug = new Map(loadGraph().map((s) => [s.slug, s]));
@@ -454,8 +417,7 @@ describe("t66 graph traversal — per-scope sub-DAG (in-process)", () => {
 // =============================================================================
 // Plan-identity parity — byte-exact for 11 scopes
 // MUST STAY SPAWN: asserts the CLI `state lookup stages-in-scope` stdout matches the
-// golden fixtures byte-for-byte (process-boundary stdout contract). The .sh re-pretty-
-// prints the CLI's single-line JSON with JSON.stringify(parse, null, 2); reproduced here.
+// golden fixtures byte-for-byte (process-boundary stdout contract).
 // =============================================================================
 
 describe("t66 plan-identity parity (spawnSync CLI-boundary: 11 scopes)", () => {
@@ -465,7 +427,6 @@ describe("t66 plan-identity parity (spawnSync CLI-boundary: 11 scopes)", () => {
         encoding: "utf8",
       });
       expect(res.status).toBe(0);
-      // .sh pipes CLI single-line JSON through JSON.stringify(parse, null, 2).
       const actual = JSON.stringify(JSON.parse(res.stdout), null, 2);
       const expected = readFileSync(join(PARITY_DIR, `${scope}.json`), "utf8").trimEnd();
       expect(actual).toBe(expected);
@@ -475,27 +436,20 @@ describe("t66 plan-identity parity (spawnSync CLI-boundary: 11 scopes)", () => {
 
 // =============================================================================
 // AIDLC_GRAPH_RESOLVE=1 resolve cutover parity — byte-exact for 11 scopes
-// (.sh:407-415, 10 assertions). MUST STAY SPAWN: this is an ENV-GATED CLI
-// subcommand whose entire subject is a process-boundary seam — a FRESH process
-// must (a) read AIDLC_GRAPH_RESOLVE at module/handler time to lift the gate and
-// (b) emit the {slug, phase, action} plan to stdout. resolvePlanForScope() is
-// importable, but the .sh assertion proves the `resolve <scope> --stdout` CLI
-// path (env read + stdout byte-shape), so spawnSync the real tool.
+// MUST STAY SPAWN: this is an ENV-GATED CLI subcommand whose entire subject is a
+// process-boundary seam - a FRESH process must (a) read AIDLC_GRAPH_RESOLVE at
+// handler time to lift the gate and (b) emit the {slug, phase, action} plan to
+// stdout. resolvePlanForScope() is importable, but the assertion proves the
+// `resolve <scope> --stdout` CLI path (env read + stdout byte-shape), so
+// spawnSync the real tool.
 //
-// v0.6.0 SURFACE NOTE: the .sh framed this as the "milestone 12 cutover safety net"
-// proving the frontmatter-derived grid == the LEGACY scope-mapping-derived plan
-// BEFORE scope-mapping.json was retired. scope-mapping.json IS now retired
-// (verified: dist/claude/.claude/tools/data/ has scope-grid.json, no
-// scope-mapping.json; nine .claude/scopes/aidlc-<scope>.md files are the
-// authored source). resolvePlanForScope() (aidlc-graph.ts:762-780) reads
-// loadScopeGrid()[scope] — the compiled grid — so this resolve path now pins the
-// CURRENT shipped surface, and its output still equals the mr9-parity fixtures
-// byte-for-byte (the cutover held). No obsolete-source resurrection: the
-// fixtures are the frozen plan-shape; the live surface is the grid. The output
-// is already 2-space-indented JSON with a trailing newline, so the .sh's
-// JSON.parse + JSON.stringify(parse, null, 2) reformat is an identity
-// round-trip; asserted directly against the trimmed fixture here, plus the raw
-// trailing-newline byte-shape and exit 0.
+// resolvePlanForScope() (aidlc-graph.ts) reads loadScopeGrid()[scope] - the
+// compiled grid - so this resolve path pins the CURRENT shipped surface, and its
+// output equals the mr9-parity fixtures byte-for-byte. The fixtures are the frozen
+// plan-shape; the live surface is the grid. The output is already 2-space-indented
+// JSON with a trailing newline, so a JSON.parse + JSON.stringify(parse, null, 2)
+// reformat is an identity round-trip; asserted directly against the trimmed
+// fixture here, plus the raw trailing-newline byte-shape and exit 0.
 // =============================================================================
 
 describe("t66 AIDLC_GRAPH_RESOLVE=1 resolve cutover parity (spawnSync env-gated CLI)", () => {
@@ -531,19 +485,16 @@ describe("t66 AIDLC_GRAPH_RESOLVE=1 resolve cutover parity (spawnSync env-gated 
         env: { ...process.env, AIDLC_GRAPH_RESOLVE: "1" },
         encoding: "utf8",
       });
-      // Gate lifted -> the resolve handler runs and exits 0 (the .sh ran with
-      // `2>/dev/null`, trusting a clean stdout — assert the exit explicitly,
-      // which is strictly stronger than the .sh's silent assumption).
       expect(res.status).toBe(0);
-      // resolve --stdout writes `${JSON.stringify(plan, null, 2)}\n` (graph.ts:1328-1331):
-      // already pretty-printed with a trailing newline. The .sh's reformat pipe is an
-      // identity round-trip, so compare the parsed-and-re-pretty-printed stdout to the
-      // fixture (trimmed exactly as the .sh's `$(cat ...)` strips the trailing newline).
+      // resolve --stdout writes `${JSON.stringify(plan, null, 2)}\n` (aidlc-graph.ts
+      // resolve handler): already pretty-printed with a trailing newline. The
+      // reformat is an identity round-trip, so compare the parsed-and-re-pretty-printed
+      // stdout to the fixture (trimmed to strip the trailing newline).
       const actual = JSON.stringify(JSON.parse(res.stdout), null, 2);
       const expected = readFileSync(join(PARITY_DIR, `${scope}.json`), "utf8").trimEnd();
       expect(actual).toBe(expected);
-      // STRONGER than the .sh: pin the raw stdout byte-shape too — the handler's
-      // trailing newline must be present (the `--stdout` write contract).
+      // Pin the raw stdout byte-shape too - the handler's trailing newline must be
+      // present (the `--stdout` write contract).
       expect(res.stdout.endsWith("\n")).toBe(true);
       expect(res.stdout.trimEnd()).toBe(expected);
     });
@@ -552,8 +503,7 @@ describe("t66 AIDLC_GRAPH_RESOLVE=1 resolve cutover parity (spawnSync env-gated 
   // The env gate is the whole reason `resolve` ships behind a flag — prove it
   // FIRES (the failure event, not just the happy path): without
   // AIDLC_GRAPH_RESOLVE=1 the handler must exit 1 with the rollout-gate message
-  // on stderr and emit NO plan to stdout. STRONGER than the .sh (which only ever
-  // ran the flag-set happy path, redirecting stderr to /dev/null).
+  // on stderr and emit NO plan to stdout.
   test("resolve is gated behind AIDLC_GRAPH_RESOLVE=1 (no flag -> exit 1, stderr, no stdout)", () => {
     const env = { ...process.env };
     delete (env as Record<string, string | undefined>).AIDLC_GRAPH_RESOLVE;
@@ -626,13 +576,11 @@ describe("t66 firstInScopeStageOfPhase parity (spawnSync CLI-boundary)", () => {
 });
 
 // =============================================================================
-// nextInScopeStage state-file semantics (.sh:467-533, 3 assertions, in-process)
-// nextInScopeStage(afterSlug, scope, stateContent) is a pure function — the .sh
-// only spawned it because it lived in lib.ts. Call it directly here.
+// nextInScopeStage state-file semantics (in-process)
+// nextInScopeStage(afterSlug, scope, stateContent) is a pure function.
 // =============================================================================
 
 describe("t66 nextInScopeStage state-file semantics (in-process)", () => {
-  // .sh:467-491 — completed [x] intent-capture is skipped; returns market-research
   test("nextInScopeStage skips completed intent-capture, returns market-research", () => {
     const state = `# Workflow State
 
@@ -646,7 +594,6 @@ describe("t66 nextInScopeStage state-file semantics (in-process)", () => {
     expect(next ? next.slug : "null").toBe("market-research");
   });
 
-  // .sh:497-510 — SKIP suffix on intent-capture honoured; returns market-research
   test("nextInScopeStage honours SKIP suffix on intent-capture", () => {
     const state = `# Workflow State
 
@@ -659,7 +606,6 @@ describe("t66 nextInScopeStage state-file semantics (in-process)", () => {
     expect(next ? next.slug : "null").toBe("market-research");
   });
 
-  // .sh:521-533 — EXECUTE override promotes a scope-SKIP stage (bugfix intent-capture)
   test("nextInScopeStage honours EXECUTE override for scope-SKIP intent-capture in bugfix", () => {
     const state = `# Workflow State
 
@@ -673,11 +619,11 @@ describe("t66 nextInScopeStage state-file semantics (in-process)", () => {
 });
 
 // =============================================================================
-// Circular import — both modules load without throw (.sh:539-544, 1 assertion)
+// Circular import - both modules load without throw
 // In-process: the test file already statically imports BOTH modules at the top
 // (aidlc-graph.ts <-> aidlc-lib.ts circular pair). If the circular import threw at
 // module-load, this file would not have loaded at all. Pin it explicitly via the
-// imported symbols being functions — equivalent to the .sh's dynamic-import probe.
+// imported symbols being functions.
 // =============================================================================
 
 describe("t66 circular import (in-process)", () => {
@@ -687,11 +633,11 @@ describe("t66 circular import (in-process)", () => {
 });
 
 // =============================================================================
-// AIDLC_STAGE_GRAPH env override honoured post-rewire (.sh:550-594, 1 assertion)
+// AIDLC_STAGE_GRAPH env override honoured
 // MUST STAY SPAWN: the assertion's whole point is that a FRESH process reads
-// AIDLC_STAGE_GRAPH at module load and stagesInScope() reflects the injected file.
-// In-process the module is already loaded with the real graph cached, so this is a
-// genuine module-load env-read boundary -> spawnSync.
+// AIDLC_STAGE_GRAPH and stagesInScope() reflects the injected file. In-process
+// the module is already loaded with the real graph cached, so this is a genuine
+// fresh-process env-read boundary -> spawnSync.
 // =============================================================================
 
 describe("t66 AIDLC_STAGE_GRAPH env override (spawnSync env-seam)", () => {
@@ -759,34 +705,31 @@ describe("t66 AIDLC_STAGE_GRAPH env override (spawnSync env-seam)", () => {
 });
 
 // =============================================================================
-// validateScope semantic precision (.sh:604-655, 5 assertions, in-process)
+// validateScope semantic precision (in-process)
 // =============================================================================
 
 describe("t66 validateScope (in-process)", () => {
-  // .sh:604-610 — structured shape + feature valid
   test("validateScope returns structured {valid, errors, advisories}; feature scope valid", () => {
     const r = validateScope("feature");
     const shape = "valid" in r && Array.isArray(r.errors) && Array.isArray(r.advisories);
     expect(`${shape}:${r.valid}`).toBe("true:true");
   });
-  // .sh:618-623 — bugfix produces advisories (off-path producers)
+  // bugfix produces advisories (off-path producers).
   test("validateScope produces advisories for bugfix (off-path producers)", () => {
     expect(validateScope("bugfix").advisories.length).toBeGreaterThan(0);
   });
-  // .sh:632-640 — projectType filter reduces advisories (<=)
   test("validateScope projectType filter reduces advisories", () => {
     const unfiltered = validateScope("feature");
     const greenfield = validateScope("feature", { projectType: "greenfield" });
     expect(greenfield.advisories.length).toBeLessThanOrEqual(unfiltered.advisories.length);
   });
-  // .sh:650-655 — required:false orphans are silent (feature errors=0)
+  // required:false orphans are silent (feature errors=0).
   test("validateScope ignores required:false orphans (feature errors=0)", () => {
     expect(validateScope("feature").errors.length).toBe(0);
   });
-  // The .sh header lists "validateScope (5)"; the fifth distinct contract the .sh
-  // exercises across cases is the errors-vs-advisories split: an off-path producer is
-  // an advisory (not an error). Pin it directly so all five validateScope semantics
-  // are represented (the bugfix advisory exists while errors stay empty).
+  // An off-path producer is an advisory (not an error). Pin the
+  // errors-vs-advisories split directly (the bugfix advisory exists while errors
+  // stay empty).
   test("validateScope: off-path producer is an advisory, not an error (bugfix)", () => {
     const r = validateScope("bugfix");
     expect(r.errors.length).toBe(0);
@@ -879,7 +822,7 @@ describe("t66 validateScope (in-process)", () => {
 });
 
 // =============================================================================
-// Compile round-trip — second compile byte-identical (.sh:661-682, 1 assertion)
+// Compile round-trip - second compile byte-identical
 // In-process: compileStageGraph() twice (with __resetGraphCache between) -> equal hash.
 // =============================================================================
 
@@ -893,8 +836,7 @@ describe("t66 compile round-trip (in-process)", () => {
 });
 
 // =============================================================================
-// Edge-local invariant — upstream-depends-on-higher-number (.sh:696-721, 1 assertion)
-// In-process: replicate the .sh's direct invariant-logic check verbatim.
+// Edge-local invariant - upstream-depends-on-higher-number
 // =============================================================================
 
 describe("t66 edge-local invariant (in-process)", () => {
@@ -937,7 +879,7 @@ describe("t66 compile auto-seeds new stages (source grep)", () => {
 });
 
 // =============================================================================
-// for_each preservation on 5 Construction per-unit stages (.sh:741-747, 1 assertion)
+// for_each preservation on 5 Construction per-unit stages
 // =============================================================================
 
 describe("t66 for_each preservation (in-process)", () => {
@@ -953,11 +895,10 @@ describe("t66 for_each preservation (in-process)", () => {
 });
 
 // =============================================================================
-// Compile error hardening (.sh:761-811, 3 assertions)
+// Compile error hardening
 // =============================================================================
 
 describe("t66 compile error hardening (in-process + source grep)", () => {
-  // .sh:761-781 — duplicate-slug detection logic names both files
   test("compile duplicate-slug detection names both files", () => {
     const files = [
       { path: "a.md", slug: "intent-capture" },
@@ -984,7 +925,6 @@ describe("t66 compile error hardening (in-process + source grep)", () => {
     expect(result).toBe("DETECTED");
   });
 
-  // .sh:784-803 — validateStageFrontmatter rejects missing required field (execution)
   test("compile invokes validateStageFrontmatter which rejects missing required fields", () => {
     const bad = {
       slug: "test-stage",
@@ -1003,7 +943,6 @@ describe("t66 compile error hardening (in-process + source grep)", () => {
     expect(r.valid).toBe(false);
   });
 
-  // .sh:806-811 — filePath context in compile errors (>=2 sites). GREP-THE-SOURCE.
   test("compile errors include filePath context (>=2 sites)", () => {
     const src = readFileSync(GRAPH_TS, "utf8");
     const count = (src.match(/\$\{filePath\}:/g) ?? []).length;
@@ -1012,7 +951,7 @@ describe("t66 compile error hardening (in-process + source grep)", () => {
 });
 
 // =============================================================================
-// compile --check drift detection (.sh:821-849, 3 assertions)
+// compile --check drift detection
 // MUST STAY SPAWN: `aidlc-graph.ts compile --check` exits 0/1 via process.exit; there
 // is no in-process seam for the check's exit boundary. Sandboxed via a fresh tempfile.
 // =============================================================================
@@ -1022,18 +961,15 @@ describe("t66 compile --check drift (spawnSync CLI exit-code)", () => {
     const graph = seedGraphCopy();
     const env = compileEnv(graph);
 
-    // Clean -> exit 0
     const clean = spawnSync(BUN, [GRAPH_TS, "compile", "--check"], { env, encoding: "utf8" });
     expect(clean.status).toBe(0);
 
-    // Mutate temp graph -> exit 1
     const j = JSON.parse(readFileSync(graph, "utf8"));
     j[0].bogus_field = "drift";
     writeFileSync(graph, `${JSON.stringify(j, null, 2)}\n`, "utf8");
     const mutated = spawnSync(BUN, [GRAPH_TS, "compile", "--check"], { env, encoding: "utf8" });
     expect(mutated.status).toBe(1);
 
-    // Restore -> exit 0 again
     copyFileSync(SEED_GRAPH, graph);
     const restored = spawnSync(BUN, [GRAPH_TS, "compile", "--check"], { env, encoding: "utf8" });
     expect(restored.status).toBe(0);
@@ -1041,15 +977,13 @@ describe("t66 compile --check drift (spawnSync CLI exit-code)", () => {
 });
 
 // =============================================================================
-// Canonical emitter pin (.sh:855-870, 2 assertions, in-process)
+// Canonical emitter pin (in-process)
 // =============================================================================
 
 describe("t66 canonical emitter pin (in-process)", () => {
-  // .sh:855-860 — trailing newline
   test("canonicalStageGraphJson emits trailing newline", () => {
     expect(canonicalStageGraphJson(loadGraph()).endsWith("\n")).toBe(true);
   });
-  // .sh:862-870 — byte-stable across calls
   test("canonicalStageGraphJson is byte-stable across calls", () => {
     const g = loadGraph();
     expect(sha256(canonicalStageGraphJson(g))).toBe(sha256(canonicalStageGraphJson(g)));
@@ -1057,17 +991,16 @@ describe("t66 canonical emitter pin (in-process)", () => {
 });
 
 // =============================================================================
-// Designer export (.sh:885-955, 10 assertions)
+// Designer export
 // MUST STAY SPAWN: the strongest assertion compares the CLI `export` stdout to the
 // golden fixture byte-for-byte (process-boundary stdout contract); the env-seam group
-// proves a FRESH process reads AIDLC_STAGE_GRAPH + AIDLC_SCOPE_MAPPING at module load;
+// proves a FRESH process reads AIDLC_STAGE_GRAPH + AIDLC_SCOPE_MAPPING;
 // export --check exits via process.exit. The golden at tests/fixtures/designer-export/
 // export.json is READ only, never written.
 // =============================================================================
 
 describe("t66 designer export (spawnSync CLI-boundary)", () => {
-  // .sh:888-890 — Group A: byte-identical to golden fixture (the .sh's $(...) strips
-  // the trailing newline from both sides, so compare trimmed-equal).
+  // Group A: byte-identical to golden fixture (compare trimmed-equal).
   test("export output matches golden fixture byte-for-byte", () => {
     const res = spawnSync(BUN, [GRAPH_TS, "export"], { encoding: "utf8" });
     expect(res.status).toBe(0);
@@ -1075,7 +1008,7 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
     expect(res.stdout.trimEnd()).toBe(expected.trimEnd());
   });
 
-  // .sh:892-900 — Group B: element counts match live sources (4 assertions)
+  // Group B: element counts match live sources (4 assertions).
   test("export element counts: stages=33, scopes=11, artifacts=122, agents=14", () => {
     const res = spawnSync(BUN, [GRAPH_TS, "export"], { encoding: "utf8" });
     const out = JSON.parse(res.stdout) as {
@@ -1090,14 +1023,14 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
     expect(out.agents.length).toBe(14);
   });
 
-  // .sh:903-904 — Group C: determinism across two invocations
+  // Group C: determinism across two invocations.
   test("export is deterministic across two invocations", () => {
     const a = spawnSync(BUN, [GRAPH_TS, "export"], { encoding: "utf8" }).stdout;
     const b = spawnSync(BUN, [GRAPH_TS, "export"], { encoding: "utf8" }).stdout;
     expect(a).toBe(b);
   });
 
-  // .sh:910-949 — Group D: env-seam for AIDLC_STAGE_GRAPH + AIDLC_SCOPE_MAPPING (2 assertions)
+  // Group D: env-seam for AIDLC_STAGE_GRAPH + AIDLC_SCOPE_MAPPING (2 assertions).
   test("env-seam: AIDLC_STAGE_GRAPH + AIDLC_SCOPE_MAPPING swap produce fixture-only export", () => {
     const dir = mkdtempSync(join(tmpdir(), "t66-export-seam-"));
     scratch.push(dir);
@@ -1150,7 +1083,7 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
     expect(Object.keys(out.scopes)[0]).toBe("fixture-scope");
   });
 
-  // .sh:954-955 — Group E: export --check exits 0 when output matches fixture
+  // Group E: export --check exits 0 when output matches fixture.
   test("export --check exits 0 when output matches fixture", () => {
     const res = spawnSync(BUN, [GRAPH_TS, "export", "--check"], { encoding: "utf8" });
     expect(res.status).toBe(0);
@@ -1158,31 +1091,28 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
 });
 
 // =============================================================================
-// rules_in_context resolution (milestone 7a) — (.sh:966-1037, 6 assertions)
+// rules_in_context resolution
 // =============================================================================
 
 describe("t66 rules_in_context resolution (in-process + spawnSync seams)", () => {
-  // .sh:966-971 — loadGraph() stages carry rules_in_context as array (in-process)
   test("loadGraph() stages carry rules_in_context as array", () => {
     expect(Array.isArray(loadGraph()[0].rules_in_context)).toBe(true);
   });
 
-  // .sh:974-983 — FIELD_ORDER places rules_in_context immediately after outputs (in-process)
   test("FIELD_ORDER places rules_in_context immediately after outputs", () => {
     const obj = JSON.parse(canonicalStageGraphJson(loadGraph()))[0] as Record<string, unknown>;
     const keys = Object.keys(obj);
     expect(keys.indexOf("rules_in_context")).toBe(keys.indexOf("outputs") + 1);
   });
 
-  // .sh:987-997 — canonical emitter pin: rules_in_context populates from AIDLC_RULES_DIR.
-  // MUST STAY SPAWN: two FRESH compile processes each reading AIDLC_RULES_DIR at module
-  // load; the populated-vs-empty hashes must differ (env-seam read boundary).
+  // Canonical emitter pin: rules_in_context populates from AIDLC_RULES_DIR.
+  // MUST STAY SPAWN: two FRESH compile processes each reading AIDLC_RULES_DIR;
+  // the populated-vs-empty hashes must differ (env-seam read boundary).
   test("canonical emitter pin: rules_in_context populates from AIDLC_RULES_DIR", () => {
     const popRules = mkdtempSync(join(tmpdir(), "t66-rules-pop-"));
     const emptyRules = mkdtempSync(join(tmpdir(), "t66-rules-empty-"));
     scratch.push(popRules, emptyRules);
-    // Neutral method-file name (P5 relocation: RULE_FILE_REGEX now matches
-    // org/team/project.md, not the old aidlc-<scope>.md).
+    // Neutral method-file name: RULE_FILE_REGEX matches org/team/project.md.
     writeFileSync(join(popRules, "org.md"), "# org rule\n");
     const graphA = seedGraphCopy();
     const graphB = seedGraphCopy();
@@ -1199,7 +1129,7 @@ describe("t66 rules_in_context resolution (in-process + spawnSync seams)", () =>
     expect(hashPop).not.toBe(hashEmpty);
   });
 
-  // .sh:1000-1009 — compile --check detects rule-file drift via AIDLC_RULES_DIR.
+  // compile --check detects rule-file drift via AIDLC_RULES_DIR.
   // MUST STAY SPAWN: compile then --check (process.exit boundary) after adding a rule.
   test("compile --check detects rule-file drift via AIDLC_RULES_DIR", () => {
     const rules = mkdtempSync(join(tmpdir(), "t66-rules-drift-"));
@@ -1213,7 +1143,7 @@ describe("t66 rules_in_context resolution (in-process + spawnSync seams)", () =>
     expect(check.status).toBe(1);
   });
 
-  // .sh:1013-1020 — round-trip: two compiles produce byte-identical output.
+  // Round-trip: two compiles produce byte-identical output.
   // MUST STAY SPAWN: two FRESH compile processes against seeded tempfiles -> equal hash.
   test("round-trip: two compiles produce byte-identical output", () => {
     const graphD = seedGraphCopy();
@@ -1229,19 +1159,17 @@ describe("t66 rules_in_context resolution (in-process + spawnSync seams)", () =>
     expect(sha256(readFileSync(graphD, "utf8"))).toBe(sha256(readFileSync(graphE, "utf8")));
   });
 
-  // .sh:1025-1037 — concurrency: two PARALLEL compiles serialise via withAuditLock; the
+  // Concurrency: two PARALLEL compiles serialise via withAuditLock; the
   // resulting file is byte-equal to a serial compile result. MUST STAY SPAWN (parallel
   // processes). Spawn both async, await both, then compare to the serial hash.
   test("concurrency: parallel compiles produce byte-equal output to serial compile", async () => {
     const serial = seedGraphCopy();
     const parallel = seedGraphCopy();
-    // Serial baseline.
     spawnSync(BUN, [GRAPH_TS, "compile"], {
       env: compileEnv(serial),
       encoding: "utf8",
     });
     const serialHash = sha256(readFileSync(serial, "utf8"));
-    // Two parallel compiles against the same file.
     const env = compileEnv(parallel);
     const p1 = Bun.spawn([BUN, GRAPH_TS, "compile"], { env, stdout: "ignore", stderr: "ignore" });
     const p2 = Bun.spawn([BUN, GRAPH_TS, "compile"], { env, stdout: "ignore", stderr: "ignore" });
@@ -1251,26 +1179,24 @@ describe("t66 rules_in_context resolution (in-process + spawnSync seams)", () =>
 });
 
 // =============================================================================
-// sensors_applicable resolution (milestone 7b) — (.sh:1049-1137, 6 assertions)
+// sensors_applicable resolution
 // =============================================================================
 
 describe("t66 sensors_applicable resolution (in-process + spawnSync seams)", () => {
-  // .sh:1049-1054 — loadGraph() stages carry sensors_applicable as array (in-process)
   test("loadGraph() stages carry sensors_applicable as array", () => {
     expect(Array.isArray(loadGraph()[0].sensors_applicable)).toBe(true);
   });
 
-  // .sh:1057-1066 — FIELD_ORDER places sensors_applicable after rules_in_context (in-process)
   test("FIELD_ORDER places sensors_applicable immediately after rules_in_context", () => {
     const obj = JSON.parse(canonicalStageGraphJson(loadGraph()))[0] as Record<string, unknown>;
     const keys = Object.keys(obj);
     expect(keys.indexOf("sensors_applicable")).toBe(keys.indexOf("rules_in_context") + 1);
   });
 
-  // .sh:1074-1101 — AIDLC_SENSORS_DIR seam: populated dir yields a graph.
-  // MUST STAY SPAWN: a FRESH compile reading AIDLC_STAGES_DIR + AIDLC_SENSORS_DIR at
-  // module load; the seam is the populated-dir-produces-a-graph fact. Rebuild the
-  // single-stage init tree + probe-sensor heredoc via cpSync + writeFileSync.
+  // AIDLC_SENSORS_DIR seam: populated dir yields a graph.
+  // MUST STAY SPAWN: a FRESH compile reading AIDLC_STAGES_DIR + AIDLC_SENSORS_DIR;
+  // the seam is the populated-dir-produces-a-graph fact. Build the
+  // single-stage init tree + probe-sensor fixture via cpSync + writeFileSync.
   test("AIDLC_SENSORS_DIR seam: populated dir yields a graph", () => {
     const stagesInit = mkdtempSync(join(tmpdir(), "t66-sensors-stages-"));
     const sensorsPop = mkdtempSync(join(tmpdir(), "t66-sensors-pop-"));
@@ -1299,11 +1225,10 @@ description: Probe sensor for canonical-emitter test
       }),
       encoding: "utf8",
     });
-    // Non-empty graph file -> the AIDLC_SENSORS_DIR seam wired through.
     expect(readFileSync(graphS1, "utf8").length).toBeGreaterThan(0);
   });
 
-  // .sh:1106-1116 — compile --check detects sensor-manifest drift via AIDLC_SENSORS_DIR.
+  // compile --check detects sensor-manifest drift via AIDLC_SENSORS_DIR.
   // MUST STAY SPAWN: compile then --check (process.exit boundary) after editing a
   // manifest's matches glob. Use the REAL sensor set so real stage imports resolve.
   test("compile --check detects sensor-manifest drift via AIDLC_SENSORS_DIR", () => {
@@ -1313,7 +1238,6 @@ description: Probe sensor for canonical-emitter test
     const graphS3 = seedGraphCopy();
     const env = compileEnv(graphS3, { AIDLC_SENSORS_DIR: sensorsDrift });
     spawnSync(BUN, [GRAPH_TS, "compile"], { env, encoding: "utf8" });
-    // Edit the linter manifest's matches glob; --check should now fail.
     const linterPath = join(sensorsDrift, "aidlc-linter.md");
     const orig = readFileSync(linterPath, "utf8");
     writeFileSync(linterPath, orig.replace('"**/*.{ts,js}"', '"**/post-edit/*.ts"'));
@@ -1321,7 +1245,7 @@ description: Probe sensor for canonical-emitter test
     expect(check.status).toBe(1);
   });
 
-  // .sh:1119-1126 — round-trip: sensor-included compile is byte-identical across runs.
+  // Round-trip: sensor-included compile is byte-identical across runs.
   // MUST STAY SPAWN: two FRESH compile processes (real sensors) -> equal hash.
   test("round-trip: sensor-included compile is byte-identical across runs", () => {
     const graphS4 = seedGraphCopy();
@@ -1337,10 +1261,10 @@ description: Probe sensor for canonical-emitter test
     expect(sha256(readFileSync(graphS4, "utf8"))).toBe(sha256(readFileSync(graphS5, "utf8")));
   });
 
-  // .sh:1130-1137 — resolveSensorsForStage direct unit: declared-order + throw-on-unknown.
+  // resolveSensorsForStage direct unit: declared-order + throw-on-unknown.
   // In-process: loadSensors() walks the real sensors dir; resolveSensorsForStage preserves
-  // declared order. (The .sh only asserted declared order; the throw-on-unknown contract
-  // is exercised by t89 and pinned here too for completeness.)
+  // declared order. The throw-on-unknown contract
+  // is exercised by t89 and pinned here too.
   test("resolveSensorsForStage returns entries in declared order", () => {
     const m = loadSensors();
     const stage = { slug: "probe", sensors: ["linter", "type-check"] } as unknown as GraphStage;
@@ -1352,9 +1276,8 @@ description: Probe sensor for canonical-emitter test
 });
 
 // =============================================================================
-// withAuditLock reentrancy (.sh:1149-1195, 2 assertions, in-process)
-// nextInScopeStage's sibling lib.ts primitive — pure in-process, no subprocess needed.
-// (The .sh spawned `bun -e` only because it lived in lib.ts.)
+// withAuditLock reentrancy (in-process)
+// nextInScopeStage's sibling lib.ts primitive - in-process, no subprocess needed.
 // =============================================================================
 
 describe("t66 withAuditLock reentrancy (in-process)", () => {
@@ -1392,7 +1315,7 @@ describe("t66 withAuditLock reentrancy (in-process)", () => {
     expect(released).toBe(true);
   });
 
-  // .sh:1180-1195 — sequential calls do not accumulate exit handlers (handler-leak guard)
+  // Sequential calls do not accumulate exit handlers (handler-leak guard).
   test("withAuditLock: sequential calls do not accumulate exit handlers", () => {
     const pd = mkdtempSync(join(tmpdir(), "t66-listener-probe-"));
     scratch.push(pd);

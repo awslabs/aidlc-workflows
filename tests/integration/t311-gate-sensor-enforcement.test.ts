@@ -3,7 +3,7 @@
 //
 // Gate-bound sensor integration: state dispatches outside its transaction,
 // blocking failures refuse the transition, the explicit override is audited,
-// and advisory failures preserve the historical non-blocking behavior.
+// and advisory failures preserve non-blocking behavior.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,

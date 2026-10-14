@@ -95,12 +95,12 @@ import {
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
-// The space-level per-repo codekb dir the RE stage now writes into
-// (aidlc/spaces/<space>/codekb/<repo>/ — the codekb-determinism placement fix).
-// This single-repo brownfield fixture records NO repos row, so the engine keys
-// the store by basename(projectDir) (codekbRepoName's 0-repo case). Tolerant of
-// the bare workspace-root form too (the live RE subagent occasionally writes
-// there), mirroring the t-acp-kiro / journey codekbFiles helpers.
+// The space-level per-repo codekb dir the RE stage writes into
+// (aidlc/spaces/<space>/codekb/<repo>/). This single-repo brownfield fixture
+// records NO repos row and is not a linked git worktree, so codekbRepoName
+// falls back to basename(projectDir). Tolerant of the bare workspace-root form
+// too (the live RE subagent occasionally writes there), mirroring the
+// t-acp-kiro / journey codekbFiles helpers.
 function codekbReDir(proj: string): string {
   const spaceScoped = join(proj, "aidlc", "spaces", activeSpace(proj), "codekb", basename(proj));
   const bare = join(proj, "aidlc", "codekb", basename(proj));
@@ -108,13 +108,14 @@ function codekbReDir(proj: string): string {
 }
 
 // The 9 RE artifact stems the architect synthesises (reverse-engineering.md
-// produces:). The anti-scatter check below tests for THESE in the old per-intent
+// produces:). The anti-scatter check below tests for THESE in the per-intent
 // record location - NOT the directory's mere existence, because the RE stage's
 // own "Learn" ritual legitimately writes its stage diary memory.md into
-// <record>/<phase>/<stage>/ (reverse-engineering.md "the memory.md file stays in
-// the artefact directory as part of the stage's permanent record"). That diary
-// materializes the reverse-engineering/ directory by design; only a scattered RE
-// ARTIFACT there is a placement regression. Mirrors t183's stem-filtered check.
+// <record>/<phase>/<stage>/ (stage-protocol-learnings.md "the memory file stays
+// in the artefact directory as part of the stage's permanent record"). That
+// diary materializes the reverse-engineering/ directory by design; only a
+// scattered RE ARTIFACT there is a placement regression. Mirrors t183's
+// stem-filtered check.
 const RE_STEMS = [
   "business-overview",
   "architecture",
@@ -163,7 +164,7 @@ const TARGET_PHASE = "INCEPTION";
 describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
   // -------------------------------------------------------------------------
   // Brownfield project seeded at init-done with RE next. Drive the RE stage and
-  // STOP when its approval gate renders — the moment the 9 artifacts + the state
+  // STOP after its approval answer is delivered, when the 9 artifacts + the state
   // update have landed. The live conductor may already have reported completion
   // and advanced, so assert the durable artifact + ordered state/audit outcome.
   // -------------------------------------------------------------------------
@@ -177,8 +178,8 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
         withAudit: true,
       });
       try {
-        // P9: state lives in the seeded per-intent record the RE stage resolves
-        // via the active-intent cursor (the flat aidlc-docs/ root is retired).
+        // State lives in the seeded per-intent record the RE stage resolves
+        // via the active-intent cursor.
         sedReplaceInFile(
           seededStateFile(proj),
           "- **Project Root**: /tmp/aidlc-test",
@@ -209,16 +210,15 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
           }),
         });
 
-        // A generic first question previously false-passed on missing workflow
+        // A generic first question can false-pass on missing workflow
         // history. The predicate proves the held gate's stage/attempt identity.
         expect(r.askedQuestions.length).toBeGreaterThan(0);
         expect(r.timedOut).toBe(false);
         expect(r.stoppedAfterAskUserQuestion).toBe(true);
 
-        // .sh test 1: the RE artifact directory was created. RE now writes to the
-        // SPACE-LEVEL per-repo codekb store, NOT the per-intent record dir (the
-        // codekb-determinism placement fix). Enumerate that dir; also assert RE
-        // did NOT scatter ARTIFACTS into the old record-dir location.
+        // RE writes to the SPACE-LEVEL per-repo codekb store, NOT the per-intent
+        // record dir. Enumerate that dir; also assert RE did NOT scatter ARTIFACTS
+        // into the record-dir location.
         const reDir = codekbReDir(proj);
         expect(existsSync(reDir) && statSync(reDir).isDirectory()).toBe(true);
         // Anti-scatter: no RE artifact (by stem) landed in the per-intent record
@@ -233,31 +233,25 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
           : [];
         expect(scatteredArtifacts).toEqual([]);
 
-        // .sh test 2: >= 4 .md artifacts (the .sh's assert_gt 3).
         const reFiles = readdirSync(reDir).filter((f) => f.endsWith(".md"));
         expect(reFiles.length).toBeGreaterThan(3);
 
-        // .sh test 7: at least one artifact carries a markdown heading.
         const withHeading = reFiles.filter((f) =>
           /^#/m.test(readFileSync(join(reDir, f), "utf8")),
         ).length;
         expect(withHeading).toBeGreaterThan(0);
 
-        // .sh test 6: at least one artifact > 200 bytes.
         const big = reFiles.filter((f) => statSync(join(reDir, f)).size > 200).length;
         expect(big).toBeGreaterThan(0);
 
-        // .sh test 15: lifecycle phase is INCEPTION (RE is an inception stage).
-        // sdk-drive read the state file off disk; read the field from it.
         expect(r.stateFile).toBeDefined();
         const state = r.stateFile as string;
         expect(readStateField(state, "Lifecycle Phase")).toBe(TARGET_PHASE);
 
-        // .sh tests 8/9 re-expressed as durable journey evidence. The live
-        // conductor may clear RE's gate and advance before the driver's
-        // AskUserQuestion stop lands, so Current Stage is allowed to be RE or any
-        // later stage in this state file's own compiled checkbox order. RE itself
-        // must have started and must not have been skipped.
+        // Durable journey evidence. The live conductor may clear RE's gate and
+        // advance before the driver's AskUserQuestion stop lands, so Current Stage is
+        // allowed to be RE or any later stage in this state file's own compiled
+        // checkbox order. RE itself must have started and must not have been skipped.
         const rows = stateStageRows(state);
         const targetIndex = rows.findIndex((row) => row.slug === TARGET_SLUG);
         const currentStage = readStateField(state, "Current Stage");

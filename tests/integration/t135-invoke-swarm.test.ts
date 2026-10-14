@@ -17,40 +17,38 @@
 //     worktree fixture, with THIS TEST playing the conductor (no `claude -p`
 //     worker, no AIDLC_SWARM_CLAUDE_BIN). prepare a 2-unit batch, stage only
 //     `win`'s impl on disk, then finalize claiming BOTH — `lose` is re-verified
-//     red (the lying-conductor guard, aidlc-swarm.ts handleFinalize:~430) and
+//     red (the lying-conductor guard, aidlc-swarm.ts handleFinalize) and
 //     refused the merge. Assert the three batch-level audit events
 //     SWARM_STARTED (prepare) / SWARM_COMPLETED / SWARM_BATON_RETURNED
-//     (finalize) all land in audit.md, and the mixed batch returns the baton
+//     (finalize) all land in audit shards, and the mixed batch returns the baton
 //     (exit 2) with a 1-converged + 1-failed envelope. (The full referee
 //     surface is t134's job — here we pin only the batch-level taxonomy.)
 //
 // SPAWN (not in-process): every assertion is on a PROCESS boundary the .sh was
 // built around. The engine's directive is JSON on stdout from a tool that calls
 // `process.exit` after `emit()` (aidlc-orchestrate.ts emit:139); the referee's
-// audit rows are bytes written to audit.md by `appendAuditEntry` invoked inside
-// the spawned `prepare`/`finalize` subprocesses, and the exit code (2 = baton
-// returns) is `process.exit(failedCount > 0 ? 2 : 0)` (handleFinalize tail).
-// The referee also forks REAL git worktrees (aidlc-worktree + aidlc-bolt start
-// --worktree) — that needs an actual git repo on `main`, which only exists in
-// the spawned process's cwd. An in-process twin would lose the git-fork +
-// process.exit + cross-tool composition seams the .sh verifies. spawnCount =
-// all 7 spawns (3 engine `next`, 1 referee `prepare`, 1 referee `finalize`).
+// audit rows are bytes written to audit shards by `appendAuditEntry` invoked
+// inside the spawned `prepare`/`finalize` subprocesses, and the exit code (2 =
+// baton returns on a failed unit or a merge failure) is set at the handleFinalize
+// tail. The referee also forks REAL git worktrees (aidlc-worktree + aidlc-bolt
+// start --worktree) - that needs an actual git repo on `main`, which only exists
+// in the spawned process's cwd. An in-process twin would lose the git-fork +
+// cross-tool composition seams.
 //
-// §6-E NON-GOLDEN: this is a baton-return / lying-conductor twin, NOT a happy
+// NON-GOLDEN: this is a baton-return / lying-conductor twin, NOT a happy
 // path. The failure event (SWARM_BATON_RETURNED for the red `lose` unit) MUST
 // ACTUALLY FIRE — staging only `win.txt` and claiming BOTH is what trips the
-// guard. A happy-path-only twin (both units green) would emit no baton and is
-// NOT equal-or-stronger. Test 5 asserts the event fires AND names `lose`.
+// guard. A happy-path-only twin (both units green) would emit no baton.
+// Test 5 asserts the event fires AND names `lose`.
 //
-// FIXTURE DISCIPLINE (mirrors the .sh):
-//   - Engine cases: createTestProject() (a temp dir with aidlc-docs/), seeded
+// FIXTURE DISCIPLINE:
+//   - Engine cases: createTestProject() (a temp dir with an aidlc/ shell), seeded
 //     from tests/fixtures/state-construction.md with Current Stage pivoted to
 //     code-generation, a bolt_dag runtime-graph.json written, and the autonomy
 //     / scope line edited per case. Torn down per case (cleanupTestProject).
 //   - Referee case: setupWorktreeFixture() — a real git repo on `main` with one
-//     commit, gitignoring audit.md so the amend commit leaves a clean tree the
-//     worktree fork can branch from. Torn down with cleanupWorktreeFixture
-//     (chmod u+w first; git worktrees are read-locked).
+//     commit the worktree fork can branch from. Torn down with
+//     cleanupWorktreeFixture (child worktrees pruned first).
 //   - NOTHING is written under tests/fixtures/**; all temp dirs cleaned.
 //
 // Old TAP -> new test parity (1:1, every .sh `ok`/`assert_eq` -> a named test):
@@ -119,7 +117,7 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 resetAidlcEnv();
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const SWARM_TOOL = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
 
@@ -144,9 +142,8 @@ afterEach(() => {
 /**
  * Seed a Construction-phase project parked at code-generation (in-flight) with
  * a bolt_dag batch on runtime-graph.json. `autonomy` is the value injected as
- * `Construction Autonomy Mode` (or "" to omit the field). Mirrors the .sh's
- * seed_codegen_project. The compiled batch DAG is the milestone 15 shape: one
- * topological level of units a, b.
+ * `Construction Autonomy Mode` (or "" to omit the field). The compiled batch
+ * DAG is one topological level of units a, b.
  */
 function seedCodegenProject(autonomy: string): string {
   const proj = createTestProject();
@@ -163,7 +160,6 @@ function seedCodegenProject(autonomy: string): string {
     "- **Current Stage**: code-generation",
   );
   if (autonomy) {
-    // Add the autonomy field right after the Scope line.
     state = state.replace(
       /^(- \*\*Scope\*\*: .*)$/m,
       `$1\n- **Construction Autonomy Mode**: ${autonomy}`,
@@ -189,7 +185,6 @@ function seedCodegenProject(autonomy: string): string {
   return proj;
 }
 
-/** Flip the seeded fixture's scope (e.g. feature -> bugfix). */
 function setScope(proj: string, scope: string): void {
   const statePath = seededStateFile(proj);
   const state = readFileSync(statePath, "utf-8").replace(
@@ -206,7 +201,6 @@ interface Directive {
   [k: string]: unknown;
 }
 
-/** Run `aidlc-orchestrate.ts next` against the project and parse the directive. */
 function runNext(proj: string): { directive: Directive; raw: string } {
   const r = runOrchestrateNext(TOOL, proj);
   return {
@@ -571,7 +565,7 @@ function setupReferee(): void {
   );
   finalizeStatus = fin.status ?? -1;
   finalizeOut = fin.stdout ?? "";
-  // Audit is now a per-clone shard DIR — the swarm tool writes its SWARM_* rows
+  // Audit is a per-clone shard DIR - the swarm tool writes its SWARM_* rows
   // to its own <host>-<clone>.md shard alongside the seeded fixture.md; glob +
   // concat all shards so the batch-level taxonomy assertions see the whole trail.
   auditBody = readAllShards(seededAuditDir(proj));
@@ -718,17 +712,14 @@ describe("t135 engine — invoke-swarm emission gated on autonomy (migrated from
 
   test("1b: invoke-swarm names the batch units off the compiled bolt_dag (order-preserved)", () => {
     const { directive } = runNext(seedCodegenProject("autonomous"));
-    // STRONGER than the .sh's string compare of the JSON array: assert the
-    // parsed units array equals the first batch, in order, off the DAG.
+    // Assert the parsed units array equals the first batch, in order, off the DAG.
     expect(directive.units).toEqual(["a", "b"]);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("2: gated autonomy -> engine falls back to run-stage for code-generation (no swarm)", () => {
     const { directive } = runNext(seedCodegenProject("gated"));
-    // The .sh asserted "$KIND|$STG" == "run-stage|code-generation".
     expect(directive.kind).toBe("run-stage");
     expect(directive.stage).toBe("code-generation");
-    // STRONGER: it is definitively NOT a swarm directive.
     expect(directive.kind).not.toBe("invoke-swarm");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -757,12 +748,11 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
 
   test("4: SWARM_COMPLETED emitted with converged/failed tally (finalize)", () => {
     setupReferee();
-    // The .sh grepped three independent lines; assert the same three observables.
     expect(auditBody).toContain("SWARM_COMPLETED");
     expect(auditBody).toContain("Converged count");
     expect(auditBody).toContain("Failed count");
-    // STRONGER: the tally is the genuine 1-converged / 1-failed verdict, not a
-    // happy-path zero — the SWARM_COMPLETED block carries those exact counts.
+    // The tally is the genuine 1-converged / 1-failed verdict, not a happy-path
+    // zero - the SWARM_COMPLETED block carries those exact counts.
     const block = auditBody.slice(auditBody.indexOf("SWARM_COMPLETED"));
     expect(block).toContain("**Converged count**: 1");
     expect(block).toContain("**Failed count**: 1");
@@ -770,10 +760,9 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
 
   test("5: SWARM_BATON_RETURNED emitted for the failed unit (lose)", () => {
     setupReferee();
-    // §6-E: the failure event must ACTUALLY FIRE. The .sh asserted the event is
-    // present AND the lines after it name `lose`. STRONGER: scope the unit-name
-    // check to the SWARM_BATON_RETURNED block, so a stray `lose` elsewhere in
-    // the audit can't satisfy it.
+    // The failure event must ACTUALLY FIRE. Scope the unit-name check to the
+    // SWARM_BATON_RETURNED block, so a stray `lose` elsewhere in the audit can't
+    // satisfy it.
     const idx = auditBody.indexOf("SWARM_BATON_RETURNED");
     expect(idx).toBeGreaterThanOrEqual(0);
     const block = auditBody.slice(idx);

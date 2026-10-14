@@ -98,7 +98,6 @@ function after(agent: AgentStandIn, marks: Marks) {
   };
 }
 
-/** The person types their words at the late question. */
 function personAsksForTheChange(agent: AgentStandIn, late: Directive): void {
   const prompt = String((late.approve_together as { prompt?: string }).prompt ?? "");
   agent.askPerson("approval", String(late.stage), prompt, ["Approve", "Request Changes"], WORDS);

@@ -742,8 +742,8 @@ ${needle}`));
       const files = readdirSync(witnesses);
       expect(files.length, result.output).toBeGreaterThan(0);
       for (const file of files) {
-        // Preserve the original immediate read/probe ordering. Archive I/O and
-        // the additional queued-file assertion happen after these observations.
+        // Preserve the immediate read/probe ordering. Archive I/O and
+        // the queued-file assertion happen after these observations.
         const value = readFileSync(join(witnesses, file), "utf8");
         const pid = Number(value);
         const diagnostic = `Sibling ${file}, value=${JSON.stringify(value)}, pid=${pid}; evidence: ${evidence}`;

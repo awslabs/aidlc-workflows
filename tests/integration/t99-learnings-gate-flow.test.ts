@@ -1,26 +1,25 @@
 // covers: subcommand:aidlc-learnings:surface, subcommand:aidlc-learnings:persist, subcommand:aidlc-graph:compile, function:parseSensorManifest
 //
-// t99 (integration) — §13 learning-gate END-TO-END (v0.5.0 milestone 12). Migrated
-// from tests/integration/t99-learnings-gate-flow.sh (TAP plan 16).
+// t99 (integration) - section 13 learning-gate END-TO-END.
 //
 // Mechanism: cli. The body SPAWNS the real tools via the Bun runtime against
 // the shipped .ts paths — `aidlc-learnings.ts surface|persist` and
-// `aidlc-graph.ts compile` — against a real dist/claude/.claude COPY + audit.md
-// + memory.md + state + runtime-graph (the same surface→glue→persist round-trip
-// the .sh drove). The process boundary IS the subject: exit codes, on-disk
-// audit rows, the learnings-file lines, the two-write sensor bind, and
-// concurrent-write serialisation are all observable only through the spawned
-// process + the bytes it leaves on disk. Case 3 ALSO imports parseSensorManifest
+// `aidlc-graph.ts compile` - against a real dist/claude/.claude COPY + audit
+// shard + memory.md + state + runtime-graph (the surface->glue->persist
+// round-trip). The process boundary IS the subject: exit codes, on-disk audit
+// rows, the learnings-file lines, the two-write sensor bind, and
+// concurrent-write serialisation are all observed through the spawned process
+// + the bytes it leaves on disk. Case 3 ALSO imports parseSensorManifest
 // IN-PROCESS to prove the scaffolded manifest round-trips through the real
-// schema parser (the .sh did this via an inline `bun -e` one-liner) — that is
-// the one `function:` unit credited here; everything else is the CLI seam.
+// schema parser - that is the one `function:` unit credited here; everything
+// else is the CLI seam.
 //
-// Per the .sh header: the conflict-check COMPARISON is the orchestrator-LLM's
-// job (KNOWLEDGE) and never lives in the tool. Case 3b models the verdict by
-// what the test writes into the selections-json (persist receives only
-// conflict-clear / user-escalated selections and never judges) — the §6-E
-// non-golden reject path actually fires (empty selections → zero RULE_LEARNED
-// rows), and the escalate path writes through.
+// The conflict-check COMPARISON is the orchestrator-LLM's job (KNOWLEDGE) and
+// never lives in the tool. Case 3b models the verdict by what the test writes
+// into the selections-json (persist receives only conflict-clear /
+// user-escalated selections and never judges) - the section 6-E non-golden
+// reject path actually fires (empty selections -> zero RULE_LEARNED rows), and
+// the escalate path writes through.
 //
 // Source under test:
 //   dist/claude/.claude/tools/aidlc-learnings.ts
@@ -30,41 +29,26 @@
 //                        ts, summary, context, default_scope:"project"};
 //                        Open-questions entries are parked, not candidates.
 //     persist  — one withAuditLock body (decide-inside-lock). Appends a
-//                        practice line under
-//                        the orchestrator-routed heading in the relocated
-//                        {project,team}.md (aidlc/spaces/<space>/memory/ via
-//                        memoryDirFor — a learning IS a practice, vision §6; the
-//                        heading is ensure-exists) keyed by a `cid:<slug>:<id>`
-//                        marker, emits RULE_LEARNED. Two-write sensor bind:
-//                        scaffolds .claude/sensors/aidlc-<id>.md + appends the id to the
-//                        origin stage's `sensors:` frontmatter, emits SENSOR_PROPOSED
-//                        with Destinations: JSON.stringify([origin_stage]) (:536-549).
-//                        Idempotent (row+line both present → no-op, :463) + recovery
-//                        (row present, line gone → re-write only, skip emit, :467-487).
+//                        practice line under the orchestrator-routed heading
+//                        in {project,team}.md (aidlc/spaces/<space>/memory/ via
+//                        memoryDirFor - a learning IS a practice, vision
+//                        section 6; the heading is ensure-exists) keyed by a
+//                        `cid:<intent>:<slug>:<hash>` marker, emits
+//                        RULE_LEARNED. Two-write sensor bind: scaffolds
+//                        .claude/sensors/aidlc-<id>.md + appends the id to the
+//                        origin stage's `sensors:` frontmatter, emits
+//                        SENSOR_PROPOSED with Destinations:
+//                        JSON.stringify([origin_stage]). Idempotent (row+line
+//                        both present -> no-op) + recovery (row present, line
+//                        gone -> re-write only, skip emit).
 //   dist/claude/.claude/tools/aidlc-graph.ts
-//     compile  (:1293) — recompiles stage-graph.json (AIDLC_STAGE_GRAPH seam,
-//                        :154-162) from stage YAML (AIDLC_STAGES_DIR) + sensors
-//                        (AIDLC_SENSORS_DIR); the newly-bound `sensors:` import
-//                        resolves into the stage node's sensors_applicable[] (:131-133).
+//     compile (compileStageGraph) - recompiles stage-graph.json
+//                        (AIDLC_STAGE_GRAPH seam) from stage YAML
+//                        (AIDLC_STAGES_DIR) + sensors (AIDLC_SENSORS_DIR); the
+//                        newly-bound `sensors:` import resolves into the stage
+//                        node's sensors_applicable[].
 //   dist/claude/.claude/tools/aidlc-sensor-schema.ts
-//     parseSensorManifest (:54) — extracts {id, matches, ...} from manifest YAML.
-//
-// Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
-//   .sh assert 1  (Case 1: surface → 3 candidates + 1 parked)        -> "Case 1: surface emits 3 candidates (I/D/T) + 1 parked open question"
-//   .sh assert 2  (Case 1: project pick lands in project-learnings)  -> "Case 1: project pick lands in aidlc-project-learnings.md"
-//   .sh assert 3  (Case 1: team pick lands in team-learnings)        -> "Case 1: team-scoped pick lands in aidlc-team-learnings.md"
-//   .sh assert 4  (Case 1: two RULE_LEARNED rows)                    -> "Case 1: two RULE_LEARNED audit rows"
-//   .sh asserts 5-6 (Case 2: surface + persist skipped in test-run mode) were DROPPED
-//                 per #369 when the test-run mechanism was removed.
-//   .sh assert 7  (Case 3: manifest parses via parseSensorManifest)  -> "Case 3: project-tier manifest parses + carries matches glob"
-//   .sh assert 8  (Case 3: compile binds id into sensors_applicable) -> "Case 3: next compile binds the id into user-stories sensors_applicable"
-//   .sh assert 9  (Case 3: SENSOR_PROPOSED Destinations array)       -> "Case 3: SENSOR_PROPOSED row carries Destinations array [user-stories]"
-//   .sh assert 10 (Case 3b: rejected entry never persists)           -> "Case 3b: rejected entry never reaches persist — no RULE_LEARNED row"
-//   .sh assert 11 (Case 3b: escalated entry writes through)          -> "Case 3b: user-escalated entry writes through to the learnings file"
-//   .sh assert 12 (Case 4: idempotent re-run → 1 row + 1 line)       -> "Case 4: idempotent re-run → exactly one audit row + one file line"
-//   .sh assert 13 (Case 5: concurrent persist → 1 row + 1 line)      -> "Case 5: concurrent persist serialises → exactly one row + one line"
-//   .sh assert 14 (Case 6: recovery → re-write only, exit 0)         -> "Case 6: recovery re-writes the line, skips re-emit, exit 0"
-//   .sh assert 15 (Glue: candidate field contract)                  -> "Glue: candidate carries {id, summary, source_heading, default_scope}"
+//     parseSensorManifest - extracts {id, matches, ...} from manifest YAML.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test } from "bun:test";
@@ -91,14 +75,14 @@ import {
 import { parseSensorManifest } from "../../dist/claude/.claude/tools/aidlc-sensor-schema.ts";
 import { memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 
-// P9: createTestProject seeds the per-intent record (DEFAULT_RECORD_DIR)
+// createTestProject seeds the per-intent record (DEFAULT_RECORD_DIR)
 // + active-intent cursor, so the learnings/graph tools resolve THAT record (not
-// the flat aidlc-docs/, retired). State, runtime-graph, the per-stage memory,
+// the flat aidlc-docs/). State, runtime-graph, the per-stage memory,
 // and the per-clone audit shard all live under it; the runtime-graph memory_path
-// is record-relative so surface's join(projectDir, memRel) finds the file.
+// is project-relative so surface's join(projectDir, memRel) finds the file.
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const TOOLS = join(AIDLC_SRC, "tools");
 const LEARNINGS_TS = join(TOOLS, "aidlc-learnings.ts");
 const GRAPH_TS = join(TOOLS, "aidlc-graph.ts");
@@ -111,11 +95,6 @@ afterAll(() => {
   for (const p of projects) rmSync(p, { recursive: true, force: true });
 });
 
-/**
- * mkproj — mirrors the .sh mkproj(): a fresh temp project with a full
- * dist/claude/.claude copy, a user-stories state file, and a runtime-graph
- * pointing the stage at its memory.md.
- */
 function mkproj(): string {
   const pd = createTestProject();
   projects.push(pd);
@@ -156,7 +135,6 @@ interface CliResult {
   stderr: string;
 }
 
-/** Spawn `bun aidlc-learnings.ts surface --slug <slug> --project-dir <pd>`. */
 function surface(pd: string, slug = "user-stories"): CliResult {
   const r = spawnSync(BUN, [LEARNINGS_TS, "surface", "--slug", slug, "--project-dir", pd], {
     encoding: "utf-8",
@@ -164,7 +142,6 @@ function surface(pd: string, slug = "user-stories"): CliResult {
   return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
-/** Spawn `bun aidlc-learnings.ts persist --slug <slug> --selections-json <sel> --project-dir <pd>`. */
 function persist(pd: string, sel: string, slug = "user-stories", env?: NodeJS.ProcessEnv): CliResult {
   const r = spawnSync(
     BUN,
@@ -175,7 +152,7 @@ function persist(pd: string, sel: string, slug = "user-stories", env?: NodeJS.Pr
 }
 
 function readAudit(pd: string): string {
-  // P9: persist writes RULE_LEARNED / SENSOR_PROPOSED into the seeded record's
+  // persist writes RULE_LEARNED / SENSOR_PROPOSED into the seeded record's
   // per-clone shard (the fixture pins the clone-id, so the subprocess resolves
   // the SAME shard as seededAuditShard).
   const p = seededAuditShard(pd);
@@ -183,7 +160,6 @@ function readAudit(pd: string): string {
 }
 
 function ruleLearnedRows(pd: string): number {
-  // Mirror the .sh's `grep -c "Event.*: RULE_LEARNED"`.
   return readAudit(pd)
     .split("\n")
     .filter((l) => /Event.*: RULE_LEARNED/.test(l)).length;
@@ -197,7 +173,7 @@ function countLines(file: string, needle: string): number {
 }
 
 // A confirmed learning is a practice (vision §6): persist appends a practice
-// line into the relocated method file the resolver reads — {project,team}.md
+// line into the method file the resolver reads - {project,team}.md
 // under aidlc/spaces/<space>/memory/ (via memoryDirFor()) — not a parallel
 // `*-learnings.md` log.
 function projectPractices(pd: string): string {
@@ -219,7 +195,6 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const r = surface(pd);
     expect(r.status).toBe(0);
     const j = JSON.parse(r.stdout);
-    // STRONGER than the .sh's "3:1" string: assert the two array LENGTHS directly.
     expect(j.candidates.length).toBe(3);
     expect(j.parked_open_questions.length).toBe(1);
     // The fixture memory_path carries the per-intent record dir, so the phase
@@ -320,14 +295,11 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     expect(ruleLearnedRows(pd)).toBe(2);
   }, TIMEOUT);
 
-  // Case 2 (surface + persist skipped in test-run mode) was dropped per #369
-  // when the test-run mechanism was removed.
-
   // ===========================================================================
   // Case 3 — sensor proposal → project-tier manifest + frontmatter bind →
   // compile binds. Drives the parseSensorManifest in-proc check + a real
   // `aidlc-graph compile` against the AIDLC_STAGES_DIR / AIDLC_SENSORS_DIR /
-  // AIDLC_STAGE_GRAPH seam, exactly as the .sh did.
+  // AIDLC_STAGE_GRAPH seam.
   // ===========================================================================
   function seedSensorProposal(pd: string): string {
     const sel = join(pd, "sel3.json");
@@ -365,8 +337,6 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     expect(r.status).toBe(0);
     const manifest = join(SENSORS_DIR_OF(pd), "aidlc-acceptance-format.md");
     expect(existsSync(manifest)).toBe(true);
-    // In-process: the scaffolded manifest round-trips through the REAL schema
-    // parser (the .sh's inline `bun -e` parseSensorManifest one-liner).
     const m = parseSensorManifest(readFileSync(manifest, "utf-8"));
     expect(m.id).toBe("acceptance-format");
     expect(m.matches).toBe("**/aidlc-docs/inception/user-stories/**");
@@ -399,8 +369,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const node = g.find((x) => x.slug === "user-stories");
     expect(node).toBeDefined();
     const ids = (node?.sensors_applicable ?? []).map((row) => row.id);
-    // .sh: BOUND === "true". Two-write install: the manifest + the frontmatter
-    // edit make the id resolvable on the NEXT compile.
+    // Two-write install: the manifest + the frontmatter edit make the id
+    // resolvable on the NEXT compile.
     expect(ids).toContain("acceptance-format");
   }, TIMEOUT);
 
@@ -411,8 +381,6 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
       persist(pd, sel, "user-stories", { AIDLC_STAGES_DIR: STAGES_DIR_OF(pd) }).status,
     ).toBe(0);
     const audit = readAudit(pd);
-    // Extract the SENSOR_PROPOSED block (the .sh's awk span) and assert the
-    // Destinations array landed verbatim.
     const blocks = audit.split(/\n---\n/);
     const spBlock = blocks.find((b) => /Event.*: SENSOR_PROPOSED/.test(b)) ?? "";
     expect(spBlock).toContain('Destinations**: ["user-stories"]');
@@ -430,7 +398,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const sel = join(pd, "sel3b-reject.json");
     writeJson(sel, { stage_slug: "user-stories", space: DEFAULT_SPACE, intent: DEFAULT_RECORD_DIR, selections: [] });
     expect(persist(pd, sel).status).toBe(0);
-    // The failure event (a write) MUST NOT fire: zero RULE_LEARNED rows.
+    // The RULE_LEARNED event (a write) MUST NOT fire: zero RULE_LEARNED rows.
     expect(ruleLearnedRows(pd)).toBe(0);
     expect(existsSync(projectPractices(pd))).toBe(false);
   }, TIMEOUT);
@@ -510,8 +478,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
         },
       ],
     });
-    // Launch two persists concurrently (the .sh's `& ... wait`). Bun.spawn is
-    // async, so both processes are genuinely in flight before either is awaited.
+    // Launch two persists concurrently. Bun.spawn is async, so both processes are
+    // genuinely in flight before either is awaited.
     const a = Bun.spawn([BUN, LEARNINGS_TS, "persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd], {
       stdout: "ignore",
       stderr: "ignore",
@@ -557,7 +525,6 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
       .join("\n");
     writeFileSync(lf, stripped);
     const r = persist(pd, sel);
-    // .sh: EC:ROWS:LINES === "0:1:1".
     expect(r.status).toBe(0);
     expect(ruleLearnedRows(pd)).toBe(1);
     expect(countLines(lf, `cid:${DEFAULT_RECORD_DIR}:user-stories:`)).toBe(1);
@@ -575,7 +542,6 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     expect(r.status).toBe(0);
     const j = JSON.parse(r.stdout);
     const c = j.candidates[0];
-    // .sh: GLUE === "string:string:Interpretations:project".
     expect(typeof c.id).toBe("string");
     expect(typeof c.summary).toBe("string");
     expect(c.source_heading).toBe("Interpretations");
