@@ -33,10 +33,11 @@
 //       creates a new child when native source landing removed the old one.
 //       Both paths require current Plan Approval or a protected continuation
 //       under a lowered plan-approval fence before dispatch.
-//   check <unit> [--check-cmd <cmd>] [--test-file <path>]
+//   check <unit> [--check-cmd <cmd>] [--test-file <path>] [--show-output]
 //       Single-unit verdict: the authorized Construction Verification Command,
 //       with or without checkpoints (a supplied --check-cmd must match it)
-//       (exit 0 = green,
+//       (--show-output: the command's own output on stderr as it runs, for a
+//       worker or reviewer running the Unit's tests; exit 0 = green,
 //       the AUTHORITATIVE signal — a worker's own success claim is never trusted)
 //       plus an anti-tamper compare of the protected file against its forked-git
 //       baseline. Prints {unit, converged, tampered, reason}; exits 0 iff the unit
@@ -287,7 +288,10 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
 //
 // Shell interpretation is intentional only after command authorization has been
 // resolved from the parent intent.
-function checkConverged(cwd: string, checkCmd: string): boolean {
+// With `showOutput` the command's own output goes to this tool's stderr as it
+// runs, so a worker sees its tests as if it had run them; stdout keeps the one
+// verdict line.
+function checkConverged(cwd: string, checkCmd: string, showOutput = false): boolean {
   const shell =
     process.platform !== "win32" && existsSync("/bin/bash")
       ? "/bin/bash"
@@ -297,6 +301,7 @@ function checkConverged(cwd: string, checkCmd: string): boolean {
     encoding: "utf-8",
     timeout: EXTENDED_SUBPROCESS_TIMEOUT_MS,
     shell,
+    ...(showOutput ? { stdio: ["ignore", 2, 2] as const } : {}),
   });
   return result.status === 0;
 }
@@ -364,7 +369,8 @@ function verdictFor(
   projectDir: string,
   identity: BoltIdentity,
   checkCmd: string,
-  testFile?: string
+  testFile?: string,
+  showOutput = false,
 ): Verdict {
   const wt = identity.dir;
   if (!existsSync(wt)) {
@@ -388,7 +394,7 @@ function verdictFor(
       };
     }
   }
-  const converged = checkConverged(wt, checkCmd);
+  const converged = checkConverged(wt, checkCmd, showOutput);
   let tampered = false;
   let confineError: string | undefined;
   let tamperNotice: string | undefined;
@@ -2879,8 +2885,10 @@ function handleCheck(rest: string[]): void {
     throw error;
   }
   const check = swarmCheckCommand(projectDir, flags["check-cmd"], "check");
+  const showOutput = flags["show-output"] !== undefined;
+  if (showOutput && flags["show-output"] !== "true") fail("--show-output is a boolean flag");
 
-  const verdict = verdictFor(unit, projectDir, identity, check.command, flags["test-file"]);
+  const verdict = verdictFor(unit, projectDir, identity, check.command, flags["test-file"], showOutput);
   if (!verdict.exists) {
     fail(`no worktree for unit "${unit}" — run \`prepare\` first`);
   }

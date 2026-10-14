@@ -8,8 +8,8 @@
 // was named after it. Once a line of flag-shaped tokens stopped being a
 // description, the person was asked whether "--session" was a setting they
 // wanted, and nothing ran, at the start of work and in the middle of a stage
-// alike. A `--session <id>` before any of the person's words is now the agent's
-// own argument and is not read; among their words it is still theirs.
+// alike. A `--session <id>` before any of the person's words is the agent's own
+// argument and is untaken; among their words it is still theirs.
 
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -48,7 +48,6 @@ afterEach(() => {
   while (created.length > 0) cleanupTestProject(created.pop());
 });
 
-/** Work in progress, in this chat. */
 function openWork(): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
@@ -83,7 +82,7 @@ describe("t-next-session-flag: how next reads a --session", () => {
     const parsed = parseNextFlags(["--session", SESSION]);
     expect(parsed.intent).toBeUndefined();
     // A flag `next` does not take, before the person's first word: the agent's
-    // own argument, read as nothing (t-flags-next-does-not-take holds the rule).
+    // own argument, read as untaken (t-flags-next-does-not-take holds the rule).
     expect(parsed.untakenFlag).toBe("--session");
     expect(parsed.untakenFlagValue).toBe(SESSION);
     expect(parsed.parseError).toBeUndefined();
@@ -118,8 +117,6 @@ describe("t-next-session-flag: what the step is", () => {
     expect(withSession.directive.kind, withSession.out).toBe("print");
     expect(withSession.directive.narration).toBeUndefined();
     expect(String(withSession.directive.message)).toContain("--session");
-    // The step itself is untouched: the next call with no argument of the
-    // agent's own returns what a bare `next` always returned.
     expect(next(openWork(), []).directive.kind).toBe(plain.kind);
     expect(next(openWork(), []).directive.stage).toBe(plain.stage);
   });

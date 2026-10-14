@@ -222,7 +222,7 @@ Verifies the orchestrator's structural correctness without invoking the LLM. If 
 - Scope-stage mapping, graph consistency, stage I/O contract chains, protocol compliance (integration)
 - Stage output-to-step validation: all declared outputs referenced in instruction steps (integration, deterministic via the `aidlc-validate.ts` CLI tool)
 - Scope runs: every shipped scope driven from the person's first request to done (integration, `tests/integration/t-scope-run-*`; see below)
-- Scope-host runs: one classic journey on the Claude, Codex and Copilot CLI trees, through each tree's own hooks (integration, `tests/integration/t-scope-host-*`; see below)
+- Scope-host runs: one classic journey on the Claude, Codex, Copilot CLI, Kiro CLI and Kiro IDE trees, through each tree's own hooks (integration, `tests/integration/t-scope-host-*`; see below)
 - Guard matrix: what the person meets when files change under approved work, per Guard Policy, review cap and plan approval (integration, `tests/integration/t-guard-matrix-*`; see below)
 
 **Run:** `bun tests/run-tests.ts --no-llm`. The default profile includes the
@@ -267,17 +267,24 @@ a `full_verification` Full Suite.
 `tests/harness/scope-hosts.ts` runs the same stand-in and person script on
 another tool's tree, through that tool's own hooks. Each host installs the tree
 as it ships, gives the agent's shell what that tool gives it (Codex's
-`CODEX_THREAD_ID`), and at every moment (a chat starts, the person types or
-picks, a shell or file tool runs, a helper is sent, the turn ends) runs each
-command the tree's wiring file registers (`.codex/hooks.json`,
-`.github/hooks/aidlc.json`), fed that tool's payload. `tests/unit/t-scope-hosts.test.ts`
-pins those payloads against the ones recorded from each tool
-(`tests/fixtures/<tool>-hook-payloads`). Each tool's answer is read in its own
-form: Codex refuses with exit 2, Copilot with a deny decision, and Copilot runs
-the command its hook rewrote. Every tool call fires the hooks, so a refusal
-stops the run, and a hook command that fails is a problem.
+`CODEX_THREAD_ID`, Kiro's `KIRO_SESSION_ID`), and at every moment (a chat
+starts, the person types or picks, a shell or file tool runs, a helper is sent,
+the turn ends) runs each command the tree's wiring registers, fed that tool's
+payload: `.codex/hooks.json`, `.github/hooks/aidlc.json`, Kiro CLI's agent JSON
+(`.kiro/agents/<agent>.json`, glob matchers over a tool's name and its alias; a
+helper runs its own agent's hooks under a session of its own) and Kiro IDE's
+hook cards (`.kiro/hooks/*.json`, regex matchers in file-name order; no card runs
+after a write or a command, so the next card does that work, as in Kiro).
+`tests/unit/t-scope-hosts.test.ts` pins those payloads against the ones recorded
+from each tool (`tests/fixtures/<tool>-hook-payloads`). Each tool's answer is
+read in its own form: Codex and Kiro refuse with exit 2, Copilot with a deny
+decision, Copilot runs the command its hook rewrote, and Kiro's person-turn hook
+may run the turn's first `next` itself, so the agent acts on that reply. Every
+tool call fires the hooks, so a refusal stops the run, and a hook command that
+fails is a problem.
 
-Each `t-scope-host-<harness>.test.ts` (`claude`, `codex`, `copilot`) drives one
+Each `t-scope-host-<harness>.test.ts` (`claude`, `codex`, `copilot`, `kiro`,
+`kiro-ide`) drives one
 journey: classic with its design stages skipped and two Units built one at a
 time, a checkpoint each. After the first Unit's checkpoint the person stops for
 the day, picks the work up from a fresh clone (the folder left with only what a
@@ -1747,8 +1754,15 @@ fresh state, while retaining both attempts under `e2e-artifacts/<file>/attempt-N
 files in a fresh process; the merge queue uses that, as described above.)
 Timeouts, incomplete evidence, cleanup failures and person-turn failures are
 not retried; a person-turn failure also prints a `Person-turn failure` error
-line. A pass on the retry prints a `Flaky live test` warning. The Windows live
-job keeps the isolated child's output out of its log, so it says both lines
+line. A pass on the retry prints a `Flaky live test` warning. A file that
+failed because the model service did (the SDK drive's `ModelApiError`: Claude
+Code ended the run on a 429, a 5xx or a dropped connection, never a 4xx the
+request caused) keeps its one retry and prints a `Model service failure`
+warning; when every failed case is the service's, its line in `failures.txt` and
+the preview report reads "the model service failed, not AI-DLC: infrastructure,
+not a test result", and a real failure beside one keeps the file's ordinary
+reason. The Windows live
+job keeps the isolated child's output out of its log, so it says these lines
 from the collected `e2e-results.json` (`bun scripts/ci-retry-report.ts --live
 tests/logs`), in fixed words and the test file's name only. Passing
 files are not rerun. Each shard retains its authenticated isolation and required
@@ -1985,7 +1999,9 @@ The broker stays under the runner identity; only nonsecret routes and model pins
 cross into the live user's environment. Failed isolation proofs block execution.
 
 Windows Codex also provisions its two native sandbox identities and verifies
-both using fresh test homes. The readiness command runs through PowerShell and
+both using fresh test homes. A provisioning run that exits non-zero runs once
+more on the same fresh host, its logs kept beside the first run's; a timeout
+or an unfinished output drain still fails closed at once. The readiness command runs through PowerShell and
 Bun under the actual sandbox: the shell must start in the project, Bun must
 canonicalize its path, and credential reads and writes outside the workspace
 must remain denied. The sandbox identities receive directory metadata and

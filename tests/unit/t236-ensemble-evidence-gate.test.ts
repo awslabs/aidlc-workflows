@@ -1,16 +1,15 @@
 // covers: subcommand:aidlc-orchestrate:report, function:reviewArtifactFingerprint
 //
-// t236 — the ensemble evidence gate (2.5.0). On a mob stage (or a
-// hub-and-spoke subagent stage with declared support_agents), the
-// collaborators' contribution files are the deterministic proof the ensemble
-// convened (stage-protocol §5 "Completion evidence"): one file per declared
+// t236 - the ensemble evidence gate. On a mob stage (or a hub-and-spoke
+// subagent stage with declared support_agents), the collaborators'
+// contribution files are the deterministic proof the ensemble convened
+// (stage-protocol section 5 "Completion evidence"): one file per declared
 // support agent at <record>/<phase>/<slug>/contributions/<agent-slug>.md
 // whose FIRST line is `**Collaborator:** <agent-slug>` verbatim. handleReport
 // refuses `--result approved` while any is missing or malformed, naming the
 // gap and the remediation; AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 is the escape
 // hatch; inline stages carry no requirement (pipeline receipts are covered by
-// t315); an already-[x]
-// stage is an idempotent replay and is never blocked.
+// t315); an already-[x] stage is an idempotent replay and is never blocked.
 //
 // SOURCE UNDER TEST: the ensemble-evidence guard in handleReport
 // (dist/claude/.claude/tools/aidlc-orchestrate.ts) — not exported, so the
@@ -545,7 +544,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
       expect(d.message).toContain(agent);
     }
     expect(d.message).toContain("contributions/");
-    expect(d.message).toContain("AIDLC_DISABLE_ENSEMBLE_EVIDENCE");
+    expect(d.message).not.toContain("AIDLC_DISABLE_ENSEMBLE_EVIDENCE");
   });
 
   test("partial evidence -> refused, only the absent agents named", () => {
@@ -561,7 +560,6 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
   test("file present but identity-marker first line wrong -> refused as malformed", () => {
     const proj = seedProject();
     for (const agent of MOB_SUPPORTS) writeContribution(proj, agent);
-    // Overwrite one with a wrong first line.
     writeContribution(proj, "aidlc-quality-agent", "# Quality notes");
     const d = report(proj);
     expect(d.kind).toBe("error");
@@ -1128,7 +1126,6 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     );
     const graph = nonSkeletonSwarmGraph(proj);
     const d = report(proj, { AIDLC_STAGE_GRAPH: graph });
-    // The agent's step: repair the block, then the same report.
     expect(d.kind).toBe("print");
     expect(d.message).toContain("unit-of-work-dependency.md cannot be read");
   });
@@ -1164,7 +1161,6 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
       AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
     });
     expect(missing.kind).toBe("error");
-    // Refused at the STAGE level (no per-unit paths in the remediation).
     expect(missing.message).toContain("aidlc-design-agent (no contribution file)");
     expect(missing.message).not.toContain("for unit \"unit-a\"");
 

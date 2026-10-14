@@ -3,9 +3,9 @@
 // t244 — Doc drift guard for the Stage-by-Scope Matrix in
 // docs/guide/05-scopes-and-depth.md.
 //
-// Mechanism: none. Every byte inspected is a static file checked into the
-// repo: the compiled grid + graph under dist/claude/.claude/tools/data/ and
-// the guide chapter. No spawn, no LLM, no env seam.
+// Mechanism: none. Every byte inspected is a static file on disk: the
+// compiled grid + graph under dist/claude/.claude/tools/data/ and the guide
+// chapter. No spawn, no LLM, no env seam.
 //
 // Subject (two ground-truth sources cross-checked against the doc table):
 //   A. dist/claude/.claude/tools/data/scope-grid.json  — the EXECUTE/SKIP
@@ -81,7 +81,6 @@ function extractRegion(): string {
   if (begin === -1 || end === -1 || end < begin) {
     throw new Error("scope-stage-matrix markers missing or out of order");
   }
-  // Validate the BEGIN marker line is a complete HTML comment (ends with -->).
   const beginLineEnd = doc.indexOf("\n", begin);
   const beginLine = doc.slice(begin, beginLineEnd === -1 ? undefined : beginLineEnd);
   if (!beginLine.trimEnd().endsWith("-->")) {
@@ -94,7 +93,6 @@ function extractRegion(): string {
   return doc.slice(begin, end);
 }
 
-/** Split a markdown table row into trimmed cells (drops the outer pipes). */
 function cells(line: string): string[] {
   return line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
 }
@@ -102,7 +100,6 @@ function cells(line: string): string[] {
 const INIT_STAGE_LABEL = `Initialization (all ${initStages.length} stages)`;
 const TOTALS_LABEL = "**Total stages**";
 
-/** Validate that a line is a well-formed Markdown table separator with the expected column count. */
 function validateSeparator(line: string, expectedColumns: number): void {
   const sepCells = line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
   if (sepCells.length !== expectedColumns) {
@@ -134,7 +131,6 @@ function parseDocTable(): DocTable {
   const lines = pipeIndices.map((i) => allLines[i]);
 
   const header = cells(lines[0]);
-  // Validate the fixed header columns.
   if (header[0] !== "#") {
     throw new Error(`expected header[0] to be "#", got "${header[0]}"`);
   }
@@ -144,7 +140,6 @@ function parseDocTable(): DocTable {
   // header: [ "#", "Stage", "`scope`", ... ]
   const scopes = header.slice(2).map((c) => c.replace(/`/g, ""));
 
-  // Validate the separator row (lines[1]) is a proper Markdown delimiter.
   validateSeparator(lines[1], header.length);
 
   let initCells: string[] | undefined;
@@ -210,7 +205,6 @@ describe("t244 stage-by-scope matrix doc drift guard", () => {
     // The collapsed init-row label must match the actual init stage numbers from the graph.
     const initNums = initStages.map((s) => s.number);
     expect(INIT_ROW_LABEL).toBe(`${initNums[0]}\u2013${initNums[initNums.length - 1]}`);
-    // Every grid column covers exactly the graph's stage set.
     const slugs = graph.map((s) => s.slug).sort();
     for (const scope of Object.keys(grid)) {
       expect(Object.keys(grid[scope].stages).sort()).toEqual(slugs);
@@ -291,16 +285,14 @@ describe("t244 stage-by-scope matrix doc drift guard", () => {
 // --- The Scope Routing summary table, higher in the same chapter -------------
 // The matrix above is pinned cell by cell. The "Scope Routing Table" earlier in
 // the file transcribes the SAME compiled grid a second time — one row per scope
-// with an `EXECUTE / Total` count, plus Depth and Test Strategy — and nothing
-// pinned it. t213 pins the CLI's rendered table against the cost helper, and
-// t125 pins each scope file's depth/testStrategy against loadScopeMetadata, but
-// neither reads this markdown.
+// with an `EXECUTE / Total` count, plus Depth and Test Strategy. t213 pins the
+// CLI's rendered table against the cost helper, and t125 pins each scope file's
+// depth/testStrategy against loadScopeMetadata, but neither reads this markdown.
 //
 // A second, unpinned transcription of already-derivable data is the shape that
 // drifts: the agent matrix in docs/reference/05-agent-system.md sat wrong at
-// 6/3/9 while the guide said 10 (fixed and pinned in #902). Same discipline as
-// above — forward (every scope's row is right) and reverse (no extra, unknown,
-// or duplicate rows).
+// 6/3/9 while the guide said 10. Same discipline as above - forward (every
+// scope's row is right) and reverse (no extra, unknown, or duplicate rows).
 //
 // Depth and Test Strategy come from loadScopeMetadata rather than a fresh
 // frontmatter parse, so this consumes the framework's own resolution. Test
@@ -381,9 +373,8 @@ describe("t244 scope routing summary table doc drift guard", () => {
   test("9b: the only non-scope summary row is the proposed-plan sentinel", () => {
     // The filter above drops rows that do not name a scope in backticks. Pin what
     // it is allowed to drop, or a future stray row would vanish silently instead
-    // of failing — the same reason test 4 checks rows in reverse. The row was
-    // "(auto-detect)" while the engine read the plan from keywords; the agent
-    // proposes the plan now (t-plan-proposed-by-the-agent), and the row says so.
+    // of failing - the same reason test 4 checks rows in reverse. The agent
+    // proposes the plan (t-plan-proposed-by-the-agent), and the row says so.
     const extra = allSummaryRows().filter((r) => !r.quoted);
     expect(extra.map((r) => r.scope)).toEqual(["(proposed)"]);
     for (const r of extra) {
@@ -416,7 +407,7 @@ describe("t244 scope routing summary table doc drift guard", () => {
   test("12: the two tables agree with each other on every scope's EXECUTE count", () => {
     // Cross-check the chapter against itself: the summary count and the matrix
     // footer total are two renderings of one number, so a partial edit that
-    // updated only one of them is caught even if both somehow matched the grid.
+    // updated only one of them is caught.
     const doc = parseDocTable();
     const summary = new Map(summaryRows().map((r) => [r.scope, Number(r.counts.split("/")[0])]));
     doc.scopes.forEach((scope, i) => {

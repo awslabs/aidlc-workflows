@@ -2034,7 +2034,6 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(recordGuardRefusal(project, refusalA, attempt).count).toBe(2);
     const capped = recordGuardRefusal(project, refusalB, attempt);
     expect(capped.count).toBe(3);
-    // A repeat says so in the person's words; the codes carry the rest.
     expect(capped.ask.question).toBe(
       "Functional Design still can't go ahead as things stand: which way would you like to go on?",
     );
@@ -2107,7 +2106,6 @@ describe("AttemptView projections and refusal streaks", () => {
       { count: 1, codes: [refusal.code], signature: "f".repeat(64), atCap: false },
     );
     expect(stuck.question.startsWith("I stopped at Functional Design for alpha: ")).toBe(true);
-    // No engine words reach the person in the line the engine writes.
     for (const question of [ask?.question ?? "", stuck.question.replace(" summary blocked", "")]) {
       expect(question).not.toMatch(/guard|authorit|refus|remed|action|functional-design/i);
     }
@@ -2230,16 +2228,12 @@ describe("AttemptView projections and refusal streaks", () => {
     });
     expect(refusal.remedies.map((remedy) => remedy.op)).toEqual(["record-verdict", "retry-pending", "request-changes"]);
 
-    // First time: the agent saves the review result or asks the reviewer again
-    // itself. Nothing is put to the person.
     const first = recordGuardRefusal(project, refusal, attempt);
     expect(first.ask.agent_work).toBe(true);
     expect(first.ask.remedies.map((remedy) => remedy.op)).toEqual(["record-verdict", "retry-pending"]);
     for (const remedy of first.ask.remedies) expect(remedy.interaction).toBe("external-work");
     expect(validateDirective(first.ask).valid).toBe(true);
 
-    // It came back unchanged: now the person decides, and only between ways on
-    // that need them, each in plain words.
     const again = recordGuardRefusal(project, refusal, attempt);
     expect(again.ask.agent_work).toBeUndefined();
     expect(again.ask.question).toBe("Functional Design still can't go ahead as things stand: which way would you like to go on?");
@@ -2247,7 +2241,6 @@ describe("AttemptView projections and refusal streaks", () => {
       {
         op: "request-changes",
         label: "Request Changes",
-        // One Unit at a time, a rejection reaches every Unit: the person reads that too.
         description: "Tell me what should change in Functional Design, and I'll revise it. This also throws away " +
           "every Unit's finished Functional Design work, and each needs its review and approval again.",
       },
@@ -2794,7 +2787,6 @@ describe("unit-major resets name what they throw away", () => {
     expect(guidance).not.toContain("--stage code-generation");
     expect(guidance).toContain('Start "code-generation" again for unit "beta" only');
     expect(guidance).toContain("reopen --target code-generation --units beta`");
-    // With no Unit on record the person names the one that does it again.
     expect(recoveryGuidance("/nonexistent-project", walkState(), "code-generation")).toContain(
       'Ask the person which unit should do "code-generation" again, then run ' +
         "/aidlc --stage code-generation --unit <name>.",

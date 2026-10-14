@@ -31,7 +31,6 @@ const SUMMARY_PROTOCOL = readFileSync(
   "utf-8",
 );
 
-// Every annex that renders questions as numbered prose.
 const NUMBERED_ANNEXES = [
   ...ANNEXES,
   "harness/opencode/skills/aidlc/question-rendering.md",

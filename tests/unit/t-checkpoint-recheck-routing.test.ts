@@ -212,10 +212,8 @@ describe("t-checkpoint-recheck-routing: re-checks of an approved Unit's changed 
     editAlphaDocument(p);
     const beat = next(p);
     expect(beat.construction_checkpoint?.rereview?.stage, JSON.stringify(beat)).toBe(DOCUMENT_STAGE);
-    // The checkpoint keeps its identity.
     expect(beat).toMatchObject({ stage: "code-generation", unit: "alpha", gate: true });
     expect(beat.construction_checkpoint?.unit).toBe("alpha");
-    // The reviewer gets the document stage's own work.
     const own = findStageBySlug(DOCUMENT_STAGE)!;
     expect(beat.reviewer).toBe(own.reviewer);
     expect(beat.review_artifact).toBe(own.review_artifact);

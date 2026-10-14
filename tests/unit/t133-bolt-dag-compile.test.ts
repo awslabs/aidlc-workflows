@@ -1,7 +1,6 @@
 // covers: subcommand:aidlc-runtime:compile, subcommand:aidlc-sensor-required-sections, function:parseBoltDag
 //
-// t133 — Bolt-DAG runtime compile + gate-time edge-block sensor. Migrated from
-// tests/unit/t133-bolt-dag-compile.sh (TAP plan 10).
+// t133 - Bolt-DAG runtime compile + gate-time edge-block sensor.
 //
 // Mechanism: cli. Both surfaces under test are process-boundary seams that the
 // .sh exercised by shelling out, and that an in-process import would lose:
@@ -34,17 +33,9 @@
 //          branch on: {ok,units,batches} | {ok:false, reason: absent|malformed|cyclic}.
 //          :1932 computeBatches — Kahn-by-level, each level sorted lexicographically.
 //
-// Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
-//   .sh 1  valid block → bolt_dag node + 4 units             -> "valid edge block: bolt_dag node with 4 units"
-//   .sh 2  batches are sorted topological levels             -> "valid edge block: batches are correct sorted topological levels"
-//   .sh 3  second compile byte-identical                      -> "second compile is byte-identical (pure-data parse)"
-//   .sh 4  cyclic → node omitted + stderr 'cyclic'            -> "cyclic edge block: bolt_dag omitted + stderr names 'cyclic'"
-//   .sh 5  malformed (dangling) → omitted + stderr 'malformed' -> "malformed edge block: bolt_dag omitted + stderr names 'malformed'"
-//   .sh 6  absent artifact → 4-key envelope                   -> "absent artifact: envelope keeps the pre-milestone-15 4-key shape"
 //   .sh 7  sensor valid → pass:true, edge_block:ok            -> "sensor: valid block → pass:true, edge_block:ok"
 //   .sh 8  sensor cyclic → pass:false, edge_block:cyclic      -> "sensor: cyclic block → pass:false, edge_block:cyclic"
 //   .sh 9  sensor absent → pass:false, edge_block:absent      -> "sensor: absent block → pass:false, edge_block:absent"
-//   .sh 10 sensor non-target md keeps generic check           -> "sensor: non-target markdown keeps generic H2 check (no edge_block)"
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -68,16 +59,16 @@ import { auditFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-// P9: with no intent cursor seeded, the compile tool resolves the BARE space
+// With no intent cursor seeded, the compile tool resolves the BARE space
 // record root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/.
 // State, runtime-graph, the unit-dependency artefact, and the audit shard all
-// live under it (the flat aidlc-docs/ root is retired — there is no fallback).
+// live under it (there is no flat aidlc-docs/ fallback).
 const RECORD_REL = join("aidlc", "spaces", "default", "intents");
 function recordRoot(proj: string): string {
   return join(proj, RECORD_REL);
 }
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const RUNTIME = join(AIDLC_SRC, "tools", "aidlc-runtime.ts");
 const SENSOR = join(AIDLC_SRC, "tools", "aidlc-sensor-required-sections.ts");
 const STATE_FIXTURE = join(FIXTURES_DIR, "state-construction.md");
@@ -88,10 +79,9 @@ afterAll(() => {
   for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
 });
 
-// make_project (.sh:66-99): aidlc-state.md (the construction fixture) + an
-// audit.md carrying WORKFLOW_STARTED so compile builds a real header rather
-// than the empty-graph short-circuit. Each call is a fresh dir, torn down in
-// afterAll — same isolation the .sh's mktemp -d + EXIT trap gave.
+// aidlc-state.md (the construction fixture) + an audit.md carrying
+// WORKFLOW_STARTED so compile builds a real header rather than the empty-graph
+// short-circuit. Each call is a fresh dir, torn down in afterAll.
 const AUDIT_MD = `# AI-DLC Audit Log
 
 ## Workflow Started
@@ -148,8 +138,6 @@ function graphPath(proj: string): string {
   return join(recordRoot(proj), "runtime-graph.json");
 }
 
-// write_uowd (.sh:102-114): unit-of-work-dependency.md with the given fenced
-// block body wrapped in prose H2 sections.
 function writeUowd(proj: string, block: string): void {
   const body = [
     "# Unit Dependency DAG",
@@ -168,8 +156,8 @@ interface CompileRun {
   stderr: string;
 }
 
-// run_compile (.sh:124-127): `bun RUNTIME compile --project-dir <proj>`,
-// capturing stderr (the omit diagnostic surface).
+// `bun RUNTIME compile --project-dir <proj>`, capturing stdout+stderr
+// (including the omit diagnostic surface).
 function runCompile(proj: string): CompileRun {
   const res = spawnSync(BUN, [RUNTIME, "compile", "--project-dir", proj], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -261,8 +249,8 @@ describe("t133 Bolt-DAG runtime compile (migrated from t133-bolt-dag-compile.sh,
     const first = readFileSync(graphPath(proj), "utf-8");
     runCompile(proj);
     const second = readFileSync(graphPath(proj), "utf-8");
-    // Stronger than the .sh's `diff -q`: assert exact byte equality of the
-    // whole file (no Date.now / Set-order nondeterminism in the bolt_dag path).
+    // Assert exact byte equality of the whole file (no Date.now / Set-order
+    // nondeterminism in the bolt_dag path).
     expect(second).toBe(first);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -291,8 +279,6 @@ describe("t133 Bolt-DAG runtime compile (migrated from t133-bolt-dag-compile.sh,
     const proj = makeProject(); // no unit-of-work-dependency.md written
     runCompile(proj);
     const g = readGraph(proj);
-    // Stronger than the .sh's join check: assert exact key set AND order, and
-    // that bolt_dag is genuinely absent (no empty-node noise).
     expect(Object.keys(g)).toEqual(["workflow_id", "scope", "started_at", "stages"]);
     expect("bolt_dag" in g).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -321,7 +307,7 @@ describe("t133 edge-block sensor (aidlc-sensor-required-sections, units-generati
 
   test("sensor: absent block → pass:false, edge_block:absent [.sh test 9]", () => {
     const proj = makeProject();
-    // A doc with H2 headings but NO fenced yaml units block (.sh:255-261).
+    // A doc with H2 headings but NO fenced yaml units block.
     writeFileSync(
       uowdPath(proj),
       ["## Dependencies", "Prose only: a depends on b.", "## Integration", "REST.", ""].join("\n"),

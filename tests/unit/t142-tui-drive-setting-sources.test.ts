@@ -664,7 +664,7 @@ describe("tui-drive turn-end detection (#1369)", () => {
     expect(watch.observe(`${IDLE}\n● one more line`, 8_000)).toBe(false); // a repaint restarts the settle
     expect(watch.observe(`${IDLE}\n● one more line`, 8_999)).toBe(false);
     expect(watch.observe(`${IDLE}\n● one more line`, 9_000)).toBe(true);
-    expect(watch.observe(BACKGROUND_WAIT, 9_500)).toBe(false); // work resumed
+    expect(watch.observe(BACKGROUND_WAIT, 9_500)).toBe(false);
     expect(watch.observe(IDLE, 10_000)).toBe(false);
     watch.begin();
     expect(watch.observe(IDLE, 20_000)).toBe(false);
@@ -807,7 +807,7 @@ describe("Kiro numbered-prose answer classification", () => {
   });
 
   test("answers one summary confirmation per checkpoint-bearing stage, not once per journey", () => {
-    // Post-checkpoint-enforcement journeys present one consolidated-summary
+    // Journeys present one consolidated-summary
     // confirmation per stage that ran a Q&A (observed live: reverse-engineering
     // "before I finalize", then requirements-analysis "before I generate the
     // requirements artifact"). The retained viewport still shows the earlier

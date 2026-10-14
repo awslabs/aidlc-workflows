@@ -51,15 +51,45 @@ export function retryEligible(first: RetryEvidence, maxWallMs: number, remaining
 }
 
 /**
- * True when a case failed a person-turn check (tests/harness/person-turns.ts).
- * Bun 1.4 writes the error's name as the JUnit failure type; Bun 1.3 writes
- * every thrown error as `AssertionError`, so the error's own header line,
- * which every Bun prints for an uncaught error, counts too.
+ * True when a case failed with the error a driver throws by this name. Bun 1.4
+ * writes the error's name as the JUnit failure type; Bun 1.3 writes every
+ * thrown error as `AssertionError`, so the error's own header line, which
+ * every Bun prints for an uncaught error, counts too.
  */
-export function personTurnFailed(xml: string, output = ""): boolean {
-  return [...xml.matchAll(/<(failure|error)\b([^>]*)>/g)].some((match) => /\btype="PersonTurnError"/.test(match[2])) ||
-    /^PersonTurnError: /m.test(output);
+function failedWith(name: string, xml: string, output: string): boolean {
+  return [...xml.matchAll(/<(failure|error)\b([^>]*)>/g)].some((match) => new RegExp(`\\btype="${name}"`).test(match[2])) ||
+    new RegExp(`^${name}: `, "m").test(output);
 }
+
+/** True when a case failed a person-turn check (tests/harness/person-turns.ts). */
+export function personTurnFailed(xml: string, output = ""): boolean {
+  return failedWith("PersonTurnError", xml, output);
+}
+
+/**
+ * True when a case failed because the model service did, not AI-DLC
+ * (tests/harness/sdk-drive.ts ModelApiError). It is still a failure and keeps
+ * its one retry; only what the run says about it changes.
+ */
+export function modelApiFailed(xml: string, output = ""): boolean {
+  return failedWith("ModelApiError", xml, output);
+}
+
+/**
+ * True when every failed case failed because the model service did: only then
+ * is the whole file's failure infrastructure. Bun 1.3 names every failure
+ * `AssertionError`, so there each failed case needs its own printed header.
+ */
+export function onlyModelApiFailures(xml: string, output = ""): boolean {
+  const failures = [...xml.matchAll(/<(failure|error)\b([^>]*)>/g)].map((match) => match[2]);
+  if (failures.length === 0) return false;
+  if (failures.every((attributes) => /\btype="ModelApiError"/.test(attributes))) return true;
+  return failures.every((attributes) => /\btype="AssertionError"/.test(attributes)) &&
+    (output.match(/^ModelApiError: /gm)?.length ?? 0) >= failures.length;
+}
+
+/** What a file whose every failed case was the model service's says, in its result and failures.txt. */
+export const MODEL_API_REASON = "the model service failed, not AI-DLC: infrastructure, not a test result";
 
 /** The line a live file that passed only on its second attempt gets, on every OS. */
 export function flakyLiveLine(file: string): string {
@@ -70,6 +100,12 @@ export function flakyLiveLine(file: string): string {
 export function personTurnLine(file: string): string {
   return `::error title=Person-turn failure::${basename(file)} found AI-DLC acting for the person ` +
     "(a decision recorded as theirs with no reply of theirs behind it, or work started before they answered).";
+}
+
+/** The line a live file the model service failed under gets, on every OS; its other failures are its own. */
+export function modelApiLine(file: string): string {
+  return `::warning title=Model service failure::${basename(file)}: the model service failed under it ` +
+    "(throttled, a server error, or the connection dropped); that failure is infrastructure, not a test result.";
 }
 
 /** True when a JUnit report has failed cases and every one ran past its case timeout (bun writes `type="TimeoutError"`). */

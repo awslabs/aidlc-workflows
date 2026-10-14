@@ -12,7 +12,7 @@
 //    stdout - the observable contract of the creation pipeline (scan -> state +
 //    audit + stdout warning).
 //  - parseGitmodules unit cases import the pure exported parser in-process from
-//    the dist tool (t37's idiom) — STRONGER than a stringified grep.
+//    the dist tool (t37's idiom).
 //
 // poc's scope grid has reverse-engineering = EXECUTE, so a Brownfield creation
 // keeps RE in scope and the greenfield->SKIP flip must NOT fire; a Greenfield
@@ -32,7 +32,7 @@ import { parseGitmodules } from "../../dist/claude/.claude/tools/aidlc-utility.t
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 
@@ -42,7 +42,6 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-/** Fresh bare temp project (createTestProject scaffolds the workspace shell). */
 function proj(): string {
   const p = createTestProject();
   tempDirs.push(p);
@@ -55,7 +54,6 @@ interface CliResult {
   stderr: string;
 }
 
-/** Spawn `bun aidlc.ts engine intent create --scope poc --project-dir <p>`. */
 function runIntentCreate(p: string): CliResult {
   const res = spawnSync(
     BUN,
@@ -116,14 +114,12 @@ const GITMODULES_TWO = `[submodule "services/api"]
 `;
 
 describe("t211 aidlc-utility intent-create — git submodules as a brownfield signal", () => {
-  // --- Case 1: .gitmodules + empty dirs -> Brownfield, RE stays EXECUTE, warned ---
   test("1: uninitialized submodules classify Brownfield with warning + RE EXECUTE", () => {
     const p = proj();
     writeFileSync(join(p, ".gitmodules"), GITMODULES_TWO, "utf-8");
     const r = runIntentCreate(p);
     expect(r.status).toBe(0);
 
-    // Brownfield classification, languages truthfully Unknown (dirs empty).
     expect(stateField(p, "Project Type")).toBe("Brownfield");
     expect(stateField(p, "Languages")).toBe("Unknown");
 
@@ -133,7 +129,6 @@ describe("t211 aidlc-utility intent-create — git submodules as a brownfield si
       "reverse-engineering — greenfield",
     );
 
-    // Audit WORKSPACE_SCANNED carries the Submodules field + the remedy.
     const audit = readAudit(p);
     expect(audit).toContain("**Event**: WORKSPACE_SCANNED");
     expect(audit).toContain("**Submodules**: 2 declared, 2 uninitialized");
@@ -141,27 +136,22 @@ describe("t211 aidlc-utility intent-create — git submodules as a brownfield si
       "git submodule update --init --recursive",
     );
 
-    // Creation stdout carries the warning line naming the remedy + paths.
     expect(r.stdout).toContain(
       "Warning: 2 uninitialized git submodule path(s) (services/api, services/web)",
     );
     expect(r.stdout).toContain("git submodule update --init --recursive");
   });
 
-  // --- Case 2: no .gitmodules -> Greenfield unchanged, RE flips to SKIP ---
   test("2: no .gitmodules keeps Greenfield + RE SKIP (byte-stable no-submodule path)", () => {
     const p = proj();
     const r = runIntentCreate(p);
     expect(r.status).toBe(0);
 
     expect(stateField(p, "Project Type")).toBe("Greenfield");
-    // Greenfield flip fires: RE annotated greenfield in Stages-to-Skip.
     expect(stateField(p, "Stages to Skip")).toContain(
       "reverse-engineering — greenfield",
     );
 
-    // No submodule surfaces: audit event has no Submodules field, no remedy,
-    // and stdout carries no warning line.
     const audit = readAudit(p);
     expect(audit).toContain("**Event**: WORKSPACE_SCANNED");
     expect(audit).not.toContain("**Submodules**:");
@@ -186,7 +176,6 @@ describe("t211 aidlc-utility intent-create — git submodules as a brownfield si
     expect(r.stdout).not.toContain("Warning:");
   });
 
-  // --- Case 4: .gitmodules + INITIALIZED dirs -> Brownfield, no warning ---
   test("4: initialized submodules classify Brownfield with no uninitialized warning", () => {
     const p = proj();
     writeFileSync(join(p, ".gitmodules"), GITMODULES_TWO, "utf-8");
@@ -201,7 +190,6 @@ describe("t211 aidlc-utility intent-create — git submodules as a brownfield si
 
     const audit = readAudit(p);
     expect(audit).toContain("**Submodules**: 2 declared, 0 uninitialized");
-    // No remedy in Details, no stdout warning when all are initialized.
     expect(audit).toContain("**Details**: Deterministic rule-based scan\n");
     expect(audit).not.toContain("git submodule update");
     expect(r.stdout).not.toContain("Warning:");

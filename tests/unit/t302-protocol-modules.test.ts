@@ -511,7 +511,8 @@ describe("t302 construction branches live in their own modules", () => {
     }
     const construction = readFileSync(join(dir, "stage-protocol-construction.md"), "utf-8");
     expect(construction).not.toContain("Non-executable future-state");
-    // The swarm module's bindings carry the retry-discard line; the reviewer module no longer repeats it.
+    // The swarm module's bindings carry the retry-discard line; the reviewer
+    // module does not repeat it.
     const reviewer = readFileSync(join(dir, "stage-protocol-reviewer.md"), "utf-8");
     expect(reviewer).not.toContain("because the work changed again after its re-check");
     // Text the engine already does or says, and pointers protocol_note carries.
@@ -532,7 +533,7 @@ describe("t302 construction branches live in their own modules", () => {
   });
 });
 
-// A tool line that sends the agent to a moved part names the file it is in now.
+// A tool line that sends the agent to a moved part names the file it is in.
 describe("t302 tool lines name the module a moved part lives in", () => {
   test("the swarm retry line and the reviewer dispatch-record warning name their modules", () => {
     const log = readFileSync(join(REPO_ROOT, "core", "tools", "aidlc-log.ts"), "utf-8");

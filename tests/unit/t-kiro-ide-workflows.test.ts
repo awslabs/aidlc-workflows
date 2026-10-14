@@ -400,7 +400,6 @@ describe("config trust and doctor", () => {
     expect(row?.fix).toContain("Developer: Reload Window");
     const off = machine(`{ "${KEY}": false }`);
     expect(kiroIdeWorkflowsDoctorCheck(project, ".kiro", off.env)).toEqual({ pass: true, label: "Kiro Workflows is off" });
-    // Outside a Kiro IDE project there is no row.
     expect(kiroIdeWorkflowsDoctorCheck(temp("aidlc-t-kiro-workflows-empty-"), undefined, on.env)).toBeNull();
   });
 

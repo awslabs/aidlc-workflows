@@ -97,7 +97,6 @@ function next(proj: string, args: string[] = []): Emitted {
   return result.directive as unknown as Emitted;
 }
 
-/** The person's message in Claude Code, read by the human-turn hook; returns the hook's context line. */
 function reply(proj: string, prompt: string): string {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj,
@@ -110,7 +109,6 @@ function reply(proj: string, prompt: string): string {
   return result.stdout ?? "";
 }
 
-/** What the agent runs after reading the person's reply. */
 function answer(proj: string, details: string, extra: string[] = []): { code: number; message: string } {
   const result = spawnSync(BUN, [
     join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
@@ -155,10 +153,10 @@ function askFor(proj: string): Emitted {
   return directive;
 }
 
-// Arden, 2026-10-07: a person-facing line never asks the person to type exact
-// words. The questions file's own invite said "write your answer after
-// `[Answer]:` and say done", and two guide rows paraphrased it, so the file the
-// person opens told them a word to send back.
+// A person-facing line never asks the person to type exact words. The
+// questions file's own invite said "write your answer after `[Answer]:` and say
+// done", and two guide rows paraphrased it, so the file the person opens told
+// them a word to send back.
 describe("the questions file invites an answer without naming words to say", () => {
   const read = (rel: string): string => readFileSync(join(REPO_ROOT, rel), "utf-8");
   test("the invite and the two guide rows ask them to tell the agent, in their words", () => {
@@ -193,7 +191,6 @@ describe("an answer written in the Plan Approval questions file", () => {
       expect(context).toContain("is recorded");
       expect(context).toContain("code-generation-questions.md");
       expect(answerLine(proj)).toBe("[Answer]: A. Approve Plan");
-      // The agent's own record of the same choice is fine; a different one is refused.
       expect(answer(proj, "Approve Plan").message).toContain("already recorded");
       expect(answer(proj, "Request Changes").code).not.toBe(0);
       expect(next(proj).plan_approval).toEqual({ status: "approved" });
@@ -241,7 +238,6 @@ describe("an answer written in the Plan Approval questions file", () => {
     expect(auditText(proj)).not.toContain("**Details**: Request Changes");
     expect(context).toContain("code-generation-questions.md");
     expect(context).toContain("use a lookup table");
-    // The agent reads the file and records the choice the person made.
     expect(answer(proj, "Request Changes", ["--reason", "use a lookup table"]).message).toContain('Recorded "Request Changes"');
     expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "use a lookup table" });
   });

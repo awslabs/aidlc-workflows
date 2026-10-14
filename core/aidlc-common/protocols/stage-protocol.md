@@ -35,9 +35,11 @@ what they say, in their own words and in context, and do it.
   person's request in chat. Say in one line that the team's rule holds, in which
   file, and that changing that line changes it.
 - When they ask for a review of a stage or of a Unit ("review Unit 1 again",
-  "have the reviewer look at the design"), record it through AI-DLC the first
+  "have the reviewer look at the design", or yes to "Do you want me to have the
+  new approach checked before you decide?"), record it through AI-DLC the first
   time they ask, under every Guard Policy: run `{{INVOKE}} engine log review
-  --stage <slug> --reviewer <the stage's reviewer> --iteration <next>` (add
+  --stage <slug> --reviewer <the stage's reviewer> --iteration <next>
+  --person-asked` (add
   `--unit <unit>` for a Unit; the stage file's `reviewer` field names the
   reviewer, and a wrong iteration is answered with the right one), then
   dispatch the reviewer and record its verdict as

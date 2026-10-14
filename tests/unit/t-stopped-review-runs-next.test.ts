@@ -86,7 +86,6 @@ function says(p: string, prompt: string, session = SESSION): string {
   return heard(result.stdout ?? "");
 }
 
-// The agent-facing context lines in a hook's stdout.
 function heard(stdout: string): string {
   const lines: string[] = [];
   for (const line of stdout.split("\n")) {
@@ -164,7 +163,6 @@ function recordCommand(p: string): void {
   }
 }
 
-// The Unit's Code Generation written and completed.
 function build(p: string, unit: string): void {
   const stage = findStageBySlug(CG)!;
   const output = join(seededRecordDir(p), "construction", unit, CG);
@@ -183,7 +181,6 @@ function build(p: string, unit: string): void {
 const reviewArgs = (unit: string, iteration: number) =>
   ["review", "--stage", CG, "--reviewer", REVIEWER, "--unit", unit, "--iteration", String(iteration)];
 
-// The agent asks for the Unit's review; the reviewer's answer is optional.
 function review(p: string, unit: string, verdict?: "READY" | "NOT-READY", extra: string[] = []): void {
   const requested = tool(p, "log", [...reviewArgs(unit, 1), ...extra]);
   expect(requested.status, requested.out).toBe(0);
@@ -232,8 +229,6 @@ function checkpoint(p: string, unit: string, action: string, extra: string[] = [
 const unitApprovals = (p: string, unit: string) => events(p, "GATE_APPROVED")
   .filter((row) => auditBlockField(row.block, "Checkpoint") === "construction-unit" && auditBlockField(row.block, "Unit") === unit);
 
-// After alpha: beta is built, reviewed and approved as usual, and one bare
-// `next` closes Code Generation.
 function walkCarriesOn(p: string): void {
   build(p, "beta");
   review(p, "beta", "READY");
@@ -295,10 +290,8 @@ describe("(a) the person writes while a review has no verdict: the agent hears t
       const first = says(p, AS_IT_IS);
       expect(first).toContain(NOTE);
       expect(first).toContain(`Run ${CLAUDE_NEXT} before retrying it or recording anything, and follow the step it prints.`);
-      // Stopped again after the one retry: the same note.
       review(p, "alpha", undefined, ["--retry-pending"]);
       expect(says(p, "no, don't run the review again, approve the unit as it is")).toContain(NOTE);
-      // `next` names the step for that review (the retry, and the person's way on).
       const step = routed(p);
       expect(step.construction_checkpoint?.rereview?.unfinished).toBe("no-verdict");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -321,7 +314,6 @@ describe("(a) the person writes while a review has no verdict: the agent hears t
     // Their words are the approval: no question, no second yes.
     const approved = checkpoint(p, "alpha", "approve");
     expect(approved.json?.approved, approved.out).toBe(true);
-    // Approved over it, the review that never finished asks for nothing more.
     expect(says(p, "carry on")).not.toContain(NOTE);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

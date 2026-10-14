@@ -125,7 +125,6 @@ function tool(p: string, name: string, args: string[]) {
   return { status: result.status, json, out: `${result.stdout}${result.stderr}` };
 }
 
-// What the person types, through the real prompt hook every harness uses.
 function says(p: string, prompt: string, session = SESSION): void {
   const env: NodeJS.ProcessEnv = { ...agentEnv(), AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p };
   const result = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
@@ -151,7 +150,6 @@ function recordCommand(p: string): void {
   }
 }
 
-// The Unit's Code Generation written and completed.
 function build(p: string, unit: string): void {
   const stage = findStageBySlug(CG)!;
   const output = join(seededRecordDir(p), "construction", unit, CG);
@@ -268,7 +266,6 @@ function walkCarriesOn(p: string): void {
   const settled = next(p);
   expect(settled.kind, JSON.stringify(settled).slice(0, 800)).not.toBe("error");
   expect(readFileSync(seededStateFile(p), "utf-8")).toMatch(/^- \[x\] code-generation /m);
-  // Their words were alpha's approval: it was never asked about.
   expect(questionsAsked(p, "alpha")).toHaveLength(0);
   expect(events(p, "GATE_REJECTED")).toHaveLength(0);
 }
@@ -306,7 +303,6 @@ describe("approving a Unit as it is over a review that did not finish", () => {
     expect(refused.out).toContain("--retry-pending");
     expect(refused.out).toContain("--over-unfinished-review");
 
-    // Following the named retry finishes the review, and the Unit verifies.
     review(p, "alpha", 1, "READY", ["--retry-pending"]);
     const ready = checkpoint(p, "alpha", "verify");
     expect(ready.json?.verified, ready.out).toBe(true);

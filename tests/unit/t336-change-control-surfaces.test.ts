@@ -54,12 +54,10 @@ function runValidateGrid(proj: string, proposal: unknown, extra: string[] = []) 
   return { rc: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
-/** How many times the one-line rename notice appears in a stream. */
 function renameNotices(stream: string): number {
   return stream.split("\n").filter((line) => line === GUARD_POLICY_RENAME_NOTICE).length;
 }
 
-/** The validator's JSON, narrowed to the fields these tests read. */
 function validation(stdout: string): {
   valid: boolean;
   errors: string[];

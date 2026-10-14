@@ -40,7 +40,6 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
 const SESSION = "01995000-7a11-7000-8000-000000000021";
 
-/** The directive fields these cases read. */
 interface Emitted {
   kind: string;
   ask_type?: string;
@@ -88,7 +87,6 @@ function approvalRows(proj: string): number {
     .join("\n").match(/\*\*Event\*\*: PLAN_APPROVAL_RECORDED/g)?.length ?? 0;
 }
 
-/** Run one of a project's tools, from the given tree; exit 0 required. */
 function tool(proj: string, tools: string, [name, ...args]: string[], input?: string): string {
   const result = spawnSync(BUN, [join(tools, name), ...args], {
     cwd: proj,
@@ -106,7 +104,6 @@ function engine(proj: string, tools: string, args: string[]): Emitted {
   return JSON.parse(tool(proj, tools, ["aidlc-orchestrate.ts", ...args, "--project-dir", proj]).trim()) as Emitted;
 }
 
-/** Each `continue` the part names, to the directive after the last part. */
 function followParts(proj: string, tools: string, from: Emitted): Emitted {
   let directive = from;
   for (let i = 0; directive.kind === "load-steering" && i < 20; i++) {
@@ -115,7 +112,6 @@ function followParts(proj: string, tools: string, from: Emitted): Emitted {
   return directive;
 }
 
-/** The person's reply, read by the human-turn hook. */
 function reply(proj: string, prompt: string): void {
   tool(proj, join(AIDLC_SRC, "tools"), ["aidlc.ts", "engine", "hook", "record-human-turn"], JSON.stringify({
     hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt,

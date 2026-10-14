@@ -20,7 +20,6 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-/** A checkout with one file in each packaged input and a dist/ directory. */
 function checkout(): string {
   const root = mkdtempSync(join(tmpdir(), "aidlc-package-sources-"));
   roots.push(root);

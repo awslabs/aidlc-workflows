@@ -126,6 +126,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    - The resolved paths in `directive.consumes` - all upstream artifacts the stage declares - paths only, per the context-budget rule. This applies to **every** reviewer-bearing stage, not only per-unit ones:
      - For a **workflow-level** stage with no `directive.unit` (e.g. `contract-design`), these are the upstream artifacts that justify the produced output - the unit DAG (`unit-of-work.md`, `unit-of-work-dependency.md`), the component catalogue (`components.md`), and `requirements.md` - so the reviewer can verify the contracts against the boundaries, entities, and NFRs they formalise rather than reviewing the summary in isolation.
    - The validation tools list from the stage definition's frontmatter (if any)
+   - The request JSON's `test_command`, when it has one (a Code Generation review of a Unit in a parallel batch): the reviewer runs the tests the person approved with it, exactly as written, as a command of its own from the session's folder (the project's main folder) with no `cd` before it, and quotes its result
    - The review-content boundary: tell the reviewer not to raise a finding whose sole subject is this stage's own review bookkeeping. Treat text as this stage's own review bookkeeping when its sole purpose is to record a review iteration, revision count or revision-round label, to list or status this stage's findings in any form including a table or a section of its own, to state the stage's own review state (`draft`, `awaiting review`, `awaiting re-review`, `reviewed`), or to name this stage's review-record path; judge the product claims instead. An inline tag naming an upstream stage's finding is provenance; a tag naming this stage's own finding is bookkeeping.
 
    Do NOT pass: `memory.md` (builder's diary) or any plan/reasoning files, and never a verdict to write or to prefer. The reviewer forms independent judgment.
@@ -249,7 +250,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    stage, or of a Unit they already approved, record it through AI-DLC the
    first time they ask, under every Guard Policy (`strict`, `relaxed`, and
    `off` alike): run step 1's `{{INVOKE}} engine log review` request for that
-   stage (and `--unit`) at the next iteration, dispatch the reviewer, and
+   stage (and `--unit`) at the next iteration with `--person-asked`, dispatch the reviewer, and
    record its verdict as in step 3. The engine never refuses it for want of
    passes, past the cap or a spent recovery; the cap and the one recovery
    bound only the reviews you start on your own. Never write a review file by

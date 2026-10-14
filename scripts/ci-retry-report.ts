@@ -4,16 +4,16 @@
 // the runner's retries.json. It always exits 0; the test step decides the job.
 //
 // `--live <logs-dir>` is the Windows live job's report. The runner prints its
-// Flaky and person-turn lines on every OS, but a Windows live job keeps the
-// child's output to itself, so the job reads the collected e2e-results.json
-// and says the same lines. They are built from fixed words and a test file
-// this checkout holds, never from text a test or an agent wrote.
+// Flaky, person-turn and model service lines on every OS, but a Windows live
+// job keeps the child's output to itself, so the job reads the collected
+// e2e-results.json and says the same lines. They are built from fixed words
+// and a test file this checkout holds, never from text a test or an agent wrote.
 //
 //   bun scripts/ci-retry-report.ts <stamp-file>
 //   bun scripts/ci-retry-report.ts --live <logs-dir>
 import { appendFileSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { flakyLiveLine, personTurnLine } from "../tests/lib/file-retry.ts";
+import { flakyLiveLine, modelApiLine, personTurnLine } from "../tests/lib/file-retry.ts";
 import { summaryFromStamp } from "./ci-test-weights.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
@@ -76,7 +76,7 @@ function liveResults(dir: string, depth = 0): string[] {
   });
 }
 
-/** The Windows live job's Flaky and person-turn lines, from the collected results. Never throws. */
+/** The Windows live job's Flaky, person-turn and model service lines, from the collected results. Never throws. */
 export function liveRetryReport(logsDir: string, repoRoot = REPO_ROOT): string[] {
   let reports: string[];
   try {
@@ -98,12 +98,13 @@ export function liveRetryReport(logsDir: string, repoRoot = REPO_ROOT): string[]
       continue;
     }
     for (const record of Array.isArray(files) ? files : []) {
-      const { file, passedOnRetry, personTurnFailure } = (record ?? {}) as Record<string, unknown>;
-      if (passedOnRetry !== true && personTurnFailure !== true) continue;
+      const { file, passedOnRetry, personTurnFailure, modelApiFailure } = (record ?? {}) as Record<string, unknown>;
+      if (passedOnRetry !== true && personTurnFailure !== true && modelApiFailure !== true) continue;
       if (typeof file !== "string" || !TEST_FILE.test(file) || !existsSync(join(repoRoot, file))) {
         unknown++;
         continue;
       }
+      if (modelApiFailure === true) lines.push(modelApiLine(file));
       if (passedOnRetry === true) lines.push(flakyLiveLine(file));
       if (personTurnFailure === true) lines.push(personTurnLine(file));
     }

@@ -1,7 +1,7 @@
 // covers: function:parseNextFlags, subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:intent-create
 //
-// One rule for a flag-shaped token `next` does not take, before the person's
-// first word. Before this, each such token was read as something the person
+// One rule for a flag-shaped token `next` does not take, wherever it sits on
+// the line. Before this, each such token was read as something the person
 // said: an answer argument the agent misplaced became the routing question's
 // "You said: --details Approve Plan" about words they never typed, or ended the
 // turn with `I could not read "--result". Was that a setting you wanted?`; only
@@ -9,8 +9,8 @@
 // the person misspelt (`--plan-aprroval off add the export`) named the work
 // after the whole line. Now `next` says in one print, to the agent alone, that
 // it cannot take the token and the value it took, and nothing of it reaches the
-// person, becomes the work's name, or is recorded. A flag among their own words
-// or after `--` is still their text (#847).
+// person, becomes the work's name, or is recorded. A flag inside one quoted
+// argument or after `--` is still their text (#847).
 //
 // The second half: the lowering flag the person typed rides the answer commands
 // to the work they pick, and creation takes it once they have asked in this
@@ -308,7 +308,6 @@ describe("the parser reads a flag it does not take, before the person's words, a
   test("a flag among their words is untaken too; the delimiter and a quoted sentence keep it", () => {
     expect(parseNextFlags(["add", "a", "--session", "timeout", "option"]).untakenFlag).toBe("--session");
     expect(parseNextFlags(["add", "a", "--choice", "flag"]).untakenFlag).toBe("--choice");
-    // Marked as theirs: kept word for word, and nothing is untaken.
     const delimited = parseNextFlags(["--", "--choice", "Approve Plan"]);
     expect(delimited.intent).toBe("--choice Approve Plan");
     expect(delimited.untakenFlag).toBeUndefined();
@@ -342,15 +341,12 @@ describe("an answer flag misplaced on next never reaches the person", () => {
       const before = events(proj);
       const { d, out } = next(proj, args);
       expect(d.kind, out).toBe("print");
-      // Nothing for the person: no spoken line, and no question of any kind.
       expect(d.narration, out).toBeUndefined();
       expect(d.ask_type, out).toBeUndefined();
       expect(out).not.toContain(UNREAD);
-      // The print names the token, and sends the agent to the answer command.
       expect(String(d.message)).toContain(flag);
       expect(String(d.message)).toContain(ANSWER_COMMAND);
       expect(String(d.message)).not.toContain("--request");
-      // No question copy says the person said it, and nothing is recorded.
       expect(questionCopies(proj).join(" ")).not.toContain(flag);
       expect(events(proj)).toEqual(before);
       cleanupTestProject(created.pop());
@@ -431,7 +427,6 @@ describe("a name the person misspelt costs them neither their words nor the turn
     expect(d.narration, out).toBeUndefined();
     expect(String(d.message)).toContain("--plan-aprroval off");
     expect(out).not.toContain(UNREAD);
-    // No routing question about words they never typed, and nothing changed.
     expect(d.ask_type, out).toBeUndefined();
     expect(questionCopies(proj).join(" ")).not.toContain("--plan-aprroval");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
@@ -513,7 +508,6 @@ describe("creation takes a lowering flag the command passes when the person aske
   test("before any work exists, their message in this chat is the proof", () => {
     const proj = emptyProject();
     say(proj, "I trust these plans, let it build them without me");
-    // The agent names the reply that asked.
     const made = utility(proj, [
       ...CREATE, "--plan-approval", "off", "--person-words", "I trust these plans, let it build them without me",
     ]);
@@ -621,7 +615,6 @@ describe("the person's own words reach the record from every harness they drive"
       const proj = createTestProject();
       created.push(proj);
       removeWorkspaceRecord(proj);
-      // The install this harness ships, in the person's project.
       cpSync(join(REPO_ROOT, "dist", harness, dir), join(proj, dir), { recursive: true });
       const health = hooksHealthDir(proj);
       mkdirSync(health, { recursive: true });
@@ -649,7 +642,6 @@ describe("the person's own words reach the record from every harness they drive"
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       });
       expect(fired.status, `${harness}: ${fired.stdout}${fired.stderr}`).toBe(0);
-      // Their words are on record for this chat, with the setting they typed.
       const records = listMessages(proj);
       expect(records.length, `${harness}: ${JSON.stringify(records)}`).toBe(1);
       expect(records[0].words, harness).toBe("add the export");
@@ -689,16 +681,13 @@ describe("the Kiro CLI forwarding latch lets the agent correct the line", () => 
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(intercept.status, `${intercept.stdout}${intercept.stderr}`).toBe(0);
-    // Their words are kept whole, typo and all, before any agent acts.
     const records = listMessages(proj);
     expect(records.length, JSON.stringify(records)).toBe(1);
     expect(records[0].text).toBe(typed);
-    // The agent's first call is the line as typed: the print, not a refusal.
     const first = next(proj, ["--plan-aprroval", "off", "add", "the", "export"]);
     expect(first.d.kind, first.out).toBe("print");
     expect(String(first.d.message)).toContain("--plan-aprroval off");
     expect(first.out).not.toContain("dropped or changed the user's arguments");
-    // Then the corrected call, which the latch does not stand in front of.
     const second = next(proj, ["--plan-approval", "off", "add the export"]);
     expect(second.out).not.toContain("dropped or changed the user's arguments");
     expect(second.d.kind, second.out).toBe("ask");
@@ -721,14 +710,12 @@ describe("a reply carrying a flag-shaped word of their own stays their reply", (
     const turns = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN");
     expect(turns.length).toBeGreaterThan(0);
     expect(auditBlockField(turns[turns.length - 1].block, "Reply")).toBeNull();
-    // So the answer command records the choice they made.
     const answered = spawnSync(BUN, [
       join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation",
       "--checkpoint", "plan-approval", "--details", "Approve Plan", "--project-dir", proj,
     ], { cwd: proj, env: env(proj), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
     expect(next(proj).d.plan_approval?.status).toBe("approved");
-    // The message record keeps their whole line, the flag-shaped word included.
     expect(listMessages(proj).map((message) => message.text))
       .toContain("/aidlc approve, but add a --verbose flag");
   });
@@ -741,7 +728,6 @@ describe("a reply carrying a flag-shaped word of their own stays their reply", (
     expect(d.kind, out).toBe("print");
     expect(d.narration, out).toBeUndefined();
     expect(String(d.message)).toContain("--verbose");
-    // The way to keep their token, and the answer command for the open question.
     expect(String(d.message)).toContain(ANSWER_COMMAND);
   });
 });
@@ -758,7 +744,6 @@ describe("a misspelt setting after the person's words is not swallowed by the wo
     expect(d.narration, out).toBeUndefined();
     expect(String(d.message)).toContain("--plan-aprroval off");
     expect(questionCopies(proj).join(" ")).not.toContain("--plan-aprroval");
-    // Their words, marked as theirs, start the work with the setting they meant.
     const ask = next(proj, ["--plan-approval", "off", "--", "add the export"]);
     expect(ask.d.kind, ask.out).toBe("ask");
     expect(String(ask.d.question)).toContain("add the export");
@@ -777,9 +762,7 @@ describe("a misspelt setting after the person's words is not swallowed by the wo
     expect(d.kind, out).toBe("print");
     expect(d.narration, out).toBeUndefined();
     expect(String(d.message)).toContain("--plan-aprroval off");
-    // The open question is named, as it was.
     expect(String(d.message)).toContain(ANSWER_COMMAND);
-    // And so is the way on for a line that is not its answer.
     expect(String(d.message)).toContain("only the person's words");
     expect(String(d.message)).toContain("`--` before their words");
     expect(String(d.message)).toContain("the flag `next` takes");
@@ -793,7 +776,6 @@ describe("a misspelt setting after the person's words is not swallowed by the wo
     expect(parsed.untakenFlag).toBe("--plan-aprroval");
     expect(parsed.intent).toBe("add the export");
     expect(parsed.personWords).toBe("--plan-aprroval off add the export");
-    // One of their words before the delimiter and one after it, both kept.
     expect(parseNextFlags(["add", "a", "--verbose", "flag", "--", "in the CLI"]).personWords)
       .toBe("add a --verbose flag in the CLI");
   });
@@ -812,7 +794,6 @@ describe("a misspelt setting after the person's words is not swallowed by the wo
     expect(d.kind, out).toBe("print");
     expect(d.narration, out).toBeUndefined();
     expect(String(d.message)).toContain("--");
-    // One re-run with the delimiter keeps every token of theirs (#847).
     const ask = next(proj, ["--", "add a --verbose flag to the CLI"]);
     expect(ask.d.kind, ask.out).toBe("ask");
     expect(String(ask.d.question)).toContain("add a --verbose flag to the CLI");

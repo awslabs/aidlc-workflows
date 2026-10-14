@@ -55,9 +55,8 @@ import { frameworkMemorySeedDir } from "../../dist/claude/.claude/tools/aidlc-gr
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const UTILITY = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
-// The seed bundled INSIDE the shipped Claude engine dir (tools/data/memory-seed/).
 const BUNDLED_SEED = join(
   REPO_ROOT,
   "dist",
@@ -100,10 +99,8 @@ describe("t-memory-seed engine-only-install self-heal", () => {
     // Defaults to DATA_DIR/memory-seed relative to THIS test's import of the
     // shipped Claude tool — i.e. the bundled seed under that tree.
     expect(seed).toBe(BUNDLED_SEED);
-    // The seed shipped, with real method content (not just an empty dir).
     expect(existsSync(join(BUNDLED_SEED, "org.md"))).toBe(true);
     expect(readFileSync(join(BUNDLED_SEED, "org.md"), "utf-8").length).toBeGreaterThan(0);
-    // And the nested per-phase method file ships too (the whole core/memory/ tree).
     expect(existsSync(join(BUNDLED_SEED, "phases", "construction.md"))).toBe(true);
   });
 
@@ -118,14 +115,12 @@ describe("t-memory-seed engine-only-install self-heal", () => {
     const res = runIntentCreate(proj);
     expect(res.status, `intent-create failed: ${res.stdout}\n${res.stderr}`).toBe(0);
 
-    // The self-heal seeded the default-space method tree from the engine bundle.
     const orgMd = join(defaultMemory, "org.md");
     expect(existsSync(orgMd), "org.md seeded into default memory").toBe(true);
     const body = readFileSync(orgMd, "utf-8");
     expect(body.length, "seeded org.md has real content").toBeGreaterThan(0);
     // Byte-for-byte the engine bundle (it is a recursive copy, no transform).
     expect(body).toBe(readFileSync(join(BUNDLED_SEED, "org.md"), "utf-8"));
-    // The nested per-phase method file was copied recursively too.
     expect(existsSync(join(defaultMemory, "phases", "construction.md"))).toBe(true);
   });
 

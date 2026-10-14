@@ -92,7 +92,6 @@ function secondSpace(dir: string, record = OVER_THERE, slug = "over-there"): voi
   lib.setActiveIntentCursor(dir, record, ELSEWHERE);
 }
 
-// The chat comes back: the host fires its session start with the resume source.
 function resumes(dir: string, session = CHAT): { rc: number; out: string } {
   const r = spawnSync(process.execPath, [join(dir, ".claude", "hooks", "aidlc-session-start.ts")], {
     cwd: dir,
@@ -129,7 +128,6 @@ describe("a switch typed in another window moves the selection, not this chat", 
     // slash form, so one step works on every harness.
     expect(first.out).toContain(`aidlc-utility.ts intent ${THERE}`);
     expect(first.out).not.toContain(`/aidlc intent ${THERE}`);
-    // The step still works this chat's own record, not the one the other window chose.
     expect(first.out).toContain(`intents/${HERE}/`);
     expect(first.out).not.toContain(`intents/${THERE}/`);
     const second = run(dir, "aidlc-orchestrate.ts", ["next"], asChat);
@@ -191,7 +189,6 @@ describe("a switch typed in another window moves the selection, not this chat", 
     const step = run(dir, "aidlc-orchestrate.ts", ["next"], { AIDLC_SESSION_OVERRIDE: CHAT });
     expect(step.rc, step.out).toBe(0);
     expect(step.out).not.toContain("Another window switched");
-    // The chat still has its own work, and the selection still moved.
     expect(chatIsOn(dir)).toBe(HERE);
     expect(selection(dir)).toBe(THERE);
   });

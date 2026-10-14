@@ -5,7 +5,7 @@
 // so the engine removes the record when it records the verdict; the protocol has
 // no delete step, and no `rm` (a permission card on Claude Code and Kiro CLI) is
 // ever asked of the agent. An attempt with no verdict leaves the record for the
-// retry; the scope hook's 6 h TTL covers a crashed review as before.
+// retry; the scope hook's 6 h TTL covers a crashed review.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";

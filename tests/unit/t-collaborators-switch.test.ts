@@ -98,9 +98,7 @@ describe("t-collaborators effectiveSupportAgents (the single owner)", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
       expect(effectiveSupportAgents(FAKE, "enterprise", null)).toEqual(FAKE.support_agents);
       expect(effectiveSupportAgents(FAKE, "feature", null)).toEqual([]);
-      // A per-run intent flips it back on under an off scope.
       expect(effectiveSupportAgents(FAKE, "feature", "- **Collaborators**: on (set by you)\n")).toEqual(FAKE.support_agents);
-      // A stage that declares no collaborators never gains any.
       expect(effectiveSupportAgents({ support_agents: [] }, "enterprise", null)).toEqual([]);
     });
   });
@@ -131,7 +129,6 @@ describe("t-collaborators effectiveSupportAgentsForProject reads the active work
       writeFileSync(seededStateFile(onProj), stateWithScope("enterprise"));
       expect(effectiveSupportAgentsForProject(onProj, re!)).toEqual(re!.support_agents);
 
-      // A per-run intent on an off scope restores the roster.
       const intentProj = createTestProject();
       tempDirs.push(intentProj);
       writeFileSync(

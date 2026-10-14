@@ -45,7 +45,7 @@ import {
   TestBudgetExhaustedError,
 } from "./harness/test-budget.ts";
 import { buildMeta, renderMeta } from "./lib/bun-junit-to-meta.ts";
-import { CASE_TIMEOUT_RETRY_MAX_MS, flakyLiveLine, ISOLATED_RETRY_MAX_MS, onlyCaseTimeouts, ORDINARY_RETRY_MAX_MS, personTurnFailed, personTurnLine, preserveFirstAttempt, retryEligible, retryPassed } from "./lib/file-retry.ts";
+import { CASE_TIMEOUT_RETRY_MAX_MS, flakyLiveLine, ISOLATED_RETRY_MAX_MS, MODEL_API_REASON, modelApiFailed, modelApiLine, onlyModelApiFailures, onlyCaseTimeouts, ORDINARY_RETRY_MAX_MS, personTurnFailed, personTurnLine, preserveFirstAttempt, retryEligible, retryPassed } from "./lib/file-retry.ts";
 import {
   type OrderWeights,
   orderLongestFirst,
@@ -127,6 +127,8 @@ interface FileExecution {
   caseTimeoutsOnly?: boolean;
   /** A case failed a person-turn check, so the file is never retried. */
   personTurnFailure?: boolean;
+  /** A case failed because the model service did; that failure is infrastructure, not a test result. */
+  modelApiFailure?: boolean;
 }
 
 function usage(): string {
@@ -1191,6 +1193,8 @@ async function runBunTestFile(
       ? "Explicitly selected file executed no test cases (all skipped or empty). For production guard journeys, rerun with --production-guards; for live gates, enable the documented live variable and install/authenticate its CLI."
       : "No test cases executed (all skipped or empty)";
   }
+  const modelApiFailure = meta.status === "FAIL" && modelApiFailed(xml, run.output);
+  if (modelApiFailure && onlyModelApiFailures(xml, run.output)) meta.reason = MODEL_API_REASON;
   // Preserve a duration even if a future Bun omits root time.
   if (meta.duration === "0") meta.duration = String(Math.max(0, (Date.now() - start) / 1000));
   writeMeta(name, meta);
@@ -1225,6 +1229,7 @@ async function runBunTestFile(
     junitPath: junitXml,
     ...(status === "FAIL" && onlyCaseTimeouts(xml) ? { caseTimeoutsOnly: true } : {}),
     ...(status === "FAIL" && personTurnFailed(xml, run.output) ? { personTurnFailure: true } : {}),
+    ...(modelApiFailure ? { modelApiFailure: true } : {}),
     // Diagnostic evidence, never grounds for changing an assertion or retrying.
     throttlingSignals: (run.output.match(
       /ThrottlingException|TooManyRequestsException|(?:HTTP|status(?:Code)?)\s*[:=]?\s*429\b|rate[_ ]limit[_ ]exceeded/gi,
@@ -1723,6 +1728,7 @@ async function runIsolatedE2e(): Promise<void> {
     await runE2eQueue(runnable, limits, async (task, worker) => {
       try {
         const first = await execute(task.file, worker);
+        if (first.modelApiFailure) process.stdout.write(`${modelApiLine(task.file)}\n`);
         // Retry only a short assertion failure after confirmed retirement. A
         // timeout, missing evidence, cleanup failure or person-turn failure
         // never earns another run.
@@ -1731,6 +1737,7 @@ async function runIsolatedE2e(): Promise<void> {
         }
         if (args.fileRetries && retryEligible(first, ISOLATED_RETRY_MAX_MS, remainingRunMs())) {
           const second = await execute(task.file, worker, 2);
+          if (second.modelApiFailure) process.stdout.write(`${modelApiLine(task.file)}\n`);
           if (second.status === "PASS") {
             records.get(task.file)!.passedOnRetry = true;
             process.stdout.write(`${flakyLiveLine(task.file)}\n`);

@@ -1,23 +1,17 @@
 // covers: function:validScopes, subcommand:aidlc-utility:scope-table
 //
-// CLI-contract port of tests/unit/t60-valid-scopes-derived.sh (TAP plan 9),
-// mechanism = cli. The .sh proves that DROPPING ONE .claude/scopes/aidlc-<name>.md
-// file (frontmatter name/depth/keywords/description) makes <name> a valid scope
-// that flows through EVERY tool that validates scopes (init, scope-change,
-// doctor) AND through the summary surface (scope-table) with no source edit
-// and NO JSON file. The .sh's keyword cases (Test 7 inferScopeFromText, Test 9
-// detect-scope --from-text) went with the classifier: the engine no longer
-// reads the person's words for a plan; the agent proposes it
-// (t-plan-proposed-by-the-agent). Equal-or-stronger
-// migration: every .sh assertion is preserved by SPAWNING the real binary
-// (BUN + the tool .ts) against the SAME surface the .sh exercised — a fresh
-// project whose .claude/scopes/ has a dropped fixture-scope.md — and asserting
-// on res.status / combined stdout+stderr / the state.md + audit.md the tool
+// Mechanism = cli. DROPPING ONE .claude/scopes/aidlc-<name>.md file
+// (frontmatter name/depth/keywords/description) makes <name> a valid scope
+// that flows through EVERY tool that validates scopes (intent-create,
+// scope-change, doctor) AND through the summary surface (scope-table) with no
+// source edit and NO JSON file. The engine does not read the person's words
+// for a plan; the agent proposes it (t-plan-proposed-by-the-agent). Every
+// case SPAWNS the real binary (BUN + the tool .ts) against a fresh project
+// whose .claude/scopes/ has a dropped fixture-scope.md, asserting on
+// res.status / combined stdout+stderr / the state.md + audit shards the tool
 // writes, the PROCESS boundary incl. exit codes.
 //
-// ── CURRENT-SURFACE CORRECTION (audit fold-in) ───────────────────────────────
-// An earlier draft of this twin injected `fixture-scope` via a
-// scope-mapping.fixture.json + AIDLC_SCOPE_MAPPING. That env-var is the LEGACY
+// CURRENT SURFACE: AIDLC_SCOPE_MAPPING is the LEGACY
 // TEST SEAM: when set, loadScopeMapping() reads the JSON VERBATIM and SKIPS the
 // real derivation (aidlc-lib.ts:805-825). v0.6.0 DELETED scope-mapping.json from
 // the shipped tree (verified absent on disk); the compiled scope-grid.json is now
@@ -25,14 +19,14 @@
 // depth/keywords/description source (aidlc-lib.ts:699-704, 827-849). The .sh
 // authors a NEW scope the way a harness engineer actually does — it DROPS a
 // .claude/scopes/aidlc-fixture-scope.md file and sets NO env var (t60.sh:53-81),
-// exercising the real shipped derivation. This twin now mirrors that EXACTLY:
+// exercising the real shipped derivation. This test mirrors that EXACTLY:
 // it writes the fixture .md into each temp project's COPIED .claude/scopes/ and
 // never sets AIDLC_SCOPE_MAPPING (it is even deleted from each spawn env so a
 // developer's leaked shell var can't shadow the derivation). Test 0 below pins
 // the current surface (scope-grid.json present, scope-mapping.json gone) so the
 // obsolete old-source path can never silently come back as the seam under test.
 //
-// MECHANISM SPLIT — why this is a .cli file even though Test 2 imports a
+// MECHANISM SPLIT - why this file spawns even though Test 2 imports a
 // function symbol:
 //   - The covers header credits function:validScopes precisely because the
 //     .sh exercised it via a `bun -e "import { validScopes } ..."` SUBPROCESS
@@ -43,53 +37,19 @@
 //   - scope-table is exercised through the real aidlc-utility.ts CLI
 //     subprocess and the table it prints — the .sh's `bun "$TOOL" scope-table`
 //     (t60.sh:145-150).
-//   - init / scope-change / doctor are also real-CLI spawns (the .sh shelled
+//   - intent-create, scope-change, doctor: real-CLI spawns too (the .sh shelled
 //     out to the same aidlc-utility.ts subcommands at t60.sh:87,101,110,123),
 //     credited transitively to the derivation contract under test.
 //
-// PARITY MAP (.sh `ok`/assert line -> test() below; STRONGER additions noted):
-//   - t60.sh Test 1  grep VALID_SCOPES gone from tools/        -> Test 1:
-//       a recursive scan of dist/claude/.claude/tools/ for VALID_SCOPES
-//       returns zero hits (same observable — symbol absent from shipped src).
-//   - t60.sh Test 2  validScopes() default == 9 sorted scopes  -> Test 2:
-//       spawned `bun -e import {validScopes}` stdout === the 9-scope CSV
-//       (same observable + STRONGER: also pins rc 0 on the import subprocess).
-//   - t60.sh Test 3  init --scope fixture-scope succeeds + state Scope line
-//       -> Test 3: res.status 0 AND state.md contains
-//       `- **Scope**: fixture-scope` (same two observables).
-//   - t60.sh Test 4  init --scope bogus error lists fixture-scope -> Test 4:
-//       combined out contains "fixture-scope" (same) + STRONGER: status === 1.
-//   - t60.sh Test 5  scope-change --scope fixture-scope -> state Scope line
-//       -> Test 5: state.md `- **Scope**: fixture-scope` (same) + STRONGER:
-//       res.status === 0.
-//   - t60.sh Test 6  doctor invalid env-scope fix hint lists fixture-scope
-//       -> Test 6: combined out contains "fixture-scope" (same observable;
-//       the fix line is `valid values: …, fixture-scope, …`).
-//   - t60.sh Test 7  inferScopeFromText picks fixture-scope from keyword
-//       -> gone with the classifier (no tool reads the words for a plan).
-//   - t60.sh Test 8  scope-table includes "| fixture-scope" row -> Test 8:
-//       scope-table stdout contains "| fixture-scope" (same) + STRONGER:
-//       rc === 0.
-//   - t60.sh Test 9  detect-scope --from-text emits SCOPE_DETECTED w/
-//       Detected scope=fixture-scope AND Source=keyword -> gone with the
-//       classifier (`--from-text` is refused as unknown).
-//   - (no .sh row) -> Test 0: STRONGER current-surface pin — scope-grid.json
-//       present, scope-mapping.json absent in the shipped tree.
-//
-// 9 .sh asserts -> 9 expect()-bearing test() cases + 1 added surface-pin
-// (Test 0). Test 3 keeps both its observables in one case to mirror the single
-// `ok` line, as the .sh did.
-//
-// FIXTURE DISCIPLINE (mirrors setup_integration_project + setup_fixture_scope +
-// cleanup_test_project per case): each case builds a FRESH integration sandbox
-// via setupIntegrationProject (which copies dist/claude/.claude/ incl. the
+// FIXTURE DISCIPLINE: each case builds a FRESH integration sandbox via
+// setupIntegrationProject (which copies dist/claude/.claude/ incl. the
 // .claude/scopes/*.md set + tools/data/scope-grid.json + stage-graph.json),
-// then DROPS one .claude/scopes/aidlc-fixture-scope.md into the COPIED tree —
-// the v0.6.0 authoring path. No env var, no JSON edit, no source edit. Nothing
-// under tests/fixtures/** is written; the file lands in each temp project's own
-// .claude/scopes/. All temp dirs cleaned in afterAll. State-reading cases use
-// setupIntegrationProject (which routes the temp path through toPortablePath)
-// so audit.md/state.md round-trip on Windows.
+// then DROPS one .claude/scopes/aidlc-fixture-scope.md into the COPIED tree.
+// No env var, no JSON edit, no source edit. Nothing under tests/fixtures/** is
+// written; the file lands in each temp project's own .claude/scopes/. All temp
+// dirs cleaned in afterAll. State-reading cases use setupIntegrationProject
+// (which routes the temp path through toPortablePath) so audit shards/state.md
+// round-trip on Windows.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -109,22 +69,20 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 
-/** Path to a tool inside a temp project's copied .claude/tools. */
 const toolIn = (proj: string, name: string): string =>
   join(proj, ".claude", "tools", name);
 
 const utilityIn = (proj: string): string => toolIn(proj, "aidlc-utility.ts");
 
-/** The dropped fixture scope file inside a temp project's copied .claude/scopes. */
 const fixtureScopeFile = (proj: string): string =>
   join(proj, ".claude", "scopes", "aidlc-fixture-scope.md");
 
-// P4: init creates a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/)
-// and writes aidlc-state.md there, not the flat aidlc-docs/. Resolve the record
-// dir from the active-space + active-intent cursors, falling back to the flat
-// layout for a seeded-flat project (Test 5 seeds flat state and never inits).
+// intent-create writes aidlc-state.md into a per-intent record
+// (aidlc/spaces/<space>/intents/<YYMMDD>-<slug>/), not the flat aidlc-docs/.
+// Resolve the record dir from the active-space + active-intent cursors,
+// falling back to the flat layout for a seeded-flat project.
 function recordDirOf(proj: string): string {
   const spaceCursor = join(proj, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -142,8 +100,6 @@ function recordDirOf(proj: string): string {
 }
 const statePath = (proj: string): string =>
   join(recordDirOf(proj), "aidlc-state.md");
-// P9: the per-intent audit shard a spawned tool resolves once the seeded record
-// resolves (state present). Mirrors auditShardName() against the pinned clone-id.
 
 const tempDirs: string[] = [];
 afterAll(() => {
@@ -152,13 +108,13 @@ afterAll(() => {
 
 interface CliResult {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string;
   stdout: string;
 }
 
 /**
- * Spawn `bun <tool.ts> <args...>`, optionally with extra env. Mirrors
- * `bun "$TOOL" ...`. AIDLC_SCOPE_MAPPING is force-DELETED from the child env so
+ * Spawn `bun <tool.ts> <args...>`, optionally with extra env.
+ * AIDLC_SCOPE_MAPPING is force-DELETED from the child env so
  * the spawn always takes the real .claude/scopes/ derivation path, never the
  * legacy JSON test seam — even if a developer's shell leaks the var.
  */
@@ -185,7 +141,6 @@ function run(
   };
 }
 
-/** Spawn `bun -e "<src>"` with env. Mirrors the .sh's inline `bun -e` calls. */
 function runEval(src: string, env: Record<string, string> = {}): CliResult {
   const childEnv: Record<string, string | undefined> = {
     ...process.env,
@@ -206,14 +161,12 @@ function runEval(src: string, env: Record<string, string> = {}): CliResult {
 }
 
 /**
- * setup_fixture_scope (t60.sh:56-81): DROP one
- * .claude/scopes/aidlc-fixture-scope.md into the project's COPIED scopes dir.
- * Frontmatter carries name/depth/keywords/description exactly as the .sh's
- * heredoc does. No JSON, no grid edit, no code change — the EXECUTE/SKIP grid
- * column stays empty (no stage frontmatter names this scope), which init
- * tolerates (it stamps the scope name + the always-EXECUTE init stages), the
- * sole behaviour tests 3-6 assert. Optionally attaches the `fixturetrigger`
- * keyword (the NL path, t60.sh:133).
+ * DROP one .claude/scopes/aidlc-fixture-scope.md into the project's COPIED
+ * scopes dir. Frontmatter carries name/depth/keywords/description. No JSON, no
+ * grid edit, no code change - the EXECUTE/SKIP grid column stays empty (no
+ * stage frontmatter names this scope), which intent-create tolerates (it stamps
+ * the scope name + the always-EXECUTE init stages), the sole behaviour tests
+ * 3-6 assert. Optionally attaches the `fixturetrigger` keyword.
  */
 function setupFixtureScope(proj: string, withKeyword = false): void {
   const kwBlock = withKeyword
@@ -234,7 +187,6 @@ Test-only scope dropped to prove validScopes() derives from
   writeFileSync(fixtureScopeFile(proj), body, "utf-8");
 }
 
-/** Fresh integration sandbox (setup_integration_project --no-aidlc-docs --strip-env-scope). */
 function freshProject(opts: {
   withState?: string;
   withAudit?: boolean;
@@ -249,15 +201,15 @@ function freshProject(opts: {
   return proj;
 }
 
-// The 11 alphabetically-sorted default scopes (t60.sh:45). Pins the derivation
+// The 11 alphabetically-sorted default scopes. Pins the derivation
 // baseline: validScopes() == sorted scope names from the shipped
 // .claude/scopes/*.md set.
 const EXPECTED_DEFAULT_SCOPES =
   "bugfix,classic,enterprise,express,feature,infra,mvp,poc,refactor,security-patch,workshop";
 
 describe("t60 valid-scopes derived from .claude/scopes/*.md (migrated from t60-valid-scopes-derived.sh, plan 9)", () => {
-  // --- Test 0: STRONGER current-surface pin (no .sh row) ---
-  // Locks the v0.6.0 surface this twin asserts against: the compiled
+  // --- Test 0: current-surface pin ---
+  // Locks the surface this test asserts against: the compiled
   // scope-grid.json is present and the retired scope-mapping.json is ABSENT
   // from the shipped tree. Guards against a regression that would resurrect
   // the deleted JSON source-of-truth or remove the compiled grid.
@@ -270,11 +222,8 @@ describe("t60 valid-scopes derived from .claude/scopes/*.md (migrated from t60-v
     expect(existsSync(join(AIDLC_SRC, "scopes", "aidlc-feature.md"))).toBe(true);
   });
 
-  // --- Test 1: static scan — VALID_SCOPES symbol gone from shipped tools/ ---
   test("1: no VALID_SCOPES references in shipped tools/", () => {
     const toolsDir = join(AIDLC_SRC, "tools");
-    // grep -rE 'VALID_SCOPES' over the shipped tools dir. Use grep so the scan
-    // matches the .sh exactly (recursive, all files). Exit 1 == no match.
     const res = spawnSync("grep", ["-rE", "VALID_SCOPES", toolsDir], {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
@@ -284,11 +233,10 @@ describe("t60 valid-scopes derived from .claude/scopes/*.md (migrated from t60-v
     expect(res.stdout ?? "").toBe("");
   });
 
-  // --- Test 2: runtime — validScopes() default returns 9 sorted scopes ---
   test("2: validScopes() returns 9 alphabetically-sorted scopes", () => {
     // Spawn `bun -e import { validScopes } from <shipped lib.ts>` against the
-    // shipped tree (no fixture scope dropped) — exactly the .sh mechanism
-    // (t60.sh:46). The fresh process reads .claude/scopes/*.md, no cache.
+    // shipped tree (no fixture scope dropped). The fresh process reads
+    // .claude/scopes/*.md, no cache.
     const lib = join(AIDLC_SRC, "tools", "aidlc-lib.ts");
     const r = runEval(
       `import { validScopes } from ${JSON.stringify(lib)}; console.log([...validScopes()].join(","));`,
@@ -297,7 +245,6 @@ describe("t60 valid-scopes derived from .claude/scopes/*.md (migrated from t60-v
     expect(r.stdout.trim().split("\n").pop()).toBe(EXPECTED_DEFAULT_SCOPES);
   });
 
-  // --- Test 3: init --scope fixture-scope succeeds + writes state Scope line ---
   test("3: init --scope fixture-scope succeeds against dropped .claude/scopes/ file", () => {
     const proj = freshProject();
     setupFixtureScope(proj);
@@ -313,7 +260,6 @@ describe("t60 valid-scopes derived from .claude/scopes/*.md (migrated from t60-v
     expect(state.split("\n")).toContain("- **Scope**: fixture-scope");
   });
 
-  // --- Test 4: init --scope bogus error lists fixture-scope (derivation flowing) ---
   test("4: init --scope bogus error message lists fixture-scope", () => {
     const proj = freshProject();
     setupFixtureScope(proj);
@@ -324,11 +270,10 @@ describe("t60 valid-scopes derived from .claude/scopes/*.md (migrated from t60-v
       "--project-dir",
       proj,
     ]);
-    expect(r.status).toBe(1); // STRONGER: .sh swallowed rc; the error path is process.exit(1)
+    expect(r.status).toBe(1);
     expect(r.out).toContain("fixture-scope");
   });
 
-  // --- Test 5: scope-change --scope fixture-scope succeeds (aidlc-state surface) ---
   test("5: scope-change --scope fixture-scope succeeds (covers state-write surface)", () => {
     const proj = freshProject({
       withState: join(REPO_ROOT, "tests", "fixtures", "state-mid-ideation.md"),
@@ -342,12 +287,11 @@ describe("t60 valid-scopes derived from .claude/scopes/*.md (migrated from t60-v
       "--project-dir",
       proj,
     ]);
-    expect(r.status).toBe(0); // STRONGER: .sh discarded rc
+    expect(r.status).toBe(0);
     const state = readFileSync(statePath(proj), "utf-8");
     expect(state.split("\n")).toContain("- **Scope**: fixture-scope");
   });
 
-  // --- Test 6: doctor invalid env-scope fix hint derives from .claude/scopes/ ---
   test("6: doctor fix hint for invalid AWS_AIDLC_DEFAULT_SCOPE lists fixture-scope", () => {
     const proj = freshProject();
     setupFixtureScope(proj);
@@ -356,16 +300,15 @@ describe("t60 valid-scopes derived from .claude/scopes/*.md (migrated from t60-v
     });
     // doctor reports the invalid env-scope row with a fix line enumerating the
     // valid scopes — fixture-scope among them. (Doctor exits non-zero when any
-    // check fails; the observable the .sh pinned is the fixture-scope mention.)
+    // check fails; the observable is the fixture-scope mention.)
     expect(r.out).toContain("fixture-scope");
   });
 
-  // --- Test 8: scope-table includes a fixture-scope row from the dropped .md ---
   test("8: scope-table includes fixture-scope row from dropped .claude/scopes/ file", () => {
     const proj = freshProject();
     setupFixtureScope(proj, /* withKeyword */ true);
     const r = run(utilityIn(proj), ["scope-table"]);
-    expect(r.status).toBe(0); // STRONGER: non-check scope-table prints + exits 0
+    expect(r.status).toBe(0);
     expect(r.out).toContain("| fixture-scope");
   });
 

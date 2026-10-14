@@ -17,6 +17,7 @@
 // first answer (tests/unit/t149-codex-hook-adapter.test.ts owns that).
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { auditShardHostSegment, cloneIdFileContent, cloneIdPath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -35,14 +36,15 @@ import {
   ScopeHost,
   RESUME_AGAIN,
   ScopeRunRefused,
+  ScopeRunStuck,
   type ScopeRun,
   scopeRunProblems,
   scopeScratchDir,
   stopVerdict,
 } from "./scope-run.ts";
 
-export type HostName = "codex" | "copilot";
-export const HOSTS: readonly ("claude" | HostName)[] = ["claude", "codex", "copilot"];
+export type HostName = "codex" | "copilot" | "kiro" | "kiro-ide";
+export const HOSTS: readonly ("claude" | HostName)[] = ["claude", "codex", "copilot", "kiro", "kiro-ide"];
 
 type Payload = Record<string, unknown>;
 
@@ -68,6 +70,41 @@ interface CopilotWiring {
 /** The commands `.github/hooks/aidlc.json` registers for an event (no matchers: each target reads the tool name). */
 export function copilotWired(wiring: CopilotWiring, event: string, platform: NodeJS.Platform = process.platform): string[] {
   return (wiring.hooks[event] ?? []).map((entry) => (platform === "win32" ? entry.powershell : entry.bash));
+}
+
+interface KiroCliAgent {
+  hooks?: Record<string, { matcher?: string; command: string }[]>;
+}
+
+/** Kiro CLI's tool families: an agent-v1 matcher selects a tool by its canonical name or its alias. */
+const KIRO_CLI_ALIASES: readonly (readonly string[])[] = [["fs_write", "write"], ["fs_read", "read"], ["execute_bash", "shell"]];
+
+/** Whether a Kiro CLI agent-v1 matcher (a glob) selects the tool the CLI names. */
+export function kiroCliMatches(matcher: string, tool: string): boolean {
+  const names = KIRO_CLI_ALIASES.find((family) => family.includes(tool)) ?? [tool];
+  const glob = new Bun.Glob(matcher);
+  return names.some((name) => glob.match(name));
+}
+
+/** The commands an agent JSON (`.kiro/agents/<agent>.json`) registers for an event and tool, in order. */
+export function kiroCliWired(agent: KiroCliAgent, event: string, tool: string | null): string[] {
+  return (agent.hooks?.[event] ?? [])
+    .filter((hook) => hook.matcher === undefined || (tool !== null && kiroCliMatches(hook.matcher, tool)))
+    .map((hook) => hook.command);
+}
+
+export interface KiroIdeCard {
+  file: string;
+  hooks: { trigger: string; matcher?: string; action: { command: string } }[];
+}
+
+/** The commands Kiro IDE's hook cards register for a trigger and tool: cards in file-name order, a matcher is an unanchored regex. */
+export function kiroIdeWired(cards: readonly KiroIdeCard[], event: string, tool: string | null): string[] {
+  return [...cards]
+    .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))
+    .flatMap((card) => card.hooks)
+    .filter((hook) => hook.trigger === event && (hook.matcher === undefined || (tool !== null && new RegExp(hook.matcher).test(tool))))
+    .map((hook) => hook.action.command);
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +157,19 @@ export function copilotPayload(event: string, at: Moment, fields: Payload): Payl
   };
 }
 
+/**
+ * A Kiro CLI payload (captured on 2.29.0): camelCase events, the folder, and the
+ * session the event belongs to on every event; a helper's events carry its own.
+ */
+export function kiroCliPayload(event: string, at: Moment, fields: Payload): Payload {
+  return { hook_event_name: event, cwd: at.proj, session_id: at.helper?.id ?? at.session, ...fields };
+}
+
+/** A Kiro IDE payload (1.2.37): snake_case, the chat's session on every event, a helper's calls included. */
+export function kiroIdePayload(event: string, at: Moment, fields: Payload): Payload {
+  return { session_id: at.session, hook_event_name: event, cwd: at.proj, ...fields };
+}
+
 /** A Codex apply_patch envelope that writes `content` to `rel` (whole-file replacement when it existed). */
 export function codexPatch(rel: string, content: string, before: string | null): string {
   const lines = (text: string, mark: string) => text.split("\n").filter((line, i, all) => i < all.length - 1 || line !== "")
@@ -169,6 +219,11 @@ export abstract class NativeScopeHost extends ScopeHost {
     return this.env;
   }
 
+  /** The variables the tool gives its hook commands. */
+  protected hookEnv(): NodeJS.ProcessEnv {
+    return this.env;
+  }
+
   protected moment(): Moment {
     return { proj: this.proj, session: this.session, turn: this.turn, transcript: this.transcript(), helper: this.helper };
   }
@@ -190,8 +245,8 @@ export abstract class NativeScopeHost extends ScopeHost {
     const input = JSON.stringify(this.payload(event, fields));
     return commands.map((line) => {
       const words = commandWords(line);
-      const res = this.spawn(`${event}${tool ? ` ${tool}` : ""}: ${line}`, [words[0] === "bun" ? process.execPath : words[0], ...words.slice(1)], input);
-      if (res.status !== 0 && !(res.status === 2 && (event === "PreToolUse" || event === "Stop"))) {
+      const res = this.spawn(`${event}${tool ? ` ${tool}` : ""}: ${line}`, [words[0] === "bun" ? process.execPath : words[0], ...words.slice(1)], input, this.hookEnv());
+      if (res.status !== 0 && !(res.status === 2 && /^(PreToolUse|preToolUse|Stop|stop)$/.test(event))) {
         this.hookFailures.push(`${event}${tool ? ` ${tool}` : ""}: ${line} exited ${res.status}: ${clip(res.stderr || res.stdout, 400)}`);
       }
       return res;
@@ -218,8 +273,11 @@ export abstract class NativeScopeHost extends ScopeHost {
     throw new Error(`${name} is a Claude Code hook name; this host fires its own wiring`);
   }
 
+  /** The tool's name for the turn-end event. */
+  protected readonly stopEvent: string = "Stop";
+
   override stop(): { blocked: boolean; reason: string } {
-    const results = this.fire("Stop", null, this.stopFields());
+    const results = this.fire(this.stopEvent, null, this.stopFields());
     const blocked = results.find((res) => res.status === 2);
     if (blocked) return { blocked: true, reason: blocked.stderr };
     return stopVerdict(results.map((res) => res.stdout).join("\n"));
@@ -261,9 +319,10 @@ export class CodexScopeHost extends NativeScopeHost {
     this.fire("SessionStart", null, { source });
   }
 
-  override typed(words: string): void {
+  override typed(words: string): string {
     this.newTurn();
     this.fire("UserPromptSubmit", null, { prompt: words });
+    return "";
   }
 
   /** request_user_input: the box's answer comes back to the agent in the same turn. */
@@ -396,10 +455,11 @@ export class CopilotScopeHost extends NativeScopeHost {
   }
 
   // A slash skill reaches the hook as Copilot's skill-context block, not as the typed line.
-  override typed(words: string): void {
+  override typed(words: string): string {
     this.newTurn();
     const skill = /^\/aidlc(?:\s+|$)/.exec(words);
     this.fire("UserPromptSubmit", null, { prompt: skill ? copilotSkillPrompt(this.proj, words.slice(skill[0].length)) : words });
+    return "";
   }
 
   override bash(line: string): RunResult {
@@ -463,6 +523,235 @@ export class CopilotScopeHost extends NativeScopeHost {
   }
 }
 
+/** The aidlc skill as Kiro expands `/aidlc <args>` into the prompt: the installed SKILL.md with every `$ARGUMENTS` replaced. */
+export function kiroSkillPrompt(proj: string, args: string): string {
+  return readFileSync(join(proj, ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8").split("$ARGUMENTS").join(args);
+}
+
+/**
+ * Kiro CLI (v2 agent engine): the conductor's agent JSON (`.kiro/agents/aidlc.json`)
+ * through `engine adapter kiro`. Questions are numbered prose. The
+ * person-turn hook may run the turn's first `next` itself, or name the exact
+ * first call (AgentStandIn.fromTurn). A helper runs its own agent JSON's hooks
+ * under a session of its own, while its shell keeps the chat's
+ * KIRO_SESSION_ID (captured on 2.29.0, tmp/workshop-fixes/e2e-gaps/item3).
+ */
+export class KiroCliScopeHost extends NativeScopeHost {
+  override readonly dir = ".kiro";
+  override readonly picker = false;
+  protected override readonly stopEvent = "stop";
+  /** The agent whose JSON hooks fire: the conductor's, or a helper's own while it works. */
+  private agent = "aidlc";
+
+  protected override sessionName(n: number): string {
+    return `0c11a000-${hex(this.hostNumber, 4)}-4000-8000-${hex(n, 12)}`;
+  }
+
+  wired(event: string, tool: string | null): string[] {
+    const file = join(this.proj, ".kiro", "agents", `${this.agent}.json`);
+    if (!existsSync(file)) throw new ScopeRunStuck(`Kiro CLI has no agent ${this.agent} to hand the work to: ${file} is not installed`);
+    return kiroCliWired(JSON.parse(readFileSync(file, "utf-8")) as KiroCliAgent, event, tool);
+  }
+
+  protected payload(event: string, fields: Payload): Payload {
+    return kiroCliPayload(event, this.moment(), fields);
+  }
+
+  protected transcript(): string {
+    return "";
+  }
+
+  // Kiro names the chat in the hooks' and the agent's shell environment.
+  protected override hookEnv(): NodeJS.ProcessEnv {
+    return { ...this.env, KIRO_SESSION_ID: this.session };
+  }
+
+  protected override shellEnv(): NodeJS.ProcessEnv {
+    return this.hookEnv();
+  }
+
+  protected refusal(res: RunResult): string | null {
+    return res.status === 2 ? res.stderr : null;
+  }
+
+  protected override startChat(): void {
+    this.fire("agentSpawn", null, {});
+  }
+
+  override typed(words: string): string {
+    const skill = /^\/aidlc(?:\s+|$)/.exec(words);
+    const prompt = skill ? kiroSkillPrompt(this.proj, words.slice(skill[0].length)) : words;
+    return this.fire("userPromptSubmit", null, { prompt }).map((res) => res.stdout).join("");
+  }
+
+  override bash(line: string): RunResult {
+    const input = { __tool_use_purpose: "Run the step AI-DLC named", command: line };
+    const call = { tool_name: "shell", tool_tags: ["shell", "@builtin"], tool_input: input };
+    this.refuseOn("shell", input, this.fire("preToolUse", "shell", call));
+    const res = this.run(line);
+    this.fire("postToolUse", "shell", {
+      ...call,
+      tool_response: { items: [{ Json: { exit_status: `exit status: ${res.status}`, stdout: res.stdout, stderr: res.stderr } }] },
+    });
+    return res;
+  }
+
+  override write(rel: string, content: string): void {
+    const abs = join(this.proj, rel);
+    const before = existsSync(abs) ? readFileSync(abs, "utf-8") : null;
+    const purpose = "Write the stage's file";
+    const input = before === null
+      ? { __tool_use_purpose: purpose, command: "create", path: abs, content }
+      : { __tool_use_purpose: purpose, command: "str_replace", path: abs, old_str: before, new_str: content };
+    const call = { tool_name: "write", tool_tags: ["write", "@builtin"], tool_input: input };
+    this.refuseOn("write", input, this.fire("preToolUse", "write", call));
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+    const said = before === null ? `Successfully created ${abs} (${content.split("\n").length} lines).` : `Successfully replaced text in ${abs}.`;
+    this.fire("postToolUse", "write", { ...call, tool_response: { items: [{ Text: said }] } });
+  }
+
+  override remove(rel: string): void {
+    const input = { __tool_use_purpose: "Remove a file", command: `rm ${rel}` };
+    const call = { tool_name: "shell", tool_tags: ["shell", "@builtin"], tool_input: input };
+    this.refuseOn("shell", input, this.fire("preToolUse", "shell", call));
+    rmSync(join(this.proj, rel), { force: true });
+    this.fire("postToolUse", "shell", { ...call, tool_response: { items: [{ Json: { exit_status: "exit status: 0", stdout: "", stderr: "" } }] } });
+  }
+
+  /** The subagent tool with one stage; the helper's own agent JSON fires for its spawn, its brief, each call, its report and its stop. */
+  override task(agent: string, prompt: string, work: () => void): void {
+    const input = { __tool_use_purpose: "Hand the stage to its agent", task: "stage work", mode: "blocking", stages: [{ name: "stage", role: agent, prompt_template: prompt }] };
+    const call = { tool_name: "subagent", tool_tags: ["subagent", "@builtin"], tool_input: input };
+    this.refuseOn("subagent", input, this.fire("preToolUse", "subagent", call));
+    const conductor = this.agent;
+    this.agent = agent;
+    this.helper = { agent, id: `0c11a000-${hex(this.hostNumber, 4)}-4000-9000-${hex(++helpers, 12)}` };
+    try {
+      this.fire("agentSpawn", null, {});
+      this.fire("userPromptSubmit", null, { prompt });
+      work();
+      const report = { tool_name: "summary", tool_tags: ["@builtin"], tool_input: { __tool_use_purpose: "Report back", taskDescription: prompt.slice(0, 200), taskResult: "Done." } };
+      this.fire("preToolUse", "summary", report);
+      this.fire("postToolUse", "summary", { ...report, tool_response: { items: [{ Text: "" }] } });
+      this.fire("stop", null, { assistant_response: "DONE" });
+    } finally {
+      this.agent = conductor;
+      this.helper = null;
+    }
+    this.fire("postToolUse", "subagent", { ...call, tool_response: { items: [{ Text: "Pipeline completed: 1 stages finished.\n\n## stage\n\nDone." }] } });
+  }
+
+  protected stopFields(): Payload {
+    return { assistant_response: "Over to you." };
+  }
+}
+
+/**
+ * Kiro IDE (1.2.37): the hook cards in `.kiro/hooks/*.json` through `engine
+ * adapter kiro-ide`. Questions are numbered prose. After a write or a command
+ * no card runs; the next card does that work (its catch-up), so a write lands
+ * between the guard card and whichever card comes next, as in Kiro. A helper's
+ * calls fire the same cards under the chat's session. The agent's shell
+ * carries `TERM_PROGRAM=kiro` and the chat's `KIRO_SESSION_ID`, the hooks
+ * `VSCODE_IPC_HOOK` and `VSCODE_PID` (docs/reference/kiro-ide-hook-payload.md).
+ */
+export class KiroIdeScopeHost extends NativeScopeHost {
+  override readonly dir = ".kiro";
+  override readonly picker = false;
+  private readonly shellTool = process.platform === "win32" ? "execute_pwsh" : "execute_bash";
+
+  protected override sessionName(n: number): string {
+    return `sess_c0de${hex(this.hostNumber, 4)}-0000-4000-8000-${hex(n, 12)}`;
+  }
+
+  wired(event: string, tool: string | null): string[] {
+    const dir = join(this.proj, ".kiro", "hooks");
+    const cards = readdirSync(dir).filter((file) => file.endsWith(".json"))
+      .map((file) => ({ file, ...(JSON.parse(readFileSync(join(dir, file), "utf-8")) as { hooks: KiroIdeCard["hooks"] }) }));
+    return kiroIdeWired(cards, event, tool);
+  }
+
+  protected payload(event: string, fields: Payload): Payload {
+    return kiroIdePayload(event, this.moment(), fields);
+  }
+
+  protected transcript(): string {
+    return "";
+  }
+
+  protected override hookEnv(): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = {
+      ...this.env,
+      KIRO_SESSION_ID: this.session,
+      VSCODE_IPC_HOOK: join(tmpdir(), "vscode-ipc-scope-host.sock"),
+      VSCODE_PID: String(process.pid),
+    };
+    delete env.USER_PROMPT;
+    return env;
+  }
+
+  protected override shellEnv(): NodeJS.ProcessEnv {
+    return { ...this.env, KIRO_SESSION_ID: this.session, TERM_PROGRAM: "kiro" };
+  }
+
+  protected refusal(res: RunResult): string | null {
+    return res.status === 2 ? res.stderr : null;
+  }
+
+  protected override startChat(): void {
+    this.fire("SessionStart", null, {});
+  }
+
+  override typed(words: string): string {
+    return this.fire("UserPromptSubmit", null, { prompt: words }).map((res) => res.stdout).join("");
+  }
+
+  override bash(line: string): RunResult {
+    const input = { command: line, cwd: this.proj, run_in_background: false, timeout: 120000 };
+    this.refuseOn(this.shellTool, input, this.fire("PreToolUse", this.shellTool, { tool_name: this.shellTool, tool_input: input }));
+    const res = this.run(line);
+    this.fire("PostToolUse", this.shellTool, {
+      tool_name: this.shellTool,
+      tool_input: {},
+      tool_response: `Output:\n${res.stdout}${res.stderr}\n\nExit Code: ${res.status}`,
+    });
+    return res;
+  }
+
+  override write(rel: string, content: string): void {
+    const abs = join(this.proj, rel);
+    const before = existsSync(abs) ? readFileSync(abs, "utf-8") : null;
+    const [tool, input, said] = before === null
+      ? ["fs_write", { path: rel, text: content }, `Created the ${rel} file.`] as const
+      : ["str_replace", { path: rel, oldStr: before, newStr: content }, `Replaced text in ${rel}`] as const;
+    this.refuseOn(tool, input, this.fire("PreToolUse", tool, { tool_name: tool, tool_input: input }));
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+    this.fire("PostToolUse", tool, { tool_name: tool, tool_input: {}, tool_response: said });
+  }
+
+  override remove(rel: string): void {
+    const input = { command: `rm ${rel}`, cwd: this.proj, run_in_background: false, timeout: 120000 };
+    this.refuseOn(this.shellTool, input, this.fire("PreToolUse", this.shellTool, { tool_name: this.shellTool, tool_input: input }));
+    rmSync(join(this.proj, rel), { force: true });
+    this.fire("PostToolUse", this.shellTool, { tool_name: this.shellTool, tool_input: {}, tool_response: "Output:\n\n\nExit Code: 0" });
+  }
+
+  /** invoke_sub_agent; the helper's result comes back after Kiro's empty `subagent_response`, as `subagent_<agent>`. */
+  override task(agent: string, prompt: string, work: () => void): void {
+    const input = { name: agent, prompt, preset: null, contextFiles: [] };
+    this.refuseOn("invoke_sub_agent", input, this.fire("PreToolUse", "invoke_sub_agent", { tool_name: "invoke_sub_agent", tool_input: input }));
+    work();
+    this.fire("PostToolUse", "subagent_response", { tool_name: "subagent_response", tool_input: {}, tool_response: "Response recorded." });
+    this.fire("PostToolUse", `subagent_${agent}`, { tool_name: `subagent_${agent}`, tool_input: {}, tool_response: `**Agent:** ${agent}\n\nDone.` });
+  }
+
+  protected stopFields(): Payload {
+    return {};
+  }
+}
+
 function parseJson(text: string): Record<string, unknown> | null {
   const t = text.trim();
   if (!t.startsWith("{")) return null;
@@ -478,7 +767,13 @@ function parseJson(text: string): Record<string, unknown> | null {
 // ---------------------------------------------------------------------------
 
 function hostFor(name: "claude" | HostName, proj: string): ScopeHost {
-  return name === "claude" ? new ScopeHost(proj) : name === "codex" ? new CodexScopeHost(proj) : new CopilotScopeHost(proj);
+  switch (name) {
+    case "claude": return new ScopeHost(proj);
+    case "codex": return new CodexScopeHost(proj);
+    case "copilot": return new CopilotScopeHost(proj);
+    case "kiro": return new KiroCliScopeHost(proj);
+    case "kiro-ide": return new KiroIdeScopeHost(proj);
+  }
 }
 
 /** A project as a person brings it with that tool's tree installed as it ships, in a git repository with one commit. */

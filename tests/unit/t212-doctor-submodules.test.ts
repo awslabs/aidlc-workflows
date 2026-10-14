@@ -1,9 +1,8 @@
 // covers: subcommand:aidlc-utility:doctor
 //
-// The doctor's Submodules advisory row (added alongside the workspace-detection
-// submodule signal). Four states, all pass:true (an uninitialized submodule is a
-// user-environment pre-flight state, not framework breakage, and doctor's exit
-// code feeds CI/scripts):
+// The doctor's Submodules advisory row. Four states, all pass:true (an
+// uninitialized submodule is a user-environment pre-flight state, not
+// framework breakage, and doctor's exit code feeds CI/scripts):
 //   - no .gitmodules            -> "no .gitmodules at workspace root"
 //   - uninitialized entries     -> advisory naming count + paths + the remedy
 //   - all initialized           -> "N declared, all initialized"
@@ -26,7 +25,7 @@ import { AIDLC_SRC, cleanupTestProject, createTestProject } from "../harness/fix
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 
 const created: string[] = [];
@@ -72,7 +71,6 @@ describe("t212 aidlc-utility doctor — Submodules advisory row", () => {
     expect(out).toContain("Submodules: 2 declared, 2 uninitialized (advisory)");
     expect(out).toContain("services/api, services/web");
     expect(out).toContain("git submodule update --init --recursive");
-    // Advisory renders as an ok row, never a fail row.
     expect(out).toContain("ok    Submodules: 2 declared, 2 uninitialized");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

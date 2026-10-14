@@ -757,7 +757,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
 
   // From live runs: on "please review Unit 1 again" the agent reviewed in chat,
   // hand-wrote a review file, or started the stage again, because the rule lived
-  // only in the reviewer protocol, which a mid-chat request never opens.
+  // only in the reviewer protocol, which a mid-chat request never opens. The
+  // request says the person asked (--person-asked), a yes to the approval's
+  // offer of a check included, so it runs past the stage's passes.
   test("every shipped conductor SKILL and the protocol record a review the person asks for through AI-DLC", () => {
     const missing: string[] = [];
     for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
@@ -765,7 +767,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       for (const token of [
         "When they ask for a review of a stage or of a Unit",
         "record it through AI-DLC the first time they ask, under every Guard Policy",
-        "engine log review --stage <slug> --reviewer <the stage's reviewer> --iteration <next>",
+        "engine log review --stage <slug> --reviewer <the stage's reviewer> --iteration <next> --person-asked`",
+        'or yes to "Do you want me to have the new approach checked before you decide?")',
         "aidlc-common/protocols/stage-protocol-reviewer.md` says.",
         "Never review it in chat yourself, never write a review file by hand, never start the stage again with " +
           "`next --stage` to get one, and never offer to change the Guard Policy for it.",

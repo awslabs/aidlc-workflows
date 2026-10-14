@@ -60,7 +60,6 @@ afterEach(() => {
   while (created.length > 0) cleanupTestProject(created.pop());
 });
 
-/** Open work under a strict Guard Policy, set by the person. */
 function openWork(): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
@@ -109,7 +108,6 @@ function guardsOff(state: string): string {
   return getField(state, "Guards Off") ?? "";
 }
 
-/** The person's message as their host delivers it to the prompt hook. */
 function reply(proj: string, prompt: string, session = SESSION): string {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj,
@@ -157,13 +155,11 @@ function configSet(proj: string, args: string[], session: string | null): { stat
 }
 
 function next(proj: string, args: string[]): { directive: Record<string, unknown> | null; out: string } {
-  // The agent's proposal step follows the plan proposal print, as it does live.
   const options = { env: { ...process.env, ...CLEAR } };
   const result = followProposal(runOrchestrateNext(ORCHESTRATE, proj, args, options), ORCHESTRATE, proj, options);
   return { directive: result.directive as Record<string, unknown> | null, out: result.out };
 }
 
-/** The `next` arguments of an answer command the engine handed out. */
 function answerArgs(command: unknown): string[] {
   const text = String(command);
   return text.slice(text.indexOf(" next ") + 6).split(" ");
@@ -175,7 +171,6 @@ function requestIn(message: unknown, out: string): string {
   return id;
 }
 
-/** Creation as the agent runs it: the plan and request the engine's print names. */
 function createFromPrint(proj: string, step: { directive: Record<string, unknown> | null; out: string }): {
   status: number;
   stdout: string;
@@ -226,12 +221,10 @@ function atATerminal(proj: string, args: string[]): { status: number; out: strin
 
 const hasPty = spawnSync("script", ["-qec", "true", "/dev/null"], { encoding: "utf-8" }).status === 0;
 
-/** Everything the person hears from this step: its own line and the kept ones. */
 function heard(proj: string, step: { directive: Record<string, unknown> | null }): string {
   return `${String(step.directive?.narration ?? "")} ${pendingPersonLines(proj, SESSION).lines.join(" ")}`;
 }
 
-/** Hold the open work at its approval gate, as a person reading its output is. */
 function holdAtGate(proj: string): void {
   const stage = getField(activeState(proj), "Current Stage")!.trim();
   const result = spawnSync(BUN, [STATE, "checkbox", `${stage}=awaiting-approval`, "--project-dir", proj], {
@@ -252,7 +245,6 @@ describe("a check typed off with a request, routed through a second question", (
     reply(proj, TYPED);
     const first = next(proj, ["--guard.review-freeze", "off", "--", "fix the parser"]);
     const q1 = requestIn(first.directive?.message, first.out);
-    // The engine asks where the request belongs: a second question.
     const routing = next(proj, ["--request", q1]);
     const ask = routing.directive as { ask_type?: string; new_intent_command?: string } | null;
     expect(ask?.ask_type, routing.out).toBe("new-work-routing");
@@ -273,7 +265,6 @@ describe("a check typed off with a request, routed through a second question", (
     // first step says it, as the live run showed it must.
     const onNewWork = next(proj, []);
     expect(heard(proj, onNewWork), onNewWork.out).toContain(FOR_NEW_WORK);
-    // The work the person did not ask about keeps its checks.
     expect(readFileSync(join(intents(proj), open, "aidlc-state.md"), "utf-8")).toBe(openBefore);
   });
 
@@ -366,7 +357,6 @@ describe("a setter the person runs in their own terminal", () => {
   test.skipIf(!hasPty)("is their own act, and quotes no chat message", () => {
     const proj = openWork();
     reply(proj, ASKED);
-    // The person typed this command at their own terminal.
     const off = atATerminal(proj, ["guard.state-transition", "off"]);
     expect(off.status, off.out).toBe(0);
     expect(off.out).not.toContain(ASKED);
@@ -443,15 +433,14 @@ describe("a terminal that the person's own tool runs", () => {
     const refused = inHostTerminal(proj, mark);
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain(`To turn the state-transition check off, ask for it in your ${host} chat.`);
-    // No environment variable and no third person in what the person reads.
     expect(refused.out).not.toContain("AIDLC_");
     expect(refused.out).not.toContain("the person");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 });
 
-// Finding 1 from the live runs: the authority rule that stops an agent lowering
-// one of the person's checks was also applied to the person themselves.
+// The authority rule that stops an agent lowering one of the person's checks
+// was also applied to the person themselves.
 describe("a command the person typed, with no turn of theirs on record", () => {
   test.skipIf(!hasPty)("is carried out, not refused, and reads as theirs", () => {
     const proj = openWork();
@@ -494,24 +483,19 @@ describe("a command the person typed, with no turn of theirs on record", () => {
 describe("a switch typed while the engine's question is open, before any work exists", () => {
   test("brings that question back instead of asking for the work again", () => {
     const proj = emptyProject();
-    // The person described the work, so the engine asked about the plan for it.
     const asked = next(proj, ["--", "a tiny tool that reverses a string"]);
     expect(asked.directive?.kind, asked.out).toBe("ask");
     const question = String(asked.directive?.question ?? "");
     expect(question).toContain("reverses a string");
 
-    // They turn a check off while that question waits: the agent runs the setter.
     reply(proj, "/aidlc --guard.review-freeze off");
     expect(configSet(proj, ["guard.review-freeze", "off"], SESSION).out).toContain(FOR_WORK_STARTING_NOW);
 
-    // The step puts their own question back, rather than asking them to say
-    // what to build when they already have.
     const again = next(proj, []);
     expect(String(again.directive?.narration ?? ""), again.out).not.toContain("Tell me what to build");
     expect(again.directive?.kind, again.out).toBe("ask");
     expect(String(again.directive?.question ?? "")).toContain("reverses a string");
 
-    // Answering it starts the work with the check they turned off.
     const route = (again.directive as { confirm_command?: string; scope_commands?: Array<{ scope: string; command: string }> });
     const command = route.confirm_command ??
       route.scope_commands?.find((row) => row.scope === "poc")?.command;
@@ -543,17 +527,14 @@ describe("a setting the engine cannot read, typed on its own", () => {
     { typed: "--plan-aprroval", reason: "the name is misspelt" },
   ])("with work open, the agent is told and nothing of theirs changes ($reason)", ({ typed }) => {
     const proj = openWork();
-    // The hook reads no switch here, so nothing of theirs is applied or said.
     expect(reply(proj, `/aidlc ${typed} off`)).not.toContain("could not read");
     const before = readFileSync(seededStateFile(proj), "utf-8");
 
     const step = next(proj, [typed, "off"]);
     expect(step.directive?.kind, step.out).toBe("print");
-    // Nothing for the person, and nothing that re-asks them.
     expect(step.directive?.narration, step.out).toBeUndefined();
     expect(step.out).not.toContain("could not read");
     expect(String(step.directive?.message ?? ""), step.out).toContain(`${typed} off`);
-    // Nothing ran on top of the question, and nothing changed.
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 
@@ -587,7 +568,6 @@ describe("a request made only of a flag-shaped token the engine could not read",
     const proj = emptyProject();
     reply(proj, "/aidlc --guard.review-freeze off --nonsense 1");
     expect(configSet(proj, ["guard.review-freeze", "off"], SESSION).out).toContain(FOR_WORK_STARTING_NOW);
-    // The agent passes on the words it has left, as it does for any request.
     const step = next(proj, ["--nonsense", "1"]);
     expect(step.directive?.kind, step.out).not.toBe("ask");
     // The token is not work, so no plan is offered for it and nothing is said
@@ -621,7 +601,6 @@ describe("a ceremony the person typed before any work exists", () => {
     const proj = emptyProject();
     reply(proj, `/aidlc ${flag} off`);
     expect(configSet(proj, [flag.slice(2), "off"], SESSION).status).toBe(0);
-    // The engine's step says what they set is kept for the work they start next.
     expect(String(next(proj, []).directive?.message)).toContain("is kept for it");
     const printed = next(proj, ["--scope", scope, "--", "build the export"]);
     const made = createFromPrint(proj, printed);
@@ -629,8 +608,8 @@ describe("a ceremony the person typed before any work exists", () => {
     expect(getField(activeState(proj), field)).toBe("off (set by you)");
   });
 
-  // The plain path a person takes on main (issue 1962 F1): they type it, then
-  // describe the work in their own words and answer the plan question.
+  // The plain path a person takes (issue 1962 F1): they type it, then describe
+  // the work in their own words and answer the plan question.
   test("typed, then the work described in their own words: it is still off, and theirs", () => {
     const proj = emptyProject();
     reply(proj, "/aidlc --learnings off");

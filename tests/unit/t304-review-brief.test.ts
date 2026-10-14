@@ -1745,7 +1745,6 @@ describe("t304 executable review brief scenarios", () => {
       expect(rendered).toContain(
         "**Looks correct** - record this confirmation and generate",
       );
-      // What happens and what the person does next, in plain words.
       expect(rendered).toContain(
         "- **Request changes** - nothing is generated yet; say what to change in your answers, and they are updated first.",
       );
@@ -2508,7 +2507,7 @@ describe("t304 engine-owned report replay and compatibility", () => {
 
   // One generic sentence stood for eleven faults, so a reviewer repeated the
   // same mistake on its retry (a relabelled prior ID, an unescaped pipe) and
-  // the one retry was spent. The sentence now names the rule, the row and the
+  // the one retry was spent. The sentence names the rule, the row and the
   // cell, after the same opening every reader pins.
   test("the refusal names the rule, the row and the cell", () => {
     const faults: Array<[string, string]> = [
@@ -3755,7 +3754,6 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     );
     expect(context.stdout).not.toContain("No findings |");
     expect(context.stdout).toContain("No open findings require re-checking");
-    // The gate still shows people the explicit "no findings" row.
     const brief = run(REVIEW_BRIEF, ["review", "--stage", "requirements-analysis", "--why", "first"], proj);
     expect(brief.stdout).toContain("| - | - | - | No findings |");
   });
@@ -3793,7 +3791,7 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     expect(context.stdout).toContain("| R-01 |");
 
     // Dispositions address the record's findings through the reviewed
-    // artifact's path, as they always did.
+    // artifact's path.
     const rejected = run(
       ORCHESTRATE,
       [

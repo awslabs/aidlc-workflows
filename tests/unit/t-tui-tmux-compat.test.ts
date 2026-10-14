@@ -1,5 +1,5 @@
 // Real POSIX tmux capture/view compatibility, independently selectable from
-// the portable socket-isolation source guards. No model calls; case unchanged.
+// the portable socket-isolation source guards. No model calls.
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,

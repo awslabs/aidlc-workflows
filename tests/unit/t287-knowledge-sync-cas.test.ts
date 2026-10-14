@@ -1,21 +1,19 @@
 // covers: function:syncDocuments function:collectStaleJournals function:rebindDocument
 //
-// t287 - the SLICE B invariant: "nothing becomes visible until everything has
-// succeeded, and no decision made outside the lock may be applied inside it
-// without rechecking that its premises still hold." Onboard's whole-batch
-// publish gate already existed (t289/t278); this file adds the twin for
-// `sync`'s commit, the compare-and-swap that guards it against a stale plan,
-// moving journal collection under the lock, and the resulting self-heal
-// property.
+// t287 - the sync commit invariant: a candidate index passes validation before
+// publication, and no decision made outside the lock may be applied inside it
+// without rechecking that its premises still hold. This file pins `sync`'s
+// commit, the compare-and-swap that guards it against a stale plan, journal
+// collection under the lock, and the resulting self-heal property.
 //
-// Mechanism: real filesystem + real subprocesses. A race between `sync`'s
-// planning (outside the lock) and a concurrent `rebind` (which changes the
-// PATH, not the digest) cannot be forced deterministically without a REAL
-// second process stalled mid-extraction -- an in-process mock never enters the
-// window between planning and commit.
+// Mechanism: real filesystem + real subprocesses for the write failures and
+// the lock contention; structural checks for the CAS (a sequential rebind then
+// sync never creates a stale plan between planning and commit, see the note
+// on the CAS describe block).
 //
 // Subject under test: dist/claude/.claude/tools/aidlc-knowledge.ts (the
-// SHIPPED distributable), so a guard reverted only in core/ still fails these.
+// SHIPPED distributable); a guard reverted only in core/ is not observed here
+// until dist is rebuilt.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -302,13 +300,12 @@ describe("t287 sync commits through the SAME publish gate as onboard", () => {
 
 describe("t287 write-failure injection: content.md fails AFTER index/metadata commit", () => {
   test("a content write failure leaves the row's digest advanced but its content WITHHELD, not stale-exposed", () => {
-    // Both reviewers asked for this explicitly. `content.md` is pre-replaced
-    // with a DIRECTORY at the exact leaf the content write targets -- narrower
-    // than making the whole <id>/ dir unwritable, which would ALSO block
-    // metadata.json and mask which write actually failed. This isolates the
-    // one write this test is about: writeBufferAtomic's rename() onto
-    // `content.md` throws EISDIR while `writeIndex`/`writeMetadataTo` (which
-    // run first, per the fix) succeed.
+    // `content.md` is pre-replaced with a DIRECTORY at the exact leaf the content
+    // write targets -- narrower than making the whole <id>/ dir unwritable, which
+    // would ALSO block metadata.json and mask which write actually failed. This
+    // isolates the one write this test is about: writeBufferAtomic's rename() onto
+    // `content.md` throws while `writeIndex`/`writeMetadataTo` (which run first)
+    // succeed.
     const p = scratchProject();
     const abs = doc(p, "a.md", "v1 original\n");
     const { indexed } = onboard(p, SPACE, undefined, NOW);
@@ -326,7 +323,7 @@ describe("t287 write-failure injection: content.md fails AFTER index/metadata co
       .not.toBe(0);
 
     // The row's digest DID advance (index.json committed before content.md's
-    // write was attempted) -- confirming the new ordering, not just a refusal.
+    // write was attempted) -- confirming the ordering, not just a refusal.
     const row = readIndex(p, SPACE).documents.find((r) => r.id === id)!;
     expect(row.sha256).not.toBe(indexed[0].sha256);
 
@@ -405,22 +402,20 @@ describe("t287 the CAS: a stale sync plan is never applied to a rebound row", ()
   // survives a following sync, and a re-created file at the old path lands as
   // its own row instead of being dragged into the rebound row's identity.
   //
-  // It does NOT exercise the CAS. Measured, not assumed: with
+  // It does NOT exercise a stale-plan CAS failure. Measured, not assumed: with
   // `stillMatchesPlan` stubbed to `() => true` in the shipped dist tool -- the
   // CAS entirely removed -- this scenario still produces the same result, because
   // sync's planning pass reads the index at call time. In one process the plan
-  // is never stale: sync sees the post-rebind row, plans `unchanged` for it and
-  // `new` for the re-created a.md, and the precondition is never consulted.
-  // (An earlier version of this test claimed to drive "a real spawned process
-  // mid-sync" and did not; a reviewer caught that, correctly.)
+  // is never stale: sync sees the post-rebind row, plans `retried` for it and
+  // `new` for the re-created a.md, and the precondition succeeds.
   //
-  // The CAS only engages when a writer commits BETWEEN sync's pre-lock planning
-  // read and its under-lock commit read. Reaching that window from a test needs
-  // either a test-only seam in the shipped commit path or a second process timed
-  // into a sub-millisecond gap -- the first trades production surface for test
-  // convenience, the second is the flake this suite already avoids elsewhere.
-  // Neither is worth it for a precondition whose failure mode is "skip a row and
-  // replan next sync".
+  // The CAS only detects a conflict when a writer commits BETWEEN sync's
+  // pre-lock planning read and its under-lock commit read. Reaching that window
+  // from a test needs either a test-only seam in the shipped commit path or a
+  // second process timed into a sub-millisecond gap -- the first trades
+  // production surface for test convenience, the second is the flake this suite
+  // already avoids elsewhere. Neither is worth it for a precondition whose
+  // failure mode is "skip a row and replan next sync".
   //
   // So the CAS's four-field completeness is pinned STRUCTURALLY instead (see the
   // companion test below and attack 1), and that limit is stated here rather
@@ -433,7 +428,7 @@ describe("t287 the CAS: a stale sync plan is never applied to a rebound row", ()
     const id = indexed[0].id;
     const originalDigest = indexed[0].sha256;
 
-    // Edit on disk so sync's plan (built from THIS snapshot) is "changed".
+    // Edit on disk before rebind; no sync plan is built from this snapshot.
     writeFileSync(abs, "v2 edited on disk\n");
 
     const beforeRebind = structuredClone(readIndex(p, SPACE).documents[0]);
@@ -465,14 +460,12 @@ describe("t287 the CAS: a stale sync plan is never applied to a rebound row", ()
     const aRow = readIndex(p, SPACE).documents.find((r) => r.source.path === "documents/a.md");
     expect(aRow, "a.md must land as its own row").toBeDefined();
     expect(aRow?.id).not.toBe(id);
-    // The rebound row's own change is "retried", NOT "unchanged" -- Finding 1's
-    // fix (t284's REGRESSION test) makes an `invalidated` row eligible for
-    // retry on the very next sync even with its digest unchanged, which is
-    // exactly what this sync is: b-renamed.md's digest matches what rebind
-    // just wrote. The CAS/identity claim this test is actually about --
-    // path, digest and tombstone state all survive -- is unaffected; only the
-    // reported `change` value differs from this test's original assertion,
-    // which predated that fix and encoded its absence.
+    // The rebound row's own change is "retried", NOT "unchanged" -- the t284
+    // regression test pins that an `invalidated` row is eligible for retry on the
+    // very next sync even with its digest unchanged, which is exactly what this
+    // sync is: b-renamed.md's digest matches what rebind just wrote. The identity
+    // claim this test is actually about -- path, digest and tombstone state all
+    // survive -- is unaffected.
     const reboundChange = result.changes.find((c) => c.id === id);
     expect(reboundChange?.change, "an invalidated row retries on the next sync")
       .toBe("retried");
@@ -489,7 +482,6 @@ describe("t287 the CAS: a stale sync plan is never applied to a rebound row", ()
     expect(fnEnd).toBeGreaterThan(fnStart);
     const body = src.slice(fnStart, fnEnd);
     expect(body).toContain("stillMatchesPlan");
-    // The precondition must compare all four fields the design calls out.
     expect(body).toMatch(/fresh\.source\.path === planned\.source\.path/);
     expect(body).toMatch(/fresh\.sha256 === planned\.sha256/);
     expect(body).toMatch(/fresh\.extraction\).*planned\.extraction/);
@@ -499,12 +491,11 @@ describe("t287 the CAS: a stale sync plan is never applied to a rebound row", ()
 
 describe("t287 stale-journal collection moves under the lock", () => {
   test("collectStaleJournals is invoked from INSIDE syncDocuments's withAuditLock callback, not before it", () => {
-    // Structural: the cheapest durable check that this ordering, once fixed,
-    // cannot silently regress back to a pre-lock call. Locates the
+    // Structural: the cheapest durable check that this ordering cannot silently
+    // regress back to a pre-lock call. Locates the
     // `withAuditLock(projectDir, () => {` opening for syncDocuments specifically
-    // (there are two in this file; onboard's own transaction is the sibling)
-    // and asserts collectStaleJournals appears strictly AFTER that open, and
-    // that no call to it exists strictly BEFORE it within this function.
+    // and asserts collectStaleJournals appears strictly AFTER that open, and that
+    // no call to it exists strictly BEFORE it within this function.
     const src = readFileSync(join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "utf-8");
     const fnStart = src.indexOf("export function syncDocuments(");
     const fnEnd = src.indexOf("\nexport function shouldRetryExtraction", fnStart);
@@ -519,10 +510,9 @@ describe("t287 stale-journal collection moves under the lock", () => {
   });
 
   test("a live onboard's staging dir survives a concurrent sync's collection, exactly as it did before", () => {
-    // Regression guard for the liveness stamp's OWN coverage, now exercised
-    // from sync's (moved) call site rather than sync's old pre-lock one. If
-    // moving collection under the lock accidentally dropped the liveness
-    // check, this would delete a live writer's dir.
+    // Regression guard for the liveness stamp's OWN coverage, exercised from
+    // sync's call site. If collection under the lock dropped the liveness check,
+    // this would delete a live writer's dir.
     const p = scratchProject();
     doc(p, "a.md");
     onboard(p, SPACE, undefined, NOW);
@@ -551,14 +541,11 @@ describe("t287 stale-journal collection moves under the lock", () => {
 
 describe("t287 the liveness stamp already covers part of finding C", () => {
   test("writeTxnLivenessStamp / isPidAlive already exist and are exercised by t278 — this file adds no duplicate mechanism", () => {
-    // Documented rather than re-implemented: the writer.pid stamp (added in an
-    // earlier round) already distinguishes a crashed run's leftovers from a
-    // live writer's in-progress staging dir, for ANY caller of
-    // collectStaleJournals -- including sync's now-relocated call site. What
-    // this slice adds is WHERE the call happens (inside the lock), not the
-    // liveness decision itself. The known residual (a hand-planted pid=1
-    // making a dir permanently uncollectible) is explicitly out of scope, per
-    // t289's own header comment, and is NOT re-probed here.
+    // Documented rather than re-implemented: the writer.pid stamp distinguishes a
+    // crashed run's leftovers from a live writer's in-progress staging dir, for
+    // ANY caller of collectStaleJournals. The known residual (a hand-planted pid=1
+    // making a dir permanently uncollectible) is explicitly out of scope (t289
+    // notes it) and is NOT re-probed here.
     const src = readFileSync(join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "utf-8");
     expect(src).toContain("writeTxnLivenessStamp");
     expect(src).toContain("isPidAlive(pid)");
@@ -573,13 +560,15 @@ describe("t287 the self-heal property: a plain sync always recovers from an inje
   //   3. writeMetadataTo (a single row's metadata.json write)
   //   4. the content.md write/delete loop
   //   5. deleteDerivedText (the tombstone content removal)
-  // Each is injected in turn; after EVERY injection, a plain follow-up `sync`
-  // (untouched, no special args) must complete successfully and reach a state
-  // with no dangling half-write. An injection point NOT in this enumeration
-  // (e.g. a failure inside collectStaleJournals, or inside the read of
-  // before.documents during planning) is explicitly OUT of this property's
-  // coverage and is called out below rather than silently assumed safe --
-  // per the rule that a guard must state what it does NOT cover.
+  // Points 2 and 3 are injected below; after EACH injection, a plain follow-up
+  // `sync` (untouched, no special args) must complete successfully and reach a
+  // state with no dangling half-write. Point 1 is pinned structurally (the
+  // assertPublishable call) and point 4 by the content.md failure test above;
+  // point 5 is not injected. An injection point NOT in this enumeration (e.g. a
+  // failure inside collectStaleJournals, or inside the read of before.documents
+  // during planning) is explicitly OUT of this property's coverage and is called
+  // out here rather than silently assumed safe -- per the rule that a guard must
+  // state what it does NOT cover.
   const injectionPoints = [
     "metadata.json write (unwritable document dir)",
     "index.json write (unwritable documentkb dir)",
@@ -594,8 +583,6 @@ describe("t287 the self-heal property: a plain sync always recovers from an inje
     const failed = withDirectoryWritesDenied(p, dir, () => runSync(p, true));
     expectPermissionWriteFailure(failed, join(dir, "metadata.json"));
 
-    // The self-heal: a plain, unmodified sync must now succeed and land the
-    // pending change.
     const healed = runSync(p);
     expect(healed.status, `follow-up sync did not self-heal: ${healed.out}`).toBe(0);
     const row = readIndex(p, SPACE).documents[0];
@@ -664,13 +651,11 @@ describe("t287 self-defeat: adversarial probes against the CAS and the publish g
   });
 
   test("attack 3 -- racing the fix itself: a rebind landing WHILE sync's own commit callback is running is impossible by lock, not by luck", () => {
-    // The strongest version of the CAS claim is not "the CAS catches a stale
-    // plan" but "no writer can even attempt to invalidate a plan WHILE the
-    // commit that would apply it is running", because both rebind and sync's
-    // commit take the SAME withAuditLock. This drives a REAL second process
-    // attempting rebind while sync holds the lock, and asserts the rebind
-    // either queues (succeeds only after sync's commit releases the lock) or
-    // sync's commit has already finished -- never both mutating concurrently.
+    // Both rebind and sync's commit take the SAME withAuditLock. This drives a REAL
+    // second process attempting rebind while a holder stands in for sync's commit
+    // callback. The assertion checks that the recorded source path is either the
+    // original or the rebound path; it does not prove acquisition timing or compare
+    // every row field for a partial mutation.
     const p = scratchProject();
     const abs = doc(p, "a.md", "v1\n");
     const { indexed } = onboard(p, SPACE, undefined, NOW);
@@ -699,12 +684,10 @@ describe("t287 self-defeat: adversarial probes against the CAS and the publish g
       `--to ${JSON.stringify(rebindPath)} --project-dir ${JSON.stringify(p)} 2>&1\n` +
       `wait\n`;
     const r = spawnSync("bash", ["-c", script], { encoding: "utf-8", env: CHILD_ENV, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
-    // The rebind must have completed (it blocks on the lock, then runs) --
-    // never partially applied.
     const rows = readIndex(p, SPACE).documents;
     expect(rows.length).toBe(1);
-    // Either rebind succeeded (row now points at b.md) or it is still exactly
-    // the pre-attempt row -- never a mixed/partial state.
+    // Either the source path is b.md or it remains a.md; this assertion does not
+    // compare the rest of the row.
     const isRebound = rows[0].source.path === "documents/b.md";
     const isOriginal = rows[0].source.path === "documents/a.md";
     expect(isRebound || isOriginal, `unexpected intermediate state: ${JSON.stringify(rows[0])}`)

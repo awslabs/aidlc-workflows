@@ -169,9 +169,9 @@ function stripComments(source: string): string {
 }
 
 // Innermost bracket-pair bodies (quoted strings may contain brackets without
-// splitting a pair). A single linear scan with a bracket stack - the previous
-// backreference-free regex form backtracked quadratically and blew past the
-// 5s test timeout once aidlc-lib.ts grew large enough.
+// splitting a pair). A single linear scan with a bracket stack: a regex form,
+// even backreference-free, backtracked quadratically and blew past the 5s test
+// timeout once aidlc-lib.ts grew large enough.
 function arrayLiteralBodies(code: string): Array<{ body: string; prefix: string }> {
   const bodies: Array<{ body: string; prefix: string }> = [];
   const stack: Array<{ start: number; hadNested: boolean }> = [];
@@ -241,8 +241,8 @@ function makePluginOnlyInstall(): string {
   return project;
 }
 
-// Known pre-existing couplings, exempted by exact (file, name-set) signature.
-// None remain: the scopes for existing code say so in their own frontmatter
+// Known couplings, exempted by exact (file, name-set) signature. None remain:
+// the scopes for existing code say so in their own frontmatter
 // (`existing_code: true`). A NEW literal still fails.
 const KNOWN_COUPLINGS = new Set<string>();
 

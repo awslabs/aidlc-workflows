@@ -1,9 +1,9 @@
 // covers: tool:aidlc-sensor, tool:aidlc-swarm, tool:aidlc-validate
 //
-// Seam: tool entrypoint exports for the future single CLI dispatcher.
+// Seam: tool entrypoint exports for the single CLI dispatcher.
 // Mechanism: spawn fresh bun processes, dynamically import each shipped tool,
 // and assert import is inert while exposing main(argv). This pins the
-// process-boundary contract without invoking the dispatcher that will consume it.
+// process-boundary contract without invoking the dispatcher that consumes it.
 //
 // The default tools dir is dist/claude/.claude/tools so the shipped copies are
 // what CI pins after packaging. AIDLC_T226_TOOLS_DIR is an explicit test seam

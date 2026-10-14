@@ -35949,6 +35949,25 @@ export function pipelineLinkEvidence(
   return { links, repos, receipts, reusedRepos, completed, missing };
 }
 
+// The way on for missing pipeline handoffs, one sentence for the engine's
+// refusal and the state tool's floor: the conductor's own step. The evidence
+// switch is the person's, so neither names it.
+export function pipelineLinkWayOn(
+  projectDir: string,
+  slug: string,
+  options: { repos: boolean; singleRun?: boolean },
+): string {
+  const singleRun = options.singleRun === true;
+  return `Re-run \`${aidlcToolInvocation("orchestrate")} next${singleRun ? ` --single --stage ${slug}` : ""}\` ` +
+    `and dispatch the missing pipeline links in their declared order, carrying the human's revision feedback. ` +
+    (guardPolicyAcceptsChanges(projectDir)
+      ? ""
+      : "Rejection starts a new attempt: earlier scans and receipts cannot certify this revision, even for a targeted artifact edit. ") +
+    `After each link returns, run \`${aidlcToolInvocation("log")} link --stage ${slug} ` +
+    `--link <agent>${options.repos ? " --repo <repo>" : ""}` +
+    `${singleRun ? " --single" : ""}\`. Do not re-stamp an old handoff or disable evidence checks to reopen the gate.`;
+}
+
 export type UnitGateScope = "per-stage" | "unit-end";
 export type UnitGateStatus =
   | "pending"

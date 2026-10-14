@@ -31,7 +31,6 @@ afterAll(() => {
   for (const proj of projects) cleanupTestProject(proj);
 });
 
-/** A packaged install of one harness, as a configured project leaves it. */
 function copiedProject(harness: string): string {
   const root = join(REPO_ROOT, "dist", harness);
   const proj = createTestProject();
@@ -61,7 +60,6 @@ async function composeDispatch(harness: string): Promise<string> {
     return stdout;
   };
   const read = JSON.parse(await run(["next", "Build a tiny tool for counting late invoices by region"])) as Record<string, unknown>;
-  // The agent's proposal step: no ready-made plan fits, so it proposes compose.
   const proposal = proposalFollowUp(read, "compose");
   const offer = (proposal === null ? read : JSON.parse(await run(["next", ...proposal]))) as { ask_type?: string; compose_command?: string };
   expect(offer.ask_type).toBe("compose-offer");

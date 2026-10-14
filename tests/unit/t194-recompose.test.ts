@@ -1,11 +1,11 @@
 // covers: subcommand:aidlc-utility:recompose, function:setStageSuffix
 // covers: audit:RECOMPOSED
 //
-// t194 - the P4 in-flight recompose matrix (adaptive workflows).
+// t194 - the in-flight recompose matrix (adaptive workflows).
 //
 // The recompose verb flips a PENDING stage's plan suffix on the live state
 // file under withAuditLock, strict-validated, derived-fields rebuilt,
-// RECOMPOSED audited. This pins the FULL P4 contract:
+// RECOMPOSED audited. This pins the FULL contract:
 //
 //   flips:      pending SKIP honored (the router walks around it); pending
 //               forward ADD honored (the router walks TO it); both directions
@@ -19,9 +19,8 @@
 //               against it too.
 //   readers:    finalize (both calls), lookup next-stage, jump target
 //               validation + loops honour the recomposed plan (ADD-then-jump
-//               consistency) - the override-blind sites P4 threaded.
-//   audit:      RECOMPOSED lands with the flip lists (and is a canonical
-//               event - the 69-count pins hold in t28/t111).
+//               consistency).
+//   audit:      RECOMPOSED lands with the flip lists (a canonical event).
 //   inert:      a run that never calls recompose leaves the state file
 //               byte-identical (the OFF-path gate).
 //
@@ -92,8 +91,8 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-/** A created feature-scope project (all 31 post-scaffold stages EXECUTE; cursor
- *  at intent-capture after init). */
+/** A created feature-scope project (cursor at intent-capture after
+ *  initialization; greenfield reverse-engineering is SKIP). */
 function createdProject(scope = "feature"): string {
   const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
   tempDirs.push(proj);
@@ -149,10 +148,7 @@ describe("t194 recompose - flips land as suffix edits and the router honours the
     const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
     expect(r.status).toBe(0);
     const after = readState(proj);
-    // Suffix flipped, checkbox marker still pending.
     expect(after).toMatch(/- \[ \] market-research — SKIP/);
-    // The router (via lookup next-stage, now state-aware) walks around it:
-    // after intent-capture the next stage is NOT market-research.
     const next = run(proj, "aidlc-state.ts", ["lookup", "next-stage", "intent-capture", "feature"]);
     expect(next.status).toBe(0);
     expect(next.out.trim()).toBe("feasibility");
@@ -313,14 +309,12 @@ describe("t194 recompose - rejections", () => {
     const r = run(proj, "aidlc-utility.ts", ["recompose", "--add", "functional-design"]);
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("walking-skeleton gate anchor");
-    // And the state file is untouched by the rejection.
     expect(readState(proj)).toMatch(/- \[ \] functional-design — SKIP/);
   });
 
   test("each refused stage names what the person can do instead", () => {
     const proj = createdProject();
     const before = readState(proj);
-    // Done: jump back to run it again.
     const done = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "state-init"]);
     expect(done.status).not.toBe(0);
     expect(done.out).toContain("not pending");
@@ -333,17 +327,14 @@ describe("t194 recompose - rejections", () => {
     const addCurrent = run(proj, "aidlc-utility.ts", ["recompose", "--add", "intent-capture"]);
     expect(addCurrent.status).not.toBe(0);
     expect(addCurrent.out).toContain("`/aidlc --stage intent-capture --single`");
-    // A starved input names both ways to make the change.
     const starved = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "domain-design"]);
     expect(starved.status).not.toBe(0);
     expect(starved.out).toContain("also add a stage that produces what is missing, or also skip the stage that needs it");
-    // Moving the skeleton anchor names jumping past it and the scopes that skip it.
     const anchorSkip = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "functional-design"]);
     expect(anchorSkip.status).not.toBe(0);
     expect(anchorSkip.out).toContain("jump past it when the workflow reaches it");
     expect(anchorSkip.out).toContain("change to a scope that skips it (bugfix, ");
     expect(readState(proj)).toBe(before);
-    // Adding ahead of the anchor names the isolated run and the scopes that run it.
     const bugfix = createdProject("bugfix");
     const anchorAdd = run(bugfix, "aidlc-utility.ts", ["recompose", "--add", "functional-design"]);
     expect(anchorAdd.status).not.toBe(0);
@@ -381,7 +372,6 @@ describe("t194 recompose - rejections", () => {
     expect(r.out).toMatch(/`[^`]*aidlc[^`]*bolt[^`]* set-autonomy --mode gated`/);
     expect(r.out).not.toContain("(aidlc-bolt set-autonomy");
     expect(r.out).not.toContain("wait for the current build");
-    // The state file is untouched by the refusal (still autonomous, still EXECUTE).
     expect(readState(proj)).toBe(withAutonomy);
   });
 
@@ -454,7 +444,7 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     const proj = createdProject("bugfix");
     run(proj, "aidlc-utility.ts", ["recompose", "--add", "user-stories"]);
     // Jump forward over the promoted stage to code-generation: the forward
-    // loop must mark IN-FLIGHT intermediates [S] against the EFFECTIVE plan.
+    // loop must mark pending intermediates [S] against the EFFECTIVE plan.
     // First put the cursor at requirements-analysis (jump execute redo-shape).
     const jr = run(proj, "aidlc-jump.ts", [
       "execute", "--target", "code-generation", "--direction", "forward",
@@ -480,7 +470,6 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect(body.stages_skipped).toContain("user-stories");
     expect(body.notice).toMatch(/^Moved to Code Generation; skipped .*User Stories.*\. You can go back to [A-Z][^.]* any time\.$/);
     expect(body.notice).not.toContain("--stage");
-    // One plain line: no stage slugs, no internals.
     expect(body.notice).not.toContain("[S]");
     const back = run(proj, "aidlc-jump.ts", [
       "execute", "--target", String(before), "--direction", "backward",
@@ -566,9 +555,7 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect(said.kind).toBe("run-stage");
     expect(String(said.narration)).toContain("You can return to Code Generation any time.");
     expect(String(said.narration)).toMatch(/^Moved back to [A-Z][^.;`]*\. You can return to Code Generation/);
-    // Said once.
     expect(String(nextIn().narration ?? "")).not.toContain("To return to Code Generation");
-    // And the way back works: the jump it names goes through.
     expect(run(proj, "aidlc-jump.ts", ["execute", "--target", "code-generation", "--direction", "forward"], chat).status).toBe(0);
     expect(readState(proj)).toContain("- **Current Stage**: code-generation");
   });
@@ -647,7 +634,6 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect(message).toContain("next --stage requirements-analysis`.");
     expect(message).not.toContain("change scope");
 
-    // The commands it names, in order, land the workflow on the stage.
     const added = run(proj, "aidlc-utility.ts", ["recompose", "--add", "user-stories", "--reason", "jump to user-stories"]);
     expect(added.status, added.out).toBe(0);
     const jumped = run(proj, "aidlc-jump.ts", [

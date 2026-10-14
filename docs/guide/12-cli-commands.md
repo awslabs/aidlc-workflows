@@ -2176,7 +2176,7 @@ Verification Command in each prepared Unit worktree, with or without Constructio
 Checkpoints:
 
 ```bash
-aidlc engine swarm check <Unit> [--test-file <protected spec>]
+aidlc engine swarm check <Unit> [--test-file <protected spec>] [--show-output]
 aidlc engine swarm finalize --batch <N> --units "<all Units>" --claimed "<converged Units>"
 ```
 
@@ -2184,7 +2184,12 @@ aidlc engine swarm finalize --batch <N> --units "<all Units>" --claimed "<conver
 canonical digest must match the authorized command. A missing authorization
 refuses execution: complete the [recorded-command flow](#construction-verification-command-record-human-authorization)
 and `set-construction-verification-command`, rather than substituting a passing
-command. With no workflow, both commands refuse. `check` is advisory; `finalize` reruns the command and validates
+command. With no workflow, both commands refuse. `check --show-output` sends the
+command's own output to stderr as it runs; stdout keeps the one verdict line. In a
+side-by-side build each worker's brief and each reviewer's review request
+(`test_command`) name `check <Unit> --show-output`, run from the project's main
+folder, so the tests you approved run through AI-DLC's own
+command. `check` is advisory; `finalize` reruns the command and validates
 review evidence before merging each claimed Unit. Re-running `finalize` withdraws
 every open checkpoint question and captured checkpoint response for this intent,
 in any session; ask again only after fresh verification, source landing, and a

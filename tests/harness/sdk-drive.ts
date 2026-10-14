@@ -691,6 +691,28 @@ async function removeEphemeralConfigDir(path: string): Promise<void> {
 }
 
 /**
+ * The model service failed under the drive: Claude Code ended the run on an
+ * API error that is the service's (throttled, a server error, the connection
+ * dropped), not one the run caused. The runner reads the name and says the
+ * failure is infrastructure (tests/lib/file-retry.ts modelApiFailed).
+ */
+export class ModelApiError extends Error {
+  override name = "ModelApiError";
+}
+
+// Claude Code's words for a run that ended on the service's API error. A 4xx
+// the request caused (a prompt too long, a bad key, our own abort) is not one.
+const SERVICE_API_ERROR =
+  /^Claude Code returned an error result: API Error: (?:(?:429|5\d\d)\b|The socket connection was closed|Connection error|The system encountered an unexpected error)/;
+
+/** The SDK's failure, as a ModelApiError when it is the model service's. */
+export function driveFailure(error: unknown): unknown {
+  return error instanceof Error && SERVICE_API_ERROR.test(error.message)
+    ? new ModelApiError(error.message, { cause: error })
+    : error;
+}
+
+/**
  * Drive a single AIDLC prompt through the Claude Agent SDK and return a fully
  * structured result. This is the one entry point tests use instead of the old
  * run_claude shell fixture.
@@ -1147,7 +1169,7 @@ export async function driveAidlc(
       writeSdkTrace(tracePath, "error", {
         message: err instanceof Error ? err.message : String(err),
       });
-      throw err;
+      throw driveFailure(err);
     }
   } finally {
     if (timer) clearTimeout(timer);

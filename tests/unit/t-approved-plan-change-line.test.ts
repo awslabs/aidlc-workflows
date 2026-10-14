@@ -16,7 +16,7 @@
 //     again, and the line is gone. Only the person's word since their last
 //     decision runs it: the agent going back on its own is refused;
 //   - ticking a step is not a change, an added step is named as added, and
-//     once the build has started nothing is said before the build any more;
+//     once the build has started the line says so and offers the rebuild;
 //   - the plan-approval guard lets restore through while the plan waits;
 //   - their words in a new chat, in any wording, are read for the way back,
 //     and the print names the restore (a person once got a question about
@@ -126,7 +126,6 @@ const recordDir = (proj: string, unit: string | null = UNIT) => codeGenerationRe
 const planPath = (proj: string, unit: string | null = UNIT) => join(recordDir(proj, unit), "code-generation-plan.md");
 const instructionsPath = (proj: string, unit: string | null = UNIT) =>
   join(recordDir(proj, unit), "unit-test-instructions.md");
-/** The scope selector a per-Unit or stage-level target passes to the tools. */
 const targetArgs = (unit: string | null): string[] => unit === null ? ["--stage-level"] : ["--unit", unit];
 
 
@@ -158,7 +157,6 @@ function run(proj: string, args: string[], input?: string): ReturnType<typeof sp
   });
 }
 
-/** The person says something in chat, through the real human-turn hook. */
 function say(proj: string, prompt: string, session = SESSION): void {
   const turn = run(proj, [DISPATCHER, "engine", "hook", "record-human-turn"],
     JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }));
@@ -253,8 +251,6 @@ describe("an approved plan that changed before the build is named, and can be un
     expect(ask.ask_type).toBe("plan-approval");
     // One question only: the plan question follows the note, so the note asks nothing.
     expect(ask.plan_approval?.note).toBe(changed(OFFER));
-    // The question is open now; going back still works on their word, and the
-    // person's approval of the plan they saw is what holds.
     say(proj, "go back to what I approved");
     expect(restore(proj)).toBe("Back to the plan you approved.");
     expect(evaluateCodeGenerationApproval(proj, { unit: UNIT }).ok).toBe(true);
@@ -273,10 +269,8 @@ describe("an approved plan that changed before the build is named, and can be un
       const refused = run(proj, [POSTURE, "restore", "--unit", UNIT, "--project-dir", proj]);
       expect(refused.status, String(refused.stdout)).not.toBe(0);
       expect(String(refused.stderr)).toContain("Do you want me to go back to the plan you approved?");
-      // Nothing was put back.
       expect(readFileSync(planPath(proj), "utf-8")).toBe(edited);
       expect(readFileSync(instructionsPath(proj), "utf-8")).not.toBe(INSTRUCTIONS);
-      // Their word since then runs it.
       say(proj, "yes, go back");
       expect(restore(proj)).toBe("Back to the plan you approved.");
     });
@@ -315,7 +309,6 @@ describe("an approved plan that changed before the build is named, and can be un
       expect(readFileSync(planPath(proj, unit), "utf-8")).toBe(approved);
       expect(readFileSync(instructionsPath(proj, unit), "utf-8")).toBe(INSTRUCTIONS);
       expect(evaluateCodeGenerationApproval(proj, { unit }).ok).toBe(true);
-      // The build that follows is the approved plan's: no question, no revise.
       const build = next(proj);
       expect(build.kind, JSON.stringify(build)).toBe("run-stage");
       expect(build.plan_approval).toEqual({ status: "approved" });

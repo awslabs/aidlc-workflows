@@ -1,6 +1,6 @@
 // covers: function:headingKey, function:summaryConfirmationContentHash
 //
-// #1385 follow-up. The claim-sources sensor reads a Q<n> or Assumption
+// #1385. The claim-sources sensor reads a Q<n> or Assumption
 // Confirmation heading behind a leading emoji as the section it names, but the
 // summary confirmation digest needed the exact spelling: a decorated follow-up
 // question after the Consolidated Summary Confirmation stopped the gate with
@@ -85,7 +85,6 @@ describe("summary confirmation digest reads decorated contract headings", () => 
     expect(summaryConfirmationContentHash(
       decorated.replace("Customers use email sign-in.", "Customers use SSO."),
     )).toBe(UNDECORATED_DIGEST);
-    // A second one, decorated or not, is still a duplicate.
     expect(() => summaryConfirmationContentHash(
       `${decorated}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n`,
     )).toThrow('duplicate H2 section "Assumption Confirmation"');

@@ -1,41 +1,27 @@
 // covers: hook:aidlc-statusline
 //
-// Port of tests/unit/t11-hook-statusline.sh (TAP plan 62), mechanism = none.
 // aidlc-statusline.ts is a HOOK, not a CLI tool — Claude Code registers it via
 // the `statusLine` setting and pipes a JSON blob on stdin, expecting a single
 // rendered status line on stdout. There is no subcommand surface and no
 // process.exit contract to assert (the hook always exits 0 and writes via
 // process.stdout.write). The hook reads project state off disk and renders the
 // phase / progress-bar / breadcrumb / model+ctx suffix. It is mechanism=none
-// (no LLM, no tokens), but it is NOT a pure importable function: `main()` runs
-// at module top-level and reads `Bun.stdin.text()`. So — exactly as the .sh did
-// — every contract is exercised by SPAWNING the hook with controlled stdin and
-// asserting on the stdout it writes. spawnCount = all; inProcess = 0.
+// (no LLM, no tokens). Every contract is exercised by SPAWNING the hook with
+// controlled stdin and asserting on the stdout it writes. spawnCount = all;
+// inProcess = 0.
 //
-// MECHANISM NOTE: the .sh shelled out via `echo '<json>' | bun "$HOOK"`. We
+// MECHANISM NOTE: the hook is never imported in this file. We
 // spawn the same `bun <hook>` binary through node:child_process spawnSync,
 // feeding the JSON as `input` (so stdin is a pipe, not a TTY — the hook's
-// `process.stdin.isTTY ? "" : await Bun.stdin.text()` guard reads it). Output
-// is read back from res.stdout, mirroring the .sh's `$(... 2>/dev/null)`
-// capture. The env-var fall-through case (.sh Test 10) passes empty stdin plus
-// CLAUDE_PROJECT_DIR in the child env, identical to the .sh.
+// isTTY guard reads it). Output is read back from res.stdout. The env-var
+// fall-through case passes empty stdin plus CLAUDE_PROJECT_DIR in the child env.
 //
-// FIXTURE DISCIPLINE (mirrors the .sh's create_test_project + seed_state_file +
-// cleanup_test_project per case): each case uses a FRESH temp project dir
+// FIXTURE DISCIPLINE: each case uses a FRESH temp project dir
 // (createTestProject, toPortablePath-wrapped so the project path round-trips on
 // native Windows when embedded in the stdin JSON). Seeded fixtures come from the
-// shipped tests/fixtures/state-*.md via seedStateFile, exactly as the .sh did;
-// the inline-`cat`-heredoc cases (.sh Tests 8, 9, 22-24, 42-49, 37, 38) are
-// rebuilt by writing the same bytes to <proj>/aidlc-docs/aidlc-state.md. All
-// temp dirs are cleaned in afterAll. Nothing is written under tests/fixtures/**.
-//
-// PARITY MAP — every .sh assert_* line has an expect() counterpart below; the
-// .sh's 62-assertion plan maps 1:1 (a few cases bundle 2-3 asserts the .sh ran
-// against one $OUTPUT, kept together since they observe the same render). The
-// .sh's grep/assert_contains become expect(out).toContain(...); assert_eq
-// becomes expect(out).toBe(...); assert_match (ERE) becomes a RegExp .toMatch;
-// assert_not_contains becomes .not.toContain; the assert_lt timing check
-// (Test 16) becomes an elapsed-ms expect(<500). STRONGER additions are tagged.
+// shipped tests/fixtures/state-*.md via seedStateFile; inline cases write their
+// bytes to the default intent's aidlc-state.md (writeState). All temp dirs are
+// cleaned in afterAll. Nothing is written under tests/fixtures/**.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -62,7 +48,7 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const HOOK = join(REPO_ROOT, "dist", "claude", ".claude", "hooks", "aidlc-statusline.ts");
 
 const tempDirs: string[] = [];
@@ -71,19 +57,17 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-/** Fresh empty temp project (create_test_project). */
 function proj(): string {
   const p = createTestProject();
   tempDirs.push(p);
   return p;
 }
 
-// Per-intent record (P9 — the flat aidlc-docs/ root is retired). The statusline
-// hook reads state via stateFilePath() → the active intent's record dir; seeding
-// aidlc-state.md there makes the active-intent cursor resolve.
+// Per-intent record. The statusline hook reads state from the active intent's
+// record dir (its local stateFilePathForSelection); seeding aidlc-state.md there
+// makes the active-intent cursor resolve.
 const statePath = (p: string): string => join(seededRecordDir(p), "aidlc-state.md");
 
-/** Write a state file body to the default intent's record (the inline `cat` heredocs). */
 function writeState(p: string, body: string): void {
   mkdirSync(seededRecordDir(p), { recursive: true });
   writeFileSync(statePath(p), body);
@@ -96,9 +80,8 @@ interface RunResult {
 
 /**
  * Spawn the statusline hook, piping `stdin` as stdin and merging `env` into the
- * child env. Mirrors `echo '<stdin>' | [ENV=…] bun "$HOOK" 2>/dev/null`.
- * stderr is discarded (the .sh's 2>/dev/null). The hook is NOT given a TTY
- * stdin (spawnSync `input` is a pipe), so its isTTY guard reads the JSON.
+ * child env. stderr is discarded. The hook is NOT given a TTY stdin (spawnSync
+ * `input` is a pipe), so its isTTY guard reads the JSON.
  */
 function runHook(stdin: string, env: Record<string, string> = {}): RunResult {
   const res = spawnSync(BUN, [HOOK], {
@@ -106,19 +89,17 @@ function runHook(stdin: string, env: Record<string, string> = {}): RunResult {
     input: stdin,
     encoding: "utf-8",
     // Strip any inherited CLAUDE_PROJECT_DIR so it can't leak into stdin-driven
-    // cases; the .sh ran each invocation in a clean shell with only the vars it
-    // set. Callers that need the env-var fall-through pass it explicitly.
+    // cases. Callers that need the env-var fall-through pass it explicitly.
     env: { ...process.env, CLAUDE_PROJECT_DIR: "", ...env },
   });
   return { status: res.status ?? -1, out: res.stdout ?? "" };
 }
 
-/** Build the stdin JSON the .sh constructed: {"workspace":{"project_dir":"<p>"}}. */
 function stdinFor(p: string): string {
   return JSON.stringify({ workspace: { project_dir: p } });
 }
 
-// ESC literal — the .sh used `ESC=$'\033'`; the hook emits "\x1b[..m".
+// ESC literal - the hook emits "\x1b[..m".
 const ESC = "\x1b";
 
 const MID_IDEATION = join(FIXTURES_DIR, "state-mid-ideation.md");
@@ -128,30 +109,25 @@ const STATE_COMPLETED = join(FIXTURES_DIR, "state-completed.md");
 const STATE_JUMPED = join(FIXTURES_DIR, "state-jumped.md");
 
 describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 62)", () => {
-  // --- .sh Test 1: ready with no state file ---
   test("1: shows [AIDLC] ready when no state file", () => {
     const p = proj();
-    // create_test_project makes aidlc-docs/ but no state file (the .sh rm -f's it).
+    // createTestProject makes the default intent record but no state file.
     const r = runHook(stdinFor(p));
-    // assert_eq "$OUTPUT" "[AIDLC] ready" — exact match on the trimmed line.
     expect(r.out.trim()).toBe("[AIDLC] ready");
   });
 
-  // --- .sh Test 2: shows IDEATION phase ---
   test("2: shows IDEATION phase", () => {
     const p = proj();
     seedStateFile(p, MID_IDEATION);
     expect(runHook(stdinFor(p)).out).toContain("IDEATION");
   });
 
-  // --- .sh Test 3: shows display name (not slug) ---
   test("3: shows stage display name Feasibility", () => {
     const p = proj();
     seedStateFile(p, MID_IDEATION);
     expect(runHook(stdinFor(p)).out).toContain("Feasibility");
   });
 
-  // --- .sh Test 4: agent without -agent slug (two asserts on one render) ---
   test("4: shows agent display name and strips slug", () => {
     const p = proj();
     seedStateFile(p, MID_IDEATION);
@@ -160,7 +136,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(out).not.toContain("aidlc-architect-agent");
   });
 
-  // --- .sh Test 6: phase progress 2/7 ---
   // IDEATION has 7 non-SKIP stages, 2 are [x] (intent-capture, market-research).
   test("6: computes phase progress 2/7", () => {
     const p = proj();
@@ -168,14 +143,12 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(runHook(stdinFor(p)).out).toContain("2/7");
   });
 
-  // --- .sh Test 7: output starts with [AIDLC] prefix ---
   test("7: output starts with [AIDLC] prefix", () => {
     const p = proj();
     seedStateFile(p, MID_IDEATION);
     expect(runHook(stdinFor(p)).out).toMatch(/^\[AIDLC\]/);
   });
 
-  // --- .sh Test 8: ready when phase empty (trailing space after colon) ---
   test("8: shows [AIDLC] ready when Lifecycle Phase value is empty", () => {
     const p = proj();
     writeState(
@@ -191,7 +164,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(runHook(stdinFor(p)).out.trim()).toBe("[AIDLC] ready");
   });
 
-  // --- .sh Test 9: all-SKIP phase shows no progress fraction ---
   test("9: all-SKIP phase shows empty progress (no n/m fraction)", () => {
     const p = proj();
     writeState(
@@ -212,26 +184,21 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
 - **Active Agent**: aidlc-product-agent
 `,
     );
-    // .sh: grep -q "[0-9]/[0-9]" must NOT match.
     expect(runHook(stdinFor(p)).out).not.toMatch(/[0-9]\/[0-9]/);
   });
 
-  // --- .sh Test 10: empty stdin falls through to CLAUDE_PROJECT_DIR env var ---
   test("10: empty stdin falls through to CLAUDE_PROJECT_DIR env var", () => {
     const p = proj();
     seedStateFile(p, MID_IDEATION);
-    // echo "" | CLAUDE_PROJECT_DIR="$PROJ" bun "$HOOK"
     expect(runHook("", { CLAUDE_PROJECT_DIR: p }).out).toContain("IDEATION");
   });
 
-  // --- .sh Test 11: CONSTRUCTION phase ---
   test("11: shows CONSTRUCTION phase", () => {
     const p = proj();
     seedStateFile(p, STATE_CONSTRUCTION);
     expect(runHook(stdinFor(p)).out).toContain("CONSTRUCTION");
   });
 
-  // --- .sh Test 12: construction progress count [0-9]/9 ---
   // Construction fixture: 9 non-SKIP checkbox lines under CONSTRUCTION PHASE
   // (cart: 2; checkout: 7); 2 are [x] -> 2/9.
   test("12: construction shows progress fraction (regex /9)", () => {
@@ -239,46 +206,39 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     seedStateFile(p, STATE_CONSTRUCTION);
     const out = runHook(stdinFor(p)).out;
     expect(out).toMatch(/[0-9]\/9/);
-    // STRONGER (S1): the .sh only regex-matched "/9"; pin the exact numerator.
     expect(out).toContain("2/9");
   });
 
-  // --- .sh Test 13: OPERATION phase ---
   test("13: shows OPERATION phase", () => {
     const p = proj();
     seedStateFile(p, STATE_OPERATION);
     expect(runHook(stdinFor(p)).out).toContain("OPERATION");
   });
 
-  // --- .sh Test 14: operation progress count [0-9]/7 ---
   test("14: operation shows progress fraction (regex /7)", () => {
     const p = proj();
     seedStateFile(p, STATE_OPERATION);
     // operation fixture: 7 stages, 0 [x] ([-] deployment-pipeline) -> 0/7.
     const out = runHook(stdinFor(p)).out;
     expect(out).toMatch(/[0-9]\/7/);
-    // STRONGER (S2): pin the exact numerator the fixture produces.
     expect(out).toContain("0/7");
   });
 
-  // --- .sh Test 15: completed fixture shows COMPLETE ---
   test("15: completed fixture shows COMPLETE", () => {
     const p = proj();
     seedStateFile(p, STATE_COMPLETED);
     expect(runHook(stdinFor(p)).out).toContain("COMPLETE");
   });
 
-  // --- .sh Test 16: statusline completes within 500ms ---
   test("16: statusline completes within 500ms", () => {
     const p = proj();
     seedStateFile(p, STATE_CONSTRUCTION);
-    // Preserve the historical inventory label and prove completion by output.
+    // The test name says 500ms; this test proves completion by output, not timing.
     const result = runHook(stdinFor(p));
     expect(result.status).toBe(0);
     expect(result.out).toContain("2/9");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // --- .sh Test 17: [S] stages excluded from construction progress total ---
   test("17: [S] stages excluded from construction total (0/3 + empty bar)", () => {
     const p = proj();
     seedStateFile(p, STATE_JUMPED);
@@ -287,11 +247,9 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(out).toContain("[░░░░░░░░░░]");
   });
 
-  // --- .sh Test 18: [S] in completed ideation phase show correct count ---
   test("18: [S] stages excluded; ideation shows 2/2 + full bar", () => {
     const p = proj();
     seedStateFile(p, STATE_JUMPED);
-    // Flip only the Lifecycle Phase pointer to IDEATION (not the heading).
     const body = require("node:fs")
       .readFileSync(statePath(p), "utf-8")
       .replace("**Lifecycle Phase**: CONSTRUCTION", "**Lifecycle Phase**: IDEATION");
@@ -301,7 +259,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(out).toContain("[▓▓▓▓▓▓▓▓▓▓]");
   });
 
-  // --- .sh Test 19: progress bar with filled and empty chars ---
   test("19: progress bar contains filled and empty chars", () => {
     const p = proj();
     seedStateFile(p, MID_IDEATION);
@@ -310,21 +267,18 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(out).toContain("░");
   });
 
-  // --- .sh Test 20: breadcrumb > separator present ---
   test("20: breadcrumb > separator present", () => {
     const p = proj();
     seedStateFile(p, MID_IDEATION);
     expect(runHook(stdinFor(p)).out).toContain(" > ");
   });
 
-  // --- .sh Test 21: agent -- separator present ---
   test("21: agent -- separator present", () => {
     const p = proj();
     seedStateFile(p, MID_IDEATION);
     expect(runHook(stdinFor(p)).out).toContain(" -- ");
   });
 
-  // --- .sh Tests 22-24: init-phase render (one heredoc, three asserts) ---
   test("22-24: init-phase shows INITIALIZATION + Workspace Detection + filled bar", () => {
     const p = proj();
     writeState(
@@ -346,12 +300,11 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
 `,
     );
     const out = runHook(stdinFor(p)).out;
-    expect(out).toContain("INITIALIZATION"); // Test 22
-    expect(out).toContain("Workspace Detection"); // Test 23
-    expect(out).toContain("▓"); // Test 24
+    expect(out).toContain("INITIALIZATION");
+    expect(out).toContain("Workspace Detection");
+    expect(out).toContain("▓");
   });
 
-  // --- .sh Test 26: Bedrock model abbreviated ---
   test("26: Bedrock opus-4-6 model abbreviates to BR:opus-4-6", () => {
     const p = proj();
     seedStateFile(p, MID_IDEATION);
@@ -363,7 +316,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(runHook(stdin).out).toContain("BR:opus-4-6");
   });
 
-  // --- .sh Test 27: context percentage appears (rounded) ---
   test("27: context percentage appears as ctx:45%", () => {
     const p = proj();
     seedStateFile(p, MID_IDEATION);
@@ -375,7 +327,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(runHook(stdin).out).toContain("ctx:45%");
   });
 
-  // --- .sh Test 28: model + context appear after agent ---
   test("28: model and context appear after agent", () => {
     const p = proj();
     seedStateFile(p, MID_IDEATION);
@@ -384,11 +335,9 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
       model: { id: "us.anthropic.claude-opus-4-6-v1" },
       context_window: { used_percentage: 45.2 },
     });
-    // assert_match "Agent.*BR:.*ctx:"
     expect(runHook(stdin).out).toMatch(/Agent.*BR:.*ctx:/);
   });
 
-  // --- .sh Test 29: Bedrock prefix detection (sonnet) ---
   test("29: Bedrock sonnet abbreviates to BR:sonnet-4", () => {
     const p = proj();
     seedStateFile(p, MID_IDEATION);
@@ -400,7 +349,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(runHook(stdin).out).toContain("BR:sonnet-4");
   });
 
-  // --- .sh Test 30: non-Bedrock model has no BR: prefix (two asserts) ---
   test("30: non-Bedrock model name appears without BR: prefix", () => {
     const p = proj();
     seedStateFile(p, MID_IDEATION);
@@ -414,7 +362,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(out).not.toContain("BR:");
   });
 
-  // --- .sh Test 31: context green for low usage ---
   test("31: context green color (ESC[32m) for usage < 50%", () => {
     const p = proj();
     seedStateFile(p, MID_IDEATION);
@@ -426,7 +373,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(runHook(stdin).out).toContain(`${ESC}[32m`);
   });
 
-  // --- .sh Test 32: context red for high usage ---
   test("32: context red color (ESC[31m) for usage >= 75%", () => {
     const p = proj();
     seedStateFile(p, MID_IDEATION);
@@ -438,7 +384,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(runHook(stdin).out).toContain(`${ESC}[31m`);
   });
 
-  // --- .sh Test 33: no model/context in JSON -> no suffix (two asserts) ---
   test("33: no model/context in JSON means no BR: or ctx: suffix", () => {
     const p = proj();
     seedStateFile(p, MID_IDEATION);
@@ -448,7 +393,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(out).not.toContain("ctx:");
   });
 
-  // --- .sh Test 34: shipped Bedrock Opus 4-7 ID abbreviates ---
   test("34: shipped Opus 4.7 Bedrock ID abbreviates to BR:opus-4-7", () => {
     const p = proj();
     seedStateFile(p, MID_IDEATION);
@@ -460,7 +404,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(runHook(stdin).out).toContain("BR:opus-4-7");
   });
 
-  // --- .sh Test 42: 1-stage phase math (poc-style scope), two states ---
   test("42: 1-stage phase 0/1 empty bar then 1/1 full bar", () => {
     const p = proj();
     writeState(
@@ -494,7 +437,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(outEmpty).toContain("0/1");
     expect(outEmpty).toContain("[░░░░░░░░░░]");
 
-    // Bump code-generation [-] -> [x]; same file (the .sh's sed -i.bak edit).
     const body = require("node:fs")
       .readFileSync(statePath(p), "utf-8")
       .replace("- [-] code-generation", "- [x] code-generation");
@@ -504,7 +446,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(outFull).toContain("[▓▓▓▓▓▓▓▓▓▓]");
   });
 
-  // --- .sh Test 43: OPERATION phase mid-progression bar ---
   test("43: operation 3/7 renders 4 filled chars", () => {
     const p = proj();
     writeState(
@@ -531,7 +472,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(out).toContain("[▓▓▓▓░░░░░░]");
   });
 
-  // --- .sh Test 44: CONSTRUCTION -> OPERATION phase-boundary reset ---
   test("44: construction full bar then operation empty bar on phase pointer flip", () => {
     const p = proj();
     writeState(
@@ -571,7 +511,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(runHook(stdinFor(p)).out).toContain("[░░░░░░░░░░]");
   });
 
-  // --- .sh Test 45: IDEATION -> INCEPTION phase-boundary reset ---
   test("45: ideation full bar then inception empty bar on phase pointer flip", () => {
     const p = proj();
     writeState(
@@ -612,7 +551,7 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(runHook(stdinFor(p)).out).toContain("[░░░░░░░░░░]");
   });
 
-  // --- .sh Test 46: realistic full-state-file regression (#37, inception 6/8) ---
+  // Realistic full-state-file regression (#37, inception 6/8).
   test("46: full state file renders inception 6/8 with 7 filled chars", () => {
     const p = proj();
     writeState(
@@ -697,7 +636,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(out).toContain("[▓▓▓▓▓▓▓░░░]");
   });
 
-  // --- .sh Test 47: Lifecycle Phase with trailing text still matches heading (two asserts) ---
   test("47: Lifecycle Phase 'INCEPTION (finalizing)' still resolves ratio + bar", () => {
     const p = proj();
     writeState(
@@ -719,7 +657,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(out).toContain("▓");
   });
 
-  // --- .sh Test 48: prose decoy containing "Lifecycle Phase:" doesn't hijack (three asserts) ---
   test("48: prose decoy does not hijack the phase field", () => {
     const p = proj();
     writeState(
@@ -748,7 +685,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(out).toContain("1/3");
   });
 
-  // --- .sh Test 49: COMPLETE status with unresolved phase renders full bar (two asserts) ---
   test("49: COMPLETE status with unresolved phase renders full bar + COMPLETE label", () => {
     const p = proj();
     writeState(
@@ -768,7 +704,7 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(out).toContain("COMPLETE");
   });
 
-  // --- .sh Test 37: bar advances when a stage completes (#37 regression, two projects) ---
+  // Bar advances when a stage completes (#37 regression, two projects).
   test("37: inception 4/7 (5 filled) advances to 5/7 (7 filled)", () => {
     const pa = proj();
     writeState(
@@ -820,14 +756,12 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     );
     const outB = runHook(stdinFor(pb)).out;
 
-    // .sh extracted the bar via grep -oE '\[▓*░*\]'; assert the exact bars.
     const barA = outA.match(/\[▓*░*\]/)?.[0];
     const barB = outB.match(/\[▓*░*\]/)?.[0];
     expect(barA).toBe("[▓▓▓▓▓░░░░░]"); // floor(4*10/7)=5 filled
     expect(barB).toBe("[▓▓▓▓▓▓▓░░░]"); // floor(5*10/7)=7 filled
   });
 
-  // --- .sh Test 38: phase-boundary reset (full -> empty on pointer flip, two asserts) ---
   test("38: end-of-inception full bar then start-of-construction empty bar", () => {
     const p = proj();
     writeState(
@@ -870,7 +804,6 @@ describe("t11 aidlc-statusline hook (migrated from t11-hook-statusline.sh, plan 
     expect(runHook(stdinFor(p)).out).toContain("[░░░░░░░░░░]");
   });
 
-  // --- .sh Test 40: COMPLETE status renders full bar from phase-local checkbox state ---
   test("50: a session bound to a record outside the slug shape keeps showing it after the cursor moves", () => {
     const p = proj();
     const bound = createIntent(p, "bound-work", "default", "feature");

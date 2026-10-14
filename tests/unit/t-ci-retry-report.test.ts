@@ -10,9 +10,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { liveRetryReport, type RetryRecord, retryReport } from "../../scripts/ci-retry-report.ts";
 import {
-  CASE_TIMEOUT_RETRY_MAX_MS, flakyLiveLine, ISOLATED_RETRY_MAX_MS, ORDINARY_RETRY_MAX_MS, onlyCaseTimeouts, personTurnFailed,
-  personTurnLine, preserveFirstAttempt, RETRY_DEADLINE_RESERVE_MS, type RetryEvidence, retryEligible, retryPassed,
+  CASE_TIMEOUT_RETRY_MAX_MS, flakyLiveLine, ISOLATED_RETRY_MAX_MS, modelApiFailed, modelApiLine, ORDINARY_RETRY_MAX_MS, onlyCaseTimeouts, onlyModelApiFailures,
+  personTurnFailed, personTurnLine, preserveFirstAttempt, RETRY_DEADLINE_RESERVE_MS, type RetryEvidence, retryEligible, retryPassed,
 } from "../lib/file-retry.ts";
+import { driveFailure, ModelApiError } from "../harness/sdk-drive.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -109,6 +110,82 @@ describe("the retry rule", () => {
     expect(personTurnFailed(readFileSync(junit, "utf8"), `${child.stdout}${child.stderr}`)).toBe(true);
     // The header alone holds on every Bun, whatever its JUnit names the failure.
     expect(personTurnFailed("", `${child.stdout}${child.stderr}`)).toBe(true);
+  });
+
+  // The model service failing under a live drive is infrastructure, not a
+  // result about AI-DLC. The drive types Claude Code's error for the
+  // service's own failures; the runner reads the type, as it reads a
+  // person-turn failure, and only what the run says changes.
+  test("the drive types the model service's own API errors, and no other error", () => {
+    const sdk = (words: string) => new Error(`Claude Code returned an error result: API Error: ${words}`);
+    for (const words of [
+      "The system encountered an unexpected error during processing. Try your request again.",
+      "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+      "Connection error.",
+      "429 Too many requests, please wait before trying again.",
+      "503 Service Unavailable",
+    ]) {
+      const typed = driveFailure(sdk(words));
+      expect(typed, words).toBeInstanceOf(ModelApiError);
+      expect((typed as Error).message).toBe(sdk(words).message);
+    }
+    // A failure the request itself caused, our own abort, or any other error stays as it was.
+    for (const error of [
+      sdk("400 due to tool use concurrency issues."), sdk("Prompt is too long"), sdk("401 Invalid API key \u00b7 Please run /login"),
+      sdk("Request was aborted."), new Error("expected 1 to be 2"), "not an error",
+    ]) {
+      expect(driveFailure(error)).toBe(error);
+    }
+  });
+
+  test("reads a model service failure off bun's JUnit report or the error's own header", () => {
+    const report = (cases: string) => `<?xml version="1.0"?><testsuites><testsuite name="x">${cases}</testsuite></testsuites>`;
+    const service = '<testcase name="a" time="30.0"><failure type="ModelApiError" message="Claude Code returned an error result" /></testcase>';
+    const assertion = '<testcase name="b" time="0.1"><failure type="AssertionError" message="ModelApiError in words only" /></testcase>';
+    expect(modelApiFailed(report(service + assertion))).toBe(true);
+    expect(modelApiFailed(report(assertion))).toBe(false);
+    expect(personTurnFailed(report(service))).toBe(false);
+    const bun13 = '<testcase name="a" time="0.1"><failure type="AssertionError" /></testcase>';
+    const printed = "ModelApiError: Claude Code returned an error result: API Error: Connection error.\r\n      at driveAidlc (sdk-drive.ts:1)\r\n";
+    expect(modelApiFailed(report(bun13), printed)).toBe(true);
+    expect(modelApiFailed(report(bun13), printed.replaceAll("\r\n", "\n"))).toBe(true);
+    expect(modelApiFailed(report(bun13), "error: expected ModelApiError: no\n")).toBe(false);
+    // The drive's real error, through real bun.
+    const root = mkdtempSync(join(tmpdir(), "aidlc-model-api-junit-"));
+    roots.push(root);
+    const harness = join(import.meta.dir, "..", "harness", "sdk-drive.ts").replaceAll("\\", "/");
+    writeFileSync(join(root, "t-x.test.ts"), [
+      `import { test } from "bun:test";`,
+      `import { driveFailure } from ${JSON.stringify(harness)};`,
+      `test("the model service fails", () => { throw driveFailure(new Error("Claude Code returned an error result: API Error: Connection error.")); });`,
+    ].join("\n"));
+    const junit = join(root, "t-x.junit.xml");
+    const child = spawnSync(process.execPath, ["test", "--reporter=junit", `--reporter-outfile=${junit}`, "t-x.test.ts"], {
+      cwd: root, encoding: "utf8", timeout: 60_000,
+    });
+    expect(child.status, child.stderr).toBe(1);
+    expect(modelApiFailed(readFileSync(junit, "utf8"), `${child.stdout}${child.stderr}`)).toBe(true);
+    expect(modelApiFailed("", `${child.stdout}${child.stderr}`)).toBe(true);
+  });
+
+  // The reason says "not AI-DLC" for a whole file, so it needs every failed
+  // case to be the model service's; one service failure beside a real
+  // assertion keeps the ordinary reason (the warning still says it happened).
+  test("only a file whose every failed case is the model service's reads as infrastructure", () => {
+    const report = (cases: string) => `<?xml version="1.0"?><testsuites><testsuite name="x">${cases}</testsuite></testsuites>`;
+    const service = (name: string) => `<testcase name="${name}" time="1.0"><failure type="ModelApiError" message="API Error" /></testcase>`;
+    const assertion = '<testcase name="b" time="0.1"><failure type="AssertionError" message="expected 1 to be 2" /></testcase>';
+    const passed = '<testcase name="c" time="0.1" />';
+    expect(onlyModelApiFailures(report(service("a") + service("d") + passed))).toBe(true);
+    expect(onlyModelApiFailures(report(service("a") + assertion))).toBe(false);
+    expect(modelApiFailed(report(service("a") + assertion))).toBe(true);
+    expect(onlyModelApiFailures(report(passed))).toBe(false);
+    expect(onlyModelApiFailures("")).toBe(false);
+    // Bun 1.3 names every failure AssertionError: a header for each failed case counts.
+    const bun13 = (name: string) => `<testcase name="${name}" time="0.1"><failure type="AssertionError" /></testcase>`;
+    const header = "ModelApiError: Claude Code returned an error result: API Error: Connection error.\n";
+    expect(onlyModelApiFailures(report(bun13("a") + bun13("b")), header + header)).toBe(true);
+    expect(onlyModelApiFailures(report(bun13("a") + bun13("b")), `${header}error: expect(received).toBe(expected)\n`)).toBe(false);
   });
 
   test("reads case timeouts off bun's JUnit report", () => {
@@ -264,6 +341,16 @@ describe("the live retry report (Windows)", () => {
   const FLAKY = "tests/e2e/t-exec-codex-compose-inflight.serial.test.ts";
   const PERSON = "tests/e2e/t-exec-copilot-release-journey.serial.test.ts";
   const STEADY = "tests/integration/t20.test.ts";
+
+  test("says the model service line the POSIX jobs print, beside the Flaky line when the retry passed", () => {
+    const { root, logs } = collected([
+      { file: FLAKY, state: "PASS", passedOnRetry: true, modelApiFailure: true },
+      { file: PERSON, state: "FAIL", modelApiFailure: true },
+      { file: STEADY, state: "PASS" },
+    ], [FLAKY, PERSON, STEADY]);
+    expect(liveRetryReport(logs, root)).toEqual([modelApiLine(FLAKY), flakyLiveLine(FLAKY), modelApiLine(PERSON)]);
+    expect(modelApiLine(PERSON)).toStartWith("::warning title=Model service failure::t-exec-copilot-release-journey.serial.test.ts: the model service failed under it ");
+  });
 
   test("says the Flaky line and the person-turn line the POSIX jobs print, once per file", () => {
     const { root, logs } = collected([

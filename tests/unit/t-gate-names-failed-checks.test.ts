@@ -69,7 +69,6 @@ function run(tool: string, args: string[], extra: Record<string, string> = {}): 
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
-// The engine's reply: the one JSON object a command prints.
 function reply(tool: string, args: string[], extra: Record<string, string> = {}): Record<string, unknown> {
   const r = run(tool, args, extra);
   const line = r.out.split("\n").find((entry) => entry.startsWith("{"));
@@ -141,7 +140,6 @@ describe("t-gate-names-failed-checks: a check that still fails is said with the 
     );
     // The change lines stay what changed: a failing check is not a change.
     expect(opened.change_notices).toBeUndefined();
-    // The record keeps what it kept before: the row's field is the same string.
     const row = readAuditShardEvents(proj).filter((r) => r.event === "STAGE_AWAITING_APPROVAL").at(-1);
     expect(row).toBeDefined();
     expect(auditBlockField(row!.block, "Sensor State") ?? "").toContain(`required-sections@${rel}=failed(3)`);

@@ -1,17 +1,7 @@
 // covers: doc:docs/reference/06-hooks-and-tools.md(hook-scope-count), file:settings.json, file:hooks/aidlc-*.ts
 //
 // t132 — Doc-count drift guard for the hook-scope sentence in
-// docs/reference/06-hooks-and-tools.md. Migrated from
-// tests/unit/t132-hooks-doc-count-sync.sh (TAP plan 8).
-//
-// Mechanism: none. The .sh shelled out to `ls` (disk count), `bun -e` (to
-// parse settings.json WITHOUT a jq dependency — the framework ships jq-free),
-// and `grep`/`sed` over the doc. None of that is a process-boundary contract:
-// every byte the .sh inspected is a static file checked into the repo. The
-// twin reads those three files in-process and asserts on their contents — no
-// spawn, no LLM, no env seam. (The .sh's `bun -e` was a bash-portability
-// workaround for the missing jq, not a tool/CLI under test; in TS we
-// JSON.parse settings.json directly.)
+// docs/reference/06-hooks-and-tools.md.
 //
 // Subject (three ground-truth sources cross-checked against the doc prose):
 //   A. dist/claude/.claude/hooks/aidlc-*.ts          — the hook scripts on disk
@@ -19,10 +9,10 @@
 //        count, + the shipped `statusLine` in tools/data/harness.json (1 when
 //        present), which each person's own settings.local.json wires on their yes (#1407)
 //   C. docs/reference/06-hooks-and-tools.md           — the count-words in the
-//        Wave-3-milestone-13 hook-scope sentence:
-//        "This implementation uses twelve TypeScript hook sources ... All twelve are
-//         **project-wide** ... the other nine via the `hooks` block ..."
-//        (located at line 9 at migration time; matched by phrase, not by line).
+//        hook-scope sentence:
+//        "This implementation uses seventeen TypeScript hook sources ... All
+//         seventeen are **project-wide** ... the other sixteen via the `hooks`
+//         block ..."
 //
 // This mirrors t28's two-source set-equality discipline: it derives the count
 // from disk + settings.json independently, then asserts the doc's count-words
@@ -30,16 +20,6 @@
 // doc's own block+statusLine split is arithmetically whole). t131 pins the
 // settings.json WIRING; this pins the PROSE COUNT so a reword can't silently
 // re-drift it away from ground truth.
-//
-// Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
-//   .sh test 1  assert_gt DISK_COUNT 0                        -> "ground truth A: hooks/aidlc-*.ts exist on disk"
-//   .sh test 2  assert_eq SETTINGS_STATUSLINE_COUNT 1         -> "ground truth B: settings.json registers exactly 1 statusLine hook"
-//   .sh test 3  assert_eq SETTINGS_TOTAL DISK_COUNT           -> "ground truth cross-check: settings total == disk files"
-//   .sh test 4  doc three count-words parse cleanly           -> "doc: the three count-words parse cleanly (sentence not reworded)"
-//   .sh test 5  assert_eq DOC_ALL_PW DOC_TOTAL                -> "doc internal: 'All N project-wide' matches the hook-source total"
-//   .sh test 6  assert_eq DOC_TOTAL DISK_COUNT                -> "doc forward: documented hook-source total == ground truth"
-//   .sh test 7  assert_eq DOC_BLOCK SETTINGS_BLOCK_COUNT      -> "doc subcount: 'other N via the hooks block' == settings hooks-block count"
-//   .sh test 8  assert_eq (DOC_BLOCK+1) DOC_TOTAL             -> "doc reverse: hooks-block (N) + statusLine (1) == total (whole split)"
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
@@ -52,7 +32,6 @@ const SETTINGS = join(AIDLC_SRC, "settings.json");
 const DOC = join(REPO_ROOT, "docs", "reference", "06-hooks-and-tools.md");
 
 // --- Ground truth A: hook scripts on disk (hooks/aidlc-*.ts) -----------------
-// The .sh did `ls -1 "$HOOKS_DIR"/aidlc-*.ts | wc -l`.
 function diskHookCount(): number {
   return readdirSync(HOOKS_DIR).filter(
     (f) => f.startsWith("aidlc-") && f.endsWith(".ts"),
@@ -60,18 +39,17 @@ function diskHookCount(): number {
 }
 
 // --- Ground truth B: settings.json registrations ----------------------------
-// The .sh's `bun -e` parse counted every command in the `hooks` block, which
-// was 1:1 with scripts while each script had exactly one registration. The
-// mint-presence hook is now wired at TWO events (UserPromptSubmit + PostToolUse
-// AskUserQuestion), so count UNIQUE commands instead: the guard's subject is
-// "scripts wired vs scripts on disk", and a wired-but-missing script still
-// changes the unique count. statusLine stays +1 (its own top-level key).
+// The human-turn hook (record-human-turn) is wired at TWO events
+// (UserPromptSubmit + PostToolUse AskUserQuestion), so count UNIQUE commands: the
+// guard's subject is "scripts wired vs scripts on disk", and a wired-but-missing
+// script still changes the unique count. statusLine stays +1 (its own top-level
+// key).
 //
 // One registration can also run SEVERAL hooks in one process (#2066: the four
 // tool-call checks ride `engine hook guard-tool-call`), so a group command
 // counts as the hooks it stands for, exactly as the doctor's roster expands it.
-// The subject is unchanged: a script on disk that no registration reaches,
-// directly or through a group, still fails the cross-check below.
+// A script on disk that no registration reaches, directly or through a group,
+// still fails the cross-check below.
 interface SettingsCounts {
   block: number;
   statusline: number;
@@ -109,7 +87,7 @@ function settingsCounts(): SettingsCounts {
 }
 
 // --- Doc count-words (number-word -> int) ------------------------------------
-// The .sh's word2int case statement. "MISS" (here: NaN) if not a known word.
+// NaN if not a known word.
 const WORD2INT: Record<string, number> = {
   zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
   seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
@@ -126,8 +104,8 @@ function docWord(re: RegExp): string | undefined {
   return m ? m[1] : undefined;
 }
 
-// The three pinned count-words. Same patterns the .sh grepped (the subject noun
-// "This implementation" / "AI-DLC" is deliberately NOT pinned — only the count).
+// The three pinned count-words. The subject noun "This implementation" /
+// "AI-DLC" is deliberately NOT pinned - only the count.
 //   "uses <word> TypeScript hook sources" -> total
 //   "All <word> are **project-wide**"     -> total restatement
 //   "the other <word> via the `hooks` block" -> hooks-block subcount
@@ -140,27 +118,22 @@ const DOC_ALL_PW = word2int(DOC_ALL_PW_WORD);
 const DOC_BLOCK = word2int(DOC_BLOCK_WORD);
 
 describe("t132 hook-scope doc-count drift guard (migrated from t132-hooks-doc-count-sync.sh, plan 8)", () => {
-  // --- Ground truth A ---
   test("1: ground truth A — hooks/aidlc-*.ts exist on disk [.sh test 1]", () => {
     expect(diskHookCount()).toBeGreaterThan(0);
   });
 
-  // --- Ground truth B ---
   test("2: ground truth B — settings.json registers exactly 1 statusLine hook [.sh test 2]", () => {
     expect(settingsCounts().statusline).toBe(1);
   });
 
-  // --- Ground truth cross-check: disk == settings total ---
   test("3: ground truth cross-check — settings total registrations == hook files on disk [.sh test 3]", () => {
     const { total } = settingsCounts();
     expect(total).toBe(diskHookCount());
   });
 
-  // --- Doc parse: the three count-words survived (no silent reword) ---
   test("4: doc — the three count-words parse cleanly (sentence not reworded) [.sh test 4]", () => {
-    // The .sh's `[ "$DOC_TOTAL" != "MISS" ] && ...` for all three. A reword
-    // that drops the pinned phrasing yields undefined -> NaN here, tripping
-    // this before any equality check.
+    // A reword that drops the pinned phrasing yields undefined -> NaN here,
+    // tripping this before any equality check.
     expect(DOC_TOTAL_WORD).toBeDefined();
     expect(DOC_ALL_PW_WORD).toBeDefined();
     expect(DOC_BLOCK_WORD).toBeDefined();
@@ -169,26 +142,20 @@ describe("t132 hook-scope doc-count drift guard (migrated from t132-hooks-doc-co
     expect(Number.isNaN(DOC_BLOCK)).toBe(false);
   });
 
-  // --- Doc internal consistency ---
   test("5: doc internal — 'All N project-wide' matches the hook-source total [.sh test 5]", () => {
     expect(DOC_ALL_PW).toBe(DOC_TOTAL);
   });
 
-  // --- Doc forward: doc total cannot over/under-state ground truth ---
   test("6: doc forward — documented hook-source total == ground-truth total [.sh test 6]", () => {
-    // The .sh asserts against DISK_COUNT; SETTINGS_TOTAL was already proven
-    // equal to DISK_COUNT in test 3, so this pins the doc to both at once.
     const disk = diskHookCount();
     expect(DOC_TOTAL).toBe(disk);
     expect(DOC_TOTAL).toBe(settingsCounts().total);
   });
 
-  // --- Doc subcount: hooks-block word == settings hooks-block count ---
   test("7: doc subcount — 'other N via the hooks block' == settings.json hooks-block count [.sh test 7]", () => {
     expect(DOC_BLOCK).toBe(settingsCounts().block);
   });
 
-  // --- Doc reverse: the doc's own split is arithmetically whole ---
   test("8: doc reverse — hooks-block (N) + statusLine (1) == total (whole split) [.sh test 8]", () => {
     // Catches a half-correction that fixes one count-word but not the other.
     expect(DOC_BLOCK + 1).toBe(DOC_TOTAL);

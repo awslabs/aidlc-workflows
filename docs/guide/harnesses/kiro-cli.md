@@ -236,7 +236,8 @@ does not start with a dot. Their writes into `.kiro/` (apart from the `aidlc` ag
 top-level dot entry, and anything outside the project, still ask. Your
 project's own test and build commands (`bun test`, `npm test`, `pytest`, and so
 on), a `git push` and a recursive delete still ask, so you see each one before
-it runs.
+it runs. In a side-by-side build the workers and reviewers run the test command
+you approved through AI-DLC's own `swarm check`, which does not ask.
 
 **Sessions with no approver stall rather than prompt.** Anything outside the
 pre-approved set needs an interactive answer. Under `kiro-cli chat

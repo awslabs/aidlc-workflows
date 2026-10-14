@@ -389,9 +389,6 @@ function reviewerExecutionSurface(
 }
 
 describe("t248 deterministic steering delivery", () => {
-  // Old property: rules crossed the boundary as load-steering parts before the
-  // run-stage. New property: for a shipped stage they ride inside the one
-  // run-stage message as rules_content; knowledge stays path-loaded.
   test("delivers substantive rules inside the run-stage and keeps knowledge path-loaded", () => {
     const proj = project();
     const result = drive(proj);
@@ -423,8 +420,6 @@ describe("t248 deterministic steering delivery", () => {
     expect(result.contents.some((entry) => entry.path.endsWith("project.md"))).toBe(false);
   });
 
-  // Old property: a populated placeholder arrived in a load-steering part. New
-  // property: it arrives in the run-stage's inline rules_content, in order.
   test("a populated placeholder is delivered as part of the ordered bundle", () => {
     const proj = project();
     const teamPath = join(
@@ -453,8 +448,6 @@ describe("t248 deterministic steering delivery", () => {
     );
   });
 
-  // Old property: a blockquoted policy was delivered verbatim in a part. New
-  // property: delivered verbatim inside the run-stage's rules_content.
   test("a blockquoted policy is substantive and delivered verbatim", () => {
     const proj = project();
     const teamPath = join(
@@ -480,9 +473,8 @@ describe("t248 deterministic steering delivery", () => {
     );
   });
 
-  // Old property: large rules chunked into token-continued parts. New property:
-  // the same chunking, continued by receipt; the closing run-stage carries no
-  // inline rules because they did not fit beside it.
+  // Large rules are chunked into parts, continued by receipt; the closing
+  // run-stage carries no inline rules because they did not fit beside it.
   test("large rules are automatically chunked and every directive fits 28 KiB", () => {
     const proj = project();
     const large = Array.from(
@@ -567,8 +559,8 @@ describe("t248 deterministic steering delivery", () => {
     }
   });
 
-  // Old and new property alike: chunk boundaries follow serialized size, so
-  // JSON-escaped control characters still split into bounded parts.
+  // Chunk boundaries follow serialized size, so JSON-escaped control
+  // characters still split into bounded parts.
   test("JSON-escaped control characters are chunked by serialized size", () => {
     const proj = project();
     const controls = "\u0000\u0001\u0002\t".repeat(5_000);
@@ -589,10 +581,9 @@ describe("t248 deterministic steering delivery", () => {
     expect(result.final.kind).toBe("run-stage");
   });
 
-  // Old property: repeated `next` reused one private machine-local key and so
-  // minted the same 610-char token. New property: the same key file mints the
-  // same 8-char receipt, the receipt is HMAC(key, payload) truncated, and a
-  // receipt under any other key is answered with part 1, never with part 2.
+  // The same key file mints the same 8-char receipt, the receipt is HMAC(key,
+  // payload) truncated, and a receipt under any other key is answered with
+  // part 1, never with part 2.
   test("plain next reuses a random, private machine-local key and mints deterministic receipts", () => {
     const proj = project();
     inflateOrg(proj);
@@ -677,9 +668,9 @@ describe("t248 deterministic steering delivery", () => {
     expect(answered.receipt).toBe(first.receipt);
   });
 
-  // Old property: a token issued before the engine-directory migration stayed
-  // valid. New property: the receipt does too, and continuing keeps the legacy
-  // marker and key locations instead of recreating the engine-dir ones.
+  // A receipt issued before the engine-directory migration stays valid, and
+  // continuing keeps the legacy marker and key locations instead of recreating
+  // the engine-dir ones.
   test("a continuation issued before the engine-directory migration remains valid", () => {
     const proj = statefulProject("state-brownfield-feature.md");
     appendFileSync(
@@ -720,10 +711,9 @@ describe("t248 deterministic steering delivery", () => {
     ).toBe(false);
   });
 
-  // Old property: probes minted a probe-keyed token and a forged probe envelope
-  // errored. New property: probes mint a probe-keyed receipt without a key file
-  // or marker, and that receipt never advances a real delivery: it is answered
-  // with part 1 under the real key, never with part 2.
+  // Probes mint a probe-keyed receipt without a key file or marker, and that
+  // receipt never advances a real delivery: it is answered with part 1 under
+  // the real key, never with part 2.
   test("engine observers are read-only for team and solo, and route checks bypass transport", () => {
     const team = statefulProject("state-brownfield-feature.md");
     const teamStatePath = seededStateFile(team);
@@ -773,11 +763,11 @@ describe("t248 deterministic steering delivery", () => {
     expect(forged.part).toBe(1);
     expect(forged.receipt).toBe(continued.receipt);
 
-    // The SOLO probe is the case the deadlock was reported on. It used to mint the
-    // machine-local steering key and publish the marker, and that publication is
-    // what deleted the human's in-flight Plan Approval. A query must leave both
-    // absent, whatever the Unit Ownership. With rules that fit, the probe sees
-    // the same one-message run-stage a real `next` then issues, byte for byte.
+    // The SOLO probe is the case the deadlock was reported on: a probe that
+    // minted the machine-local steering key and published the marker deleted the
+    // human's in-flight Plan Approval. A query must leave both absent, whatever
+    // the Unit Ownership. With rules that fit, the probe sees the same
+    // one-message run-stage a real `next` then issues, byte for byte.
     const solo = statefulProject("state-brownfield-feature.md");
     const soloProbe = invoke(
       solo,
@@ -814,8 +804,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(existsSync(statefulMarkerPath(routed))).toBe(false);
   });
 
-  // Old property: the second use of a token errored "no longer current". New
-  // property: the first use advances to part 2; the second is answered as a
+  // The first use of a receipt advances to part 2; the second is answered as a
   // bare `next`, which restarts delivery at part 1 with the same receipt.
   test("sessionless continuation advances the same receipt exactly once", () => {
     const proj = statefulProject("state-brownfield-feature.md");
@@ -842,8 +831,8 @@ describe("t248 deterministic steering delivery", () => {
     expect(marker.continue_token).toBe(receipt);
   });
 
-  // Old and new property alike: the drift advisory rides on every part and on
-  // the closing run-stage; the chain is now continued by receipt.
+  // The drift advisory rides on every part and on the closing run-stage; the
+  // chain is continued by receipt.
   test("stage validity advisory survives every steering continuation", () => {
     const proj = statefulProjectWithDrift();
     writeFileSync(
@@ -872,11 +861,10 @@ describe("t248 deterministic steering delivery", () => {
     expect(directive.stage_validity?.state).toBe("drifted");
   });
 
-  // Old property: a token re-signed with the old public-path MAC errored
-  // "Invalid steering continuation token". New property: no receipt that the
-  // machine-local key did not mint for the CURRENT part can skip chunks; a
-  // public-path-keyed receipt for the last part, a flipped character, an empty
-  // string and an overlong string are all answered with part 1, same receipt.
+  // No receipt that the machine-local key did not mint for the CURRENT part can
+  // skip chunks; a public-path-keyed receipt for the last part, a flipped
+  // character, an empty string and an overlong string are all answered with
+  // part 1, same receipt.
   test("a forged receipt cannot skip chunks and is answered with part 1", () => {
     const proj = project();
     writeFileSync(
@@ -1109,8 +1097,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(treeDigest(join(proj, "aidlc"))).toEqual(before);
   });
 
-  // Old property: a rule edited mid-delivery errored "rules changed ... Run a
-  // fresh `next`". New property: the receipt names a bundle that no longer
+  // A rule edited mid-delivery: the receipt names a bundle that no longer
   // exists, so the answer is part 1 of the CURRENT bundle under a new receipt,
   // byte-identical to a fresh `next`; old and new parts are never mixed.
   test("a changed rule restarts an in-flight continuation from part 1 of the current bundle", () => {
@@ -1132,7 +1119,6 @@ describe("t248 deterministic steering delivery", () => {
     expect(stale.directive.receipt).not.toBe(first.receipt);
     expect(invoke(proj, "next", args).line).toBe(stale.line);
 
-    // The same holds when the state file routes the workflow.
     const stateful = statefulProject();
     inflateOrg(stateful);
     const statefulFirst = invoke(stateful, "next", []).directive;
@@ -1150,9 +1136,9 @@ describe("t248 deterministic steering delivery", () => {
     expect(invoke(stateful, "next", []).line).toBe(statefulStale.line);
   });
 
-  // Old property: a moved workflow state errored "workflow state changed". New
-  // property: the receipt no longer matches the current state, so the answer
-  // is the new state's part 1 under a new receipt, identical to a fresh `next`.
+  // A moved workflow state: the receipt no longer matches the current state, so
+  // the answer is the new state's part 1 under a new receipt, identical to a
+  // fresh `next`.
   test("a changed workflow state re-routes an in-flight continuation to the new part 1", () => {
     const proj = statefulProject();
     inflateOrg(proj);
@@ -1173,10 +1159,9 @@ describe("t248 deterministic steering delivery", () => {
     expect(fresh.line).toBe(stale.line);
   });
 
-  // Old property: a changed scope route errored "stage route changed". New
-  // property: the marker's stored route replays the stateless `next`, whose
-  // answer is the new route's part 1 under a new receipt, identical to a fresh
-  // `next --scope --stage`.
+  // A changed scope route: the marker's stored route replays the stateless
+  // `next`, whose answer is the new route's part 1 under a new receipt,
+  // identical to a fresh `next --scope --stage`.
   test("a changed scope route re-routes an in-flight continuation to the new part 1", () => {
     const proj = project();
     inflateOrg(proj);
@@ -1619,7 +1604,6 @@ describe("t248 deterministic steering delivery", () => {
 
       const result = drive(proj);
       expect(result.final.kind, result.final.message).toBe("run-stage");
-      // The space now holds the framework's phase rules, as a new space does.
       const seeded = readdirSync(seedPhases(proj)).sort();
       expect(seeded).toEqual(["construction.md", "ideation.md", "inception.md", "operation.md"]);
       for (const name of seeded) {

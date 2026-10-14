@@ -24,7 +24,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
-// The shipped `## Way of Working` body, as the rule bundle delivers it.
 function wayOfWorking(): string {
   const body = readFileSync(join(REPO_ROOT, "core", "memory", "org.md"), "utf-8");
   const from = body.indexOf("## Way of Working");

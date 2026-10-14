@@ -201,7 +201,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(help.rc).toBe(0);
     expect(help.stdout).toContain("aidlc attest resolve");
     expect(help.stdout).toContain("aidlc attest anchor");
-    expect(attest([], project).stdout).toContain("Usage:"); // bare invocation = usage, exit 0
+    expect(attest([], project).stdout).toContain("Usage:");
 
     const unknown = attest(["bogus"], project);
     expect(unknown.rc).toBe(1);
@@ -229,7 +229,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(JSON.parse(bothCommitForms.stderr).error).toContain("pass either <commit> or --commit <rev>");
 
     // A flag the OTHER verb owns is a usage error, never silently ignored: a
-    // pipeline writing `resolve --commit X` must not get a report about HEAD.
+    // pipeline writing `resolve --reconcile` must not get a report about HEAD.
     const foreignOnResolve = attest(["resolve", "--reconcile"], project);
     expect(foreignOnResolve.rc).toBe(1);
     expect(JSON.parse(foreignOnResolve.stderr).error).toContain("resolve does not accept --reconcile");
@@ -317,7 +317,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     writeFileSync(join(project, "unclaimed.ts"), "export const u = 1;\n");
     const c2 = commitAll(project, "manual drift");
 
-    result = attest(["resolve"], project); // default HEAD
+    result = attest(["resolve"], project);
     expect(result.rc).toBe(0);
     report = JSON.parse(result.stdout);
     expect(report.head).toBe(c2);
@@ -355,7 +355,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(pathStatus(report, "app.ts")?.status).toBe("verified");
 
     // --commit <rev> is the flag form of the positional and selects the same
-    // commit (it used to be parsed and then ignored, silently reporting HEAD).
+    // commit (it must not be parsed and then ignored, silently reporting HEAD).
     report = JSON.parse(attest(["resolve", "--commit", c2], project).stdout);
     expect(report.mode).toBe("commit");
     expect(report.head).toBe(c2);
@@ -435,9 +435,9 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     // A ref only the verifier can move — the stand-in for a protected branch.
     git(project, ["branch", "records", approved]);
 
-    // The adversarial shape from review: a change that edits source AND writes
-    // its own approving receipt in the same commit. Judged against itself it
-    // verifies, but the report refuses to call that better than `reproducible`.
+    // The adversarial shape: a change that edits source AND writes its own
+    // approving receipt in the same commit. Judged against itself it verifies, but
+    // the report refuses to call that better than `reproducible`.
     writeFileSync(join(project, "app.ts"), "export const app = 99;\n");
     review(project, record, "alpha", [{ path: "app.ts" }]);
     const selfApproved = commitAll(project, "change plus a receipt for itself");
@@ -457,7 +457,6 @@ describe("t312 aidlc-attest resolve/anchor", () => {
       required: "independent",
       satisfied: false,
     });
-    // A bar it does clear passes.
     expect(attest(["resolve", selfApproved, "--require-trust", "reproducible"], project).rc).toBe(0);
 
     // Reading the record from the ref the change cannot write strips the
@@ -621,8 +620,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
 
     // Which dot-dirs are established harness shells is read from the BASE TREE,
     // so it is a property of the range and not of whoever resolves it.
-    // Uninstalling the shell from this checkout cannot reclassify the same SHA
-    // (it used to flip these paths to `unattested`).
+    // Uninstalling the shell from this checkout cannot reclassify the same SHA.
     rmSync(join(project, ".claude"), { recursive: true, force: true });
     expect(attest(["resolve", head, "--fail-on", "unattested"], project).stdout).toBe(first.stdout);
 
@@ -702,7 +700,6 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(report.unattributed).toEqual([]);
     expect(readAllAuditShards(shallow)).not.toContain("**Event**: SOURCE_COMMITTED");
 
-    // Deepening the clone restores normal resolution of the same commit.
     expect(spawnSync("git", ["-C", shallow, "fetch", "-q", "--deepen", "1"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }).status).toBe(0);
     const deepened = attest(["resolve", head], shallow);
     expect(deepened.rc).toBe(0);
@@ -880,7 +877,6 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(anchored.unattributed).toEqual([c1]);
     expect(readAllAuditShards(project)).not.toContain("**Event**: SOURCE_COMMITTED");
 
-    // Break the tie by one second and the newer record owns the path again.
     writeFileSync(
       join(second, "audit", "clone-a.md"),
       receipt("beta").replace("10:00:00Z", "10:00:01Z"),
@@ -901,7 +897,6 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     writeFileSync(join(project, "app.ts"), "export const app = 3;\n");
     const c3 = commitAll(project, "claimed drift");
 
-    // Session anchor of HEAD.
     const result = attest(["anchor"], project);
     expect(result.rc).toBe(0);
     let report = JSON.parse(result.stdout);
@@ -1011,7 +1006,6 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     fireHook('{"source":"compact"}', { AIDLC_SESSION_ANCHOR: "1" });
     expect(anchorRows().length).toBe(2);
 
-    // The next opted-in start picks c4 up; without the switch it stays put.
     fireHook('{"source":"startup"}');
     expect(anchorRows().length).toBe(2);
     fireHook('{"source":"startup"}', { AIDLC_SESSION_ANCHOR: "1" });

@@ -119,7 +119,6 @@ function utility(proj: string, args: string[]): { status: number; stdout: string
   return { status: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
-/** The setter as the agent runs it in the chat. */
 function configSet(proj: string, args: string[]): { status: number; out: string } {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", ...args, "--project-dir", proj], {
     cwd: proj,
@@ -151,7 +150,6 @@ function next(proj: string, args: string[]): { directive: Record<string, unknown
   return { directive: result.directive as Record<string, unknown> | null, out: result.out };
 }
 
-/** The `next` arguments of an answer command the engine handed out. */
 function answerArgs(command: unknown): string[] {
   const text = String(command);
   return text.slice(text.indexOf(" next ") + 6).split(" ");
@@ -196,9 +194,7 @@ describe("a fence switch typed with a request beside open work", () => {
     const routing = next(proj, ["--guard.review-freeze", "off", "enterprise", "fix", "the", "parser"]);
     const ask = routing.directive as { ask_type?: string; new_work_description?: string; new_intent_command?: string } | null;
     expect(ask?.ask_type, routing.out).toBe("new-work-routing");
-    // The switch is not part of what the person asked for.
     expect(ask?.new_work_description).toBe("fix the parser");
-    // The person picks new work.
     const routed = next(proj, answerArgs(ask?.new_intent_command));
     expect(pendingPersonLines(proj, SESSION).lines.join(" "), routed.out).toContain(
       "The review freeze check (it stops edits to work you already approved) is off for the new work (set by you).",
@@ -234,7 +230,6 @@ describe("a fence switch typed with a request beside open work", () => {
     expect(confirm, offer.out).toContain("--guard.review-freeze off");
     reply(proj, "1");
     const creating = next(proj, answerArgs(confirm));
-    // The work the person asked for is created, not refused, with the check on.
     const made = createFromPrint(proj, creating);
     expect(made.status, made.stderr).toBe(0);
     expect(guardsOff(activeState(proj))).not.toContain("review-freeze");

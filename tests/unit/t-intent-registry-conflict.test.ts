@@ -32,7 +32,6 @@ afterEach(() => {
   while (roots.length > 0) rmSync(roots.pop()!, { recursive: true, force: true });
 });
 
-// Stock git: no global or system config, no prompts, no background maintenance.
 function gitEnv(root: string): NodeJS.ProcessEnv {
   const empty = join(root, "empty.gitconfig");
   writeFileSync(empty, "", "utf-8");

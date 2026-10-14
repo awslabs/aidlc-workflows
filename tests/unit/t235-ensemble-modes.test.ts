@@ -6,7 +6,7 @@
 //   for the swarm-trigger trap (a per-unit Construction build stage whose
 //   mode is not subagent silently leaves the autonomous swarm path).
 //
-// t235 — three-role ensemble mode enum (2.5.0). The mode field is the stage's
+// t235 - three-role ensemble mode enum. The mode field is the stage's
 // communication topology: inline (voices) | subagent (hub-and-spoke) |
 // pipeline (chain) | mob (mesh) | agent-team (reserved). pipeline and mob
 // collaborate by construction, so the schema rejects them without a
@@ -40,8 +40,6 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO = join(import.meta.dir, "..", "..");
 const GRAPH_TOOL = join(REPO, "dist", "claude", ".claude", "tools", "aidlc-graph.ts");
 
-// Minimal valid frontmatter (t62 fixture shape) with an overridable mode +
-// support set.
 function stage(mode: string, support: string[]): Record<string, unknown> {
   return {
     slug: "fixture-stage",

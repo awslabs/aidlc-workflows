@@ -66,7 +66,6 @@ function next(tools: string, proj: string, args: string[], env: NodeJS.ProcessEn
   return r.directive as Directive;
 }
 
-/** The person's message as their host delivers it to the prompt hook, in the chat `session`. */
 function reply(proj: string, prompt: string, session: string): void {
   const r = spawnSync(process.execPath, [join(CLAUDE_TOOLS, "aidlc.ts"), "engine", "hook", "record-human-turn"], {
     cwd: proj,
@@ -77,7 +76,6 @@ function reply(proj: string, prompt: string, session: string): void {
   expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
 }
 
-/** The `next` arguments of an answer command the engine handed out. */
 function answerArgs(command: unknown): string[] {
   const text = String(command);
   return text.slice(text.indexOf(" next ") + 6).split(" ");
@@ -202,10 +200,8 @@ describe("t-plan-proposed-by-the-agent: a fresh workspace", () => {
     expect(message).toContain(PROPOSAL);
     expect(message).toContain("--propose compose --request");
     expect(message).not.toContain("This looks like");
-    // Every plan, with its length here and the hints its author wrote.
     for (const scope of validScopes()) expect(message).toMatch(new RegExp(`${scope} \\(\\d+ stages?\\):`));
     expect(message).toContain("hints: fix, bug, broken, bugfix");
-    // The request is kept whole, with no plan, and nothing is recorded.
     const kept = questionTexts(proj);
     expect(kept.map((q) => q.text)).toContain(REQUEST_TEXT);
     expect(kept.find((q) => q.text === REQUEST_TEXT)?.proposedScope).toBe("");
@@ -239,7 +235,6 @@ describe("t-plan-proposed-by-the-agent: a fresh workspace", () => {
     expect(String(ask.compose_command)).toMatch(/next compose --request [0-9a-f]{8}$/);
     expect(ask.scope_commands?.map((row) => row.scope)).toEqual([...validScopes()]);
     for (const row of ask.scope_commands ?? []) expect(row.stages).toMatch(/^\d+ stages?$/);
-    // The yes creates the work with that plan.
     const created = next(CLAUDE_TOOLS, proj, String(ask.confirm_command).split(" ").slice(String(ask.confirm_command).split(" ").indexOf("next") + 1));
     expect(created.kind, JSON.stringify(created).slice(0, 300)).toBe("print");
     expect(String(created.message)).toContain("intent create --scope security-patch --request");
@@ -417,7 +412,6 @@ describe("t-plan-proposed-by-the-agent: work here but none selected", () => {
 describe("t-plan-proposed-by-the-agent: a line that opens with a plan's name keeps every word, and the agent reads it", () => {
   const LINE = ["fix", "the", "login", "crash", "when", "the", "session", "expires"];
   const BOTH = "is the name of a plan and also the first word of what the person typed";
-  /** The `next` arguments of the command a print names after `lead`, as the agent runs it. */
   const commandAfter = (message: unknown, lead: RegExp): string[] => {
     const command = new RegExp(`\`([^\`]* next ${lead.source}[^\`]*)\``).exec(String(message))?.[1];
     expect(command, String(message)).toBeDefined();
@@ -499,10 +493,10 @@ describe("t-plan-proposed-by-the-agent: a line that opens with a plan's name kee
 });
 
 // The request's questions (the proposal step's, the plan question derived from
-// it) are the creation's own request: once the work exists they are gone, as
-// the plan offer's single question was before. Left behind, the proposal
-// question would meet the next words line as "the plan question they were
-// asked" (a re-ask about work already built) and take a switch typed next.
+// it) are the creation's own request: once the work exists they are answered or
+// gone. Left open, the proposal question would meet the next words line as "the
+// plan question they were asked" (a re-ask about work already built) and take a
+// switch typed next.
 describe("t-plan-proposed-by-the-agent: creation retires the request's whole chain", () => {
   const OTHER_CHAT = "01995000-7a11-7000-8000-0000000000c2";
   const OPEN_FRONT = "has not answered the plan question";

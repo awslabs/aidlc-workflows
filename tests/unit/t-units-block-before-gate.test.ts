@@ -175,7 +175,6 @@ describe("t-units-block-before-gate: Units Generation's units block is checked b
       expect(readAllAuditShards(proj)).not.toContain("REVIEW_REQUESTED");
       expect(readAllAuditShards(proj)).not.toContain("ERROR_LOGGED");
 
-      // Once the block reads, the same request goes through.
       writeDependency(proj, GOOD);
       const accepted = reviewRequest(proj);
       expect(accepted.out).not.toContain("unit-of-work-dependency.md");
@@ -192,7 +191,6 @@ describe("t-units-block-before-gate: Units Generation's units block is checked b
       expect(readAllAuditShards(proj)).not.toContain("STAGE_AWAITING_APPROVAL");
       expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(`- [-] ${STAGE}`);
 
-      // The same report no longer stops on the block once it reads.
       writeDependency(proj, GOOD);
       const again = run(ORCH, ["report", "--stage", STAGE, "--result", "awaiting-approval"], proj);
       expect(again.out).not.toContain("unit-of-work-dependency.md cannot be read");
