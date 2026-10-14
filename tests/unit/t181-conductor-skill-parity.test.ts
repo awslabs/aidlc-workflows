@@ -816,11 +816,11 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every shipped conductor SKILL and the protocol have a mob's lead read its knowledge, not only its persona", () => {
     const missing: string[] = [];
     // The protocol keeps the rule; the skills point at the step's reading instruction, whose list the engine
-    // already ordered (the lead's persona first, then every knowledge path).
+    // already ordered (the step carries the lead's persona; the list is the lead's knowledge).
     for (const rel of ["core/aidlc-common/protocols/stage-protocol.md"]) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
-      if (!/a mob must (?:explicitly read|load) its lead persona(?: path)? first,? (?:and )?then every knowledge path after it/i.test(body)) {
-        missing.push(`${rel}  missing: a mob reads its lead persona, then every knowledge path after it`);
+      if (!/On `mob`, the roster holds the lead's knowledge only, because supports are dispatched: read all of it\./.test(body)) {
+        missing.push(`${rel}  missing: a mob's lead reads all of its knowledge`);
       }
     }
     for (const rel of skills) {
