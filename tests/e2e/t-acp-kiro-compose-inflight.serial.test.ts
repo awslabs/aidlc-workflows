@@ -185,8 +185,6 @@ describe("t-acp-kiro compose in-flight recompose journey (live Kiro ACP)", () =>
             /(?:^|\s)--strict(?:\s|$)/.test(input?.command ?? "") &&
             /"valid"\s*:\s*true/.test(call.output.join(""));
         }), "composer must validate the proposed grid strictly before the approval gate").toBe(true);
-        // The marker was written, the gate is pending, and NOTHING is applied
-        // yet: state byte-unchanged, no RECOMPOSED (the marker-first discipline).
         expect(existsSync(markerPath(root))).toBe(true);
         expect(readState(root)).toBe(before);
         expect(recomposed(root)).toBe(false);
@@ -228,17 +226,14 @@ describe("t-acp-kiro compose in-flight recompose journey (live Kiro ACP)", () =>
           clearInterval(poll);
         }
 
-        // The flips landed as suffix edits; cursor + markers byte-unchanged.
         const after = readState(root);
         expect(after).toMatch(/- \[ \] market-research .* SKIP/);
         const cursorAfter = /- \*\*Current Stage\*\*: (.*)/.exec(after)?.[1];
         expect(cursorAfter).toBe(cursorBefore);
         const markersAfter = [...after.matchAll(/^- \[[ xSR?-]\] \S+/gm)].map((m) => m[0]);
         expect(markersAfter).toEqual(markersBefore);
-        // Derived fields rebuilt: total dropped by at least the one flip.
         const totalAfter = Number(/- \*\*Total Stages\*\*: (\d+)/.exec(after)?.[1]);
         expect(totalAfter).toBeLessThan(totalBefore);
-        // And the rebuilt Stages to Skip names the flipped stage.
         expect(after).toMatch(/- \*\*Stages to Skip\*\*: .*market-research/);
 
         // RECOMPOSED audited and the marker gone (the poll only cancelled once

@@ -54,15 +54,12 @@ export interface GuardCell {
 
 /** The changes, each made where a person makes it. */
 export const GUARD_CHANGES = {
-  /** Unit 2's work edits a file Unit 1 made and the person approved, and claims it. */
   "later-unit-edit": "Unit 2 edits Unit 1's approved file and claims it",
   /** The same edit, left out of Unit 2's manifest. */
   "later-unit-edit-unclaimed": "Unit 2 edits Unit 1's approved file without claiming it",
-  /** The person tidies Unit 1's source by hand after approving it. */
   "hand-edit-source": "the person hand-edits Unit 1's approved source",
   /** The person adds a line to the approved requirements before the next stage. */
   "hand-edit-requirements": "the person hand-edits the approved requirements",
-  /** The person edits the code plan while its approval waits. */
   "plan-edit": "the person edits the plan while its approval waits",
   /** A pulled commit changes the requirements while Unit 2 generates. */
   pull: "a pulled commit changes the requirements mid-stage",
@@ -72,7 +69,6 @@ export const GUARD_CHANGES = {
   "second-review": "the person asks for a second review after one cycle",
   /** The person stops between Units, the engine is updated, and they resume. */
   "engine-update": "resume after the engine version changes",
-  /** While Unit 2's code plan waits, the person asks for Unit 1 to be reviewed again. */
   "review-while-plan-waits": "the person asks for a review of Unit 1 while Unit 2's plan waits",
   /** While Unit 2 builds, its agent edits Unit 1's functional design. */
   "doc-edit-agent": "Unit 2's agent edits Unit 1's functional design",
@@ -100,7 +96,6 @@ export const DOCUMENT_CHANGES: ReadonlySet<GuardChange> = new Set<GuardChange>([
   "doc-edit-agent", "doc-edit-hand", "plan-edit-after-approval-agent", "plan-edit-after-approval-hand", "doc-delete",
 ]);
 
-/** The stages a change's cells leave out. */
 export function matrixSkip(change: GuardChange): string[] {
   return DOCUMENT_CHANGES.has(change) ? MATRIX_SKIP.filter((s) => s !== "functional-design") : MATRIX_SKIP;
 }
@@ -256,7 +251,6 @@ export function updateEngine(proj: string): void {
   }
 }
 
-/** Unit 1's functional design, as its Functional Design wrote it. */
 export function docOf(agent: AgentStandIn): string {
   const fd = agent.worked.find((d) => d.stage === "functional-design" && d.unit === MATRIX_UNITS[0]);
   return ((fd?.produces as string[] | undefined) ?? []).find((p) => p.endsWith(".md") && !p.endsWith("-questions.md")) ?? "";
@@ -329,7 +323,6 @@ the work into Units, builds each Unit and runs Build and Test. Nothing else runs
   return { name, text, stages };
 }
 
-/** The core stages a plugin puts under its own scope, by phase. */
 const PLUGIN_STAGES: Record<string, string> = {
   "requirements-analysis": "inception",
   "units-generation": "inception",
@@ -590,7 +583,6 @@ export function resolvedPolicy(c: CellRun): string | null {
   return /^(off|relaxed|strict)\b/.exec(policy)?.[1] ?? null;
 }
 
-/** The audit rows a change leaves, for a test that checks the record itself. */
 export function changeRows(run: ScopeRun): { event: string; stage: string | null; unit: string | null }[] {
   return auditEvents(run.proj)
     .filter((e) => /^(CHANGE_ACCEPTED|GUARD_STOOD_ASIDE)$/.test(e.event))
@@ -599,7 +591,6 @@ export function changeRows(run: ScopeRun): { event: string; stage: string | null
 
 export const cellName = (cell: GuardCell) => `Guard Policy ${cell.policy}, review ${cell.review}, plan approval ${cell.plan}`;
 
-/** One cell of a matrix file: a change under one setting. */
 export interface MatrixCase {
   cell: GuardCell;
   change: GuardChange;

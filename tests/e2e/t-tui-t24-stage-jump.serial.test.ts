@@ -1,9 +1,7 @@
 // covers: stage:ideation/approval-handoff
 //
-// t-tui-t24-stage-jump.serial.tui.test.ts — the TUI journey port of
-// tests/integration/t24-integration-stage-jump.sh (a forward `--stage` jump),
-// driven through a REAL claude TUI (§5-A1, Phase 3, Pattern A
-// "landed + rendered").
+// t-tui-t24-stage-jump.serial.test.ts - a forward `--stage` jump driven
+// through a REAL claude TUI (Pattern A "landed + rendered").
 //
 // WHAT IT PROVES
 //   A user mid-IDEATION (seeded Current Stage=feasibility) types
@@ -21,7 +19,7 @@
 //   The rendered statusline is the tui-only value-add the SDK / claude -p path
 //   was BLIND to — the old .sh only grepped the state/audit bytes.
 //
-// WHY PATTERN A (landed + rendered, NO answer-gate) — and the gate we DESIGN OUT
+// WHY PATTERN A (landed + rendered, NO answer-gate)
 //   A forward `--stage` jump is a single deterministic transition. The jump
 //   sets Status=Running (aidlc-jump.ts:309) and the orchestrator keeps going
 //   past the jump. So the journey NEVER reaches a
@@ -30,14 +28,11 @@
 //   statusline re-rendering "> Approval & Handoff" — and read the on-disk audit +
 //   state the .sh asserted. No answer-gate child, no --until-* terminator.
 //
-//   BUT a forward jump is only single-transition if its target's REQUIRED inputs
-//   are present. SKILL.md step 10 scans the target's `consumes:` frontmatter and
-//   renders a Missing-inputs Continue/Cancel AskUserQuestion gate when a
-//   *required* (`required: true`) upstream artifact is absent. So this port seeds
-//   the 3 required ideation artifacts (ideationArtifacts: true) — the jump then
-//   finds its required inputs present and lands with NO prompt. That is the
-//   honest Pattern A: a real user jumping forward over stages whose *required*
-//   artifacts already exist on disk sees no missing-input gate.
+//   BUT the target's REQUIRED inputs must be present for stage work.
+//   aidlc-orchestrate.ts splitConsumesByPresence reports absent required inputs
+//   through consumes_absent. So this test seeds the 3 required ideation
+//   artifacts (ideationArtifacts: true) - the target then finds its required
+//   inputs present.
 //
 //   FRAMEWORK FIX THIS RELIED ON (0.5.17, this session): the gate originally
 //   scanned EVERY consume — including `required: false` optionals — so it fired on
@@ -75,8 +70,9 @@
 //   here is a FINDING about that race, not an assertion to soften.
 //
 // COST: spends real Bedrock tokens (the jump runs through the live orchestrator
-// turn). Gated behind AIDLC_TUI_LIVE=1 so a bare `--e2e` SKIPs it; selected TUI substrate/claude/
-// distributable absence also SKIPs with a reason — never a hollow pass.
+// turn). Gated behind AIDLC_TUI_LIVE=1 so a bare `--e2e` SKIPs it; selected TUI
+// substrate/claude/distributable absence also SKIPs with a reason - never a
+// hollow pass.
 //
 // Spawn tui-drive.ts using the shared runtime selector for the native Bun and
 // POSIX tmux backends. The driver subprocess remains the source of the `tui`
@@ -175,20 +171,17 @@ describe("t-tui-t24 stage-jump (forward --stage lands on disk + re-renders statu
     `forward jump to approval-handoff lands STAGE_JUMPED + re-renders "> Approval & Handoff"${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       const session = `aidlc_tui_t24_${process.pid}`;
-      // Mirror setup_integration_project --with-state state-mid-ideation.md
-      // --with-audit (t24.sh:17). Seeded mid-IDEATION at Current Stage=feasibility
-      // with 5 completed [x] stages; audit.md seeded so the jump appends to it.
+      // Seeded mid-IDEATION at Current Stage=feasibility with 5 completed [x]
+      // stages; an audit shard is seeded so the jump appends to it.
       const proj = setupTuiProject({
         withState: "state-mid-ideation.md",
         withAudit: true,
-        // Seed the 3 REQUIRED upstream ideation artifacts so the forward jump to
-        // approval-handoff finds its `consumes` inputs present and does NOT render
-        // the Missing-inputs Continue/Cancel gate (SKILL.md:212-215). Verified
-        // live 2026-06-06: without this, the jump gates (state marks stages [x]
-        // but ships no artifacts → required inputs absent → gate), and the
-        // landed statusline never paints. Seeding keeps the jump the deterministic
-        // single-transition Pattern A this test asserts, and does NOT alter the
-        // [S] marks (those derive purely from checkbox state — aidlc-jump.ts:242-253).
+        // Seed the 3 REQUIRED upstream ideation artifacts so the target
+        // approval-handoff finds its `consumes` inputs present.
+        // Missing required inputs are reported by aidlc-orchestrate.ts
+        // splitConsumesByPresence. Seeding keeps the target's input recovery
+        // out of this single-transition Pattern A test, and does NOT alter the
+        // [S] marks (those derive from checkbox state - aidlc-jump.ts movedState).
         ideationArtifacts: true,
       });
       try {
@@ -223,7 +216,7 @@ describe("t-tui-t24 stage-jump (forward --stage lands on disk + re-renders statu
 
         // --- send the slash command ------------------------------------------
         // Spaces in the command -> send literally with no auto-Enter, then Enter
-        // as a named key (the established two-step from the workshop template).
+        // as a named key.
         drive([
           "send",
           "--session",
@@ -237,12 +230,11 @@ describe("t-tui-t24 stage-jump (forward --stage lands on disk + re-renders statu
 
         // --- wait for the LANDED render (the Pattern-A terminator) ------------
         // The jump rewrites Current Stage=approval-handoff and the statusline hook
-        // repaints "> Approval & Handoff" (STAGE_DISPLAY["approval-handoff"],
-        // aidlc-statusline.ts:72,243). --stable-ms 0: the screen streams (live
-        // token counter / spinner during the orchestrator turn), so match the
-        // instant the landed stage name appears, NOT byte-stability. We do NOT
-        // wait on terminal completion: the jump leaves
-        // Status=Running and the orchestrator auto-continues (FINDING in header).
+        // repaints "> Approval & Handoff" (aidlc-statusline.ts STAGE_DISPLAY).
+        // --stable-ms 0: the screen streams (live token counter / spinner during the
+        // orchestrator turn), so match the instant the landed stage name appears, NOT
+        // byte-stability. We do NOT wait on terminal completion: the jump leaves
+        // Status=Running and the orchestrator auto-continues (see header).
         const sawLanded = waitFor(session, "> Approval & Handoff", remainingWorkMs(), 0);
         const pane = drive(["capture", "--session", session]).stdout;
         if (!sawLanded) {
@@ -259,56 +251,43 @@ describe("t-tui-t24 stage-jump (forward --stage lands on disk + re-renders statu
         expect(pane).toContain("· IDEATION");
         expect(pane).toContain("> Approval & Handoff");
 
-        // --- assert ON DISK: aidlc-state.md (the .sh's state greps) -----------
+        // --- assert ON DISK: aidlc-state.md -----------
         const stateMd = readFileSync(seededStateFile(proj), "utf8");
 
-        // Current Stage rewritten to the jump target (t24.sh:28).
         expect(stateMd).toMatch(/^-\s*\*\*Current Stage\*\*:\s*approval-handoff\s*$/m);
-        // Lifecycle phase stays IDEATION (t24.sh:29).
         expect(stateMd).toMatch(/^-\s*\*\*Lifecycle Phase\*\*:\s*IDEATION\s*$/m);
-        // At least one stage flipped to [S] (t24.sh:27).
         expect(stateMd).toMatch(/\[S\]/);
-        // The two in-flight intermediate stages the jump skipped over are [S]
-        // (t24.sh:32-42). The checkbox line is "- [S] <slug> — EXECUTE".
         expect(stateMd).toMatch(/^-\s*\[S\]\s*feasibility\b/m);
         expect(stateMd).toMatch(/^-\s*\[S\]\s*team-formation\b/m);
-        // A previously-completed stage stays [x] — not reset by a FORWARD jump
-        // (t24.sh:45-49).
+        // A previously-completed stage stays [x] - not reset by a FORWARD jump.
         expect(stateMd).toMatch(/^-\s*\[x\]\s*intent-capture\b/m);
-        // Completed counter == actual [x] count, and must NOT count [S]
-        // (t24.sh:52-54). Count the checkbox lines on disk and compare to the
+        // Completed counter == actual [x] count, and must NOT count [S].
+        // Count the checkbox lines on disk and compare to the
         // declared counter.
         const xCount = (stateMd.match(/^-\s*\[x\]/gm) ?? []).length;
         const completedField = stateMd.match(/^-\s*\*\*Completed\*\*:\s*(\d+)/m);
         expect(completedField).not.toBeNull();
         expect(Number((completedField as RegExpMatchArray)[1])).toBe(xCount);
-        // Last Updated carries a fresh timestamp (t24.sh:57).
         expect(stateMd).toMatch(/^-\s*\*\*Last Updated\*\*:.*\d[0-9T:Z-]/m);
 
-        // --- assert ON DISK: the per-intent audit shards (the .sh's audit greps) ------
+        // --- assert ON DISK: the per-intent audit shards ------
         const auditMd = readAllAuditShards(proj);
-        // The canonical STAGE_JUMPED event (t24.sh:61). One per appended block:
-        // "**Event**: STAGE_JUMPED".
         const stageJumped = auditMd
           .split("\n")
           .filter((l) => l.startsWith("**Event**: STAGE_JUMPED")).length;
         expect(stageJumped).toBeGreaterThanOrEqual(1);
-        // FORWARD direction recorded (t24.sh:62). aidlc-jump.ts:375 emits the
-        // field `Direction: "FORWARD"`, which appendAuditEvent renders as the
-        // bold-key audit line `**Direction**: FORWARD` (aidlc-audit.ts:259 wraps
+        // FORWARD direction recorded. aidlc-jump.ts handleExecute emits the
+        // field `Direction: "FORWARD"`, which appendAuditEntry renders as the
+        // bold-key audit line `**Direction**: FORWARD` (aidlc-audit.ts wraps
         // every field key in **). Anchor on that real on-disk format (matches the
         // **Timestamp** assertion below), not a bare `Direction:`.
         expect(auditMd).toMatch(/\*\*Direction\*\*:\s*FORWARD/);
         // Per-stage STAGE_SKIPPED for each in-flight stage skipped over
-        // (aidlc-jump.ts:349) — the audit twin of the [S] state marks. The .sh
-        // asserted the [S] state marks; this is the equal-or-stronger audit-side
-        // proof of the same skips.
+        // (aidlc-jump.ts handleExecute) - the audit twin of the [S] state marks.
         const stageSkipped = auditMd
           .split("\n")
           .filter((l) => l.startsWith("**Event**: STAGE_SKIPPED")).length;
         expect(stageSkipped).toBeGreaterThanOrEqual(1);
-        // Audit events carry ISO timestamps (t24.sh:63). aidlc-audit.ts:257
-        // writes "**Timestamp**: <ts>".
         expect(auditMd).toMatch(/\*\*Timestamp\*\*:.*\d[0-9T:Z-]/);
       } finally {
         cleanupTuiProjectAfterKill(

@@ -61,7 +61,6 @@ export function vscodeVisibleOutput(output: string, commandLine: string): string
     : first;
 }
 
-/** The command lines an agent types to run doctor, in each spelling. */
 export function doctorCommandLines(harnessDir = ".aidlc"): string[] {
   return ["aidlc", `bun ${harnessDir}/tools/aidlc.ts`].flatMap((invoke) => [
     `${invoke} doctor`,

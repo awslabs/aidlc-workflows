@@ -85,7 +85,6 @@ function asksAllowedFor(item: CorpusItem): number {
   return item.expected.end?.asks ?? (item.ambiguous ? 1 : item.expected.engine.no_ask ? 0 : 1);
 }
 
-// The end state, judged against `expected.end` and the record against `expected.engine`.
 function judge(item: CorpusItem, proj: string, prompt: string, start: Snapshot, transcript: Transcript): { failures: string[]; endSummary: string } {
   const failures: string[] = [];
   const end = item.expected.end ?? {};

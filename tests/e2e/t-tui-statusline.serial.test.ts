@@ -1,14 +1,12 @@
-// t-tui-statusline.serial.tui.test.ts — render-fidelity: the AI-DLC statusline
-// draws in a REAL terminal (§5.2). A faithful port of the working spike
-// tests/spike/t-tui-statusline.sh (91 lines, plan 3) — SAME flow, expressed in
-// TS over the spawned tui-drive.ts subprocess instead of bash. No logic change.
+// t-tui-statusline.serial.test.ts - render-fidelity: the AI-DLC statusline
+// draws in a REAL terminal (section 5.2).
 //
-// The flow the spike proved, step for step:
+// The flow, step for step:
 //   1. Copy the distributable exactly as the README says:
 //        cp -r dist/claude/.claude/ <sandbox>/.claude/
 //      (dest .claude must NOT pre-exist, or cp nests it).
 //   2. Launch `claude` in a fixed-size session via the driver.
-//   3. Clear the two startup modals the spike discovered:
+//   3. Clear the two startup modals:
 //        a. workspace-trust dialog     -> "1. Yes, I trust"
 //        b. bypass-permissions warning  -> "2. Yes, I accept"
 //   4. Wait for the statusline marker "[AIDLC]" to paint and settle.
@@ -74,8 +72,7 @@ function drive(args: string[]): Run {
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
 // `wait` returns nonzero on timeout — we want a boolean for the idempotent modal
-// clears (only act if the modal is present), mirroring the spike's
-// `if drive wait ...; then send; fi`.
+// clears (only act if the modal is present).
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
   return (
     drive([
@@ -92,8 +89,6 @@ function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: 
   );
 }
 
-// ABSENT detection checks the selected substrate; claude
-// is needed on every platform; the distributable must be present to copy.
 function absentReason(): string | null {
   const runtimeReason = tuiUnavailableReason();
   if (runtimeReason) return runtimeReason;
@@ -117,10 +112,9 @@ describe("t-tui-statusline (statusline renders in a real terminal)", () => {
         const destClaude = join(sandbox, ".claude");
         const settingsPath = join(destClaude, "settings.json");
         expect(existsSync(settingsPath)).toBe(true);
-        // P0a — the retired spike (git show 4ce826b:tests/spike/t-tui-statusline.sh
-        // ~L55) also required the "statusLine" key to be wired: that key is what
-        // runs aidlc-statusline.ts in the TUI. It is the person's own choice now,
-        // in .claude/settings.local.json (#1407), never the shared settings.json.
+        // The "statusLine" key is what runs aidlc-statusline.ts in the TUI. It is the
+        // person's own choice, in .claude/settings.local.json (#1407), never the shared
+        // settings.json.
         expect(readFileSync(settingsPath, "utf8")).not.toContain('"statusLine"');
         expect(readFileSync(join(destClaude, "settings.local.json"), "utf8")).toContain('"statusLine"');
 

@@ -1,13 +1,13 @@
 // sdk-drive.calibration.test.ts — KNOWN-ANSWER calibration of the SDK harness.
 //
-// This file calibrates the just-built measuring instrument (tests/harness/
+// This file calibrates the measuring instrument (tests/harness/
 // sdk-drive.ts + assert.ts + fixtures.ts) against planted truths the driver
 // MUST report exactly. It is the trust anchor for every sdk-mechanism test
 // above it: if a calibration here cannot confirm the planted truth, the whole
 // SDK E2E tier is untrustworthy.
 //
 // It SPENDS TOKENS — it drives the real /aidlc through the Claude Agent SDK
-// (SDK 0.3.158, Opus on Bedrock; env inherited from the sandbox). Each test
+// (SDK 0.3.158; env inherited from the sandbox). Each test
 // carries a generous per-test timeout so a hung canUseTool fails LOUD (the
 // bun:test timeout fires) rather than hanging the runner forever.
 //
@@ -18,9 +18,8 @@
 //   4. assertToolResultContains FAILS when the tool was absent (guard, no vacuous pass)
 //
 // Calibrations 1-3 assert ONLY on deterministic surfaces: the structured
-// AskUserQuestion the driver captured (askedQuestions), the verbatim Bash
-// tool_result bytes (toolResults), and the on-disk state file the chosen
-// branch wrote (stateFile). Never on assistantText.
+// AskUserQuestion the driver captured (askedQuestions) and the verbatim
+// tool_result bytes (toolResults). Never on assistantText.
 
 import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -71,15 +70,14 @@ function remainingWorkMs(requestedMs = LIVE_LONG_OPERATION_TIMEOUT_MS): number {
 // ---------------------------------------------------------------------------
 // CALIBRATION 2 known-answer strings — read from the SHIPPED doctor handler so
 // they are REAL, not guessed. Source: dist/claude/.claude/tools/
-// aidlc-utility.ts handleDoctor():
-//   - header literal:           "AI-DLC doctor\n"                  (doctor renderer)
-//   - separator rule:           "─".repeat(37)                (utility.ts:1356)
-//   - runtime label prefix:     "Runtime hook PATH: bun"            (shared diagnostics)
-//   - hook label shape:         "<hook>.ts present"                (utility.ts:356, hooks :343-351)
-//   - settings label:           "settings.json present"           (utility.ts:365)
-//   - workspace label:          "workspace shell ready"            (shared doctor)
-// The spike's aidlc-sdk-toolout-probe.ts proved these exact strings appear in
-// the tool_result (and unreliably in prose) — we re-prove it through the driver.
+// aidlc-utility.ts collectDoctorReport() and aidlc-doctor.ts humanReport():
+//   - header literal:           "AI-DLC doctor\n"                  (humanReport)
+//   - runtime label prefix:     "Runtime hook PATH: bun"            (aidlc-config-diagnostics.ts runtimeDoctorChecks)
+//   - hook label shape:         "<hook>.ts present"                (collectDoctorReport)
+//   - settings label:           "settings.json present"           (collectDoctorReport)
+//   - workspace label:          "workspace shell ready"            (collectDoctorReport)
+// These exact strings appear in the tool_result (and only unreliably in prose);
+// calibration 2 proves the tool_result half through the driver.
 // ---------------------------------------------------------------------------
 const DOCTOR_HEADER = "AI-DLC doctor";
 const DOCTOR_RUNTIME_LABEL = "Runtime hook PATH: bun";
@@ -178,8 +176,6 @@ function recordCalibration(name: string, result: DriveResult, expectedDecision: 
   }, null, 2));
 }
 
-// ---------------------------------------------------------------------------
-
 describe("sdk-drive calibration (known-answer)", () => {
   // -------------------------------------------------------------------------
   // CALIBRATION 1 — canUseTool fires for AskUserQuestion.
@@ -209,8 +205,6 @@ describe("sdk-drive calibration (known-answer)", () => {
         );
         recordCalibration("default-answer", r, expectedDecision);
 
-        // The compose offer must have been captured. If canUseTool never fired
-        // (or the gate was denied), askedQuestions would be empty here.
         expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
 
         // Prove WHICH decision and menu fired, without requiring a particular
@@ -255,11 +249,11 @@ describe("sdk-drive calibration (known-answer)", () => {
   //   harness-instrument:sdk-drive-toolresult-byte-identity
   //
   // Planted truth: /aidlc --doctor runs a deterministic bun tool whose stdout
-  // is fixed bytes (the spike saw md5 553308ac... x3). The driver MUST surface
+  // is fixed bytes (after normalizeHeartbeat). The driver MUST surface
   // those exact bytes in toolResults — the tool's stdout, NOT the assistant's
   // prose rendering. We assert the literal strings (read from the shipped
   // doctor handler) AND verify the doctor block repeats byte-for-byte across
-  // two runs (stability), the property that makes this assertable at all.
+  // two runs (after normalizeHeartbeat), the property that makes this assertable at all.
   // -------------------------------------------------------------------------
   test(
     "2. doctor tool_result carries the verbatim deterministic stdout (byte-identical, stable x2)",
@@ -300,19 +294,19 @@ describe("sdk-drive calibration (known-answer)", () => {
         expect(blockA!.split(/\r?\n/)).toContain(runtimeLine);
 
         // Stability: a second independent run must yield a byte-identical
-        // doctor block (deterministic stdout). We compare from the header to
+        // doctor block after normalizeHeartbeat. We compare from the header to
         // the footer so an LLM preamble/postamble around the tool_result does
-        // not perturb the comparison; the tool bytes themselves must match.
+        // not perturb the comparison; the normalized tool bytes themselves must match.
         //
-        // ONE line in the doctor stdout is intrinsically non-deterministic:
-        // "Hooks last fired: session-start <ISO timestamp>" (utility.ts:430) —
-        // the SessionStart hook re-stamps wall-clock time on every run, so the
-        // timestamp legitimately differs run-to-run. That is a property of the
-        // TOOL, not a defect of the instrument. We normalise that single line
-        // out before comparing; every other byte (header, rule, all fixed
-        // labels, counts, footer) must be identical. The structural asserts
-        // above already prove the instrument carries the tool's verbatim bytes;
-        // this proves it does so STABLY for the deterministic portion.
+        // Scratch-root paths and ONE line in the doctor stdout vary run to run:
+        // "Hooks last fired: session-start <ISO timestamp>" (aidlc-utility.ts
+        // collectDoctorReport) - the SessionStart hook re-stamps wall-clock time on
+        // every run, so the timestamp legitimately differs run-to-run. That is a
+        // property of the TOOL, not a defect of the instrument. We normalise the
+        // scratch-root paths and that line's timestamps before comparing; every other
+        // byte (header, all fixed labels, counts, footer) must be identical. The
+        // structural asserts above already prove the instrument carries the tool's
+        // verbatim bytes; this proves it does so STABLY for the deterministic portion.
         const rB = await driveAidlc("/aidlc --doctor --verbose", {
           projectDir: projB,
           timeoutMs: remainingWorkMs(),
@@ -363,12 +357,8 @@ describe("sdk-drive calibration (known-answer)", () => {
         );
         recordCalibration("scripted-answer", r, expectedDecision);
 
-        // The compose offer must have fired and been answered (canUseTool path).
         expect(r.askedQuestions.length).toBe(1);
 
-        // The second offered option must be what was handed to the model,
-        // proving the scripted answer reached it rather than silently falling
-        // back to the default first option.
         const composeMenu = assertComposeOffer(r, expectedDecision, proj);
         const composeOffered = composeMenu.questions[0].options.map(
           (o) => o.label,
@@ -377,7 +367,6 @@ describe("sdk-drive calibration (known-answer)", () => {
         const secondOption = composeOffered[1];
         const composeHanded = Object.values(composeMenu.answers)[0] as string;
         expect(composeHanded).toBe(secondOption);
-        // It is NOT the default first option — the non-default truly drove.
         expect(composeHanded).not.toBe(composeOffered[0]);
         assertToolResultContains(r, "AskUserQuestion", secondOption);
       } finally {
@@ -429,7 +418,6 @@ describe("sdk-drive calibration (known-answer)", () => {
   // already proved the real-drive path; this isolates the guard logic.
   // -------------------------------------------------------------------------
   test("4. assertToolResultContains FAILS loudly when the tool was absent (no vacuous pass)", () => {
-    // A run that called Skill but never Bash.
     const noBash: DriveResult = {
       toolResults: [
         {
@@ -448,12 +436,10 @@ describe("sdk-drive calibration (known-answer)", () => {
       stoppedAfterToolResult: false,
     };
 
-    // Asserting on a tool that never fired MUST throw — not silently pass.
     expect(() =>
       assertToolResultContains(noBash, "Bash", DOCTOR_HEADER),
     ).toThrow(/expected tool "Bash" to be called/);
 
-    // The fully-empty case must also throw (zero tool calls at all).
     const empty: DriveResult = {
       toolResults: [],
       assistantText: "",

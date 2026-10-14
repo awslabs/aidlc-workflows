@@ -984,7 +984,6 @@ export class AgentStandIn {
     throw new ScopeRunDeadlock(`a refusal named no step to take: ${clip(said, 800)}`, said);
   }
 
-  /** One directive's work. */
   private step(d: Directive): void {
       const cp = d.construction_checkpoint as { unit?: unknown } | undefined;
       this.unitInHand = typeof d.unit === "string" ? d.unit : typeof cp?.unit === "string" ? cp.unit : null;
@@ -1136,7 +1135,6 @@ export class AgentStandIn {
       // What this entry wrote, for the matrix's changes: an entry reads as the Unit's own body.
       this.worked.push({ ...d, unit, produces, wave: undefined });
       if (entry.build_required === true) {
-        // The builder runs the Unit's own question flow, then writes its outputs.
         const questions = produces.find((p) => p.endsWith(`${stage}-questions.md`));
         if (questions) this.askQuestions({ ...d, unit, wave: undefined }, questions);
         for (const p of produces) {
@@ -1657,7 +1655,6 @@ function codePlanText(contract: string, change: string | null = null): string {
   return `# Code Generation Plan\n\n## Summary\n\n- Builds: one function and its test\n- Touches: src/scope-run.ts, test/scope-run.test.ts\n- Tests: 1 unit test\n\n## Steps\n\n- [ ] Step 1: Write src/scope-run.ts (FR1)\n- [ ] Step 2: Write and run test/scope-run.test.ts (FR1)\n${revised}\n${contract.trim()}\n`;
 }
 
-/** The active intent's record dir and state file. */
 export function activeRecord(proj: string): { space: string; intent: string; dir: string; state: string } {
   const spaceFile = join(proj, "aidlc", "active-space");
   const space = existsSync(spaceFile) ? readFileSync(spaceFile, "utf-8").trim() || "default" : "default";
@@ -1828,7 +1825,6 @@ export function scopeScratchDir(prefix: string): string {
   return dir;
 }
 
-/** Remove every project this file's runs made. */
 export function cleanupScopeProjects(): void {
   while (projects.length > 0) cleanupTestProject(projects.pop());
 }

@@ -72,7 +72,6 @@ import {
 } from "../harness/fixtures.ts";
 import { auditDirFor, type DriveResult, driveAidlc, readStateField, stateFilePathFor } from "../harness/sdk-drive.ts";
 
-// ---------------------------------------------------------------------------
 // AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
 const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 // Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
@@ -90,12 +89,12 @@ function remainingWorkMs(): number {
 }
 
 
-const INIT_STATE_SUMMARY = "State initialized:"; // utility.ts:2154
+const INIT_STATE_SUMMARY = "State initialized:"; // aidlc-utility.ts handleIntentCreateStateBuild
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
 const INIT_STAGES = ["workspace-scaffold", "workspace-detection", "state-init"];
-// --init was retired. Unknown flags are preserved as task text, so it made
-// the conductor ask for a task instead of creating the intent.
-// Give the real entry point a concrete task it can name without another turn.
+// Unknown flags are preserved as task text, so --init makes the conductor ask
+// for a task instead of creating the intent. Give the real entry point a
+// concrete task it can name without another turn.
 const CREATE_BUGFIX = "/aidlc --scope bugfix fix the todo checkbox state not persisting after reload";
 
 /** Count `- [x]` completed-stage rows in a state-file string. */
@@ -164,9 +163,9 @@ function reportInitFailure(projectDir: string, result: DriveResult | undefined):
 
 describe("t52 /aidlc --scope bugfix state-file integrity (sdk)", () => {
   // -------------------------------------------------------------------------
-  // Fresh project: the full State-Version-7 file lands at explicit init. Assert its
-  // structure (counter↔checkbox invariant, ordering, every field) on the landed
-  // file. Deep progression is the tui t50 journey's surface.
+  // Fresh project: the full State-Version-8 file lands at intent creation. Assert
+  // its structure (counter-to-checkbox invariant, ordering, every field) on the
+  // landed file. Deep progression is the tui t50 journey's surface.
   // -------------------------------------------------------------------------
   test(
     "init writes a structurally sound State-Version-7 file: counter==checkboxes, ordering preserved, all fields present",
@@ -181,21 +180,21 @@ describe("t52 /aidlc --scope bugfix state-file integrity (sdk)", () => {
           stopAfterToolResult: STOP_AFTER_INIT,
         });
 
-        // .sh test 1: state file exists (read off disk by sdk-drive post-run).
+        // State file exists (read off disk by sdk-drive post-run).
         expect(r.stateFile).toBeDefined();
         const state = r.stateFile as string;
 
-        // .sh test 4: the Completed counter EQUALS the `- [x]` checkbox count —
-        // the framework's core state-integrity invariant the .sh asserted.
+        // The Completed counter EQUALS the `- [x]` checkbox count -
+        // the framework's core state-integrity invariant.
         const counterStr = readStateField(state, "Completed");
         expect(counterStr).toBeDefined();
         const counter = Number.parseInt(counterStr as string, 10);
         expect(Number.isNaN(counter)).toBe(false);
         expect(counter).toBe(completedCount(state));
 
-        // .sh test 5: stage ordering preserved — no `- [x]` row appears AFTER the
+        // Stage ordering preserved - no `- [x]` row appears AFTER the
         // last `- [-]` in-progress row. (If there is no [-], ordering is trivially
-        // valid.) Compare line indices on disk, the .sh's exact check.
+        // valid.) Compare line indices on disk.
         const lines = state.split("\n");
         const lastX = lines.reduce(
           (acc, l, i) => (/^- \[x\]/.test(l) ? i : acc),
@@ -209,24 +208,20 @@ describe("t52 /aidlc --scope bugfix state-file integrity (sdk)", () => {
           expect(lastX).toBeLessThan(lastInProgress);
         }
 
-        // .sh tests 6/7/9: the Lifecycle Phase / Status / Active Agent fields are
-        // present (defined) in the landed state file.
         expect(readStateField(state, "Lifecycle Phase")).toBeDefined();
         expect(readStateField(state, "Status")).toBeDefined();
         expect(readStateField(state, "Active Agent")).toBeDefined();
 
-        // .sh test 8: Last Updated carries an ISO timestamp (YYYY-MM-DDThh:mm:ss).
+        // Last Updated carries an ISO timestamp (YYYY-MM-DDThh:mm:ss).
         const lastUpdated = readStateField(state, "Last Updated");
         expect(lastUpdated).toBeDefined();
         expect(lastUpdated as string).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
 
-        // .sh test 10: State Version is exactly 7.
         expect(readStateField(state, "State Version")).toBe("8");
 
-        // The .sh's tests 2-3 floor: the 3 init stages ARE [x] (the deterministic
-        // completion the ">4 completed" / "advanced past init" assertions built
-        // on); Current Stage is a populated field. Deep progression past init is
-        // the tui t50 journey's surface (see header), not asserted here.
+        // The 3 init stages ARE [x]; Current Stage is a populated field. Deep
+        // progression past init is the tui t50 journey's surface (see header), not
+        // asserted here.
         for (const stage of INIT_STAGES) {
           expect(state).toContain(`[x] ${stage}`);
         }

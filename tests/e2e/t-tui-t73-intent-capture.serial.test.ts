@@ -1,44 +1,36 @@
 // covers: stage:ideation/intent-capture
 //
-// t-tui-t73-intent-capture.serial.tui.test.ts — drive the IDEATION intent-capture
+// t-tui-t73-intent-capture.serial.test.ts - drive the IDEATION intent-capture
 // stage through a REAL keystroke-driven claude TUI and prove it produces its
-// on-disk artifacts (§5.1, Phase-3 journey tier). A REWRITE — not a port — of the
-// shipped tests/integration/t73-stage-intent-capture.sh.
+// on-disk artifacts.
 //
-// WHAT THE .sh DID (and why it was a fake journey): it ran the intent-capture
-// stage jump headlessly, AUTO-APPROVING the stage's AskUserQuestion gate. The user
-// never answered the gate the real intent-capture stage raises; the interactive
-// journey a human actually lives was NEVER exercised. This rewrite drives the
-// painted gate by keystroke via the shared `answer-gate` primitive (tui-drive.ts
-// §3), terminating on the on-disk intent-statement.
-//
-// WHY PATTERN B (multi-gate journey, answer-gate --until-file):
+// WHY PATTERN B (multi-gate journey, answer-gate --until-state-field):
 //   intent-capture is a GATED stage — it asks the user questions (a questions file
 //   gets [Answer]: lines filled) and surfaces an AskUserQuestion menu before it
 //   commits its artifacts. The journey runs multiple LLM turns and at least one
 //   rendered gate, so it is NOT a single landed-and-rendered jump (Pattern A).
-//   We answer every gate by taking the Recommended default and TERMINATE on the
-//   on-disk intent-statement artifact — never on a screen string (§1.1: the
-//   transcript is not a leading event bus; disk is the terminator).
+//   We answer every gate by taking the Recommended default and TERMINATE on
+//   Last Completed Stage=intent-capture AND Current Stage moving on - never on a
+//   screen string (the transcript is not a leading event bus; disk is the
+//   terminator).
 //
-// THE SEEDED REDO-JUMP (matches the .sh fixture exactly):
+// THE SEEDED REDO-JUMP:
 //   state-initialization-done.md sets Current Stage == intent-capture (the redo
 //   target) with Completed=3 / 3 [x]. Because Current Stage already equals the
 //   --stage target, aidlc-jump does NOT terminate the workflow on the jump; the
 //   stage runs, its gate approves, and approve auto-advances to the next in-scope
 //   stage (market-research). So after the journey: intent-capture flips to [x],
-//   Completed climbs past 3, and Current Stage moves off intent-capture. The .sh
-//   asserted exactly this (its tests 9-12). We assert equal-or-stronger.
+//   Completed climbs past 3, and Current Stage moves off intent-capture.
 //
 // What it proves:
 //   - the intent-capture stage starts from a --stage jump
-//     (statusline leaves nothing-to-do and shows a live IDEATION phase),
+//     (statusline shows a live IDEATION phase),
 //   - the answer-gate clears the stage's rendered AUQ menu(s) by taking the
-//     Recommended default and TERMINATES on the on-disk intent-statement artifact,
-//   - ON DISK (the surface the .sh greps, equal-or-stronger):
+//     Recommended default and TERMINATES on approval AND advancement,
+//   - ON DISK:
 //       * <record>/ideation/intent-capture/ exists,
-//       * a *questions* file exists AND carries >=1 `[Answer]:` line (the gate's
-//         answers were written back, the thing the headless auto-approve faked),
+//       * a *questions* file exists AND carries >=1 `[Answer]:` line
+//         (the gate's answers were written back),
 //       * a *intent*statement* artifact exists, is > 100 bytes, and has at least
 //         one markdown heading,
 //       * both deliverables carry source tags and an Assumptions & Open
@@ -46,16 +38,14 @@
 //       * aidlc-state.md Completed counter == the number of `- [x]` lines
 //         (internal consistency invariant), Completed >= 4 (monotonic from the
 //         fixture's 3 + this stage), and Lifecycle Phase == IDEATION,
-//       * audit.md recorded a STAGE_COMPLETED for intent-capture (stronger than
-//         the .sh, which never checked audit for this stage),
+//       * audit recorded a STAGE_COMPLETED for intent-capture,
 //   - RENDER (the tui-only value-add the SDK/claude-p path is blind to): the
 //     captured grid showed the AUQ select footer (`Enter to select`) and/or the
 //     multi-tab `Submit` strip at least once while the gate was up.
 //
-// REACHABILITY NOTE / potential FINDING: intent-capture is a normal IDEATION stage
-// (not the heavy reverse-engineering stage), so a few-minute live run is expected
-// to reach the intent-statement well inside the 900s budget. If the artifact never
-// lands inside the overall-timeout, answer-gate exits nonzero (HANG BACKSTOP) and
+// REACHABILITY: intent-capture is a normal IDEATION stage
+// (not the heavy reverse-engineering stage). If approval and advancement never
+// land inside the overall-timeout, answer-gate exits nonzero (HANG BACKSTOP) and
 // this test RED — that red is a finding about stage reachability, NOT a thing to
 // soften. We assert what the stage SHOULD produce; we do not weaken to force green.
 //
@@ -92,7 +82,7 @@ const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
 // Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds; the integration
 // tier sets 600). A full intent-capture run-through is a few minutes of real LLM
-// turns, so the bun:test cap is generous. The .sh pinned AIDLC_TEST_TIMEOUT=900.
+// turns, so the bun:test cap is generous.
 const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
   ? TIMEOUT_S * 1000
@@ -157,8 +147,7 @@ function skipReason(): string | null {
 const SKIP_REASON = skipReason();
 
 // Find the first file under `dir` whose basename matches every fragment (case-
-// insensitive), excluding any in `exclude`. Mirrors the .sh `find -name '*frag*'`
-// greps so the disk asserts hit the SAME artifacts the bash journey did.
+// insensitive), excluding any in `exclude`.
 function findArtifact(dir: string, fragments: string[], exclude: string[] = []): string | null {
   if (!existsSync(dir)) return null;
   for (const entry of readdirSync(dir)) {
@@ -181,7 +170,7 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
     `intent-capture jump commits intent-statement + answered questions on disk${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       const session = `aidlc_tui_t73_${process.pid}`;
-      // Seed EXACTLY as the .sh: state at init-done (intent-capture next/current),
+      // Seed state at init-done (intent-capture next/current),
       // greenfield stub (drives workspace-detection to Greenfield), audit present.
       const sandbox = setupTuiProject({
         withState: "state-initialization-done.md",
@@ -256,26 +245,24 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
           if (grid.includes("Submit")) sawSubmitStrip = true;
         }, 1000);
 
-        // --- answer the gate(s) via the shared answer-gate primitive (§3) ------
+        // --- answer the gate(s) via the shared answer-gate primitive (section 3) ------
         // It answers each menu (single-select Enter / multi-select Space-toggle +
-        // arrow-navigate to Submit / the :304 "Looks correct" confirmation / the
+        // arrow-navigate to Submit / the "Looks correct" confirmation / the
         // final Approve gate) by taking the Recommended default, and TERMINATES on
         // an on-disk STATE signal, NOT a screen string. Run it as a long-lived
         // subprocess; its own backstops error loud, so a hang surfaces as a nonzero
         // exit (a FINDING about reachability, not a thing to soften).
         //
         // TERMINATOR = `Last Completed Stage` reaching `intent-capture` AND
-        // `Current Stage` moving on. The earlier intent-statement *file* lands
-        // mid-Step-5, BEFORE the stakeholder-map (rest of Step 5), the state update
-        // (Step 6), and the Step 7 approval gate — so terminating on it stopped the
-        // loop too early (stakeholder-map absent, no STAGE_COMPLETED — the
-        // 2026-06-06 t73 red). Verified 2026-09-13: handleApprove writes Last
-        // Completed Stage first (aidlc-state.ts:5719); only then does handleAdvance
-        // write Current Stage (aidlc-state.ts:4506). The loop polls disk first, and
-        // the test kills the session ~60 ms after termination: watching only Last
-        // Completed Stage killed approve between these writes (GATE_APPROVED
-        // present, no next-stage STAGE_STARTED). Waiting for BOTH keeps that kill
-        // from landing mid-approve.
+        // `Current Stage` moving on. The intent-statement *file* lands mid-Step-4,
+        // BEFORE the stakeholder-map (rest of Step 4), the completion handoff (Step 6)
+        // and the Step 7 approval gate - so terminating on it stopped the loop too
+        // early (stakeholder-map absent, no STAGE_COMPLETED). handleApprove writes
+        // Last Completed Stage first (aidlc-state.ts); only then does handleAdvance
+        // write Current Stage. The loop polls disk first, and the test kills the
+        // session ~60 ms after termination: watching only Last Completed Stage killed
+        // approve between these writes (GATE_APPROVED present, no next-stage
+        // STAGE_STARTED). Waiting for BOTH keeps that kill from landing mid-approve.
         const gateRc = await new Promise<number>((resolve) => {
           const child = spawn(
             DRIVE_BIN,
@@ -295,8 +282,8 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
               "Looks correct",
               "--assert-file-absent",
               "aidlc/spaces/default/intents/*/ideation/intent-capture/*intent*statement*",
-              // Wait for approval AND advancement (aidlc-state.ts:5719 and
-              // aidlc-state.ts:4506), not just the first write. Keep the completed
+              // Wait for approval AND advancement (aidlc-state.ts handleApprove and
+              // handleAdvance), not just the first write. Keep the completed
               // stage anchored exactly so the kill cannot land mid-approve.
               "--until-state-field",
               "Last Completed Stage=^intent-capture$",
@@ -312,15 +299,12 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         pollTimer = undefined;
         expect(gateRc).toBe(0);
 
-        // --- assert ON DISK (the .sh's greps, equal-or-stronger) --------------
+        // --- assert ON DISK --------------
         const icDir = join(seededRecordDir(sandbox), "ideation", "intent-capture");
-        // .sh test 1: intent-capture directory created.
         expect(existsSync(icDir)).toBe(true);
 
-        // .sh tests 2+3: a *questions* file exists AND has >=1 [Answer]: line.
-        // This is the heart of the rewrite — the answered-questions file is the
-        // artifact the headless auto-approve faked. We assert the answers were
-        // really written.
+        // A *questions* file exists AND has >=1 [Answer]: line.
+        // We assert the answers were really written.
         const questionsFile = findArtifact(icDir, ["questions"]);
         expect(questionsFile).not.toBeNull();
         const questionsBody = readFileSync(questionsFile as string, "utf8");
@@ -338,9 +322,6 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
           /\[Answer\]:\s*(?:[A-Z]|\d+)\.?\s+Looks correct/,
         );
 
-        // .sh tests 4+5+6: a *intent*statement* artifact exists, > 100 bytes, with
-        // at least one markdown heading. (The terminator already required it to
-        // exist & be non-empty; we re-derive it for the size/heading asserts.)
         const intentFile = findArtifact(icDir, ["intent", "statement"]);
         expect(intentFile).not.toBeNull();
         const intentBody = readFileSync(intentFile as string, "utf8");
@@ -351,7 +332,7 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
           /\[(?:desc|scope|Q\d+|memory:[A-Za-z0-9][A-Za-z0-9._-]*|assumption)\]/,
         );
 
-        // .sh test 8: a *stakeholder* map artifact exists. The grounding
+        // A *stakeholder* map artifact exists. The grounding
         // contract additionally requires source tags and assumption surfacing.
         const stakeholderFile = findArtifact(icDir, ["stakeholder"]);
         expect(stakeholderFile).not.toBeNull();
@@ -361,32 +342,28 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
           /\[(?:desc|scope|Q\d+|memory:[A-Za-z0-9][A-Za-z0-9._-]*|assumption)\]/,
         );
 
-        // --- state invariants (the .sh's tests 9, 11, 12) ---------------------
+        // --- state invariants ---------------------
         const stateMd = readFileSync(seededStateFile(sandbox), "utf8");
-        // test 9: Completed counter == count of `- [x]` lines (consistency).
         const xCount = (stateMd.match(/^- \[x\]/gm) ?? []).length;
         const completedMatch = /\*\*Completed\*\*:[ \t]*(\d+)/.exec(stateMd);
         expect(completedMatch).not.toBeNull();
         const completed = Number.parseInt((completedMatch as RegExpExecArray)[1], 10);
         expect(completed).toBe(xCount);
-        // test 12: Completed >= 4 (monotonic — fixture seeds 3, this stage adds >=1).
+        // Completed >= 4 (monotonic - fixture seeds 3, this stage adds >=1).
         expect(xCount).toBeGreaterThan(3);
-        // test 11: lifecycle phase is IDEATION (set by fixture, held by the stage).
+        // Lifecycle phase is IDEATION (set by fixture, held by the stage).
         expect(stateMd).toContain("IDEATION");
 
-        // test 10 (the redo-jump advancement): intent-capture is [x] and Current
+        // The redo-jump advancement: intent-capture is [x] and Current
         // Stage moved off it. The fixture set Current Stage == target, so the jump
-        // doesn't terminate; the stage's gate approve auto-advances. STRONGER than
-        // the .sh, which SKIPPED this when intent-capture wasn't yet [x] — the
-        // live answered journey reaches [x], so we assert (not skip) the advance.
+        // doesn't terminate; the stage's gate approve auto-advances.
         expect(stateMd).toMatch(/- \[x\] intent-capture/);
         const currentStageLine =
           /\*\*Current Stage\*\*:[ \t]*([^\r\n]*)/.exec(stateMd)?.[1]?.trim() ?? "";
         expect(currentStageLine.length).toBeGreaterThan(0);
         expect(currentStageLine.toLowerCase()).not.toContain("intent-capture");
 
-        // --- audit assertion (STRONGER than the .sh, which never checked audit) -
-        // The completed intent-capture stage emits a STAGE_COMPLETED for it.
+        // --- audit assertion -
         const auditMd = readAllAuditShards(sandbox);
         expect(auditMd).toMatch(/STAGE_COMPLETED/);
         expect(auditMd.toLowerCase()).toContain("intent-capture");

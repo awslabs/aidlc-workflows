@@ -8,32 +8,25 @@
 // subcommand:aidlc-worktree:create — the same subcommand t02 covers, here
 // exercised on its sibling-rejection branch.
 //
-// MECHANISM: this is a .cli file, so every observable is taken at the PROCESS
+// MECHANISM: every observable is taken at the PROCESS
 // boundary — SPAWN the real binary via spawnSync (BUN + the tool .ts path) and
-// assert on res.status / combined stdout+stderr (the .sh's 2>&1). The guard
+// assert on res.status / combined stdout+stderr. The guard
 // fires inside the real process from the real cwd, so an in-process twin would
 // not reproduce the `git rev-parse --show-toplevel` resolution that drives the
-// main-checkout-vs-sibling comparison.
+// nesting comparison.
 //
-// FIXTURE: aidlc-worktree.ts resolves the main checkout from process cwd, so
-// the .sh builds a REAL sibling worktree under
+// FIXTURE: aidlc-worktree.ts resolves checkout nesting from process cwd, so
+// the test builds a REAL nested worktree under
 // <fixture>/.claude/worktrees/dev-slug (via `git worktree add -b dev-branch`)
-// and runs the tool with cwd = that sibling. setupWorktreeFixture
+// and runs the tool with cwd = that checkout. setupWorktreeFixture
 // (tests/harness/fixtures.ts) builds the parent git repo on `main` with one
-// commit + aidlc-docs/; we add the sibling inline with spawnSync("git", ...)
-// exactly as the .sh did. cleanupWorktreeFixture prunes child worktrees then
-// rm -rf's the parent. Nothing is written under tests/fixtures/**.
+// commit + a per-intent workspace shell; we add the nested checkout inline with
+// spawnSync("git", ...). cleanupWorktreeFixture prunes child worktrees then
+// removes the parent. Nothing is written under tests/fixtures/**.
 //
-// PARITY NOTES — every .sh assertion has an equal-or-stronger counterpart:
-//   .sh T1  create from sibling worktree exits non-zero          -> expect status !== 0
-//   .sh T2  error names "must run from the main repo checkout"    -> expect out contains it
-//   .sh T3  error explains the nesting rule                    -> expect out contains
-//             "inside another worktree's tracked tree"
-//
-// 3 .sh asserts -> 3 equal counterparts + STRONGER additions: the guard is
+// The guard is
 // pre-audit, so we also assert NO WORKTREE_CREATED row for the slug landed in
-// the sibling's audit.md and NO Bolt worktree dir was created (the .sh's
-// "pre-audit check" intent, which it only documented in its header comment).
+// either checkout's audit and NO Bolt worktree dir was created.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
@@ -74,7 +67,7 @@ afterAll(() => {
   for (const f of fixtures) cleanupWorktreeFixture(f);
 });
 
-/** Fresh git-repo fixture on `main` + aidlc-docs/, registered for cleanup. */
+/** Fresh git repo on `main` + per-intent workspace shell, registered for cleanup. */
 function freshFixture(): string {
   const p = setupWorktreeFixture();
   fixtures.push(p);
@@ -105,8 +98,6 @@ function addOutsideWorktree(fixture: string): { outside: string; featureHead: st
   return { outside, featureHead, mainHead };
 }
 
-/** Add a real sibling worktree at <fixture>/<relativePath> on a new branch,
- *  mirroring the .sh's nested-worktree setup. */
 function addSibling(fixture: string, relativePath: string, branch: string): string {
   git(fixture, "add", "--", "aidlc");
   git(fixture, "commit", "-qm", "seed aidlc workspace shell");
@@ -130,7 +121,6 @@ interface CliResult {
   out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
 }
 
-/** Spawn a worktree subcommand at the process boundary from the given checkout. */
 function worktree(cwd: string, projectDir: string, args: string[]): CliResult {
   const res = spawnSync(
     BUN,
@@ -148,7 +138,6 @@ function create(cwd: string, projectDir: string, args: string[]): CliResult {
   return worktree(cwd, projectDir, ["create", ...args]);
 }
 
-/** Count Bolt slug rows across the selected fixture record's audit shards. */
 function boltSlugRows(dir: string): string[] {
   const auditDir = seededAuditDir(dir);
   let names: string[];
@@ -210,14 +199,13 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
     const fixture = freshFixture();
     const sibling = addSibling(fixture, join(".claude", "worktrees", "dev-slug"), "dev-branch");
 
-    // Run aidlc-worktree create from INSIDE the sibling worktree.
     const r = create(sibling, sibling, ["--slug", "demo", "--base", "main"]);
 
-    expect(r.status).not.toBe(0); // T1
-    expect(r.out).toContain("must run from the main repo checkout"); // T2
-    expect(r.out).toContain("inside another worktree's tracked tree"); // T3
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain("must run from the main repo checkout");
+    expect(r.out).toContain("inside another worktree's tracked tree");
 
-    // STRONGER: the guard fires BEFORE the audit emit, so nothing landed in
+    // The guard fires BEFORE the audit emit, so nothing landed in
     // either checkout's audit, and no Bolt worktree directory was created.
     expect(boltSlugRows(sibling)).not.toContain("demo");
     expect(boltSlugRows(fixture)).not.toContain("demo");
@@ -235,7 +223,7 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
   test("4: create from a worktree OUTSIDE the main checkout is allowed and places the Bolt under the invoking worktree", () => {
     const fixture = freshFixture();
     const { outside, featureHead, mainHead } = addOutsideWorktree(fixture);
-    expect(featureHead).not.toBe(mainHead); // fixture precondition
+    expect(featureHead).not.toBe(mainHead);
 
     const r = create(outside, outside, ["--slug", "demo", "--base", "feature-x"]);
 

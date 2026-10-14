@@ -14,52 +14,48 @@
 // WORKFLOW_COMPLETED emit before PHASE_VERIFIED, or dropped the
 // alreadyMarkedCompleted guard so the final STAGE_COMPLETED doubled — the
 // counts could still look plausible while the SEQUENCE lied about what
-// happened. No test today asserts this terminal ORDER, nor the re-run
-// idempotency of the final approve. t51 asserts counts + "first/last event"
-// + a single gate<stage ordering pair, but not the four-event terminal tail
-// nor what a past-the-end approve does. This pins both.
+// happened.
 //
 // SOURCE (aidlc-state.ts):
-//   - handleApprove (:675) validates the slug is `awaiting-approval` (:685),
-//     flips it to [x], emits GATE_APPROVED + STAGE_COMPLETED (:703-708), then
-//     auto-advances: nextInScopeStage -> handleAdvance, OR (final stage)
-//     handleCompleteWorkflow (:729-739).
-//   - handleCompleteWorkflow (:520) sets Status=Completed and emits, IN ORDER,
-//     STAGE_COMPLETED (suppressed when alreadyMarkedCompleted, :574) ->
-//     PHASE_COMPLETED (:580) -> PHASE_VERIFIED (:585) -> WORKFLOW_COMPLETED
-//     (:593). For the final-stage approve path the STAGE_COMPLETED was already
-//     emitted by approve (:705), so the guard suppresses the duplicate and the
-//     observed terminal tail is exactly STAGE_COMPLETED -> PHASE_COMPLETED ->
+//   - handleApprove validates the slug is `awaiting-approval`
+//     (validateSlugInState), flips it to [x], emits GATE_APPROVED +
+//     STAGE_COMPLETED, then auto-advances: nextInScopeStage -> handleAdvance, OR
+//     (final stage) handleCompleteWorkflow.
+//   - handleCompleteWorkflow sets Status=Completed and emits, IN ORDER,
+//     STAGE_COMPLETED (suppressed when the slug is already [x] and its
+//     STAGE_COMPLETED is already audited) -> PHASE_COMPLETED -> PHASE_VERIFIED ->
+//     WORKFLOW_COMPLETED. For the final-stage approve path the STAGE_COMPLETED
+//     was already emitted by approve, so the guard suppresses the duplicate and
+//     the observed terminal tail is exactly STAGE_COMPLETED -> PHASE_COMPLETED ->
 //     PHASE_VERIFIED -> WORKFLOW_COMPLETED.
 //
 // IDEMPOTENCY — verified by probe, asserting the REAL behaviour of each seam:
-//   - approve PAST THE END is idempotent: once the final slug is [x],
-//     re-running `approve build-and-test` fails validateSlugInState (:685,
-//     state 'completed' not 'awaiting-approval') WITHOUT reaching the terminal
-//     sequence, so WORKFLOW_COMPLETED stays at exactly 1 (and no second
-//     STAGE_COMPLETED lands). This is the realistic re-run scenario in the
-//     deterministic walk (the orchestrator replays an approve), so it is the
-//     behavioural contract pinned here. NOTE the failed approve is not a
-//     silent no-op: error() routes through emitError (:1709 -> lib :1473) and
-//     appends exactly ONE ERROR_LOGGED row, so the trail GROWS by one and its
-//     new dead-last event is ERROR_LOGGED, not a duplicate WORKFLOW_COMPLETED.
-//     The test asserts that real shape.
+//   - approve of a completed stage is rejected: once a slug is [x], re-running
+//     `approve build-and-test` fails validateSlugInState (state 'completed' not
+//     'awaiting-approval') WITHOUT reaching the terminal sequence, so
+//     WORKFLOW_COMPLETED stays at exactly 1 (and no second STAGE_COMPLETED
+//     lands). This test replays build-and-test after deployment-execution
+//     completed the workflow (the orchestrator-replay scenario). NOTE the failed
+//     approve is not a silent no-op: error() routes through emitError
+//     (aidlc-lib.ts) and appends exactly ONE ERROR_LOGGED row, so the trail
+//     GROWS by one and its new dead-last event is ERROR_LOGGED, not a duplicate
+//     WORKFLOW_COMPLETED. The test asserts that real shape.
 //   - SOURCE SURPRISE (not the asserted path, noted for the record): re-running
-//     `complete-workflow build-and-test` DIRECTLY is NOT idempotent — it has no
-//     already-Completed early return, and the alreadyMarkedCompleted guard
-//     suppresses only the duplicate STAGE_COMPLETED, so PHASE_COMPLETED /
-//     PHASE_VERIFIED / WORKFLOW_COMPLETED all re-emit, doubling the count to 2.
+//     `complete-workflow build-and-test` DIRECTLY has no already-Completed early
+//     return; the duplicate guard suppresses only the duplicate STAGE_COMPLETED,
+//     so PHASE_COMPLETED / PHASE_VERIFIED / WORKFLOW_COMPLETED would re-emit.
 //     A future fix that guards handleCompleteWorkflow against an
 //     already-Completed Status would make that path idempotent too; this test
 //     would not break (it asserts only the approve seam).
 //
-// TECHNIQUE: invariant. Drive the SHORTEST scope (bugfix, 6 EXECUTE stages) from
-// init to completion with NO claude — `aidlc-utility.ts init` to bootstrap, then
-// gate-start -> approve per remaining stage (approve auto-advances; the final
-// approve reaches handleCompleteWorkflow). Same seam t51 uses. Then parse the
-// resulting audit.md and assert on the FILE bytes (never prose). bugfix has 3
-// PHASE_VERIFIED (initialization, inception, construction); we assert the FINAL
-// phase's terminal ordering and the singleton WORKFLOW_COMPLETED.
+// TECHNIQUE: invariant. Drive the bugfix scope from intent creation to
+// completion with NO claude - `aidlc-utility.ts intent-create` to bootstrap,
+// then gate-start -> approve per remaining stage (approve auto-advances; the
+// final approve reaches handleCompleteWorkflow). Same seam t51 uses. Then parse
+// the resulting audit shards and assert on the FILE bytes (never prose). bugfix
+// has 4 PHASE_VERIFIED (initialization, inception, construction, operation); we
+// assert the FINAL phase's terminal ordering and the singleton
+// WORKFLOW_COMPLETED.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
@@ -75,7 +71,7 @@ import {
   cleanupTestProject,
   createTestProject,
 } from "../harness/fixtures.ts";
-// P4: audit is sharded per clone under the created intent's record; read the
+// Audit is sharded per clone under the created intent's record; read the
 // merged shards via the shipped helper (default-resolves the active intent).
 import {
   readAllAuditShards,
@@ -88,8 +84,6 @@ const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
-// Spawn a state/utility subcommand via the SAME bun that runs this test
-// (process.execPath), cwd-independent. Mirrors t51's `bun "$STATE" ...` calls.
 function run(
   tool: string,
   args: string[],
@@ -117,10 +111,10 @@ function run(
 // the reviewer gate contract requires.
 function walkStage(slug: string, proj: string): void {
   // Reviewer-bearing stages need a terminal REVIEW_COMPLETED before gate-start
-  // presents the approval gate (§12a), recorded by the declared reviewer.
-  // Record one for the two reviewer-bearing stages this walk crosses; a
-  // no-reviewer stage ignores the extra row. This walk drives transitions to
-  // accumulate the audit trail, not to test the reviewer gate. Mirrors t51.
+  // presents the approval gate (stage-protocol-reviewer.md section 12a), recorded
+  // by the declared reviewer. Record one for the two reviewer-bearing stages this
+  // walk crosses. This walk drives transitions to accumulate the audit trail, not
+  // to test the reviewer gate. Mirrors t51.
   const reviewerFor: Record<string, string> = {
     "requirements-analysis": "aidlc-product-lead-agent",
     "code-generation": "aidlc-architecture-reviewer-agent",
@@ -175,14 +169,13 @@ function walkStage(slug: string, proj: string): void {
 }
 
 // Each audit block carries `**Timestamp**: <iso>` + `**Event**: <TYPE>`
-// (aidlc-audit.ts). P4 shards audit per clone, so a multi-spawn drive lands its
-// blocks across several shards; readAllAuditShards concatenates them (block
-// boundaries preserved) but cross-shard order is by clone-id filename, NOT
-// chronology. So parse (timestamp, event) per block and STABLE-sort by timestamp
-// — buffer position is the documented tiebreak for same-second blocks (isoTimestamp
-// is second-precision), which is exactly how the engine's block parsers order. The
-// terminal four (emitted in one complete-workflow process, one shard) stay in
-// their emit order under this sort.
+// (aidlc-audit.ts). Audit is sharded per clone; readAllAuditShards concatenates
+// the shards (block boundaries preserved) but cross-shard order is by clone-id
+// filename, NOT chronology. So parse (timestamp, event) per block and
+// STABLE-sort by timestamp - buffer position is the documented tiebreak for
+// same-second blocks (isoTimestamp is second-precision), which is exactly how
+// the engine's block parsers order. The terminal four (emitted in one final
+// approve process, one shard) stay in their emit order under this sort.
 function eventSequence(proj: string): string[] {
   const text = readAllAuditShards(proj);
   const blocks = text.split("\n---\n");
@@ -203,8 +196,9 @@ function countEvent(seq: string[], type: string): number {
 
 // Drive a complete bugfix workflow once; return the project dir (audit is read
 // from the created intent's shards via readAllAuditShards(proj)). Bootstrap via
-// init (emits WORKFLOW_STARTED + init phase + PHASE_SKIPPED for Ideation and
-// pre-completes the 3 init stages), then walk the remaining EXECUTE stages.
+// intent-create (emits WORKFLOW_STARTED + init phase + PHASE_SKIPPED for
+// Ideation and pre-completes the 3 init stages), then walk the remaining EXECUTE
+// stages.
 function driveBugfixToCompletion(): { proj: string } {
   const proj = createTestProject();
   const init = run(
@@ -232,7 +226,7 @@ afterAll(() => {
 });
 
 // Each `bun <tool>.ts` cold-start costs ~hundreds of ms and a full bugfix drive
-// now includes five post-init stage walks; driving once per test blows
+// includes five post-init stage walks; driving once per test blows
 // bun:test's default 5s per-test timeout. So drive the workflow ONCE per
 // describe in a beforeAll (the walk is deterministic) and share the resulting
 // audit across the assertions. Generous explicit timeouts on the drives keep
@@ -249,7 +243,6 @@ describe("complete-workflow terminal-event ordering (bugfix, no claude)", () => 
   }, DRIVE_TIMEOUT_MS);
 
   test("the FINAL four events are STAGE_COMPLETED -> PHASE_COMPLETED -> PHASE_VERIFIED -> WORKFLOW_COMPLETED, in that order", () => {
-    // Sanity: a non-trivial trail was produced.
     expect(seq.length).toBeGreaterThan(10);
 
     // The terminal tail — the canonical workflow-closure sequence. The last
@@ -266,8 +259,8 @@ describe("complete-workflow terminal-event ordering (bugfix, no claude)", () => 
     // slice(-4) check above does NOT catch a doubled final STAGE_COMPLETED:
     // the duplicate lands at index -5 (...STAGE_COMPLETED, STAGE_COMPLETED,
     // PHASE_COMPLETED, PHASE_VERIFIED, WORKFLOW_COMPLETED), leaving the last
-    // four bytes unchanged. Dropping the alreadyMarkedCompleted guard
-    // (aidlc-state.ts:574) produces exactly that doubling. Assert that no two
+    // four events unchanged. Dropping the duplicate-STAGE_COMPLETED guard in
+    // handleCompleteWorkflow produces exactly that doubling. Assert that no two
     // STAGE_COMPLETED events are adjacent ANYWHERE in the trail — the final
     // approve's STAGE_COMPLETED must not be re-emitted by handleCompleteWorkflow.
     const adjacentDup = seq.some(
@@ -292,8 +285,6 @@ describe("complete-workflow terminal-event ordering (bugfix, no claude)", () => 
     const lastCompletedPhase = seq.lastIndexOf("PHASE_COMPLETED");
     const workflowDone = seq.lastIndexOf("WORKFLOW_COMPLETED");
 
-    // PHASE_COMPLETED precedes PHASE_VERIFIED precedes WORKFLOW_COMPLETED, and
-    // the final PHASE_VERIFIED sits exactly one slot before WORKFLOW_COMPLETED.
     expect(lastCompletedPhase).toBeLessThan(lastVerified);
     expect(lastVerified).toBeLessThan(workflowDone);
     expect(workflowDone - lastVerified).toBe(1);
@@ -310,17 +301,15 @@ describe("complete-workflow idempotency: re-running the final approve emits no s
   }, DRIVE_TIMEOUT_MS);
 
   test("approve PAST THE END fails (slug already [x]) and emits NO second WORKFLOW_COMPLETED / STAGE_COMPLETED — only an ERROR_LOGGED row", () => {
-    // Precondition: the clean walk landed exactly one WORKFLOW_COMPLETED, with
-    // it dead-last in the trail.
     const before = eventSequence(proj);
     expect(countEvent(before, "WORKFLOW_COMPLETED")).toBe(1);
     expect(before[before.length - 1]).toBe("WORKFLOW_COMPLETED");
     const stageCompletedBefore = countEvent(before, "STAGE_COMPLETED");
 
-    // Re-run approve on the (now [x]) final stage. handleApprove's
-    // validateSlugInState (aidlc-state.ts:685) requires 'awaiting-approval';
-    // the slug is 'completed', so this MUST fail WITHOUT reaching the terminal
-    // sequence — the realistic orchestrator-replay idempotency contract.
+    // Re-run approve on the completed build-and-test stage. handleApprove's
+    // validateSlugInState requires 'awaiting-approval'; the slug is 'completed', so
+    // this MUST fail WITHOUT reaching the terminal sequence - the
+    // orchestrator-replay idempotency contract.
     const replay = run(
       STATE,
       ["approve", "build-and-test", "--user-input", "approve"],
@@ -333,20 +322,19 @@ describe("complete-workflow idempotency: re-running the final approve emits no s
 
     // The IDEMPOTENCY contract on the audit FILE: still exactly one
     // WORKFLOW_COMPLETED (no duplicate terminal event) and no extra
-    // STAGE_COMPLETED for the final stage.
+    // STAGE_COMPLETED for the replayed stage.
     const after = eventSequence(proj);
     expect(countEvent(after, "WORKFLOW_COMPLETED")).toBe(1);
     expect(countEvent(after, "STAGE_COMPLETED")).toBe(stageCompletedBefore);
 
     // REAL behaviour of the failed replay (asserted, not assumed): the error
-    // path routes through error() -> emitError (aidlc-state.ts:1709 ->
-    // aidlc-lib.ts:1473), which appends exactly ONE ERROR_LOGGED row. So the
+    // path routes through error() -> emitError (aidlc-state.ts ->
+    // aidlc-lib.ts), which appends exactly ONE ERROR_LOGGED row. So the
     // trail GREW by one event and the new dead-last event is ERROR_LOGGED, NOT
     // a second WORKFLOW_COMPLETED. Pinning this guards a future regression
-    // where a failed past-the-end approve falls through to the terminal emits.
+    // where a failed completed-stage approve falls through to the terminal emits.
     expect(after.length).toBe(before.length + 1);
     expect(after[after.length - 1]).toBe("ERROR_LOGGED");
-    // And WORKFLOW_COMPLETED remains the last NON-error terminal event.
     expect(after.lastIndexOf("WORKFLOW_COMPLETED")).toBe(
       after.length - 2,
     );

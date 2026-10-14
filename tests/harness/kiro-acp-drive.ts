@@ -3,8 +3,7 @@
 // the Claude Agent SDK (Kiro ships no SDK package; `kiro-cli acp` is its
 // programmatic surface — JSON-RPC 2.0, newline-delimited, over stdio).
 //
-// SPIKE-VERIFIED contract (live against kiro-cli 2.6.1, 2026-06-12; probes in
-// tmp/kiro-acp-spike/ of the spike branch, transcripts in the spike findings):
+// Verified contract (live against kiro-cli 2.6.1):
 //   - spawn `kiro-cli acp --agent <name> [--trust-all-tools]` in the project
 //     cwd; `initialize` (protocolVersion 1) returns agentInfo + capabilities.
 //   - `session/new {cwd, mcpServers: []}` returns {sessionId, modes:{...}} —
@@ -35,9 +34,9 @@
 //
 // Questions/gates: AIDLC structured questions on Kiro render as numbered
 // prose INSIDE agent_message_chunk text (the question-rendering annex), not
-// as a protocol object — so multi-turn gate answering means calling drive()
-// again with the answer text on the same session (sessionId is returned).
-// This driver supports that via opts.sessionId + opts.keepAlive.
+// as a protocol object - so multi-turn gate answering means calling
+// driveKiroAcp() again with the answer text on the same session (sessionId is
+// returned). This driver supports that via opts.session + opts.keepAlive.
 
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -50,13 +49,12 @@ import { LIVE_LONG_OPERATION_TIMEOUT_MS, LIVE_STARTUP_TIMEOUT_MS, remainingOpera
 //
 // sdk-drive.ts writes a per-event ndjson trace under AIDLC_TEST_LOG_DIR when
 // the runner is in --debug mode, so a failed (or timed-out) SDK turn can be
-// reconstructed after the fact. The ACP driver historically wrote NOTHING and
-// spawned `kiro-cli acp` with stderr:"ignore", so a `session/prompt` timeout
-// surfaced only as the bare reject — no record of whether the turn was making
-// real tool calls (running, just slow) or stalled. That blind spot is the one
-// this trace closes: every ACP event (start, tool_call, tool_call_update,
-// permission, result, timeout, end) plus the spawned process's stderr lands in
-// `kiro-acp-drive-<pid>.ndjson`, the ACP analogue of sdk-drive's trace.
+// reconstructed after the fact. This trace does the same for ACP, so a
+// `session/prompt` timeout shows whether the turn was making real tool calls
+// (running, just slow) or stalled: every ACP event (start, tool_call,
+// tool_call_update, permission, result, timeout, end) plus the spawned
+// process's stderr lands in `kiro-acp-drive-<pid>.ndjson`, the ACP analogue of
+// sdk-drive's trace.
 function acpTracePath(): string | undefined {
   if (process.env.AIDLC_ACP_TRACE_FILE) return process.env.AIDLC_ACP_TRACE_FILE;
   if (process.env.AIDLC_TEST_DEBUG === "true" && process.env.AIDLC_TEST_LOG_DIR) {
@@ -199,9 +197,13 @@ export interface AcpDriveResult {
    * catch one. Assert on it where a test genuinely cares.
    */
   rejectedToolCalls: AcpToolCallIssue[];
-  /** aidlc-docs/aidlc-state.md after the turn, if present. */
+  /** The active intent record's aidlc-state.md after the turn, if present;
+   * aidlc-docs/aidlc-state.md is the fallback.
+   */
   stateFile?: string;
-  /** Audit **Event**: types parsed from aidlc-docs/audit.md, in file order. */
+  /** Audit **Event**: types parsed from the active intent record's audit shards
+   * (or the flat aidlc-docs/audit.md fallback), in file order.
+   */
   auditEvents?: string[];
 }
 
@@ -220,12 +222,12 @@ export interface AcpDriveOptions {
   /** Keep the process + session alive and return it on the result for
    *  follow-up turns (caller must close() it). */
   keepAlive?: boolean;
-  /** Abort the turn (session/cancel) as soon as a tool_call_update completes
+  /** Abort the turn (session/cancel) as soon as a tool_call_update carries output
    *  for a tool whose title matches — the ACP analogue of sdk-drive's
    *  stopAfterToolResult: prove the deterministic contract, then stop the
    *  model before it can roll into unrelated workflow execution (the
-   *  turn-boundary edge). The completed tool's output is already captured
-   *  when the cancel fires; stopReason will reflect the cancellation. */
+   *  turn-boundary edge). The tool's output is already captured when the cancel
+   *  fires; stopReason will reflect the cancellation. */
   stopAfterToolTitle?: RegExp;
 }
 
@@ -298,8 +300,7 @@ export class AcpSession {
       stdin: "pipe",
       stdout: "pipe",
       // In --debug, PIPE stderr and tee it into the trace; otherwise ignore it.
-      // kiro-cli's stderr carries the diagnostics that explain a timeout (the
-      // old stderr:"ignore" is why an ACP timeout was previously undiagnosable).
+      // kiro-cli's stderr carries the diagnostics that explain a timeout.
       stderr: this.tracePath ? "pipe" : "ignore",
     });
     this.traceDiagnostic("spawn", { agent, trustAllTools });
@@ -307,7 +308,6 @@ export class AcpSession {
     if (this.tracePath) void this.stderrLoop();
   }
 
-  /** Tee the spawned process's stderr into the debug trace (--debug only). */
   private async stderrLoop(): Promise<void> {
     const stderr = this.proc.stderr;
     if (!stderr || typeof stderr === "number") return;
@@ -345,7 +345,7 @@ export class AcpSession {
             bytes: Buffer.byteLength(line),
             sha256: createHash("sha256").update(line).digest("hex"),
           });
-          continue; // Preserve existing behavior; diagnostic coverage is incomplete.
+          continue;
         }
         this.dispatch(msg);
       }
@@ -486,11 +486,11 @@ export class AcpSession {
   }
 }
 
-// P4: creation writes the workflow record per-intent - state at
-// aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md, audit as per-clone
+// Creation writes the workflow record per-intent - state at
+// aidlc/spaces/<space>/intents/<YYMMDD>-<slug>/aidlc-state.md, audit as per-clone
 // shards at <record>/audit/<host>-<clone>.md — NOT the flat aidlc-docs/. Resolve
 // the created record from the active-space + active-intent cursors, falling back to
-// the flat layout for a not-yet-created (pre-migration) fixture.
+// the flat layout for a not-yet-created fixture.
 function recordDirOf(projectDir: string): string {
   const spaceCursor = join(projectDir, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -513,7 +513,7 @@ function stateFilePathOf(projectDir: string): string {
 
 function parseAuditEvents(projectDir: string): string[] | undefined {
   // Audit is sharded per clone under <record>/audit/; concat every shard, else
-  // fall back to a flat aidlc-docs/audit.md (pre-migration fixture).
+  // fall back to a flat aidlc-docs/audit.md.
   const auditDir = join(recordDirOf(projectDir), "audit");
   let body: string;
   if (existsSync(auditDir)) {
@@ -537,12 +537,11 @@ function parseAuditEvents(projectDir: string): string[] | undefined {
 // stopAfterToolTitle (which fires session/cancel the moment the named tool's
 // output lands) rather than waiting for end_turn: the workspace journey leg
 // (t-acp-kiro-journey-workspace) reuses one keepAlive AcpSession across turns and
-// drives the conductor's offer→confirm flow this way, spike-verified 3/3. Gate
-// loops that need a HUMAN-shaped voluntary stop still belong to the TUI driver;
-// ACP's lane is single-turn contracts (and bounded multi-turn sequences) anchored
-// by stopAfterToolTitle.
+// drives the conductor's offer->confirm flow this way. Gate loops that need a
+// HUMAN-shaped voluntary stop still belong to the TUI driver; ACP's lane is
+// single-turn contracts (and bounded multi-turn sequences) anchored by
+// stopAfterToolTitle.
 
-/** Run one agentic turn through `kiro-cli acp` and return structure. */
 export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResult> {
   const timeoutMs = opts.timeoutMs ?? LIVE_LONG_OPERATION_TIMEOUT_MS;
   // Validate the parent allocation before spawning; each RPC re-reads the same
@@ -621,7 +620,7 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
       if (u.status) tc.status = String(u.status);
       // Cancel as soon as the matched tool's OUTPUT BYTES are captured — the
       // contract surface is in hand; waiting for status:"completed" raced the
-      // cancel against the content update (calibration 2 failed that way).
+      // cancel against the content update.
       if (
         opts.stopAfterToolTitle &&
         tc.output.length > 0 &&
@@ -674,8 +673,7 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
       // Turn overran the budget — cancel it so the agent stops burning
       // credits, then rethrow: a timeout is a finding, not a soft pass. The
       // trace's tool_call events up to this point show whether the turn was
-      // progressing (real tool calls) or stalled — the diagnosis the old
-      // stderr:"ignore" + no-trace driver could not give.
+      // progressing (real tool calls) or stalled.
       writeAcpTrace(trace, "timeout", {
         timeoutMs,
         toolCallsSoFar: toolCalls.length,

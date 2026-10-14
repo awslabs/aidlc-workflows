@@ -1,17 +1,10 @@
 // covers:
 //
-// t04 — shell anti-pattern lint. Migrated from tests/smoke/t04-shell-lint.sh
-// (TAP plan 2, two awk-based corpus scanners). The .sh had no `# covers:`
-// header (it is a structural lint over the test suite's own .sh corpus, not a
-// unit contract on a shipped tool), so this twin's covers id list is empty too
-// — matching the smoke meta-guard house style in
-// tests/smoke/t02-hook-executability.test.ts and t-scope-mapping-guard.test.ts.
+// t04 - shell anti-pattern lint.
 //
 // Mechanism: none. Subject is the suite's own *.sh corpus on disk
 // (tests/**/*.sh) — a pure structural file scan with zero LLM, zero tokens,
-// zero process boundary. We port the two awk scanners into TypeScript and run
-// them in-process over the SAME corpus the .sh resolved (TESTS_ROOT =
-// "$SCRIPT_DIR/.." == <REPO_ROOT>/tests, here REPO_ROOT/tests).
+// zero process boundary. The two scanners run in-process over REPO_ROOT/tests.
 //
 // What the .sh guards (verbatim from its header, t04-shell-lint.sh:1-18):
 //   Pattern A — a trailing `[ ... ] && action` as the LAST non-blank,
@@ -21,7 +14,7 @@
 //     tests mid-plan). Guard scope: function bodies only.
 //   Pattern B — `$VAR` adjacent to a non-printable-ASCII byte without `${...}`
 //     braces. Under `set -u` bash reads the UTF-8 continuation bytes as part of
-//     the identifier and exits "unbound variable" (#41: t21b `→` arrow crashed
+//     the identifier and exits "unbound variable" (#41: t21b's arrow crashed
 //     the script before assertions could fire).
 //
 // Port of the scanners (faithful to the .sh's awk):
@@ -52,10 +45,8 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
-// TESTS_ROOT mirrors the .sh's `cd "$SCRIPT_DIR/.."` (t04:13) — the tests/ dir.
 const TESTS_ROOT = join(REPO_ROOT, "tests");
 
-/** All *.sh files under tests/, the .sh's `find "$TESTS_ROOT" -name "*.sh"`. */
 function shellFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
@@ -69,8 +60,7 @@ function shellFiles(dir: string): string[] {
 
 /**
  * Pattern-A candidate: a trailing `[ ... ] && action` with no `||` fallback,
- * not a comment. Mirrors awk is_candidate (t04:25-29). The awk char class
- * [[:space:]] is whitespace; [^]] is "not a closing bracket".
+ * not a comment.
  */
 function isCandidateA(line: string): boolean {
   if (/^\s*#/.test(line)) return false;
@@ -81,8 +71,7 @@ function isCandidateA(line: string): boolean {
 /**
  * Pattern-A corpus scan: returns `file:line` hits where a candidate is the
  * LAST non-blank/non-comment line of a function body (the body-closing `}` at
- * column 0 immediately follows it, code-line-wise). Ports the awk state
- * machine in t04:32-49.
+ * column 0 immediately follows it, code-line-wise).
  */
 function scanA(text: string, fileName: string): string[] {
   const hits: string[] = [];
@@ -90,11 +79,10 @@ function scanA(text: string, fileName: string): string[] {
   let inFn = false;
   let lastCand = 0;
   let lastCode = 0;
-  // awk NR is 1-based.
   for (let i = 0; i < lines.length; i++) {
     const nr = i + 1;
     const s = lines[i];
-    // Enter function body on `name() {` (awk t04:33-35).
+    // Enter function body on `name() {`.
     if (/^[A-Za-z_][A-Za-z0-9_]*\s*\(\)\s*\{?\s*$/.test(s)) {
       inFn = true;
       lastCand = 0;
@@ -102,7 +90,7 @@ function scanA(text: string, fileName: string): string[] {
       continue;
     }
     if (inFn && /^\}\s*$/.test(s)) {
-      // Body-closing `}` at column 0 (awk t04:36-41).
+      // Body-closing `}` at column 0.
       if (lastCand > 0 && lastCand === lastCode) {
         hits.push(`${fileName}:${lastCand}: trailing [..] && in function body`);
       }
@@ -110,8 +98,8 @@ function scanA(text: string, fileName: string): string[] {
       continue;
     }
     if (inFn) {
-      if (/^\s*$/.test(s)) continue; // blank
-      if (/^\s*#/.test(s)) continue; // comment
+      if (/^\s*$/.test(s)) continue;
+      if (/^\s*#/.test(s)) continue;
       lastCode = nr;
       if (isCandidateA(s)) lastCand = nr;
     }
@@ -121,9 +109,9 @@ function scanA(text: string, fileName: string): string[] {
 
 /**
  * Pattern-B corpus scan: `$VAR` immediately followed by a byte outside
- * printable-ASCII + tab, on a non-comment line. Ports the awk in t04:62-70.
- * The awk char class `[^ -~\t]` = anything not in printable ASCII (space..~)
- * and not a tab; in a JS string/regex the equivalent excludes \x20-\x7e and \t.
+ * printable-ASCII + tab, on a non-comment line. The char class `[^ -~\t]` =
+ * anything not in printable ASCII (space..~) and not a tab; in a JS
+ * string/regex the equivalent excludes \x20-\x7e and \t.
  */
 function scanB(text: string, fileName: string): string[] {
   const hits: string[] = [];
@@ -131,7 +119,7 @@ function scanB(text: string, fileName: string): string[] {
   const lines = text.split("\n");
   for (let i = 0; i < lines.length; i++) {
     const s = lines[i];
-    if (/^\s*#/.test(s)) continue; // awk: skip comment lines
+    if (/^\s*#/.test(s)) continue;
     if (re.test(s)) hits.push(`${fileName}:${i + 1}: ${s}`);
   }
   return hits;
@@ -141,8 +129,7 @@ const FILES = shellFiles(TESTS_ROOT);
 
 describe("t04 shell anti-pattern lint — tests/**/*.sh corpus (migrated from t04-shell-lint.sh, plan 2)", () => {
   // Sanity: the corpus is non-empty, so a clean result is real coverage and not
-  // a vacuous pass over zero files (the .sh implicitly relied on `find` hitting
-  // files; we make it explicit).
+  // a vacuous pass over zero files.
   test("the .sh corpus under tests/ is non-empty (scan is not vacuous)", () => {
     expect(FILES.length).toBeGreaterThan(0);
   });
@@ -191,7 +178,6 @@ describe("t04 Pattern-A detector — #34 trailing `[..] &&` in a function body",
       "}",
       "",
     ].join("\n");
-    // The last code line is `echo done`, not the candidate -> no hit.
     expect(scanA(ok, "OK.sh")).toEqual([]);
   });
 

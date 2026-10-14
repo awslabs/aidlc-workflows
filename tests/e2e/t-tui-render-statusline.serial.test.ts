@@ -1,7 +1,7 @@
 // covers: render-surface:statusline-phase-bar render-surface:statusline-counter
 // covers: render-surface:statusline-stage-name render-surface:statusline-align
 //
-// t-tui-render-statusline.serial.tui.test.ts — four render-surface units of the
+// t-tui-render-statusline.serial.test.ts - four render-surface units of the
 // AI-DLC statusline (§5-C render row, §7 Phase 1), driven SEEDED-STATE in a REAL
 // terminal with ZERO Bedrock tokens.
 //
@@ -18,7 +18,7 @@
 //                             live turn). In production the statusline hook runs
 //                             with PIPED stdout, so process.stdout.columns is
 //                             undefined -> cols=0 -> printLine takes the ` | `
-//                             separator branch (:185). The model is pinned in the
+//                             separator branch. The model is pinned in the
 //                             distributable settings.json (ANTHROPIC_DEFAULT_OPUS_
 //                             MODEL=us.anthropic.claude-opus-4-8, abbreviated by
 //                             abbreviateModel() to "BR:opus-4-8[1m]"), so the
@@ -27,8 +27,8 @@
 //                             is platform-invariant plain text (no colour escapes),
 //                             so every supported backend captures it identically.
 //
-// DIST/ FINDING (surfaced, not chased here): printLine's right-justify/padStart
-// branch (:180-183) only fires when process.stdout.columns > 0. Claude Code pipes
+// DIST/ FINDING (surfaced, not chased here): printLine's right-justify (space
+// padding) branch only fires when process.stdout.columns > 0. Claude Code pipes
 // stdout to the statusline hook, so columns is always 0 and that branch is DEAD in
 // the live render path — the ` | ` fallback always wins. The "padded to terminal
 // width" behaviour the align unit is nominally about never executes in production.
@@ -37,7 +37,7 @@
 //
 // COST: launches the claude TUI but submits NO prompt — it reaches the workflow
 // statusline state purely from the seeded state file, spending NO Bedrock tokens
-// (the probe on 2026-06-04 verified all three paint pre-turn on the live TUI).
+// (the probe on 2026-06-04 verified these paint pre-turn on the live TUI).
 // Needs the selected TUI substrate + claude + the distributable; absent any of those it SKIPs with a
 // reason — never a hollow pass.
 //
@@ -114,8 +114,6 @@ function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: 
   );
 }
 
-// ABSENT detection checks the selected substrate; claude is
-// needed on every platform; the distributable + the fixture must be present.
 function absentReason(): string | null {
   const runtimeReason = tuiUnavailableReason();
   if (runtimeReason) return runtimeReason;
@@ -128,9 +126,9 @@ function absentReason(): string | null {
 }
 const ABSENT_REASON = absentReason();
 
-// Capture the workflow statusline once, shared by all three unit assertions. A
-// fresh TUI launch per assertion would triple the (already slow) tmux+claude
-// startup for no extra coverage — the three branches paint from ONE seeded
+// Capture the workflow statusline once, shared by all four unit assertions. A
+// fresh TUI launch per assertion would quadruple the (already slow) tmux+claude
+// startup for no extra coverage - the four branches paint from ONE seeded
 // state, so one capture is the faithful observation. Returns the captured pane.
 function captureWorkflowStatusline(): string {
   const session = `aidlc_tui_render_sl_${process.pid}`;
@@ -177,8 +175,9 @@ function captureWorkflowStatusline(): string {
     if (startup.rc !== 0) throw new Error(`TUI startup failed: ${startup.stderr}`);
 
     // --- wait for the WORKFLOW statusline (IDEATION, not "ready") -----------
-    // P9: the statusline now carries the orientation prefix ("<intent-slug> · ")
-    // between [AIDLC] and the phase, so match with .* rather than a contiguous gap.
+    // The statusline carries the orientation prefix (the intent slug and a
+    // middle-dot separator) between [AIDLC] and the phase, so match with .* rather
+    // than a contiguous gap.
     const sawMarker = waitFor(session, "\\[AIDLC\\].*IDEATION", remainingWorkMs(), 1000);
     const pane = drive(["capture", "--session", session]).stdout;
     if (!sawMarker) {
@@ -198,7 +197,6 @@ function captureWorkflowStatusline(): string {
 }
 
 describe("t-tui-render statusline workflow branches (seeded mid-ideation, no tokens)", () => {
-  // One launch, cached for the three unit assertions.
   let PANE: string | null = null;
   function pane(): string {
     if (PANE === null) PANE = captureWorkflowStatusline();
@@ -245,7 +243,7 @@ describe("t-tui-render statusline workflow branches (seeded mid-ideation, no tok
   // the distributable pins the Opus model -> abbreviateModel() -> "BR:opus-4-8[1m]".
   // So the painted line ends "... | BR:opus-4-8[1m]". Anchored on the separator +
   // model token so a stray "BR:" elsewhere can't satisfy it. Platform-invariant
-  // plain text (no SGR escapes) is captured consistently. The padStart
+  // plain text (no SGR escapes) is captured consistently. The space-padding
   // right-justify branch is dead in production; see the DIST/ FINDING above.
   test.skipIf(ABSENT_REASON !== null)(
     `statusline-align paints the " | BR:opus-4-8[1m]" right side via printLine${ABSENT_REASON ? ` — SKIP: ${ABSENT_REASON}` : ""}`,

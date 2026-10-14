@@ -212,7 +212,7 @@ async function git(proj: string, args: string[]): Promise<string> {
   if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
   return result.stdout.trim();
 }
-/** A feature at Code Generation run as a swarm (stage-major, two Units in batch 1, gamma in batch 2), with the source
+/** A feature at Code Generation run as a swarm (stage-major, with the supplied Unit batches), with the source
  * committed and baselined, as t343 and t340 build it. */
 async function swarmFixture(proj: string, units: string[][]): Promise<void> {
   writeFileSync(seededStateFile(proj), `# AI-DLC State Tracking
@@ -345,7 +345,7 @@ export async function buildQuestion(proj: string, question: Question): Promise<v
       return;
     }
     case "stage-gate-sensor-failure":
-      // The report refused on a blocking sensor, so the gate is NOT open (stage-protocol.md:385): the stage still runs
+      // The report refused on a blocking sensor, so the gate is NOT open (stage-protocol.md, Part 0: Enter the approval gate): the stage still runs
       // and the agent asks the two-option question.
       workOpen(proj);
       writeStageFiles(proj, false);
@@ -396,7 +396,6 @@ export async function buildQuestion(proj: string, question: Question): Promise<v
       const line = question === "plan-offer" ? "/aidlc fix the login: it rejects a correct password" : "/aidlc fix the login timeout";
       await say(proj, line, "claude");
       const read = await next(proj, line.replace(/^\/aidlc\s*/, "").split(" "));
-      // The agent's step after the plan proposal print: a fix line gets the bugfix plan proposed.
       const proposal = proposalFollowUp(read.directive, "bugfix");
       const offer = proposal === null ? read : await next(proj, proposal);
       if (offer.directive?.ask_type !== "scope-confirm") throw new Error(`the plan offer did not open: ${offer.out}`);

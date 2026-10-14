@@ -8,8 +8,8 @@
 //
 // WHY THIS IS METAMORPHIC, NOT A t53 CLONE. t53 (tests/e2e/t53.test.ts)
 // proves the same family for `bugfix` by HARD-CODING IDEATION_STAGES /
-// OPERATION_STAGES literals. This test is the metamorphic generalisation: it
-// DERIVES the SKIP set for its scope FROM scope-grid.json at test time (the
+// OPERATION_SKIP_STAGES literals. This test is the metamorphic generalisation:
+// it DERIVES the SKIP set for its scope FROM scope-grid.json at test time (the
 // shipped source of truth, dist/.../tools/data/scope-grid.json), so the
 // invariant tracks the data — if a future scope edit moves a stage EXECUTE->SKIP,
 // this test's expectation moves with it, automatically. And it runs a DIFFERENT
@@ -26,7 +26,7 @@
 //
 // SOURCE-PINNED FACTS (verify-never-guess):
 //   - scope grid: dist/claude/.claude/tools/data/scope-grid.json (read at test
-//     time; "security-patch".stages maps each of the 32 stages to EXECUTE|SKIP).
+//     time; "security-patch".stages maps each stage to EXECUTE|SKIP).
 //   - STAGE_STARTED is emitted for EXECUTE stages ONLY (aidlc-utility.ts init
 //     stages + aidlc-state.ts advance); a SKIP stage gets a `[ ] <slug> — SKIP`
 //     state row and NO STAGE_STARTED block (audit-format.md:33; the t53 thesis,
@@ -34,8 +34,8 @@
 //   - the audit STAGE_STARTED `**Stage**:` field names the slug (audit-format.md:33).
 //   - greenfield downgrades reverse-engineering EXECUTE->SKIP at runtime
 //     (aidlc-utility.ts) — a stage that is EXECUTE in the mapping but SKIP at
-//     runtime on greenfield. We run on a greenfield project and EXCLUDE
-//     reverse-engineering from the positive "EXECUTE stages did start" control so
+//   runtime on greenfield. We run on a greenfield project and use only the
+//   initialization stages as the positive "EXECUTE stages did start" control so
 //     the runtime downgrade can't red the test; it's irrelevant to the SKIP
 //     disjointness assertion (the mapping's SKIP set is a subset of the runtime
 //     SKIP set, so disjointness from the authored SKIP set is the weaker, sound
@@ -127,7 +127,6 @@ function seedScopedState(proj: string): void {
   expect(output).toContain("State initialized");
 }
 
-/** Derive { skip[], execute[] } for a scope straight from scope-grid.json. */
 function deriveStageSets(scope: string): { skip: string[]; execute: string[] } {
   const grid = JSON.parse(readFileSync(SCOPE_GRID, "utf8")) as Record<
     string,
@@ -144,9 +143,9 @@ function deriveStageSets(scope: string): { skip: string[]; execute: string[] } {
   return { skip, execute };
 }
 
-/** Extract the `**Stage**:` slug from every STAGE_STARTED block in audit.md,
- *  pairing the Event line with the Stage line in the SAME block (mirrors t53's
- *  stageStartedStages). Returns slugs in file order. */
+/** Extract the `**Stage**:` slug from every STAGE_STARTED block in the audit
+ *  shards, pairing the Event line with the Stage line in the SAME block (mirrors
+ *  t53's stageStartedStages). Returns slugs in file order. */
 function stageStartedStages(proj: string): string[] {
   // Every shard: the audit folder can hold more than one file.
   const blocks = readAuditText(proj).split(/\n---\n/);
@@ -206,7 +205,6 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
         // journey cannot prove that a later SKIP stage never starts.
         assertAuditEvent(r, "WORKFLOW_COMPLETED");
 
-        // Scope recorded correctly (the run actually ran THIS scope).
         const scope = (r.stateFile ?? "").match(/^- \*\*Scope\*\*: (\S+)$/m)?.[1];
         expect(scope).toBe(SCOPE);
 
@@ -228,7 +226,7 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
         const initExecute = execute.filter((s) =>
           ["workspace-scaffold", "workspace-detection", "state-init"].includes(s),
         );
-        expect(initExecute.length).toBe(3); // sanity: mapping marks init EXECUTE
+        expect(initExecute.length).toBe(3);
         for (const slug of initExecute) {
           expect(started.has(slug)).toBe(true);
         }
