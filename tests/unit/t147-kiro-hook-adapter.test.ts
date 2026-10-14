@@ -938,7 +938,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(r.stdout).not.toContain("Cwd=C:\\shell\\noise");
       // Kiro renders the reply as Markdown, which joins single line breaks; a
       // fenced text block keeps doctor and help on their own lines.
-      expect(r.stdout).toContain(`relay that output to the user ${relayAsTextBlock("")}, then stop.`);
+      expect(r.stdout).toContain(`Relay the output below to the person ${relayAsTextBlock("")}, then stop.`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -952,7 +952,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         prompt: "/aidlc add a --version flag that prints the version from package.json",
       });
       expect(r.code).toBe(0);
-      expect(r.stdout).not.toContain("relay that output to the user");
+      expect(r.stdout).not.toContain("Relay the output below to the person");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -973,12 +973,12 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       ]) {
         const r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
         expect(r.code, prompt).toBe(0);
-        expect(r.stdout, prompt).not.toContain("relay that output to the user");
+        expect(r.stdout, prompt).not.toContain("Relay the output below to the person");
         expect(r.stdout, prompt).not.toContain("Unknown intent");
       }
       const switched = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: `/aidlc intent ${slug}` });
       expect(switched.code).toBe(0);
-      expect(switched.stdout).toContain("relay that output to the user");
+      expect(switched.stdout).toContain("Relay the output below to the person");
       expect(switched.stdout).toContain(`Now working on \`${slug}\`.`);
     } finally {
       rmSync(dir, { recursive: true, force: true });

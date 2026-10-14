@@ -2302,6 +2302,19 @@ export function fenceCommandOutput(output: string, exitCode?: number): string {
   );
 }
 
+// What a prompt hook hands the agent with a command it already ran for the
+// person's own line (`command`, as they typed it): the output to show them,
+// and that nothing else is to run this turn. One wording for every host whose
+// prompt hook does this (the core human-turn hook, both Kiro adapters).
+export function terminalCommandRelay(command: string, output: string, exitCode?: number): string {
+  return (
+    `The command \`${command}\` has already run; it carries no workflow work. ` +
+    `Relay the output below to the person ${relayAsTextBlock(output)}, then stop. ` +
+    "Run no shell command and no AI-DLC command this turn, and do not advance, resume, or run any workflow stage.\n\n" +
+    fenceCommandOutput(output, exitCode)
+  );
+}
+
 // --- Engine command detectors (hook classifier seam) ---
 //
 // These raw command-string classifiers are shared by hooks and tests. They do

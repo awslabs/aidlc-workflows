@@ -249,7 +249,7 @@ function verifiedChecksums(directory: string): Map<string, string> {
 }
 
 // Whether an attestation was checked. Without `gh`, or with a `gh` too old to
-// verify attestations, only the checksums bind the release, as they always have.
+// verify attestations, only the checksums bind the release.
 export type AttestationOutcome = "verified" | "absent" | "unsupported";
 
 export function verifyReleaseProvenance(

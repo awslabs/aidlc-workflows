@@ -81,6 +81,15 @@ describe("log", () => {
     }
   });
 
+  // --person-asked is read only when the review is requested, never with --verdict.
+  test("review names --person-asked on the request line, not the verdict line", () => {
+    const p = project();
+    const [request, , verdict] = run(p, "aidlc-log.ts", ["review", "--help"]).stdout.split("\n");
+    expect(request).toContain("--iteration <n> [--unit <unit>] [--person-asked]");
+    expect(verdict).toContain("--verdict ");
+    expect(verdict).not.toContain("--person-asked");
+  });
+
   test("an unknown checkpoint names only the ones that subcommand accepts", () => {
     const p = project();
     const decision = run(p, "aidlc-log.ts", ["decision", "--stage", "feasibility", "--decision", "Pick", "--checkpoint", "guard-recovery"]);

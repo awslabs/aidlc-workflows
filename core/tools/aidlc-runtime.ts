@@ -1,5 +1,5 @@
 // Runtime-graph compile + read tool. Materialises a per-workflow
-// runtime-graph.json from audit.md + per-stage memory.md files; the
+// runtime-graph.json from audit shards + per-stage memory.md files; the
 // data-plane mirror of stage-graph.json (which is structural truth).
 //
 // Subcommands:
@@ -17,10 +17,9 @@
 // (Bolt fork/merge, gate ritual, lifecycle, doctor) in the same change.
 //
 // Determinism: re-running compile against the same audit log produces a
-// byte-equivalent runtime-graph.json. Emitted MEMORY_EMPTY rows are
-// re-emitted on re-compile (append-only audit, no row de-duplication);
-// the doctor de-duplicates by (Stage, ISO-second) tuple when computing
-// the MEMORY_EMPTY-rate metric.
+// byte-equivalent runtime-graph.json. MEMORY_EMPTY rows are suppressed on
+// re-compile when a row already exists at or after the stage's completed_at,
+// giving one row per (stage, gate-completion) tuple.
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
@@ -86,10 +85,10 @@ interface BoltInstance {
 
 interface RuntimeStage {
   stage_slug: string;
-  // Single-instance fields (started_at, completed_at, agent, memory_path,
-  // memory_entries, memory_breakdown) are NULL when `instances` is present —
-  // those values sit on each BoltInstance instead. memory_path stays populated
-  // even on instance-bearing rows (it's the parent stage's path).
+  // Single-instance fields (started_at, completed_at, agent, memory_entries,
+  // memory_breakdown) are NULL when `instances` is present -- those values sit
+  // on each BoltInstance instead. memory_path stays populated even on
+  // instance-bearing rows (it's the parent stage's path).
   started_at: string | null;
   completed_at: string | null;
   agent: string | null;
@@ -127,10 +126,10 @@ interface RuntimeGraph {
 
 // --- Path helpers ---
 //
-// The aidlc-docs data-path helpers (runtimeGraphPath, memoryFilePath,
+// The record data-path helpers (runtimeGraphPath, memoryFilePath,
 // unitDependencyPath, relativeMemoryPath, worktreeRuntimeGraphPath) are imported
-// from aidlc-lib.ts — the single chokepoint for the aidlc-docs tree. memoryPath
-// here is memoryFilePath; the per-row relative form is relativeMemoryPath.
+// from aidlc-lib.ts -- the single chokepoint for the record tree; the per-row
+// relative form is relativeMemoryPath.
 
 // --- Compile ---
 
@@ -319,7 +318,6 @@ function computeBoltDag(projectDir: string): BoltDag | undefined {
 function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   const { projectDir } = opts;
 
-  // Env-misconfig fallback per plan §97-102.
   const statePath = stateFilePath(projectDir);
   if (!existsSync(statePath)) {
     process.stderr.write(
@@ -327,7 +325,6 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
     );
     return { skipped: "no-state" };
   }
-  // Read across every per-clone audit shard (single shard in the common case).
   const audit = readAllAuditShards(projectDir);
   if (audit.length === 0) {
     // No audit yet — write an empty graph anchored to state cursor only,
@@ -405,18 +402,19 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   // --- BoltInstance[] populator (parallel-Bolt detection) ----------------
   //
   // For each Construction-phase stage row, detect parallel-Bolt audit
-  // footprint and (when ≥ 2 distinct slugs are present in the stage's
+  // footprint and (when >= 2 distinct slugs are present in the stage's
   // window) replace the parent's single-instance fields with a populated
   // `instances[]` array. Single-Bolt stages stay single-instance — the
   // schema reserves `instances?` as optional.
   //
-  // Detection rule: a stage row gets `instances[]` when audit contains ≥ 2
+  // Detection rule: a stage row gets `instances[]` when audit contains >= 2
   // distinct `Bolt slug` values whose STATE_FORKED rows fall within the
-  // stage's [stage.started_at, stage.completed_at OR now) window AND the
-  // stage's phase is `construction`. The window's started_at is the
-  // LATEST STAGE_STARTED for that slug: re-jumps reset the window so
-  // prior-cycle Bolts don't bleed into the new cycle's instances[].
-  // pairing.entries() already gives us the latest per stage-slug.
+  // stage's [stage.started_at, stage.completed_at) window (unbounded above
+  // while the stage is incomplete) AND the stage's phase is `construction`.
+  // The window's started_at is the LATEST STAGE_STARTED for that slug:
+  // re-jumps reset the window so prior-cycle Bolts don't bleed into the new
+  // cycle's instances[]. pairing.entries() already gives us the latest per
+  // stage-slug.
   //
   // Per-instance pairing:
   //   - bolt: STATE_FORKED's `Bolt slug` field
@@ -429,9 +427,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   //   - memory_path: parent stage's memory_path (per-Bolt memory.md is a
   //                  forward-noted gap)
   //   - memory_entries / memory_breakdown: null (forward-noted)
-  //   - sensor_firings: [] (forward-noted; per-instance attribution waits
-  //                     for the sensor_firings populator that also fixes
-  //                     the parent stage's hardcode)
+  //   - sensor_firings: [] initially; populated by pairFirings below.
   //
   // Ordering: alphabetical by Bolt slug. Stable across re-compiles
   // because audit timestamps don't influence ordering.
@@ -439,7 +435,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   // Parent-stage null-out: when instances is non-empty, null `started_at`,
   // `completed_at`, `agent`, `memory_entries`, `memory_breakdown`.
   // memory_path STAYS populated (it's the parent stage's path, not a
-  // per-Bolt one). sensor_firings stays []. Parent outcome derives from
+  // per-Bolt one). sensor_firings starts as []. Parent outcome derives from
   // the rollup table (all approved → approved; any failed → failed;
   // otherwise → pending).
   const allStateForkedEvents = findAllEvents(audit, "STATE_FORKED");
@@ -447,7 +443,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   const allBoltFailedEvents = findAllEvents(audit, "BOLT_FAILED");
 
   // Helper: read a field's value from an audit row block. Mirrors
-  // getField's discipline at aidlc-lib.ts:184-194 (single-line match,
+  // getField's discipline in aidlc-lib.ts (single-line match,
   // [ \t]* not \s*) without the dynamic-regexp pattern — callers pass
   // hard-coded field names but the helper is line-scanned to keep ReDoS
   // surface zero. Block format: lines of `**FieldName**: value`.
@@ -507,7 +503,6 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
           return fieldFromBlock(ev.block, "Bolt slug") === slug;
         });
 
-        // Find BOLT_FAILED for this slug after the fork timestamp.
         const failed = allBoltFailedEvents.find((ev) => {
           if (ev.timestamp < fork.started_at) return false;
           if (windowEnd !== null && ev.timestamp >= windowEnd) return false;
@@ -528,13 +523,11 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
           memory_path: stage.memory_path,
           memory_entries: null, // per-Bolt memory.md is a forward-noted gap
           memory_breakdown: null,
-          sensor_firings: [], // per-instance attribution is a forward-noted gap
+          sensor_firings: [], // per-instance attribution is populated by pairFirings below
           outcome: instOutcome,
         };
       });
 
-    // Parent rollup: all approved → approved; any failed → failed;
-    // otherwise (any pending, no failures) → pending.
     const anyFailed = instances.some((i) => i.outcome === "failed");
     const anyPending = instances.some((i) => i.outcome === "pending");
     const parentOutcome: RuntimeStage["outcome"] = anyFailed
@@ -548,9 +541,9 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
     // learnings_captured follows the schema invariant `null on non-approved
     // rows` — when the rollup flips outcome to pending or failed, the
     // approved-only `{from_orchestrator, from_user_addition}` shape from the
-    // single-instance row builder above (lines 324-327) becomes inconsistent
-    // and must be nulled. Gate-ritual surfaces that want per-Bolt provenance
-    // attach it independently, not via this rollup.
+    // single-instance row builder above becomes inconsistent and must be
+    // nulled. Gate-ritual surfaces that want per-Bolt provenance attach it
+    // independently, not via this rollup.
     stage.started_at = null;
     stage.completed_at = null;
     stage.agent = null;
@@ -773,8 +766,8 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   };
 
   // Bolt/unit batch DAG — append only when a valid edge block exists, so the
-  // key order stays {…, stages, bolt_dag} and the absent case is byte-identical
-  // to the pre-milestone-15 envelope (no empty-node noise).
+  // key order stays {..., stages, bolt_dag} and the absent case carries no
+  // empty-node noise.
   const boltDag = computeBoltDag(projectDir);
   if (boltDag) {
     graph.bolt_dag = boltDag;
@@ -1115,8 +1108,9 @@ Learnings captured
 //
 // The runtime-graph fragment lifecycle mirrors the audit-fork +
 // state-fork pattern. fragment-fork byte-copies main's runtime-graph.json
-// into a Bolt's worktree at <wt>/aidlc-docs/runtime-graph.json on Bolt
-// start; fragment-merge removes the worktree fragment on Bolt complete.
+// into a Bolt's worktree at worktreeRuntimeGraphPath(wtPath, recordPrefix)
+// on Bolt start; fragment-merge removes the worktree fragment on Bolt
+// complete.
 //
 // No new audit events: the fork boundary is already triple-attested by
 // BOLT_STARTED + STATE_FORKED + AUDIT_FORKED, the merge boundary by
@@ -1125,22 +1119,22 @@ Learnings captured
 //
 // No content-merge in fragment-merge: main's runtime-graph.json is rebuilt
 // event-source from main audit by the post-Bash hook (AUDIT_MERGED is in
-// the transition regex per aidlc-rebuild-stage-graph.ts:87). Content-merge
+// the transitionRegex in aidlc-rebuild-stage-graph.ts). Content-merge
 // would compete with compile.
 
 // fragment-fork --slug <slug> [--project-dir <path>]
 //
 // Pre-emit guards:
-//   - worktree directory exists (mirrors audit-fork:354-358)
-//   - fragment does not already exist (mirrors audit-fork:359-363; one-shot)
+//   - worktree directory exists (mirrors audit-fork)
+//   - fragment does not already exist (mirrors audit-fork; one-shot)
 //
 // Single-read protocol (G5): readFileSync once, writeFileSync from buffer,
 // hash same buffer. Closes the byte-copy / hash race against a concurrent
 // compile rewriting main runtime-graph.json mid-fork.
 //
-// Source-absent fallback: when main has no runtime-graph.json yet (pre-milestone-8
-// state, or fresh init), write an empty graph to the worktree fragment
-// path via the refactored writeEmptyGraph(wtPath, { acquireLock: false }).
+// Source-absent fallback: when main has no runtime-graph.json yet (fresh
+// init), write an empty graph to the worktree fragment path via
+// writeEmptyGraph(wtPath, { acquireLock: false }).
 // fragment-fork takes no audit lock anywhere (L9 — no audit emit).
 function handleFragmentFork(rest: string[], projectDir: string): void {
   const flags: Record<string, string> = {};
@@ -1170,9 +1164,10 @@ function handleFragmentFork(rest: string[], projectDir: string): void {
     process.exit(1);
   }
   // Pin the worktree runtime-graph mirror AND the main read to ONE intent
-  // (vision §5). recordPrefix -> the worktree mirror's relative record dir
-  // (null -> flat); wtRecord -> the record-dir NAME the worktree fragment lives
-  // under (null -> flat). Resolved on the MAIN side so fork and merge agree.
+  // (vision section 5). recordPrefix -> the worktree mirror's relative record
+  // dir (null -> the bare space record prefix); wtRecord -> the record-dir NAME
+  // the worktree fragment lives under (undefined -> no selected intent).
+  // Resolved on the MAIN side so fork and merge agree.
   const intent = flags.intent;
   // Resolve the SPACE segment ONCE against the MAIN cursor and pass it
   // EXPLICITLY everywhere below. Without this, the source-absent write path
@@ -1428,9 +1423,9 @@ const SUBCOMMANDS: Record<string, SubcommandHandler> = {
   "fragment-merge": tryRun("fragment-merge", handleFragmentMerge),
 };
 
-// Pre-strip --project-dir <path> from argv. Mirrors
-// aidlc-state.ts:101-106 / aidlc-audit.ts:616-624. Required because
-// aidlc-bolt.ts's spawnSibling invokes us as
+// Pre-strip --project-dir <path> from argv. Mirrors the same pre-strip in
+// aidlc-state.ts / aidlc-audit.ts main(). Required because aidlc-bolt.ts's
+// spawnSibling invokes us as
 //   bun run <tool> --project-dir <pd> <subcommand> ...
 // — without this pre-strip, `cmd === "--project-dir"` and dispatch fails.
 // Existing flag-less callers (the post-Bash compile hook, direct user

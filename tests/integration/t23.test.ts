@@ -1,51 +1,34 @@
-// covers: subcommand:aidlc-utility:help
+// covers: hook:aidlc-record-human-turn, subcommand:aidlc-utility:help
 //
 // t23.test.ts - drives the real /aidlc --help through the Claude Agent SDK and
-// asserts ONLY on deterministic surfaces — never on assistantText.
+// asserts ONLY on deterministic surfaces, never on assistantText.
 //
-// THE DETERMINISTIC SURFACE. SKILL.md:67,72 routes `--help` to
-// `bun .claude/tools/aidlc-utility.ts help` via Bash and prints its stdout
-// VERBATIM, as first ported; today the engine names the help command in a
-// print directive the conductor runs the same way. The SDK surfaces that Bash
-// tool_result BYTE-IDENTICAL to the tool's stdout, before the LLM rewords it
-// (the same surface t20/t22 use).
+// THE DETERMINISTIC SURFACE. Claude Code's prompt hook answers a typed help
+// request itself: it hands the agent the help (renderHelpText, the same text
+// `aidlc-utility.ts help` prints) with the person's message, and the agent
+// shows it with no command to run. The SDK reports what the UserPromptSubmit
+// hook printed (capturePromptHooks), byte for byte, before the model rewords
+// anything.
 //
 // ASSERTION MAP (.sh test -> SDK surface):
-//   1 OUTPUT contains AI-DLC    -> Bash tool_result contains "AI-DLC"    (HELP_TEXT_HEAD header line, utility.ts:106)
-//   2 OUTPUT contains --status  -> Bash tool_result contains "--status"  (HELP_TEXT_TAIL Utilities line, utility.ts:115)
-//   3 OUTPUT contains --init    -> --init/--force are gone from help; re-expressed as a
-//                                 POSITIVE assertion that the help lists the verbs
-//                                 `intent`/`space` PLUS a NEGATIVE assertion that --init/--force
-//                                 are ABSENT (mirrors tests/integration/t31-help.test.ts).
-//   4 OUTPUT contains --doctor  -> Bash tool_result contains "--doctor"  (HELP_TEXT_TAIL Utilities line, utility.ts:118)
-//   5 OUTPUT contains enterprise-> Bash tool_result contains "enterprise"(scope line rendered from scope-mapping.json via renderHelpText, utility.ts:144-158; key utility.ts data/scope-mapping.json:2)
-//   6 /aidlc --help exits 0     -> resultEvent.is_error === false        (SDK terminal event — handleHelp is a single stdout write + exit-0 by construction, utility.ts:165-167)
-//                                 (asserted today on the non-error Bash tool_result)
+//   1 OUTPUT contains AI-DLC    -> the prompt hook's context carries the help header
+//   2 OUTPUT contains --status  -> ... the Utilities block's --status line
+//   3 OUTPUT contains --init    -> --init/--force are gone from help: the help lists
+//                                 the verbs `intent`/`space`, and --init/--force are
+//                                 ABSENT (mirrors tests/integration/t31-help.test.ts)
+//   4 OUTPUT contains --doctor  -> ... the Utilities block's --doctor line
+//   5 OUTPUT contains enterprise-> ... a scope line rendered from the scope mapping
+//   6 /aidlc --help exits 0     -> the drive ends without an error (assertResultOk)
 //
-// This file asserts the literals on the ROUTED /aidlc --help path's
-// deterministic Bash tool_result (so a regression where dispatch stopped
-// running the tool, or the tool stopped emitting a section, is caught on the
-// user-facing path). assertToolResultContains refuses to pass vacuously if
-// Bash never fired - so it also proves --help routed to the tool, not just
-// that prose mentioned a flag.
+// The help is shown once: no command result in the drive carries it again (an
+// agent that showed the hook's help and then ran the help as well would put it
+// in front of the person twice).
 //
-// Known-answer literals (read from the SHIPPED handler, not guessed):
-//   - "AI-DLC"      HELP_TEXT_HEAD first line                          (utility.ts:106)
-//   - "--status"    HELP_TEXT_TAIL Utilities block                     (utility.ts:115)
-//   - "intent"/"space"  the verb families listed in help (HELP_TEXT_TAIL)
-//   - "--doctor"    HELP_TEXT_TAIL Utilities block                     (utility.ts:118)
-//   - "enterprise"  scope name padded into a scope line by renderHelpText
-//                   (utility.ts:158), sourced from data/scope-mapping.json:2
-//   - --help dispatch: SKILL.md:67,72 -> `bun .claude/tools/aidlc-utility.ts help` via Bash, stdout verbatim
+// MECHANISM. Plain t23.test.ts: mechanism `sdk` is DERIVED from the driveAidlc(
+// call, no filename segment.
 //
-// MECHANISM. Plain t23.test.ts — mechanism `sdk` is DERIVED from the driveAidlc(
-// call, no filename segment. The covered unit `aidlc-utility help` is
-// minMechanism `cli` (rank 1); sdk (rank 2) satisfies cli (2 >= 1), so the
-// covers claim is honoured by the guarantee-principle gate.
-//
-// It SPENDS TOKENS — driveAidlc drives the real /aidlc on Opus/Bedrock.
+// It SPENDS TOKENS: driveAidlc drives the real /aidlc on Opus/Bedrock.
 // Generous per-test timeout so a hung canUseTool fails LOUD via bun:test.
-
 import {
   liveCaseTimeoutMs,
   LIVE_LONG_OPERATION_TIMEOUT_MS,
@@ -53,7 +36,7 @@ import {
   fileCleanupReserveMs,
 } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
-import { assertResultOk, assertToolResultContains } from "../harness/assert.ts";
+import { assertResultOk } from "../harness/assert.ts";
 import {
   cleanupTestProject,
   setupIntegrationProject,
@@ -68,7 +51,7 @@ const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
 const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 // Known-answer help strings, read from the shipped handler (see header).
-const HELP_HEADER = "AI-DLC"; // HELP_TEXT_HEAD, aidlc-utility.ts
+const HELP_HEADER = "AI-DLC - AI-Driven Development Life Cycle"; // HELP_TEXT_HEAD, aidlc-utility.ts
 const HELP_STATUS = "--status"; // HELP_TEXT_TAIL Utilities block, aidlc-utility.ts
 // The engine auto-creates; the workspace shell ships in dist/. The help lists
 // the intent/space verb families - assert those PLUS the absence of
@@ -77,17 +60,33 @@ const HELP_INTENT = "intent"; // verb family, renderHelpText
 const HELP_SPACE = "space"; // verb family, renderHelpText
 const HELP_DOCTOR = "--doctor"; // HELP_TEXT_TAIL Utilities block, aidlc-utility.ts
 const HELP_ENTERPRISE = "enterprise"; // scope line via renderHelpText and loadScopeMapping
-const STOP_AFTER_HELP = { toolName: "Bash", resultIncludes: HELP_HEADER } as const;
+
+// What the prompt hooks handed the agent: the context of each JSON reply.
+function handedToAgent(printed: readonly string[]): string {
+  const texts: string[] = [];
+  for (const out of printed) {
+    for (const line of out.split(/\r?\n/)) {
+      if (line.trim() === "") continue;
+      try {
+        const parsed = JSON.parse(line) as { additionalContext?: unknown; hookSpecificOutput?: { additionalContext?: unknown } };
+        const text = parsed.hookSpecificOutput?.additionalContext ?? parsed.additionalContext;
+        if (typeof text === "string") texts.push(text);
+      } catch {
+        texts.push(line);
+      }
+    }
+  }
+  return texts.join("\n");
+}
 
 describe("t23 /aidlc --help (sdk)", () => {
   // -------------------------------------------------------------------------
-  // /aidlc --help routes to the deterministic help CLI via Bash and prints its
-  // stdout verbatim. The content literals are asserted on the tool_result the
-  // orchestrator actually produced when routing /aidlc --help, plus its
-  // non-error result.
+  // /aidlc --help is answered by the prompt hook: the help, with every
+  // advertised section, reaches the agent with the person's message, and the
+  // drive ends cleanly with the help shown once.
   // -------------------------------------------------------------------------
   test(
-    "help routes to the help CLI and its verbatim stdout carries every advertised section",
+    "the prompt hook hands the agent the help with every advertised section, and it is shown once",
     async () => {
       const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const proj = setupIntegrationProject({ noAidlcDocs: true });
@@ -97,39 +96,26 @@ describe("t23 /aidlc --help (sdk)", () => {
           timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
             deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
           }),
-          stopAfterToolResult: STOP_AFTER_HELP,
+          capturePromptHooks: true,
         });
-        // A drive that ended before the help printed says why (an API error,
-        // a crash, a timeout) before the content checks below say what is missing.
-        if (!r.stoppedAfterToolResult) assertResultOk(r);
+        // A drive that ended in an error says why (an API error, a crash, a
+        // timeout) before the content checks below say what is missing.
+        assertResultOk(r);
+        // Which tools the agent used, for reading a red: names only, no inputs or results.
+        console.log(`t23 tools: ${JSON.stringify(r.toolResults.map((t) => t.toolName))}`);
 
-        // The --help path RAN: the help CLI fired via Bash and its verbatim
-        // stdout carries each advertised literal. assertToolResultContains
-        // fails loudly if Bash never fired (no vacuous pass) — so this is also
-        // proof --help dispatched to the tool, not that prose mentioned a flag.
-        assertToolResultContains(r, "Bash", HELP_HEADER);
-        assertToolResultContains(r, "Bash", HELP_STATUS);
-        assertToolResultContains(r, "Bash", HELP_DOCTOR);
-        assertToolResultContains(r, "Bash", HELP_INTENT);
-        assertToolResultContains(r, "Bash", HELP_SPACE);
-        // --init/--force are ABSENT (regression guard - a re-introduced flag in the
-        // routed help reds here). The help stdout filtered into helpResultText is the
-        // deterministic surface; assert the negative on it.
-        const helpResultText = r.toolResults
-          .filter((t) => t.toolName === "Bash" && t.resultText.includes(HELP_HEADER))
-          .map((t) => t.resultText)
-          .join("\n");
-        expect(helpResultText).not.toContain("--init");
-        expect(helpResultText).not.toContain("--force");
-        assertToolResultContains(r, "Bash", HELP_ENTERPRISE);
+        const handed = handedToAgent(r.promptHooks ?? []);
+        for (const literal of [HELP_HEADER, HELP_STATUS, HELP_DOCTOR, HELP_INTENT, HELP_SPACE, HELP_ENTERPRISE]) {
+          expect(handed, `the prompt hook did not hand over ${literal}`).toContain(literal);
+        }
+        // --init/--force are ABSENT (a re-introduced flag in the help reds here).
+        const help = handed.slice(handed.indexOf(HELP_HEADER));
+        expect(help).not.toContain("--init");
+        expect(help).not.toContain("--force");
 
-        // /aidlc --help exits 0. Asserted on the non-error Bash tool_result, then the
-        // driver aborts immediately so the model cannot spend turns after the
-        // deterministic help contract is proven.
-        const helpCall = r.toolResults.find(
-          (t) => t.toolName === "Bash" && t.resultText.includes(HELP_HEADER),
-        );
-        expect(helpCall?.isError).toBe(false);
+        // Shown once: no command the agent ran brought the help back a second time.
+        const again = r.toolResults.filter((t) => t.resultText.includes(HELP_HEADER));
+        expect(again.map((t) => t.toolName), "the help was fetched again after the hook handed it over").toEqual([]);
       } finally {
         cleanupTestProject(proj);
       }

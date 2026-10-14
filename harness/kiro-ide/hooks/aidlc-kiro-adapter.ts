@@ -122,6 +122,7 @@ import {
   decodeHarnessPlainText,
   fenceCommandOutput,
   relayAsTextBlock,
+  terminalCommandRelay,
   planApprovalAskIsOpen,
   presenceFloorHolds,
   clearKiroIdeLegacyPlanApprovalHost,
@@ -2325,12 +2326,7 @@ function workflowRecordSelected(pd: string, sessionId: string): boolean {
 }
 
 function terminalContext(result: TerminalResult): string {
-  return (
-    `The command \`/aidlc ${result.typed}\` has already run. ` +
-    `It carries no workflow work. Relay the output below ${relayAsTextBlock(result.output)}, then stop. ` +
-    "Do not run any shell command or call any AIDLC tool this turn.\n\n" +
-    fenceCommandOutput(result.output, result.exitCode)
-  );
+  return terminalCommandRelay(`/aidlc ${result.typed}`, result.output, result.exitCode);
 }
 
 function terminalRefusal(result: TerminalResult): string {
@@ -3094,6 +3090,9 @@ function buildForward(): Forward {
           session_id: sessionId,
           prompt: ide.userPrompt ?? "",
           origin,
+          // verb-intercept, beside this hook, runs a command the person typed
+          // and hands the agent its output itself.
+          relays_terminal_output: true,
         },
       };
     }
