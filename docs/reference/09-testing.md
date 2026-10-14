@@ -222,7 +222,7 @@ Verifies the orchestrator's structural correctness without invoking the LLM. If 
 - Scope-stage mapping, graph consistency, stage I/O contract chains, protocol compliance (integration)
 - Stage output-to-step validation: all declared outputs referenced in instruction steps (integration, deterministic via the `aidlc-validate.ts` CLI tool)
 - Scope runs: every shipped scope driven from the person's first request to done (integration, `tests/integration/t-scope-run-*`; see below)
-- Scope-host runs: one classic journey on the Claude, Codex and Copilot CLI trees, through each tree's own hooks (integration, `tests/integration/t-scope-host-*`; see below)
+- Scope-host runs: one classic journey on the Claude, Codex, Copilot CLI, Kiro CLI and Kiro IDE trees, through each tree's own hooks (integration, `tests/integration/t-scope-host-*`; see below)
 - Guard matrix: what the person meets when files change under approved work, per Guard Policy, review cap and plan approval (integration, `tests/integration/t-guard-matrix-*`; see below)
 
 **Run:** `bun tests/run-tests.ts --no-llm`. The default profile includes the
@@ -267,17 +267,24 @@ a `full_verification` Full Suite.
 `tests/harness/scope-hosts.ts` runs the same stand-in and person script on
 another tool's tree, through that tool's own hooks. Each host installs the tree
 as it ships, gives the agent's shell what that tool gives it (Codex's
-`CODEX_THREAD_ID`), and at every moment (a chat starts, the person types or
-picks, a shell or file tool runs, a helper is sent, the turn ends) runs each
-command the tree's wiring file registers (`.codex/hooks.json`,
-`.github/hooks/aidlc.json`), fed that tool's payload. `tests/unit/t-scope-hosts.test.ts`
-pins those payloads against the ones recorded from each tool
-(`tests/fixtures/<tool>-hook-payloads`). Each tool's answer is read in its own
-form: Codex refuses with exit 2, Copilot with a deny decision, and Copilot runs
-the command its hook rewrote. Every tool call fires the hooks, so a refusal
-stops the run, and a hook command that fails is a problem.
+`CODEX_THREAD_ID`, Kiro's `KIRO_SESSION_ID`), and at every moment (a chat
+starts, the person types or picks, a shell or file tool runs, a helper is sent,
+the turn ends) runs each command the tree's wiring registers, fed that tool's
+payload: `.codex/hooks.json`, `.github/hooks/aidlc.json`, Kiro CLI's agent JSON
+(`.kiro/agents/<agent>.json`, glob matchers over a tool's name and its alias; a
+helper runs its own agent's hooks under a session of its own) and Kiro IDE's
+hook cards (`.kiro/hooks/*.json`, regex matchers in file-name order; no card runs
+after a write or a command, so the next card does that work, as in Kiro).
+`tests/unit/t-scope-hosts.test.ts` pins those payloads against the ones recorded
+from each tool (`tests/fixtures/<tool>-hook-payloads`). Each tool's answer is
+read in its own form: Codex and Kiro refuse with exit 2, Copilot with a deny
+decision, Copilot runs the command its hook rewrote, and Kiro's person-turn hook
+may run the turn's first `next` itself, so the agent acts on that reply. Every
+tool call fires the hooks, so a refusal stops the run, and a hook command that
+fails is a problem.
 
-Each `t-scope-host-<harness>.test.ts` (`claude`, `codex`, `copilot`) drives one
+Each `t-scope-host-<harness>.test.ts` (`claude`, `codex`, `copilot`, `kiro`,
+`kiro-ide`) drives one
 journey: classic with its design stages skipped and two Units built one at a
 time, a checkpoint each. After the first Unit's checkpoint the person stops for
 the day, picks the work up from a fresh clone (the folder left with only what a

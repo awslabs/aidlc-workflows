@@ -360,9 +360,15 @@ export class ScopeHost {
     this.sessionStart("startup");
   }
 
-  /** The person's typed line, through the host's human-turn hook. */
-  typed(words: string): void {
+  /**
+   * The person's typed line, through the host's human-turn hook. Returns what
+   * the host's hooks told the agent for that turn when it shapes the agent's
+   * next step (a step the hook already ran, the exact first call); this host's
+   * words are left to the skill.
+   */
+  typed(words: string): string {
     this.hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt: words });
+    return "";
   }
 
   /** The person's pick in an AskUserQuestion picker, through the host's human-turn hook. */
@@ -476,11 +482,11 @@ export class PersonScript {
     this.ledger = new PersonTurnLedger(host.proj);
   }
 
-  /** The person types a reply in the chat. */
-  say(words: string): void {
+  /** The person types a reply in the chat; returns what the host's hooks told the agent (ScopeHost.typed). */
+  say(words: string): string {
     this.ledger.sent(words);
     this.said.push(words);
-    this.host.typed(words);
+    return this.host.typed(words);
   }
 
   /** The person picks an option in the host's picker; where the host has none, they type it. */
@@ -728,9 +734,28 @@ export class AgentStandIn {
   /** The person types a line into the chat; a slash command goes to `next` as the skill forwards it. */
   personTypes(line: string): Directive {
     this.host.sessionStartIfNew();
-    this.person.say(line);
+    const told = this.person.say(line);
     const args = line.trim().startsWith("/aidlc") ? commandWords(line.trim().slice("/aidlc".length)) : [line];
-    return this.next(...args);
+    return this.fromTurn(told) ?? this.next(...args);
+  }
+
+  /**
+   * The step a host's person-turn hook set for the agent, when it set one
+   * (Kiro): the reply of a `next` the hook already ran, which the agent acts on
+   * instead of calling `next` again, or the exact first call it named, which the
+   * agent runs as written.
+   */
+  fromTurn(told: string): Directive | null {
+    const ran = /--- DIRECTIVE ---\n([\s\S]*?)\n--- END DIRECTIVE ---/.exec(told)?.[1];
+    if (ran !== undefined) {
+      const d = parseJson(ran) as Directive | null;
+      if (!d) this.fail(`the hook's step was no directive: ${clip(ran, 800)}`);
+      this.directives.push(d);
+      this.heard(d);
+      return d;
+    }
+    const first = /Your first tool call is exactly the call below[^\n]*\n\n([^\n]+)\n/.exec(told)?.[1];
+    return first === undefined ? null : this.follow(this.host.bash(first.trim()));
   }
 
   fail(message: string, directive?: Directive): never {
@@ -832,8 +857,8 @@ export class AgentStandIn {
   /** The person's first message: a request, perhaps with flags, typed into /aidlc. */
   begin(request: string, flags: string[]): Directive {
     this.host.sessionStart("startup");
-    this.person.say(`/aidlc ${[...flags, request].join(" ")}`);
-    return this.createFromPrint(this.next(...flags, request));
+    const told = this.person.say(`/aidlc ${[...flags, request].join(" ")}`);
+    return this.createFromPrint(this.fromTurn(told) ?? this.next(...flags, request));
   }
 
   /** A print that names `intent create`: create the work with a short label, then `next`. */
