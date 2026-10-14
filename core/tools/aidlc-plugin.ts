@@ -913,7 +913,7 @@ function writeCompositionRecords(
     }
   } else {
     // A plugin whose vendored compose hook predates the record: prove
-    // ownership from the source bytes, as before.
+    // ownership from the source bytes.
     for (const candidate of pluginPrimitiveTargets(plugin, stagedProject, harnessDir)) {
       if (claimedPaths.has(candidate.path)) continue;
       const target = join(stagedProject, candidate.path);

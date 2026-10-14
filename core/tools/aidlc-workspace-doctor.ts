@@ -12,8 +12,8 @@
 // installs.
 //
 // Factored into its own module (rather than inlined in aidlc-utility.ts, whose
-// handleDoctor is already large) so the workspace-manifest checks read as one
-// unit; handleDoctor calls workspaceManifestChecks() and spreads the rows in.
+// collectDoctorReport is already large) so the workspace-manifest checks read as
+// one unit; collectDoctorReport calls workspaceManifestChecks() and adds its rows.
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -27,7 +27,7 @@ import {
   WORKSPACE_RECOVERY_GITIGNORE,
 } from "./aidlc-workspace-manifest.ts";
 
-/** One --doctor report row. Structurally matches handleDoctor's results[]. */
+/** One --doctor report row. Structurally matches collectDoctorReport's results[]. */
 export interface DoctorCheck {
   pass: boolean;
   severity?: "warn";
@@ -49,8 +49,8 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
 
   // W1 - Uncommitted records. Any git workspace: surface uncommitted changes
   // under aidlc/ so the shared records get committed and pushed to teammates.
-  // Skips silently outside a git repo (smoke / fresh fixtures), mirroring the
-  // stale-branches guard. git status --porcelain omits gitignored per-user
+  // Reports a passing row outside a git repo (smoke / fresh fixtures).
+  // git status --porcelain omits gitignored per-user
   // cursors, so ignored runtime state (active-intent, runtime-graph.json, ...)
   // never false-positives.
   try {
@@ -152,7 +152,7 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
 
       // W3 - Stale .gitignore managed block. The block between the frozen
       // markers is regenerated from repos.json by aidlc-workspace-sync; if it
-      // doesn't match the manifest, sync hasn't been run since the last edit.
+      // doesn't match the manifest, it needs regeneration.
       const gitignorePath = join(projectDir, ".gitignore");
       const gi = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
       const b = gi.indexOf(GATE_BEGIN);
