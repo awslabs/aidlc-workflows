@@ -335,6 +335,54 @@ describe("t281 upstream and target verification", () => {
     expect(out.result.gaps).toContain("US1.2");
   });
 
+  // Units Generation writes Markdown, and an agent often sets IDs and
+  // directories in inline code, several Units to a cell (#2488).
+  test("story-map cells in inline code, several Units to a cell, still join", () => {
+    const proj = project();
+    seedUserStories(proj);
+    seedUnits(proj);
+    write(proj, "inception/units-generation/unit-of-work-story-map.md", [
+      "# Story Map",
+      "",
+      "| Story | Primary Unit | Participating Units |",
+      "|---|---|---|",
+      "| `US1.1` Sign in | `U1` / `u1-auth` | `U1` / `u1-auth`; `U2` / `u2-profile` |",
+      "| `US1.2` Edit profile | `U2` / `u2-profile` | `U2` / `u2-profile` |",
+    ].join("\n"));
+    const file = trace(proj, "inception/units-generation/traceability.json", {
+      stage: "units-generation",
+      upstream_ids: ["US1.1", "US1.2"],
+      coverage: [
+        { id: "US1.1", status: "OK", target: "U1" },
+        { id: "US1.2", status: "OK", target: "u2-profile" },
+      ],
+    });
+    const out = run(proj, "units-generation", file);
+    expect(out.result.reason).toBeUndefined();
+    expect(out.result.invalid_targets).toEqual([]);
+    expect(out.result.pass).toBe(true);
+
+    // u2-profile owns US1.2 and shares US1.1, which reaches it only through the
+    // inline-code, several-Units cell: its Functional Design traces both.
+    write(proj, "construction/u2-profile/functional-design/rules.md", "# Rules\n\n- BR1.1 Profile rules\n");
+    const scoped = ["AC1.1.1", "AC1.1.2", "AC1.2.1"];
+    const scopedFile = trace(proj, "construction/u2-profile/functional-design/traceability.json", {
+      upstream_ids: scoped,
+      coverage: scoped.map((id) => ({ id, status: "OK", target: "BR1.1" })),
+    });
+    const traced = run(proj, "functional-design", scopedFile);
+    expect(traced.result.reason).toBeUndefined();
+    expect(traced.result.pass).toBe(true);
+
+    trace(proj, "construction/u2-profile/functional-design/traceability.json", {
+      upstream_ids: ["AC1.1.2", "AC1.2.1"],
+      coverage: ["AC1.1.2", "AC1.2.1"].map((id) => ({ id, status: "OK", target: "BR1.1" })),
+    });
+    const short = run(proj, "functional-design", scopedFile);
+    expect(short.result.pass).toBe(false);
+    expect(short.result.missing_from_upstream_ids).toEqual(["AC1.1.1"]);
+  });
+
   // The stage guidance names each Unit's construction directory `u{n}-{description}`,
   // while the edge block names the Unit without that prefix (the engine names
   // construction/<unit>/ after the edge block). `U5`, `u5-identity-kyc` and

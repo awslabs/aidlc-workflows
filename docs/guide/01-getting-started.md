@@ -97,7 +97,10 @@ command.
 
 ## 2. Set up your project
 
-Run `aidlc config` in the project folder. This run uses a new, empty folder:
+Run `aidlc config` in the project folder. AI-DLC does not look upward for a git
+root, so this folder is where `aidlc/` will live; with several repos, see
+[Where `aidlc/` lives](03-spaces-and-intents.md#where-aidlc-lives). This run uses
+a new, empty folder:
 
 ```text
 $ mkdir inventory-api && cd inventory-api && git init -q
@@ -346,7 +349,7 @@ $ git status --short
 | Path | What it is | Commit it? |
 | --- | --- | --- |
 | `.claude/` | Claude Code's AI-DLC files: the `/aidlc` skill, agents, stages, hooks, tools, and `settings.json` (hooks, permissions, the welcome message) | Yes |
-| `aidlc/` | The workspace: `aidlc/spaces/default/memory/` holds the rules (the framework's defaults, and your team's and project's own), and each piece of work gets its record here | Yes |
+| `aidlc/` | AI-DLC's records: `aidlc/spaces/default/memory/` holds the rules (the framework's defaults, and your team's and project's own), and each piece of work gets its record here | Yes |
 | `.gitignore` | AI-DLC's own marked block, added to yours if you had one | Yes |
 | `.mcp.json` | The MCP servers, when you chose them | Yes |
 | `aidlc.settings.json` | The model preset | Yes |

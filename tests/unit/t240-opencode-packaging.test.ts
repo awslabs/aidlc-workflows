@@ -43,7 +43,7 @@ import {
 } from "node:fs";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import { cleanupTestProject, REPO_ROOT } from "../harness/fixtures.ts";
 import createAdapter from "../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -464,7 +464,8 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       expect(ambient.status, ambient.stderr).toBe(0);
       expect(ambient.stdout).toBe(claudeSkill.endsWith("\n") ? claudeSkill : `${claudeSkill}\n`);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      // The launcher it just ran can hold the folder a moment on Windows.
+      cleanupTestProject(root);
     }
   });
 });

@@ -75,6 +75,10 @@ my-project/
 └── repo-b/                       an intent can span more than one
 ```
 
+That tree shows a project with several code repos. A project with one repo is the
+same thing with the repo as the workspace itself
+([Where `aidlc/` lives](#where-aidlc-lives)).
+
 Three things are worth pulling out of that tree, because they are the whole idea:
 
 - **`aidlc/spaces/<space>/`** is one team's self-contained world: its method
@@ -347,7 +351,7 @@ Create, list, and switch spaces with verbs that mirror the intent verbs exactly:
 
 ```
 /aidlc space                      List all spaces
-/aidlc space create payments-team Create a new space, seeded from the default space's method
+/aidlc space create payments-team Create a new space, starting from the default space's org rules
 /aidlc space switch payments-team Switch the active space to "payments-team"
 ```
 
@@ -363,11 +367,14 @@ Switch to it with /aidlc space payments-team.
 The shorter `/aidlc space-create <name>` and bare `/aidlc space <name>` forms
 work too.
 
-A newly created space starts with a copy of the default space's method
-(`aidlc/spaces/default/memory/org.md`, with any changes your team made there) and
-fresh, empty `team.md` / `project.md` practice files — a new team earns its own
-practices rather than inheriting another team's. Its `knowledge/` and `codekb/`
-start empty too.
+A newly created space starts with a copy of the default space's
+`aidlc/spaces/default/memory/org.md` (with any changes your team made there), the
+framework's own phase rules, and fresh, empty `team.md` / `project.md` practice
+files — a new team earns its own practices rather than inheriting another team's.
+Its `knowledge/` and `codekb/` start empty too. The copy is made once: later
+changes to the default space's `org.md` do not reach the new space.
+[What carries over, and what doesn't](#what-carries-over-and-what-doesnt) lists
+what is shared and what is not.
 
 When you switch spaces, two things follow the cursor automatically:
 
@@ -403,11 +410,95 @@ harness, `/aidlc space` and `/aidlc intent` list where you are, marked with `*`.
 
 ---
 
+## Where `aidlc/` lives
+
+**`aidlc/` goes in the folder `aidlc config` installs into, and that folder is
+your workspace.** That is the folder you run it in, or the one you name with
+`--project-dir`. AI-DLC does not look upward for a git root. Install into a
+subfolder and that subfolder gets its own harness folder and its own `aidlc/`,
+with its own spaces and intents. Open your harness in the same folder.
+
+Two layouts cover most teams.
+
+### One repo, or a monorepo
+
+```
+inventory-api/        ← run `aidlc config` here; this is the git repo
+├── .claude/          the harness files (committed)
+├── aidlc/            rules, knowledge, and the record of each piece of work (committed)
+├── .gitignore        AI-DLC adds its own marked block
+└── src/              your code
+```
+
+Everything travels with the code, in the same repo and the same pull requests.
+A monorepo is the same layout: run `aidlc config` at the repo root and every
+package shares one `aidlc/`. Work in this layout records no repos, so generated
+code and git operations stay in the folder itself, as long as the repo has no
+immediate child folder with its own `.git` (an initialized submodule or a
+nested repo does). If it has one, AI-DLC treats those folders as the repos, as
+in the next layout. Put the install in one
+package's subfolder instead and that package gets a separate `aidlc/`, with its
+own records. Git is not separated: branches and worktrees still belong to the
+whole repo, because git resolves the repo from the subfolder. If several teams
+share the repo, a space per team (see Spaces, above) is the better fit;
+use a subfolder install only when a package is really its own project.
+
+### Several repos beside one `aidlc/`
+
+```
+my-project/           ← run `aidlc config` here
+├── .claude/          the harness files
+├── aidlc/            records for work that spans the repos
+├── repos.json        optional: the repos to clone (see below)
+├── .gitignore
+├── checkout-api/     its own git repo
+└── checkout-web/     its own git repo
+```
+
+The code repos are the folders next to `aidlc/` that have their own `.git`.
+AI-DLC finds them itself ([Multiple repos in one intent](#multiple-repos-in-one-intent)).
+The record of the work lives once, in `aidlc/`, not once per repo, so a change
+that touches both repos has one set of requirements and one audit trail.
+
+The folder holding them does not have to be a git repo, and AI-DLC does not
+make it one. Because it holds no `.git` or project file, `aidlc config` can ask you
+to confirm the folder (in a script, pass `--project-dir`). What that means for
+`aidlc/`:
+
+- **Just you:** nothing to do. `aidlc/` stays on your disk, untracked.
+- **A team:** run `git init` in the folder and push it as its own small
+  workspace repo. The code repos stay separate repos with their own remotes, and
+  the workspace repo must not track them, so keep them out first: for the repos
+  listed in `repos.json`, the
+  [`aidlc-workspace-sync`](12-cli-commands.md#aidlc-workspace-sync-clone-and-reconcile-the-declared-repo-set)
+  tool does it for you; otherwise add an ignore line for each. Then run
+  `git status` and commit what it lists (everything `aidlc config` wrote that git
+  does not ignore, plus `repos.json`); the exact files differ by harness, so
+  don't pick paths by hand. A teammate clones the workspace repo and runs the
+  sync tool to clone the code repos beside it.
+- **Codex CLI and Cursor:** Codex finds its hooks only in a git repo, and
+  Cursor may skip them outside one
+  ([Getting Started](01-getting-started.md)), so run `git init` in the folder
+  whichever way you share it.
+
+### Which layout
+
+| Your situation | Use |
+|---|---|
+| The code is in one repo | One repo: install in it |
+| One piece of work changes several repos | Several repos beside one `aidlc/` |
+| Several teams share the same repos | One workspace, with a space per team (see Spaces, above) |
+| Unrelated projects | A separate folder and `aidlc/` for each. They share no records, rules, or knowledge; only machine-wide settings and the active release reach both ([what carries over](#what-carries-over-and-what-doesnt)) |
+
+What to commit in each layout is in [What's committed and what's not](#whats-committed-and-whats-not).
+
+---
+
 ## Multiple repos in one intent
 
-An intent isn't limited to a single repository. Because your code repos are
-siblings of the workspace (not nested inside any one of them), an intent can span
-as many as it needs.
+An intent isn't limited to a single repository. Because your code repos sit
+beside `aidlc/` in the workspace folder (not nested inside any one of them), an
+intent can span as many as it needs.
 
 The repo set is captured **when the intent is created** — you don't type anything
 extra. By default AI-DLC auto-discovers every sibling repo (each immediate child
@@ -417,7 +508,7 @@ the right repo automatically.
 
 ```
 my-project/
-├── aidlc/          # the workspace
+├── aidlc/          # AI-DLC's records
 ├── checkout-api/   # repo-a   ┐ both auto-discovered as siblings;
 └── checkout-web/   # repo-b   ┘ an intent here can touch either or both
 ```
@@ -463,6 +554,50 @@ manifest" is unrelated to a harness `manifest.ts`, which is a packaging file.)
 
 ---
 
+## What carries over, and what doesn't
+
+Everything AI-DLC knows lives in files, so sharing follows the folders: a space
+is a boundary, a workspace is a boundary, and git carries files between people
+and machines.
+
+| What | Between intents in a space | Between spaces | Between projects (separate `aidlc/` folders) |
+|---|---|---|---|
+| Rules: `org.md`, `team.md`, `project.md`, `phases/` | Shared. Each stage reads the current files | A new space gets a one-time copy of the default space's `org.md` and the framework's phase rules; its `team.md` and `project.md` start empty. After that, nothing flows | Copy the files, or start from a template repo (below) |
+| Learnings you keep | Land in the active space's `project.md`, or `team.md` when you promote them | Not shared. Each space has its own | Copy the lines you want |
+| Your documents (`knowledge/`) | Shared. `associate` adds an intent to a document's list and can be repeated; a document with no intent is space-wide | Not shared. Each space has its own folder | `onboard` copies a file in and refuses a path outside the project, so copy the file into the other project |
+| Code knowledge (`codekb/`) | Shared, per repo. A current scan can be reused by your choice | Not shared. Another space scans again | Each project scans its own. A teammate's clone of the same repo can reuse a scan |
+| Saved scopes (`aidlc/scopes/`) | Shared | Shared by every space in the workspace | Copy the file |
+| Output-format overrides (`memory/templates/`) | Shared | Per space. Not copied into a new space | Copy the files |
+| Agents you add (in the harness folder) | Shared | Shared by every space | Copy the files |
+| Repo list (`repos.json`) | One per workspace | One per workspace | Per project |
+| Model and flag policy | Shared | Shared | Set once in the machine settings file and applied to every project on the machine. A project's own `aidlc.settings.json` overrides it value by value, except bypasses, which add up across the files ([the hierarchy](18-install-and-lifecycle.md)). Model and effort policy does not apply on Kiro IDE, Cursor, and GitHub Copilot, where every agent uses the model you pick in the tool. |
+| Kiro CLI's session model, and the effort a preset sets | Shared | Shared | Saved in your personal Kiro settings, so every Kiro CLI project uses them. Changes to agent or group policy do not do this |
+| Update, offline, mirror, and CA-bundle settings | Shared | Shared | Machine-only. A project file cannot set them |
+| Kiro IDE's Workflows switch and, on Windows, its default terminal | Shared | Shared | Kept in Kiro's user settings, outside the project. Setup asks once (`aidlc config --yes` takes the recommended answer), and `aidlc config trust` changes them on request. They apply to every project you open in that IDE |
+| The AI-DLC release itself | Shared | Shared | A native project with no pinned release (`.aidlc-version`) runs the release the machine has active, so `aidlc update` changes it for every such project (its own files catch up at its next `aidlc config`). A copied project runs its own copied release |
+
+Apart from those machine-wide settings, IDE choices, and the active release, nothing in
+AI-DLC links two projects.
+Teammates get the shared files by pulling the repo, and the per-user files in
+[What's committed and what's not](#whats-committed-and-whats-not) never travel.
+
+### Standards for many projects
+
+To give many projects the same starting rules, keep a template repo that holds
+an `aidlc/` with the `org.md`, `team.md`, and knowledge files your organization
+wants everywhere. A new project starts from a copy of it and adds its own
+`project.md`. To roll out a change, change the template and bring the change into
+each project the way you bring any other change, through a pull request.
+
+If you refresh a project by copying a new release over it, the copy replaces the
+default space's `org.md` and `phases/` rules with the shipped ones and keeps
+`team.md` and `project.md`. Check the git diff before you commit
+([Copy Channel](18-install-and-lifecycle.md#copy-channel)). A native
+`aidlc config` refresh keeps every space's memory files
+([Configure or Refresh a Project](18-install-and-lifecycle.md#configure-or-refresh-a-project)).
+
+---
+
 ## What's committed and what's not
 
 `aidlc/` is checked into git so a team **shares** its work — the method, the intent
@@ -475,7 +610,7 @@ repo. Two kinds of file are deliberately **gitignored** instead:
 | `.../intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/`, `aidlc/.aidlc-active-space-*.tmp` | Derived, machine-local runtime state, including per-session bindings and PID ancestry entries. |
 | `aidlc/.aidlc-request-text/` | A request the agent wrote to a file for the engine to read. Removed once the command goes ahead; one left there when it did not is your words, not shared work. |
 | `…/knowledge/documentkb/.journal/` | One directory per in-flight document transaction. Transient and per-clone; a committed journal would be a merge conflict on every concurrent `sync`. |
-| `…/knowledge/.sources.local.json` | Where *this machine* resolves documents linked from outside the repo. The path is machine-specific by definition, so committing it would break every teammate's checkout. |
+| `…/knowledge/.sources.local.json` | Where *this machine* finds documents that live outside the repo. The path is machine-specific by definition, so committing it would break every teammate's checkout. No command creates such a link today (`onboard` copies a file into `documents/`), so you will not normally see this file. |
 
 Everything else under a space — `memory/**`, `knowledge/**`, `codekb/**`,
 `intents.json`, each record's `aidlc-state.md`, `audit/` shards, and artifacts — is

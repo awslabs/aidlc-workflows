@@ -74,12 +74,11 @@ import {
 import {
   NATIVE_COMPILE_TIMEOUT_MS,
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
-  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
-  remainingCleanupTimeoutMs,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { waitForBarrierLine } from "../harness/barrier-file.ts";
+import { cleanupTestProject } from "../harness/fixtures.ts";
 import { adaptWindowsLaunch } from "../harness/tui-drive.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -137,8 +136,9 @@ function cleanupTemporary(keepSuiteFixtures: boolean): void {
   for (let index = temporary.length - 1; index >= 0; index--) {
     const path = temporary[index];
     if (keepSuiteFixtures && suiteTemporary.has(path)) continue;
-    // Node linear retry delays sum to at most the shared cleanup backstop.
-    rmSync(path, { recursive: true, force: true, maxRetries: Math.floor((Math.sqrt(1 + 8 * remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS) / 100) - 1) / 2), retryDelay: 100 });
+    // A binary the case just ran can hold its folder a moment on Windows; the
+    // shared removal retries in its own loop (Bun's rmSync gave up at once here).
+    cleanupTestProject(path);
     temporary.splice(index, 1);
   }
 }

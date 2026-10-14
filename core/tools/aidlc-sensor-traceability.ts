@@ -266,9 +266,11 @@ function detailedNfrIds(dir: string, names: string[]): Set<string> | null {
   return sawFile ? ids : null;
 }
 
+// Inline code is formatting, not part of a name: a cell such as
+// `` `U1` / `u1-ledger`; `U2` / `u2-api` `` names U1 and U2 (#2488).
 function markdownCells(line: string): string[] {
   if (!line.trimStart().startsWith("|") || /^\s*\|?[\s:|-]+\|?\s*$/.test(line)) return [];
-  return line.split("|").slice(1, -1).map((cell) => cell.trim());
+  return line.split("|").slice(1, -1).map((cell) => cell.replaceAll("`", "").trim());
 }
 
 // The stage guidance names a Unit's directory `u{n}-{description}` while the
