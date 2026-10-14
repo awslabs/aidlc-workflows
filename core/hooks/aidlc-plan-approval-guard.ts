@@ -2183,8 +2183,8 @@ async function evaluate(
         }
         // A call to one of the person's own MCP servers, as the harness adapter
         // marks it outside the agent's input, runs like their other requests:
-        // the host asks them before it runs. A marked write, shell or
-        // dispatch gets no such pass.
+        // the host's own approval and their settings decide it. A marked
+        // write, shell or dispatch gets no such pass.
         if (parsed.aidlc_external_tool === "mcp" && !knownMutationTool && !DISPATCH_TOOLS.has(toolName)) {
           return 0;
         }

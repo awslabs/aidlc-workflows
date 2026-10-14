@@ -3127,8 +3127,8 @@ function buildForward(): Forward {
       }
       // While the engine asks the person to approve the plan, a call to one of
       // their MCP servers goes to the core guard marked as theirs, which runs it
-      // like their other requests beside the build; Kiro's own card still asks
-      // before it runs. Outside that question it takes the checks below.
+      // like their other requests beside the build; Kiro's own card and their
+      // Kiro settings decide it. Outside that question it takes the checks below.
       if (
         isKiroMcpTool(toolName) &&
         planApprovalQuestionOpen(projectDir, resolvedPlanApprovalSessionId(ide))
