@@ -7568,9 +7568,10 @@ function conversationHasNotJoined(workflow: ReturnType<typeof enterHookWorkflow>
 // The selected record's own Status. Completed and Archived are finished work:
 // the conversation may still be the one that did it, and the record stays
 // selected, but a later chat event is not part of that work.
-function selectedRecordIsFinished(workflow: ReturnType<typeof enterHookWorkflow>): boolean {
-  const projectDir = workflow.projectDir;
-  const selection = workflow.selection;
+export function selectedRecordIsFinished(
+  projectDir: string,
+  selection: WorkflowSelection | null,
+): boolean {
   if (!projectDir || selection === null) return false;
   let content: string;
   try {
@@ -7589,7 +7590,7 @@ function selectedRecordIsFinished(workflow: ReturnType<typeof enterHookWorkflow>
 // is nothing to protect, and hooks keep their pre-workflow behaviour.
 export function hookStandsOutside(workflow: ReturnType<typeof enterHookWorkflow>): boolean {
   if (conversationHasNotJoined(workflow)) return true;
-  return selectedRecordIsFinished(workflow);
+  return selectedRecordIsFinished(workflow.projectDir, workflow.selection);
 }
 
 // Whether a gate may stand aside for this conversation: only when the selection

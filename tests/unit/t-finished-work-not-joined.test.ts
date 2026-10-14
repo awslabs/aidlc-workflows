@@ -1,4 +1,4 @@
-// covers: function:hookStandsOutside, function:hookOutsideGate, function:enterHookWorkflow, hook:aidlc-record-human-turn
+// covers: function:hookStandsOutside, function:hookOutsideGate, function:enterHookWorkflow, function:selectedRecordIsFinished, hook:aidlc-record-human-turn, hook:aidlc-plan-approval-guard, hook:aidlc-session-end
 //
 // A conversation that finished its work stays on that record, and a later
 // prompt is not part of it: the hooks that ask whether the conversation has
@@ -80,6 +80,46 @@ function laterPrompt(): { status: number; stdout: string; stderr: string } {
   };
 }
 
+function passiveHook(
+  name: string,
+  payload: Record<string, unknown>,
+  extraEnv: NodeJS.ProcessEnv = {},
+): { status: number; stdout: string; stderr: string } {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...extraEnv,
+    AIDLC_PROJECT_DIR: proj,
+    CLAUDE_PROJECT_DIR: proj,
+  };
+  delete env.AIDLC_SESSION_OVERRIDE;
+  delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+  const result = spawnSync(process.execPath, [join(REPO_ROOT, "core", "hooks", `aidlc-${name}.ts`)], {
+    encoding: "utf-8",
+    input: JSON.stringify({ ...payload, session_id: SESSION }),
+    env,
+  });
+  return {
+    status: result.status ?? -1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+  };
+}
+
+const passiveEvents = [
+  {
+    name: "plan-approval-guard",
+    event: "GUARD_DISABLED",
+    payload: { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "pwd" } },
+    env: { AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1" },
+  },
+  {
+    name: "session-end",
+    event: "SESSION_ENDED",
+    payload: { hook_event_name: "SessionEnd", reason: "logout" },
+    env: {},
+  },
+] as const;
+
 function util(args: string[]): { status: number; stdout: string; stderr: string } {
   const result = spawnSync(process.execPath, [UTIL, ...args, "--project-dir", proj], {
     encoding: "utf-8",
@@ -148,6 +188,56 @@ describe("finished work is not joined for a later prompt", () => {
       expect(readFileSync(statePath, "utf-8")).toBe(stateBefore);
     },
   );
+
+  for (const hook of passiveEvents) {
+    test.each(["Running", "Completed", "Archived"] as const)(
+      `${hook.event} is recorded only while the selected work is running (%s)`,
+      (status) => {
+        const { record, statePath } = seed(status);
+        const before = readAllAuditShards(proj, record, "default");
+        const stateBefore = readFileSync(statePath, "utf-8");
+        const result = passiveHook(hook.name, hook.payload, hook.env);
+        expect(result.status, result.stderr).toBe(0);
+        const after = readAllAuditShards(proj, record, "default");
+        if (status === "Running") {
+          expect(after).not.toBe(before);
+          expect(after).toContain(`**Event**: ${hook.event}`);
+        } else {
+          expect(after).toBe(before);
+        }
+        expect(readFileSync(statePath, "utf-8")).toBe(stateBefore);
+      },
+    );
+
+    test.each(["Running", "Completed"] as const)(
+      `${hook.event} follows the session's %s work when the shared cursor names another record`,
+      (status) => {
+        const { record, statePath } = seed(status);
+        const other = createIntent(proj, "another piece of work", "default", "feature");
+        const otherState = join(proj, "aidlc", "spaces", "default", "intents", other.dirName, "aidlc-state.md");
+        writeFileSync(
+          otherState,
+          readFileSync(statePath, "utf-8").replace(
+            `- **Status**: ${status}`,
+            `- **Status**: ${status === "Running" ? "Completed" : "Running"}`,
+          ),
+        );
+        setActiveIntentCursor(proj, other.dirName, "default");
+        const before = readAllAuditShards(proj, record, "default");
+        const otherBefore = readAllAuditShards(proj, other.dirName, "default");
+        const result = passiveHook(hook.name, hook.payload, hook.env);
+        expect(result.status, result.stderr).toBe(0);
+        const after = readAllAuditShards(proj, record, "default");
+        if (status === "Running") {
+          expect(after).not.toBe(before);
+          expect(after).toContain(`**Event**: ${hook.event}`);
+        } else {
+          expect(after).toBe(before);
+        }
+        expect(readAllAuditShards(proj, other.dirName, "default")).toBe(otherBefore);
+      },
+    );
+  }
 
   test("status, archive, and unarchive still reach a completed record", () => {
     const { record, statePath } = seed("Completed");

@@ -117,6 +117,7 @@ import {
   resolveBoltDag,
   resolveProjectFlag,
   resolveProjectDirFromHook,
+  selectedRecordIsFinished,
   stateFilePath,
   worktreesDir,
   writeGuardStoodAside,
@@ -1948,7 +1949,7 @@ async function evaluate(
   // Deterministic off-switch: the Plan Approval fence is disabled, recorded once.
   if (resolveProjectFlag("AIDLC_DISABLE_PLAN_APPROVAL_GUARD") === "1") {
     try {
-      recordGuardDisabled(input);
+      if (!selectedRecordIsFinished(projectDir, workflow.selection)) recordGuardDisabled(input);
     } catch {
       // Fail-open: disabled fence bookkeeping does not refuse the call.
     }

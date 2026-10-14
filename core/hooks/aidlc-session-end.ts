@@ -2,8 +2,8 @@
 // The workflow lifecycle is independent of session lifecycle — ending a
 // session does NOT complete the workflow. This event is observability only.
 //
-// No-op if aidlc-state.md is absent in cwd (the canonical "active workflow"
-// signal — matches session-start.ts and the plan definition).
+// Finished work records no later session event, even while the conversation
+// remains bound to it.
 import { existsSync } from "node:fs";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
@@ -21,6 +21,7 @@ import {
   readSessionIntentUuid,
   recordHookDrop,
   resolveProjectDirFromHook,
+  selectedRecordIsFinished,
   stateFilePath,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
@@ -103,6 +104,7 @@ try {
   const source = ended.binding?.source;
   if (source === "unjoined") return 0;
   if (ended.intent !== null && workflowParticipation(projectDir, ended) !== "participant") return 0;
+  if (selectedRecordIsFinished(projectDir, ended)) return 0;
 } catch {
   return 0;
 }
