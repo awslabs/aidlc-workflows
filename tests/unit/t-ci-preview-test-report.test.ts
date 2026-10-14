@@ -26,6 +26,7 @@ import {
   stagePreviewNotes,
   updateReport,
 } from "../../scripts/ci-preview-test-report.ts";
+import { MODEL_API_REASON } from "../lib/file-retry.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -85,6 +86,14 @@ describe("t-ci-preview-test-report", () => {
       { name: "Linux / result", url: "https://github.com/j/2" },
       { name: "Windows / codex 1/1", url: "https://github.com/j/1" },
     ]);
+  });
+
+  // The runner writes this reason for a file the model service failed
+  // (tests/lib/file-retry.ts); the report says it beside the file.
+  test("a file the model service failed says so in the report", () => {
+    const run = parseFailures("live-claude-sdk-2-macOS", `FAIL: t138-scope-exclusion-counts (${MODEL_API_REASON})\n`);
+    expect(run.files).toEqual([{ name: "t138-scope-exclusion-counts", reason: MODEL_API_REASON, cases: [] }]);
+    expect(report([run])).toContain(`- \`t138-scope-exclusion-counts\` (${MODEL_API_REASON}) in \`live-claude-sdk-2-macOS\``);
   });
 
   test("failure files yield failing files, deduplicated cases and runner errors", () => {

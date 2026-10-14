@@ -24,7 +24,7 @@ import {
   runnerFileTimeoutSeconds,
   testGuardEnvironment,
 } from "../harness/runner-profile.ts";
-import { personTurnLine } from "../lib/file-retry.ts";
+import { MODEL_API_REASON, modelApiLine, personTurnLine } from "../lib/file-retry.ts";
 import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -756,6 +756,30 @@ describe("bounded file workers through the public runner", () => {
     expect(report.files[0].passedOnRetry).toBeUndefined();
   });
 
+  // The model service failing under a drive is infrastructure: the file is
+  // still a failure and keeps its one retry; only what the run says changes.
+  test("a model service failure says so on every attempt, and keeps its retry", () => {
+    const fixture = isolatedRunnerFixture({
+      "integration/t-service-once.test.ts": RETRY_CASES.modelApiOnce,
+      "integration/t-service-down.test.ts": RETRY_CASES.modelApiAlways,
+    });
+    const observer = join(fixture.root, "observer");
+    const result = fixture.run(["--integration", "--isolated-files", "--file-retries", "1", "-P", "1"], {
+      AIDLC_TUI_BACKEND: "bun", AIDLC_RETRY_OBSERVER: observer,
+    });
+    expect(result.status, result.out + result.failures).not.toBe(0);
+    expect(readFileSync(join(observer, "runs"), "utf8").trim().split("\n").sort())
+      .toEqual(["t-service-down.test.ts", "t-service-down.test.ts", "t-service-once.test.ts", "t-service-once.test.ts"]);
+    expect(result.out).toContain(modelApiLine("tests/integration/t-service-once.test.ts"));
+    expect(result.out).toContain("Flaky live test::t-service-once.test.ts");
+    expect(result.failures).toContain(`FAIL: t-service-down (${MODEL_API_REASON})`);
+    const report = JSON.parse(readFileSync(join(result.stamp, "e2e-results.json"), "utf8"));
+    const record = (name: string) => report.files.find((file: { file: string }) => file.file.endsWith(name));
+    expect(record("t-service-once.test.ts")).toMatchObject({ state: "PASS", passedOnRetry: true, modelApiFailure: true });
+    expect(record("t-service-down.test.ts")).toMatchObject({ state: "FAIL", modelApiFailure: true });
+    expect(record("t-service-down.test.ts").attempts).toHaveLength(2);
+  });
+
   test("cleanup uncertainty stops reuse and leaves the remaining file incomplete", () => {
     const fixture = isolatedRunnerFixture({
       "integration/t-a-dirty.test.ts": `import { test } from "bun:test";
@@ -850,6 +874,21 @@ test("records a decision the person never made, on its first attempt only", () =
     writeFileSync(marker, "1");
     throw new PersonTurnError("The SDK drive recorded 1 decision(s) as the person's that no turn from them backs");
   }
+});`,
+  // The SDK drive's error for the model service's own failure, by its name.
+  modelApiOnce: `${RETRY_PRELUDE}
+class ModelApiError extends Error { override name = "ModelApiError"; }
+test("the model service fails on its first attempt only", () => {
+  const marker = join(observer, name + ".failed-once");
+  if (!existsSync(marker)) {
+    writeFileSync(marker, "1");
+    throw new ModelApiError("Claude Code returned an error result: API Error: Connection error.");
+  }
+});`,
+  modelApiAlways: `${RETRY_PRELUDE}
+class ModelApiError extends Error { override name = "ModelApiError"; }
+test("the model service fails", () => {
+  throw new ModelApiError("Claude Code returned an error result: API Error: 503 Service Unavailable");
 });`,
   timesOutOnce: `${RETRY_PRELUDE}
 test("runs past its case timeout on its first attempt only", async () => {
