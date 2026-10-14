@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-log:link, audit:PIPELINE_LINK_COMPLETED, function:codekbStoreIsCurrent, function:codekbSourceRoot, function:latestPipelineLinkArtifactMtime, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:singleStageAttemptIsOpen, function:checkPipelineLinkEvidence
+// covers: subcommand:aidlc-log:link, audit:PIPELINE_LINK_COMPLETED, function:codekbStoreIsCurrent, function:codekbSourceRoot, function:latestPipelineLinkArtifactMtime, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:singleStageAttemptIsOpen, function:checkPipelineLinkEvidence, function:pipelineLinkWayOn
 //
 // Pipeline links are durable, ordered completion evidence. The log tool owns
 // each receipt; the engine and direct state transitions require the complete
@@ -777,10 +777,24 @@ describe("t315 pipeline link receipts", () => {
     appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
     expect(runLog(proj, LEAD).rc).toBe(0);
 
+    // The engine's refusal for the same missing link names the conductor's step.
+    const engine = report(proj, ["--stage", RE_STAGE, "--result", "awaiting-approval"]);
+    expect(engine.directive?.kind).toBe("error");
+    const engineMessage = String(engine.directive?.message ?? "");
+    const wayOn = engineMessage.slice(engineMessage.indexOf("Re-run `"));
+    expect(wayOn).toStartWith("Re-run `");
+
     const gate = state(proj, ["gate-start", RE_STAGE]);
     expect(gate.rc).not.toBe(0);
     expect(gate.out).toContain("pipeline handoffs have not been recorded");
     expect(gate.out).toContain(FINAL);
+    // The state tool's floor gives the same way on, and never the person's switch.
+    const refusalLine = gate.out.split("\n").find((line) => line.startsWith("{\"error\""));
+    const gateMessage = String(
+      (JSON.parse(refusalLine ?? "{}") as { error?: string }).error ?? "",
+    ).split("\n", 1)[0];
+    expect(gateMessage).toEndWith(`. ${wayOn}`);
+    expect(gate.out).not.toContain("AIDLC_DISABLE_ENSEMBLE_EVIDENCE");
 
     expect(state(proj, ["gate-start", RE_STAGE], true).rc).toBe(0);
     const approve = state(
@@ -789,6 +803,7 @@ describe("t315 pipeline link receipts", () => {
     );
     expect(approve.rc).not.toBe(0);
     expect(approve.out).toContain("pipeline handoffs have not been recorded");
+    expect(approve.out).not.toContain("AIDLC_DISABLE_ENSEMBLE_EVIDENCE");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
       `- [?] ${RE_STAGE}`,
     );

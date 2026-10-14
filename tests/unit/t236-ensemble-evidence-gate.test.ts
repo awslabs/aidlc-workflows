@@ -545,7 +545,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
       expect(d.message).toContain(agent);
     }
     expect(d.message).toContain("contributions/");
-    expect(d.message).toContain("AIDLC_DISABLE_ENSEMBLE_EVIDENCE");
+    expect(d.message).not.toContain("AIDLC_DISABLE_ENSEMBLE_EVIDENCE");
   });
 
   test("partial evidence -> refused, only the absent agents named", () => {

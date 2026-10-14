@@ -307,6 +307,7 @@ import {
   isPlainObject,
   parseCeremonySetting,
   pipelineLinkEvidence,
+  pipelineLinkWayOn,
   parseBoltDag,
   type KnowledgeCommand,
   parseKnowledgeCommand,
@@ -15186,8 +15187,7 @@ function checkEnsembleEvidence(
     message:
       `Cannot present "${slug}" for approval because collaborator notes are missing or ` +
       `incomplete: ${missing.join("; ")}. Ask each named collaborator to write ` +
-      `${contributionPath} with **Collaborator:** <agent-slug> on the first line, then try again. ` +
-      `Set AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run stage whose files were lost.`,
+      `${contributionPath} with **Collaborator:** <agent-slug> on the first line, then try again.`,
   };
 }
 
@@ -15216,14 +15216,7 @@ function checkPipelineLinkEvidence(
     ok: false,
     message:
       `${refusal}: ${missing.join(", ")}. ` +
-      `Re-run \`${aidlcToolInvocation("orchestrate")} next${singleRun ? ` --single --stage ${slug}` : ""}\` ` +
-      `and dispatch the missing pipeline links in their declared order, carrying the human's revision feedback. ` +
-      (guardPolicyAcceptsChanges(pd)
-        ? ""
-        : "Rejection starts a new attempt: earlier scans and receipts cannot certify this revision, even for a targeted artifact edit. ") +
-      `After each link returns, run \`${aidlcToolInvocation("log")} link --stage ${slug} ` +
-      `--link <agent>${evidence.repos.length > 0 ? " --repo <repo>" : ""}` +
-      `${singleRun ? " --single" : ""}\`. Do not re-stamp an old handoff or disable evidence checks to reopen the gate.`,
+      pipelineLinkWayOn(pd, slug, { repos: evidence.repos.length > 0, singleRun }),
   };
 }
 

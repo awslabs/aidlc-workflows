@@ -160,6 +160,7 @@ import {
   parseRefsList,
   parseStateStageSuffixes,
   pipelineLinkEvidence,
+  pipelineLinkWayOn,
   effectiveSupportAgentsForProject,
   producesArtifactFile,
   readAllAuditShards,
@@ -5178,10 +5179,8 @@ function verifyPipelineLinkPrecondition(
   );
   const message =
     `Cannot complete "${stage.slug}" because these pipeline handoffs have not been ` +
-      `recorded for the current run: ${missing.join(", ")}. Run aidlc-log.ts link after ` +
-      `each agent returns` +
-      `${evidence.repos.length > 0 ? " with --repo <repo>" : ""}, or set ` +
-      `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run in-flight pipeline.`;
+      `recorded for the current run: ${missing.join(", ")}. ` +
+      pipelineLinkWayOn(pd, stage.slug, { repos: evidence.repos.length > 0 });
   const content = readStateFile(pd);
   refuseStateGuard(pd, content, stage, {
     code: "PIPELINE_EVIDENCE_MISSING",
