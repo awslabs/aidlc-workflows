@@ -467,16 +467,15 @@ to confirm the folder (in a script, pass `--project-dir`). What that means for
 
 - **Just you:** nothing to do. `aidlc/` stays on your disk, untracked.
 - **A team:** run `git init` in the folder and push it as its own small
-  workspace repo that holds everything `aidlc config` wrote there that git does
-  not ignore, plus `repos.json`. The exact files differ by harness, so after
-  `aidlc config` run `git status` and commit what it lists, rather than picking
-  paths by hand. The
-  code repos stay separate repos with their own remotes, and the workspace repo
-  must not track them. For the repos listed in `repos.json`, the
+  workspace repo. The code repos stay separate repos with their own remotes, and
+  the workspace repo must not track them, so keep them out first: for the repos
+  listed in `repos.json`, the
   [`aidlc-workspace-sync`](12-cli-commands.md#aidlc-workspace-sync-clone-and-reconcile-the-declared-repo-set)
-  tool keeps them out for you; otherwise add an ignore line for each. A
-  teammate clones the workspace repo and runs the sync tool to clone the code
-  repos beside it.
+  tool does it for you; otherwise add an ignore line for each. Then run
+  `git status` and commit what it lists (everything `aidlc config` wrote that git
+  does not ignore, plus `repos.json`); the exact files differ by harness, so
+  don't pick paths by hand. A teammate clones the workspace repo and runs the
+  sync tool to clone the code repos beside it.
 - **Codex CLI and Cursor:** Codex finds its hooks only in a git repo, and
   Cursor may skip them outside one
   ([Getting Started](01-getting-started.md)), so run `git init` in the folder
@@ -572,6 +571,7 @@ and machines.
 | Agents you add (in the harness folder) | Shared | Shared by every space | Copy the files |
 | Repo list (`repos.json`) | One per workspace | One per workspace | Per project |
 | Model and flag policy | Shared | Shared | Set once in the machine settings file and applied to every project on the machine. A project's own `aidlc.settings.json` overrides it value by value, except bypasses, which add up across the files ([the hierarchy](18-install-and-lifecycle.md)). Model and effort policy does not apply on Kiro IDE, Cursor, and GitHub Copilot, where every agent uses the model you pick in the tool. |
+| Kiro CLI's session model, and the effort a preset sets | Shared | Shared | Saved in your personal Kiro settings, so every Kiro CLI project uses them. Changes to agent or group policy do not do this |
 | Update, offline, mirror, and CA-bundle settings | Shared | Shared | Machine-only. A project file cannot set them |
 | Kiro IDE's Workflows switch and, on Windows, its default terminal | Shared | Shared | Kept in Kiro's user settings, outside the project. Setup asks once (`aidlc config --yes` takes the recommended answer), and `aidlc config trust` changes them on request. They apply to every project you open in that IDE |
 | The AI-DLC release itself | Shared | Shared | A native project with no pinned release (`.aidlc-version`) runs the release the machine has active, so `aidlc update` changes it for every such project (its own files catch up at its next `aidlc config`). A copied project runs its own copied release |
