@@ -318,13 +318,11 @@ import {
   parseTeamBoardArgs,
   parseWorkspaceCommand,
   isWorkspaceNoun,
-  nextArgsCarryRequestWords,
-  ORCHESTRATOR_VERBS,
-  WORKSPACE_VERBS,
   type NextLineReading,
-  nextTokenKind,
+  beforeDelimiter,
   readNextLine,
-  READ_ONLY_FLAGS,
+  readNextTokens,
+  readOrchestratorLauncherOptions,
   REQUEST_TEXT_DIR,
   readKiroIdeLegacyPlanApprovalHost,
   readAllAuditShards,
@@ -994,7 +992,7 @@ function namedRestartRequest(
   // Every `--request` value before `--`, where `next`'s own parser reads the
   // flag too, so a kept id named beside another is still read as one; words
   // after `--` are the person's.
-  const flagArgs = args.includes("--") ? args.slice(0, args.indexOf("--")) : args;
+  const flagArgs = beforeDelimiter(args);
   const kept = flagArgs.flatMap((arg, i) => {
     const candidate = flagArgs[i + 1] ?? "";
     if (arg !== "--request" || !isQuestionId(candidate)) return [];
@@ -4764,8 +4762,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   }
   // Behind the delimiter `--config` is one of their words, like every other
   // token there, so the scan for this engine's own flag stops at the mark.
-  const beforeMark = args.indexOf("--");
-  const configIndex = (beforeMark < 0 ? args : args.slice(0, beforeMark)).indexOf("--config");
+  const configIndex = beforeDelimiter(args).indexOf("--config");
   if (configIndex >= 0) {
     const trailing = args.slice(configIndex + 1);
     if (
@@ -4821,25 +4818,23 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   // engine does not take and the word after it: `intent` drops those (nothing
   // on the line is acted on), the record keeps them.
   const wordTokens: string[] = [];
-  const requestWords = nextArgsCarryRequestWords(args);
-  let literalIntent = false;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (literalIntent) {
+  // Which token is a flag, which is a flag's value and which is theirs is
+  // readNextTokens in aidlc-lib.ts, the one reading the seams ask too. It reads
+  // only the tokens in front of the `--` mark, so neither the mark nor a word
+  // behind it is ever a flag's value.
+  const read = readNextTokens(args);
+  for (const { role, token: a, value } of read.tokens) {
+    if (role === "word") {
+      // Among the person's own words a flag-shaped token is one of their words,
+      // never noise (#847), and so is a utility flag ("add a --version flag
+      // ..."). Use the standard `--` delimiter when a task must contain a token
+      // that is otherwise a recognized AIDLC flag (for example
+      // `compose -- --scope`).
       intentWords.push(a);
-      // Theirs on the record too: the delimiter marks the words as the person's,
-      // so leaving them out of `wordTokens` made the record of what they said
-      // omit the request itself when a token earlier on the line was untaken.
       wordTokens.push(a);
       continue;
     }
-    if (a === "--") {
-      literalIntent = true;
-      continue;
-    }
-    // Among the person's own words a utility flag is part of their request
-    // ("add a --version flag ..."), kept as one of its words below.
-    if (READ_ONLY_FLAGS.has(a) && !requestWords) {
+    if (role === "read-only") {
       flags.readOnly = a;
       continue;
     }
@@ -4849,19 +4844,9 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
     // Kept as a fixed allowlist (mirrored by classifyTerminalCommand in
     // aidlc-lib.ts) so an arbitrary token can never ride the read-only path
     // into the tool. The value of `--output` is the following non-flag token.
-    if (
-      flags.readOnly === "--doctor" &&
-      (a === "--export" || a === "--output" || a === "--verbose")
-    ) {
+    if (role === "doctor-arg") {
       flags.readOnlyArgs = flags.readOnlyArgs ?? [];
-      flags.readOnlyArgs.push(a);
-      if (a === "--output") {
-        const next = args[i + 1];
-        if (next !== undefined && !next.startsWith("--")) {
-          flags.readOnlyArgs.push(next);
-          i++;
-        }
-      }
+      flags.readOnlyArgs.push(a, ...(value === undefined ? [] : [value]));
       continue;
     }
     // A LEADING `compose` verb forces the composer (front on a fresh workspace,
@@ -4873,7 +4858,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
     // positional token counts, so freeform prose containing "compose"
     // mid-sentence stays intent text. Any text after the verb is the compose
     // request (falls through to intentWords).
-    if (i === 0 && a === "compose") {
+    if (role === "compose") {
       flags.compose = true;
       continue;
     }
@@ -4889,20 +4874,20 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
     // text instead, a misspelt setting became part of the work's name while
     // the check they asked to drop stayed on, and nothing said so.
     // Which tokens this engine takes is NEXT_FLAGS in aidlc-lib.ts, read here
-    // through nextTokenKind, so a flag missing from that table can never be
+    // through readNextTokens, so a flag missing from that table can never be
     // taken by the branches below and a harness seam reading a line before any
     // agent sees it gets the same answer. After the `--` delimiter nothing
-    // reaches here (the loop keeps it as theirs), and one quoted argument
+    // reaches here (the words behind it are theirs), and one quoted argument
     // holding a sentence is not flag-shaped, so `--help flag for the reverser`
-    // is still what they asked for.
-    if (nextTokenKind(a, args[i + 1]) === "untaken") {
+    // is still what they asked for. Each flag below comes with the value the
+    // table says it takes: `value` is undefined when nothing it can take
+    // follows it.
+    if (role === "untaken") {
       flags.untakenFlag ??= a;
       wordTokens.push(a);
-      const value = args[i + 1];
-      if (value !== undefined && !value.startsWith("--")) {
+      if (value !== undefined) {
         flags.untakenFlagValue ??= value;
         wordTokens.push(value);
-        i++;
       }
     } else if (a === "--resume") {
       flags.resume = true;
@@ -4911,39 +4896,30 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
     } else if (a === "--new-intent") {
       flags.newIntent = true;
     } else if (a === "--request") {
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = "--request requires <8-hex id>.";
       } else {
         flags.request = value;
-        i++;
       }
     } else if (a === "--continue") {
       flags.continue = true;
     } else if (a === "--record") {
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = "--record requires <record selector>.";
       } else {
         flags.record = value;
-        i++;
       }
-    } else if (a === "--scope" && i + 1 < args.length) {
-      flags.scope = args[i + 1];
-      i++;
-    } else if (a === "--stage" && i + 1 < args.length) {
-      flags.stage = args[i + 1];
-      i++;
-    } else if (a === "--phase" && i + 1 < args.length) {
-      flags.phase = args[i + 1];
-      i++;
+    } else if (a === "--scope" && value !== undefined) {
+      flags.scope = value;
+    } else if (a === "--stage" && value !== undefined) {
+      flags.stage = value;
+    } else if (a === "--phase" && value !== undefined) {
+      flags.phase = value;
     } else if (a === "--unit") {
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = `--unit needs the unit's name: for example \`${entrySkillInvocation()} --stage nfr-design --unit beta\`.`;
       } else {
         flags.jumpUnit = value;
-        i++;
       }
     } else if (a === "--every-unit") {
       flags.everyUnit = true;
@@ -4953,18 +4929,15 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       // The agent's plan for a proposal step. A word outside the plan table is
       // the value reading step (readNextLine, before this loop); a missing
       // value is the agent's own slip, said to the agent in routeNext.
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.propose = "";
       } else {
         flags.propose = value.toLowerCase();
-        i++;
       }
     } else if (a === "--depth" || a === "--test-strategy") {
       // Checked here, like --review: the value is echoed into the command the
       // conductor runs, so only the three level words may pass.
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = `${a} requires <minimal|standard|comprehensive>.`;
       } else {
         const word = value.toLowerCase();
@@ -4976,23 +4949,19 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
         } else {
           flags.testStrategy = word;
         }
-        i++;
       }
     } else if (a === "--project-type") {
       // Echoed into the creation or reclassify command, so only the two words pass.
-      const value = args[i + 1];
       const word = value?.toLowerCase();
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = "--project-type requires <greenfield|brownfield>.";
       } else {
         if (word === "greenfield" || word === "brownfield") flags.projectType = word;
         else flags.parseError = `--project-type requires <greenfield|brownfield>; received "${value}".`;
-        i++;
       }
     } else if (a === "--skip" || a === "--add") {
       // Stage slugs echoed into the creation command: each must name a stage.
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = `${a} requires <stage,...>.`;
       } else {
         const slugs = splitSlugList(value);
@@ -5003,21 +4972,17 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
           flags.planChanges ??= { skip: [], add: [] };
           flags.planChanges[a === "--skip" ? "skip" : "add"].push(...slugs);
         }
-        i++;
       }
     } else if (a === "--plan-name") {
       // Echoed into the creation command, so only a plain kebab name passes.
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = "--plan-name requires <name>.";
       } else {
         if (PLAN_NAME_PATTERN.test(value)) flags.planName = value;
         else flags.parseError = `--plan-name takes lowercase letters, digits and hyphens; received "${value}".`;
-        i++;
       }
     } else if (a === "--review") {
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = "--review requires <adversarial|advisory|none>.";
       } else {
         // Checked here, like the ceremony flags: the value is echoed into the
@@ -5028,12 +4993,10 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
         } else {
           flags.parseError = `--review requires <adversarial|advisory|none>; received "${value}".`;
         }
-        i++;
       }
     } else if (a === "--guard-policy" || a === "--change-control") {
       if (a === "--change-control") noteGuardPolicyRename();
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = `${a} requires <strict|relaxed|off>.`;
       } else {
         const parsed = parseGuardPolicy(value);
@@ -5043,19 +5006,16 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
         } else {
           flags.changeControl = parsed;
         }
-        i++;
       }
     } else if (a.startsWith("--") && guardFenceFromConfigKey(a.slice(2)) !== null) {
       // A check typed for this piece of work (`--guard.review-freeze off`), never
       // part of the request. `guard.plan-approval` is another way to say plan approval.
       const fence = guardFenceFromConfigKey(a.slice(2))!;
-      const value = args[i + 1];
       const word = value?.toLowerCase();
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = `${a} requires <on|off>.`;
       } else if (word !== "on" && word !== "off") {
         flags.parseError = `${a} requires <on|off>; received "${value}".`;
-        i++;
       } else {
         if (fence === "plan-approval") {
           flags.ceremony ??= {};
@@ -5064,12 +5024,10 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
           flags.fences ??= {};
           flags.fences[fence] = word;
         }
-        i++;
       }
     } else if (CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === a)) {
       const key = CEREMONY_KEYS.find((key) => CEREMONY_FLAGS[key] === a)!;
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = `${a} requires <on|off>.`;
       } else {
         const parsed = parseCeremonySetting(value);
@@ -5079,33 +5037,27 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
           flags.ceremony ??= {};
           flags.ceremony[key] = parsed;
         }
-        i++;
       }
     } else if (a === "--new-scope") {
       flags.newScope = true;
-    } else if (a === "--report" && i + 1 < args.length) {
+    } else if (a === "--report" && value !== undefined) {
       // CONSUME the value: an unrecognized valued flag would leak its value
       // into the freeform intent text (the path would read as intent words).
-      flags.report = args[i + 1];
-      i++;
-    } else if (a === "--claim" && i + 1 < args.length) {
-      flags.claim = args[i + 1];
-      i++;
+      flags.report = value;
+    } else if (a === "--claim" && value !== undefined) {
+      flags.claim = value;
     } else if (a === "--claim") {
       flags.parseError = "--claim requires <unit>.";
-    } else if (a === "--release" && i + 1 < args.length) {
-      flags.release = args[i + 1];
-      i++;
+    } else if (a === "--release" && value !== undefined) {
+      flags.release = value;
     } else if (a === "--release") {
       flags.parseError = "--release requires <unit>.";
-    } else if (a === "--team" && i + 1 < args.length) {
-      flags.claimTeam = args[i + 1];
-      i++;
+    } else if (a === "--team" && value !== undefined) {
+      flags.claimTeam = value;
     } else if (a === "--team") {
       flags.parseError = "--team requires <label>.";
-    } else if (a === "--rhythm" && i + 1 < args.length) {
-      flags.claimRhythm = args[i + 1];
-      i++;
+    } else if (a === "--rhythm" && value !== undefined) {
+      flags.claimRhythm = value;
     } else if (a === "--rhythm") {
       flags.parseError = "--rhythm requires <per-stage|unit-end>.";
     } else if (a === "--init" || a === "--force") {
@@ -5118,13 +5070,19 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       flags.retiredFlags ??= [];
       flags.retiredFlags.push(a);
     } else {
-      // Among the person's own words a flag-shaped token is one of their words,
-      // never noise (#847). Use the standard `--` delimiter when a task must
-      // contain a token that is otherwise a recognized AIDLC flag (for example
-      // `compose -- --scope`).
+      // A flag of the table that no branch above reads (t-next-flag-table pins
+      // that there is none) stays one of their words rather than being dropped.
       intentWords.push(a);
       wordTokens.push(a);
     }
+  }
+  const literalIntent = read.literal !== null;
+  if (read.literal !== null) {
+    intentWords.push(...read.literal);
+    // Theirs on the record too: the delimiter marks the words as the person's,
+    // so leaving them out of `wordTokens` made the record of what they said
+    // omit the request itself when a token earlier on the line was untaken.
+    wordTokens.push(...read.literal);
   }
   // A leading valid scope token is positional scope syntax, even when a
   // description follows it (`/aidlc bugfix Fix duplicate todos`). Peel only
@@ -17691,15 +17649,18 @@ function nextArgsWithRequestFile(
   args: readonly string[],
   projectDir: string,
 ): { args: string[]; spend(): void } | string {
-  const at = args.indexOf("--request-file");
+  // The flag counts only in front of the `--` mark: behind it the token is one
+  // of the person's words ("add a --request-file option"), as every flag is.
+  const options = beforeDelimiter(args);
+  const at = options.indexOf("--request-file");
   if (at < 0) return { args: [...args], spend: () => {} };
   const usage =
     `--request-file needs a file directly inside ${REQUEST_TEXT_DIR}/ in this project, for example ` +
     `${REQUEST_TEXT_DIR}/request.txt.`;
-  const file = args[at + 1];
+  const file = options[at + 1];
   const rest = [...args.slice(0, at), ...args.slice(at + 2)];
   if (file === undefined || file.startsWith("--")) return usage;
-  if (rest.includes("--request-file")) return "Pass --request-file once.";
+  if (beforeDelimiter(rest).includes("--request-file")) return "Pass --request-file once.";
   if (rest.includes("--")) return "Pass the request either after -- or with --request-file, not both.";
   const relativePath = file.replaceAll("\\", "/");
   const parts = relativePath.split("/");
@@ -17738,72 +17699,17 @@ function nextArgsWithRequestFile(
 
 // --- CLI entry point ---
 
-/**
- * The words that make a `next` line this engine's own command in a fixed shape
- * rather than a request of the person's: the workspace commands, this
- * orchestrator's own verbs, its configuration verb and its help. A line that
- * opens with one of these carries no word of theirs, so its options are its own
- * wherever they sit.
- */
-const NEXT_OWN_COMMAND_WORDS: ReadonlySet<string> = new Set([
-  ...WORKSPACE_VERBS,
-  ...ORCHESTRATOR_VERBS,
-  "config",
-  "help",
-]);
-
-/**
- * Where a request of the person's own begins on a `next` line: at its first
- * bare word. This engine's own `--project-dir` rides ahead of that word, which
- * is where every caller puts it, so among their words the same token is a word
- * of their request and nothing of theirs is read as a folder to work in. The
- * `--` mark already separates their words itself.
- */
-function requestWordsBeginAt(rawArgs: readonly string[]): number {
-  if (rawArgs[0] !== "next") return Number.POSITIVE_INFINITY;
-  for (let i = 1; i < rawArgs.length; i++) {
-    const token = rawArgs[i];
-    if (token === "--") return Number.POSITIVE_INFINITY;
-    if (token.startsWith("-")) {
-      // A token after a flag is that flag's value, never a word of theirs.
-      if (rawArgs[i + 1] !== undefined && !rawArgs[i + 1].startsWith("-")) i++;
-      continue;
-    }
-    return NEXT_OWN_COMMAND_WORDS.has(token) ? Number.POSITIVE_INFINITY : i;
-  }
-  return Number.POSITIVE_INFINITY;
-}
-
 export function main(argv: string[]): void {
   const rawArgs = argv;
 
-  // Extract --project-dir (mirrors aidlc-jump.ts / aidlc-state.ts).
-  const requestFrom = requestWordsBeginAt(rawArgs);
-  let projectDir: string | undefined;
-  let attemptId: string | undefined;
-  let conflictingAttemptId = false;
-  const filteredArgs: string[] = [];
-  let literalArgs = false;
-  for (let i = 0; i < rawArgs.length; i++) {
-    if (rawArgs[i] === "--") {
-      literalArgs = true;
-      filteredArgs.push(rawArgs[i]);
-    } else if (
-      !literalArgs && i < requestFrom && rawArgs[i] === "--project-dir" && i + 1 < rawArgs.length
-    ) {
-      projectDir = rawArgs[i + 1];
-      i++;
-    } else if (!literalArgs && rawArgs[i] === "--aidlc-attempt-id" && i + 1 < rawArgs.length) {
-      const candidate = rawArgs[i + 1];
-      if (/^[A-Za-z0-9._:-]{1,128}$/.test(candidate)) {
-        if (attemptId !== undefined && attemptId !== candidate) conflictingAttemptId = true;
-        attemptId = candidate;
-      }
-      i++;
-    } else {
-      filteredArgs.push(rawArgs[i]);
-    }
-  }
+  // Extract --project-dir and the attempt id (mirrors aidlc-jump.ts /
+  // aidlc-state.ts), the one way a Copilot claim reads them too.
+  const {
+    args: filteredArgs,
+    projectDir,
+    attemptId,
+    conflictingAttemptId,
+  } = readOrchestratorLauncherOptions(rawArgs);
 
   const subcommand = filteredArgs[0];
   let subArgs = filteredArgs.slice(1);

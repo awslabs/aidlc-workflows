@@ -1406,7 +1406,10 @@ describe("detector corpus", () => {
           [`${entry} --project-dir '${otherProjectDir}' next --depth standard`, true],
           [`${terminal} --project-dir '${projectDir}'`, false],
           [`${terminal} --project-dir='${otherProjectDir}'`, true],
-          [`${terminal} --project-dir='${projectDir}'`, false],
+          // The orchestrator takes its folder only as two tokens: there
+          // `--project-dir=<dir>` is a token `next` does not take, so the line is
+          // not this terminal command. The dispatcher's own grammar reads it.
+          [`${terminal} --project-dir='${projectDir}'`, entry.endsWith("aidlc-orchestrate.ts")],
           [`cd '${projectDir}' && ${terminal} --project-dir '${otherProjectDir}'`, true],
           [`cd '${otherProjectDir}' && ${terminal} --project-dir '${projectDir}'`, true],
           [`${terminal} --project-dir .`, false],
@@ -1422,7 +1425,7 @@ describe("detector corpus", () => {
       const terminal = "bun .claude/tools/aidlc-orchestrate.ts next --depth standard";
       for (const [selectors, engaged] of [
         [`--project-dir '${projectDir}' --project-dir='${otherProjectDir}'`, true],
-        [`--project-dir='${otherProjectDir}' --project-dir '${projectDir}'`, false],
+        [`--project-dir='${otherProjectDir}' --project-dir '${projectDir}'`, true],
       ] as const) {
         const command = `${terminal} ${selectors}`;
         expect(isEngineToolCall("Bash", { command }, output, projectDir), command).toBe(engaged);

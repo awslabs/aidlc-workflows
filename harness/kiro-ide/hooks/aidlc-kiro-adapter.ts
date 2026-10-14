@@ -164,7 +164,10 @@ import {
   memoryFilePath,
   normalizeDriveLetter,
   nextFlagShape,
+  nextLineFlags,
   nextTokenKind,
+  ORCHESTRATOR_LAUNCHER_OPTIONS,
+  readOrchestratorLauncherOptions,
   REQUEST_TEXT_DIR,
 } from "../tools/aidlc-lib.ts";
 import {
@@ -1113,7 +1116,7 @@ function nextQuotedFlagValues(args: PowerShellWord[], next: number): Set<number>
     if (i === 0 && !word.opaque && word.value === "compose") continue;
     // The engine takes these off the line with their value before it reads
     // its flags (stripOrchestratorLauncherOptions, nextArgsWithRequestFile).
-    if (!word.opaque && ["--request-file", "--project-dir", "--aidlc-attempt-id"].includes(word.value)) {
+    if (!word.opaque && ["--request-file", ...ORCHESTRATOR_LAUNCHER_OPTIONS].includes(word.value)) {
       i++;
       continue;
     }
@@ -1883,7 +1886,13 @@ function toolTerminalInvocation(command: string): TerminalInvocation | null {
   const runner = match[1] ?? match[2] ?? match[3] ?? "";
   if (runner && !/(^|[\\/])bun(?:\.exe)?$/i.test(runner)) return null;
   const raw = (match[4] ?? "").trim();
-  return { raw, args: splitKiroCommandArgs(raw) };
+  // The words after `next` as the engine reads them: its launcher options
+  // taken off first (readOrchestratorLauncherOptions), as its main() does. A
+  // line that names a folder keeps them as typed, so the seam, which runs
+  // commands in this project only, never runs one meant for another.
+  const words = splitKiroCommandArgs(raw);
+  const launcher = readOrchestratorLauncherOptions(["next", ...words]);
+  return { raw, args: launcher.projectDir !== undefined ? words : launcher.args.slice(1) };
 }
 
 // Whether `latch` is this chat's terminal command of its recorded turn, read
@@ -2153,6 +2162,16 @@ function loweringGuardFlags(args: string[], allowFences: boolean): GuardLowering
     lowering ??= found;
   }
   return lowering;
+}
+
+// The Guard Policy a `next` line lowers, read from the words as typed the way
+// the engine reads them: its launcher options off, then the flags it takes
+// (nextLineFlags). A word of the person's that looks like the flag, behind `--`
+// or not, lowers nothing.
+function nextLoweringGuardFlags(args: string[]): GuardLowering {
+  const own = readOrchestratorLauncherOptions(["next", ...args]).args.slice(1);
+  const taken = nextLineFlags(own).flatMap(({ token, value }) => (value === undefined ? [token] : [token, value]));
+  return loweringGuardFlags(taken, false);
 }
 
 function loweringGuardInvocation(
@@ -2527,7 +2546,7 @@ if (target === "terminal-command-guard") {
   // this, Branch 0, reads only the agent-v1 project-wide latch; the engine
   // could tell this chat's latch from another's only by process ancestry,
   // which one IDE window shares.)
-  const refused = invocation !== null ? loweringGuardFlags(invocation.args, false) : lowering;
+  const refused = invocation !== null ? nextLoweringGuardFlags(splitKiroCommandArgs(invocation.raw)) : lowering;
   const held = readTerminalLatch(sessionId);
   if (holdsThisTurn(held, recordedTurn) && refused !== null && promptWasEmpty(sessionId, recordedTurn)) {
     process.stderr.write(loweringRefusal(refused));

@@ -24,19 +24,25 @@
 //           forwarding, landing on the engine's cold-start compose OFFER
 //           ("reply with compose...") instead; when that happens the journey
 //           answers "compose" in the same session and expects the gate next.
+//           The words name the stages, so the conductor may instead change the
+//           plan at once (`next --skip`, the skill's named-stage route, its
+//           RECOMPOSED carrying the person-asked reason); then there is no gate
+//           and no beat 2.
 //   beat 2: codex exec resume --last "Approve" - same session (asserted via the
 //           stderr session id), the conductor runs the recompose verb and
 //           deletes the marker.
-//   disk:   market-research now carries the SKIP suffix, the cursor and every
-//           checkbox marker are byte-unchanged, Total Stages shrank, Stages to
-//           Skip names market-research, RECOMPOSED audited, the marker gone.
+//   disk:   market-research now carries the SKIP suffix and no stage the person
+//           did not name does, the cursor and every checkbox marker are
+//           unchanged (the current stage may start: the agent carrying on),
+//           Total Stages shrank, Stages to Skip names market-research,
+//           RECOMPOSED audited, the marker gone.
 //
 // JOURNEY-LEVEL tolerance (mirrors t196): the live composer exercises judgment
 // over WHICH of the two named stages to flip (a run keeping team-formation was
 // observed), so the deterministic contract is that at least the unambiguous
 // market-research flip landed AS A SUFFIX EDIT, the plan shrank, and the cursor
 // never moved. t194 pins the exact multi-flip mechanics. The marker is asserted
-// absent only AFTER beat 2 completes (resume returns when the turn is done),
+// absent only AFTER the last turn completes (exec returns when the turn is done),
 // avoiding the write-then-delete race t196 documents.
 //
 // `--last` filters recorded sessions by cwd, so beat 2 MUST run with the same
@@ -74,6 +80,7 @@ import {
   seededRecordDir,
 } from "../harness/fixtures.ts";
 import { expectPersonFirst } from "../harness/person-turns.ts";
+import { markersChanged, newlySkipped } from "../harness/outcomes.ts";
 import { PERSON_ASKED_SKIP_REASON } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 function completedStartupProbe<T extends { error?: Error }>(result: T): T {
@@ -237,7 +244,7 @@ function auditText(proj: string): string {
 
 describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec resume", () => {
   test.skipIf(SKIP_REASON !== null)(
-    `beat 1 stops at the gate with nothing applied; beat 2 resume-approves the SKIP flips${SKIP_REASON ? ` [SKIP: ${SKIP_REASON}]` : ""}`,
+    `the named stages are skipped at once, or beat 1 stops at the gate with nothing applied and beat 2 resume-approves the SKIP flips${SKIP_REASON ? ` [SKIP: ${SKIP_REASON}]` : ""}`,
     async () => {
       const deadlineMs = performance.now() + TEST_TIMEOUT_MS;
       const { proj, home, root } = setupCodexProject();
@@ -247,12 +254,12 @@ describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec r
         expect(before).toMatch(/- \[ \] team-formation .* EXECUTE/);
         const cursorBefore = /- \*\*Current Stage\*\*: (.*)/.exec(before)?.[1];
         const totalBefore = Number(/- \*\*Total Stages\*\*: (\d+)/.exec(before)?.[1]);
-        const markersBefore = [...before.matchAll(/^- \[[ xSR?-]\] \S+/gm)].map((m) => m[0]);
-        expect(markersBefore.length).toBeGreaterThan(0);
 
-        // Beat 1: the compose front. The turn must END at a human question (the
-        // proposal gate, or - conductor-forwarding variance - the engine's
-        // cold-start compose offer) with the marker written but NOTHING applied.
+        // Beat 1: the compose front. The words name the stages, so the skill may
+        // change the plan at once (`next --skip`, "Named stage changes are done
+        // at once" in harness/codex/skills/aidlc/SKILL.md; its RECOMPOSED
+        // carries the person-asked reason) or take the composer's gate. The
+        // record says which route ran.
         const b1 = codexTurn(
           proj,
           home,
@@ -262,59 +269,57 @@ describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec r
         const b1Session = sessionIdOf(b1.stderr);
         expect(b1Session).toBeDefined();
 
-        // If the verb was dropped and the engine asked the compose OFFER instead
-        // of the proposal gate, answer "compose" in-session; the next turn must
-        // land on the gate. Still: nothing applied yet.
-        let gateOut = b1.stdout;
-        let gateDiagnostic = codexExecDiagnostic(b1);
-        if (!/approve/i.test(gateOut)) {
-          expect(/compose/i.test(gateOut), gateDiagnostic).toBe(true);
-          const offerTurn = codexTurn(proj, home, "compose", { resume: true });
-          expect(offerTurn.rc, codexExecDiagnostic(offerTurn)).toBe(0);
-          expect(sessionIdOf(offerTurn.stderr)).toBe(b1Session);
-          gateOut = offerTurn.stdout;
-          gateDiagnostic = codexExecDiagnostic(offerTurn);
-        }
-        // The approve/edit/reject gate reached the final message.
-        expect(/approve/i.test(gateOut), gateDiagnostic).toBe(true);
-        expect(/reject/i.test(gateOut), gateDiagnostic).toBe(true);
-        // Marker written, nothing applied: state byte-unchanged, no RECOMPOSED.
-        // The words name the stages, so the skill may also take its named-stage
-        // route (`next --skip`, done at once): a plan change the person asked
-        // for, not one made ahead of them. Only on the compose gate route is a
-        // change before Approve AI-DLC acting for the person.
-        expect(existsSync(markerPath(proj))).toBe(true);
-        const beat1Audit = auditText(proj);
-        const untouched = readState(proj) === before && !beat1Audit.includes("**Event**: RECOMPOSED");
-        if (beat1Audit.includes(`**Reason**: ${PERSON_ASKED_SKIP_REASON}`)) {
-          expect(untouched, "beat 1 took the named-stage route, so the compose gate was not reached").toBe(true);
-        } else {
-          expectPersonFirst(untouched, "the plan change was applied before the person approved it");
+        if (!auditText(proj).includes(`**Reason**: ${PERSON_ASKED_SKIP_REASON}`)) {
+          // The gate route: the turn must END at a human question (the proposal
+          // gate, or - conductor-forwarding variance - the engine's cold-start
+          // compose offer) with the marker written but NOTHING applied. If the
+          // engine asked the compose OFFER instead of the proposal gate, answer
+          // "compose" in-session; the next turn must land on the gate.
+          let gateOut = b1.stdout;
+          let gateDiagnostic = codexExecDiagnostic(b1);
+          if (!/approve/i.test(gateOut)) {
+            expect(/compose/i.test(gateOut), gateDiagnostic).toBe(true);
+            const offerTurn = codexTurn(proj, home, "compose", { resume: true });
+            expect(offerTurn.rc, codexExecDiagnostic(offerTurn)).toBe(0);
+            expect(sessionIdOf(offerTurn.stderr)).toBe(b1Session);
+            gateOut = offerTurn.stdout;
+            gateDiagnostic = codexExecDiagnostic(offerTurn);
+          }
+          // The approve/edit/reject gate reached the final message.
+          expect(/approve/i.test(gateOut), gateDiagnostic).toBe(true);
+          expect(/reject/i.test(gateOut), gateDiagnostic).toBe(true);
+          // Marker written, nothing applied: a change before Approve on this
+          // route is AI-DLC acting for the person.
+          expect(existsSync(markerPath(proj))).toBe(true);
+          expectPersonFirst(readState(proj) === before && !auditText(proj).includes("**Event**: RECOMPOSED"),
+            "the plan change was applied before the person approved it");
+
+          // Beat 2: answer the gate in the SAME session.
+          const b2 = codexTurn(proj, home, "Approve", { resume: true });
+          expect(b2.rc, codexExecDiagnostic(b2)).toBe(0);
+          // Same-session proof: resume continued beat 1's conversation.
+          expect(sessionIdOf(b2.stderr)).toBe(b1Session);
         }
 
-        // Beat 2: answer the gate in the SAME session.
-        const b2 = codexTurn(proj, home, "Approve", { resume: true });
-        expect(b2.rc, codexExecDiagnostic(b2)).toBe(0);
-        // Same-session proof: resume continued beat 1's conversation.
-        expect(sessionIdOf(b2.stderr)).toBe(b1Session);
-
-        // The approve applied the flips as suffix edits; cursor + markers
-        // byte-unchanged (a plan edit, not a stage advance).
+        // Either route: market-research, and only stages the person named, are
+        // skipped as suffix edits, and the work stands where it stood; after the
+        // plan change the agent may carry on into the current stage.
         const after = readState(proj);
-        expect(after).toMatch(/- \[ \] market-research .* SKIP/);
+        const skipped = newlySkipped(before, after);
+        expect(skipped).toContain("market-research");
+        expect(["market-research", "team-formation"]).toEqual(expect.arrayContaining(skipped));
         const cursorAfter = /- \*\*Current Stage\*\*: (.*)/.exec(after)?.[1];
         expect(cursorAfter).toBe(cursorBefore);
-        const markersAfter = [...after.matchAll(/^- \[[ xSR?-]\] \S+/gm)].map((m) => m[0]);
-        expect(markersAfter).toEqual(markersBefore);
+        expect(markersChanged(before, after, cursorBefore)).toEqual([]);
         // Derived fields rebuilt: total dropped by at least the one flip.
         const totalAfter = Number(/- \*\*Total Stages\*\*: (\d+)/.exec(after)?.[1]);
         expect(totalAfter).toBeLessThan(totalBefore);
         // And the rebuilt Stages to Skip names the flipped stage.
         expect(after).toMatch(/- \*\*Stages to Skip\*\*: .*market-research/);
 
-        // RECOMPOSED audited and the marker gone (beat 2 returned only when the
-        // turn fully resolved, so this is the settled end state - the strongest
-        // proof the recompose verb ran, mirroring t196's audit assertion).
+        // RECOMPOSED audited and the marker gone (the last turn returned only
+        // when it fully resolved, so this is the settled end state - the
+        // strongest proof the recompose verb ran, mirroring t196's audit assertion).
         expect(auditText(proj)).toContain("**Event**: RECOMPOSED");
         expect(existsSync(markerPath(proj))).toBe(false);
       }, deadlineMs);

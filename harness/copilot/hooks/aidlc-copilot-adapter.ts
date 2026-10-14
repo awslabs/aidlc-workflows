@@ -97,6 +97,7 @@ import { platform, tmpdir, userInfo } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  beforeDelimiter,
   workflowParticipation,
   hookStandsOutside,
   enterHookWorkflow,
@@ -108,6 +109,8 @@ import {
   type CopilotCommandClaim,
   type CopilotDirectiveMetadata,
   isReadOnlyNextArgv,
+  nextLineFlags,
+  readOrchestratorLauncherOptions,
   normalizeDriveLetter,
   recordCopilotHumanSequence,
   recordHookDrop,
@@ -674,8 +677,7 @@ export async function run(
 
   // A flag before the literal `--` delimiter, in either spelling.
   function hasFlag(args: readonly string[], flag: string): boolean {
-    const literal = args.indexOf("--");
-    return (literal < 0 ? args : args.slice(0, literal)).some((arg) => arg === flag || arg.startsWith(`${flag}=`));
+    return beforeDelimiter(args).some((arg) => arg === flag || arg.startsWith(`${flag}=`));
   }
 
   // Stage status changes the state-transition guard refuses, plus the setters
@@ -771,7 +773,9 @@ export async function run(
     return named.length === 1 ? named[0] : null;
   }
 
-  function shellWords(command: string): string[] | null {
+  // `ends`, when given, gets where each word ends in `command`, so a word can
+  // be added after one without re-spelling the others.
+  function shellWords(command: string, ends: number[] = []): string[] | null {
     const words: string[] = [];
     let word = "";
     let quote: "'" | '"' | null = null;
@@ -789,11 +793,11 @@ export async function run(
         else word += ch;
       } else if (ch === "'" || ch === '"') quote = ch;
       else if (";&|<>`\n".includes(ch) || (ch === "$" && command[i + 1] === "(")) return null;
-      else if (/\s/.test(ch)) { if (word) { words.push(word); word = ""; } }
+      else if (/\s/.test(ch)) { if (word) { words.push(word); ends.push(i); word = ""; } }
       else word += ch;
     }
     if (escaped || quote) return null;
-    if (word) words.push(word);
+    if (word) { words.push(word); ends.push(command.length); }
     return words;
   }
 
@@ -818,6 +822,7 @@ export async function run(
 
   function simpleCommand(command: string): {
     words: string[];
+    ends: number[];
     body: string;
     redirect: string;
     expansionActive: boolean;
@@ -862,10 +867,12 @@ export async function run(
     }
     if (escaped || quote) return null;
     const body = command.slice(0, redirectStart < 0 ? command.length : redirectStart).trimEnd();
-    const words = shellWords(body);
+    const ends: number[] = [];
+    const words = shellWords(body, ends);
     return words
       ? {
           words,
+          ends,
           body,
           redirect: redirectStart < 0 ? "" : command.slice(redirectStart),
           expansionActive,
@@ -1051,21 +1058,51 @@ export async function run(
     const start = !(first === "bun" || first === process.execPath) ? "aidlc"
       : `bun ${[".aidlc", "tools", viaDispatcher ? "aidlc.ts" : "aidlc-orchestrate.ts"].join("/")}`;
     const form = (verb: string) => `${start}${viaDispatcher && routedOrchestrate ? " engine orchestrate" : ""} ${verb}`;
-    if (args[0] === "engine" && args[1] === "orchestrate") args = args.slice(2);
+    // Where the verb stands among the command's words: the attempt id goes
+    // right after it (rewrite), ahead of any word of the person's.
+    let verbWord = cursor;
+    if (args[0] === "engine" && args[1] === "orchestrate") {
+      args = args.slice(2);
+      verbWord += 2;
+    }
     if (args[0] === "--resume") args = ["next", "--resume", ...args.slice(1)];
+    // The orchestrator's own reading says which tokens are its launcher
+    // options, in front of the verb and after it, so a word of the person's
+    // that looks like one stays theirs and the claim hashes the line the
+    // engine hashes (readOrchestratorLauncherOptions).
+    const launcher = readOrchestratorLauncherOptions(args);
+    verbWord += launcher.verbAt;
+    const options = new Set(launcher.taken);
+    // The agent's own slip: an option it would take with nothing it can take
+    // after it. An attempt id is this adapter's to add, however it is written.
+    if (launcher.dangling !== undefined && args[launcher.dangling] === ATTEMPT_FLAG) {
+      return { status: target === "guard-tool-call" ? "attempt" : "unsupported" };
+    }
+    if (launcher.dangling !== undefined && args[launcher.dangling] === "--project-dir") {
+      return { status: "unsupported", reason: PROJECT_DIR_EMPTY };
+    }
     const normalized: string[] = [];
     let attemptId = safeAttemptId(copilot.tool_use_id);
     for (let i = 0; i < args.length; i++) {
-      if (args[i] === ATTEMPT_FLAG) {
+      if (args[i] === ATTEMPT_FLAG && options.has(i)) {
         const carried = args[++i];
         if (target === "guard-tool-call") return { status: "attempt" };
         if (!safeAttemptId(carried) || (attemptId && attemptId !== carried)) return { status: "unsupported" };
         attemptId = carried;
         continue;
       }
-      if (args[i] !== "--project-dir") { normalized.push(args[i]); continue; }
+      if (args[i] === "--project-dir" && !options.has(i) && !args.slice(0, i).includes("--")) {
+        // Among the person's words the folder stays theirs for the claim, but
+        // the dispatcher may still take a folder there (its own boundary), so a
+        // folder that is another project is refused as on any other spelling.
+        try {
+          if (normalizeDriveLetter(realpathSync(resolve(projectDir, terminalPath(args[i + 1] ?? "")))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "foreign" };
+        } catch {
+          // No such folder: a word of theirs, nothing to run in.
+        }
+      }
+      if (args[i] !== "--project-dir" || !options.has(i)) { normalized.push(args[i]); continue; }
       const routed = args[++i];
-      if (!routed) return { status: "unsupported", reason: PROJECT_DIR_EMPTY };
       // Either drive spelling names this project: VS Code hooks see `c:\`,
       // its terminal `C:\`. Only the comparison folds; projectDir is unchanged.
       try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, terminalPath(routed)))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "foreign" }; }
@@ -1107,6 +1144,10 @@ export async function run(
     // read from it would retire this work's waiting resume choice.
     const runs = commandKind === "next" ? keptRestartRun(projectDir, subArgs)?.args ?? subArgs : subArgs;
     const flagValue = (name: string): string => subArgs[subArgs.lastIndexOf(name) + 1] ?? "";
+    // A flag the engine's reading of this line takes, never a word of the
+    // person's or another flag's value (readNextTokens).
+    const taken = commandKind === "next" ? new Set(nextLineFlags(subArgs).map((flag) => flag.token)) : new Set<string>();
+    const nextTakes = (flag: string): boolean => taken.has(flag);
     const reportResult = flagValue("--result");
     const skipRecovery = reportResult === "skipped" && subArgs.length === 6 && subArgs[0] === "--stage" && subArgs[2] === "--result" && subArgs[4] === "--reason" && flagValue("--reason") === "stage is SKIP in the approved workflow plan";
     return {
@@ -1119,16 +1160,23 @@ export async function run(
         (runs[0] === "knowledge" && ["onboard", "sync"].includes(runs[1] ?? "")) ||
         (runs[0] === "plugin" && ["sync", "select", "build"].includes(runs[1] ?? "")))) ||
         !argumentsStayInProject(runs),
-      rewrite: (selectedAttemptId) => `${lead}${parsed.body} ${ATTEMPT_FLAG} ${selectedAttemptId}${parsed.redirect ? ` ${parsed.redirect}` : ""}`,
+      // On a `next` line right after the verb, ahead of the person's words,
+      // where the engine reads it; behind them it would be one of their words.
+      // The other verbs carry no words of theirs, so it goes at the end.
+      rewrite: (selectedAttemptId) => {
+        const at = commandKind === "next" ? parsed.ends[verbWord] : parsed.body.length;
+        return `${lead}${parsed.body.slice(0, at)} ${ATTEMPT_FLAG} ${selectedAttemptId}` +
+          `${parsed.body.slice(at)}${parsed.redirect ? ` ${parsed.redirect}` : ""}`;
+      },
       claim: {
         sessionId,
         ...(attemptId ? { attemptId } : {}),
         commandKind: commandKind as CopilotCommandClaim["commandKind"],
         commandSha256: digest,
         ...(commandKind === "continue" && subArgs.length === 1 ? { continueToken: subArgs[0] } : {}),
-        ...(commandKind === "next" && subArgs.includes("--resume") ? { resumeRequest: true } : {}),
-        ...(commandKind === "next" && (subArgs.includes("--stage") || subArgs.includes("--phase")) ? { jumpRequest: true } : {}),
-        ...(commandKind === "next" && subArgs.includes("--new-intent") ? { startFreshRequest: true } : {}),
+        ...(commandKind === "next" && nextTakes("--resume") ? { resumeRequest: true } : {}),
+        ...(commandKind === "next" && (nextTakes("--stage") || nextTakes("--phase")) ? { jumpRequest: true } : {}),
+        ...(commandKind === "next" && nextTakes("--new-intent") ? { startFreshRequest: true } : {}),
         ...(commandKind === "next" && subArgs.length === 0 ? { plainNext: true } : {}),
         ...(commandKind === "report" && skipRecovery ? { skipRecovery: true, reportStage: flagValue("--stage") } : {}),
       },

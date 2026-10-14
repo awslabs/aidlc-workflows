@@ -1995,6 +1995,26 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // `next` takes no `--bypass`, so on its line, behind `--` or among their
+  // words, the token is the person's: a request to build such an option turns
+  // no check off.
+  test("the person's words that name --bypass on a next line are not a switch while the plan waits", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "u1", { plan: true, answer: null });
+      for (const command of ["aidlc engine orchestrate next -- add a --bypass option", "aidlc next add a --bypass option"]) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+      // Any other command is read whole, as the tool that applies it reads it.
+      const flags = runHook(proj, BASH("aidlc config flags -- --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes"));
+      expect(flags.code, flags.stderr).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   // Switching a check off for the project, or back on, is the person's call,
   // and the engine then tells them which check is off. While a plan waits,
   // turning one back on always passes; turning one off passes once a person

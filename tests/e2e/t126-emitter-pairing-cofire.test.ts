@@ -67,7 +67,6 @@ import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { gateWitness } from "../harness/gate-witness.ts";
 import { driveAidlc, readAuditText } from "../harness/sdk-drive.ts";
 
 // AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
@@ -156,31 +155,20 @@ describe("t126 emitter-pairing co-fire (metamorphic invariant, sdk)", () => {
       try {
         seedPocState(proj);
 
-        const witness = gateWitness(proj);
         // The questions are answered by the driver's menus, as a person answers
         // them: an answer chosen up front would be the agent's, not the person's.
+        // The prompt's "approve each gate" is a standing instruction, not an
+        // answer: the drive's person-turn check fails any gate resolution with
+        // no reply from the person after its gate opened (sdk-drive.ts).
         const r = await driveAidlc(
           "/aidlc poc Build a local CLI that converts CSV input to formatted JSON output. " +
             "Use the simplest sensible stack, and approve each gate.",
-          {
-          projectDir: proj,
-          timeoutMs: remainingWorkMs(),
-          onAskUserQuestion: witness.onAskUserQuestion,
-          },
+          { projectDir: proj, timeoutMs: remainingWorkMs() },
         );
 
         // The run must have terminated cleanly (structured SDK result, not an
         // exit-code guess). A timeout/crash would make the pairing check vacuous.
         assertResultOk(r);
-
-        // The prompt's "approve each gate" is a standing instruction, not an
-        // answer: every gate resolution must match an approval menu the driver
-        // answered while that stage's gate was held.
-        expect(witness.answered().length).toBeGreaterThan(0);
-        expect(
-          witness.unanswered(),
-          `gate resolutions with no answered gate menu; answered: ${JSON.stringify(witness.answered())}`,
-        ).toEqual([]);
 
         const events = auditEventsOnDisk(proj);
         const present = new Set(events);
