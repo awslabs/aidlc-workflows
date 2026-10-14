@@ -45,9 +45,11 @@
 //      deny envelope.
 //   8. VS Code fires UserPromptSubmit for each runSubagent subagent, carrying
 //      the agent's briefing as `prompt` under the parent chat's session id
-//      (live-captured on VS Code 1.131, #1411). The dispatch records a digest
-//      of the brief, and record-human-turn drops a matching prompt, so a
-//      briefing is never counted as the person's turn or words.
+//      (live-captured on VS Code 1.131, #1411). The CLI fires it for each task
+//      subagent under the subagent's own id (the task call's id on 1.0.74;
+//      live-captured on 1.0.74, 1.0.95 and 1.0.96). The dispatch records a
+//      digest of the brief, and record-human-turn drops a matching prompt, so
+//      a briefing is never counted as the person's turn or words.
 //   9. VS Code asks "Run command? Allow / Skip" before every shell call unless
 //      a PreToolUse hook answers permissionDecision "allow" (#1411). In VS Code
 //      (its `run_in_terminal` tool) the shim answers allow for AI-DLC's own
@@ -1588,8 +1590,11 @@ export async function run(
   // one: the agent briefing a subagent is not the person speaking. A match
   // spends that launch's record, and only a prompt in the chat that launched
   // the subagent can spend it; a record lapses with the subagent ledger's
-  // window. Only digests are kept, never the text. The record is named for the
-  // user as well as the project: Linux shares one /tmp between users.
+  // window. The CLI sends a task launch's brief as the first prompt of the
+  // subagent's own session, an id the launch cannot know, so that record names
+  // no chat and its brief spends it from whichever session it arrives in.
+  // Only digests are kept, never the text. The record is named for the user as
+  // well as the project: Linux shares one /tmp between users.
   const BRIEFING_USER = (() => {
     if (typeof process.getuid === "function") return `u${process.getuid()}`;
     try {
@@ -1606,7 +1611,7 @@ export async function run(
   const BRIEFING_BUSY = "AI-DLC was busy and did not start this subagent. Retry the same call.";
 
   // One record per dispatch: the brief as delivered and as first written, and
-  // the chat that launched it.
+  // the chat whose prompt carries it, when the host sends it there.
   interface BriefingEntry {
     digests: string[];
     ts: number;
@@ -1689,7 +1694,7 @@ export async function run(
   }
 
   // A transient write failure is retried; a lock that stays busy is not.
-  function recordBriefings(prompts: unknown[]): boolean {
+  function recordBriefings(prompts: unknown[], chat: string): boolean {
     const digests = [...new Set(
       prompts
         .filter((prompt): prompt is string => typeof prompt === "string" && prompt.trim().length > 0)
@@ -1698,7 +1703,7 @@ export async function run(
     if (digests.length === 0) return true;
     for (let attempt = 0; attempt < 3; attempt++) {
       const result = transactBriefings((entries) => {
-        entries.push({ digests, ts: Date.now(), ...(sessionId ? { session: sessionId } : {}) });
+        entries.push({ digests, ts: Date.now(), ...(chat ? { session: chat } : {}) });
         return { value: true, changed: true };
       }, false);
       if (result.committed) return true;
@@ -1709,8 +1714,8 @@ export async function run(
   }
 
   // "briefing" spends the matching launch's record; "unknown" means the
-  // record could not be read even under the lock. A launch from another chat
-  // never matches: its brief arrives under that chat's session.
+  // record could not be read even under the lock. A VS Code launch from
+  // another chat never matches: its brief arrives under that chat's session.
   function checkBriefing(prompt: unknown): "briefing" | "not-briefing" | "unknown" {
     if (typeof prompt !== "string" || prompt.trim().length === 0) return "not-briefing";
     const digest = briefingDigest(prompt);
@@ -1942,8 +1947,9 @@ export async function run(
           return 0;
         }
         const delivered = hostInput(dispatchInput);
-        // The subagent's first message is the brief as delivered (difference #8).
-        if (!recordBriefings([delivered.prompt, native.prompt])) {
+        // The subagent's first message is the brief as delivered (difference #8),
+        // in this chat only for VS Code's runSubagent.
+        if (!recordBriefings([delivered.prompt, native.prompt], rawToolName === "runSubagent" ? sessionId : "")) {
           process.stdout.write(denyJson(BRIEFING_BUSY));
           return 0;
         }

@@ -278,18 +278,26 @@ the rewrite back in the host's own input shape, as top-level `modifiedArgs`
 VS Code also fires UserPromptSubmit for every `runSubagent` subagent: the
 payload is `{prompt}` plus the shared session fields, with the agent's brief as
 `prompt` and the parent chat's `session_id`, sent right after SubagentStart.
-Nothing in it marks it as the agent's. The dispatch's PreToolUse carries the
-same text, so for each allowed launch the adapter records SHA-256 digests of
-the brief as delivered (after the rule rewrite) and as first written, in the
-temp file `aidlc-copilot-briefings-<user>-<project hash>.json`. The user part
-is the uid on Linux and macOS (one `/tmp` serves every user there) and a hash
-of the user name on Windows, and the project hash is the same drive-letter
-normalized key as the subagent ledger and its lock. Each launch's record also
-names the chat that launched it, and only a prompt in that chat matches or
-spends it: the brief arrives under the launching chat's session, so the same
-words submitted in another chat on the project are that person's. The record
-keeps the newest 64 launches; a launch's record lapses after 30 minutes and is
-spent when its brief arrives. Only digests are stored, never the brief text.
+The Copilot CLI fires it for every `task` subagent as the first prompt of the
+subagent's own session: right after SubagentStart, with the same fields as a
+prompt the person types, and as `session_id` the subagent's own id (the one
+SubagentStop later reports as `agent_id`) on 1.0.95 and later, the task call's
+id on 1.0.74. Nothing in either marks it as the agent's. The dispatch's
+PreToolUse carries the same text, so for each allowed launch the adapter
+records SHA-256 digests of the brief as delivered (after the rule rewrite) and
+as first written, in the temp file
+`aidlc-copilot-briefings-<user>-<project hash>.json`. The user part is the uid
+on Linux and macOS (one `/tmp` serves every user there) and a hash of the user
+name on Windows, and the project hash is the same drive-letter normalized key
+as the subagent ledger and its lock. A `runSubagent` launch's record also names
+the chat that launched it, and only a prompt in that chat matches or spends it:
+the brief arrives under the launching chat's session, so the same words
+submitted in another chat on the project are that person's. Any other launch's
+record, the CLI's `task` among them, names no chat: its brief arrives under an
+id the launch cannot know, and spends the record from whichever session it
+arrives in. The record keeps the newest 64 launches; a launch's record lapses
+after 30 minutes and is spent when its brief arrives. Only digests are stored,
+never the brief text.
 
 Every read and write of the record happens under the subagent ledger's lock,
 so a reader never races a writer's rename (Windows refuses to replace a file
@@ -307,20 +315,20 @@ subagent started in the same chat within the last 5 seconds (the subagent
 ledger says so) is not counted: it is almost certainly that subagent's brief,
 whether VS Code changed the brief's text or the record is unreadable, and a
 message the person did type in that window is asked for again. Any other
-prompt counts as before, including one typed while the subagent still runs.
+prompt counts as before, including one typed while the subagent still runs. On
+the CLI a brief never arrives in the launching chat, so the window does not
+apply there.
 
 Each prompt the 5-second window holds back leaves an advisory
 `SUBAGENT_PROMPT_UNMATCHED` audit row (`Counted: no`, with a Reason naming
 whether no brief matched or the record could not be read), so a change in the
 text VS Code sends is noticed. The row never carries the prompt.
 
-A match only ever withholds a turn. In VS Code the subagent's own prompt spends
-its record, so a false positive needs the person to type a brief verbatim
-before its subagent starts. The Copilot CLI documents `userPromptSubmitted` as
-firing when the user submits a prompt, and the same record covers its `task`
-launches in case a build sends a brief through that hook. Nothing spends a
-record there today, so for 30 minutes after a `task` launch a message
-identical to its brief is not counted, and the person replies again.
+A match only ever withholds a turn. On both surfaces the subagent's own prompt
+spends its record, so a false positive needs the person to type a brief
+verbatim before its subagent starts: in the launching chat in VS Code, in any
+chat on the project on the CLI, where a launch's brief arrives about a second
+after the dispatch.
 
 #### Codex adapter
 
