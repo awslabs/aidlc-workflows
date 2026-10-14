@@ -8813,6 +8813,9 @@ function customizeFirstRun(
     providerVerified: detection.bedrockReachable === true,
     opencodeDefault: true,
   };
+  // Step 3 records whether the person's pick is that harness's default, so a
+  // later harness change moves only a default preset.
+  let presetIsDefault = true;
   const editStep = (step: number): void => {
     if (step === 1) {
       process.stdout.write("  Step 1 of 6 - Harness\n");
@@ -8835,7 +8838,7 @@ function customizeFirstRun(
       if (choices.candidate.stamp.distribution !== previousDistribution) {
         choices.kiro = undefined;
         // The default preset follows the harness; a preset the person chose stays.
-        if (choices.preset === firstRunDefaultPreset(previousDistribution)) {
+        if (presetIsDefault) {
           choices.preset = firstRunDefaultPreset(choices.candidate.stamp.distribution);
         }
       }
@@ -8968,6 +8971,7 @@ function customizeFirstRun(
         choices.preset === "balanced" ? 1 : choices.preset === "thorough" ? 2 : choices.preset === "minimal" ? 3 : 4,
       );
       choices.preset = selected === 1 ? "balanced" : selected === 2 ? "thorough" : selected === 3 ? "minimal" : "unchanged";
+      presetIsDefault = choices.preset === firstRunDefaultPreset(choices.candidate.stamp.distribution);
       process.stdout.write(choices.preset === "unchanged"
         ? "  Keeping existing settings unchanged; no preset recorded.\n\n"
         : `  Using the ${choices.preset} preset.\n\n`);

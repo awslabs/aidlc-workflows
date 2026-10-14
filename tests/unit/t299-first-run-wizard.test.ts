@@ -1103,6 +1103,43 @@ describe("t299 first-run setup wizard", () => {
     ).models.preset).toBe("balanced");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Cursor's default preset is unchanged and Claude Code's is balanced, so a
+  // pick of unchanged on Claude Code equals the default of the harness passed
+  // through on the way back.
+  test("a preset the person picked stays when the harness changes and changes back", () => {
+    const env = isolatedMachineEnv();
+    const result = runWizard(
+      `${["2", "", "", "4", "", "", "1", "4", "1", "1", ""].join("\n")}\n`,
+      { env },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Using Cursor.");
+    const last = result.stdout.slice(result.stdout.lastIndexOf("Your choices"));
+    expect(last).toContain("1. Harness      Claude Code");
+    expect(last).toContain("3. Preset       none (unchanged)");
+    expect(result.stdout).toContain("Model preset ... left unchanged");
+    for (const path of [
+      join(result.project, "aidlc.settings.json"),
+      join(result.project, "aidlc.settings.local.json"),
+      join(env.AIDLC_INSTALL_ROOT as string, "aidlc.settings.json"),
+    ]) {
+      const settings = existsSync(path) ? JSON.parse(readFileSync(path, "utf-8")) : {};
+      expect(settings).not.toHaveProperty("models");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("the default preset follows a harness change", () => {
+    const result = runWizard(
+      `${["2", "", "", "", "", "", "", "1", "4", "n"].join("\n")}\n`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Using the balanced preset.");
+    const last = result.stdout.slice(result.stdout.lastIndexOf("Your choices"));
+    expect(last).toContain("1. Harness      Cursor");
+    expect(last).toContain("3. Preset       none (unchanged)");
+    expect(result.stdout).toContain("Nothing written.");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("review accepts a step number, re-enters it, then applies", () => {
     const result = runWizard(
       `${[
