@@ -10,7 +10,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { AIDLC_SRC, cleanupTestProject, createTestProject, seededAuditShard, seededStateFile } from "../harness/fixtures.ts";
-import { newlySkipped, readBeforeFirstAct, stageEvents } from "../harness/outcomes.ts";
+import { markersChanged, newlySkipped, readBeforeFirstAct, stageEvents } from "../harness/outcomes.ts";
 import { PersonTurnLedger } from "../harness/person-turns.ts";
 import type { CapturedToolResult } from "../harness/sdk-drive.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
@@ -52,6 +52,11 @@ const read = (path: string) => tool("Read", { file_path: `/proj/${path}` });
 // Stage Progress lines as the engine writes them (an em dash between slug and action).
 function state(actions: Record<string, string>): string {
   return `${Object.entries(actions).map(([slug, action]) => `- [ ] ${slug} \u2014 ${action}`).join("\n")}\n`;
+}
+
+/** Stage lines with their run markers ("x", " ", "-"), every action EXECUTE. */
+function progress(markers: Record<string, string>): string {
+  return `${Object.entries(markers).map(([slug, mark]) => `- [${mark}] ${slug} \u2014 EXECUTE`).join("\n")}\n`;
 }
 
 describe("t-outcomes", () => {
@@ -166,6 +171,27 @@ describe("t-outcomes", () => {
     test("a stage the person did not name skipped shows", () => {
       const after = state({ "reverse-engineering": "SKIP", "market-research": "SKIP", "team-formation": "SKIP", "user-stories": "SKIP" });
       expect(newlySkipped(before, after)).toEqual(["market-research", "team-formation", "user-stories"]);
+    });
+  });
+
+  // Codex compose-inflight: a plan change edits the plan, never the run state;
+  // after the person's Approve the agent may carry on into the current stage.
+  describe("a plan change leaves the work where it stands (Codex compose-inflight)", () => {
+    const before = progress({ "state-init": "x", "intent-capture": " ", "market-research": " " });
+
+    test("the current stage starting is the agent carrying on, not a change", () => {
+      const after = progress({ "state-init": "x", "intent-capture": "-", "market-research": " " });
+      expect(markersChanged(before, after, "intent-capture")).toEqual([]);
+    });
+
+    test("a completed stage reopened shows", () => {
+      const after = progress({ "state-init": " ", "intent-capture": " ", "market-research": " " });
+      expect(markersChanged(before, after, "intent-capture")).toEqual(["state-init"]);
+    });
+
+    test("a stage ahead of the cursor started shows", () => {
+      const after = progress({ "state-init": "x", "intent-capture": " ", "market-research": "-" });
+      expect(markersChanged(before, after, "intent-capture")).toEqual(["market-research"]);
     });
   });
 });
