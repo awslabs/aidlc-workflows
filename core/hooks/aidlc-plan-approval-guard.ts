@@ -2204,12 +2204,24 @@ async function evaluate(
         // request's own file while the parent holds the dispatch record. The
         // worker and the reviewer are subagents of this session, so this hook,
         // with the parent as its project, is the one that sees their writes.
-        // Everything else in the main checkout waits until the batch lands.
+        // A write seen anywhere else in the main checkout waits until the batch
+        // lands.
         const listed = activeDirective.units ?? [];
         // Each Unit's code is written inside the worktree `prepare` bound to it.
         if (
           !mutation.opaqueShell && mutation.targets.length > 0 &&
           preparedBoltWorktreeUnit(projectDir, mutation.targets, listed) !== null
+        ) return 0;
+        // While every listed Unit's approved plan holds, a command whose writes
+        // cannot be seen runs, as a serial build's does once its plan is
+        // approved (below), whatever it is spelled as. What it is seen to write
+        // still lands only in one prepared worktree; whether the main checkout
+        // changed during the build is the landing's to say.
+        const seen = mutation.targets.filter((candidate) => !isOutsideProject(projectDir, candidate));
+        if (
+          mutation.opaqueShell && listed.length > 0 &&
+          (seen.length === 0 || preparedBoltWorktreeUnit(projectDir, seen, listed) !== null) &&
+          gatherUnitEvidence(projectDir, listed).every(approvalEvidenceIsCurrent)
         ) return 0;
         swarmBatchOut = true;
         authorityFailure =
