@@ -329,6 +329,12 @@ of a workflow. It does not change which AI-DLC checkpoints stop for you.
   so an allowed AI-DLC command cannot be stretched into another. Kiro also asks
   before the two AI-DLC commands held back on purpose (see
   [Native channel](#native-channel-recommended)).
+- In Kiro CLI (its v3 engine), when a side-by-side build's workers or
+  reviewers ask, Kiro gathers their requests in a "tool approval pending" box;
+  (f) **Approve all pending and auto-approve future subagent requests** lets
+  them run whatever they ask, without asking you again, for the rest of that
+  chat, reviewers that start later included. Requests from the main chat still
+  ask as before, and Kiro writes no setting for it.
 
 In both modes, AI-DLC still stops and waits for your typed reply at each of its
 questions, at every approval gate, and at Code Generation's **Approve Plan**
