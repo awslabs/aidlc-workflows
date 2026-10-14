@@ -2000,8 +2000,11 @@ the session it runs in, and `--session <id>` overrides that only when it reports
 it cannot tell which session this is. Each accepts exactly one of `--command-file <path>`
 or `--command`; both or neither are refused. Use the file form for conductor
 shell calls; the direct argument is only safe when passed without shell
-interpolation. Files must be record-relative regular files, with no absolute
-path, `..`, or symlink in the chain, and no larger than 16 KiB. The file is decoded
+interpolation. The file is a regular file in the work's record, named from the record
+(`verification-command.txt`), from the project folder
+(`aidlc/spaces/<space>/intents/<intent>/verification-command.txt`, either slash)
+or in full; a name outside the record, a `..` part, or a symlink in the chain is
+refused, and the file is no larger than 16 KiB. The file is decoded
 as UTF-8 and canonicalized exactly like the direct argument.
 Leading/trailing whitespace is trimmed before recording, hashing, and execution.
 The resulting command must be nonblank, at most 1024 characters, and a single
@@ -2031,7 +2034,7 @@ complete canonical command as `Command Label` (never truncated), and the human's
 exact choice.
 `aidlc-audit append` cannot mint this reserved receipt.
 
-The typed setter accepts `--command-file <record-relative path>` or one positional
+The typed setter accepts `--command-file <path>` (named the same ways) or one positional
 command argument, never both. It writes `- **Construction Verification Command**: <cmd>`
 under `## Runtime State` in `aidlc-state.md` only when the latest current-workflow
 approval receipt matches its digest. Its JSON output includes `command_label`

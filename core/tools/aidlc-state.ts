@@ -1192,7 +1192,7 @@ function handleSet(args: string[]): void {
 function handleSetConstructionVerificationCommand(args: string[]): void {
   const fromFile = args.length === 2 && args[0] === "--command-file";
   if (!fromFile && (args.length !== 1 || args[0] === "--command-file")) {
-    error('Usage: aidlc-state.ts set-construction-verification-command --command-file <record-relative path> (or one positional command argument).');
+    error('Usage: aidlc-state.ts set-construction-verification-command --command-file <path in the record> (or one positional command argument).');
   }
   const pd = resolveProjectDir(projectDir);
   const command = fromFile

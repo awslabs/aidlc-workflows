@@ -71,6 +71,7 @@ import {
   readRegularFileNoFollowOrThrow,
   recordDir,
   recordFileTargetOrThrow,
+  recordRelativeFileName,
   relativeRecordDir,
   recordAcceptedChanges,
   recordGuardStoodAside,
@@ -3414,7 +3415,7 @@ function assertPlanApprovalBatchLifecycle(projectDir: string, receipt: PlanAppro
 function planApprovalBatchSelection(projectDir: string, file: string): PlanApprovalBatchSelection {
   const record = recordDir(projectDir);
   if (record === null) throw new Error("Cannot resolve the active intent record.");
-  const path = recordFileTargetOrThrow(record, file);
+  const path = recordFileTargetOrThrow(record, recordRelativeFileName(projectDir, record, file));
   const contents = readRegularFileNoFollowOrThrow(path, "Plan Approval batch manifest", 64 * 1024).toString("utf-8");
   let value: unknown;
   try {

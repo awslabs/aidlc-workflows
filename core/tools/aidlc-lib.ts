@@ -13040,10 +13040,28 @@ export function verificationCommandDetails(command: string): VerificationCommand
   };
 }
 
+/**
+ * The record-relative name of a file the agent names for the engine to read
+ * from the work's record. Named from the record, from the project folder, or in
+ * full, it is the same file (#2167, #2451): the prompts say to write it to
+ * `<record>/<name>`, and `<record>` is a project-relative path. A `.` part
+ * (`./aidlc/...`) names nothing and is dropped. A name with a `..` part, or one
+ * that is not inside the record from the project folder, is returned as given,
+ * for the record reader to take or refuse.
+ */
+export function recordRelativeFileName(projectDir: string, root: string, file: string): string {
+  const parts = file.replaceAll("\\", "/").split("/");
+  if (parts.includes("..")) return file.replaceAll("\\", "/");
+  const given = parts.filter((part, index) => part !== "." || index === parts.length - 1).join("/");
+  const fromRecord = relative(root, resolvePath(projectDir, given)).replaceAll("\\", "/");
+  const inRecord = fromRecord !== "" && fromRecord !== ".." && !fromRecord.startsWith("../") && !isAbsolute(fromRecord);
+  return inRecord ? fromRecord : given;
+}
+
 export function readVerificationCommandFile(projectDir: string, file: string): VerificationCommand {
   const root = recordDir(projectDir);
   if (!root) throw new Error("Verification command file requires an active intent record.");
-  const path = recordFileTargetOrThrow(root, file);
+  const path = recordFileTargetOrThrow(root, recordRelativeFileName(projectDir, root, file));
   return verificationCommandDetails(
     readRegularFileNoFollowOrThrow(path, "verification command file", 16 * 1024).toString("utf-8"),
   );
@@ -13071,13 +13089,9 @@ export function readAnswerTextFile(projectDir: string, file: string): string {
   const inFolder = (name: string): boolean =>
     !name.split("/").some((part) => part === ".." || part === ".") &&
     name.startsWith(`${ANSWER_TEXT_DIR}/`) && name.length > ANSWER_TEXT_DIR.length + 1;
-  const given = file.replaceAll("\\", "/");
-  // Named from the project folder or in full, it is the same file (#2167):
-  // read it under its name in the record, which still has to be in the folder.
-  const fromRecord = relative(root, resolvePath(projectDir, given)).replaceAll("\\", "/");
-  const relativePath = !isAbsolute(file) && inFolder(given)
-    ? given
-    : !isAbsolute(fromRecord) && inFolder(fromRecord) ? fromRecord : null;
+  // Read it under its name in the record, which still has to be in the folder.
+  const name = recordRelativeFileName(projectDir, root, file);
+  const relativePath = inFolder(name) ? name : null;
   if (relativePath === null) {
     throw new Error(
       `An answer text file must be inside ${ANSWER_TEXT_DIR}/ in the work's record, named relative to the record ` +
