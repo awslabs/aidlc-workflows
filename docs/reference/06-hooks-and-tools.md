@@ -1664,8 +1664,11 @@ command): a named folder covers what is under it, and a bare file name covers
 that name anywhere. What else the person asks for runs at once, the same under
 every Guard Policy: a shell command that names no file it writes (a commit, an
 install, a test run), a file-tool or shell write to any other file in the
-project outside `aidlc/` and the harness folder, reached through no symlink, and
-AI-DLC's own commands and records (above and below). When the plans name no
+project outside `aidlc/` and the harness folder, reached through no symlink,
+AI-DLC's own commands and records (above and below), and on the kiro-ide row a
+call to one of the person's MCP servers (the Kiro adapter marks it
+`aidlc_external_tool: "mcp"`; Kiro's own approval card and the person's Kiro
+settings decide whether it runs). When the plans name no
 path at all, only a Markdown or plain-text document (`.md`, `.markdown`, `.txt`,
 `.rst`, `.adoc`) is beside the build. The conductor does what was asked and says
 "Done. The code plan still waits for your approval." Once the person's approval

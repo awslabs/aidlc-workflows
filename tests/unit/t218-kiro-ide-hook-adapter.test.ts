@@ -4780,6 +4780,55 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     });
   }
 
+  // An MCP call reaches the hooks as Kiro's tool_load, then the call itself as
+  // `mcp_<server>_<tool>` (measured on Kiro CLI 2.31.0 and Kiro IDE 1.3.0).
+  // While the engine asks the person to approve the code plan both pass, so
+  // they can look something up before they decide; Kiro's own card still asks
+  // before the call. While the stage runs before approval the call waits, with
+  // or without a marker in the payload, and so does a tool the table does not
+  // know that is not an MCP call.
+  for (const policy of ["off", "strict"] as const) {
+    test(`an MCP call passes while the plan question is open, not before it (Guard Policy ${policy})`, () => {
+      const dir = scratchProject(true);
+      try {
+        seedCodeGenerationDirective(dir);
+        const statePath = seededStateFile(dir);
+        const state = readFileSync(statePath, "utf-8").replace(
+          "- **Change Control**: strict (from scope feature)",
+          policy === "off" ? "- **Guard Policy**: off (from scope feature)" : "- **Guard Policy**: strict (set by you)",
+        );
+        writeFileSync(statePath, state);
+        const call = (toolName: string, toolInput: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+          runIdeStdin(dir, "plan-approval-guard", JSON.stringify({
+            hook_event_name: "PreToolUse",
+            session_id: `ide-mcp-${policy}`,
+            cwd: dir,
+            tool_name: toolName,
+            tool_input: toolInput,
+            ...extra,
+          }));
+        const load = { tool_ids: ["probe-ws::ws_echo"] };
+        const echo = { text: "look this up" };
+        writeActiveDirectiveMarker(dir, {
+          kind: "ask", ask_type: "plan-approval", stage: "code-generation", state_sha256: stateDigest(state),
+        });
+        // A tool that takes no arguments arrives with `{}`.
+        for (const [name, input] of [["tool_load", load], ["mcp_probe_ws_ws_echo", echo], ["mcp_time_get_current_time", {}]] as const) {
+          const result = call(name, input);
+          expect(result.code, `${name}: ${result.stderr}`).toBe(0);
+        }
+        expect(call("unknown_mutation_tool", { message: "x" }).code).toBe(2);
+        writeActiveDirectiveMarker(dir, { kind: "run-stage", stage: "code-generation", state_sha256: stateDigest(state) });
+        expect(call("tool_load", load).code).toBe(0);
+        expect(call("mcp_probe_ws_ws_echo", echo).code).toBe(2);
+        expect(call("mcp_probe_ws_ws_echo", echo, { aidlc_external_tool: "mcp" }).code).toBe(2);
+        expect(call("mcp_time_get_current_time", {}).code).toBe(2);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
   test("malformed Plan Approval payloads fail closed during active Code Generation", () => {
     const dir = scratchProject(true);
     try {

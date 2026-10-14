@@ -159,7 +159,7 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
         const matcher = new RegExp(parsed.hooks[0].matcher ?? "");
         for (const name of [
           "read", "fs_read", "read_file", "read_files", "read_code", "list_directory", "file_search", "glob",
-          "grep_search", "grep", "web_fetch", "web_search", "disclose_context", "thinking", "todo_list",
+          "grep_search", "grep", "web_fetch", "web_search", "disclose_context", "tool_load", "thinking", "todo_list",
           "report_progress", "subagent_response",
         ]) {
           expect(isPlanApprovalSafeReadTool(name), name).toBe(true);

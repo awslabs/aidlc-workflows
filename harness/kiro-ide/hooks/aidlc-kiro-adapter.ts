@@ -122,6 +122,7 @@ import {
   decodeHarnessPlainText,
   fenceCommandOutput,
   relayAsTextBlock,
+  planApprovalAskIsOpen,
   presenceFloorHolds,
   clearKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalViolation,
@@ -191,6 +192,7 @@ import {
   isKiroAppendTool,
   isKiroDelegationTool,
   isKiroGenericDelegationTool,
+  isKiroMcpTool,
   isKiroPipelineDelegationTool,
   isKiroPowerShellTool,
   isKiroShellTool,
@@ -2592,6 +2594,22 @@ if (target === "terminal-command-guard") {
   return 2;
 }
 
+// Whether the workflow this chat selects has the engine's Plan Approval
+// question open (planApprovalAskIsOpen), judged in that workflow as the gate
+// floor judges it. A chat outside the workflow never has it open.
+function planApprovalQuestionOpen(pd: string, sessionId: string): boolean {
+  try {
+    const workflow = enterHookWorkflow(pd, sessionId);
+    try {
+      return !hookOutsideGate(workflow) && planApprovalAskIsOpen(pd);
+    } finally {
+      workflow.restore();
+    }
+  } catch {
+    return false;
+  }
+}
+
 // UserPromptSubmit forwards to the core human-turn hook below. That hook
 // applies typed switches before its state-file gate, then records HUMAN_TURN
 // and the conversational Stop marker only when workflow state exists.
@@ -3104,6 +3122,26 @@ function buildForward(): Forward {
           input: {
             reason:
               "Plan Approval blocked this mutation because a legacy write did not complete PostToolUse mediation. Exact human recovery is required before any legacy or modern write.",
+          },
+        };
+      }
+      // While the engine asks the person to approve the plan, a call to one of
+      // their MCP servers goes to the core guard marked as theirs, which runs it
+      // like their other requests beside the build; Kiro's own card still asks
+      // before it runs. Outside that question it takes the checks below.
+      if (
+        isKiroMcpTool(toolName) &&
+        planApprovalQuestionOpen(projectDir, resolvedPlanApprovalSessionId(ide))
+      ) {
+        return {
+          hook: "aidlc-plan-approval-guard.ts",
+          input: {
+            hook_event_name: "PreToolUse",
+            tool_name: toolName,
+            tool_input: toolArgs,
+            cwd: projectDir,
+            // Set here, outside the agent's input.
+            aidlc_external_tool: "mcp",
           },
         };
       }

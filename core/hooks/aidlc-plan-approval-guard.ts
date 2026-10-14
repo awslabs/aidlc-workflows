@@ -2181,6 +2181,13 @@ async function evaluate(
           const planPaths = mutation.targets.length > 0 ? planApprovalPlanNamedPaths(projectDir) : null;
           if (mutation.targets.every((candidate) => isPlanWaitSideWrite(projectDir, candidate, planPaths))) return 0;
         }
+        // A call to one of the person's own MCP servers, as the harness adapter
+        // marks it outside the agent's input, runs like their other requests:
+        // the host asks them before it runs. A marked write, shell or
+        // dispatch gets no such pass.
+        if (parsed.aidlc_external_tool === "mcp" && !knownMutationTool && !DISPATCH_TOOLS.has(toolName)) {
+          return 0;
+        }
         authorityFailure = PLAN_APPROVAL_ASK_OPEN;
         standing = planStanding(projectDir, activeDirective);
         // Loaded only here: the question's own record, read the way its owner

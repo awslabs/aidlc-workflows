@@ -2299,6 +2299,52 @@ describe("t265b hook lifecycle", () => {
     });
   }
 
+  // On the kiro-ide row the person's MCP servers reach the chat, and the Kiro
+  // adapter marks such a call `aidlc_external_tool: "mcp"`, outside the agent's
+  // input. While the plan waits it runs like their other asks (Kiro asks them
+  // before it runs). Unmarked, or marked on a write, a shell or the developer,
+  // it waits; before the question is asked it waits too.
+  for (const policy of ["strict (set by you)", "off (from scope poc)"]) {
+    test(`while the plan waits, a call the adapter marks as the person's MCP server runs (Guard Policy ${policy})`, () => {
+      const proj = scratchProject();
+      try {
+        seedState(proj);
+        const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+        writeFileSync(statePath, readFileSync(statePath, "utf-8")
+          .replace("- **Scope**: poc\n", `- **Scope**: poc\n- **Guard Policy**: ${policy}\n`), "utf-8");
+        seedUnit(proj, null, { plan: true, answer: null });
+        const marker = (kind: "ask" | "run-stage") => writeActiveDirectiveMarker(proj, {
+          kind,
+          ...(kind === "ask" ? { ask_type: "plan-approval" } : {}),
+          stage: "code-generation",
+          state_sha256: stateDigest(readFileSync(statePath, "utf-8")),
+        });
+        const MCP = (extra: Record<string, unknown> = {}) => ({
+          hook_event_name: "PreToolUse",
+          tool_name: "mcp_docs_query_docs",
+          tool_input: { query: "zod v4 refine" },
+          ...extra,
+        });
+        const MARK = { aidlc_external_tool: "mcp" };
+        marker("ask");
+        const marked = runHook(proj, MCP(MARK));
+        expect(marked.code, marked.stderr).toBe(0);
+        expect(runHook(proj, MCP()).code).toBe(2);
+        for (const payload of [
+          { ...WRITE(join(proj, "src", "inline.ts")), ...MARK },
+          { ...BASH("echo 'export const x = 1;' > src/inline.ts"), ...MARK },
+          { ...STAGE_DISPATCH(proj, "Build the plan."), ...MARK },
+        ]) {
+          expect(runHook(proj, payload).code, JSON.stringify(payload)).toBe(2);
+        }
+        marker("run-stage");
+        expect(runHook(proj, MCP(MARK)).code).toBe(2);
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    });
+  }
+
   // What the plan never governs runs at any point of Code Generation, under
   // every Guard Policy: a command that names no file it writes and is not
   // AI-DLC's own (a read, a scan, a test run), a write to a file outside the
