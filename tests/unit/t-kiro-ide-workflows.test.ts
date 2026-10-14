@@ -119,6 +119,12 @@ const ON_WITH_COMMENTS = `{
 }
 `;
 
+const MISSING_COMMA = `{
+  "editor.fontSize": 14
+  "${KEY}": true
+}
+`;
+
 describe("Kiro IDE's user settings file", () => {
   test("inside Kiro IDE it is the running Kiro's user data folder; elsewhere Kiro's default folder", () => {
     expect(kiroIdeUserSettingsPath({ VSCODE_CODE_CACHE_PATH: join("C:", "ud", "CachedData", "2d86910a") }, "win32"))
@@ -294,6 +300,37 @@ describe("config trust and doctor", () => {
     });
   });
 
+  // Kiro IDE 1.2.37 turned Workflows on from a file missing a comma, which
+  // AI-DLC cannot read: unknown, never off, and the step is the person's.
+  test("a settings file AI-DLC cannot read is named as unknown, never as off, with the person's own step", () => {
+    const m = machine(MISSING_COMMA);
+    const unknown = `Kiro Workflows: ${m.settingsPath} could not be read as JSONC, so AI-DLC cannot tell whether Workflows is on`;
+    const setup = installKiroIde(m.env);
+    expect(readFileSync(m.settingsPath, "utf-8")).toBe(MISSING_COMMA);
+    expect(setup.out).toContain(unknown);
+    const { project } = setup;
+    const show = runInit(["config", "trust", "--project-dir", project, "--show", "--json"], project, m.env);
+    expect(show.status, show.out).toBe(0);
+    expect(JSON.parse(show.out).data.kiroWorkflows).toEqual({ enabled: false, readable: false, settingsPath: m.settingsPath, answer: null });
+    const human = runInit(["config", "trust", "--project-dir", project, "--show"], project, m.env);
+    expect(human.out).toContain(`Kiro Workflows: could not be read (${m.settingsPath})`);
+    expect(human.out).not.toContain("Kiro Workflows: off");
+    const check = runInit(["config", "trust", "--project-dir", project, "--check"], project, m.env);
+    expect(check.status, check.out).toBe(0);
+    expect(check.out).toContain(unknown);
+    expect(kiroIdeWorkflowsDoctorCheck(project, ".kiro", m.env)).toMatchObject({ pass: false, severity: "warn", label: unknown });
+    withEnv(m.env, () => {
+      const action = postApplyOutstandingActions(project, ".kiro", "kiro-ide").find((entry) => entry.id === "kiro-workflows-unreadable");
+      expect(action?.message).toBe(unknown);
+      expect(action?.step).toContain("Disable Workflows from the Command Palette");
+      expect(action?.command).toMatch(/config trust --check$/);
+      // The person kept Workflows on: nothing is left to tell them.
+      recordKiroWorkflowsAnswer("on");
+      expect(trustStatus(project, ".kiro", "kiro-ide").issues.some((entry) => entry.id === "kiro-workflows-unreadable")).toBe(false);
+    });
+    expect(readFileSync(m.settingsPath, "utf-8")).toBe(MISSING_COMMA);
+  });
+
   test("doctor warns while Workflows is on and names the same command; ok when it is off", () => {
     const on = machine(ON_WITH_COMMENTS);
     const { project } = installKiroIde({ ...on.env, AIDLC_TEST_KIRO_IDE_SETTINGS: join(on.root, "none.json") });
@@ -339,7 +376,7 @@ describe("config trust and doctor", () => {
     const { project } = installKiroIde({ ...m.env, AIDLC_TEST_KIRO_IDE_SETTINGS: join(m.root, "none.json") });
     const show = runInit(["config", "trust", "--project-dir", project, "--show", "--json"], project, m.env);
     expect(show.status, show.out).toBe(0);
-    expect(JSON.parse(show.out).data.kiroWorkflows).toEqual({ enabled: true, settingsPath: m.settingsPath, answer: null });
+    expect(JSON.parse(show.out).data.kiroWorkflows).toEqual({ enabled: true, readable: true, settingsPath: m.settingsPath, answer: null });
     const human = runInit(["config", "trust", "--project-dir", project, "--show"], project, m.env);
     expect(human.out).toContain(`Kiro Workflows: on (${m.settingsPath})`);
 

@@ -1871,7 +1871,12 @@ function showDiagnosticSection(
     };
     output += `  Allowlist reviewed: ${status.record?.reviewed === true ? "yes" : "not recorded"}\n`;
     if (status.kiroWorkflows?.settingsPath) {
-      output += `  Kiro Workflows: ${status.kiroWorkflows.enabled ? "on" : "off"} (${status.kiroWorkflows.settingsPath})\n`;
+      const workflows = status.kiroWorkflows.readable === false
+        ? "could not be read"
+        : status.kiroWorkflows.enabled
+        ? "on"
+        : "off";
+      output += `  Kiro Workflows: ${workflows} (${status.kiroWorkflows.settingsPath})\n`;
     }
     if (status.kiroTerminal?.commandPrompt) {
       output += `  Kiro terminal: Command Prompt (${status.kiroTerminal.settingsPath})\n`;
@@ -2343,7 +2348,7 @@ function kiroWorkflowsSwitch(
   if (!state.settingsPath) return failure("Kiro IDE's settings are not in reach here", EXIT.failure);
   const enabled = value === "on";
   const data = (answer: KiroWorkflowsAnswer | null) => ({
-    kiroWorkflows: { enabled, settingsPath: state.settingsPath, answer },
+    kiroWorkflows: { enabled, readable: state.readable, settingsPath: state.settingsPath, answer },
   });
   if (argv.includes("--dry-run")) {
     return success(`would turn Kiro's Workflows feature ${value} in ${state.settingsPath}`, data(readKiroWorkflowsAnswer()));

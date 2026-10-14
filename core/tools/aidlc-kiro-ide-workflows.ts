@@ -15,6 +15,7 @@ import { writeFileAtomic } from "./aidlc-lib.ts";
 
 export const KIRO_WORKFLOWS_SETTING = "kiroAgent.workflows.enabled";
 export const KIRO_WORKFLOWS_ISSUE_ID = "kiro-workflows-on";
+export const KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID = "kiro-workflows-unreadable";
 
 /** The person's answer, kept per machine: they turned Workflows off or kept it
  *  on, or a chat already asked them. Any answer means AI-DLC does not ask again. */
@@ -175,6 +176,16 @@ export function kiroWorkflowsFix(invoke: string): string {
   return `ask the agent to turn Kiro Workflows off, or run \`${invoke} config trust --kiro-workflows off\` ` +
     "(a Kiro setting for all your projects); then run Developer: Reload Window from the Command Palette";
 }
+
+// A settings file AI-DLC cannot read as JSONC may still be one Kiro reads
+// (measured: Kiro IDE 1.2.37 turned Workflows on from a file missing a comma),
+// so it is named as unknown, never as off. AI-DLC cannot edit it either, so the
+// step is the person's, in the file or in Kiro.
+export function kiroWorkflowsUnreadableMessage(settingsPath: string): string {
+  return `Kiro Workflows: ${settingsPath} could not be read as JSONC, so AI-DLC cannot tell whether Workflows is on`;
+}
+
+export const KIRO_WORKFLOWS_UNREADABLE_FIX = "correct the file, or in Kiro run Disable Workflows from the Command Palette";
 
 /**
  * The one chat line a Kiro IDE chat gives the agent while Workflows is on and the

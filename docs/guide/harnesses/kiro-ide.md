@@ -507,7 +507,9 @@ aidlc config trust --kiro-workflows off --yes   # or: on
 ```
 
 Kiro's own **Disable Workflows** and **Enable Workflows** commands do the same.
-`/aidlc --doctor` shows a warning while Workflows is on. Kiro CLI keeps its
+`/aidlc --doctor` shows a warning while Workflows is on, and while Kiro's
+settings file is not JSONC AI-DLC can read (Kiro may still read Workflows as
+on from it). Kiro CLI keeps its
 sub-agent tool with Workflows on (unless you turn its "Workflows: sub-agent
 tool" setting off), so it needs nothing.
 
