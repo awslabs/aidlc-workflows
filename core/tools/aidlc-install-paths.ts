@@ -157,9 +157,8 @@ export function windowsPosixCommandPath(): string | null {
 // "warning: an unescaped backslash at end of string is not portable" to stderr
 // on the single-backslash operand, on EVERY launch, which would spam every hook
 // invocation. The loop also removes the external-command dependency, so the
-// forwarder works in a stripped MSYS that lacks tr. Manually spot-checked on
-// Windows Server 2022 Git Bash (MINGW64) — zero warnings, identical output;
-// CI exercises the loop via a POSIX /bin/sh test, not MINGW64 itself.
+// forwarder works in a stripped MSYS that lacks tr. CI exercises the loop via
+// a POSIX /bin/sh test, not MINGW64 itself.
 export function windowsPosixShim(): string {
   return [
     "#!/bin/sh",
@@ -197,7 +196,7 @@ export function windowsPosixShim(): string {
 export function previousWindowsPosixShims(): readonly string[] {
   return [
     // v2 — normalised backslashes via `tr "\\" "/"`, which emitted a per-launch
-    // GNU-tr stderr warning in MSYS; superseded by the v3 builtin loop.
+    // GNU-tr stderr warning in MSYS.
     [
       "#!/bin/sh",
       "# aidlc-gitbash-forwarder-v2",

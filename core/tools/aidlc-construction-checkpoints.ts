@@ -106,8 +106,6 @@ import {
 
 export type ConstructionCheckpointKind = "unit" | "skeleton";
 
-// The walking skeleton's first Unit stops at the skeleton checkpoint; every
-// other Unit, and every Unit without the skeleton, at its own Unit checkpoint.
 export function constructionCheckpointKind(
   stateContent: string,
   unit: string,
@@ -393,7 +391,6 @@ function proofFileAbsent(root: string, path: string): boolean {
   }
 }
 
-// What a committed verification row records of its proof.
 type CommittedCheckpointProof = Pick<ConstructionCheckpointProof, "id" | "kind" | "unit" | "fingerprint" |
   "command_sha256" | "verified" | "evidence_unchanged" | "exit_code" | "signal" | "error" | "finished_at">;
 
@@ -432,7 +429,6 @@ interface Snapshot {
   waivedStages: string[];
 }
 
-/** One stage's evidence as an approval of the Unit saw it. */
 interface ApprovedStageEvidence {
   artifact: string;
   source: string | null;
@@ -631,8 +627,6 @@ function notFinishedReviews(row: AuditShardEvent | null): Map<string, string> {
   return stages;
 }
 
-// The reviews of these stages as the person reads them: "Code Generation
-// review", or "Functional Design and Code Generation reviews".
 function reviewsNamed(slugs: readonly string[]): string {
   const names = slugs.map((slug) => findStageBySlug(slug)?.name ?? slug);
   const named = names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
@@ -733,7 +727,7 @@ function snapshot(
   const notFinishedBefore = notFinishedReviews(verification);
   const notFinished: string[] = [];
   // Stages whose review ended in the NOT-READY fallback no reviewer gave:
-  // ready as before, and asked about and approved as not finished.
+  // ready, and asked about and approved as not finished.
   const endedUnfinished: string[] = [];
   // Stages whose fresh review was edited after the reviewer finished, whose
   // fresh review records the verdict its dispatch dictated, and whose verdict
