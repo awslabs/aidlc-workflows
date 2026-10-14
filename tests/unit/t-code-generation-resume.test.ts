@@ -572,12 +572,29 @@ describe("a built plan owes its review, also after a reopen", () => {
     appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
     return proj;
   }
-  function finishBuild(proj: string): void {
+  /** Build and tick every step, then write Step 5's handoff (with its source manifest unless told not to). */
+  function finishBuild(proj: string, manifest = true): void {
     const steps = planSteps(readFileSync(planPath(proj), "utf-8")).length;
     tick(proj, UNIT, ...Array.from({ length: steps }, (_, index) => index + 1));
     const dir = codeGenerationRecordDir(proj, UNIT);
     writeFileSync(join(dir, "code-summary.md"), "# Code Summary\n\nNine parts.\n", "utf-8");
     writeFileSync(join(dir, "traceability.json"), `${JSON.stringify({ upstream_ids: [], coverage: [] })}\n`, "utf-8");
+    if (!manifest) return;
+    writeFileSync(join(dir, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: UNIT, version: 1, writes: [{ path: "src/" }],
+    })}\n`, "utf-8");
+  }
+  /** Request Changes at the completion gate, revise and re-approve the plan, and start its build. */
+  function reopenAndRebuild(proj: string): void {
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "code-generation", Unit: UNIT, "User Input": "Request Changes", Feedback: "log every part",
+    }, proj);
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "log every part" });
+    revisePlan(proj);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    approve(proj);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    dispatch(proj, brief(proj));
   }
   function revisePlan(proj: string): void {
     writeFileSync(planPath(proj), readFileSync(planPath(proj), "utf-8")
@@ -597,15 +614,7 @@ describe("a built plan owes its review, also after a reopen", () => {
   test("reopened by Request Changes, rebuilt in full: next names the review step, not the stage again", () => {
     const proj = unitMajorProject();
     interrupted(proj, 1, 2, 3, 4);
-    appendAuditEntry("GATE_REJECTED", {
-      Stage: "code-generation", Unit: UNIT, "User Input": "Request Changes", Feedback: "log every part",
-    }, proj);
-    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "log every part" });
-    revisePlan(proj);
-    expect(next(proj).ask_type).toBe("plan-approval");
-    approve(proj);
-    expect(next(proj).plan_approval).toEqual({ status: "approved" });
-    dispatch(proj, brief(proj));
+    reopenAndRebuild(proj);
     finishBuild(proj);
     const step = next(proj) as Emitted & { message?: string };
     expect(step.narration ?? "").not.toContain(PICK_UP);
@@ -616,17 +625,17 @@ describe("a built plan owes its review, also after a reopen", () => {
   test("reopened, a ticked step's file missing: the stage comes back to redo it", () => {
     const proj = unitMajorProject();
     interrupted(proj, 1, 2, 3, 4);
-    appendAuditEntry("GATE_REJECTED", {
-      Stage: "code-generation", Unit: UNIT, "User Input": "Request Changes", Feedback: "log every part",
-    }, proj);
-    next(proj);
-    revisePlan(proj);
-    next(proj);
-    approve(proj);
-    next(proj);
-    dispatch(proj, brief(proj));
+    reopenAndRebuild(proj);
     finishBuild(proj);
     rmSync(join(proj, "src", "part9.ts"));
+    expect(next(proj).kind).toBe("run-stage");
+  });
+
+  test("reopened and rebuilt, but Step 5 wrote no source manifest yet: the stage comes back to finish it", () => {
+    const proj = unitMajorProject();
+    interrupted(proj, 1, 2, 3, 4);
+    reopenAndRebuild(proj);
+    finishBuild(proj, false);
     expect(next(proj).kind).toBe("run-stage");
   });
 });

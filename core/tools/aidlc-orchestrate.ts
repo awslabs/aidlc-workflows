@@ -440,6 +440,7 @@ import {
   findStageBySlug,
   withPersonsWordsFirst,
   PERSON_ASKED_SKIP_REASON,
+  readUnitSourceManifest,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -11267,13 +11268,15 @@ function unitFirstStageAttempt(projectDir: string, slug: string, unit: string, s
 // one proof. Code Generation carries its own for any attempt, a reopen
 // included (#2487): its build started on the plan approved in this attempt
 // (the approval is read against the Unit's current floor, and that build
-// clears the ticks an earlier attempt left), and every step is ticked with
-// the files it names present.
+// clears the ticks an earlier attempt left), every step is ticked with the
+// files it names present, and its Step 5 source manifest reads as the review
+// command will read it, so the step it names can run.
 function unitWorkIsThisAttempts(projectDir: string, slug: string, unit: string, stateContent: string): boolean {
   if (unitFirstStageAttempt(projectDir, slug, unit, stateContent)) return true;
   if (slug !== "code-generation") return false;
   const built = codeGenerationResume(projectDir, { unit });
-  return built !== null && built.from === "ticks" && built.next === null && built.missing.length === 0;
+  return built !== null && built.from === "ticks" && built.next === null && built.missing.length === 0 &&
+    readUnitSourceManifest(projectDir, slug, unit).ok;
 }
 
 // `next` for a Unit that owes only its completion receipt: that step, then
