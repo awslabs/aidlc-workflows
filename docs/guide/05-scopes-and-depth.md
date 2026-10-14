@@ -93,6 +93,29 @@ Core ships 11 named scopes. Each scope defines a stage set, a default depth leve
 
 Override ceremonies for an intent with `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, `/aidlc --summary-confirmation on|off`, `/aidlc --plan-approval on|off`, or `/aidlc --collaborators on|off`. The global kill switches `AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`, `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`, and `AIDLC_DISABLE_COLLABORATORS=1` force them off. Apart from plan approval, which only you turn off, approval gates, human-turn authority, audit, and team write protection still apply. See [ceremony customization](13-customization.md#ceremony-switches).
 
+#### Fewer stops for a workshop or small work
+
+Two per-stage checks add the most stops to a long run: the learnings question
+and the summary confirmation. To start a plan without them, type both switches
+with the request, so the new work is created with them off:
+
+```
+/aidlc workshop --learnings off --summary-confirmation off <the work>
+```
+
+The plan question then says "no learnings ritual or summary confirmation".
+
+| Switch | What it removes at each stage | What you lose |
+|--------|-------------------------------|---------------|
+| `--learnings off` | The "Anything to add for next time?" question before the approval gate, and the stage diary (`memory.md`) | Nothing from this work is written to `memory/project.md` or `memory/team.md`, so the next run does not pick up what this one taught. Practices already in memory still load |
+| `--summary-confirmation off` | The `Looks correct` check on a summary of your answers before the stage writes its artifact | The stage writes straight from your answers. A misread answer shows up in the artifact at the approval gate, where fixing it costs a revision |
+
+Neither switch removes a stage's questions or its approval gate. `bugfix` and
+`express` already start with both off, and `classic` with summary confirmation
+off. On work already under way, type `/aidlc --learnings off` or
+`/aidlc --summary-confirmation off` yourself: turning summary confirmation off
+is your call, so the agent cannot do it for you.
+
 #### Upgrading an in-flight classic intent
 
 The saved stage plan is preserved: an older classic intent whose Operation
