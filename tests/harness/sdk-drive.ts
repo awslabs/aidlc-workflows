@@ -76,6 +76,7 @@ import {
   TestBudgetExhaustedError,
 } from "./test-budget.ts";
 import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
+import type { PermissionRequest } from "./stock-permissions.ts";
 import { recordWindowsFolderHolderVerdict } from "./windows-folder-holders.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 
@@ -187,6 +188,12 @@ export interface DriveResult {
   stopHooks?: CapturedStopHook[];
   /** What each SessionStart hook printed for the session (the SDK always reports it). */
   sessionStarts?: string[];
+  /**
+   * Every request Claude Code put to canUseTool other than AskUserQuestion:
+   * what a person on the drive's permission mode and settings would be asked.
+   * Empty under the default bypassPermissions.
+   */
+  permissionRequests?: PermissionRequest[];
 }
 
 // ---------------------------------------------------------------------------
@@ -739,6 +746,7 @@ export async function driveAidlc(
 
   const toolResults: CapturedToolResult[] = [];
   const askedQuestions: CapturedAskUserQuestion[] = [];
+  const permissionRequests: PermissionRequest[] = [];
   const turns: DriveTurnEnd[] = [];
   const stopHooks: CapturedStopHook[] = [];
   const sessionStarts: string[] = [];
@@ -932,7 +940,13 @@ export async function driveAidlc(
               updatedInput: { ...(input as object), answers },
             };
           }
-          // Everything else passes through unchanged (Bash/Write/Edit/Skill/...).
+          // Everything else passes through unchanged (Bash/Write/Edit/Skill/...),
+          // noted as a prompt a person on these settings would have met.
+          const asked = input as Record<string, unknown>;
+          permissionRequests.push({ toolName, input: asked });
+          writeSdkTrace(tracePath, "permission_request", {
+            toolName, command: asked.command, file_path: asked.file_path ?? asked.notebook_path ?? asked.path,
+          });
           return { behavior: "allow", updatedInput: input };
         },
       },
@@ -1202,6 +1216,7 @@ export async function driveAidlc(
     turns,
     stopHooks,
     sessionStarts,
+    permissionRequests,
   };
 
   // Attach post-run file reads when they exist (read straight off disk so the

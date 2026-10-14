@@ -648,8 +648,10 @@ export function resolveHarnessRoot(location: HarnessLocation = {}): string {
       ? projectDir
       : join(projectDir, harnessDir);
 
-  // Mutation is project-owned. Explicit/module/packaged roots are read
-  // fallbacks only and must never become a write target.
+  // Mutation goes to the project root when a project dir was named (location,
+  // AIDLC_RUNTIME_PROJECT_DIR or --project-dir), else to this module's own
+  // harness root when it has one, else the project root. Explicit and packaged
+  // roots are read fallbacks only and must never become a write target.
   if (location.mutable) {
     const root = location.projectDir !== undefined || explicitRuntimeProjectDir()
       ? projectRoot

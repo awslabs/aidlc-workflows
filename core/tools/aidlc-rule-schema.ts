@@ -1,8 +1,8 @@
 // Rule frontmatter schema — machine-checkable realisation of the rule-file
 // frontmatter spec in docs/reference/08-rule-system.md. Sibling of
 // aidlc-stage-schema.ts. Consumed by aidlc-graph compile (loadRules) and
-// the future doctor rule-drift check (which imports loadRules from
-// aidlc-graph.ts, not this file directly — single walking surface, no
+// the doctor rule-drift check (which imports loadRules from
+// aidlc-graph.ts, not this file's parser - single walking surface, no
 // parser duplication).
 //
 // Hand-rolled, zero-dep — reuses scalarField from aidlc-lib.ts as a
@@ -14,7 +14,7 @@
 //   - status: string    — lifecycle state; active, deprecated, or draft
 //   - stale_after: string — ISO calendar date (YYYY-MM-DD)
 //
-// Deleted from the schema:
+// Excluded from the schema:
 //   - enforcement: enforced (no two-mode keyword; all rules are guardrails)
 //   - overrides: { rule, reason, approved_by } (no governance attestation
 //     keyword; conflicts rejected at admission gates instead)
@@ -40,9 +40,9 @@ function hasTopLevelField(frontmatter: string, key: string): boolean {
 // parseRuleFrontmatter — extract YAML frontmatter from a rule-file body.
 // Returns {} when no `---...---` block is present. Differs from
 // parseStageFrontmatter (which throws on missing frontmatter) because rule
-// files routinely ship with no frontmatter (aidlc-org.md, aidlc-team.md,
-// aidlc-project.md, all 4 phase rules carry zero frontmatter; only the
-// optional pairing: case introduces it).
+// files routinely ship with no frontmatter (org.md, team.md, project.md and
+// all 4 phase rules carry zero frontmatter; only the optional schema fields
+// introduce it).
 //
 // Tolerates unknown keys (forward-compat per 08-rule-system.md "additive
 // extension"). Validation runs separately via validateRuleFrontmatter.

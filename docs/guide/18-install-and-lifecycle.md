@@ -607,7 +607,9 @@ Claude Opus 4.8. Where you set the model and effort depends on the harness:
 - **Kiro CLI:** the session model and its one effort. `aidlc config models`
   saves them in your personal Kiro settings (a preset sets the effort:
   `minimal` low, `balanced` medium, `thorough` extra-high); `/model` and
-  `/effort` change them inside Kiro. Recommended setup keeps an effort you
+  `/effort` change them inside Kiro. A `/model` switch reaches the agents the
+  conductor dispatches only once you save it with
+  `/model set-current-as-default`. Recommended setup keeps an effort you
   already saved for your model. On Kiro IDE's row setup saves Kiro CLI's
   session model only. See
   [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
@@ -1077,6 +1079,11 @@ Refresh preserves:
   the `package.json`, `.gitignore`, and `node_modules/` (links included)
   opencode writes under `.opencode/` at its first start: config never copies,
   owns, or removes these
+- the agent files in `.kiro/agents` that Kiro CLI upgraded for its 3.0 engine
+  (Kiro keeps each file it replaced beside it as `.json.bak`): a refresh keeps
+  them as Kiro left them, says so in one line, and brings in the rest of the
+  release; `aidlc config --harness kiro --force` takes the release's versions,
+  and Kiro upgrades them again the next time it starts on its 3.0 engine
 
 Under `aidlc/`, install and refresh copy only those seeds. The clone identity,
 sessions, engine health, and other per-machine state are never copied from the

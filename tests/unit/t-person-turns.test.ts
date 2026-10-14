@@ -158,6 +158,25 @@ describe("person-turn check", () => {
     expect(problems[1]).toContain("QUESTION_ANSWERED requirements-analysis");
   });
 
+  // The engine's own check of the quote (log answer --on-instruction), so a
+  // quote the engine records is one the drive finds, punctuation aside.
+  test("a choice left to the agent is backed by its quote whatever the punctuation, and not by words cut from it", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("Honestly, it\u2019s up to you!");
+    row(dir, "DECISION_RECORDED", { Stage: "intent-capture" });
+    row(dir, "QUESTION_ANSWERED", {
+      Stage: "intent-capture", Details: "Q1: A",
+      "Answer Source": "chosen by the agent as the person asked", Instruction: "it's up to you.",
+    });
+    expect(drive.unbacked()).toEqual([]);
+    row(dir, "QUESTION_ANSWERED", {
+      Stage: "intent-capture", Details: "Q2: A",
+      "Answer Source": "chosen by the agent as the person asked", Instruction: "honestly up to you",
+    });
+    expect(drive.unbacked()).toHaveLength(1);
+  });
+
   test("an answer needs a turn after its question opened; another stage's turn does not count", () => {
     const dir = project();
     const drive = new PersonTurnLedger(dir);

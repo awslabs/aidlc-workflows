@@ -121,8 +121,13 @@ have configured**; if you prefer your own default, remove that setting and use
 `kiro-cli chat --agent aidlc` instead.
 
 No shipped agent pins a model: a pinned ID resolves only when that
-model is enabled on the user's Kiro install, so the conductor and all 14
-personas inherit your session model (`/model`).
+model is enabled on the user's Kiro install. A chat, and each of the 14
+personas the conductor dispatches, starts on your session model: the one
+saved in your Kiro settings (Kiro auto when you have saved none). `/model`
+changes only the chat you are in, so the conductor follows it and the
+personas still start on the saved model. To move them too, save the switch
+with `/model set-current-as-default`, or choose the model with
+`aidlc config models --session-model <id>`.
 
 ### Session model and effort
 

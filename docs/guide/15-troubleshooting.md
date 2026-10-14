@@ -548,6 +548,20 @@ output-document bytes does not clear audit-recorded artifact staleness. After a
 session restart, retry the same pending request before replacing the Review
 section. The gate remains closed until the matching verdict is recorded.
 
+### A directory source manifest is refused because it contains ignored output
+
+**Symptom**: A directory claim such as `src/` answers with
+`contains ignored application source "src/main.js.map"` after a build.
+
+Git ignore rules alone do not remove files from the review source boundary.
+For generated output outside that boundary, add its exact path (or its output
+directory) to `exclude` in the repo root's `.aidlc-source-paths.json`, for
+example `{"version":1,"exclude":["src/main.js.map"]}`, then retry the review.
+The directory claim can still cover the source beside it. A registered `paths`
+entry takes precedence over `exclude`, and other ignored files still inside
+the boundary retain the refusal. Exact-file claims must still name admissible
+source; an exclusion does not make ignored output review evidence.
+
 ### Code Generation cannot complete because files changed that no Unit covers
 
 **Symptom**: Approving Code Generation answers with "N changes made during Code

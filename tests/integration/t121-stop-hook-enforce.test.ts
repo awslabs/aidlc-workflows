@@ -2183,6 +2183,163 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(parsed.decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // The audit rows a gate leaves, in the order the tools append them.
+  function gateRows(rows: Array<[event: string, fields?: Record<string, string>]>): string {
+    return rows.map(([event, fields]) =>
+      `## ${event}\n**Timestamp**: 2026-10-13T22:02:49Z\n**Event**: ${event}\n` +
+      Object.entries(fields ?? {}).map(([key, value]) => `**${key}**: ${value}\n`).join("") +
+      "\n---\n"
+    ).join("");
+  }
+  const SHOWN = (stage: string, unit?: string): [string, Record<string, string>] =>
+    ["STAGE_AWAITING_APPROVAL", { Stage: stage, ...(unit ? { Unit: unit } : {}) }];
+  const PICKED = (label: string): Array<[string, Record<string, string>]> => [
+    ["HUMAN_TURN", { Origin: "person", Source: "picker", Picked: JSON.stringify([label]) }],
+    ["QUESTION_REPLIED", { Question: "Build and Test complete. How would you like to proceed?", Reply: label }],
+  ];
+
+  test("(e) [?] with the person's reply to the gate on record: the turn carries on into recording it, on every evidence path", () => {
+    // Nightly run 38469699012 (Claude Code): the person picked Approve at the
+    // Build and Test gate and the agent ended its turn 3 s later without
+    // reporting it. The audit ended STAGE_AWAITING_APPROVAL, HUMAN_TURN
+    // (Picked: Approve), QUESTION_REPLIED, SESSION_ENDED: nothing approved.
+    for (const evidence of ["claude", "codex", "kiro"] as const) {
+      const proj = makeProject();
+      const env = evidence === "kiro" ? addKiroLayout(proj) : {};
+      seedActiveWithCheckbox(proj, "?", "build-and-test");
+      seedAuditShard(proj, gateRows([["STAGE_STARTED", { Stage: "build-and-test" }], SHOWN("build-and-test"), ...PICKED("Approve")]));
+      let transcript: string | undefined;
+      if (evidence === "kiro") {
+        seedTurnMarkers(proj, { humanNewer: false });
+      } else {
+        transcript = seedTranscriptEntries(proj, evidence, [
+          { kind: "human", text: "build it, and approve each gate as it comes" },
+          { kind: "bash", command: "bun .claude/tools/aidlc.ts engine orchestrate report --stage build-and-test --result awaiting-approval" },
+          { kind: "text" },
+        ]);
+      }
+      const r = runHook(
+        proj,
+        JSON.stringify({ stop_hook_active: false, ...(transcript ? { transcript_path: transcript } : {}) }),
+        "run-stage", "", "", "build-and-test", "", false, env,
+      );
+      expect(r.rc, r.diagnostic).toBe(0);
+      expect((JSON.parse(r.out || "{}") as { decision?: string }).decision, evidence).toBe("block");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(e) [?] with a team Unit's reply to its gate on record carries on too", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, { slug: "code-generation", phase: "construction", autonomy: "gated", iteration: "unit-major" });
+    writeFileSync(
+      seededStateFile(proj),
+      readFileSync(seededStateFile(proj), "utf-8")
+        .replace("- **Construction Iteration**: unit-major\n", "- **Construction Iteration**: unit-major\n- **Unit Ownership**: team\n")
+        .replace("- [-] code-generation", "- [?] code-generation"),
+    );
+    seedAuditShard(proj, gateRows([SHOWN("code-generation", "alpha"), ...PICKED("Approve")]));
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "alpha", "code-generation");
+    expect(r.rc, r.diagnostic).toBe(0);
+    expect((JSON.parse(r.out || "{}") as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(e) a question typed as a new message at an open gate, answered with no engine call, still ends the turn", () => {
+    const proj = makeProject();
+    seedActiveWithCheckbox(proj, "?", "build-and-test");
+    seedAuditShard(proj, gateRows([SHOWN("build-and-test"), ["HUMAN_TURN", { Origin: "person", Source: "typed" }]]));
+    const transcript = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "build it" },
+      { kind: "bash", command: "bun .claude/tools/aidlc.ts engine orchestrate report --stage build-and-test --result awaiting-approval" },
+      { kind: "human", text: "which file has the test results in it?" },
+      { kind: "text" },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: transcript }),
+      "run-stage", "", "", "build-and-test",
+    );
+    expect(r.rc, r.diagnostic).toBe(0);
+    expect(r.out).toBe("");
+    const trace = readFileSync(join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "continue-workflow.trace"), "utf-8");
+    expect(trace).toContain("conversational carve-out");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(e) a reply left unrecorded is carried on once: the next stop with nothing done is let go", () => {
+    const proj = makeProject();
+    seedActiveWithCheckbox(proj, "?", "build-and-test");
+    seedAuditShard(proj, gateRows([SHOWN("build-and-test"), ...PICKED("Approve")]));
+    const transcript = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "build it" },
+      { kind: "bash", command: "bun .claude/tools/aidlc.ts engine orchestrate report --stage build-and-test --result awaiting-approval" },
+      { kind: "text" },
+    ]);
+    const stop = (active: boolean) => runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: active, transcript_path: transcript }),
+      "run-stage", "", "", "build-and-test",
+    );
+    const first = stop(false);
+    expect(first.rc, first.diagnostic).toBe(0);
+    expect((JSON.parse(first.out || "{}") as { decision?: string }).decision).toBe("block");
+    const second = stop(true);
+    expect(second.rc, second.diagnostic).toBe(0);
+    expect(second.out).toBe("");
+    const trace = readFileSync(join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "continue-workflow.trace"), "utf-8");
+    expect(trace).toContain("no-progress block cap 2 reached");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(e) [?] or [R] with no reply since the gate was last shown still ends the turn: the person has not answered", () => {
+    const cases: Array<[name: string, marker: string, rows: Array<[string, Record<string, string>?]>]> = [
+      ["shown, nothing since", "?", [["HUMAN_TURN", { Origin: "person", Source: "typed" }], SHOWN("build-and-test")]],
+      ["only a command to AI-DLC since", "?", [SHOWN("build-and-test"), ["HUMAN_TURN", { Origin: "person", Source: "typed", Reply: "command" }]]],
+      ["shown again after a revision", "?", [
+        SHOWN("build-and-test"), ...PICKED("Request Changes"),
+        ["GATE_REJECTED", { Stage: "build-and-test" }], ["STAGE_REVISING", { Stage: "build-and-test" }], SHOWN("build-and-test"),
+      ]],
+      ["revising after Request Changes", "R", [
+        SHOWN("build-and-test"), ...PICKED("Request Changes"),
+        ["GATE_REJECTED", { Stage: "build-and-test" }], ["STAGE_REVISING", { Stage: "build-and-test" }],
+      ]],
+      // They asked something, the agent showed the box again, and they closed
+      // it with no answer: approve finds no reply either, and the agent asks
+      // again in its reply.
+      ["a question box closed with no answer since", "?", [
+        SHOWN("build-and-test"), ["HUMAN_TURN", { Origin: "person", Source: "typed" }], ["QUESTION_UNANSWERED", {}],
+      ]],
+      // The engine backfills a presentation for an approval reported over it:
+      // no showing the person answered, so nothing changes.
+      ["a backfilled showing", "?", [
+        ["STAGE_AWAITING_APPROVAL", { Stage: "build-and-test", Recovered: "true" }], ...PICKED("Approve"),
+      ]],
+      ["their message went to separate new work", "?", [
+        SHOWN("build-and-test"), ["HUMAN_TURN", { Origin: "person", Source: "typed" }], ["REQUEST_ROUTED", {}],
+      ]],
+      ["their reply answered another question", "?", [
+        SHOWN("build-and-test"), ["DECISION_RECORDED", { Stage: "build-and-test" }],
+        ["HUMAN_TURN", { Origin: "person", Source: "typed" }], ["QUESTION_ANSWERED", { Stage: "build-and-test" }],
+      ]],
+    ];
+    for (const [name, marker, rows] of cases) {
+      const proj = makeProject();
+      seedActiveWithCheckbox(proj, marker, "build-and-test");
+      seedAuditShard(proj, gateRows(rows));
+      const transcript = seedTranscriptEntries(proj, "claude", [
+        { kind: "human", text: "build it" },
+        { kind: "bash", command: "bun .claude/tools/aidlc.ts engine orchestrate report --stage build-and-test --result awaiting-approval" },
+        { kind: "text" },
+      ]);
+      const r = runHook(
+        proj,
+        JSON.stringify({ stop_hook_active: false, transcript_path: transcript }),
+        "run-stage", "", "", "build-and-test",
+      );
+      expect(r.rc, r.diagnostic).toBe(0);
+      expect(r.out, name).toBe("");
+      const trace = readFileSync(join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "continue-workflow.trace"), "utf-8");
+      expect(trace, name).toContain("human-wait carve-out");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // =========================================================================
   // (f) TIER-2 PENDING-QUESTION CARVE-OUT — a mid-stage [-] stage with a
   // questions file that has an UNANSWERED [Answer]: tag means the conductor is

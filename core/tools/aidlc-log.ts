@@ -13,10 +13,12 @@ import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:p
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   chatsSince,
+  holdsQuote,
   isMessageId,
   latestSpendingTimestamp,
   listMessages,
   messageIsReply,
+  personsSaidWords,
   readMessage,
   type StoredMessage,
 } from "./aidlc-message-store.ts";
@@ -2498,6 +2500,14 @@ function handleAnswer(args: string[]): void {
       if (!personSpokeInThisWork(pd)) {
         error("Nothing the person said in this piece of work is on record, so no choice was left to you. Ask them." +
           unattendedHumanPresenceHint());
+      }
+      // The words have to be theirs. Where the record lacks some of what they
+      // said, nothing proves a quote is not theirs, and it stands as before.
+      const words = personsSaidWords(pd, readAuditShardEvents(pd));
+      if (words.everyTurnHeld && !words.said.some((said) => holdsQuote(said, instruction))) {
+        error("Cannot record this as a choice the person left to you: those words are not in anything they said. " +
+          "Quote their own words that left it to you (--on-instruction '<their words>'), or show them the " +
+          "questions and end your turn; their reply answers them.");
       }
       fields["Answer Source"] = ANSWER_SOURCE_ON_INSTRUCTION;
       fields.Instruction = instruction;

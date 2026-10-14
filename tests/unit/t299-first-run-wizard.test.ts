@@ -797,7 +797,7 @@ describe("t299 first-run setup wizard", () => {
     );
     // A blank line parts the saved block from whatever follows it (the next
     // steps, or a machine's own runtime item such as a hooks PATH on Windows).
-    expect(result.stdout).toMatch(/\/model\.\n\n {2}\S/);
+    expect(result.stdout).toMatch(/\/model set-current-as-default to save it\.\n\n {2}\S/);
     const writes = kiroWrites(seam.writes);
     expect(writes[0]).toEqual(["settings", "chat.defaultModel", "claude-opus-5"]);
     expect(JSON.parse(writes[1][2])).toEqual({ "claude-opus-5": { output_config: { effort: "medium" } } });
