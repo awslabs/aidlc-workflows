@@ -19,10 +19,9 @@ import { join, relative } from "node:path";
 import type { GraphStage } from "./aidlc-graph.ts";
 import { errorMessage, isPluginEnabled, toPosix } from "./aidlc-lib.ts";
 
-// Walk a knowledge directory into path-roster entries. Knowledge remains
-// path-loaded until the future retrieval layer lands. We do a cheap read
-// preflight so an unreadable file produces an actionable warning instead of a
-// path the conductor cannot use.
+// Knowledge remains path-loaded until the future retrieval layer lands. We do
+// a cheap read preflight so an unreadable file produces an actionable warning
+// instead of a path the conductor cannot use.
 function assertReadableUtf8(path: string): void {
   const bytes = readFileSync(path);
   new TextDecoder("utf-8", { fatal: true }).decode(bytes);

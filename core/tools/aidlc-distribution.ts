@@ -595,8 +595,6 @@ export function rootBlockPath(
   return join(harnessRoot, "tools", "data", "root-blocks", name);
 }
 
-// Where a projection holds the bytes it ships for a root integration: the root
-// file, or for one the copy runtime leaves out, its root-blocks copy.
 /**
  * The team's file a root integration lands in, relative to the project: the
  * integration's own path, except that AI-DLC's opencode.json part goes into
@@ -609,6 +607,8 @@ export function rootIntegrationTarget(projectDir: string, path: string): string 
   return existsSync(join(projectDir, "opencode.jsonc")) ? "opencode.jsonc" : path;
 }
 
+// Where a projection holds the bytes it ships for a root integration: the root
+// file, or for one the copy runtime leaves out, its root-blocks copy.
 export function shippedRootIntegrationPath(
   root: string,
   harnessDir: string,
@@ -660,7 +660,6 @@ export function unionBlocks(contributors: Array<{ distribution: string; text: st
   return base;
 }
 
-// The ignore entries of a .gitignore part, without its comments and blank lines.
 function ignoreEntries(text: string): string {
   return text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("#")).sort().join("\n");
 }
@@ -1022,7 +1021,7 @@ export function jsoncSettingValue(text: string, key: string): unknown {
   }
 }
 
-/** Add `key` as the root object's last member, keeping every other byte. */
+/** Add `key` as the root object's last member, keeping existing members and comments. */
 export function insertJsoncSetting(text: string, key: string, valueJson: string): string | null {
   const source = text.trim() ? text : "{}\n";
   const root = jsoncRootMembers(source);
@@ -1045,7 +1044,6 @@ export function insertJsoncSetting(text: string, key: string, valueJson: string)
   return next;
 }
 
-/** Replace one top-level member's value in place. */
 export function replaceJsoncSetting(text: string, key: string, valueJson: string): string | null {
   const member = jsoncRootMembers(text)?.members.findLast((candidate) => candidate.key === key);
   if (!member) return null;
@@ -1209,7 +1207,7 @@ function jsonValueText(value: unknown, indent: string, layout: JsonLayout, inlin
 }
 
 // Add one member to an object (first, or after the last), or one string to an
-// array, in the layout around it, keeping every other byte.
+// array, in the layout around it, keeping existing entries and comments.
 function insertJsoncEntry(
   text: string,
   layout: JsonLayout,
@@ -1576,14 +1574,17 @@ export function mergeJsonEntries(
     if ("conflict" in step) return step;
     text = step.text;
   }
-  // AI-DLC's entries this release no longer ships go, unless someone changed them.
+  // AI-DLC's entries this release no longer ships go, unless someone changed them and force is false.
   for (const [id, hash] of Object.entries(prior)) {
     if (all[id] === undefined) text = removeRecordedJsonEntry(text, id, hash, force);
   }
   return { text, entries: next, whole: false };
 }
 
-/** Remove every recorded entry that still has the value AI-DLC wrote; null when the file is unreadable. */
+/**
+ * Remove every recorded entry that still has the value AI-DLC wrote (any value with force);
+ * null when the file is unreadable.
+ */
 export function removeJsonEntries(current: string, entries: Record<string, string>, force = false): string | null {
   if (jsoncTree(current)?.kind !== "object") return null;
   let text = current;
@@ -1591,7 +1592,6 @@ export function removeJsonEntries(current: string, entries: Record<string, strin
   return text;
 }
 
-/** True when the text is an object with no members (whitespace and a byte order mark aside). */
 export function emptyJsonObject(text: string): boolean {
   return withoutBom(text).replace(/\s/g, "") === "{}";
 }

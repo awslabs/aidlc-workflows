@@ -39,7 +39,7 @@ function hostValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
   return value && !setByDotenvFile(name) ? value : undefined;
 }
 
-/** True in a process Kiro IDE started (its hooks and the agent's commands). */
+/** True in a process Kiro IDE started (its hooks, not the agent's commands). */
 export function insideKiroIde(env: NodeJS.ProcessEnv = process.env): boolean {
   return hostValue(env, "VSCODE_CODE_CACHE_PATH") !== undefined;
 }
@@ -150,7 +150,6 @@ export const KIRO_WORKFLOWS_QUESTION =
   "running in your chats. Turn Workflows off? It is a Kiro setting for all your projects, and you can turn it " +
   "back on any time.";
 
-/** The line after AI-DLC turned Workflows off. */
 export function kiroWorkflowsOffLine(): string {
   return "Turned Kiro's Workflows feature off, so AI-DLC's reviews and helpers run in your chats. It is a Kiro " +
     `setting for all your projects. ${RELOAD_STEP} You can turn it back on any time.`;
@@ -160,7 +159,6 @@ export function kiroWorkflowsOnLine(): string {
   return `Turned Kiro's Workflows feature back on (a Kiro setting for all your projects). ${RELOAD_STEP}`;
 }
 
-/** The line after the person kept Workflows on at a question. */
 export function kiroWorkflowsKeptLine(invoke: string): string {
   return "Kept Kiro's Workflows feature on; AI-DLC will not ask again. To turn it off later: " +
     `\`${invoke} config trust --kiro-workflows off\`.`;

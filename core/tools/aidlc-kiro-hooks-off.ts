@@ -39,7 +39,6 @@ export function kiroHooksOff(projectDir: string, harnessDir = ".kiro"): KiroHook
   return off;
 }
 
-// The time as the person would say it: today's clock time, else the date too.
 function clock(iso: string, now: Date): string {
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return "an earlier session";

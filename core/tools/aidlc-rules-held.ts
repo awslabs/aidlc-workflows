@@ -465,8 +465,9 @@ export function forgetRulesDelivered(projectDir: string, sessionId: string | und
  * compacted). False where the host's commands do not name their chat (Copilot,
  * Cursor): there the engine keeps its one delivery per workflow, because the
  * persona travels on its own directive part and every extra delivery is one
- * more tool call the person sees. Also false on any unreadable record, so a
- * missing signal never turns into a delivery on every step.
+ * more tool call the person sees. A missing or unreadable delivery record
+ * counts as no persona delivery; an exception from the surrounding checks
+ * returns false.
  */
 export function chatNeedsPersona(
   projectDir: string | undefined,

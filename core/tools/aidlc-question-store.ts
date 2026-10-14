@@ -25,10 +25,10 @@ import { resolveAidlcSettings } from "./aidlc-settings.ts";
 
 // The copy of a request an engine question was asked about, so its answer
 // commands carry a short id instead of the request text. Each question gets
-// its own file in the gitignored session directory, written once and never
-// rewritten, with the same operating-system permissions as the rest of the
-// workspace. The file is removed when the question starts work; an unanswered
-// one is kept unless `question-retention-days` is set.
+// its own file in the gitignored session directory, written once and rewritten
+// only to mark it answered, with the same operating-system permissions as the
+// rest of the workspace. The file is removed when the question starts work; an
+// unanswered one is kept unless `question-retention-days` is set.
 
 // Which ask stored a question: a cold-start ask names new work; a
 // new-work-routing ask is about work that already exists. A `compose` entry is
@@ -376,7 +376,6 @@ export function firstFrontQuestionSince(
   return first?.id ?? null;
 }
 
-// Whether a work-list row already names `id` as the question that started it.
 function startedWorkUses(projectDir: string, id: string): boolean {
   return listSpaces(projectDir).some(({ name }) =>
     readIntentRegistry(projectDir, name).some((row) => row.request === id)
