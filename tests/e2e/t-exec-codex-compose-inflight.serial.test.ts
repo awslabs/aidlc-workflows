@@ -73,6 +73,7 @@ import {
   REPO_ROOT,
   seededRecordDir,
 } from "../harness/fixtures.ts";
+import { expectPersonFirst } from "../harness/person-turns.ts";
 
 function completedStartupProbe<T extends { error?: Error }>(result: T): T {
   if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
@@ -278,8 +279,8 @@ describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec r
         expect(/reject/i.test(gateOut), gateDiagnostic).toBe(true);
         // Marker written, nothing applied: state byte-unchanged, no RECOMPOSED.
         expect(existsSync(markerPath(proj))).toBe(true);
-        expect(readState(proj)).toBe(before);
-        expect(auditText(proj)).not.toContain("**Event**: RECOMPOSED");
+        expectPersonFirst(readState(proj) === before && !auditText(proj).includes("**Event**: RECOMPOSED"),
+          "the plan change was applied before the person approved it");
 
         // Beat 2: answer the gate in the SAME session.
         const b2 = codexTurn(proj, home, "Approve", { resume: true });

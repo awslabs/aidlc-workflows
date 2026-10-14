@@ -37,6 +37,7 @@ import { copilotTurn, trustCopilotFolder } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   doctorChecks,
+  expectPersonFirstInJourney,
   hooksRanProblems,
   RELEASE_JOURNEY_TURNS,
   type ReleaseJourneyReport,
@@ -146,6 +147,7 @@ describe("t-exec-copilot-release-journey: a person's first day on Copilot CLI, b
         report.extra = { "hook runs": Object.values(runs).reduce((sum, count) => sum + count, 0), ...tokens(usageFile), hooksByKind: runs };
         if (report.problems.length) report.extra.evidence = { ...releaseJourneyEvidence(project.proj), output: lastOut.slice(-4000) };
       });
+      expectPersonFirstInJourney(report.problems);
       expect(report.problems).toEqual([]);
       rmSync(project.root, { recursive: true, force: true });
     },

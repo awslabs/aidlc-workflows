@@ -24,6 +24,7 @@ import {
   runnerFileTimeoutSeconds,
   testGuardEnvironment,
 } from "../harness/runner-profile.ts";
+import { personTurnLine } from "../lib/file-retry.ts";
 import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -734,6 +735,24 @@ describe("bounded file workers through the public runner", () => {
     }
   });
 
+  // The live families run this path (--isolated-files --file-retries 1). A pass
+  // on the retry used to turn a run that saw AI-DLC act for the person green.
+  test("a person-turn failure gets one attempt, stays red, and says so", () => {
+    const fixture = isolatedRunnerFixture({ "integration/t-person-turn.test.ts": RETRY_CASES.personTurnOnce });
+    const observer = join(fixture.root, "observer");
+    const result = fixture.run(["--integration", "--isolated-files", "--file-retries", "1", "-P", "1"], {
+      AIDLC_TUI_BACKEND: "bun", AIDLC_RETRY_OBSERVER: observer,
+    });
+    expect(result.status, result.out + result.failures).not.toBe(0);
+    expect(readFileSync(join(observer, "runs"), "utf8").trim().split("\n")).toEqual(["t-person-turn.test.ts"]);
+    expect(result.out).toContain(personTurnLine("tests/integration/t-person-turn.test.ts"));
+    expect(result.out).not.toContain("Flaky live test");
+    const report = JSON.parse(readFileSync(join(result.stamp, "e2e-results.json"), "utf8"));
+    expect(report.files[0]).toMatchObject({ state: "FAIL", personTurnFailure: true });
+    expect(report.files[0].attempts).toHaveLength(1);
+    expect(report.files[0].passedOnRetry).toBeUndefined();
+  });
+
   test("cleanup uncertainty stops reuse and leaves the remaining file incomplete", () => {
     const fixture = isolatedRunnerFixture({
       "integration/t-a-dirty.test.ts": `import { test } from "bun:test";
@@ -818,6 +837,17 @@ test("fails on its first attempt only", () => {
 });`,
   steady: `${RETRY_PRELUDE}
 test("passes", () => expect(1).toBe(1));`,
+  // The drives' own error (tests/harness/person-turns.ts) by its name: bun's
+  // JUnit writes the name as the failure type, which is all the runner reads.
+  personTurnOnce: `${RETRY_PRELUDE}
+class PersonTurnError extends Error { override name = "PersonTurnError"; }
+test("records a decision the person never made, on its first attempt only", () => {
+  const marker = join(observer, name + ".failed-once");
+  if (!existsSync(marker)) {
+    writeFileSync(marker, "1");
+    throw new PersonTurnError("The SDK drive recorded 1 decision(s) as the person's that no turn from them backs");
+  }
+});`,
   timesOutOnce: `${RETRY_PRELUDE}
 test("runs past its case timeout on its first attempt only", async () => {
   const marker = join(observer, name + ".timed-out-once");
@@ -938,6 +968,17 @@ describe("merge-queue retry of ordinary tiers through the public runner", () => 
     expect(result.failures).toContain(`FAIL: ${name}`);
     const [retry] = JSON.parse(readFileSync(join(result.stamp, "retries.json"), "utf8")).retries;
     expect(retry).toMatchObject({ passedOnRetry: false, secondAttempt: { status: secondStatus } });
+  });
+
+  test("a person-turn failure is never retried, though its second attempt would pass", () => {
+    const { fixture, observer, runs } = retryFixture({ "integration/t-person-turn.test.ts": RETRY_CASES.personTurnOnce });
+    const result = fixture.run(["--integration", "--no-llm", "--file-retries", "1"], { AIDLC_RETRY_OBSERVER: observer });
+    expect(result.status, result.out + result.failures).toBe(1);
+    expect(runs()).toEqual(["t-person-turn"]);
+    expect(result.out).not.toContain("=== RETRY");
+    expect(result.out).toContain("=== NO RETRY t-person-turn.test.ts (it found AI-DLC acting for the person; a pass on a second attempt would hide that) ===");
+    expect(result.summary).toMatch(/^ {2}t-person-turn +FAIL /m);
+    expect(JSON.parse(readFileSync(join(result.stamp, "retries.json"), "utf8")).retries).toEqual([]);
   });
 
   test("a timeout, a crash and a file that executed no cases are never retried", () => {

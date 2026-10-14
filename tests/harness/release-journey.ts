@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { copyChannelOmits, projectionFiles } from "../../core/tools/aidlc-distribution.ts";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { REPO_ROOT } from "./fixtures.ts";
+import { expectPersonFirst } from "./person-turns.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 export type ReleaseJourneyHarness = "copilot" | "kiro";
@@ -152,6 +153,14 @@ function stageEvents(proj: string, event: string): number {
   return rows.filter((row) => row.event === event && auditBlockField(row.block, "Stage") === RELEASE_JOURNEY_STAGE).length;
 }
 
+/** The problem that says AI-DLC ran ahead of the person. */
+const RAN_AHEAD = "work was started before the person answered the plan question";
+
+/** A journey whose problems say AI-DLC ran ahead of the person fails as a PersonTurnError, which is never retried. */
+export function expectPersonFirstInJourney(problems: readonly string[]): void {
+  expectPersonFirst(!problems.some((problem) => problem.includes(RAN_AHEAD)), problems.join("\n"));
+}
+
 /**
  * What is wrong after the person's turn `turn` (1-based), in plain words; empty
  * when the journey is where it should be. Every turn checks that each line
@@ -167,7 +176,7 @@ export function releaseJourneyProblems(proj: string, turn: number): string[] {
     if (!requestRecords(proj).some((record) => record.text === RELEASE_JOURNEY_REQUEST)) {
       problems.push("AI-DLC has no request for the person's words, so no plan question was asked for them");
     }
-    if (workRecords(proj).length) problems.push("work was started before the person answered the plan question");
+    if (workRecords(proj).length) problems.push(RAN_AHEAD);
   }
   if (turn >= 2) {
     if (!workRecords(proj).some((record) => record.scope === "bugfix")) problems.push("\"1\" did not start the bugfix plan the question offered");

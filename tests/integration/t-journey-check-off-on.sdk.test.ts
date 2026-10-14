@@ -45,6 +45,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, seededStateFile, setupIntegrationProject } from "../harness/fixtures.ts";
+import { expectPersonFirst } from "../harness/person-turns.ts";
 import { type AnswerScript, type AskUserQuestionItem, type DriveResult, driveAidlc } from "../harness/sdk-drive.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
@@ -156,7 +157,7 @@ describe("t-journey-check-off-on (sdk): a check turned off and on from the chat 
         expect(off.timedOut).toBe(false);
         atMostTheWideningQuestion(off, "chat 1");
         if (off.askedQuestions.length > 0) {
-          expect(offWhenAsked, "chat 1: the question came before the person's own request was done").toBe(true);
+          expectPersonFirst(offWhenAsked === true, "chat 1: the question came before the person's own request was done");
         }
         expect(reviewFreeze(proj)).toBe(`off (${SWITCH} in aidlc.settings.local.json)`);
         const recorded = switchesOff(proj).find((item) => item.name === SWITCH);
@@ -180,7 +181,7 @@ describe("t-journey-check-off-on (sdk): a check turned off and on from the chat 
         expect(started).toContain("because you said:");
         atMostTheWideningQuestion(on, "chat 2");
         if (on.askedQuestions.length > 0) {
-          expect(onWhenAsked, "chat 2: the question came before the person's own request was done").toBe(true);
+          expectPersonFirst(onWhenAsked === true, "chat 2: the question came before the person's own request was done");
         }
         expect(reviewFreeze(proj)).toBe("on (default)");
         expect(switchesOff(proj).some((item) => item.name === SWITCH), "the switch is still recorded off").toBe(false);

@@ -35,6 +35,7 @@ import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   doctorChecks,
+  expectPersonFirstInJourney,
   hooksRanProblems,
   RELEASE_JOURNEY_TURNS,
   type ReleaseJourneyReport,
@@ -159,6 +160,7 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
       } finally {
         assertTuiDriveKill(drive(["kill", "--session", session]), session);
       }
+      expectPersonFirstInJourney(report.problems);
       expect(report.problems).toEqual([]);
       rmSync(project.root, { recursive: true, force: true });
     },

@@ -7,7 +7,9 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { cleanupTestProject, createTestProject, seedBoltDag, seededAuditShard } from "../harness/fixtures.ts";
 import {
+  expectPersonFirst,
   nextPersonTurnCarriesPicks,
+  PersonTurnError,
   PersonTurnLedger,
   startPersonTurnSession,
   submittedToPersonTurnSession,
@@ -48,6 +50,29 @@ function project(): string {
   row(dir, "WORKFLOW_STARTED");
   return dir;
 }
+
+// The runner never retries a file that fails with this error (tests/lib/file-retry.ts),
+// so every person-turn failure must be one: the drives' unbacked-decision failure and
+// a test's own "the person came first" check alike.
+describe("person-turn failures carry their own error", () => {
+  test("an unbacked decision fails as a PersonTurnError", () => {
+    const failure = unbackedFailure("The SDK drive", ["GATE_APPROVED at 00:00"]);
+    expect(failure).toBeInstanceOf(PersonTurnError);
+    expect(failure.name).toBe("PersonTurnError");
+  });
+
+  test("expectPersonFirst passes when the person came first, and fails as a PersonTurnError when not", () => {
+    expect(() => expectPersonFirst(true, "work was started before the person answered")).not.toThrow();
+    let thrown: unknown;
+    try {
+      expectPersonFirst(false, "work was started before the person answered");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(PersonTurnError);
+    expect((thrown as Error).message).toBe("work was started before the person answered");
+  });
+});
 
 describe("person-turn check", () => {
   test("an approval the agent recorded with no turn after the gate opened is flagged", () => {

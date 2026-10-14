@@ -327,9 +327,25 @@ function describe(row: AuditShardEvent, key: string, turns: readonly PersonTurn[
   ].join("");
 }
 
+/**
+ * A failure where AI-DLC acted for the person: a decision recorded as theirs
+ * that no turn of theirs backs, or work run ahead of their answer. Bun's JUnit
+ * writes this name as the failure type, and the runner never retries a file
+ * that fails with it (tests/lib/file-retry.ts): a pass on a second attempt
+ * would hide the break a person would meet.
+ */
+export class PersonTurnError extends Error {
+  override name = "PersonTurnError";
+}
+
+/** A test's own check that the person came first, failing as a PersonTurnError. */
+export function expectPersonFirst(personCameFirst: boolean, what: string): void {
+  if (!personCameFirst) throw new PersonTurnError(what);
+}
+
 /** The failure a drive raises when `problems` is not empty. */
-export function unbackedFailure(drive: string, problems: readonly string[]): Error {
-  return new Error(
+export function unbackedFailure(drive: string, problems: readonly string[]): PersonTurnError {
+  return new PersonTurnError(
     `${drive} recorded ${problems.length} decision(s) as the person's that no turn from them backs:\n` +
       problems.map((line) => `  ${line}`).join("\n"),
   );

@@ -885,6 +885,13 @@ jobs:
       - name: "Collect isolated live logs"
         if: "${{ always() }}"
         run: .github/scripts/prepare-live-runtime.ps1 -Mode collect -Family ${{ matrix.family }}
+      # The isolated child's output stays out of this log, so the runner's
+      # Flaky and person-turn lines never reach it. Say them from the collected
+      # results, in fixed words and the test file's name only.
+      - name: "Report retries and person-turn failures"
+        if: "${{ always() }}"
+        continue-on-error: true
+        run: bun scripts/ci-retry-report.ts --live tests/logs
       - name: "Sanitize diagnostic logs"
         id: sanitize
         if: "${{ always() }}"
