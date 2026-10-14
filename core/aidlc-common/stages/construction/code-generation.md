@@ -402,7 +402,7 @@ Include in the delegation prompt:
   different, or stale hash. Do not write either marker yourself and do not repeat either marker
   for contextual dependencies.
 - Design artifacts for the CURRENT UNIT ONLY (not all units)
-- A 1-2 line summary of each inception-phase artifact with its file path (requirements summary, stories summary, app design summary) — the subagent can Read specific files if it needs full content
+- A 1-2 line summary of each inception-phase artifact with its file path (requirements summary, stories summary, domain design summary) — the subagent can Read specific files if it needs full content
 - The current plan and unit-test-instructions.md are already in that output:
   the plan with a terminal `## Review` appendix removed (when a review recorded under the
   earlier protocol left one), task markers reset to `[ ]`, and spacing
