@@ -754,7 +754,7 @@ export function main(argv: string[]): void {
   }
 
   const covered = new Set(data.coverage.map((entry) => entry.id));
-  const missingFromTable = [...declared].filter((id) => !covered.has(id));
+  const missingFromTable = [...withoutTracedParents(declared)].filter((id) => !covered.has(id));
   for (const entry of data.coverage) {
     if (!declared.has(entry.id)) invalidEntries.push(`coverage:${entry.id}: id is absent from upstream_ids`);
   }

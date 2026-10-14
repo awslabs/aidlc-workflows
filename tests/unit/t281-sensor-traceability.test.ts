@@ -1339,6 +1339,25 @@ describe("t281 a requirement and its sub-requirements", () => {
     expect(out.result.missing_from_upstream_ids).toEqual(["FR1.1", "FR1.2", "FR2.1"]);
   });
 
+  test("user-stories: a requirement listed in upstream_ids needs no coverage row of its own when its sub-requirements have theirs", () => {
+    const proj = project();
+    seedUserStories(proj);
+    write(proj, "inception/requirements-analysis/requirements.md", GROUPED);
+    const file = trace(proj, "inception/user-stories/traceability.json", {
+      stage: "user-stories",
+      upstream_ids: ["FR1", "FR1.1", "FR1.2", "FR2", "FR2.1", "NFR1"],
+      coverage: [
+        { id: "FR1.1", status: "OK", target: "US1.1" },
+        { id: "FR1.2", status: "OK", target: "US1.1" },
+        { id: "FR2.1", status: "OK", target: "US1.2" },
+        { id: "NFR1", status: "Deferred", target: "nfr-requirements" },
+      ],
+    });
+    const out = run(proj, "user-stories", file);
+    expect(out.result.missing_from_table).toEqual([]);
+    expect(out.result.pass, out.result.reason).toBe(true);
+  });
+
   test("without stories: domain-design and a story map keyed by sub-requirements pass", () => {
     const proj = project();
     write(proj, "inception/requirements-analysis/requirements.md", GROUPED);
