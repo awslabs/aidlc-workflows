@@ -11,7 +11,8 @@
 //              done at once") or route through the composer's in-flight
 //              dispatch (Branch 4c; t198 pins it does not advance), whose gate
 //              the answerScript approves. Either way it runs
-//              `recompose --skip ...`; the test does not care which route.
+//              `recompose --skip ...`; the test does not care which route, and
+//              stops once RECOMPOSED is on the record.
 //   disk:      both named stages' suffixes are SKIP; derived fields rebuilt;
 //              RECOMPOSED audited with both names; the cursor unchanged (a
 //              plan edit, not an advance).
@@ -32,7 +33,8 @@ import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { driveAidlc, readStateFile } from "../harness/sdk-drive.ts";
+import { newlySkipped } from "../harness/outcomes.ts";
+import { driveAidlc, readAuditText, readStateFile } from "../harness/sdk-drive.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
 const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
@@ -74,7 +76,7 @@ describe("t196 in-flight recompose journey (/aidlc compose mid-workflow, sdk liv
         expect(before).toMatch(/- \[ \] team-formation — EXECUTE/);
         const cursorBefore = /- \*\*Current Stage\*\*: (.*)/.exec(before)?.[1];
 
-        const r = await driveAidlc(
+        await driveAidlc(
           '/aidlc compose "drop market research and team formation from this workflow - we already know the market and the team"',
           {
             projectDir: proj,
@@ -82,26 +84,17 @@ describe("t196 in-flight recompose journey (/aidlc compose mid-workflow, sdk liv
             timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
               deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
             }),
-            stopAfterToolResult: {
-              toolName: "Bash",
-              resultIncludes: "Recomposed:",
-              inputExcludes: "--dry-run",
-            },
+            // Whether a question came first is not asserted: the person named
+            // the stages, so the agent may apply them at once or confirm them
+            // through the composer's gate, and both leave the records below.
+            stopWhen: () => readAuditText(proj).includes("**Event**: RECOMPOSED"),
           },
         );
 
-        // The recompose verb ran (its verbatim summary). Whether a question
-        // came first is not asserted: the person named the stages, so the
-        // agent may apply them at once or confirm them through the composer's
-        // gate, and both leave the same records below.
-        const recomposeCalls = r.toolResults.filter(
-          (t) => t.toolName === "Bash" && t.resultText.includes("Recomposed:"),
-        );
-        expect(recomposeCalls.length).toBeGreaterThanOrEqual(1);
-
-        // Disk: both stages the person named are skipped, as suffix edits
-        // (markers still pending), and the cursor never moved.
+        // Disk: the two stages the person named are skipped and no others, as
+        // suffix edits (markers still pending), and the cursor never moved.
         const after = readStateFile(proj) ?? "";
+        expect(newlySkipped(before, after)).toEqual(["market-research", "team-formation"]);
         for (const slug of ["market-research", "team-formation"]) {
           expect(after).toContain(`- [ ] ${slug} \u2014 SKIP`);
         }
@@ -135,8 +128,8 @@ describe("t196 in-flight recompose journey (/aidlc compose mid-workflow, sdk liv
 
         // The pending-proposal MARKER discipline (write before the gate,
         // delete on resolve) is deliberately NOT asserted here: the direct
-        // route writes no marker, this drive aborts AT the recompose tool
-        // result, and on the composer route whether the conductor's
+        // route writes no marker, this drive stops once RECOMPOSED is on the
+        // record, and on the composer route whether the conductor's
         // marker-deletion step has run by that instant is a live-timing race
         // (both orders observed across runs). The deterministic halves are
         // pinned elsewhere - t195 proves the Stop hook honours the marker and

@@ -75,6 +75,7 @@ import {
   cleanupWorkspaceJourney,
   setupWorkspaceJourney,
 } from "../harness/fixtures.ts";
+import { stageEvents } from "../harness/outcomes.ts";
 import {
   type CapturedToolResult,
   type DriveResult,
@@ -324,25 +325,19 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           expect(command).toMatch(/--single\b/);
           expect(command).toMatch(/--stage(?:=|\s+)(?:["'])?reverse-engineering\b/);
         }
-        const r2Reports = r2Commands.filter((command) =>
-          /(?:aidlc-orchestrate\.ts["']?|engine orchestrate)\s+report\b/.test(command)
-        );
+        // The record, not the commands: one isolated completion, nothing
+        // completed against the main workflow, and no gate opened for the stage
+        // (a bare report the agent runs to look around writes nothing).
+        const commands = JSON.stringify(r2Commands);
         expect(
-          r2Reports,
-          `expected exactly one isolated completion report: ${JSON.stringify(r2Commands)}`,
-        ).toHaveLength(1);
-        expect(r2Reports[0]).toMatch(/--single\b/);
-        expect(r2Reports[0]).toMatch(
-          /--stage(?:=|\s+)(?:["'])?reverse-engineering\b/,
-        );
-        expect(r2Reports[0]).toMatch(
-          /--result(?:=|\s+)(?:["'])?completed\b/,
-        );
+          stageEvents(root, "STAGE_COMPLETED", "reverse-engineering", "single-stage:reverse-engineering"),
+          `expected exactly one isolated completion: ${commands}`,
+        ).toBe(1);
         expect(
-          r2Commands.some((command) =>
-            /--result(?:=|\s+)(?:["'])?awaiting-approval\b/.test(command)
-          ),
-        ).toBe(false);
+          stageEvents(root, "STAGE_COMPLETED", "reverse-engineering"),
+          `reverse-engineering completed against the main workflow: ${commands}`,
+        ).toBe(1);
+        expect(stageEvents(root, "STAGE_AWAITING_APPROVAL", "reverse-engineering"), commands).toBe(0);
         expect(
           r2Commands.some((command) =>
             /aidlc-learnings\.ts["']?\s+(?:surface|persist)\b/.test(command)

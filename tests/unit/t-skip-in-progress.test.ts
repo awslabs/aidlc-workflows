@@ -99,7 +99,8 @@ describe("a stage the person asks to skip while it is in progress is skipped", (
     test(`${stage}: skipped where it stands, and the work goes on`, () => {
       const proj = startedAt("feature", stage);
       const message = personSkips(proj, stage);
-      expect(message).toMatch(/"Skipped [A-Z][^."]*\. It can still be run on its own with `\/aidlc --stage <stage> --single`\."/);
+      expect(message).toMatch(/"Skipped [A-Z][^."]*\. It can still be run on its own with `\/aidlc --stage [a-z-]+ --single`\."/);
+      expect(message).toContain(`It can still be run on its own with \`/aidlc --stage ${stage} --single\`.`);
       expect(message).toContain("re-run `next`");
       const after = readFileSync(stateFile(proj), "utf-8");
       expect(after).toContain(`- [S] ${stage} \u2014 EXECUTE`);
@@ -116,6 +117,18 @@ describe("a stage the person asks to skip while it is in progress is skipped", (
     const after = readFileSync(stateFile(proj), "utf-8");
     expect(after).toContain("- [S] build-and-test \u2014 EXECUTE");
     expect(after).toContain("- **Status**: Completed");
+    // The way back is a command the person can type as shown: it names the
+    // stage they skipped, and it runs that stage on its own.
+    const typed = /run on its own with `\/aidlc (--stage \S+ --single)`/.exec(message);
+    expect(typed?.[1], message).toBe("--stage build-and-test --single");
+    const single = runOrchestrateNext(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), proj, String(typed?.[1]).split(" "), {
+      cwd: proj,
+      env: { ...env, CLAUDE_PROJECT_DIR: proj },
+    });
+    const ran = single.directive as { kind?: string; stage?: string; single?: boolean } | null;
+    expect(ran?.kind, single.out).toBe("run-stage");
+    expect(ran?.stage).toBe("build-and-test");
+    expect(ran?.single).toBe(true);
   });
 
   test("a stage being revised after the person asked for changes is skipped the same way", () => {

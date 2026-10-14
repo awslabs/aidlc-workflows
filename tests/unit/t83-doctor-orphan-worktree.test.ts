@@ -109,22 +109,16 @@ import {
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const STATE_FIXTURE = join(FIXTURES_DIR, "state-mid-ideation.md");
 
-// Every project dir registered here is torn down after each test (mirrors the
-// .sh's cleanup_test_project at the end of each block).
 const created: string[] = [];
 
 afterEach(() => {
   while (created.length) cleanupTestProject(created.pop());
 });
 
-/**
- * Fresh project seeded with audit-sample.md + state-mid-ideation.md — the .sh's
- * `PROJ=$(create_test_project); seed_audit_file; seed_state_file <state>` trio.
- */
 function freshProject(): string {
   const proj = createTestProject();
   created.push(proj);
@@ -133,11 +127,10 @@ function freshProject(): string {
   return proj;
 }
 
-/** The .sh's append_audit: leading blank line, the block body, then a `---`
- *  separator surrounded by blank lines. Matches findAllEvents' `\n---\n` split.
- *  Audit is now a per-clone shard DIR (doctor reads via readAllAuditShards) — the
- *  appended blocks ride seedAuditFile's fixture.md shard, so the doctor's glob
- *  picks them up exactly as the flat single file did. */
+/** Leading blank line, the block body, then a `---` separator surrounded by
+ *  blank lines. Matches findAllEvents' `\n---\n` split. Audit is a per-clone
+ *  shard DIR (doctor reads via readAllAuditShards) - the appended blocks ride
+ *  the fixture.md shard, so the doctor's glob picks them up. */
 function appendAudit(proj: string, body: string): void {
   appendFileSync(join(seededAuditDir(proj), "fixture.md"), `\n${body}\n\n---\n`);
 }
@@ -169,14 +162,12 @@ function seedWtAuditShard(proj: string, slug: string, contents: string): void {
   writeFileSync(join(auditDir, `${host}-${token}.md`), contents, "utf-8");
 }
 
-/** Seed a canonical worktree, optionally including its mirrored intent record. */
 function mkWorktree(proj: string, slug: string, withDocs = false): string {
   const dir = worktreePath(proj, fixtureIntentId8(proj), slug);
   mkdirSync(withDocs ? wtRecordRoot(proj, slug) : dir, { recursive: true });
   return dir;
 }
 
-/** The .sh's sed_i on the `- **Bolt Refs**:` line — set the bracketed list. */
 function setBoltRefs(proj: string, value: string): void {
   sedReplaceInFile(
     seededStateFile(proj),
@@ -187,10 +178,9 @@ function setBoltRefs(proj: string, value: string): void {
 
 interface DoctorResult {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string; // combined stdout+stderr
 }
 
-/** `bun UTIL doctor --project-dir <proj>` captured 2>&1, exit code swallowed. */
 function runDoctor(
   proj: string,
   args: string[] = ["--verbose"],
@@ -278,7 +268,6 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
       "# stub state\n",
     );
     const { out } = runDoctor(proj);
-    // .sh grepped two ERE lines; assert the same two literals render.
     expect(out).toContain(`Orphan worktrees: 0 (1 active fork: ${boltName(fixtureIntentId8(proj), "activeslug")})`);
     expect(out).toContain(`Orphan state files: 0 (1 active: ${boltName(fixtureIntentId8(proj), "activeslug")})`);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -298,8 +287,8 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
         "**Strategy**: squash",
       ].join("\n"),
     );
-    // STRONGER than the .sh's two independent greps: assert the classification
-    // and the slug land on the SAME worktree-drift line (Check 1's fix string).
+    // Assert the classification and the slug land on the SAME worktree-drift
+    // line (Check 1's fix string).
     const { out } = runDoctor(proj);
     const line = out.split("\n").find((l) => l.includes("cleanup-orphan")) ?? "";
     expect(line).toContain("cleanup-orphan");
@@ -310,7 +299,6 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     const proj = freshProject();
     mkWorktree(proj, "orphanunmatched");
     const { out } = runDoctor(proj);
-    // STRONGER: "unmatched" + the slug co-located on the same drift line.
     const line = out.split("\n").find((l) => l.includes("unmatched")) ?? "";
     expect(line).toContain("unmatched");
     expect(line).toContain("orphanunmatched");
@@ -326,7 +314,6 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     const { out } = runDoctor(proj);
     const line = out.split("\n").find((l) => l.includes("Orphan state files: 1 drift")) ?? "";
     expect(out).toContain("Orphan state files: 1 drift");
-    // The slug is named in the fix string for this drift row.
     expect(out).toContain("orphanstate");
     expect(line).toContain("Orphan state files: 1 drift");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -350,7 +337,6 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
       ].join("\n"),
     );
     const { out } = runDoctor(proj);
-    // Observed but reconciled → "0 (1 active)", NOT a drift row.
     expect(out).toContain(`Orphan state files: 0 (1 active: ${boltName(fixtureIntentId8(proj), "discardedstate")})`);
     expect(out).not.toContain("Orphan state files: 1 drift");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -380,8 +366,8 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     // Disk audit present (passes sub-case a) but no AUDIT_MERGED, slug not in
     // Bolt Refs, no WORKTREE_DISCARDED → sub-case (b).
     mkWorktree(proj, "deltatest", true);
-    // The worktree audit is now a per-clone shard the doctor resolves via
-    // worktreeAuditFilePath → <wt>/aidlc/spaces/default/intents/audit/<host>-<clone>.md;
+    // The worktree audit is a per-clone shard the doctor resolves via
+    // worktreeAuditFilePath -> <wt>/aidlc/spaces/default/intents/<record>/audit/<host>-<clone>.md;
     // seed it at exactly that path (a fixed clone-id token the doctor re-reads).
     seedWtAuditShard(proj, "deltatest", "# wt audit\n");
     appendAudit(
@@ -414,7 +400,6 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
       ].join("\n"),
     );
     const { out } = runDoctor(proj);
-    // Both phrases the .sh grepped land on the Check-4 fix string.
     expect(out).toContain("PRACTICES_OVERRIDE write-failure");
     expect(out).toContain("without follow-up PRACTICES_AFFIRMED");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -434,10 +419,9 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
       ].join("\n"),
     );
     const { out } = runDoctor(proj);
-    // The .sh grepped `Orphan audit: 0( |$)`. The conflict reason is skipped
-    // entirely (continue before the reconciled tally), so the only override row
-    // does not count as observed/reconciled — render is "0 observed".
-    // STRONGER: assert the audit check is a 0-row AND no drift fired.
+    // The conflict reason is skipped for drift detection, but the override row
+    // remains in the reconciled tally, so the render is "0 (1 reconciled)".
+    // Assert the audit check is a 0-row AND no drift fired.
     const line = out.split("\n").find((l) => l.includes("Orphan audit:")) ?? "";
     expect(line).toMatch(/Orphan audit: 0(\s|$)/);
     expect(out).not.toContain("Orphan audit: 1 drift");
@@ -583,8 +567,8 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
       ].join("\n"),
     );
     const { out } = runDoctor(proj);
-    // STRONGER than the .sh's two independent greps: both segments render on the
-    // SAME Check-1 worktree line ("0 (1 active fork, 1 preserved-by-abort ...)").
+    // Both segments render on the SAME Check-1 worktree line ("0 (1 active fork,
+    // 1 preserved-by-abort ...)").
     const line = out.split("\n").find((l) => l.includes("preserved-by-abort")) ?? "";
     expect(line).toContain("preserved-by-abort");
     expect(line).toContain("active fork");
@@ -603,7 +587,6 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
       ].join("\n"),
     );
     const { out } = runDoctor(proj);
-    // Both phrases the .sh grepped land on the Check-4 advisory label.
     expect(out).toContain("unknown Reason");
     expect(out).toContain("track for follow-up");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);

@@ -11,7 +11,7 @@
 // today: if the regex marker class and CHECKBOX_MAP drift apart, a state
 // silently stops parsing and a stage's progress is mis-counted with no error.
 //
-// TEST DESIGN (matches the house note in tests/unit/t69-worktree-path.sh):
+// TEST DESIGN (house style):
 // assert OBSERVABLE CONTRACTS, never implementation parity. We do NOT
 // re-implement the regex — a test that reconstructs the parser only catches
 // deletion. Instead we DRIVE generated lines from the real CHECKBOX_MAP, then
@@ -28,8 +28,8 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 // The em-dash separator the regex requires: U+2014 (bytes e2 80 94),
-// confirmed against aidlc-lib.ts:451. Spelled out so a literal swap to a
-// hyphen-minus in the source would surface here.
+// confirmed against parseCheckboxes in aidlc-lib.ts. Spelled out so a literal
+// swap to a hyphen-minus in the source would surface here.
 const EMDASH = "—";
 expect(EMDASH).toBe("—");
 
@@ -91,7 +91,6 @@ function randomSuffix(rng: () => number): string {
 }
 
 function lineFor(state: CheckboxState, slug: string, suffix: string): string {
-  // Exactly the shape the regex accepts: "- " + "[c]" + " " + slug + " — " + suffix
   return `- ${CHECKBOX_MAP[state]} ${slug} ${EMDASH} ${suffix}`;
 }
 
@@ -112,7 +111,7 @@ describe("parseCheckboxes — regex/CHECKBOX_MAP coupling guard", () => {
   });
 
   test("the six known states map to their documented markers", () => {
-    // Pins the literal table at lib.ts:50-57. Catches a marker swap that the
+    // Pins the literal CHECKBOX_MAP table. Catches a marker swap that the
     // coupling guard alone would miss (a swap that stays inside the class).
     expect(CHECKBOX_MAP).toMatchObject({
       pending: "[ ]",
@@ -159,14 +158,11 @@ describe("parseCheckboxes — property-based bulk recovery", () => {
     const content = lines.join("\n");
     const parsed = parseCheckboxes(content);
 
-    // Every generated checkbox line must come back, in order, intact.
     expect(parsed).toHaveLength(N);
     expect(parsed).toEqual(expected);
   });
 
   test("suffix surrounding whitespace is trimmed (contract: match[3].trim())", () => {
-    // The parser trims the captured suffix. Feed padded suffixes and assert
-    // the recovered value is trimmed. This pins lib.ts:478's .trim().
     const slug = "padded-stage";
     const content =
       `- ${CHECKBOX_MAP.completed} ${slug} ${EMDASH}    spaced reason   \n` +
@@ -200,24 +196,21 @@ describe("parseCheckboxes — property-based bulk recovery", () => {
 
 describe("parseCheckboxes — garbage and degraded lines are IGNORED", () => {
   test("non-checkbox and malformed lines are skipped, valid ones still recovered", () => {
-    // Each entry pairs a line with whether parseCheckboxes should emit a row.
-    // Build a document interleaving valid lines with every flavour of junk we
-    // can think of; assert ONLY the valid lines come back, in order.
     const NOISE: string[] = [
-      "", // blank line
-      "## A markdown heading", // heading
-      "Just a sentence with — an em-dash but no checkbox.", // prose w/ em-dash
-      "- not a checkbox at all", // dash bullet, no brackets
+      "",
+      "## A markdown heading",
+      "Just a sentence with — an em-dash but no checkbox.",
+      "- not a checkbox at all",
       "- [x] missing-emdash-separator EXECUTE", // no em-dash → not matched
       `- [z] bad-marker ${EMDASH} EXECUTE`, // marker outside class
       `- [] empty-bracket ${EMDASH} EXECUTE`, // empty marker (needs 1 char)
-      `- [xx] double-marker ${EMDASH} EXECUTE`, // two chars in bracket
+      `- [xx] double-marker ${EMDASH} EXECUTE`,
       `  - [x] indented-stage ${EMDASH} EXECUTE`, // leading space → ^ fails
-      `- [x]nospace-after-bracket ${EMDASH} EXECUTE`, // missing space after ]
+      `- [x]nospace-after-bracket ${EMDASH} EXECUTE`,
       `- [x] ${EMDASH} no-slug`, // slug is \S+ → empty slug fails
-      `* [x] wrong-bullet ${EMDASH} EXECUTE`, // asterisk bullet, not "- "
+      `* [x] wrong-bullet ${EMDASH} EXECUTE`,
       `-[x] no-space-after-dash ${EMDASH} EXECUTE`, // "- " literal missing
-      `random [x] mid-line-marker ${EMDASH} EXECUTE`, // not at line start
+      `random [x] mid-line-marker ${EMDASH} EXECUTE`,
     ];
 
     const valids: Array<{ slug: string; state: CheckboxState; suffix: string }> =
@@ -231,7 +224,6 @@ describe("parseCheckboxes — garbage and degraded lines are IGNORED", () => {
         { slug: "third-good", state: "in-progress", suffix: "in flight" },
       ];
 
-    // Interleave: noise, valid, noise, valid, noise, valid, noise...
     const doc: string[] = [];
     let vi = 0;
     for (let i = 0; i < NOISE.length; i++) {
@@ -241,7 +233,6 @@ describe("parseCheckboxes — garbage and degraded lines are IGNORED", () => {
         doc.push(lineFor(v.state, v.slug, v.suffix));
       }
     }
-    // Push any remaining valids at the end so all three are present.
     while (vi < valids.length) {
       const v = valids[vi++];
       doc.push(lineFor(v.state, v.slug, v.suffix));
@@ -282,7 +273,6 @@ describe("parseCheckboxes — garbage and degraded lines are IGNORED", () => {
     expect(parsed).toHaveLength(1);
     expect(parsed[0].slug).toBe("alpha");
     expect(parsed[0].state).toBe("completed");
-    // The whole following line is absorbed as alpha's suffix.
     expect(parsed[0].suffix).toBe(
       `- ${CHECKBOX_MAP.pending} beta ${EMDASH} EXECUTE`
     );

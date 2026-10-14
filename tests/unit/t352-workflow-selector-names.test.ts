@@ -4,7 +4,7 @@
 // t352 - an explicit --space or --intent is one name. It becomes a path
 // segment, so a "../" could otherwise reach a record outside the project. The
 // shared resolver refuses a path for every command before anything is read or
-// written; every single name still resolves as before.
+// written; every single name still resolves.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -50,7 +50,7 @@ describe("t352 (1) the resolver takes one name per selector", () => {
     if (process.platform !== "win32") {
       expect(resolveWorkflowSelection(proj, { intent: "back\\slash" }).intent).toBe("back\\slash");
     }
-    // Any single name still resolves as before, however it is spelled, and an
+    // Any single name still resolves, however it is spelled, and an
     // empty intent is still the legacy flat record.
     expect(resolveWorkflowSelection(proj, { space: "teamB" }).space).toBe("teamB");
     expect(resolveWorkflowSelection(proj, { intent: "" }).intent).toBe("");
@@ -101,7 +101,6 @@ describe("t352 (2) no command reads or writes through a path selector", () => {
       expect(res.status, `${tool} ${args.join(" ")}\n${res.out}`).not.toBe(0);
       expect(res.out, args.join(" ")).toMatch(/is not an? (intent|space) name/);
     }
-    // Nothing was saved in the project, and the outside record's audit is untouched.
     expect(existsSync(join(proj, "aidlc", "scopes", "quick-fix.md"))).toBe(false);
     expect(readdirSync(join(proj, ".claude", "scopes"))).not.toContain("aidlc-quick-fix.md");
     expect(auditText(outsideAudit)).toBe(auditBefore);

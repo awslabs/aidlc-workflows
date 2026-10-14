@@ -260,7 +260,6 @@ describe("t207 unit-kind schema/parse/compile/sensor", () => {
     const emitted = emitStageFrontmatter(parsed);
     const reparsed = parseStageFrontmatter(emitted);
     expect(reparsed.produces_kinds).toEqual(parsed.produces_kinds);
-    // The map lands right after produces: in the emitted frontmatter.
     expect(emitted).toContain("produces_kinds:\n  alpha-doc: [service, ui]\n  beta-doc: [spec]");
   });
 

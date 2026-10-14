@@ -8,22 +8,22 @@
 // the core hook bodies, each run as a bun subprocess fed the ClaudeCodeHookInput
 // JSON shape the core hooks parse (live-verified on opencode 1.17.18):
 //
-//   opencode moment                      → core hook (Claude event it mirrors)
-//   ------------------------------------------------------------------------
-//   chat.message (first per session)     → aidlc-session-start.ts  (SessionStart)
-//   chat.message (every human turn)      → aidlc-record-human-turn.ts  (UserPromptSubmit)
-//   tool.execute.before task             → aidlc-deliver-stage-rules.ts rewrite + plan-approval guard (PreToolUse)
-//   tool.execute.before other tools      → entrypoint boundary + aidlc-reviewer-scope.ts (PreToolUse)
-//   tool.execute.after write|edit|patch  → aidlc-write-audit-log.ts + aidlc-run-sensors.ts (PostToolUse Write|Edit)
-//   tool.execute.after bash              → aidlc-rebuild-stage-graph.ts (PostToolUse Bash)
-//   tool.execute.after todowrite         → aidlc-sync-workflow-state.ts (PostToolUse TaskUpdate)
-//   tool.execute.after task              → aidlc-log-subagent.ts    (SubagentStop)
-//   event session.idle                   → aidlc-continue-workflow.ts            (Stop)
-//   experimental.session.compacting      → aidlc-validate-state.ts  (PreCompact)
+//   opencode moment                           -> core hook (Claude event it mirrors)
+//   ----------------------------------------------------------------------------
+//   chat.message (until a workflow is active) -> aidlc-session-start.ts  (SessionStart)
+//   chat.message (every human turn)           -> aidlc-record-human-turn.ts  (UserPromptSubmit)
+//   tool.execute.before task                  -> aidlc-deliver-stage-rules.ts rewrite + plan-approval guard (PreToolUse)
+//   tool.execute.before other tools           -> entrypoint boundary + state-transition, review-freeze, plan-approval and reviewer-scope guards (PreToolUse)
+//   tool.execute.after write|edit|apply_patch -> aidlc-write-audit-log.ts + aidlc-run-sensors.ts (PostToolUse Write|Edit)
+//   tool.execute.after bash                   -> aidlc-rebuild-stage-graph.ts (PostToolUse Bash)
+//   tool.execute.after todowrite              -> aidlc-sync-workflow-state.ts (PostToolUse TaskUpdate)
+//   tool.execute.after task                   -> aidlc-log-subagent.ts    (SubagentStop)
+//   event session.idle                        -> aidlc-continue-workflow.ts            (Stop)
+//   experimental.session.compacting           -> aidlc-validate-state.ts  (PreCompact)
 //
 // Stop enforcement: session.idle is a REACTIVE event (opencode has no blocking
 // continue-workflow channel), so when the core continue-workflow hook answers {"decision":"block",
-// "reason":…} this plugin re-engages the loop by injecting the reason as a new
+// "reason":...} this plugin re-engages the loop by injecting the reason as a new
 // session prompt via the SDK client. The injected prompt carries the NUDGE
 // sentinel so the chat.message arm never mints HUMAN presence for it (a
 // synthetic nudge is not a human turn), and loop-guarding stays with the core
@@ -38,13 +38,13 @@
 // command's template, and the chat.message that follows records it as their
 // turn.
 //
-// Known degradations vs Claude Code (documented in AGENTS.md):
+// Known degradations vs Claude Code (documented in .aidlc/onboarding.md):
 //   - session-start's additionalContext has no injection channel; the hook
 //     still runs for its side effects (session→intent stamp, state checks).
 //   - There is no session-end moment; SESSION_ENDED is not emitted.
 //   - Presence minting is skipped for subagent (child) sessions. A parent
-//     lookup failure fails closed for that event and is retried later; an
-//     uncertain child can never record-human-turn a HUMAN_TURN into the shared ledger.
+//     lookup exception fails closed for that event and is retried later; a
+//     response without a session record is treated as a main session.
 //   - tool.execute.before carries no active-agent field. Reviewer identity is
 //     correlated from chat.message.agent by session; when that field is absent,
 //     a child session is treated as scoped registration while a dispatch record
@@ -1040,7 +1040,7 @@ export default async ({
       idleInFlight.add(sessionID);
       // opencode provides no stop_hook_active flag and no transcript, so the
       // core hook's run-mode-aware no-progress ceiling is the loop guard here
-      // (same degradation profile as Kiro). The absent transcript no longer makes
+      // (same degradation profile as Kiro). The absent transcript does not make
       // the conversational carve-out inert: the core hook falls back to the
       // `.aidlc-engine/human-turn` / `.aidlc-engine/engine-touch` mtime comparison, and the
       // chat.message arm's aidlc-record-human-turn.ts forward writes the former.

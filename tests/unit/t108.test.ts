@@ -4,36 +4,29 @@
 // Mechanism: none (pure string transform, zero I/O, zero LLM, zero tokens).
 // Technique: metamorphic — the no-clobber-neighbours invariant.
 //
-// Source (dist/claude/.claude/tools/aidlc-lib.ts):
-//   :484  setCheckbox(content, slug, newState): string
-//   :489    marker = CHECKBOX_MAP[newState]        // a BRACKETED literal, e.g. "[x]"
-//   :491    regex  = /^(- )\[[ xSR?-]\]( <slug> —)/  with flag "m" ONLY (no "g")
-//   :495    return content.replace(regex, `$1${marker}$2`)
-//
-// Verified facts the assertions below depend on (read at the cited lines):
-//   - CHECKBOX_MAP (:50-57) maps states to bracketed markers:
+// Verified facts the assertions below depend on:
+//   - CHECKBOX_MAP maps states to bracketed markers:
 //       pending "[ ]", in-progress "[-]", awaiting-approval "[?]",
 //       revising "[R]", completed "[x]", skipped "[S]".
 //     setCheckbox swaps the WHOLE bracket group; group 1 is "- " and group 2
 //     is " <slug> —" (space + slug + space + U+2014 em-dash).
-//   - The divider is an EM-DASH U+2014 (bytes e2 80 94), confirmed via od on
-//     line 492. A line that uses a hyphen-minus instead will NOT match.
+//   - The divider is an EM-DASH U+2014 (bytes e2 80 94). A line that uses a
+//     hyphen-minus instead will NOT match.
 //   - Flag is "m" but NOT "g": content.replace fires on the FIRST match only.
 //     Slugs are normally unique per checkbox list, so this flips exactly the
 //     target line; a later identical slug (pathological) would be untouched.
-//   - escapeRegex (:1540) escapes regex metachars in the slug, so a slug like
+//   - escapeRegex escapes regex metachars in the slug, so a slug like
 //     "v0.4.0" is matched literally (the "." is not a wildcard).
 //   - ABSENT slug => regex has no match => content.replace returns the SAME
-//     string reference, unchanged. NOT an insert, NOT a throw. (Verified by
-//     reading :491-495: there is no else-branch, no push, no error path.)
+//     string, unchanged. NOT an insert, NOT a throw.
 //
-// Test-design note (house style, per tests/unit/t69-worktree-path.sh and
-// t106.none.test.ts): assert the OBSERVABLE CONTRACT, never re-implement the
-// regex. The load-bearing assertion is metamorphic: build a multi-checkbox
-// block, flip exactly one slug, and prove every OTHER line is byte-identical
-// to the input. A test that merely re-runs replace() would only catch
-// deletion; the line-by-line neighbour diff catches a regex that over-matches
-// (drops the slug anchor, becomes global, or swallows adjacent lines).
+// Test-design note (house style, per tests/unit/t106.test.ts): assert the
+// OBSERVABLE CONTRACT, never re-implement the regex. The load-bearing
+// assertion is metamorphic: build a multi-checkbox block, flip exactly one
+// slug, and prove every OTHER line is byte-identical to the input. A test that
+// merely re-runs replace() would only catch deletion; the line-by-line
+// neighbour diff catches a regex that over-matches (drops the slug anchor,
+// becomes global, or swallows adjacent lines).
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -43,8 +36,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 // U+2014 EM DASH — the divider setCheckbox's regex requires between slug and
-// suffix. Spelled out as an escape so the literal can't be silently mangled
-// by an editor that "helpfully" normalises dashes.
+// suffix.
 const EM = "—";
 
 // A realistic multi-checkbox block. Mixed starting states across the six
@@ -71,8 +63,6 @@ const ALL_SLUGS = [
   "rework",
 ] as const;
 
-// Split into lines and return only the lines whose slug is NOT `target`.
-// Used to assert neighbours are untouched.
 function neighbourLines(content: string, target: string): string[] {
   return content.split("\n").filter((line) => {
     // A checkbox line for slug S looks like: "- [m] S — ...". Extract the slug
@@ -157,7 +147,7 @@ describe("setCheckbox() — metamorphic no-clobber-neighbours invariant", () => 
 
     const beforeLines = block.split("\n");
     const afterLines = out.split("\n");
-    expect(afterLines.length).toBe(beforeLines.length); // no inserted/removed lines
+    expect(afterLines.length).toBe(beforeLines.length);
 
     let changed = 0;
     let changedIndex = -1;
@@ -168,7 +158,6 @@ describe("setCheckbox() — metamorphic no-clobber-neighbours invariant", () => 
       }
     }
     expect(changed).toBe(1);
-    // And the one changed line is precisely the "review" line, now completed.
     expect(afterLines[changedIndex]).toBe(`- [x] review ${EM} awaiting sign-off`);
   });
 
@@ -183,7 +172,6 @@ describe("setCheckbox() — metamorphic no-clobber-neighbours invariant", () => 
     ].join("\n");
     const out = setCheckbox(block, "build", "completed");
     expect(lineForSlug(out, "build")).toBe(`- [x] build ${EM} EXECUTE`);
-    // The neighbour, whose slug merely shares the "build" prefix, is untouched.
     expect(out.split("\n")[1]).toBe(`- [ ] build-extra ${EM} EXECUTE`);
   });
 
@@ -198,7 +186,6 @@ describe("setCheckbox() — metamorphic no-clobber-neighbours invariant", () => 
     ].join("\n");
     const out = setCheckbox(block, "v0.4.0", "completed");
     expect(out.split("\n")[0]).toBe(`- [x] v0.4.0 ${EM} EXECUTE`);
-    // The wildcard-collision candidate must remain pending and byte-identical.
     expect(out.split("\n")[1]).toBe(`- [ ] v0X4X0 ${EM} EXECUTE`);
   });
 });
@@ -206,7 +193,7 @@ describe("setCheckbox() — metamorphic no-clobber-neighbours invariant", () => 
 describe("setCheckbox() — absent slug behaviour (verified real contract)", () => {
   test("returns the content UNCHANGED when the slug is absent (no insert, no throw)", () => {
     // Source has no match -> no replacement -> original string returned. This
-    // is the real behaviour at :491-495: there is no insert branch and no
+    // is the real behaviour of setCheckbox: there is no insert branch and no
     // error path. Pin it so a future "helpful" insert-on-missing change is
     // caught as a behavioural break.
     const block = buildBlock();

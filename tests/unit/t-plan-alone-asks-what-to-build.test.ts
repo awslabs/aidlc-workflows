@@ -64,7 +64,6 @@ function records(proj: string): string[] {
   return existsSync(dir) ? readdirSync(dir).filter((name) => /^\d{6}-/.test(name)) : [];
 }
 
-/** The `next` arguments of the command a print names for the person's answer, with their words in it. */
 function answerWith(message: unknown, words: string): string[] {
   const command = /`([^`]* next --scope [^`]*)`/.exec(String(message))?.[1];
   expect(command, String(message)).toBeDefined();
@@ -74,7 +73,6 @@ function answerWith(message: unknown, words: string): string[] {
   return args;
 }
 
-/** Runs the creation a print names and returns the request the work keeps. */
 function requestKept(proj: string, creation: Directive, plan: string): string {
   expect(creation.kind, JSON.stringify(creation).slice(0, 400)).toBe("print");
   const id = new RegExp(`intent create --scope ${plan} --request ([0-9a-f]{8})`).exec(String(creation.message))?.[1];

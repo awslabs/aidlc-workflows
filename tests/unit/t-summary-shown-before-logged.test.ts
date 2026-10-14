@@ -124,7 +124,6 @@ describe("t-summary-shown-before-logged: a summary answered before its question 
       expect(receipts).toHaveLength(1);
       expect(auditBlockField(receipts[0].block, "Person Reply")).toBe("looks correct");
       expect(said(recorded.out)).toBe(`Recorded your "looks correct" for "${SUMMARY}".`);
-      // No second message was needed.
       expect(events(proj, "HUMAN_TURN")).toHaveLength(turns);
     });
 

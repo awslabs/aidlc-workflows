@@ -324,24 +324,14 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
   });
 
   // =========================================================================
-  // §5 — Knowledge loading order has >= 6 numbered steps (.sh 117-122). The
-  // .sh sliced the protocol between "### Knowledge loading order" and the next
-  // "### For inline" heading, then counted lines starting `N.`. Reproduce the
-  // slice + count exactly.
+  // §5: The knowledge an inline step reads comes listed in order on the
+  // directive (inline_context_paths), so the protocol says only to keep it.
   // =========================================================================
-  test("§5: knowledge loading order has >= 6 numbered steps", () => {
-    const lines = PROTOCOL.split("\n");
-    const start = lines.findIndex((l) => l.includes("### Knowledge loading order"));
-    expect(start).toBeGreaterThanOrEqual(0);
-    const endRel = lines
-      .slice(start + 1)
-      .findIndex((l) => l.includes("### For inline"));
-    const end = endRel === -1 ? lines.length : start + 1 + endRel;
-    // The .sh's `grep -c "^[0-9]\."` over the sed slice (inclusive of both
-    // boundary lines). Count numbered-step lines `N.` at line start.
-    const slice = lines.slice(start, end + 1);
-    const steps = slice.filter((l) => /^[0-9]+\./.test(l)).length;
-    expect(steps).toBeGreaterThanOrEqual(6);
+  test("§5: an inline step reads its knowledge in the order the directive lists it", () => {
+    expect(PROTOCOL.replace(/\s+/g, " ")).toContain(
+      "`inline_context_paths` lists the team's knowledge right after the personas and before the shipped methodology: read it in the order listed.",
+    );
+    expect(protocolHas("### Knowledge loading order")).toBe(false);
   });
 
   // =========================================================================

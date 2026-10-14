@@ -90,7 +90,6 @@ function next(args: string[]): Record<string, unknown> {
   return r.directive as Record<string, unknown>;
 }
 
-/** The command a step names, run as the agent runs it, out of the build under test. */
 function runNamed(step: Record<string, unknown>): { status: number; out: string } {
   const named = /Run `bun \.claude\/tools\/(aidlc[a-z-]*\.ts) ([^`]+)`/.exec(String(step.message));
   expect(named, JSON.stringify(step).slice(0, 300)).not.toBeNull();
@@ -109,7 +108,6 @@ const SHAPES: Array<[string, (line: string[]) => string[]]> = [
   ["next with the line", (line) => line],
 ];
 
-/** The person types `line`; the agent follows the step the engine names, which keeps it. */
 function typeSetting(line: string, first: (line: string[]) => string[] = () => []): string {
   reply(line);
   const step = next(first(line.replace(/^\/aidlc\s+/, "").split(" ")));
@@ -118,7 +116,6 @@ function typeSetting(line: string, first: (line: string[]) => string[] = () => [
   return kept.out;
 }
 
-/** The person picks `record` on the pick question: its select command, then the switch it names. */
 function pick(record: string): string {
   const asked = next([]);
   expect(asked.ask_type, JSON.stringify(asked).slice(0, 300)).toBe("intent-pick");
@@ -140,7 +137,6 @@ describe("t-kept-setting-follows-the-pick: the work the chat picks gets what was
     const said = pick(picked);
     expect(times(said, REVIEW_FREEZE_OFF), said).toBe(1);
     expect(getField(state(picked), "Guards Off") ?? "").toContain("review-freeze");
-    // Spent: new work the chat starts afterwards does not get it too.
     const made = utility(["intent-create", "--scope", "poc"], chat);
     expect(made.status, made.out).toBe(0);
     const created = readFileSync(join(intentsDir(), "active-intent"), "utf-8").trim();
@@ -193,9 +189,7 @@ describe("t-kept-setting-follows-the-pick: the work the chat picks gets what was
   test("a check typed off and then strict: the later word wins, and the picked work keeps the check on", () => {
     const [, picked] = workNoneSelected();
     typeSetting("/aidlc --guard.review-freeze off");
-    // The later line in the same sitting, as the agent passes it.
     typeSetting("/aidlc --guard-policy strict", (line) => line);
-    // The kept record no longer holds the check off: strict took it back.
     const kept = JSON.parse(readFileSync(planApprovalRuntimeFile(proj, `ceremonies-at-creation-${CHAT}.json`), "utf-8")) as {
       settings: Record<string, string>;
     };
@@ -207,7 +201,7 @@ describe("t-kept-setting-follows-the-pick: the work the chat picks gets what was
 
   // A later word takes back an earlier one in the kept record as it would on
   // selected work: one name for one setting, and a whole-policy word clears
-  // the checks it would clear there (AIDA, #2381 first review, F2).
+  // the checks it would clear there.
   test("plan approval off, then on again by its other name: the later word wins on the picked work", () => {
     const [, picked] = workNoneSelected();
     typeSetting("/aidlc --plan-approval off");
@@ -271,7 +265,6 @@ describe("t-kept-setting-follows-the-pick: what is not carried to the picked wor
       ? next(["--propose", "bugfix", "--request", request!])
       : next(["--request", request!, "--propose", "bugfix"]);
     expect(offer.ask_type, JSON.stringify(offer).slice(0, 300)).toBe("scope-confirm");
-    // Its line says so: it is for the work they are starting, not any they pick.
     const kept = typeSetting("/aidlc --guard.review-freeze off", (line) => line);
     expect(kept).toContain("for the piece of work you start now (set by you)");
     const said = pick(picked);

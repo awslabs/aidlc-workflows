@@ -1,13 +1,15 @@
 // harness/codex/manifest.ts — the Codex CLI distribution row.
 //
-// Projects core/ into dist/codex/.codex/ (rules → aidlc-rules, D-10) and defers
-// native shell surfaces to emit.ts (config.toml, hooks.json, trust-seed,
-// 14 agent TOMLs, the .agents/skills/ tree). Onboarding uses the shared renderer.
+// Projects core/ into dist/codex/.codex/ (rules prose -> aidlc-rules, D-10)
+// and defers native shell surfaces to emit.ts (config.toml, hooks.json,
+// trust-seed, 14 agent TOMLs, the .agents/skills/ tree). Onboarding uses the
+// shared renderer.
 //
 // Codex specifics vs Claude/Kiro:
 //   - token → .codex
-//   - rules/ → aidlc-rules/ (Codex's native .codex/rules/ is Starlark
-//     permission rules; the AIDLC markdown layers live in aidlc-rules/)
+//   - rules/ prose -> aidlc-rules/ (Codex's native .codex/rules/ is Starlark
+//     permission rules; the AIDLC markdown layers live in
+//     aidlc/spaces/<space>/memory/)
 //   - skills are NOT shipped in .codex/skills/ — Codex discovers skills at
 //     <project>/.agents/skills/, so skipRunnerGen is set and emit() composes
 //     the whole skill set (orchestrator + runners + session skills) there.
@@ -67,6 +69,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/active-memory/ (the
           // engine's copy of the active space's method).
           "sha256:51cb399f2257236cbf63e18cb2e317d75913f1771b5402707a2508cf5f81fa57",
+          // The variant shipped before the block ignored aidlc/.aidlc-request-text/
+          // (a request the engine has not read yet).
+          "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
         ],
       },
     },
@@ -90,7 +95,7 @@ const manifest: HarnessManifest = {
           "sha256:9be9c5cc4a25e5b4c71b3ae35188e1a543504f19cbd5d0a20892777b0904800e",
           "sha256:bc41aca84970977673af3c0b8212a1f7a4d995a4b47fc7894b1c5b342e4a3601",
           "sha256:b3d4d0d178a01591629dbf79083b00e7a3ad42f59f79cbfc88d05b7615704a70",
-          // The pre-v2-sync shipped variant (2.6.123 merge changed the bytes).
+          // The pre-v2-sync shipped variant.
           "sha256:d9be36630b49183203ae4d97946c243e3b8840202ee6f080c738e0f01343e33a",
           // Keep provider-era and pre-engine-directory root files recognizable.
           "sha256:cc3212fc7335018158882cbaa141ac6fd02cee53bbceb00bd185f416fa06ff8f",
@@ -107,9 +112,9 @@ const manifest: HarnessManifest = {
     },
   ],
 
-  // Core projection: rules→aidlc-rules, NO session skills (emitted to
-  // .agents/skills/ by emit). Persona .md files ARE core (the conductor reads
-  // them as prose; Codex agent discovery reads only the emitted .toml).
+  // Core projection: NO session skills (emitted to .agents/skills/ by emit).
+  // Persona .md files ARE core (the conductor reads them as prose; Codex agent
+  // discovery reads only the emitted .toml).
   coreDirs: [
     { src: "tools", dst: "tools" },
     { src: "aidlc-common", dst: "aidlc-common" },
@@ -125,13 +130,12 @@ const manifest: HarnessManifest = {
   // skill is authored too but is EMITTED into .agents/skills/aidlc/ by emit().
   harnessFiles: [
     { src: "hooks/aidlc-codex-adapter.ts", dst: "hooks/aidlc-codex-adapter.ts" },
-    // Project-root .gitignore (beside .codex/, not inside it) — re-rooted under
-    // aidlc/spaces/* for the workspace layout (SEED): cursors + machine-local
-    // runtime ignored, the shared work (memory/codekb/registry/state/audit
-    // shards/artifacts) committed. Net-new for Codex — it shipped none before.
-    // Authored as dot-gitignore so it does not act as a live ignore inside
-    // harness/codex/. projectRoot routes it to dist/codex/.gitignore + the
-    // --check determinism guard.
+    // Project-root .gitignore (beside .codex/, not inside it) for the aidlc/
+    // workspace layout: cursors + machine-local runtime ignored, the shared work
+    // (memory/codekb/registry/state/audit shards/artifacts) committed. Authored as
+    // dot-gitignore so it does not act as a live ignore inside harness/codex/.
+    // projectRoot routes it to dist/codex/.gitignore + the --check determinism
+    // guard.
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 

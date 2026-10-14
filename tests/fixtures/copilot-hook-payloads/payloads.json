@@ -97,5 +97,52 @@
       "result_type": "success",
       "text_result_for_llm": "POSTTOOL-CHECK\n<shellId: 0 completed with exit code 0>"
     }
+  },
+  "preToolUse_task": {
+    "hook_event_name": "PreToolUse",
+    "session_id": "89b024ae-6986-420c-bc79-13bcf3b83bdc",
+    "timestamp": "2026-10-14T06:50:52.381Z",
+    "cwd": "/workspace/copilot-fixture/proj",
+    "tool_name": "Agent",
+    "tool_input": {
+      "description": "Simple prompt response",
+      "prompt": "Reply with the single word ok.",
+      "agent_type": "general-purpose",
+      "name": "brief-response",
+      "mode": "sync"
+    }
+  },
+  "subagentStart_task": {
+    "sessionId": "89b024ae-6986-420c-bc79-13bcf3b83bdc",
+    "timestamp": 1791960652831,
+    "cwd": "/workspace/copilot-fixture/proj",
+    "transcriptPath": "/workspace/copilot-fixture/session-state/89b024ae-6986-420c-bc79-13bcf3b83bdc/events.jsonl",
+    "agentName": "general-purpose"
+  },
+  "userPromptSubmit_subagentBrief": {
+    "hook_event_name": "UserPromptSubmit",
+    "session_id": "4f6df0dd-27ac-415a-8571-ee2f577aa047",
+    "timestamp": "2026-10-14T06:50:53.082Z",
+    "cwd": "/workspace/copilot-fixture/proj",
+    "prompt": "Reply with the single word ok."
+  },
+  "subagentStop_task": {
+    "hook_event_name": "SubagentStop",
+    "session_id": "89b024ae-6986-420c-bc79-13bcf3b83bdc",
+    "timestamp": "2026-10-14T06:50:54.460Z",
+    "cwd": "/workspace/copilot-fixture/proj",
+    "transcript_path": "/workspace/copilot-fixture/session-state/89b024ae-6986-420c-bc79-13bcf3b83bdc/events.jsonl",
+    "agent_id": "4f6df0dd-27ac-415a-8571-ee2f577aa047",
+    "agent_type": "general-purpose",
+    "agent_name": "general-purpose",
+    "last_assistant_message": "ok",
+    "stop_reason": "end_turn"
+  },
+  "userPromptSubmit_subagentBrief_1_0_74": {
+    "hook_event_name": "UserPromptSubmit",
+    "session_id": "call_Epd6JNkoGrvWNIMPnbxi9afV",
+    "timestamp": "2026-10-14T06:54:13.105Z",
+    "cwd": "/workspace/copilot-fixture/proj",
+    "prompt": "Reply with the single word ok."
   }
 }

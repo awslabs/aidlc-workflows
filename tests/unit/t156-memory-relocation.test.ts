@@ -1,41 +1,38 @@
 // covers: function:loadRules
 //
-// t156 — the method ("memory") relocation + per-harness native include (P5).
+// t156 - the method ("memory") + per-harness native include.
 //
 // WHAT. The AIDLC method (the layered practice files org/team/project + the
-// per-phase phases/<phase>.md) relocated OUT of the per-harness rule dir
-// (.claude/rules / .kiro/steering / .codex/aidlc-rules, all carrying aidlc-*.md
-// names) to ONE hand-editable source of truth at the workspace root —
-// aidlc/spaces/default/memory/ — with neutral filenames. Each harness reads it
-// by its OWN native include (no copy, no drift):
+// per-phase phases/<phase>.md) has ONE hand-editable source of truth at the
+// workspace root - aidlc/spaces/default/memory/ - with neutral filenames. Each
+// harness reads it through its native delivery:
 //   - Claude  → .claude/rules/aidlc.md @-import stub → @../../aidlc/
 //               active-memory/<file>, the engine's git-ignored copy of
 //               the active space's memory (explicit @-lines; Claude @-imports do
 //               NOT glob — verified against code.claude.com/docs memory.md).
 //   - Kiro    → agent JSON resources glob file://aidlc/active-memory/**/*.md
-//   - Codex   → AGENTS.md auto-merge + AIDLC_RULES_DIR seam + orchestrator
-//               @-mention (the static seam is asserted here; the LIVE @-mention
+//   - Codex   -> AGENTS.md auto-merge + the engine's rules delivery (the LIVE
 //               probe lives in the gated e2e tests/e2e/
-//               t-exec-codex-memory-include.serial.test.ts — green 2026-06-24).
+//               t-exec-codex-memory-include.serial.test.ts).
 //
 // Three contracts land here:
-//   (1) RESOLVER reads the renamed source + tolerates empty team/project stubs
+//   (1) RESOLVER reads the source + tolerates empty team/project stubs
 //       (in-process loadRules via the AIDLC_RULES_DIR seam against a fixture
-//       laid out as the relocated tree: org/team/project.md + phases/<p>.md).
-//   (2) 3-WAY native-include resolution in the shipped dist trees: the Claude
-//       @-stub resolves the relocated path (packaging/parity); the Kiro globs
-//       point at the active space; the Codex static seam is wired
-//       (AIDLC_RULES_DIR + AGENTS.md). The Codex LIVE @-mention probe is the
-//       gated e2e t-exec-codex-memory-include.serial.test.ts (no token probe
-//       here — unit tier stays zero-LLM).
+//       laid out as org/team/project.md + phases/<p>.md).
+//   (2) Native-include resolution in the shipped dist trees: the Claude @-stub
+//       resolves the active-memory path (packaging/parity); the Kiro globs point
+//       at the active space; Codex ships no resolver seam, the engine hands each
+//       step its rules, and AGENTS.md ships. The Codex LIVE probe is the gated
+//       e2e t-exec-codex-memory-include.serial.test.ts (no token probe here -
+//       unit tier stays zero-LLM).
 //   (3) THE ONE-COPY INVARIANT: exactly one HAND-EDITABLE rule copy exists
 //       (core/memory/), and no second hand-editable copy lives under a harness
 //       rule dir. The dist copies are GENERATED, not hand-editable, so they are
 //       excluded.
 //
-// Mechanism: none for (1) (in-process pure-function call via the documented
-// env seam); file-inspection over the generated dist trees for (2)/(3). No LLM,
-// no subprocess (the grep in (3) is a git ls over the repo). Zero tokens.
+// Mechanism: none for (1) (in-process function call via the documented env
+// seam); file-inspection over the generated dist trees for (2) and the authored
+// core/ + harness/ trees for (3). No LLM, no subprocess. Zero tokens.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -67,8 +64,6 @@ afterEach(() => {
   for (const d of tempDirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-/** Build a relocated method tree (the new layout) under a temp dir and point
- *  the resolver at it via AIDLC_RULES_DIR. Returns the dir. */
 function seedMemoryTree(files: Record<string, string>): string {
   const dir = mkTemp("mem");
   for (const [rel, body] of Object.entries(files)) {
@@ -82,7 +77,7 @@ function seedMemoryTree(files: Record<string, string>): string {
 }
 
 describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness include (P5)", () => {
-  // === (1) resolver reads the RENAMED + NESTED source ======================
+  // === (1) resolver reads the NEUTRAL + NESTED source ======================
   test("1: loadRules reads neutral org/team/project + nested phases/<p>.md", () => {
     seedMemoryTree({
       "org.md": "# Org\n\n## Way of Working\n\nTrunk-based.\n",
@@ -93,7 +88,6 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
     const rules = loadRules();
     const byScope = rules.map((r) => r.scope).sort();
     expect(byScope).toEqual(["org", "phase", "project", "team"]);
-    // The display paths are harness-neutral and point at the relocated tree.
     expect(rules.map((r) => r.path)).toContain("aidlc/spaces/default/memory/org.md");
     const phase = rules.find((r) => r.scope === "phase");
     expect(phase?.path).toBe("aidlc/spaces/default/memory/phases/construction.md");
@@ -129,8 +123,6 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
     const rules = loadRules();
     expect(rules.map((r) => r.scope).sort()).toEqual(["org", "project", "team"]);
     const team = rules.find((r) => r.scope === "team");
-    // The comment-only heading body parses to empty — a populated org heading
-    // would carry text, this one does not.
     expect(team?.headings.get("Way of Working")?.trim() ?? "").toBe("");
   });
 
@@ -141,16 +133,16 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
     expect(loadRules()).toEqual([]);
   });
 
-  // === (2) 3-WAY native-include resolution in the shipped dist trees ======
+  // === (2) native-include resolution in the shipped dist trees ======
   const MEM = (harness: string) =>
     join(REPO_ROOT, "dist", harness, "aidlc", "spaces", "default", "memory");
 
   test("5: every harness ships the relocated method tree at the workspace root", () => {
     for (const harness of HARNESS_MATRIX) {
       const top = readdirSync(MEM(harness.name)).sort();
-      // org/team/project + phases/ are P5's relocated method; templates/ is the
+      // org/team/project + phases/ are the method; templates/ is the
       // SEED-shipped TPL override floor (empty-but-present via a .gitkeep) — it
-      // is part of the shipped shell, so the method top-level now includes it.
+      // is part of the shipped shell, so the method top-level includes it.
       expect(top, `${harness.name} method top-level`).toEqual([
         "org.md",
         "phases",
@@ -194,7 +186,6 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
       "utf-8",
     );
     expect(claudeMd).toContain("@.claude/rules/aidlc.md");
-    // The old per-harness rule layer no longer ships (only the stub remains).
     const rulesDirFiles = readdirSync(
       join(REPO_ROOT, "dist", "claude", ".claude", "rules"),
     );
@@ -278,7 +269,6 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
     );
     expect(config).not.toContain("AIDLC_RULES_DIR");
     expect(config).not.toContain("[shell_environment_policy]");
-    // .codex/aidlc-rules/ (the old per-harness copy) is gone.
     expect(existsSync(join(REPO_ROOT, "dist", "codex", ".codex", "aidlc-rules"))).toBe(false);
     // The root AGENTS.md (Codex's directory-merge surface) ships.
     expect(existsSync(join(REPO_ROOT, "dist", "codex", "AGENTS.md"))).toBe(true);
@@ -300,8 +290,6 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
           continue;
         }
         const rel = full.slice(REPO_ROOT.length + 1).replaceAll("\\", "/");
-        // A method file (org/team/project.md) or a flat aidlc-phase-*.md / a
-        // phases/<p>.md that is NOT under core/memory/ is a second copy.
         const isMethodTop = METHOD_BASENAMES.has(e.name);
         const isLegacyPhase = /^aidlc-phase-[a-z][a-z0-9-]*\.md$/.test(e.name);
         const isLegacyLayer = /^aidlc-(org|team|project)\.md$/.test(e.name);
@@ -317,7 +305,6 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
     // Positive control: the one source of truth IS present.
     expect(existsSync(join(REPO_ROOT, "core", "memory", "org.md"))).toBe(true);
     expect(existsSync(join(REPO_ROOT, "core", "memory", "phases", "construction.md"))).toBe(true);
-    // And core/rules/ (the old authored location) is gone entirely.
     expect(existsSync(join(REPO_ROOT, "core", "rules"))).toBe(false);
   });
 });

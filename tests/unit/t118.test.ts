@@ -1,14 +1,8 @@
 // covers: subcommand:aidlc-jump:resolve
 //
-// CLI-contract port of tests/unit/t118-engine-differential.sh (TAP plan 38),
-// mechanism = cli. The differential corpus — the WAVE CLOSE GATE for the
-// v0.6.0 Wave 1 engine (aidlc-orchestrate.ts next), extended in Wave 2 milestone 9
-// with the classified-stance anchor + the no-state workflow creation trio. It
-// proves the deterministic engine emits, FOR EACH OF THE 9 SCOPES, the same
-// scope-shaped directive the prose orchestrator (skills/aidlc/SKILL.md)
-// produces today — WITH NO MODEL IN THE LOOP. It NEVER calls the LLM (the .sh
-// deliberately omits run_claude; the prose-orchestrator workflow tests t50-t59
-// drive the model — this corpus is their deterministic mirror).
+// Engine differential corpus for `aidlc-orchestrate next`, mechanism = cli. It
+// drives the engine's explicit-jump path for every scope with no model in the
+// loop and pins each emitted directive against the frozen GOLDEN table below.
 //
 // The covers id is subcommand:aidlc-jump:resolve, not aidlc-orchestrate, BY
 // DESIGN: this corpus exercises the explicit-jump branch of the engine
@@ -21,105 +15,22 @@
 // unit credited.
 //
 // MECHANISM: SPAWN the real engine binary via node:child_process spawnSync
-// (BUN + aidlc-orchestrate.ts), mirroring the .sh's `bun "$TOOL" next ...`.
-// The directive is emitted as JSON to stdout (engine emit()), so we parse the
-// PROCESS-boundary stdout and assert on the parsed directive's fields — same
-// observable the .sh extracted with its python3 json_field helper. An
-// in-process twin would lose the spawn seam the engine relies on to relay the
-// resolve subprocess's verbatim error, the very contract under test.
+// (BUN + aidlc-orchestrate.ts). The directive is emitted as JSON to stdout
+// (engine emit()), so we parse the PROCESS-boundary stdout and assert on the
+// parsed directive's fields. An in-process twin would lose the spawn seam the
+// engine relies on to relay the resolve subprocess's verbatim error, the very
+// contract under test.
 //
-// EQUAL-OR-STRONGER PARITY (every .sh `ok` line maps to an expect() here):
+// Classified-stance anchor: the state-construction-bolt1 fixture is a feature
+// workflow parked at Current Stage=functional-design (the first Construction
+// Bolt's gate, the skeleton gate) with no stance recorded yet. Its gate is
+// "unresolved" (the STRING sentinel, NOT a boolean), beside the
+// per-fingerprint gate:true (diff A) and the init gate:false (the gate-axis
+// anchor): the first Construction Bolt's gate depends on a practices-derived
+// STANCE the engine cannot compute, so it defers to the conductor's classify
+// round-trip and emits the sentinel. The case pins gate, stage, phase and kind.
 //
-//   Diff A — per-scope fingerprint (9 .sh asserts -> 9 test() cases):
-//     .sh built ACTUAL="$KIND|$STG|$PHA|$GATE" and diffed against
-//     EXPECTED="run-stage|$fp|$ph|true" in ONE assert_eq per scope. Here each
-//     scope is one test() that asserts the SAME four fields against the SAME
-//     frozen golden — STRONGER: instead of comparing a pipe-joined string we
-//     assert each parsed field individually (kind/stage/phase/gate), so a drift
-//     in any single field reds with a field-named message, and gate is checked
-//     as the real JSON boolean `true` (not the string "true").
-//
-//   Diff B: per-scope SKIP (14 .sh asserts = 7 scopes x 2 -> 7 test() cases):
-//     The .sh asserted an error naming the scope for a jump to a SKIP stage.
-//     A jump to a stage the plan skips now does what was asked, so each case
-//     asserts the directive kind for the target's position (print for a stage
-//     ahead of the cursor, error naming --single for the current stage) and a
-//     message naming the SKIPPED stage and its scope. enterprise + feature
-//     SKIP nothing (golden "-"), so they carry no diff-B case; their negative
-//     coverage is the gate-axis anchor below, exactly as the .sh notes.
-//
-//   Gate-axis anchor (1 .sh assert -> 1 test() case):
-//     The .sh diffed "$GATE|$STG" against "false|workspace-detection" for the
-//     state-pre-workspace-detection fixture (Current Stage=workspace-detection,
-//     an init stage, in-flight). Here: gate === false (real boolean) AND
-//     stage === "workspace-detection" — the other end of the gate axis from
-//     diff A, proving gate tracks the human-judgement boundary (init stages
-//     auto-proceed) and NOT the conditional-inclusion axis.
-//
-//   Classified-stance anchor (1 .sh assert -> 1 test() case):
-//     The .sh diffed "$GATE|$STG" against "unresolved|functional-design" for
-//     the state-construction-bolt1 fixture (a feature workflow parked at Current
-//     Stage=functional-design — the FIRST Construction Bolt's gate, the skeleton
-//     gate — with no stance recorded yet). The third gate value: gate ===
-//     "unresolved" (the STRING sentinel, NOT a boolean), alongside the
-//     per-fingerprint gate:true (diff A) and the init gate:false (anchor above).
-//     The first Construction Bolt's gate depends on a practices-derived STANCE
-//     the engine cannot compute, so it defers to the conductor's classify
-//     round-trip and emits the sentinel (per the engine design). Here: gate ===
-//     "unresolved" AND stage === "functional-design" AND phase ===
-//     "construction" AND kind === "run-stage". STRONGER than the .sh's two-field
-//     diff: the .sh read only gate + stage; we additionally pin phase and kind,
-//     and assert gate is the sentinel STRING (a regression that emitted a boolean
-//     gate here would slip a two-field-only diff but reds the string equality).
-//
-//   No-state workflow creation trio (4 .sh asserts -> 3 test() cases):
-//     Every diff above seeds state then jumps; these three drive a NO-STATE
-//     invocation (createTestProject makes aidlc-docs/ but NO aidlc-state.md —
-//     same as the .sh's create_test_project), the workflow creation paths the Wave
-//     2 cutover leans on, which sat outside the close gate (Wave-1 audit findings
-//     2 & 3 slipped through here). Post-hardening, an EXPLICITLY NAMED scope on
-//     a fresh workspace CREATES the workflow (a run-then-continue print naming
-//     `init --scope <scope>`) rather than relaying the old circular no-state
-//     error; the trio's cases:
-//       (1) `next bugfix` — bare KNOWN-SCOPE positional, NOT freeform: kind ===
-//           "print" AND message names `intent create --scope bugfix` (the engine
-//           recognises bugfix as the scope, finding 2, and emits the SAME
-//           workflow creation print `next --scope bugfix` emits; pre-finding-2 it
-//           mis-read the literal scope as prose and emitted an `ask` defaulting
-//           to "feature"). P4: the named creation move is `intent-create`, not the
-//           retired `init`. One test() bundles both observables.
-//       (2) `next add dark mode toggle` — genuine freeform (<=5-word) intent,
-//           NOT a scope name: kind === "ask" (the control proving the finding-2
-//           fix narrows ONLY known-scope positionals; real prose still defers to
-//           the human via ask). One ok line -> one test().
-//       (3) bare `next`, no state, no target, no explicitly named scope:
-//           kind === "error" (no position to advance from; creating one is
-//           init's mutating job; env/default scope resolution is not a creation
-//           signal). One ok -> one test().
-//     STRONGER: case (1) additionally pins the run-then-continue shape of the
-//     creation print, and case (3) re-pins the post-hardening guidance wording
-//     verbatim, so a regression to the WRONG cause or the old circular clause
-//     reds.
-//
-//   38 .sh asserts -> 38 .sh `ok` lines -> 9 + 7 + 1 + 1 + 3 = 21 test() cases
-//   here (the 7 diff-B cases + the no-state-bugfix case each bundle 2 ok lines
-//   for one observable group). Total expect() assertions exceed 38.
-//
-// FIXTURE DISCIPLINE (mirrors the .sh's create_test_project + seed_state_file +
-// sed_i Scope-swap + cleanup_test_project per emit):
-//   - emitScopeStage() builds a FRESH temp project (createTestProject, which
-//     toPortablePath-converts on Windows so the project dir the tool resolves
-//     through forward-slash helpers round-trips), seeds it from
-//     state-initialization-done.md, and swaps ONLY the Scope field. The
-//     init-done checkboxes are scope-agnostic for the jump path (resolve
-//     validates SKIP against scope-mapping.json, not the checkbox suffixes), so
-//     one fixture serves all 11 scopes — same single-fixture rationale as the
-//     .sh. All temp dirs cleaned in afterAll.
-//   - resetAidlcEnv() runs first (mirrors the .sh's reset_aidlc_env): scope is
-//     partly resolved from AWS_AIDLC_DEFAULT_SCOPE, so a developer's exported
-//     value must not shadow the seeded fixtures. Each spawn also passes a clean
-//     env with that var deleted so the seeded Scope field is authoritative.
-//   - NOTHING is written under tests/fixtures/**.
+// Nothing is written under tests/fixtures/**.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -147,7 +58,7 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const TOOL = join(
   REPO_ROOT,
   "dist",
@@ -168,8 +79,6 @@ const JUMP_TOOL = join(
 const tempDirs: string[] = [];
 
 beforeAll(() => {
-  // Mirror the .sh's reset_aidlc_env — a stray AWS_AIDLC_DEFAULT_SCOPE export
-  // would shadow the seeded fixture Scope on the precedence ladder.
   resetAidlcEnv();
 });
 
@@ -177,10 +86,9 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-// A clean env for every spawn: drop AWS_AIDLC_DEFAULT_SCOPE so the seeded
-// fixture Scope field (state > flag > env > default) always wins, regardless
-// of the developer's shell. Mirrors the .sh sourcing reset_aidlc_env before
-// the corpus runs.
+// A clean env for every spawn: drop AWS_AIDLC_DEFAULT_SCOPE so a developer's
+// shell cannot reach the no-state cases (resolveScope reads the env only after
+// state, --scope and a positional scope, so seeded state never needed this).
 function cleanEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   delete env.AWS_AIDLC_DEFAULT_SCOPE;
@@ -208,25 +116,19 @@ interface EmitResult {
   proj?: string;
 }
 
-// emit_scope_stage (t118:79-90): fresh project seeded from
-// state-initialization-done.md, swap ONLY the Scope field, then spawn
-// `bun aidlc-orchestrate.ts next --stage <stage> --project-dir <proj>`.
-// Returns the parsed directive (the .sh piped stdout+stderr 2>&1 through
-// json_field; here we JSON.parse the engine's single emitted directive).
 function emitScopeStage(scope: string, stage: string): EmitResult {
   const proj = createOrchestrationTestProject();
   tempDirs.push(proj);
   seedStateFile(proj, join(FIXTURES_DIR, "state-initialization-done.md"));
   const statePath = seededStateFile(proj);
-  // Swap the Scope field (mirrors the .sh sed_i on `- **Scope**: ...`) AND
-  // rebuild the Stage Progress suffixes to the new scope's grid column. The
-  // fixture was authored for the feature scope; since the adaptive-composer
-  // work the jump path honours the state's per-stage suffixes as the live
-  // plan (they override the static grid, matching the router), so a state
-  // whose Scope says bugfix but whose suffixes still carry feature's plan is
-  // internally inconsistent - a shape the real tools (init/scope-change/
-  // recompose, which all rebuild suffixes) never produce. Rebuilding keeps
-  // this diff's intent intact: the target IS off the seeded plan.
+  // Swap the Scope field AND rebuild the Stage Progress suffixes to the new scope's
+  // grid column. The fixture was authored for the feature scope; the jump path
+  // honours the state's per-stage suffixes as the live plan (they override the
+  // static grid, matching the router), so a state whose Scope says bugfix but whose
+  // suffixes still carry feature's plan is internally inconsistent - a shape the
+  // real tools (intent create/scope-change/recompose, which all rebuild suffixes)
+  // never produce. Rebuilding keeps this diff's intent intact: the target IS off
+  // the seeded plan.
   const grid = JSON.parse(
     readFileSync(join(AIDLC_SRC, "tools", "data", "scope-grid.json"), "utf-8"),
   ) as Record<string, { stages: Record<string, string> }>;
@@ -258,9 +160,8 @@ interface FingerprintLoopResult {
   runStageRaw: string;
 }
 
-// emit_scope_fingerprint_runstage (t118.sh:107-133): drive the FULL post-cutover
-// jump-commit loop for one scope's fingerprint. A WITH-STATE jump is a MUTATION
-// the conductor commits, so the loop is THREE steps:
+// Drive the FULL jump-commit loop for one scope's fingerprint. A WITH-STATE jump
+// is a MUTATION the conductor commits, so the loop is THREE steps:
 //   (1) `next --stage <fp>` emits a `print` naming `execute --target <fp>
 //       --direction forward` (Current Stage is pivoted to the last init stage
 //       state-init so every post-init fingerprint resolves forward, never redo);
@@ -273,7 +174,7 @@ function emitScopeFingerprintLoop(scope: string, fp: string): FingerprintLoopRes
   seedStateFile(proj, join(FIXTURES_DIR, "state-initialization-done.md"));
   const statePath = seededStateFile(proj);
   // Swap ONLY the Scope field, and pivot Current Stage to the last init stage so
-  // the fingerprint resolves forward for every scope (mirrors the .sh's two sed_i).
+  // the fingerprint resolves forward for every scope.
   let md = readFileSync(statePath, "utf-8").replace(
     /^- \*\*Scope\*\*: .*$/m,
     `- **Scope**: ${scope}`,
@@ -303,8 +204,8 @@ function emitScopeFingerprintLoop(scope: string, fp: string): FingerprintLoopRes
 }
 
 // Spawn `next` (no --stage) over a directly-seeded fixture — used by the
-// gate-axis anchor (t118:186-193), where the happy path runs the in-flight
-// init stage straight from state.
+// gate-axis anchor, where the happy path runs the in-flight init stage straight
+// from state.
 function emitNext(fixtureFile: string): EmitResult {
   const proj = createOrchestrationTestProject();
   tempDirs.push(proj);
@@ -319,16 +220,10 @@ function emitNext(fixtureFile: string): EmitResult {
   };
 }
 
-// emitNextNoState (t118.sh:289-315): spawn `next [...args]` against a FRESH
-// project that has aidlc-docs/ but NO aidlc-state.md (createTestProject seeds
-// neither) - the no-state workflow creation paths of the trio. Pass zero args for
-// bare `next`, one for a known-scope positional (`next bugfix`), or several for
-// freeform intent (`next add dark mode toggle`). Mirrors the .sh's bare
-// `bun "$TOOL" next <args> --project-dir "$proj"` over an unseeded project.
 function emitNextNoState(...args: string[]): EmitResult {
   const proj = createTestProject();
   tempDirs.push(proj);
-  // P9: createTestProject seeds a default intent record; the no-state creation path
+  // createTestProject seeds a default intent record; the no-state creation path
   // requires a GENUINELY empty workspace (zero intents), else the engine asks to
   // SELECT the existing intent instead of creating. Strip the seeded record.
   removeWorkspaceRecord(proj);
@@ -369,8 +264,7 @@ function questionText(r: EmitResult): string {
 }
 
 // The engine emits exactly one directive as JSON to stdout. Parse it; an
-// unparseable payload yields {} so a field read surfaces as undefined (mirrors
-// the .sh json_field's "<PARSE-ERR>" / "<MISSING>" sentinels reding the diff).
+// unparseable payload yields {} so a field read surfaces as undefined.
 function parseDirective(stdout: string): Directive {
   const trimmed = stdout.trim();
   if (!trimmed) return {};
@@ -382,12 +276,10 @@ function parseDirective(stdout: string): Directive {
 }
 
 // --- The FROZEN golden table (derived once, cross-validated, now static).
-// Mirrors the .sh's GOLDEN_SCOPES / GOLDEN_FINGERPRINT / GOLDEN_PHASE /
-// GOLDEN_SKIP_STAGE parallel arrays (t118:113-135). Each row: scope, the first
-// non-init EXECUTE stage (fingerprint) + its phase, and a representative
-// SKIP-for-scope stage (null when the scope skips nothing — enterprise/feature
-// run every stage). gate is always true for every fingerprint (no scope's first
-// post-init EXECUTE stage is an initialization stage). ---
+// Each row: scope, the first non-init EXECUTE stage (fingerprint) + its phase,
+// and a representative SKIP-for-scope stage (null when the scope skips nothing -
+// enterprise/feature run every stage). gate is always true for every fingerprint
+// (no scope's first post-init EXECUTE stage is an initialization stage). ---
 interface GoldenRow {
   scope: string;
   fingerprint: string;
@@ -410,10 +302,9 @@ const GOLDEN: GoldenRow[] = [
 ];
 
 describe("t118 engine differential corpus — aidlc-orchestrate next (migrated from t118-engine-differential.sh, plan 24)", () => {
-  // --- Diff A: fingerprint stage IS in scope -> print→execute→run-stage (9 cases) ---
-  // At the v0.6.0 engine cutover a WITH-STATE jump became a MUTATION the conductor
-  // commits, so the differential is re-anchored END-TO-END through the post-cutover
-  // loop (emitScopeFingerprintLoop):
+  // --- Diff A: fingerprint stage in scope -> print->execute->run-stage (11 cases) ---
+  // A WITH-STATE jump is a MUTATION the conductor commits, so the differential runs
+  // END-TO-END through the loop (emitScopeFingerprintLoop):
   //   A1: STEP 1 — `next --stage <fp>` emits a `print` naming `execute --target
   //       <fp> --direction forward` (Current Stage pivoted to state-init so the
   //       fingerprint resolves forward for every scope).
@@ -434,15 +325,15 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
         expect(r.runStage.kind).toBe("run-stage");
         expect(r.runStage.stage).toBe(row.fingerprint);
         expect(r.runStage.phase).toBe(row.phase);
-        // STRONGER than the .sh string-diff: assert the real JSON boolean, not
-        // the rendered "true" token. gate is the human-judgement-boundary axis.
+        // Assert the real JSON boolean, not the rendered "true" token. gate is the
+        // human-judgement-boundary axis.
         expect(r.runStage.gate).toBe(true);
       });
     }
   });
 
-  // --- Diff B: a SKIP-for-scope stage -> the jump does what was asked (7 cases) ---
-  // The negative half of the fingerprint. 7 scopes SKIP at least one stage.
+  // --- Diff B: a SKIP-for-scope stage -> the jump does what was asked (9 cases) ---
+  // The negative half of the fingerprint. 9 scopes SKIP at least one stage.
   // resolve marks the skipped target (the engine asks with --allow-skipped) and
   // the engine names the move: a stage AHEAD of the cursor goes back on the plan
   // (recompose --add, with the jump as its reason) and the jump follows; the
@@ -457,7 +348,6 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       test(`scope '${row.scope}' SKIP stage '${skip}' -> named move for a stage the plan skips`, () => {
         const r = emitScopeStage(row.scope, skip);
         const msg = r.directive.message ?? "";
-        // The message names the SKIPPED stage and the scope that skips it.
         expect(msg).toContain(`is not part of this work: its ${row.scope} scope (the set of stages this work runs) leaves it out`);
         if (skip === "intent-capture") {
           expect(r.directive.kind).toBe("print");
@@ -484,58 +374,37 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
   describe("gate-axis anchor — initialization stage -> run-stage gate:false", () => {
     test("initialization stage (workspace-detection) -> run-stage gate:false (bootstrap auto-proceed)", () => {
       const r = emitNext("state-pre-workspace-detection.md");
-      // .sh: assert_eq "$GATE|$STG" "false|workspace-detection"
       expect(r.directive.gate).toBe(false);
       expect(r.directive.stage).toBe("workspace-detection");
-      // STRONGER: pin the directive kind too (the .sh read only gate + stage).
       expect(r.directive.kind).toBe("run-stage");
     });
   });
 
   // --- Classified-stance anchor: the skeleton gate emits gate:"unresolved" (1
-  // case) --- (t118.sh:255-274). The THIRD gate value, alongside the
-  // per-fingerprint gate:true (diff A) and the init gate:false (anchor above).
-  // The FIRST Construction Bolt's gate depends on a practices-derived STANCE the
-  // engine cannot compute, so it emits the sentinel string gate:"unresolved" and
-  // defers to the conductor's classify round-trip (v0.6.0 Wave 2 milestone 9, per
-  // the engine design). state-construction-bolt1 is a feature workflow parked at Current
-  // Stage=functional-design (the first construction EXECUTE stage = the skeleton
-  // gate) with no stance recorded, so bare `next` emits the run-stage for it
-  // carrying gate:"unresolved" — NOT a boolean. The full classify round-trip is
-  // the feature-tier WALK C; this single-directive anchor pins the engine's emit
-  // of the sentinel itself.
+  // case) --- The THIRD gate value, alongside the per-fingerprint gate:true (diff A)
+  // and the init gate:false (anchor above). The FIRST Construction Bolt's gate
+  // depends on a practices-derived STANCE the engine cannot compute, so it emits
+  // the sentinel string gate:"unresolved" and defers to the conductor's classify
+  // round-trip (per the engine design). state-construction-bolt1 is a feature
+  // workflow parked at Current Stage=functional-design (the first construction
+  // EXECUTE stage = the skeleton gate) with no stance recorded, so bare `next`
+  // emits the run-stage for it carrying gate:"unresolved" - NOT a boolean. The
+  // full classify round-trip is WALK C in the integration-tier t118; this
+  // single-directive anchor pins the engine's emit of the sentinel itself.
   describe("classified-stance anchor — skeleton gate -> run-stage gate:\"unresolved\"", () => {
     test("skeleton-gate stage (functional-design, Bolt 1, no stance) -> run-stage gate:\"unresolved\" (classify-round-trip sentinel)", () => {
       const r = emitNext("state-construction-bolt1.md");
-      // .sh: assert_eq "$GATE|$STG" "unresolved|functional-design"
-      // STRONGER: gate is the sentinel STRING, asserted as a strict ===
-      // "unresolved" — a regression emitting a boolean gate (true/false) here
-      // would slip the .sh's pipe-joined diff if it rendered the same token, but
-      // reds this strict string equality.
       expect(r.directive.gate).toBe("unresolved");
       expect(r.directive.stage).toBe("functional-design");
-      // STRONGER than the .sh's two-field diff: pin phase + kind too.
       expect(r.directive.phase).toBe("construction");
       expect(r.directive.kind).toBe("run-stage");
     });
   });
 
-  // --- No-state workflow creation trio (3 cases) --- (t118.sh:276-315). Every diff
-  // above seeds state then jumps; these drive a NO-STATE invocation
-  // (createTestProject makes aidlc-docs/ but NO aidlc-state.md), the
-  // workflow creation paths the Wave 2 cutover leans on. They sat outside the close
-  // gate, which is how the engine's known-scope / no-state defects (Wave-1 audit
-  // findings 2 & 3) slipped through. Each pins the resolved scope / directive
-  // kind the engine emits for a fresh workspace.
+  // --- No-state workflow creation cases --- Every diff above seeds state then
+  // jumps; these drive a NO-STATE invocation. Each pins the resolved scope /
+  // directive kind the engine emits for a fresh workspace.
   describe("no-state workflow creation trio - fresh workspace, no aidlc-state.md", () => {
-    // (1) Bare KNOWN-SCOPE positional: `next bugfix` — the literal scope name is
-    // NOT freeform intent. The engine recognises it as the scope (finding 2) and
-    // emits the SAME workflow creation print `next --scope bugfix` emits: a
-    // run-then-continue directive naming `init --scope bugfix` (an explicitly
-    // named scope on a fresh workspace is a request to START a workflow; the
-    // pre-hardening engine relayed a circular no-state error here that told the
-    // user to do exactly what they had just done). Pre-finding-2 this mis-read
-    // the scope as prose and emitted an `ask` defaulting to "feature".
     test("no-state bare known-scope 'bugfix' -> the plan is kept and the person is asked what it is for (recognised as scope, not freeform) [finding 2]", () => {
       const r = emitNextNoState("bugfix");
       expect(r.directive.kind).toBe("print");
@@ -543,8 +412,8 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       // creation is named, and the answer's command keeps the plan.
       expect(r.directive.message ?? "").not.toContain("intent create");
       expect(r.directive.message ?? "").toContain("next --scope bugfix -- <their words>");
-      // STRONGER: a regression that mis-read bugfix as freeform would emit an
-      // `ask` (the pre-fix bug) — assert it is NOT an ask, pinning finding 2.
+      // A regression that mis-read bugfix as freeform would emit an `ask` - assert it
+      // is NOT an ask.
       expect(r.directive.kind).not.toBe("ask");
     });
 
@@ -604,32 +473,30 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
     });
 
     // (2) Freeform (<=5-word) intent: `next add dark mode toggle` — genuine prose,
-    // NOT a scope name. The engine emits an `ask` (scope confirmation, the
-    // read-only stand-in for the conductor's detect-scope + confirm). The control
-    // proving the finding-2 fix narrows ONLY known-scope positionals.
+    // NOT a scope name. After the agent's plan proposal step, the engine emits an
+    // `ask` (scope confirmation, the read-only stand-in for the conductor's
+    // detect-scope + confirm). The control proving scope recognition narrows ONLY
+    // known-scope positionals.
     test("no-state freeform intent -> ask (scope confirmation; engine never calls AskUserQuestion)", () => {
       // The words reach the agent as the plan proposal step first; its plan
       // returns the plan question (t-plan-proposed-by-the-agent).
       const r = emitNextNoStateThroughProposal("add", "dark", "mode", "toggle");
-      // .sh: assert_eq "$(json_field "$OUT" kind)" "ask"
       expect(r.directive.kind).toBe("ask");
     });
 
     // (3) Bare `next`, no state and NO explicitly named scope (env/default
     // resolution is not a creation signal): the engine cannot read a position to
-    // advance from and creating one is init's (mutating) job, so it emits the
-    // no-state error rather than guessing. The wording names the two explicit
+    // advance from and creating one is intent create's (mutating) job, so it emits
+    // the no-state error rather than guessing. The wording names the two explicit
     // moves that DO start a workflow — it must never be the circular "Start a
-    // workflow with /aidlc <scope>" clause (an explicitly named scope creates
-    // via print now, so telling the user to retype it would be a lie).
+    // workflow with /aidlc <scope>" clause.
     test("no-state bare next -> error directive (no position to advance from)", () => {
       const r = emitNextNoState();
-      // .sh: assert_eq "$(json_field "$OUT" kind)" "error"
       expect(r.directive.kind).toBe("error");
-      // STRONGER: pin the verbatim no-state wording (the .sh read only kind) so a
-      // regression emitting an error of a DIFFERENT cause reds.
+      // Pin the no-state wording so a regression emitting an error of a DIFFERENT
+      // cause reds.
       expect(r.directive.message ?? "").toContain("No workflow state found");
-      // RE-PIN the post-P4 guidance wording exactly: describe-what-to-build or
+      // Pin the guidance wording exactly: describe-what-to-build or
       // describe-what-to-build and name-a-scope both create intents; there is no
       // --init. A regression back to the
       // circular clause (or a re-introduced --init) reds here.
@@ -664,7 +531,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
     // (4b) The description keeps its leading scope word under explicit routing:
     // `--scope feature "feature flags for billing"` describes feature flags:
     // "feature" is prose, not positional-scope syntax, because --scope already
-    // named the route (the pre-fix peel truncated this to "flags for billing").
+    // named the route.
     test("no-state --scope + description opening with a scope word -> description intact", () => {
       const r = emitNextNoState(
         "--scope",

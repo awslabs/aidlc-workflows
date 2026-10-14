@@ -292,6 +292,11 @@ export async function refreshUpdateState(
         message = "update refresh unavailable; pass --release-api-url or set AIDLC_RELEASE_API_URL for this mirror";
       } else if (error.code === "preview-unpublished") {
         message = `update refresh unavailable; no ${PREVIEW_CHANNEL} release is published`;
+      } else if (error.code === "preview-list-too-large") {
+        message =
+          `update refresh unavailable; the ${PREVIEW_CHANNEL} release list is too large to ` +
+          `download. To update now, run \`aidlc update --version <id>\` with a ` +
+          `${PREVIEW_CHANNEL} id from https://github.com/awslabs/aidlc-workflows/releases`;
       }
     }
     return {

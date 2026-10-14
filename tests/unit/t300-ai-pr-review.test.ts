@@ -1577,7 +1577,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(common).toContain("do not report the same");
     expect(common).toContain("supersedes, duplicates, or invalidates");
     // The product model: who owns what, the four tenets in order, and a rubric
-    // tied to what a person meets in a normal run (the old rubric stays gone).
+    // tied to what a person meets in a normal run.
     expect(common).toContain("## What AI-DLC is, and who owns what");
     expect(common).toContain("## What counts as a problem");
     expect(common).toContain(

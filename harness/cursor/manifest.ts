@@ -61,6 +61,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/active-memory/ (the
           // engine's copy of the active space's method).
           "sha256:cf4554ef90011ebc4bc70c7fbc6ca572c513d5c1e7daa328e406d1069f98e635",
+          // The variant shipped before the block ignored aidlc/.aidlc-request-text/
+          // (a request the engine has not read yet).
+          "sha256:ae1878ec98301ceb4510e711cf79f58dfb44cb486744007acd03ae5e61860665",
         ],
       },
     },
@@ -122,8 +125,8 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc-scope/SKILL.md", dst: "skills/aidlc-scope/SKILL.md" },
     // AIDLC method pointers: standing layers always apply; phase guidance is
     // agent-decided. Cursor has no @-import expansion, so each carries a READ
-    // instruction naming the active-space file. /aidlc space re-points every
-    // explicit path in place (aidlc-includes.ts cursor arm).
+    // instruction naming aidlc/active-memory/. /aidlc space refreshes that
+    // copy (aidlc-includes.ts refreshActiveMemory).
     { src: "rules-aidlc.mdc", dst: "rules/aidlc.mdc" },
     { src: "rules-aidlc-phase-ideation.mdc", dst: "rules/aidlc-phase-ideation.mdc" },
     { src: "rules-aidlc-phase-inception.mdc", dst: "rules/aidlc-phase-inception.mdc" },

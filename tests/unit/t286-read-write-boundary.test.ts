@@ -1,10 +1,7 @@
 // covers: function:readRegularFileNoFollowOrThrow function:writeBufferAtomic function:validSpaceFlag function:assertNoSymlinkInChainOrThrow
 //
-// t286 - the shared read/write boundary primitives DocumentKB indexing is built
-// on. All four arrive in this slice: three ported from the unmerged #660 line
-// (which was reviewed only internally and never landed on upstream/v2, so
-// nothing here inherits a "covered" status) and one generalised from a
-// tool-local helper into a throwing library function.
+// t286 - the shared read/write boundary primitives DocumentKB indexing is
+// built on.
 //
 // Mechanism: none for the pure functions; real filesystem for the boundary
 // checks. No spawn, no LLM, no tokens. The fixtures build actual FIFOs, symlink
@@ -257,7 +254,7 @@ describe("t286 validSpaceFlag - a --space value is a path SEGMENT", () => {
   });
 
   test("refuses traversal, absolutes, and separators", () => {
-    // Each of these would escape the workspace if it reached a join() raw.
+    // Traversal, absolute paths, separators, and non-slug shapes are all refused.
     for (const bad of [
       "..",
       "../..",

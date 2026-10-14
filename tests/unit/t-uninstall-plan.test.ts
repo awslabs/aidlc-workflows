@@ -209,6 +209,15 @@ describe("uninstall file ownership plans", () => {
     });
   }
 
+  test("purge plans the Kiro IDE settings-error marker with the machine's other answers; uninstall keeps it", () => {
+    withInstall((fixture) => {
+      const marker = join(fixture.root, "kiro-ide-settings-error-told");
+      put(marker, "told\n");
+      expect(plan(fixture, true).files.some((file) => file.path === marker)).toBe(true);
+      expect(plan(fixture, false).files.some((file) => file.path === marker)).toBe(false);
+    });
+  });
+
   test.skipIf(process.platform === "win32")("plans the known POSIX command symlink explicitly", () => {
     withInstall((fixture) => {
       rmSync(fixture.command);

@@ -59,8 +59,8 @@ const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 
 // nfr-requirements produces[] and their per-kind applicability (verified against
 // the stage frontmatter): performance/scalability/reliability/observability are
-// kind-gated; security-requirements + tech-stack-decisions are unannotated =
-// all kinds.
+// kind-gated; security-requirements + tech-stack-decisions + traceability are
+// unannotated = all kinds.
 const NFR_REQ_ALL = [
   "performance-requirements",
   "security-requirements",
@@ -70,7 +70,7 @@ const NFR_REQ_ALL = [
   "tech-stack-decisions",
   "traceability",
 ];
-// A spec unit keeps only the two unannotated ones.
+// A spec unit keeps only the three unannotated ones.
 const NFR_REQ_SPEC = ["security-requirements", "tech-stack-decisions", "traceability"];
 
 const FD_PRODUCES = ["entities", "rules", "functional-spec", "traceability", "frontend-components"];
@@ -365,8 +365,9 @@ describe("t208 engine unit-kind pruning", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // 2: coverage tracks the PRUNED set. Writing ONLY the spec unit's two
-  // applicable artifacts advances iteration past it (to the untagged unit).
+  // 2: coverage tracks the PRUNED set. Writing ONLY the spec unit's three
+  // applicable artifacts and settling its review advances iteration past it (to
+  // the untagged unit).
   test("2: covering only the pruned set advances iteration off the spec unit", () => {
     const proj = seedProject("nfr-requirements");
     seedBoltDag(proj, [{ name: "api", kind: "spec" }, { name: "svc" }]);
@@ -374,12 +375,11 @@ describe("t208 engine unit-kind pruning", () => {
     logReviewReady(proj, "api", 1, "nfr-requirements");
     completeWave(proj, "api", "nfr-requirements");
     const d = runNext(proj);
-    // api is covered by its two-artifact pruned set; the engine moves to svc.
     expect(d.unit).toBe("svc");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 3: an untagged unit in the SAME dag still owes the FULL matrix (per-unit
-  // conservatism). svc (no kind) must still produce all six paths.
+  // conservatism). svc (no kind) must still produce all seven paths.
   test("3: an untagged unit still requires the full matrix", () => {
     const proj = seedProject("nfr-requirements");
     seedBoltDag(proj, [{ name: "svc" }]);
@@ -391,7 +391,7 @@ describe("t208 engine unit-kind pruning", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 4: vacuous coverage. A packaging unit on functional-design owes ZERO
-  // artifacts (none of the four apply to packaging), so with no files on disk it
+  // artifacts (none of the five apply to packaging), so with no files on disk it
   // is already covered and `next` presents the real gate on the last unit.
   test("4: a packaging unit on functional-design is vacuously covered", () => {
     const proj = seedProject("functional-design");
@@ -597,7 +597,7 @@ describe("t208 engine unit-kind pruning", () => {
     expect(d.produces).toContain(`${RP}/construction/api/code-generation/code-summary.md`);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // 7: a kindless dag (today's shape) is byte-identical behaviour to t186 - the
+  // 7: a kindless dag is byte-identical behaviour to t186 - the
   // full matrix, gate suppressed on a non-last unit. Regression anchor.
   test("7: a kindless dag keeps today's full-matrix behaviour", () => {
     const proj = seedProject("functional-design");
@@ -620,7 +620,7 @@ describe("t208 engine unit-kind pruning", () => {
     const d = runNext(proj);
     expect(d.unit).toBe("web");
     expect(d.produces).toContain(`${RP}/construction/web/functional-design/frontend-components.md`);
-    // ui's REQUIRED set is functional-spec only (rules and
+    // ui's REQUIRED set is functional-spec and traceability (rules and
     // entities are mapped [service, spec, library]).
     expect(d.produces).toContain(`${RP}/construction/web/functional-design/functional-spec.md`);
     expect(d.produces?.some((p) => p.includes("/rules.md"))).toBe(false);

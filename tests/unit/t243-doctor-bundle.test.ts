@@ -2,11 +2,9 @@
 // covers: file:aidlc-doctor-bundle
 //
 // t243 - the `/aidlc --doctor --export` redacted diagnostic exporter (issue
-// #575). The feature was reworked to address review feedback: the flag is now
-// `--export` (was `--bundle`), the relocation flag is `--output <dir>` (was
-// `--bundle-out`), and the produced artifacts are named
-// `aidlc-diagnostic-report-<ts>-<hash>` (dir) + `.tar.gz` (was
-// `aidlc-doctor-bundle-*`). Four mechanisms in one file:
+// #575). The flag is `--export`, the relocation flag is `--output <dir>`, and
+// the produced artifacts are named `aidlc-diagnostic-report-<ts>-<hash>` (dir)
+// + `.tar.gz`. Four mechanisms in one file:
 //
 //   1. PURE-HELPER unit assertions import the projected module directly
 //      (dist/claude/.claude/tools/aidlc-doctor-bundle.ts — the same dist path
@@ -22,7 +20,7 @@
 //      load-bearing safety contract: the report's entire reason to exist is that
 //      it is safe to hand a maintainer.
 //
-//   3. ROUTING assertions (Arden #1) spawn the REAL orchestrator
+//   3. ROUTING assertions spawn the REAL orchestrator
 //      (aidlc-orchestrate.ts next --doctor --export --output <dir>) and inspect
 //      the emitted directive JSON, proving parseNextFlags carries the
 //      allowlisted export args through the engine into the named command — the
@@ -30,7 +28,7 @@
 //      a direct invocation. A Kiro-parity assertion imports classifyTerminalCommand
 //      so the verb-intercept seam and the engine agree on the same allowlist.
 //
-//   4. SAFETY-HARDENING canaries (Arden #2): a symlinked input (runtime-graph.json
+//   4. SAFETY-HARDENING canaries: a symlinked input (runtime-graph.json
 //      → a secret file) must be refused, not followed; and a CUSTOM (non-core)
 //      stage slug must be hashed to `<id:...>` in the report, never emitted raw.
 //
@@ -86,7 +84,7 @@ import { aidlcToolInvocation } from "../../dist/claude/.claude/tools/aidlc-runti
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const CORE_DOCTOR = join(REPO_ROOT, "core", "tools", "aidlc-doctor.ts");
@@ -121,7 +119,6 @@ function seedCanaryIntent(proj: string): void {
   const intentsDir = join(proj, "aidlc", "spaces", "default", "intents");
   const recDir = join(intentsDir, INTENT_SLUG);
   mkdirSync(join(recDir, "audit"), { recursive: true });
-  // Repoint the active-intent cursor at our named record.
   writeFileSync(join(intentsDir, "active-intent"), `${INTENT_SLUG}\n`, "utf-8");
 
   const state = [
@@ -176,7 +173,6 @@ interface ExportRun {
   archivePath: string | null;
 }
 
-/** Spawn `doctor --export` and locate the produced report dir + archive. */
 function runExport(proj: string, tool: string = UTIL): ExportRun {
   const outDir = join(proj, "out");
   const res = spawnSync(
@@ -412,7 +408,6 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(typeof manifest.aidlcVersion).toBe("string");
     expect(typeof manifest.intentIdHash).toBe("string");
     expect(Array.isArray(manifest.excluded)).toBe(true);
-    // Raw bodies must be named as excluded.
     expect(manifest.excluded.join("\n")).toContain("aidlc-state.md (raw)");
     expect(Array.isArray(manifest.files)).toBe(true);
     expect(manifest.files.length).toBeGreaterThan(0);
@@ -470,7 +465,6 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     const b = tl.stages.find((s) => s.slug === "stageb");
     expect(a).toBeDefined();
     expect(b).toBeDefined();
-    // Complete stage: numeric duration (1h) and a resolved gate.
     expect(typeof a!.durationMs).toBe("number");
     expect(a!.durationMs).toBe(60 * 60 * 1000);
     expect(a!.gate).toBe("approved");
@@ -495,10 +489,6 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(ok.safeToAutomate).toBe(true);
   });
 
-  // --- Review round-2 regressions (Arden #1/#2/#6) -----------------------------
-
-  // A minimal DiagnosisInput whose fields the test overrides per case. Neutral
-  // defaults: no graph, no hook health issues, no markers, no runtime graph.
   function diagInput(over: Partial<DiagnosisInput>): DiagnosisInput {
     return {
       projectDir: "/tmp/does-not-matter",
@@ -533,7 +523,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
   test("12: Rule 2 (ensemble) is inert without a contributions/ dir (Arden r2 #1)", () => {
     // A brownfield project that ran reverse-engineering (subagent + support) but
     // has NO contributions/ dir must NOT get an ensemble-evidence-missing error —
-    // the collaborator-evidence mechanism ships in #568 and is absent on v2.
+    // the diagnosis is gated on the contributions/ directory actually existing.
     const recordAbsDir = createTestProject();
     created.push(recordAbsDir);
     const findings = runDiagnosis(
@@ -574,7 +564,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
         stages: [],
         workflowStartedRaw: "2026-01-10T00:00:00Z",
         workflowStatus: "In-Progress",
-        workflowCompleted: false, // latest run not completed
+        workflowCompleted: false,
         notes: ["Scoped to the latest of 2 recorded workflow runs; earlier runs are omitted."],
       },
     });
@@ -672,7 +662,6 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       "utf-8",
     );
     writeFileSync(join(rgDir, "audit", "seed.md"), "## s\n**Event**: WORKFLOW_STARTED\n**Timestamp**: 2026-01-01T00:00:00Z\n", "utf-8");
-    // A runtime graph whose one stage names a custom lead_agent.
     writeFileSync(
       join(rgDir, "runtime-graph.json"),
       JSON.stringify({
@@ -702,7 +691,6 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(withExport.status).toBe(0);
     const dir = JSON.parse((withExport.stdout ?? "").trim());
     expect(dir.kind).toBe("print");
-    // parseNextFlags carried the allowlisted trailing args through the engine.
     expect(dir.message).toContain("doctor --export --output");
     expect(dir.message).toContain(outDir);
 
@@ -716,7 +704,6 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(verboseDir.kind).toBe("print");
     expect(verboseDir.message).toContain("doctor --verbose");
 
-    // A plain `--doctor` (no export) names the doctor command WITHOUT --export.
     const plain = spawnSync(BUN, [ORCH, "next", "--doctor"], {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
@@ -797,7 +784,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
   test("11: CUSTOM-IDENTIFIER CANARY — a non-core stage slug is hashed, never emitted raw (Arden #2)", () => {
     const proj = freshProject();
     // Copy the shipped .claude tree so the shipped stage graph is present and the
-    // custom slug is genuinely NOT one of the 32 core slugs (readShippedStageGraph
+    // custom slug is genuinely NOT one of the core slugs (readShippedStageGraph
     // resolves join(projectDir, ".claude", "tools/data/stage-graph.json")).
     cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
 
@@ -997,11 +984,9 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(existsSync(outDir)).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // ---- Arden round-3 regressions -------------------------------------------
-
   test("19: a malformed runtime graph (non-string support_agents) does not crash the analysis (Arden r3 #2)", () => {
-    // support_agents: [42] used to reach shortHash(42) -> createHash throws,
-    // taking down plain --doctor. readGraphStages now filters non-strings.
+    // support_agents: [42] would reach shortHash(42) -> createHash throws,
+    // taking down plain --doctor. readGraphStages filters non-strings.
     const proj = createTestProject();
     created.push(proj);
     cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
@@ -1017,14 +1002,13 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       JSON.stringify({ stages: [{ slug: "intent-capture", phase: "ideation", mode: "inline", lead_agent: "aidlc-product-agent", support_agents: [42, "aidlc-architect-agent"] }] }),
       "utf-8",
     );
-    // Must not throw (previously an uncaught TypeError from createHash on a
-    // number crashed the whole run BEFORE any bundle was written). A bundle
-    // being produced at all proves the analysis completed; the exit code itself
-    // may be non-zero if the bare fixture's legacy env checks fail, which is
-    // orthogonal to this crash.
+    // Must not throw (an uncaught TypeError from createHash on a number crashed
+    // the whole run BEFORE any bundle was written). A bundle being produced at
+    // all proves the analysis completed; the exit code itself may be non-zero if
+    // the bare fixture's legacy env checks fail, which is orthogonal to this
+    // crash.
     const run = runExport(proj);
     expect(run.bundleDir, "analysis crashed on a malformed graph — no bundle produced").not.toBeNull();
-    // And the malformed graph did not corrupt the report: it still parses.
     expect(() => JSON.parse(readFileSync(join(run.bundleDir!, "report.json"), "utf-8"))).not.toThrow();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1052,17 +1036,16 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     // JSON-escaped nested form (the shape after JSON.stringify of a nested blob).
     const escaped = redactString('{\\"password\\":\\"hunter2secret\\"}', ctx);
     expect(escaped, "escaped JSON secret leaked").not.toContain("hunter2secret");
-    // Punctuation-bearing value.
     const punct = redactString("password=p@ssw0rd!value", ctx);
     expect(punct, "punctuation secret leaked").not.toContain("p@ssw0rd");
-    // Bare + single-quoted forms still redact (no regression).
     expect(redactString("token=abcdef123456", ctx)).not.toContain("abcdef123456");
     expect(redactString('"secret": "swordfishXY"', ctx)).not.toContain("swordfishXY");
   });
 
   test("22: seeded-id redaction is a single pass and prefers the longest overlapping id (Arden r3 #5)", () => {
     const ctx = newRedactionContext("/tmp/proj");
-    // Seed two overlapping custom ids short-first; the old loop leaked the suffix.
+    // Seed two overlapping custom ids short-first; a short-first replacement
+    // loop leaks the suffix.
     ctx.idHashes.set("build-auth", shortHash("build-auth"));
     ctx.idHashes.set("build-auth-extra", shortHash("build-auth-extra"));
     const out = redactString("see build-auth-extra here", ctx);
@@ -1279,9 +1262,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     ].join("\n\n");
     const tl = reconstructTimeline(audit, "");
     const order = tl.stages.map((s) => s.slug);
-    // beta comes before the jumped-back alpha attempt.
     expect(order.indexOf("beta")).toBeLessThan(order.indexOf("alpha"));
-    // No stage reports a negative gapFromPrevMs.
     for (const s of tl.stages) {
       if (s.gapFromPrevMs !== null) expect(s.gapFromPrevMs).toBeGreaterThanOrEqual(0);
     }
@@ -1291,15 +1272,14 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     const legacy = [adaptLegacyResult({ pass: false, label: "bun on PATH", fix: "install bun" })];
     const diagnosis = runDiagnosis(diagInput({}));
     const merged = mergeFindings(legacy, diagnosis);
-    // The failing env check is present as an error finding in the merged set.
     const envFinding = merged.find((f) => f.severity === "error" && /bun on PATH/i.test(f.summary));
     expect(envFinding).toBeDefined();
   });
 
   test("37: a secret ending an allowlisted field value keeps normalized.json valid (Arden r4 #2)", () => {
-    // The redaction previously ate the JSON string's closing quote when a
+    // Redacting after serializing ate the JSON string's closing quote when a
     // secret-like token ended a field value, corrupting normalized.json. JSON
-    // files now redact-then-serialize, so the artifact must still parse AND the
+    // files redact-then-serialize, so the artifact must still parse AND the
     // secret must be gone.
     const proj = freshProject();
     const rec = seededRecordDir(proj);

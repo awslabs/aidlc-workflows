@@ -2,9 +2,9 @@
 //
 // Owns the linter check itself; the dispatcher (aidlc-sensor.ts) routes a
 // SENSOR fire to this script via the manifest's `command:` field. Self-
-// contained apart from the import-safe runtime budget policy. Wraps
-// `bunx eslint --format json --max-warnings -1 <path>` and prints the
-// locked stdout JSON shape:
+// contained apart from the import-safe runtime budget policy. Wraps the
+// project's own eslint, else `bunx eslint@10`, with `--format json
+// --max-warnings=-1 <path>` and prints the locked stdout JSON shape:
 //
 //   {"pass": <bool>, "errorCount": <n>, "warningCount": <n>,
 //    "violations": [{file, line, column, rule, severity, message}, ...]}
@@ -18,14 +18,14 @@
 //   walk-up resolvers silently drop outer-inherited rules in monorepos
 //   with root flat config + nested legacy config.
 //
-// * "no eslint config" detection: probe `bunx eslint --print-config <path>`.
+// * "no eslint config" detection: probe `eslint --print-config <path>`.
 //   Exit non-zero with stderr matching "No ESLint configuration" /
 //   "Could not find config" → exit 127 with stderr "no-eslint-config".
 //   The dispatcher's branch b reclassifies status 127 to PASSED with
 //   Note=tool-unavailable, giving a quiet PASS for projects without
 //   eslint config rather than spamming script-error.
 //
-// * Tool-unavailable detection: `bunx eslint --version` once at startup.
+// * Tool-unavailable detection: `eslint --version` once at startup.
 //   `bunx <tool>` returns non-127 codes for several failure modes
 //   (network-fetch failure, package-resolution failure, registry timeout)
 //   so the dispatcher's `result.status === 127` check alone won't catch
@@ -35,13 +35,14 @@
 // * pass = errorCount === 0. Warnings tracked but DO NOT fail. Real
 //   eslint configs ship `no-unused-vars: warn` and similar; warning-as-
 //   failure would emit SENSOR_FAILED on every Write under the PostToolUse hook.
-//   --max-warnings -1 disables eslint's own warning-exit override so
+//   --max-warnings=-1 disables eslint's own warning-exit override so
 //   this script's errorCount test is the sole pass/fail decider.
 //
 // Exit codes:
 //   0   pass or fail (the JSON pass field carries the verdict)
 //   127 eslint unresolvable OR no eslint config found
 //   1   execution incomplete or stdout JSON parse failed (script-error)
+//   2   malformed eslint config (script-error)
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -212,7 +213,7 @@ function invokeEslint(args: string[], cwd: string) {
 	return spawnSync("bunx", [ESLINT_SPEC, ...args], options);
 }
 
-// Probe `bunx eslint --version` at startup. `bunx <tool>` returns non-127
+// Probe `eslint --version` at startup. `bunx <tool>` returns non-127
 // codes for several failure modes (network-fetch failure, package-
 // resolution failure, registry timeout). The dispatcher's branch b
 // (status === 127) won't catch those — so we propagate by exiting 127
@@ -225,7 +226,7 @@ function probeEslintAvailable(cwd: string): void {
 	}
 }
 
-// Probe `bunx eslint --print-config <path>` to detect "no eslint config".
+// Probe `eslint --print-config <path>` to detect "no eslint config".
 // eslint exits non-zero with a stderr message containing "No ESLint
 // configuration found" or "Could not find config file" when no config is
 // resolvable from <path>. Map that to exit 127 so the dispatcher's branch
@@ -241,7 +242,7 @@ function probeEslintAvailable(cwd: string): void {
 // keeping the audit pair closed while flagging the breakage in stderr.
 function probeEslintConfig(filePath: string, cwd: string): void {
 	const result = invokeEslint(["--print-config", filePath], cwd);
-	if (result.status === 0) return; // config resolved
+	if (result.status === 0) return;
 	const stderr = result.stderr ?? "";
 	// Cover both legacy (.eslintrc.*) and flat-config (eslint.config.js)
 	// diagnostics. eslint v8 says "No ESLint configuration found";
@@ -315,11 +316,10 @@ function runEslint(
 	stdout: string;
 	status: number | null;
 } {
-	// `--max-warnings=-1` (= form, not space-separated). eslint v10's CLI
-	// parser rejects bare `-1` as a positional value because it starts
-	// with `-` ("No -NUM option defined."). The plan-mandated
-	// "--max-warnings -1" requires the equals form to actually reach
-	// eslint as a numeric value.
+	// `--max-warnings=-1` (= form, not space-separated). eslint v10's CLI parser
+	// rejects bare `-1` as a positional value because it starts with `-` ("No
+	// -NUM option defined."). The "--max-warnings -1" requires the equals form to
+	// actually reach eslint as a numeric value.
 	const result = invokeEslint(["--format", "json", "--max-warnings=-1", filePath], cwd);
 	// A killed/spawn-failed run cannot establish a verdict, even if it wrote
 	// a complete-looking JSON prefix before stopping.
@@ -376,14 +376,15 @@ export function main(argv: string[]): void {
 
 	// Probe order: tool first (cheap, ~1s for cached bunx), then config
 	// (~1s for --print-config). Both gates feed dispatcher branch b
-	// (PASSED Note=tool-unavailable) on non-zero.
+	// (PASSED Note=tool-unavailable) for unavailable tools or config;
+	// malformed config exits 2 (script-error).
 	probeEslintAvailable(projectRoot);
 	probeEslintConfig(args.filePath, projectRoot);
 
 	const { stdout } = runEslint(args.filePath, projectRoot);
 
 	// eslint exits 1 when violations exist and 0 when clean. With
-	// --max-warnings -1 the warning-exit override is disabled so we never
+	// --max-warnings=-1 the warning-exit override is disabled so we never
 	// see warning-only failure exits. We don't gate parse on result.status
 	// — eslint always writes JSON to stdout on either path.
 	let parsed: ESLintResult[];
@@ -406,9 +407,9 @@ export function main(argv: string[]): void {
 	}
 
 	const out: SensorOutput = {
-		// Per locked decision: warnings tracked but do NOT fail. Real
-		// configs ship no-unused-vars: warn; warning-as-failure spams
-		// SENSOR_FAILED on every Write under the PostToolUse hook.
+		// Warnings tracked but do NOT fail. Real configs ship no-unused-vars: warn;
+		// warning-as-failure spams SENSOR_FAILED on every Write under the
+		// PostToolUse hook.
 		pass: errorCount === 0,
 		errorCount,
 		warningCount,

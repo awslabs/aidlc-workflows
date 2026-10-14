@@ -5,7 +5,7 @@
 //
 // THE CHANGE: functional-design declares frontend-components under
 // optional_produces (not produces), so a unit that legitimately has no UI can
-// be COVERED by writing only the three REQUIRED artifacts. Before this, the
+// be COVERED by writing only the four REQUIRED artifacts. Before this, the
 // per-unit coverage loop (aidlc-orchestrate.ts unitCovered) demanded every
 // produces[] name on disk, so a backend-only unit was re-emitted forever and
 // the stage gate was unreachable unless the author wrote an N/A stub.
@@ -175,8 +175,6 @@ function constructionState(current: string, skeletonStance = "on"): string {
 `;
 }
 
-/** Mark `unit` covered for `slug` by writing each named artifact under the
- *  resolved per-unit dir construction/<unit>/<slug>/. */
 function coverUnit(proj: string, unit: string, slug: string, names: string[]): void {
   const dir = join(seededRecordDir(proj), "construction", unit, slug);
   mkdirSync(dir, { recursive: true });
@@ -226,7 +224,7 @@ function runReport(proj: string, args: string[]): Directive {
 
 describe("t206 optional_produces exempt from per-unit coverage", () => {
   // 1: happy path - the conditional artifact is ABSENT and the unit still
-  // counts covered. Cover alpha with ONLY the three required artifacts (no
+  // counts covered. Cover alpha with ONLY the four required artifacts (no
   // frontend-components.md) -> alpha is review-only, then its receipt advances.
   test("1: a unit covered by required-only artifacts advances the iteration", () => {
     const proj = seedProject("functional-design");
@@ -276,9 +274,9 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
     expect(d.gate).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // 3: gate reachable - cover both units with required-only artifacts. next now
-  // presents the stage's REAL gate on the last unit (beta), so the human
-  // approval is reachable without any frontend-components.md on disk.
+  // 3: gate reachable - cover both units with required-only artifacts and settle
+  // their reviews. next presents the stage's REAL gate on the last unit (beta), so
+  // the human approval is reachable without any frontend-components.md on disk.
   test("3: the stage gate is reachable with required-only coverage on every unit", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, ["alpha", "beta"]);
@@ -330,7 +328,6 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED);
-    // beta covered by only two required + the optional -> still uncovered.
     coverUnit(proj, "beta", "functional-design", [
       "entities",
       "rules",
@@ -344,7 +341,7 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
     ]);
     expect(d.kind).toBe("error");
     expect(d.message).toContain("beta");
-    expect(d.message).not.toContain("alpha"); // alpha is covered, not named
+    expect(d.message).not.toContain("alpha");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 5: directive paths keep the optional artifact. Any per-unit directive's
@@ -359,7 +356,6 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
     expect(d.produces).toContain(
       `${RP}/construction/alpha/functional-design/${FD_OPTIONAL}.md`,
     );
-    // and still lists a required one.
     expect(d.produces).toContain(
       `${RP}/construction/alpha/functional-design/functional-spec.md`,
     );

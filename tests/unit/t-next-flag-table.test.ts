@@ -49,19 +49,24 @@ describe("the flags `next` takes are one table, pinned to the parser's own branc
   });
 
   test("a flag taken only when a token follows it is the only kind marked that way", () => {
-    const body = parserBody();
-    const guarded = new Set(
-      [...body.matchAll(/\ba === "(--[a-z][a-z.-]*)" && i \+ 1 < args\.length/g)].map((match) => match[1]),
+    // Alone on the line, such a flag is a token this engine does not take; every
+    // other flag is taken (a valued one alone is its own refusal, by name).
+    const onlyWithFollowing = sorted(
+      [...NEXT_FLAGS.keys()].filter((flag) => parseNextFlags([flag]).untakenFlag === flag),
     );
-    // Four of them have a second, valueless branch (`--claim` alone refuses by
-    // name), so the loop takes those whatever follows.
-    const alsoBare = new Set(
-      [...body.matchAll(/\ba === "(--[a-z][a-z.-]*)"[)\s]*(?:\|\||\))/g)].map((match) => match[1]),
-    );
-    const onlyWithFollowing = sorted([...guarded].filter((flag) => !alsoBare.has(flag)));
     expect(onlyWithFollowing).toEqual(["--phase", "--report", "--scope", "--stage"]);
     expect(sorted([...NEXT_FLAGS].filter(([, shape]) => shape.needsFollowing === true).map(([flag]) => flag)))
       .toEqual(onlyWithFollowing);
+  });
+
+  test("a value that may look like a flag is marked in the table, and only there taken that way", () => {
+    // `--report --resume` reports from a file named `--resume`; `--depth --resume`
+    // refuses the missing depth and resumes. The parser takes each value from
+    // the one reading (readNextTokens), which reads this mark.
+    for (const [flag, shape] of NEXT_FLAGS) {
+      if (shape.value === "none") continue;
+      expect(parseNextFlags([flag, "--resume"]).resume === undefined, flag).toBe(shape.valueMayLookLikeFlag === true);
+    }
   });
 
   test("the words a valued flag holds are the ones the engine accepts", () => {

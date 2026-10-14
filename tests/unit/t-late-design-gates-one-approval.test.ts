@@ -345,7 +345,6 @@ function currentStage(proj: string): string | undefined {
   return /\*\*Current Stage\*\*:\s*(\S+)/.exec(readFileSync(seededStateFile(proj), "utf-8"))?.[1];
 }
 
-// Open the first late gate the way the agent does: next, then awaiting-approval.
 function openFirstGate(proj: string): { gate: Directive; opened: Directive } {
   const gate = runNext(proj);
   const opened = runReport(proj, ["--stage", "functional-design", "--result", "awaiting-approval"]);
@@ -376,7 +375,6 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
     const open = rows(proj, "STAGE_AWAITING_APPROVAL").filter((r) => r.stage === "functional-design");
     expect(open.length).toBe(1);
     const recorded = (auditBlockField(open[0].block, "Approves Together") ?? "").split(", ");
-    // Both come from the engine: the record lists exactly the stages the question names.
     expect(recorded).toEqual(gate.approve_together?.stages?.map((s) => s.slug ?? "") ?? []);
     const names = gate.approve_together?.stages?.map((s) => s.name) ?? [];
     expect(gate.approve_together?.prompt?.startsWith(`${names.slice(0, -1).join(", ")} and ${names.at(-1)} are complete`))
@@ -508,13 +506,12 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
       const r = surface(together, slug);
       expect(r.status, `${slug}: ${r.stdout}${r.stderr}`).toBe(0);
     }
-    // A stage the one question does not name is refused, as before.
     const later = surface(together, "build-and-test");
     expect(later.status).not.toBe(0);
     expect(later.stderr).toContain("slug mismatch");
 
     // With checkpoints on, or stage-major, there is no combined question: a
-    // later stage is refused, as before.
+    // later stage is refused.
     for (const state of [{ checkpoints: "enabled" as const }, { stageMajor: true }]) {
       const refused = surface(built(state), "nfr-requirements");
       expect(refused.status).not.toBe(0);

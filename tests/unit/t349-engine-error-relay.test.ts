@@ -75,7 +75,6 @@ function tempProject(prefix: string): string {
   return dir;
 }
 
-/** A project carrying one generated harness tree, as an install would. */
 function installed(harness: string, leaf: string): string {
   const dir = tempProject(harness);
   cpSync(join(REPO_ROOT, "dist", harness, leaf), join(dir, leaf), { recursive: true });
@@ -87,7 +86,6 @@ function errorOutput(message: string): string {
   return `${JSON.stringify({ kind: "error", message })}\n`;
 }
 
-/** The exact line the hook writes on a relay harness. */
 function relayLine(message: string): string {
   return `${JSON.stringify({
     systemMessage: engineErrorRelayText(message),

@@ -123,7 +123,6 @@ function checkpoint(p: string, args: string[]) {
   return tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", ...args]);
 }
 
-// The person types in a chat: the human-turn hook, as the host runs it.
 function person(p: string, prompt: string, session: string) {
   const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p };
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
@@ -239,12 +238,12 @@ describe("t-checkpoint-answer-any-chat: what a new chat is told to do", () => {
     const p = fixture();
     const before = next(p);
     expect(before.construction_checkpoint?.unit, JSON.stringify(before)).toBe("alpha");
-    expect(before.protocol_modules).toEqual(["construction", "checkpoint", "learnings"]);
+    expect(before.protocol_modules).toEqual(["construction", "checkpoint", "learnings", "sensors"]);
     expect(checkpoint(p, ["--action", "ask", "--session", OLD]).status).toBe(0);
     const after = next(p);
     expect(after.construction_checkpoint?.unit, JSON.stringify(after)).toBe("alpha");
     expect(after.construction_checkpoint?.approved).toBe(false);
-    expect(after.protocol_modules).toEqual(["construction", "checkpoint"]);
+    expect(after.protocol_modules).toEqual(["construction", "checkpoint", "sensors"]);
   });
 
   test("words while the approval is open name the Unit's own approve and reject steps", () => {

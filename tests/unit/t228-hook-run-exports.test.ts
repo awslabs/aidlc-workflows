@@ -414,7 +414,6 @@ describe("spawned hook contract smoke", () => {
       seedAuditFile(projectDir);
       const stateBefore = readFileSync(seededStateFile(projectDir), "utf-8");
       const auditBefore = readAudit(projectDir);
-      // Accepted same-user boundary: PR #1262, issuecomment-5792195050.
       // The hook route does not authenticate who launched the dispatcher.
       const dispatcher = join(
         REPO_ROOT,

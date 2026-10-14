@@ -120,8 +120,8 @@ bash tests/run-tests.sh --integration --filter "t25|t26"
 # Leave files out by pattern; the rest run as an ordinary tier
 bash tests/run-tests.sh --integration --exclude "^t-tui-"
 
-# The scope runs and the guard matrix (minutes per file) run only when selected
-bash tests/run-tests.sh --integration -P 8 --filter "^t-(scope-run|guard-matrix)-"
+# The scope runs, the scope-host runs and the guard matrix (minutes per file) run only when selected
+bash tests/run-tests.sh --integration -P 8 --filter "^t-(scope-run|scope-host|guard-matrix)-"
 
 # Run tests concurrently within a level (larger levels benefit most; smoke/unit stay serial)
 bash tests/run-tests.sh --all --parallel 4

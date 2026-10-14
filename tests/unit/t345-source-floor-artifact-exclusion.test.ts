@@ -39,7 +39,6 @@ describe("t345 source-floor OS/editor-artifact exclusion (#1099)", () => {
     const base = fp(project);
     expect(base).not.toBeNull();
 
-    // OS droppings at root and nested; editor swap/backup files.
     writeFileSync(join(project, ".DS_Store"), "\0\0");
     writeFileSync(join(project, "src", ".DS_Store"), "\0\0");
     writeFileSync(join(project, "Thumbs.db"), "x");

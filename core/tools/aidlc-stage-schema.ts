@@ -1,8 +1,8 @@
 // Stage frontmatter schema — machine-checkable realisation of the spec in
-// dist/claude/.claude/aidlc-common/protocols/stage-definition.md. Consumed by
-// parseStageFrontmatter (lib.ts), aidlc-graph compile, and the doctor
-// schema-lint check (aidlc-utility.ts collectDoctorReport). Hand-rolled,
-// zero-dep — matches parseAgentFrontmatter precedent in lib.ts. Pure
+// core/aidlc-common/protocols/stage-definition.md. Consumed by aidlc-graph
+// compile and the doctor schema-lint check (aidlc-utility.ts
+// collectDoctorReport). Hand-rolled,
+// zero-dep - matches parseAgentFrontmatter precedent in aidlc-lib.ts. Pure
 // validator: no I/O, no YAML parsing, no mutation — callers pass an
 // already-parsed object.
 
@@ -58,7 +58,8 @@ export interface StageFrontmatter {
   // to all kinds; a listed one is pruned out of a unit whose kind is not in
   // its list. It prunes BOTH the directive produces paths and the coverage
   // set - exempt from nothing. Absent map = full matrix. Each key must name a
-  // produces entry; each value must be a non-empty list of valid kinds.
+  // produces or optional_produces entry; each value must be a non-empty list
+  // of valid kinds.
   produces_kinds?: Record<string, string[]>;
   consumes: Array<{
     artifact: string;
@@ -67,12 +68,11 @@ export interface StageFrontmatter {
   }>;
   requires_stage: string[];
   sensors?: string[];
-  // scopes — the per-stage scope-membership list. Active field:
-  // the transpose of the legacy scope-mapping.json EXECUTE/SKIP matrix
-  // onto stages. Naming a scope here marks the stage EXECUTE under that
-  // scope; absence means SKIP. Optional in the schema (absent and `[]`
-  // treated identically) so a fixture stage with no membership still
-  // validates. `aidlc-graph compile` reads this to emit the compiled grid.
+  // scopes - the per-stage scope-membership list. Naming a scope here marks
+  // the stage EXECUTE under that scope; absence means SKIP. Optional in the
+  // schema (absent and `[]` treated identically) so a fixture stage with no
+  // membership still validates. `aidlc-graph compile` reads this to emit the
+  // compiled grid.
   scopes?: string[];
   // reviewer — agent slug to invoke as a quality gate after the stage body
   // (stage-protocol-reviewer.md §12a). Optional; absent when the stage has no review step.
@@ -96,7 +96,7 @@ export interface StageFrontmatter {
   summary_confirmation?: "required" | "if-present";
   // when — structured activation predicate (plugin mechanism, Layer 4). A
   // single-key map; the one predicate is `producer-in-plan: <artifact-slug>`.
-  // Accepted for shape here; the compile-time grid evaluation is separate.
+  // Accepted for shape here; no engine pass evaluates it yet.
   when?: { "producer-in-plan"?: string };
   // ars — composer screening prior: the frontmatter twin of one
   // tools/data/ars-priors.json stage entry, for stages that file does not name
@@ -163,9 +163,10 @@ export const RESERVED_KEYS: Readonly<Record<string, string>> = {
 };
 
 // Allowed predicate keys for the stage `when:` map (plugin mechanism, Layer 4).
-// Today only `producer-in-plan`. `when` is no longer reserved — it is an active
-// (shape-validated) structured predicate; compile-time grid evaluation is a
-// separate pass. Adding a predicate is one entry here + one grid-pass case.
+// Today only `producer-in-plan`. `when` is an active (shape-validated)
+// structured predicate that no engine pass evaluates yet (see the Activation
+// note in docs/reference/18-plugin-mechanism.md). Adding a predicate is one
+// entry here + one case in that pass when it lands.
 export const WHEN_PREDICATE_KEYS = ["producer-in-plan"] as const;
 
 // Composer screening prior a stage may carry in its own frontmatter (`ars:`).
@@ -265,8 +266,8 @@ export function validateStageFrontmatter(
 ): ValidationResult {
   // Rule 1: shape. Must be a plain object. If not, return a single error —
   // we can't collect field-level errors on a non-object. After this guard,
-  // TS narrows `obj` to `object` (still not `Record<string, unknown>`),
-  // so we use isPlainObject to get the indexable narrow.
+  // isPlainObject narrows `obj` to `Record<string, unknown>` so field checks
+  // can index it.
   if (!isPlainObject(obj)) {
     const actual =
       obj === null ? "null" : Array.isArray(obj) ? "array" : typeof obj;
@@ -313,7 +314,7 @@ export function validateStageFrontmatter(
   // number / name / plugin — optional display + ownership metadata. Absent is
   // valid; core stages use name only when title-casing the slug would lose an
   // established label. number must be `<int>.<int>`; name + plugin any
-  // non-empty string.
+  // string.
   checkString(o, "number", errors);
   checkSlugPattern(o, "number", NUMBER_RE, "<phase-prefix>.<index>", errors);
   checkString(o, "name", errors);
@@ -366,9 +367,6 @@ export function validateStageFrontmatter(
     }
   }
 
-  // for_each — optional. Absent → valid. Present → must be string.
-  // Explicit `null` falls through the typeof check and is rejected as
-  // "must be string, got object" — same branch as any other wrong type.
   if ("for_each" in o && o.for_each !== undefined) {
     if (typeof o.for_each !== "string") {
       errors.push(`for_each must be string, got ${describe(o.for_each)}`);
@@ -399,7 +397,7 @@ export function validateStageFrontmatter(
   checkString(o, "review_artifact", errors);
 
   // reviewer_max_iterations — optional. When present, must be a positive
-  // integer (>= 1). V1 makes the parser return a number for an integer
+  // integer (>= 1). The parser returns a number for an integer
   // literal; a non-integer literal stays a string and is rejected here as a
   // type error rather than silently coercing to NaN at compile.
   checkPositiveInteger(o, "reviewer_max_iterations", errors);
@@ -560,10 +558,9 @@ export function validateStageFrontmatter(
 
   // produces_kinds - optional per-kind applicability map. When present it must
   // be a plain object whose every key names a produces entry (union with
-  // optional_produces read defensively so this validates both standalone and
-  // once a conditional-produces axis lands) and whose every value is a
-  // non-empty list of valid unit kinds. An orphan key (typo) is an error: a
-  // silently-ignored map entry would defeat the pruning invisibly.
+  // optional_produces) and whose every value is a non-empty list of valid unit
+  // kinds. An orphan key (typo) is an error: a silently-ignored map entry
+  // would defeat the pruning invisibly.
   if ("produces_kinds" in o && o.produces_kinds !== undefined) {
     const pk = o.produces_kinds;
     if (!isPlainObject(pk)) {
@@ -704,7 +701,7 @@ export function validateStageFrontmatter(
   }
 
   // scopes — optional. When present, must be a list of non-empty strings.
-  // Cross-validation (each name resolves to a known .claude/scopes/*.md
+  // Cross-validation (each name resolves to a known <harness>/scopes/*.md
   // file) is not enforced here — the schema validator doesn't read the
   // scopes registry; `aidlc-graph compile` transposes whatever names are
   // declared into the grid, and an unknown scope name simply yields a
@@ -751,9 +748,9 @@ export function validateStageFrontmatter(
       });
     }
     // reviewer is an agent-slug field like lead_agent; cross-check it against
-    // the same roster (exempting the reserved orchestrator pseudo-agent). This
-    // is the silent-failure fix: a reviewer naming a non-existent agent passed
-    // validation today and surfaced only as a runtime no-op.
+    // the same roster (exempting the reserved orchestrator pseudo-agent). Without
+    // this check a reviewer naming a non-existent agent passes validation and
+    // surfaces only as a runtime no-op.
     if (
       typeof o.reviewer === "string" &&
       o.reviewer !== RESERVED_AGENT_SLUG &&
@@ -767,14 +764,13 @@ export function validateStageFrontmatter(
     return { valid: false, errors };
   }
 
-  // On success, return the normalized clone; deprecated aliases are not exposed
-  // past the schema boundary. Callers must NOT mutate `data`; it is treated as
-  // immutable by convention. The double-cast (unknown → StageFrontmatter) is the
-  // documented trust boundary: rules 1–9 above have already verified each field's shape
-  // (presence, type, enum, regex), so the structural compatibility is
-  // guaranteed at runtime even though TS can't follow the per-field
-  // checks. Centralising this single cast in the validator keeps the
-  // rest of the codebase cast-free.
+  // On success, return the validated clone. Callers must NOT mutate `data`; it
+  // is treated as immutable by convention. The double-cast (unknown ->
+  // StageFrontmatter) is the documented trust boundary: rules 1-9 above have
+  // already verified each field's shape (presence, type, enum, regex), so the
+  // structural compatibility is guaranteed at runtime even though TS can't
+  // follow the per-field checks. Centralising this single cast in the validator
+  // keeps it out of every caller.
   // type-coverage:ignore-next-line — documented validator trust boundary
   return { valid: true, data: o as unknown as StageFrontmatter };
 }

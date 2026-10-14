@@ -1,28 +1,28 @@
 // covers: hook:aidlc-session-start
 //
-// t169 — the P8 RESUME REBIND. A conversation works ONE intent, but the
-// active-intent CURSOR is durable + shared across sessions. So resuming an
-// A-chat after the cursor moved to B would silently inject B's context (vision
-// §3, the central multi-space hazard). The fix is a per-session→intent stamp at
+// t169 - RESUME REBIND. A conversation works ONE intent, but the active-intent
+// CURSOR is durable + shared across sessions. So resuming an A-chat after the
+// cursor moved to B would silently inject B's context (vision section 3, the
+// central multi-space hazard). The guard is a per-session->intent stamp at
 // aidlc/.aidlc-sessions/<session_id>:
 //   - On a STARTED-class event, session-start STAMPS the working intent's UUID
 //     keyed by session_id.
-//   - On RESUMED, if the stamped UUID differs from the live cursor AND still
-//     names a real intent, it injects a rebind OFFER in additionalContext — a
-//     print directive that CORRECTS the per-user cursor (it never rebuilds the
+//   - On RESUMED, if the stamped UUID differs from the shared cursor AND still
+//     names a real intent, it injects a rebind OFFER in additionalContext that
+//     asks before moving the shared cursor back (it never rebuilds the
 //     session). On a MATCH (cursor unchanged), no offer.
 //
 // WHY CLI (process-boundary, not in-process): the SUBJECT is the session-start
-// hook. It reads source + session_id off the PostToolUse-shaped stdin JSON,
-// stamps/reads the session record, and writes additionalContext to stdout —
-// none reachable by importing a function. So this twin SPAWNS the real shipped
-// hook the same way Claude Code's SessionStart drives it (same pattern as t10).
+// hook. Its CLI reads source + session_id off the SessionStart stdin JSON,
+// stamps/reads the session record, and writes additionalContext to stdout. So
+// this twin SPAWNS the real shipped hook the same way Claude Code's SessionStart
+// drives it (same pattern as t10).
 //
 // SEEDING: createIntent() (aidlc-lib.ts) mints two real per-intent records in
 // space "default" and sets the active-intent cursor; setActiveIntentCursor()
 // moves the cursor between the START fire and the RESUME fire to simulate the
-// drift. The hook gates on stateFilePath existing, which createIntent satisfies
-// (it writes a header-only state stub bound to the active cursor).
+// drift. The hook gates on the selected state file existing, which createIntent
+// satisfies (it writes a header-only state stub bound to the active cursor).
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -95,7 +95,7 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     // starts bound to auth-service.
     const a = createIntent(proj, "auth-service", "default", "feature");
     const b = createIntent(proj, "export-bug", "default", "feature");
-    setActiveIntentCursor(proj, a.dirName, "default"); // cursor → auth-service
+    setActiveIntentCursor(proj, a.dirName, "default");
 
     // 1) STARTUP: this conversation (session "S1") stamps auth-service's uuid.
     const started = fire(proj, "startup", "S1");
@@ -135,7 +135,6 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
   test("resume with the cursor UNCHANGED offers nothing (no false positive)", () => {
     const a = createIntent(proj, "billing", "default", "feature");
     setActiveIntentCursor(proj, a.dirName, "default");
-    // Startup stamps billing; cursor stays on billing.
     fire(proj, "startup", "S2");
     const resumed = fire(proj, "resume", "S2");
     expect(resumed.exitCode).toBe(0);
@@ -236,15 +235,13 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
   });
 
   test("flat-legacy project (no per-intent record) never offers a rebind", () => {
-    // No creation - the project is flat-legacy (activeIntentUuid → null). Seed a
-    // flat state file so the hook passes its no-state gate, then fire resume.
     mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
     writeFileSync(
       join(proj, "aidlc-docs", "aidlc-state.md"),
       "# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: IDEATION\n",
       "utf-8",
     );
-    fire(proj, "startup", "S3"); // no uuid to stamp (flat-legacy)
+    fire(proj, "startup", "S3");
     const resumed = fire(proj, "resume", "S3");
     expect(resumed.exitCode).toBe(0);
     expect(resumed.context).not.toContain("INTENT REBIND OFFER");

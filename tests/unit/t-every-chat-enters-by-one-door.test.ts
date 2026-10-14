@@ -112,11 +112,9 @@ describe("every chat enters by one door", () => {
     lib.writeSessionBinding(dir, ROOT, DEFAULT_SPACE, OTHER_RECORD, "switch");
     lib.noteHelperSession(dir, ROOT, CHILD);
     withShell(dir, ".kiro", () => {
-      // The shell door: the helper's id selects the root chat's work.
       const shell = lib.resolveWorkflowSelection(dir);
       expect(shell.intent).toBe(OTHER_RECORD);
       expect(shell.sessionId).toBe(ROOT);
-      // The hook door: a payload carrying the helper's id is pinned to the root chat.
       const hook = lib.enterHookWorkflow(dir, CHILD);
       try {
         expect(hook.selection?.intent).toBe(OTHER_RECORD);
@@ -124,7 +122,6 @@ describe("every chat enters by one door", () => {
       } finally {
         hook.restore();
       }
-      // No binding was written for the helper's own id: the root chat's is the one.
       expect(lib.readSessionBinding(dir, CHILD)).toBeNull();
     }, CHILD);
   });

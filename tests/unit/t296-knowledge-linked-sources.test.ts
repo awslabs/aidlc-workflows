@@ -246,9 +246,7 @@ describe("t296 committed metadata never carries an absolute path", () => {
     index.documents.push(linkedRow("corp-policies", "security/policy.pdf") as never);
     writeIndex(p, SPACE, index);
 
-    // Resolution works...
     expect(resolveLinkedSource(p, SPACE, readIndex(p, SPACE).documents[0])).not.toBeNull();
-    // ...and the COMMITTED side still names only the alias.
     const committed = JSON.stringify(readIndex(p, SPACE));
     expect(committed).toContain("corp-policies");
     expect(committed, "the external root must not appear in committed metadata")
@@ -328,7 +326,6 @@ describe("t296 an incidental symlink is never an implicit linked source", () => 
 
     const result = onboard(p, SPACE, undefined, NOW);
     expect(result.refused).toBeUndefined();
-    // Only the real file was indexed, and nothing claims the external path.
     expect(result.indexed.map((r) => r.path)).toEqual(["documents/inside.md"]);
     expect(JSON.stringify(readIndex(p, SPACE))).not.toContain(c);
   });

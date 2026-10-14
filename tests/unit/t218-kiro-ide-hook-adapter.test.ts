@@ -1287,6 +1287,8 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     ["next policy", "bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy relaxed build the service"],
     ["next retired policy", ".kiro/tools/aidlc-orchestrate.ts next --change-control off build the service"],
     ["next terminal dispatch", "bun .kiro/tools/aidlc-orchestrate.ts next --status --guard-policy off"],
+    // The engine takes its launcher options off first: `--report` is the attempt id there.
+    ["next after a launcher option", "bun .kiro/tools/aidlc-orchestrate.ts next --aidlc-attempt-id --report --guard-policy off"],
     ["next quoted assignments without runner", `AIDLC_SKIP_HUMAN_PRESENCE_GUARD="1" _AIDLC_NOTE2='quoted value' ".kiro/tools/aidlc-orchestrate.ts" next --guard-policy off`],
     ["next env assignments with quoted runner", `env AIDLC_SKIP_HUMAN_PRESENCE_GUARD='1' _AIDLC_NOTE2="quoted value" "bun" .kiro/tools/aidlc-orchestrate.ts next --guard-policy off`],
     ["utility policy", "BUN .KIRO/TOOLS/AIDLC-UTILITY.TS CONFIG-CHANGE --GUARD-POLICY OFF"],
@@ -1318,6 +1320,24 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(result.stderr).toContain(KIRO_GUARD_SWITCH_REFUSAL);
       expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
       expect(existsSync(countPath)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The flags a `next` line lowers are the ones the engine's own reading takes:
+  // the person's words behind `--` that name the option lower nothing.
+  test("8d1-words: an empty-prompt next whose words behind -- name a guard policy is not a lowering", () => {
+    const dir = scratchProject(true);
+    const session = "sess_empty_prompt_words";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      const result = preGuardSwitchCommand(
+        dir,
+        session,
+        "bun .kiro/tools/aidlc-orchestrate.ts next -- add a --guard-policy off option",
+      );
+      expect(result.stderr).not.toContain(KIRO_GUARD_SWITCH_REFUSAL);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -4780,6 +4800,55 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     });
   }
 
+  // An MCP call reaches the hooks as Kiro's tool_load, then the call itself as
+  // `mcp_<server>_<tool>` (measured on Kiro CLI 2.31.0 and Kiro IDE 1.3.0).
+  // While the engine asks the person to approve the code plan both pass, so
+  // they can look something up before they decide; Kiro's own card still asks
+  // before the call. While the stage runs before approval the call waits, with
+  // or without a marker in the payload, and so does a tool the table does not
+  // know that is not an MCP call.
+  for (const policy of ["off", "strict"] as const) {
+    test(`an MCP call passes while the plan question is open, not before it (Guard Policy ${policy})`, () => {
+      const dir = scratchProject(true);
+      try {
+        seedCodeGenerationDirective(dir);
+        const statePath = seededStateFile(dir);
+        const state = readFileSync(statePath, "utf-8").replace(
+          "- **Change Control**: strict (from scope feature)",
+          policy === "off" ? "- **Guard Policy**: off (from scope feature)" : "- **Guard Policy**: strict (set by you)",
+        );
+        writeFileSync(statePath, state);
+        const call = (toolName: string, toolInput: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+          runIdeStdin(dir, "plan-approval-guard", JSON.stringify({
+            hook_event_name: "PreToolUse",
+            session_id: `ide-mcp-${policy}`,
+            cwd: dir,
+            tool_name: toolName,
+            tool_input: toolInput,
+            ...extra,
+          }));
+        const load = { tool_ids: ["probe-ws::ws_echo"] };
+        const echo = { text: "look this up" };
+        writeActiveDirectiveMarker(dir, {
+          kind: "ask", ask_type: "plan-approval", stage: "code-generation", state_sha256: stateDigest(state),
+        });
+        // A tool that takes no arguments arrives with `{}`.
+        for (const [name, input] of [["tool_load", load], ["mcp_probe_ws_ws_echo", echo], ["mcp_time_get_current_time", {}]] as const) {
+          const result = call(name, input);
+          expect(result.code, `${name}: ${result.stderr}`).toBe(0);
+        }
+        expect(call("unknown_mutation_tool", { message: "x" }).code).toBe(2);
+        writeActiveDirectiveMarker(dir, { kind: "run-stage", stage: "code-generation", state_sha256: stateDigest(state) });
+        expect(call("tool_load", load).code).toBe(0);
+        expect(call("mcp_probe_ws_ws_echo", echo).code).toBe(2);
+        expect(call("mcp_probe_ws_ws_echo", echo, { aidlc_external_tool: "mcp" }).code).toBe(2);
+        expect(call("mcp_time_get_current_time", {}).code).toBe(2);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
   test("malformed Plan Approval payloads fail closed during active Code Generation", () => {
     const dir = scratchProject(true);
     try {
@@ -6607,6 +6676,41 @@ describe("t218 enforce-approval-gate lets only the engine-issued chosen setter t
         .toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// The seam reads a `next` line as the engine does, launcher options taken off
+// first; a folder of another project keeps the line as typed, so the seam never
+// runs that project's command in this one.
+describe("t218 terminal-command-guard runs a command named for another project nowhere", () => {
+  const archive = (dir: string, folder: string) =>
+    runIdeStdin(dir, "terminal-command-guard", JSON.stringify({
+      session_id: "sess_other_project_archive",
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: "execute_pwsh",
+      tool_input: {
+        command: `bun .kiro/tools/aidlc-orchestrate.ts next --project-dir ${JSON.stringify(folder)} intent archive ${DEFAULT_RECORD_DIR}`,
+        cwd: dir,
+        run_in_background: false,
+        timeout: null,
+      },
+    }));
+  const registry = (dir: string) =>
+    readFileSync(join(intentsDirOf(dir, DEFAULT_SPACE), "intents.json"), "utf-8");
+
+  test("an archive named for another project leaves this project's work as it is", () => {
+    const dir = scratchProject(true);
+    const other = scratchProject(true);
+    try {
+      const before = registry(dir);
+      const r = archive(dir, other);
+      expect(r.code, r.stderr).toBe(0);
+      expect(registry(dir)).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(other, { recursive: true, force: true });
     }
   });
 });

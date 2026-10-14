@@ -44,7 +44,6 @@ function shippedSettings(channel: "dist" | "dist-release" = "dist"): Settings {
   ) as Settings;
 }
 
-/** A scratch project holding the shipped .claude tree and an open workflow. */
 function scratchProject(): string {
   const project = createTestProject();
   cpSync(AIDLC_SRC, join(project, ".claude"), { recursive: true });

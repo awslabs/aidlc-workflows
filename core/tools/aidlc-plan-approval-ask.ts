@@ -59,6 +59,8 @@ import {
   steeringTokenKeyPathFor,
   toPosix,
   harnessDir,
+  PERSON_WORDS_FILL,
+  PERSON_WORDS_SLOT,
   UNBINDABLE_FINGERPRINT,
   visibleMarkdownLines,
   withActiveDirectiveLock,
@@ -1949,8 +1951,8 @@ export function recordPlanApprovalAnswer(
       throw new Error(
         "The person has not answered the plan question since it was shown: their message since then was a " +
           "question or a command to AIDLC, not an answer. Answer them and end the turn. If they want plan approval " +
-          `off for this work, run \`${aidlcDispatcherInvocation("config set guard.plan-approval off")}\` and say ` +
-          "so in one line. Then record the choice they make.",
+          `off for this work, run \`${aidlcDispatcherInvocation("config set guard.plan-approval off")} --person-words ` +
+          `'${PERSON_WORDS_SLOT}'\`${PERSON_WORDS_FILL}, and say so in one line. Then record the choice they make.`,
       );
     }
     // A reply that is exactly Request Changes is the person's pick for these

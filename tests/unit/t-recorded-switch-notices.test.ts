@@ -142,7 +142,6 @@ function dispatch(proj: string, args: string[], input?: string, extra: Record<st
   return { status: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
-// The person typing in the chat, through the real human-turn hook.
 function says(proj: string, prompt: string): void {
   const result = dispatch(
     proj,
@@ -160,7 +159,6 @@ function flags(proj: string, ...args: string[]) {
 }
 
 
-// `next` as the agent runs it: from the project.
 function notices(proj: string, extra: Record<string, string | undefined> = {}): string[] {
   const result = runOrchestrateNext(ORCHESTRATE, proj, [], { cwd: proj, env: quietEnv(extra) });
   expect(result.status, result.out).toBe(0);
@@ -205,7 +203,6 @@ describe("a check switched off for the project is always said, never refused", (
     expect(recorded.stdout).not.toContain(OFFER);
     expect(resolveProjectFlag(NAME, NONE, proj)).toBe("1");
 
-    // The engine's next directive says it once; the one after does not.
     const first = notices(proj);
     expect(first).toHaveLength(1);
     expect(first[0]).toStartWith(OFF);
@@ -306,7 +303,6 @@ describe("a check switched off for the project is always said, never refused", (
 
   test("turned back on while something else still keeps it off, the command says what does", () => {
     const proj = installedProject();
-    // The environment still sets it.
     expect(flags(proj, "--bypass", NAME, "--local", "--yes").status).toBe(0);
     const underEnv = dispatch(proj, ["config", "flags", "--project-dir", proj, "--clear-bypass", NAME, "--local", "--yes"], undefined, {
       [NAME]: "1",

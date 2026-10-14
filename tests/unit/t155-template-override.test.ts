@@ -64,7 +64,7 @@ import { existsSync, readdirSync } from "node:fs";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const SENSOR = join(AIDLC_SRC, "tools", "aidlc-sensor-required-sections.ts");
 
 const tempDirs: string[] = [];
@@ -72,9 +72,6 @@ afterAll(() => {
   for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
 });
 
-// A fresh temp workspace: an output dir, the TEAM templates dir (the override
-// source aidlc/memory/templates/), and the FRAMEWORK-default templates dir (the
-// engine-shipped middle tier). Torn down in afterAll.
 function makeWorkspace(): {
   root: string;
   outDir: string;
@@ -218,7 +215,6 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
       "# Requirements\n\n## Functional Requirements\n\n## Non-Functional Requirements\n\n## Constraints\n",
     );
     const out = join(ws.outDir, "requirements.md");
-    // Output has Functional + Constraints but NOT Non-Functional.
     writeFile(
       out,
       "# Requirements\n\n## Functional Requirements\nF1\n\n## Constraints\nC1\n",
@@ -252,7 +248,6 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
     );
     const eligible = ["business-overview", "architecture"];
 
-    // business-overview output: matches its template → pass.
     const bo = join(ws.outDir, "business-overview.md");
     writeFile(bo, "## Mission\nm\n\n## Domain\nd\n");
     const rbo = runSensor({
@@ -310,7 +305,7 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
 
   // --- §10 MIDDLE branch: framework-default templates (team → framework → floor) ---
 
-  // 5 — framework default applies when the team dir misses (the new middle tier).
+  // 5 - framework default applies when the team dir misses (the middle tier).
   test("framework-default template applies when team dir has none → template:applied", () => {
     const ws = makeWorkspace();
     // team dir empty; framework dir ships requirements.md.
@@ -319,7 +314,7 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
       "# Requirements\n\n## Functional Requirements\n\n## Constraints\n",
     );
     const out = join(ws.outDir, "requirements.md");
-    writeFile(out, "# Requirements\n\n## Functional Requirements\nF1\n"); // missing Constraints
+    writeFile(out, "# Requirements\n\n## Functional Requirements\nF1\n");
     const r = runSensor({
       stage: "requirements-analysis",
       outputPath: out,
@@ -353,7 +348,6 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
       frameworkTemplatesDir: ws.frameworkDir,
       eligible: ["requirements"],
     });
-    // Expected set is the TEAM headings, not the framework's.
     expect(r.template).toBe("applied");
     expect(r.template_expected).toEqual(["## Team Section A", "## Team Section B"]);
     expect(r.pass).toBe(true);
@@ -389,7 +383,7 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
       stage: "intent-capture",
       outputPath: out,
       frameworkTemplatesDir: ws.frameworkDir,
-      eligible: [], // intent-questions NOT eligible
+      eligible: [],
     });
     expect(r.template).toBe("ineligible");
     expect(r.config_warning).toBeDefined();
@@ -421,7 +415,7 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
     expect(typeof r.config_warning).toBe("string");
     expect(r.config_warning).toContain("requirements-analysis-questions.md");
     expect(r.template_missing).toBeUndefined();
-    // The template was IGNORED: the file kept the generic floor (1 H2 → pass,
+    // The template was IGNORED: the file kept the generic floor (1 H2 -> fail,
     // since the floor for a <2-H2 file would fail — prove it's the FLOOR, not
     // the template's 3-heading set, that governs).
     expect(r.h2_count).toBe(1);
@@ -457,9 +451,9 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
   });
 
   // Timestamp markers are run records, not documents. practices-discovery
-  // specifies its marker as one line, so the floor used to fail every to-spec
-  // file at the gate (seen in live runs). It now passes with its headings still
-  // reported; questions markers keep the floor.
+  // specifies its marker as one line, so the generic floor would fail every
+  // to-spec file at the gate. It passes with its headings still reported;
+  // questions markers keep the floor.
   test("timestamp marker written to spec (one line, no headings) passes", () => {
     const ws = makeWorkspace();
     const out = join(ws.outDir, "practices-discovery-timestamp.md");
@@ -510,20 +504,19 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
     expect(r.findings_count).toBe(0);
   });
 
-  // 8 - REGRESSION (the dispatcher default-path BLOCKER). The dispatcher's
+  // 8 - REGRESSION (the dispatcher default-path mismatch). The dispatcher's
   // default --templates-dir MUST resolve to the SAME location SEED ships the
-  // templates/ floor. The original bug defaulted to <pd>/aidlc/memory/templates
-  // while SEED ships <pd>/aidlc/spaces/default/memory/templates - a clean miss
-  // that silently disabled every team template at the real runtime path. The
-  // other tests never caught it because they ALWAYS inject an explicit
-  // --templates-dir. These pin the default-path computation (now derived via
-  // memoryTemplatesDir from the same MEMORY_SEGMENTS the rules resolver +
-  // packager use) and cross-check it against where dist actually ships, so the
-  // sensor lookup and the ship location can never drift apart again.
+  // templates/ floor. A default of <pd>/aidlc/memory/templates while SEED ships
+  // <pd>/aidlc/spaces/default/memory/templates is a clean miss that silently
+  // disables every team template at the real runtime path. The other tests cannot
+  // catch it because they ALWAYS inject an explicit --templates-dir. These pin the
+  // default-path computation (derived via memoryTemplatesDir from the same
+  // MEMORY_SEGMENTS the rules resolver + packager use) and cross-check it against
+  // where dist actually ships, so the sensor lookup and the ship location can
+  // never drift apart.
   test("memoryTemplatesDir resolves under spaces/default/memory (the ship + resolver root)", () => {
     const td = memoryTemplatesDir("/ws").replace(/\\/g, "/");
     expect(td).toBe("/ws/aidlc/spaces/default/memory/templates");
-    // NOT the old buggy default the BLOCKER shipped.
     expect(td).not.toBe("/ws/aidlc/memory/templates");
   });
 
@@ -532,7 +525,6 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
     // is its parent (<repo>/dist/claude), where aidlc/ is emitted.
     const shippedWorkspaceRoot = join(AIDLC_SRC, "..");
     const dispatcherDefault = memoryTemplatesDir(shippedWorkspaceRoot);
-    // The default the dispatcher computes must point at a real shipped dir...
     expect(existsSync(dispatcherDefault)).toBe(true);
     // ...the templates/ floor SEED ships (the .gitkeep guarantees it exists).
     expect(readdirSync(dispatcherDefault)).toContain(".gitkeep");

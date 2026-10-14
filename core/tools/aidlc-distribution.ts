@@ -595,8 +595,6 @@ export function rootBlockPath(
   return join(harnessRoot, "tools", "data", "root-blocks", name);
 }
 
-// Where a projection holds the bytes it ships for a root integration: the root
-// file, or for one the copy runtime leaves out, its root-blocks copy.
 /**
  * The team's file a root integration lands in, relative to the project: the
  * integration's own path, except that AI-DLC's opencode.json part goes into
@@ -609,6 +607,8 @@ export function rootIntegrationTarget(projectDir: string, path: string): string 
   return existsSync(join(projectDir, "opencode.jsonc")) ? "opencode.jsonc" : path;
 }
 
+// Where a projection holds the bytes it ships for a root integration: the root
+// file, or for one the copy runtime leaves out, its root-blocks copy.
 export function shippedRootIntegrationPath(
   root: string,
   harnessDir: string,
@@ -660,7 +660,6 @@ export function unionBlocks(contributors: Array<{ distribution: string; text: st
   return base;
 }
 
-// The ignore entries of a .gitignore part, without its comments and blank lines.
 function ignoreEntries(text: string): string {
   return text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("#")).sort().join("\n");
 }
@@ -849,6 +848,25 @@ export function sha256FileMatching(path: string, known: readonly (string | undef
   return sha256Matching(readFileSync(path), known);
 }
 
+// Kiro CLI's upgrade for its 3.0 engine rewrites each agent JSON in
+// .kiro/agents into Kiro's own format, which has a `permissions` block no
+// agent file AI-DLC ships has, and keeps the file it replaced beside it as
+// `<name>.json.bak`. Kiro writes the backup once, at its first upgrade, so the
+// shape is the sign, not the backup's hash. Config keeps such a file as it is,
+// and doctor does not count it as the person's change.
+export function kiroUpgradedAgentFile(projectDir: string, rel: string): boolean {
+  if (!/^\.kiro\/agents\/[^/]+\.json$/.test(rel)) return false;
+  const file = join(projectDir, rel);
+  const regular = (path: string): boolean => existsSync(path) && lstatSync(path).isFile();
+  if (!regular(file) || !regular(`${file}.bak`)) return false;
+  try {
+    const agent: unknown = JSON.parse(readFileSync(file, "utf-8"));
+    return typeof agent === "object" && agent !== null && !Array.isArray(agent) && "permissions" in agent;
+  } catch {
+    return false;
+  }
+}
+
 // Earlier releases' space switch pointed the tool's include files at that
 // space's memory, and every release shipped them at the default space (the
 // includes now read the engine's copy, aidlc-includes.ts ACTIVE_MEMORY_DIR, so
@@ -1022,7 +1040,7 @@ export function jsoncSettingValue(text: string, key: string): unknown {
   }
 }
 
-/** Add `key` as the root object's last member, keeping every other byte. */
+/** Add `key` as the root object's last member, keeping existing members and comments. */
 export function insertJsoncSetting(text: string, key: string, valueJson: string): string | null {
   const source = text.trim() ? text : "{}\n";
   const root = jsoncRootMembers(source);
@@ -1045,7 +1063,6 @@ export function insertJsoncSetting(text: string, key: string, valueJson: string)
   return next;
 }
 
-/** Replace one top-level member's value in place. */
 export function replaceJsoncSetting(text: string, key: string, valueJson: string): string | null {
   const member = jsoncRootMembers(text)?.members.findLast((candidate) => candidate.key === key);
   if (!member) return null;
@@ -1209,7 +1226,7 @@ function jsonValueText(value: unknown, indent: string, layout: JsonLayout, inlin
 }
 
 // Add one member to an object (first, or after the last), or one string to an
-// array, in the layout around it, keeping every other byte.
+// array, in the layout around it, keeping existing entries and comments.
 function insertJsoncEntry(
   text: string,
   layout: JsonLayout,
@@ -1576,14 +1593,17 @@ export function mergeJsonEntries(
     if ("conflict" in step) return step;
     text = step.text;
   }
-  // AI-DLC's entries this release no longer ships go, unless someone changed them.
+  // AI-DLC's entries this release no longer ships go, unless someone changed them and force is false.
   for (const [id, hash] of Object.entries(prior)) {
     if (all[id] === undefined) text = removeRecordedJsonEntry(text, id, hash, force);
   }
   return { text, entries: next, whole: false };
 }
 
-/** Remove every recorded entry that still has the value AI-DLC wrote; null when the file is unreadable. */
+/**
+ * Remove every recorded entry that still has the value AI-DLC wrote (any value with force);
+ * null when the file is unreadable.
+ */
 export function removeJsonEntries(current: string, entries: Record<string, string>, force = false): string | null {
   if (jsoncTree(current)?.kind !== "object") return null;
   let text = current;
@@ -1591,7 +1611,6 @@ export function removeJsonEntries(current: string, entries: Record<string, strin
   return text;
 }
 
-/** True when the text is an object with no members (whitespace and a byte order mark aside). */
 export function emptyJsonObject(text: string): boolean {
   return withoutBom(text).replace(/\s/g, "") === "{}";
 }

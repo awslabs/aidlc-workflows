@@ -1,111 +1,52 @@
 // covers: file:tools/aidlc-audit.ts, file:knowledge/aidlc-shared/audit-format.md
 //
-// t28 — audit event-type SYNC contract. Migrated from
-// tests/unit/t28-audit-event-sync.sh (TAP plan 7). The .sh validated that the
-// canonical event-type taxonomy is in lock-step across two shipped source
-// files, plus that the heading map is exhaustive and the count is pinned to a
-// baseline. Pure-bash, "no bun or claude required (L1)" — a cross-file
-// structural drift guard with zero process boundary and zero LLM.
+// t28 - audit event-type SYNC contract. The canonical event-type taxonomy is
+// in lock-step across two shipped source files, the heading map is exhaustive,
+// and the count is pinned to a baseline: a cross-file structural drift guard
+// with zero process boundary and zero LLM.
 //
 // Mechanism: none. This is a pure structural / source-inspection check over
-// the shipped bytes — read the two files in-process, extract their event-type
-// sets with the SAME extraction rules the .sh's sed/grep used, and assert the
-// set relationships. There is no argv / exit-code / stdout / audit.md seam to
-// cross (the .sh never ran a tool), and `VALID_EVENT_TYPES` / `EVENT_HEADINGS`
+// the shipped bytes: read the two files in-process, extract their event-type
+// sets, and assert the set relationships. There is no argv / exit-code /
+// stdout / audit seam to cross, and `VALID_EVENT_TYPES` / `EVENT_HEADINGS`
 // are module-private (NOT exported from aidlc-audit.ts), so the contract is
-// precisely the textual cross-file sync the .sh asserted — preserved by
-// parsing the same byte ranges in-process. No spawn, no tokens.
+// precisely the textual cross-file sync, checked by parsing the same byte
+// ranges in-process. No spawn, no tokens.
 //
 // Subject under test (the shipped distributable):
 //   - dist/claude/.claude/tools/aidlc-audit.ts
-//       :22-154  const VALID_EVENT_TYPES = new Set([ "STAGE_STARTED", ... ]);
-//       :158-239 const EVENT_HEADINGS: Record<string,string> = { TYPE: "...", };
+//       const VALID_EVENT_TYPES = new Set([ "STAGE_STARTED", ... ]);
+//       const EVENT_HEADINGS: Record<string,string> = { TYPE: "...", };
 //   - dist/claude/.claude/knowledge/aidlc-shared/audit-format.md
-//       "## Event Registry (91 events, 22 categories)" .. "## Hook-Generated"
+//       "## Event Registry" .. "## Hook-Generated"
 //       — backtick-delimited `EVENT_TYPE` cells in the registry tables.
 //
-// Extraction parity with the .sh (so the sets are byte-identical to what the
-// .sh compared):
-//   - TS_EVENTS  (.sh L16): the lines from `new Set([` through `]);`, all
+// Extraction:
+//   - TS_EVENTS: the lines from `new Set([` through `]);`, all
 //       "[A-Z_]+" double-quoted tokens, deduped + sorted.
-//   - MD_EVENTS  (.sh L24): the lines from `## Event Registry` through
+//   - MD_EVENTS: the lines from `## Event Registry` through
 //       `## Hook-Generated`, all `[A-Z_]+` backtick-delimited tokens, deduped
-//       + sorted. (The ✓ MANDATORY marker is not [A-Z_], so it never leaks
-//       into a token — same as the .sh.)
+//       + sorted. (The check-mark MANDATORY marker is not [A-Z_], so it never
+//       leaks into a token.)
 //
 // Test-design note (house style): assert the OBSERVABLE cross-file contract
-// the .sh asserted against the real bytes on disk — never re-declare the
-// taxonomy here. The expected sets are DERIVED from the files, not hard-coded;
-// only the canonical COUNT is pinned as a literal, exactly as the .sh's
-// test 7 baseline did.
-//
-// Old TAP -> new test parity (1:1, no guarantee dropped):
-//   .sh test 1 (assert_gt TS_COUNT 0)                 -> "extracts a non-empty event set from aidlc-audit.ts"
-//   .sh test 2 (assert_gt MD_COUNT 0)                 -> "extracts a non-empty event set from audit-format.md"
-//   .sh test 3 (every TS event in MD)                 -> "every aidlc-audit.ts event appears in audit-format.md"
-//   .sh test 4 (every MD event in TS)                 -> "every audit-format.md event appears in aidlc-audit.ts"
-//   .sh test 5 (EVENT_HEADINGS has every TS event)    -> "EVENT_HEADINGS maps every VALID_EVENT_TYPES member"
-//   .sh test 6 (assert_eq TS_COUNT MD_COUNT)          -> "event counts match across the two files"
-//   .sh test 7 (assert_eq TS_COUNT - baseline pin)    -> "VALID_EVENT_TYPES.size === <CANONICAL_COUNT> (baseline pin)"
+// against the real bytes on disk - never re-declare the taxonomy here. The
+// expected sets are DERIVED from the files, not hard-coded; only the canonical
+// COUNT is pinned as a literal.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 
-// AIDLC_SRC === <repo>/dist/claude/.claude — the same root the .sh resolved
-// AUDIT_TS and AUDIT_MD under ($AIDLC_SRC/tools, $AIDLC_SRC/knowledge/...).
+// AIDLC_SRC === <repo>/dist/claude/.claude (the shipped tree under test).
 const AUDIT_TS = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md");
 
-// The canonical baseline pinned by .sh test 7. Bump WITH the source when an
-// event is added (v0.6.0 Wave 4 milestone 16: +SWARM_DEGRADED took this to 67;
-// v2.1.3: +WORKFLOW_PARKED +WORKFLOW_UNPARKED took it to 69; v2.1.4:
-// -TEST_RUN_MODE_ENABLED took it to 68; +HUMAN_TURN took it to 69;
-// +RECOMPOSED (adaptive composer) takes it to 70; +REVIEWER_SCOPE_BLOCKED
-// (the reviewer-scope PreToolUse hook) takes it to 71;
-// +PLUGIN_SELECTION_CHANGED (select-plugins set-mode) took it to 72;
-// +REVIEW_REQUESTED and +REVIEW_COMPLETED take it to 74;
-// +SUMMARY_CONFIRMATION_RECORDED takes it to 75;
-// +REVIEW_FREEZE_BLOCKED takes it to 76;
-// +PLAN_APPROVAL_BLOCKED (the plan-approval PreToolUse guard) takes it to 77;
-// +REVIEW_CLASS_CHANGED (the --review per-run override) takes it to 78.
-// +UNIT_STARTED, +UNIT_PAUSED, +UNIT_RESUMED, and +UNIT_COMPLETED take it to 82;
-// +DOCUMENT_INDEXED, +DOCUMENT_UPDATED, and +DOCUMENT_REMOVED (DocumentKB) take
-// it to 85; Unit ownership and gate-rhythm configuration take it to 87;
-// pinned Unit merge completion takes it to 88; PIPELINE_LINK_COMPLETED takes it
-// to 89; SWARM_SOURCE_MERGED takes it to 90; PLAN_APPROVAL_RECORDED takes it
-// to 91; CHANGE_CONTROL_SET and CHANGE_ACCEPTED (Change Control) take it to 93;
-// PLAN_APPROVAL_OVERRIDDEN and GUARD_DISABLED (the human-only break-glass exit and
-// the audited guard off-switch) take it to 95; SOURCE_COMMITTED (aidlc-attest.ts
-// anchor, commit provenance) takes it to 96; WORKFLOW_ARCHIVED and
-// WORKFLOW_UNARCHIVED take it to 98; CEREMONY_SET takes it to 99;
-// VERIFICATION_COMMAND_RECORDED takes it to 100;
-// CHECKPOINT_VERIFICATION_RECORDED takes it to 101;
-// CONSTRUCTION_POLICY_RECORDED takes it to 102; GUARD_POLICY_SET,
-// GUARD_STOOD_ASIDE and GUARD_RESTORED (Guard Policy: the renamed setting row
-// plus the stand-aside and restore rows; the retired CHANGE_CONTROL_SET stays in
-// the set as a read-only legacy row) take it to 105; SCOPE_SAVED (a piece of
-// work's plan kept as a reusable scope) takes it to 106; PLAN_APPROVAL_SKIPPED
-// (built with plan approval off, never a person's approval) takes it to 107;
-// UNIT_SKIPPED (one unit-major (stage, unit) conditional skip) takes it to 108;
-// SUBAGENT_PROMPT_UNMATCHED (the Copilot adapter's advisory row for a prompt
-// right after a subagent start that matched no recorded brief) takes it to 109;
-// COORDINATION_STOOD_ASIDE (the Copilot adapter's advisory row for a command
-// whose coordination record it could not find or trust) takes it to 110;
-// CONSTRUCTION_POLICY_SET (an applied Construction policy change, read by the
-// Unit receipt floor) takes it to 111;
-// WORKSPACE_RECLASSIFIED (the person said the work is a new project or
-// existing code, and the folder was scanned again) takes it to 112;
-// QUESTION_UNANSWERED (a question box came back with no answer, so no earlier
-// turn carries an answer) takes it to 113;
-// QUESTION_REPLIED (what a question box carried back, question by question)
-// takes it to 114. REQUEST_ROUTED (words the person sent to other work leave the
-// question the work in progress has open) takes it to 115. INTENT_REPOS_CHANGED (a sibling repo added to
-// or removed from a piece of work by the person) takes it to 116.
-// HOST_TURN (a prompt the host made for the agent, never a person's turn) takes it to 117.
-// REVIEW_VERDICT_DICTATED (a reviewer dispatch whose brief already carried the verdict; no longer written, kept
-// registered so audits and worktree deltas written before still read and merge) takes it to 118.
+// The canonical baseline. Bump WITH the source when an event is added or
+// removed. The retired CHANGE_CONTROL_SET stays in the set as a read-only
+// legacy row; REVIEW_VERDICT_DICTATED is registered but never written, so
+// audits and worktree deltas that carry it still read and merge.
 const CANONICAL_COUNT = 118;
 
 /** Slice the lines of `text` BETWEEN the first line matching `start` and the
@@ -124,50 +65,42 @@ function sedRange(text: string, start: RegExp, end: RegExp): string {
       continue;
     }
     out.push(line);
-    if (end.test(line)) break; // sed stops at the FIRST end after entering.
+    if (end.test(line)) break;
   }
   return out.join("\n");
 }
 
-/** Deduped + sorted list of `pattern` matches in `block`, stripped of `strip`
- *  delimiters — the .sh's `grep -oE ... | tr -d ... | sort -u` pipeline. */
 function extractSorted(block: string, pattern: RegExp, strip: string): string[] {
   const matches = block.match(pattern) ?? [];
   const stripRe = new RegExp(`[${strip.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}]`, "g");
   return [...new Set(matches.map((m) => m.replace(stripRe, "")))].sort();
 }
 
-// --- TS_EVENTS (.sh L16): VALID_EVENT_TYPES set members. ---
+// --- TS_EVENTS: VALID_EVENT_TYPES set members. ---
 const auditTsBody = readFileSync(AUDIT_TS, "utf-8");
 const TS_BLOCK = sedRange(auditTsBody, /new Set\(\[/, /\]\);/);
 const TS_EVENTS = extractSorted(TS_BLOCK, /"[A-Z_]+"/g, '"');
 
-// --- MD_EVENTS (.sh L24): backtick event tokens in the Event Registry. ---
+// --- MD_EVENTS: backtick event tokens in the Event Registry. ---
 const auditMdBody = readFileSync(AUDIT_MD, "utf-8");
 const MD_BLOCK = sedRange(auditMdBody, /## Event Registry/, /## Hook-Generated/);
 const MD_EVENTS = extractSorted(MD_BLOCK, /`[A-Z_]+`/g, "`");
 
-// --- EVENT_HEADINGS block (.sh L57): the heading map keys. The .sh sliced
-// `/EVENT_HEADINGS/,/};/` and substring-grepped each TS event against it. We
-// parse the keys structurally for a STRONGER co-membership check. ---
+// --- EVENT_HEADINGS block: the heading map keys. ---
 const HEADINGS_BLOCK = sedRange(auditTsBody, /EVENT_HEADINGS/, /^};/);
 const HEADINGS_KEYS = new Set(
   [...HEADINGS_BLOCK.matchAll(/^\s+([A-Z_]+):/gm)].map((m) => m[1]),
 );
 
 describe("t28 audit event-type sync (migrated from t28-audit-event-sync.sh, plan 7)", () => {
-  // .sh test 1: assert_gt TS_COUNT 0.
   test("extracts a non-empty event set from aidlc-audit.ts [.sh test 1]", () => {
     expect(TS_EVENTS.length).toBeGreaterThan(0);
   });
 
-  // .sh test 2: assert_gt MD_COUNT 0.
   test("extracts a non-empty event set from audit-format.md [.sh test 2]", () => {
     expect(MD_EVENTS.length).toBeGreaterThan(0);
   });
 
-  // .sh test 3: every TS event found in MD. STRONGER than the .sh's
-  // accumulate-missing loop: name the exact offenders if any leak through.
   test("every aidlc-audit.ts event appears in audit-format.md [.sh test 3]", () => {
     const mdSet = new Set(MD_EVENTS);
     const missingFromMd = TS_EVENTS.filter((e) => !mdSet.has(e));
@@ -177,7 +110,6 @@ describe("t28 audit event-type sync (migrated from t28-audit-event-sync.sh, plan
     ).toEqual([]);
   });
 
-  // .sh test 4: every MD event found in TS.
   test("every audit-format.md event appears in aidlc-audit.ts [.sh test 4]", () => {
     const tsSet = new Set(TS_EVENTS);
     const missingFromTs = MD_EVENTS.filter((e) => !tsSet.has(e));
@@ -187,9 +119,6 @@ describe("t28 audit event-type sync (migrated from t28-audit-event-sync.sh, plan
     ).toEqual([]);
   });
 
-  // .sh test 5: EVENT_HEADINGS has an entry for every VALID_EVENT_TYPES member.
-  // STRONGER than the .sh's substring grep: assert exact-key membership against
-  // the parsed heading-map keys, naming any unmapped event type.
   test("EVENT_HEADINGS maps every VALID_EVENT_TYPES member [.sh test 5]", () => {
     const missingHeadings = TS_EVENTS.filter((e) => !HEADINGS_KEYS.has(e));
     expect(
@@ -198,17 +127,11 @@ describe("t28 audit event-type sync (migrated from t28-audit-event-sync.sh, plan
     ).toEqual([]);
   });
 
-  // .sh test 6: assert_eq TS_COUNT MD_COUNT. STRONGER: the two SETS are equal,
-  // not merely the same cardinality (set-equality implies count-equality and
-  // subsumes tests 3+4, but we keep the count assertion explicit for parity).
   test("event counts match across the two files [.sh test 6]", () => {
     expect(MD_EVENTS.length).toBe(TS_EVENTS.length);
-    expect(MD_EVENTS).toEqual(TS_EVENTS); // both deduped + sorted; full set parity.
+    expect(MD_EVENTS).toEqual(TS_EVENTS);
   });
 
-  // .sh test 7: assert_eq TS_COUNT - the canonical baseline pin, bumped when
-  // events are added or removed. (#367 added WORKFLOW_PARKED/UNPARKED -> 69;
-  // #369 removed TEST_RUN_MODE_ENABLED -> 68; HUMAN_TURN took it to 69; the adaptive composer added RECOMPOSED -> 70; REVIEWER_SCOPE_BLOCKED took it to 71; PLUGIN_SELECTION_CHANGED took it to 72; REVIEW_REQUESTED/REVIEW_COMPLETED took it to 74; SUMMARY_CONFIRMATION_RECORDED took it to 75; REVIEW_FREEZE_BLOCKED took it to 76; PLAN_APPROVAL_BLOCKED took it to 77; REVIEW_CLASS_CHANGED took it to 78; the unit lifecycle receipts UNIT_STARTED/PAUSED/RESUMED/COMPLETED took it to 82; the DocumentKB DOCUMENT_INDEXED/UPDATED/REMOVED trio took it to 85; UNIT_OWNERSHIP_SET/UNIT_GATE_RHYTHM_SET take it to 87; UNIT_MERGED takes it to 88; UNIT_SKIPPED, the unit-major per-unit conditional skip, takes it from 107 to 108; SUBAGENT_PROMPT_UNMATCHED, the Copilot advisory row, takes it to 109; COORDINATION_STOOD_ASIDE, the Copilot stand-aside row, takes it to 110; CONSTRUCTION_POLICY_SET, an applied Construction policy change, takes it to 111; WORKSPACE_RECLASSIFIED, the person's word on new project or existing code, takes it to 112; QUESTION_UNANSWERED, a question box that came back with no answer, takes it to 113; QUESTION_REPLIED, what a question box carried back, takes it to 114; REQUEST_ROUTED, words sent to other work, takes it to 115; INTENT_REPOS_CHANGED, a sibling repo added to or removed from a piece of work, takes today's set to 116.)
   // The name interpolates CANONICAL_COUNT rather than hardcoding it: a literal
   // here drifts silently, since no drift guard reads test-name strings.
   test(`VALID_EVENT_TYPES.size === ${CANONICAL_COUNT} (baseline pin) [.sh test 7]`, () => {

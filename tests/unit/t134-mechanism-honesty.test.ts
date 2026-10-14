@@ -1,6 +1,6 @@
 // covers: harness-instrument:mechanism-honesty
 //
-// MR8 meta-test for the all-TS runner cutover. It ties three views together:
+// Meta-test. It ties three views together:
 // the coverage registry built fresh, the body-derived mechanism scan, and the
 // runner's Claude skip-set helper.
 

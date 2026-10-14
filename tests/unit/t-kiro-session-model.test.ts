@@ -16,6 +16,8 @@
 //     without Kiro's level list it certifies only the preset's own level
 //   - a write Kiro rejects says exactly what was and was not saved, and the
 //     effort merges onto the personal map as it is at write time
+//   - a model picked inside Kiro is the chat's alone until it is saved, so a
+//     line that names /model names /model set-current-as-default too
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -532,13 +534,18 @@ describe("doctor", () => {
         "aidlc-quality-agent.json": { name: "aidlc-quality-agent" },
       },
     );
-    const labels = (await findings(env, dir)).map((finding) => finding.label);
-    expect(labels).toEqual([
+    const result = await findings(env, dir);
+    expect(result.map((finding) => finding.label)).toEqual([
       "Session model: this project's .kiro/settings/cli.json pins claude-sonnet-4.6, which overrides your claude-opus-4.7 here",
       "Session model: this project's .kiro/settings/cli.json has chat.modelDefaults, which replaces your personal effort settings here",
       'Session model: claude-opus-4.7 is not offered on your Kiro account any more; every prompt fails with "The model ... is not available"',
       'Agent architect pins claude-opus-4.7, which your Kiro account does not offer; Kiro rejects that agent with "Invalid model ID"',
     ]);
+    // A model picked inside Kiro is the chat's alone until it is saved, and
+    // agents start on the saved one, so the way out names the save.
+    expect(result[2].fix).toBe(
+      "run `aidlc config models`, or choose one in Kiro with /model, then /model set-current-as-default to save it",
+    );
   });
 
   test("a project model text that is not a plain id is never echoed into doctor", async () => {

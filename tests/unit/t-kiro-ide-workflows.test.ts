@@ -119,6 +119,12 @@ const ON_WITH_COMMENTS = `{
 }
 `;
 
+const MISSING_COMMA = `{
+  "editor.fontSize": 14
+  "${KEY}": true
+}
+`;
+
 describe("Kiro IDE's user settings file", () => {
   test("inside Kiro IDE it is the running Kiro's user data folder; elsewhere Kiro's default folder", () => {
     expect(kiroIdeUserSettingsPath({ VSCODE_CODE_CACHE_PATH: join("C:", "ud", "CachedData", "2d86910a") }, "win32"))
@@ -266,6 +272,48 @@ describe("the chat asks once", () => {
     });
   });
 
+  test("a settings file with an error is told once for each error, whatever was answered", () => {
+    const m = machine(MISSING_COMMA);
+    withEnv(inKiro(m), () => {
+      recordKiroWorkflowsAnswer("on");
+      const line = kiroIdeWorkflowsAsk("aidlc", process.env);
+      expect(line).toStartWith("TELL ONCE:");
+      expect(line).toContain(`Kiro's settings file (${m.settingsPath}) has an error, so AI-DLC cannot tell whether Kiro's Workflows feature is on.`);
+      expect(line).toContain("While Kiro's Workflows feature is on, AI-DLC's reviews and helpers do not run in your chats.");
+      expect(line).toContain("Fix the error in that file");
+      expect(line).not.toContain("--kiro-workflows");
+      expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toBe("");
+      expect(readKiroWorkflowsAnswer()).toBe("on");
+      // A file fixed, checked, and broken again in another way is told again.
+      writeFileSync(m.settingsPath, `{ "${KEY}": true }\n`);
+      expect(readKiroIdeWorkflows(m.env).readable).toBe(true);
+      writeFileSync(m.settingsPath, `{ "${KEY}": true,, }\n`);
+      expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toStartWith("TELL ONCE:");
+    });
+  });
+
+  test("two Kiro settings files with errors are each told once", () => {
+    const a = machine(MISSING_COMMA);
+    const b = machine(MISSING_COMMA);
+    const shared = { AIDLC_INSTALL_ROOT: a.env.AIDLC_INSTALL_ROOT, AIDLC_BIN_DIR: a.env.AIDLC_BIN_DIR };
+    for (const m of [a, b]) {
+      withEnv({ ...inKiro(m), ...shared }, () => expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toStartWith("TELL ONCE:"));
+    }
+    for (const m of [a, b]) {
+      withEnv({ ...inKiro(m), ...shared }, () => expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toBe(""));
+    }
+  });
+
+  test("never asked: the error is told first, and the question still comes once the file is fixed", () => {
+    const m = machine(MISSING_COMMA);
+    withEnv(inKiro(m), () => {
+      expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toStartWith("TELL ONCE:");
+      expect(readKiroWorkflowsAnswer()).toBeNull();
+      writeFileSync(m.settingsPath, ON_WITH_COMMENTS);
+      expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toContain("Do you want me to turn Workflows off?");
+    });
+  });
+
   test("no line with Workflows off, outside Kiro IDE (Kiro CLI), or once the person answered at setup", () => {
     const off = machine(`{ "${KEY}": false }`);
     withEnv(inKiro(off), () => expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toBe(""));
@@ -294,6 +342,54 @@ describe("config trust and doctor", () => {
     });
   });
 
+  // Kiro IDE 1.2.37 turned Workflows on from a file missing a comma, which
+  // AI-DLC cannot read: unknown, never off, and the step is the person's.
+  test("a settings file AI-DLC cannot read is named as unknown, never as off, with the person's own step", () => {
+    const m = machine(MISSING_COMMA);
+    const unknown = "Kiro Workflows: Kiro's settings file has an error, so AI-DLC cannot tell whether Workflows is on";
+    const step = `fix the error in ${m.settingsPath}`;
+    const setup = installKiroIde(m.env);
+    expect(readFileSync(m.settingsPath, "utf-8")).toBe(MISSING_COMMA);
+    expect(setup.out).toContain(unknown);
+    expect(setup.out).toContain(step);
+    const { project } = setup;
+    const show = runInit(["config", "trust", "--project-dir", project, "--show", "--json"], project, m.env);
+    expect(show.status, show.out).toBe(0);
+    expect(JSON.parse(show.out).data.kiroWorkflows).toEqual({ enabled: false, readable: false, settingsPath: m.settingsPath, answer: null });
+    const human = runInit(["config", "trust", "--project-dir", project, "--show"], project, m.env);
+    expect(human.out).toContain(`Kiro Workflows: could not be read (${m.settingsPath})`);
+    expect(human.out).not.toContain("Kiro Workflows: off");
+    const check = runInit(["config", "trust", "--project-dir", project, "--check"], project, m.env);
+    expect(check.status, check.out).toBe(0);
+    expect(check.out).toContain(unknown);
+    // The trust walk says the person's step before its own review question.
+    const walk = runInit(
+      ["config", "trust", "--project-dir", project, "--harness", "kiro-ide"],
+      project,
+      { ...m.env, AIDLC_TEST_CONFIG_TTY: "1", AIDLC_TEST_CONFIG_INPUT: "n\n" },
+    );
+    expect(walk.status, walk.out).toBe(0);
+    const said = walk.out.indexOf(`${unknown}: ${step}`);
+    expect(said, walk.out).toBeGreaterThan(-1);
+    expect(walk.out.indexOf("Separately, record that you reviewed")).toBeGreaterThan(said);
+    expect(kiroIdeWorkflowsDoctorCheck(project, ".kiro", m.env)).toMatchObject({ pass: false, severity: "warn", label: unknown });
+    expect(kiroIdeWorkflowsDoctorCheck(project, ".kiro", m.env)?.fix).toContain(step);
+    withEnv(m.env, () => {
+      const action = postApplyOutstandingActions(project, ".kiro", "kiro-ide").find((entry) => entry.id === "kiro-workflows-unreadable");
+      expect(action?.message).toBe(unknown);
+      // The step is shown alone in setup's list, so it names the file.
+      expect(action?.step).toContain(step);
+      expect(action?.command).toMatch(/config trust --check$/);
+      // Whatever the person answered before, Kiro may read the file as on.
+      for (const answer of ["off", "asked", "on"] as const) {
+        recordKiroWorkflowsAnswer(answer);
+        expect(trustStatus(project, ".kiro", "kiro-ide").issues.some((entry) => entry.id === "kiro-workflows-unreadable"), answer)
+          .toBe(true);
+      }
+    });
+    expect(readFileSync(m.settingsPath, "utf-8")).toBe(MISSING_COMMA);
+  });
+
   test("doctor warns while Workflows is on and names the same command; ok when it is off", () => {
     const on = machine(ON_WITH_COMMENTS);
     const { project } = installKiroIde({ ...on.env, AIDLC_TEST_KIRO_IDE_SETTINGS: join(on.root, "none.json") });
@@ -304,7 +400,6 @@ describe("config trust and doctor", () => {
     expect(row?.fix).toContain("Developer: Reload Window");
     const off = machine(`{ "${KEY}": false }`);
     expect(kiroIdeWorkflowsDoctorCheck(project, ".kiro", off.env)).toEqual({ pass: true, label: "Kiro Workflows is off" });
-    // Outside a Kiro IDE project there is no row.
     expect(kiroIdeWorkflowsDoctorCheck(temp("aidlc-t-kiro-workflows-empty-"), undefined, on.env)).toBeNull();
   });
 
@@ -339,7 +434,7 @@ describe("config trust and doctor", () => {
     const { project } = installKiroIde({ ...m.env, AIDLC_TEST_KIRO_IDE_SETTINGS: join(m.root, "none.json") });
     const show = runInit(["config", "trust", "--project-dir", project, "--show", "--json"], project, m.env);
     expect(show.status, show.out).toBe(0);
-    expect(JSON.parse(show.out).data.kiroWorkflows).toEqual({ enabled: true, settingsPath: m.settingsPath, answer: null });
+    expect(JSON.parse(show.out).data.kiroWorkflows).toEqual({ enabled: true, readable: true, settingsPath: m.settingsPath, answer: null });
     const human = runInit(["config", "trust", "--project-dir", project, "--show"], project, m.env);
     expect(human.out).toContain(`Kiro Workflows: on (${m.settingsPath})`);
 

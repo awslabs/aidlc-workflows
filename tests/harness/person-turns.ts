@@ -48,6 +48,16 @@ function audit(): AuditReader {
 }
 const auditBlockField = (block: string, field: string) => audit().auditBlockField(block, field);
 
+// The engine's own check that a quote is the person's words (log answer
+// --on-instruction makes it too), loaded on first use like the reader above.
+let quoteCheck: ((said: string, quoted: string) => boolean) | undefined;
+function holdsQuote(said: string, quoted: string): boolean {
+  quoteCheck ??= (require("../../dist/claude/.claude/tools/aidlc-message-store.ts") as {
+    holdsQuote: (said: string, quoted: string) => boolean;
+  }).holdsQuote;
+  return quoteCheck(said, quoted);
+}
+
 /** Events in one audit shard, keyed by space, intent and shard name. */
 type AuditTrail = Map<string, AuditShardEvent[]>;
 
@@ -155,6 +165,12 @@ const gateItem = (row: AuditShardEvent) =>
  * turn after the last gate resolution, as the engine requires. The rows an
  * approval backfills before it (a Recovered rejection and re-opening) leave
  * the gate's first opening in place, and the rejection is checked as usual.
+ *
+ * Shards are read one at a time, and a turn sent before a shard existed sits
+ * at its start. So a row in a shard that began during the drive (a fresh
+ * clone's, a second machine's) is backed only by the turn sent just before
+ * the shard began or a later one: every reply leaves its own row in the shard
+ * its chat writes, so no older turn can back a row there.
  */
 export function unbackedDecisions(projectDir: string, start: AuditCursor, turns: readonly PersonTurn[]): string[] {
   const { decisionAnsweredBy, nextOpenDecision, DECISION_CLOSING_EVENTS } = audit();
@@ -163,6 +179,9 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
   const used = turns.map(() => 0);
   for (const [key, events] of readTrail(projectDir)) {
     const first = start.get(key) ?? 0;
+    // The earliest turn that can back a row here: the one sent just before the shard began.
+    const began = turns.findIndex((turn) => turn.cursor.has(key));
+    const born = start.has(key) ? 0 : began === -1 ? turns.length - 1 : Math.max(0, began - 1);
     const open = new Map<string, { block: string; index: number }>();
     const answered = new Map<string, number>();
     const gates = new Map<string, number>();
@@ -212,7 +231,7 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
         // question comes: any turn of the drive that holds the words the row
         // quotes backs it, a command included, and backs every answer it covers.
         if (auditBlockField(row.block, "Answer Source") === audit().ANSWER_SOURCE_ON_INSTRUCTION) {
-          instruction = plainWords(auditBlockField(row.block, "Instruction") ?? "");
+          instruction = auditBlockField(row.block, "Instruction") ?? "";
           since = -1;
           reply = false;
           answer = false;
@@ -244,10 +263,10 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
         const quoted = instruction;
         const backs = (from: number, menuOnly: boolean) => turns.findIndex((turn, which) => {
           const at = turn.cursor.get(key) ?? 0;
-          return at >= from && at <= index && !(needsReply && isCommand(turn.words)) &&
+          return which >= born && at >= from && at <= index && !(needsReply && isCommand(turn.words)) &&
             (!menuOnly || turn.selections !== undefined) &&
             (!answer || used[which] < (turn.selections ?? openQuestions(events, at))) &&
-            (quoted === undefined || plainWords(turn.words).includes(quoted));
+            (quoted === undefined || holdsQuote(turn.words, quoted));
         });
         let backing = quoted === "" ? -1 : backs(after, false);
         if (backing === -1 && menuSince !== undefined) backing = backs(Math.max(menuSince + 1, first), true);
@@ -296,11 +315,6 @@ function openQuestions(events: readonly AuditShardEvent[], at: number): number {
   return Math.max(open, 1);
 }
 
-// Words compared as the person typed them, whatever the spacing or case.
-function plainWords(text: string): string {
-  return text.replace(/\s+/g, " ").trim().toLowerCase();
-}
-
 /** The Units of the work's compiled DAG (`<record>/runtime-graph.json`), when it has one. */
 function dagUnits(projectDir: string, key: string): string[] {
   const [space, intent] = key.split("/");
@@ -327,9 +341,25 @@ function describe(row: AuditShardEvent, key: string, turns: readonly PersonTurn[
   ].join("");
 }
 
+/**
+ * A failure where AI-DLC acted for the person: a decision recorded as theirs
+ * that no turn of theirs backs, or work run ahead of their answer. Bun's JUnit
+ * writes this name as the failure type, and the runner never retries a file
+ * that fails with it (tests/lib/file-retry.ts): a pass on a second attempt
+ * would hide the break a person would meet.
+ */
+export class PersonTurnError extends Error {
+  override name = "PersonTurnError";
+}
+
+/** A test's own check that the person came first, failing as a PersonTurnError. */
+export function expectPersonFirst(personCameFirst: boolean, what: string): void {
+  if (!personCameFirst) throw new PersonTurnError(what);
+}
+
 /** The failure a drive raises when `problems` is not empty. */
-export function unbackedFailure(drive: string, problems: readonly string[]): Error {
-  return new Error(
+export function unbackedFailure(drive: string, problems: readonly string[]): PersonTurnError {
+  return new PersonTurnError(
     `${drive} recorded ${problems.length} decision(s) as the person's that no turn from them backs:\n` +
       problems.map((line) => `  ${line}`).join("\n"),
   );

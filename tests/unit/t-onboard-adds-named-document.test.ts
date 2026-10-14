@@ -48,7 +48,6 @@ function project(): string {
   return proj;
 }
 
-/** The same project, under git, with the ignore rules the case needs. */
 function gitProject(ignore: string): string {
   const proj = project();
   const init = spawnSync("git", ["init", "-q"], { cwd: proj, encoding: "utf-8" });
@@ -57,7 +56,6 @@ function gitProject(ignore: string): string {
   return proj;
 }
 
-/** `knowledge onboard ...` as the person's own command runs it, through the dispatcher. */
 function onboard(proj: string, args: string[]): { status: number; out: string; json: Record<string, unknown> } {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "knowledge", "onboard", ...args, "--project-dir", proj], {
     cwd: proj,
@@ -90,7 +88,6 @@ describe("the document a person names is added, wherever it is in their project"
     expect(indexedPaths(result.json)).toEqual([]);
     expect(result.out).not.toContain("does not exist");
     expect(result.out).not.toContain("mkdir");
-    // The folder is there for them to fill.
     expect(existsSync(join(proj, DOCUMENTS))).toBe(true);
   });
 
@@ -108,7 +105,6 @@ describe("the document a person names is added, wherever it is in their project"
     // which would leave two live rows for one document.
     expect(note).toContain("The knowledge base reads that copy from now on, not your own vision.md.");
     expect(note).not.toContain("again");
-    // The destination is named once, and their own file is untouched.
     expect(note.split(destination)).toHaveLength(2);
     expect(existsSync(join(proj, "vision.md"))).toBe(true);
   });
@@ -233,7 +229,6 @@ describe("the document a person names is added, wherever it is in their project"
     writeFileSync(join(proj, "vision.md"), "# Vision\n", "utf-8");
     const result = onboard(proj, ["vision.md"]);
     expect(result.status, result.out).not.toBe(0);
-    // Nothing is created through the link, and nothing is copied through it.
     expect(existsSync(join(outside, "documents"))).toBe(false);
   });
 

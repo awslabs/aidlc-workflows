@@ -95,6 +95,7 @@ import {
   guardRecoveryAnswerAdmits,
   loadScopeMapping,
   loadStageGraph,
+  nextLineFlags,
   parseCheckboxes,
   parseStateStageSuffixes,
   PLAN_APPROVAL_ASK_TYPE,
@@ -1562,7 +1563,13 @@ function engineCommandAdmitted(
     !guardRecoveryAnswerAdmits(context.marker, engineArgs, projectDir)
   ) return false;
   if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted()) return false;
-  if (!args.some((arg) => arg === "--bypass" || arg.startsWith("--bypass="))) return true;
+  // `next` takes no `--bypass`: on its line the token is one of the person's
+  // words ("add a --bypass option"), never a check turned off, as the engine's
+  // own reading says (nextLineFlags). Every other command is read whole, as its
+  // tool reads it.
+  const nextAt = args[0] === "next" ? 0 : args[0] === "orchestrate" && args[1] === "next" ? 1 : -1;
+  const switches = nextAt >= 0 ? nextLineFlags(args.slice(nextAt + 1)).map((flag) => flag.token) : args;
+  if (!switches.some((arg) => arg === "--bypass" || arg.startsWith("--bypass="))) return true;
   if (args[0] === "config" && args[1] === "flags") return recordedSwitchChangeAdmitted(projectDir, args);
   return personAskedSinceGate(projectDir);
 }
@@ -2181,6 +2188,13 @@ async function evaluate(
           const planPaths = mutation.targets.length > 0 ? planApprovalPlanNamedPaths(projectDir) : null;
           if (mutation.targets.every((candidate) => isPlanWaitSideWrite(projectDir, candidate, planPaths))) return 0;
         }
+        // A call to one of the person's own MCP servers, as the harness adapter
+        // marks it outside the agent's input, runs like their other requests:
+        // the host's own approval and their settings decide it. A marked
+        // write, shell or dispatch gets no such pass.
+        if (parsed.aidlc_external_tool === "mcp" && !knownMutationTool && !DISPATCH_TOOLS.has(toolName)) {
+          return 0;
+        }
         authorityFailure = PLAN_APPROVAL_ASK_OPEN;
         standing = planStanding(projectDir, activeDirective);
         // Loaded only here: the question's own record, read the way its owner
@@ -2204,12 +2218,24 @@ async function evaluate(
         // request's own file while the parent holds the dispatch record. The
         // worker and the reviewer are subagents of this session, so this hook,
         // with the parent as its project, is the one that sees their writes.
-        // Everything else in the main checkout waits until the batch lands.
+        // A write seen anywhere else in the main checkout waits until the batch
+        // lands.
         const listed = activeDirective.units ?? [];
         // Each Unit's code is written inside the worktree `prepare` bound to it.
         if (
           !mutation.opaqueShell && mutation.targets.length > 0 &&
           preparedBoltWorktreeUnit(projectDir, mutation.targets, listed) !== null
+        ) return 0;
+        // While every listed Unit's approved plan holds, a command whose writes
+        // cannot be seen runs, as a serial build's does once its plan is
+        // approved (below), whatever it is spelled as. What it is seen to write
+        // still lands only in one prepared worktree; whether the main checkout
+        // changed during the build is the landing's to say.
+        const seen = mutation.targets.filter((candidate) => !isOutsideProject(projectDir, candidate));
+        if (
+          mutation.opaqueShell && listed.length > 0 &&
+          (seen.length === 0 || preparedBoltWorktreeUnit(projectDir, seen, listed) !== null) &&
+          gatherUnitEvidence(projectDir, listed).every(approvalEvidenceIsCurrent)
         ) return 0;
         swarmBatchOut = true;
         authorityFailure =

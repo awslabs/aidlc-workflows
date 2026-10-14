@@ -51,6 +51,7 @@ import {
 import { describe, expect, test } from "bun:test";
 import { assertToolResultContains } from "../harness/assert.ts";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
+import { expectPersonFirst } from "../harness/person-turns.ts";
 import {
   type CapturedAskUserQuestion, driveAidlc, readAuditEvents, readStateFile, separateWorkOptionIndex,
 } from "../harness/sdk-drive.ts";
@@ -199,11 +200,10 @@ describe("t-journey-question-once (sdk): a question still open at the end of a t
 
         // Nothing was answered or moved on in the person's place.
         const recorded = ANSWER_ROWS.filter((row) => (atReply!.rows.get(row) ?? 0) > (seeded.get(row) ?? 0));
-        expect(recorded, "rows recorded before the person answered").toEqual([]);
+        expectPersonFirst(recorded.length === 0, `rows recorded before the person answered: ${recorded.join(", ")}`);
         expect(atReply!.intents).toBe(1);
         expect(atReply!.state).toMatch(FEASIBILITY_IN_PROGRESS);
-        expect(turn1Results.filter((t) => RUN_STAGE.test(t.resultText)), "a stage was handed to the agent before the person answered")
-          .toEqual([]);
+        expectPersonFirst(!turn1Results.some((t) => RUN_STAGE.test(t.resultText)), "a stage was handed to the agent before the person answered");
 
         // Their answer was taken as given: the separate work was created, and
         // no picker came after the reply.

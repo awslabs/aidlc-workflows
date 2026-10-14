@@ -55,7 +55,6 @@ function run(tool: string, args: string[], proj: string): { status: number | nul
   return { status: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString() };
 }
 
-// What the person types, through the real UserPromptSubmit route.
 function says(proj: string, prompt: string): void {
   const result = Bun.spawnSync({
     cmd: [BUN, join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
@@ -110,7 +109,7 @@ describe("a guard's turn-it-off choice is a command the agent runs", () => {
       executableNow: true,
     });
     expect(guardOperationMatchesCommand(remedy.operation!, remedy.command!)).toBe(true);
-    expect(remedy.action).toStartWith("Turn the review-freeze check off for this piece of work.");
+    expect(remedy.action).toStartWith("Turn the review-freeze check off for this piece of work:");
     expect(remedy.action).toContain("tell the person in one line");
     expect(remedy.action).not.toMatch(/\/aidlc|\$aidlc|typ(e|ing)|yourself/);
   });
@@ -169,7 +168,9 @@ describe("a guard's turn-it-off choice is a command the agent runs", () => {
   test("a prose refusal tells the agent to offer it and run the setter itself", () => {
     const sentence = lowerFenceSentence("state-transition");
     expect(sentence).toContain("offer to turn the state-transition check off for this piece of work");
-    expect(sentence).toMatch(/run `[^`]+config-change --guard\.state-transition off` yourself|run `aidlc engine config set guard\.state-transition off` yourself/);
+    expect(sentence).toMatch(
+      /run `[^`]+(config-change --guard|config set guard)\.state-transition off --person-words '<their words>'` yourself/,
+    );
     // No slash command for the person to type (the setter's own path is fine).
     expect(sentence).not.toMatch(/(^|[\s`])[/$]aidlc\b/);
   });

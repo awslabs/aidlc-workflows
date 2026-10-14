@@ -159,7 +159,6 @@ describe("t334 (7) at the dispatch guard, other code moving after approval is ne
     humanTurn(project, "strict-guard");
     expect(answer(project, questions, "strict-guard").code).toBe(0);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
-    // The source moves after approval.
     writeFileSync(join(project, "src", "after.ts"), "export const after = 1;\n");
     const dispatch = (prompt: string) => runChangeControlTool(
       [BUN, GUARD],
@@ -259,7 +258,6 @@ describe("t334 (7) at the dispatch guard, other code moving after approval is ne
     for (const command of ["touch src/x.ts", "aidlc engine config set guard.plan-approval off; touch src/x.ts"]) {
       expect(bash(command).code, command).toBe(0);
     }
-    // The argv check behind the admission is exact.
     const argv = ["engine", "config", "set", "guard.plan-approval", "off"];
     expect(isGuardRecoveryEngineInvocation(argv)).toBe(true);
     for (const changed of [

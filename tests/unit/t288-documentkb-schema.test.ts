@@ -111,7 +111,6 @@ function errorMatching(errors: string[], needle: RegExp): string {
  *  exists as a literal is that a fixture built from the implementation's current
  *  requirements is circular — it proves the validator agrees with itself. */
 const DESIGN_CONFORMANT_EXTRACTION: Record<string, Record<string, unknown>> = {
-  // Carries: extractor{name,version}, chars, truncated, source_revision
   extracted: {
     state: "extracted",
     extractor: { name: "pdftotext", version: "24.02.0" },
@@ -127,16 +126,15 @@ const DESIGN_CONFORMANT_EXTRACTION: Record<string, Record<string, unknown>> = {
   },
   // Carries: attempted extractor.name ONLY — nothing ran, so there is no
   // version, and inventing one would be a fabricated fact. ALSO carries
-  // detectedType (finding 5(c)): the mime a retry needs to re-probe once an
-  // extractor for it exists -- without it, `detectMimeFromRow` fell back to
-  // guessing from the file extension, and a `.docx` row could never become
-  // retryable no matter what got installed later.
+  // detectedType: the mime a retry needs to re-probe once an extractor for it
+  // exists -- without it, `detectMimeFromRow` fell back to guessing from the
+  // file extension, and a `.docx` row could never become retryable no matter
+  // what got installed later.
   extractor_unavailable: {
     state: "extractor_unavailable",
     extractor: { name: "pdftotext" },
     detectedType: "application/pdf",
   },
-  // Carries: extractor{name,version}, reason
   extraction_failed: {
     state: "extraction_failed",
     extractor: { name: "pdftotext", version: "24.02.0" },
@@ -364,9 +362,8 @@ describe("t288 content and summary.path are CANONICALLY BOUND to the row's own i
   });
 
   test("RED-verify: the escape variant is refused by validDocumentPath already, not by this binding", () => {
-    // Documents the correction to the reviewer's framing: this is a SEPARATE
-    // gap from the traversal check, and the traversal check alone is not the
-    // fix for the cross-row binding above.
+    // This is a SEPARATE gap from the traversal check, and the traversal check
+    // alone is not the fix for the cross-row binding above.
     expect(validDocumentPath("../../../../etc/hosts")).toBe(false);
   });
 });
@@ -398,10 +395,10 @@ describe("t288 a malformed removed_at is refused, not silently read as live", ()
     expect(validateDocumentIndex(index([row({ removed_at: 12345 })])).ok).toBe(false);
   });
 
-  // Finding 5(a): the OLD check was `typeof === "string" && length > 0` -- bare
+  // The check `typeof === "string" && length > 0` gives bare
   // non-emptiness, not the ISO-timestamp shape the error message itself
-  // promises ("must be a non-empty ISO timestamp string"). Measured against
-  // the shipped tool: `removed_at: "not-a-date"` PASSED validation outright.
+  // promises ("must be a non-empty ISO timestamp string"). With that check,
+  // `removed_at: "not-a-date"` passes validation outright.
   test("removed_at: 'not-a-date' is refused -- non-empty is not the same promise as ISO", () => {
     const r = validateDocumentIndex(index([row({ removed_at: "not-a-date" })]));
     expect(r.ok).toBe(false);
@@ -420,8 +417,8 @@ describe("t288 a malformed removed_at is refused, not silently read as live", ()
   });
 
   test("removed_at: a shape-valid but impossible calendar date is refused", () => {
-    // Passes the regex's character-class shape, fails Date.parse -- proving
-    // the check is genuinely TWO gates, neither redundant with the other.
+    // Passes the regex's character-class shape, fails the calendar check --
+    // proving the check is genuinely TWO gates, neither redundant with the other.
     expect(
       validateDocumentIndex(index([row({ removed_at: "2026-13-45T00:00:00Z" })])).ok,
     ).toBe(false);
@@ -526,7 +523,6 @@ describe("t288 derivatives are REVISION-BOUND", () => {
   });
 
   test("extraction_failed REQUIRES a reason so each bound trip is distinguishable", () => {
-    // Drop `reason` from the design-conformant record and nothing else.
     const { reason, ...noReason } = DESIGN_CONFORMANT_EXTRACTION.extraction_failed;
     expect(reason).toBeDefined();
     const r = validateDocumentIndex(index([row({ extraction: noReason })]));
@@ -562,7 +558,6 @@ describe("t288 each state's REQUIRED companions are enforced, per the design tab
         const r = validateDocumentIndex(index([row({ extraction: stripped })]));
         expect(r.ok, `${state} without ${field} should be refused`).toBe(false);
         if (!r.ok) {
-          // The error must name the missing field, not merely be *an* error.
           expect(errorMatching(r.errors, new RegExp(field))).not.toBe("");
         }
       });
@@ -600,9 +595,8 @@ describe("t288 each state's REQUIRED companions are enforced, per the design tab
   });
 
   test("extractor_unavailable ACCEPTS name-only (plus detectedType) — the design's own shape", () => {
-    // This is the over-rejection review caught: the validator required
-    // name+version for every state that carried an extractor at all, which
-    // refused the exact record this state exists to express.
+    // Requiring name+version for every state that carries an extractor at all
+    // refuses the exact record this state exists to express.
     expect(validateDocumentIndex(index([
       row({
         extraction: {

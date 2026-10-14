@@ -193,7 +193,6 @@ function acceptedFor(p: string, unit: string) {
     row.event === "CHANGE_ACCEPTED" && auditBlockField(row.block, "Unit") === unit);
 }
 
-// What alpha's approval recorded for its Code Generation stage.
 function approvedEvidence(p: string, unit = "alpha") {
   const gate = readAuditShardEvents(p).filter((row) =>
     row.event === "GATE_APPROVED" && auditBlockField(row.block, "Unit") === unit).at(-1);
@@ -244,7 +243,6 @@ describe("t-checkpoint-review-none: reviews off, an approved Unit changed later"
         expect(approved(p, "alpha")).toBe(true);
         expect(readAuditShardEvents(p).filter((row) =>
           row.event === "DECISION_RECORDED" && auditBlockField(row.block, "Unit") === "alpha")).toHaveLength(1);
-        // alpha's approval kept its one claimed path and its entry.
         expect(Object.keys(approvedEvidence(p)["code-generation"][2] ?? {})).toEqual(["\u0000src/alpha.ts"]);
       }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
@@ -367,7 +365,6 @@ describe("t-checkpoint-review-none: reviews off, an approved Unit changed later"
       });
       expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
       expect(approved(p, "alpha")).toBe(true);
-      // Said once: the next Unit's checkpoint does not say it again.
       build(p, "beta");
       expect(verify(p, "beta").change_notices ?? []).toEqual([]);
       expect(acceptedFor(p, "alpha")).toHaveLength(1);

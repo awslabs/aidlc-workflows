@@ -161,7 +161,6 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
       if (/^disallowedTools:/m.test(coreSrc)) {
         expect(fm.split("\n")).toContain(WORKER_TOOLS_LINE);
       }
-      // Body prose points at the engine dir, never an unsubstituted token.
       expect(raw).not.toContain("{{HARNESS_DIR}}");
     }
   });
@@ -181,7 +180,6 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     expect(orchestrator).toContain("numbered prose");
     expect(orchestrator).toContain("picker results do not fire");
     expect(orchestrator).toContain("| `load-steering` |");
-    // The rules part names the command that fetches the next part; the row says to run it as given.
     expect(orchestrator).toContain("Run the command the part names (copy it as given)");
     expect(orchestrator).toContain("The orchestration engine emits nine kinds today");
     expect(orchestrator).toContain("stage-protocol-ensemble.md");
@@ -428,7 +426,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
   test("10: no shipped Copilot line tells a person to set GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS", () => {
     // Measured live on Copilot CLI 1.0.74 (the floor) and 1.0.96: a headless
     // `copilot -p` run in a trusted folder runs the hooks with no variable, and
-    // the `=1` this install used to ask for does nothing in either case.
+    // GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1 does nothing in either case.
     const naming = [...walk(COPILOT_ROOT)]
       .filter((file) => readFileSync(file, "utf-8").includes("GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS"))
       .map((file) => relative(COPILOT_ROOT, file).split(sep).join("/"));

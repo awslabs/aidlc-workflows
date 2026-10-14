@@ -3,6 +3,7 @@ name: aidlc
 description: AI-DLC. Choose this agent in the agent picker, then type /aidlc and what you want to build, or ask it to continue your workflow.
 display_name: aidlc
 tools: ["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent"]
+includeMcpJson: true
 resources:
   - "file://{{HARNESS_DIR}}/skills/aidlc/SKILL.md"
   - "file://{{HARNESS_DIR}}/skills/aidlc/question-rendering.md"

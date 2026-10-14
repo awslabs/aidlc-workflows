@@ -61,8 +61,10 @@
 //      in-flight, aidlc-orchestrate.ts:1161-1176), so without a carve-out the
 //      hook would block and spam the forwarding-loop nudge until the cap bleeds
 //      out. So when the current stage's checkbox is positively [?]/[R] we ALLOW
-//      the stop (isHumanWaitStop below). Positive-confirmation only and
-//      fail-open: stateless cases fall through to the cap-bounded block.
+//      the stop (isHumanWaitStop below), until the person's reply to the open
+//      gate is on record: then the wait is over and their choice is owed.
+//      Positive-confirmation only and fail-open: stateless cases fall through
+//      to the cap-bounded block.
 //   3. A mid-stage CLARIFYING QUESTION parks the stage at [-] in-progress — the
 //      same state as a lazy quit, so [-] alone can't be carved out. But the
 //      conductor must write a `<slug>-questions.md` with blank [Answer]: tags
@@ -188,6 +190,8 @@ import {
   auditBlockField,
   openPendingDecision,
   humanTurnMintAllowed,
+  humanRepliedSinceGate,
+  personRepliedSincePresentation,
   hookChildEnv,
   isEngineToolCall,
   isShellToolName,
@@ -674,8 +678,12 @@ function resetGuard(projectDir: string): void {
 // interactive gate.
 //
 // So when the CURRENT stage's checkbox is positively in one of those states,
-// allow the stop. This is the only safe widening of an allow: it can only ever
-// make the hook release MORE readily, never block more.
+// allow the stop. An open gate stops being a wait once the person has replied
+// to it, by approve's own two checks (a reply since the last decision, and
+// since the gate was last shown): the turn then owes their choice, so the
+// cap-bounded block carries it on. A message that is only a command to AI-DLC,
+// a question box closed with no answer, or another question answered since
+// keeps the wait, as it keeps approve from recording a choice.
 //
 // One honest caveat on [R]: the row stays `revising` across the WHOLE rework
 // window (it flips back to [?] only when the conductor calls `revise`; see
@@ -714,16 +722,24 @@ function isHumanWaitStop(
         activeUnit,
         effectiveUnitGateRhythm(projectDir, stateContent),
       );
-      if (status === "awaiting-approval" || status === "revising") return true;
+      if (status === "revising") return true;
+      if (status === "awaiting-approval") return !repliedToGate(projectDir, { stage: activeStage, unit: activeUnit });
     }
     const slug = currentStageSlug(stateContent);
     if (slug.length === 0) return false;
     const row = parseCheckboxes(stateContent).find((c) => c.slug === slug);
-    return row?.state === "awaiting-approval" || row?.state === "revising";
+    if (row?.state === "revising") return true;
+    return row?.state === "awaiting-approval" && !repliedToGate(projectDir, { stage: slug });
   } catch {
     // Unparseable / odd content — fall through to decideBlock (never trap).
     return false;
   }
+}
+
+// The person replied to the open gate: the presence approve requires before it
+// records their choice (aidlc-state.ts). A record that cannot be read is no reply.
+function repliedToGate(projectDir: string, gate: { stage: string; unit?: string }): boolean {
+  return humanRepliedSinceGate(projectDir) && personRepliedSincePresentation(projectDir, gate) === true;
 }
 
 // --- Tier-2: pending mid-stage question carve-out -----------------------------
@@ -2108,7 +2124,8 @@ if (!KNOWN_DIRECTIVE_KINDS.has(kind)) {
 // current-stage-scoped successor to the broad `[?]` substring match that landed
 // in 679153d; scoping to the current slug and adding [R] is strictly safer.)
 // An own-work recovery ask (finish the revision the [R] stage is in) is the
-// agent's work, not a wait on the person: it goes to the block below.
+// agent's work, not a wait on the person: it goes to the block below. So is an
+// open gate the person has replied to: their choice is owed.
 if (directive.agent_work !== true && isHumanWaitStop(projectDir, stateContent, activeStage, activeUnit)) {
   recordHookTrace(
     projectDir,

@@ -95,15 +95,15 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const TOOLS_DIR = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const STATE = join(TOOLS_DIR, "aidlc-state.ts");
 const LOG = join(TOOLS_DIR, "aidlc-log.ts");
 const JUMP = join(TOOLS_DIR, "aidlc-jump.ts");
 const BOLT = join(TOOLS_DIR, "aidlc-bolt.ts");
 
-// The .sh seeds every audit-emitting case with this state fixture (its
-// existence is what flips emitError from no-op to emit).
+// Every audit-emitting case needs this state fixture (its existence is what
+// flips emitError from no-op to emit).
 const STATE_FIXTURE = join(REPO_ROOT, "tests", "fixtures", "state-mid-ideation.md");
 
 const tempDirs: string[] = [];
@@ -112,11 +112,11 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-// P9: the flat aidlc-docs/audit.md is retired. seed_state_file seeds the default
-// intent's record so emitError's existsSync(stateFilePath) gate passes and the
-// active-intent cursor resolves; emitError's appendAuditEntry then CREATES its
-// own per-clone shard under that record (no audit-seed needed). The SPAWNED tool
-// mints its own clone-id, so reads glob every shard via readAllAuditShards.
+// seedStateFile seeds the default intent's record so emitError's state-file
+// gate passes and the active-intent cursor resolves; emitError's
+// appendAuditEntryUnlocked then CREATES its own per-clone shard under that
+// record (no audit-seed needed). The SPAWNED tool mints its own clone-id, so
+// reads glob every shard via readAllAuditShards.
 function seededProj(): string {
   const p = createTestProject();
   tempDirs.push(p);
@@ -124,7 +124,7 @@ function seededProj(): string {
   return p;
 }
 
-/** create_test_project ONLY — no state file, no audit trail (Test 6). */
+/** createTestProject ONLY - no state file, no audit trail (Test 6). */
 function bareProj(): string {
   const p = createTestProject();
   tempDirs.push(p);
@@ -133,11 +133,10 @@ function bareProj(): string {
 
 interface CliResult {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string;
   stderr: string;
 }
 
-/** Spawn `bun <tool> <args...> --project-dir <p>`. Mirrors `bun "$TOOL" ... --project-dir "$PROJ"`. */
 function run(tool: string, args: string[], p: string): CliResult {
   const res = spawnSync(BUN, [tool, ...args, "--project-dir", p], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -151,7 +150,6 @@ function run(tool: string, args: string[], p: string): CliResult {
   };
 }
 
-/** Count `**Event**: ERROR_LOGGED` lines in a buffer. */
 function errorLoggedCount(body: string): number {
   return body
     .split("\n")
@@ -161,7 +159,7 @@ function errorLoggedCount(body: string): number {
 /**
  * Value of <key> from the FIRST audit block whose `**Event**:` matches <ev>.
  * Resets at `## ` headings and `---` separators; splits `**label**: value`
- * on the literal `**: ` separator. Mirrors auditField in t31.cli.test.ts.
+ * on the literal `**: ` separator. Mirrors auditField in t31.test.ts.
  * Returns "" when absent (block-scoped).
  */
 function auditField(body: string, ev: string, key: string): string {
@@ -193,17 +191,17 @@ function auditField(body: string, ev: string, key: string): string {
 }
 
 // ============================================================
-// aidlc-state — the primary emitError driver (.sh Tests 1-6, 11, 12)
+// aidlc-state - the primary emitError driver
 // ============================================================
 
 describe("t34 ERROR_LOGGED via emitError (migrated from t34-tool-error-logged.sh, plan 11)", () => {
   test("1: aidlc-state bogus-cmd emits exactly one ERROR_LOGGED", () => {
     const p = seededProj();
     const r = run(STATE, ["bogus-cmd"], p);
-    // STRONGER than the .sh presence grep: exact count against a zero-baseline seed.
+    // Exact count against a zero-baseline seed.
     expect(errorLoggedCount(readAllAuditShards(p))).toBe(1);
     expect(r.status).toBe(1);
-    expect(r.stderr).toContain('"error"'); // JSON error on stderr (emitError, lib.ts:1545)
+    expect(r.stderr).toContain('"error"'); // JSON error on stderr (emitError, aidlc-lib.ts)
   });
 
   test("2: ERROR_LOGGED has Tool=aidlc-state", () => {
@@ -215,14 +213,12 @@ describe("t34 ERROR_LOGGED via emitError (migrated from t34-tool-error-logged.sh
   test("3: ERROR_LOGGED Command starts with the failing invocation", () => {
     const p = seededProj();
     run(STATE, ["bogus-cmd"], p);
-    // .sh grepped '**Command**: aidlc-state bogus-cmd' — an UNANCHORED substring
-    // match. error() (aidlc-state.ts:1713) builds the Command from the FULL
+    // exitWithError() (aidlc-state.ts) builds the Command from the FULL
     // process.argv.slice(2), which still carries the trailing --project-dir <p>
     // (main() splices only its own local args copy, NOT process.argv). So the
-    // recorded Command is "aidlc-state bogus-cmd --project-dir <p>", which the
-    // .sh's unanchored grep matched on its prefix. STRONGER than the file-wide
-    // grep: this assert is block-scoped to the ERROR_LOGGED entry, and pins the
-    // exact "aidlc-state bogus-cmd" prefix + that --project-dir survives into the row.
+    // recorded Command is "aidlc-state bogus-cmd --project-dir <p>". This assert is
+    // block-scoped to the ERROR_LOGGED entry, and pins the exact "aidlc-state
+    // bogus-cmd" prefix + that --project-dir survives into the row.
     const command = auditField(readAllAuditShards(p), "ERROR_LOGGED", "Command");
     expect(command).toStartWith("aidlc-state bogus-cmd");
     expect(command).toContain("--project-dir");
@@ -231,8 +227,6 @@ describe("t34 ERROR_LOGGED via emitError (migrated from t34-tool-error-logged.sh
   test("4: ERROR_LOGGED records the Error message", () => {
     const p = seededProj();
     run(STATE, ["bogus-cmd"], p);
-    // .sh grepped '**Error**: Unknown subcommand'; assert the exact field
-    // begins with that diagnostic (STRONGER: block-scoped, not file-wide).
     expect(auditField(readAllAuditShards(p), "ERROR_LOGGED", "Error")).toStartWith("Unknown subcommand");
   });
 
@@ -244,8 +238,8 @@ describe("t34 ERROR_LOGGED via emitError (migrated from t34-tool-error-logged.sh
 
   test("6: no-op when no state file (audit trail not created)", () => {
     // The per-intent shell exists (createTestProject), but no state file makes
-    // the cursor unresolvable; emitError's existsSync(stateFilePath) guard
-    // (lib.ts:1513) makes it a no-op so no shard is written.
+    // the cursor unresolvable; emitError's state-file guard (aidlc-lib.ts) makes
+    // it a no-op so no shard is written.
     const p = bareProj();
     const r = run(STATE, ["bogus-cmd"], p);
     expect(readAllAuditShards(p)).toBe("");
@@ -275,7 +269,7 @@ describe("t34 ERROR_LOGGED via emitError (migrated from t34-tool-error-logged.sh
 
 // ============================================================
 // Cross-tool: aidlc-log / aidlc-jump / aidlc-bolt all route their
-// error() helper through the same emitError (.sh Tests 7-9).
+// error() helper through the same emitError.
 // ============================================================
 
 describe("t34 emitError is shared across tool CLIs", () => {
@@ -289,8 +283,8 @@ describe("t34 emitError is shared across tool CLIs", () => {
   test("8: aidlc-jump error routes through emitError (Tool=aidlc-jump)", () => {
     const p = seededProj();
     // `preview` is not a valid aidlc-jump subcommand (valid: resolve, execute,
-    // aidlc-jump.ts:65) — so the unknown-subcommand error() fires, regardless
-    // of the --to flag. Mirrors the .sh's `aidlc-jump preview --to non-existent-slug`.
+    // reopen; see main in aidlc-jump.ts) - so the unknown-subcommand error() fires,
+    // regardless of the --to flag.
     run(JUMP, ["preview", "--to", "non-existent-slug"], p);
     expect(errorLoggedCount(readAllAuditShards(p))).toBe(1);
     expect(auditField(readAllAuditShards(p), "ERROR_LOGGED", "Tool")).toBe("aidlc-jump");
