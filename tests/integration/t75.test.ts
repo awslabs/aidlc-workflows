@@ -636,6 +636,126 @@ describe("t75 practices-promote — idempotency on both memory targets", () => {
     expect(teamSecond).toBe(teamFirst);
     expect(projectSecond).toBe(projectFirst);
   });
+
+  test("re-affirming unchanged rules on a later date preserves both categories and their original dates", () => {
+    const fx = makeFixture();
+    expect(runPromote(fx).status).toBe(0);
+    const original = readFileSync(fx.projectMd, "utf-8").replace(
+      /\(affirmed \d{4}-\d{2}-\d{2}\)/g,
+      "(affirmed 2000-01-01)",
+    );
+    writeFileSync(fx.projectMd, original, "utf-8");
+
+    const result = runPromote(fx);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      emitted: "PRACTICES_AFFIRMED",
+      mandated_appended: 0,
+      forbidden_appended: 0,
+    });
+    expect(readFileSync(fx.projectMd, "utf-8")).toBe(original);
+    expect(auditEventCount(auditPath(fx.proj), "PRACTICES_AFFIRMED")).toBe(2);
+  });
+
+  test("only matching-category rules deduplicate, including rules without a date", () => {
+    const fx = makeFixture();
+    writeFileSync(
+      fx.projectMd,
+      "# Project-Level Rules\n\n## Decided\n\nALWAYS run project checks\n\n" +
+        "## Mandated\n\nALWAYS keep review records\n\n" +
+        "## Forbidden\n\nALWAYS run project checks (affirmed 2000-01-01)\n",
+      "utf-8",
+    );
+    writeFileSync(
+      fx.discoveredRulesPath,
+      "# Discovered Rules\n\n## Mandated\n\nALWAYS keep review records\n" +
+        "ALWAYS run project checks\nALWAYS run project checks\n\n" +
+        "## Forbidden\n\nALWAYS run project checks\nNEVER skip CI gates\n",
+      "utf-8",
+    );
+
+    const result = runPromote(fx);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      mandated_appended: 1,
+      forbidden_appended: 1,
+    });
+    const project = readFileSync(fx.projectMd, "utf-8");
+    const mandated = extractMarkdownSection(project, "## Mandated");
+    const forbidden = extractMarkdownSection(project, "## Forbidden");
+    expect(mandated).toContain("ALWAYS keep review records\n");
+    expect(mandated).not.toContain("ALWAYS keep review records (affirmed");
+    expect(mandated.match(/ALWAYS run project checks/g)).toHaveLength(1);
+    expect(mandated).toContain(`ALWAYS run project checks (affirmed ${todayUtc()})`);
+    expect(forbidden).toContain("ALWAYS run project checks (affirmed 2000-01-01)");
+    expect(forbidden.match(/ALWAYS run project checks/g)).toHaveLength(1);
+    expect(forbidden).toContain(`NEVER skip CI gates (affirmed ${todayUtc()})`);
+  });
+
+  test("previously stamped drafts match existing rules without rewriting old duplicates or stacking dates", () => {
+    const fx = makeFixture();
+    const existingMandated = "ALWAYS keep review records (affirmed 2000-01-01)";
+    const existingForbidden = "NEVER skip CI gates (affirmed 2000-01-01) (affirmed 2000-01-02)";
+    writeFileSync(
+      fx.projectMd,
+      `# Project-Level Rules\n\n## Mandated\n\n${existingMandated}\n${existingMandated}\n\n` +
+        `## Forbidden\n\n${existingForbidden}\n`,
+      "utf-8",
+    );
+    writeFileSync(
+      fx.discoveredRulesPath,
+      "# Discovered Rules\n\n## Mandated\n\n" +
+        "ALWAYS keep review records (affirmed 2000-01-02) (affirmed 2000-01-03)\n\n" +
+        "## Forbidden\n\nNEVER skip CI gates\n" +
+        "NEVER bypass review (affirmed 2000-01-01) (affirmed 2000-01-02)\n" +
+        "NEVER bypass review\n",
+      "utf-8",
+    );
+
+    const result = runPromote(fx);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      mandated_appended: 0,
+      forbidden_appended: 1,
+    });
+    const project = readFileSync(fx.projectMd, "utf-8");
+    expect(project.split("\n").filter((line) => line === existingMandated)).toHaveLength(2);
+    expect(project).toContain(existingForbidden);
+    expect(project.match(/NEVER skip CI gates/g)).toHaveLength(1);
+    expect(project.match(/NEVER bypass review/g)).toHaveLength(1);
+    expect(project).toContain(`NEVER bypass review (affirmed ${todayUtc()})`);
+    expect(project).not.toContain("NEVER bypass review (affirmed 2000-01-01)");
+  });
+
+  test("different wording and non-terminal affirmation text remain distinct rules", () => {
+    const fx = makeFixture();
+    writeFileSync(
+      fx.projectMd,
+      "# Project-Level Rules\n\n## Mandated\n\n" +
+        "ALWAYS run project checks (affirmed 2000-01-01)\n\n## Forbidden\n",
+      "utf-8",
+    );
+    writeFileSync(
+      fx.discoveredRulesPath,
+      "# Discovered Rules\n\n## Mandated\n\nALWAYS run project checks.\n" +
+        "ALWAYS run project checks (affirmed 2000-01-01) before deployment\n" +
+        "ALWAYS run project checks (affirmed yesterday)\n\n## Forbidden\n",
+      "utf-8",
+    );
+
+    const result = runPromote(fx);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ mandated_appended: 3, forbidden_appended: 0 });
+    const project = readFileSync(fx.projectMd, "utf-8");
+    expect(project).toContain("ALWAYS run project checks (affirmed 2000-01-01)\n");
+    expect(project).toContain(`ALWAYS run project checks. (affirmed ${todayUtc()})`);
+    expect(project).toContain(`ALWAYS run project checks (affirmed 2000-01-01) before deployment (affirmed ${todayUtc()})`);
+    expect(project).toContain(`ALWAYS run project checks (affirmed yesterday) (affirmed ${todayUtc()})`);
+  });
 });
 
 // --- small helper: delete a fixture file (mirrors the .sh's `rm ...`). Defined
