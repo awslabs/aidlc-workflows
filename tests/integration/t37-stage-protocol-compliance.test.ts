@@ -75,6 +75,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
+import { protocolNote } from "../../core/tools/aidlc-directive.ts";
 import { AIDLC_SRC, FIXTURES_DIR } from "../harness/fixtures.ts";
 
 const PROTOCOL = join(AIDLC_SRC, "aidlc-common", "protocols", "stage-protocol.md");
@@ -223,8 +224,17 @@ describe("mid-ideation fixture conforms to the template section structure", () =
 describe("SKILL.md routing mandates the static and conditional protocol files", () => {
   // .sh: ROUTING_SECTION = sed -n '/^## Routing/,/^## /p'; assert_contains each.
   const routing = section(read(SKILL), /^## Routing/, /^## /);
+  // Each step names the stage protocol and its modules in its own note (#1330);
+  // the routing section names the two no step names.
+  const note = protocolNote(".claude/aidlc-common/stages/construction/code-generation.md", [
+    "reviewer",
+    "swarm",
+    "ensemble",
+    "construction",
+  ]) ?? "";
   test("routing mandates stage-protocol.md [.sh routing 1]", () => {
-    expect(routing.includes("stage-protocol.md")).toBe(true);
+    expect(routing).toContain("Each step names the stage protocol and the modules it runs by.");
+    expect(note).toContain(".claude/aidlc-common/protocols/stage-protocol.md");
   });
   test("routing mandates stage-protocol-recovery.md [.sh routing 2]", () => {
     expect(routing.includes("stage-protocol-recovery.md")).toBe(true);
@@ -239,7 +249,7 @@ describe("SKILL.md routing mandates the static and conditional protocol files", 
     "stage-protocol-construction.md",
   ]) {
     test(`routing mandates ${module}`, () => {
-      expect(routing.includes(module)).toBe(true);
+      expect(note).toContain(module);
     });
   }
 });

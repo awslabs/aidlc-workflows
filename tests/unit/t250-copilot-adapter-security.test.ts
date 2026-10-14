@@ -1678,7 +1678,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     };
     for (const root of roots) walk(join(REPO_ROOT, root));
     expect(families.size).toBeGreaterThan(40);
-    for (const named of ["engine log decision", "engine log answer", "engine log review", "engine runtime summary", "engine intent list", "engine learnings persist", "engine testing-posture verify", "engine state lookup"]) {
+    for (const named of ["engine log decision", "engine log answer", "engine log review", "engine runtime summary", "engine orchestrate park", "engine learnings persist", "engine testing-posture verify", "engine state lookup"]) {
       expect(families.has(named), named).toBe(true);
     }
     const s = scratch();

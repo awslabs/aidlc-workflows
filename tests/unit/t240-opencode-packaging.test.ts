@@ -407,8 +407,8 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     expect(release).toContain("!`aidlc engine skill-text --harness-dir .aidlc`");
     expect(release).not.toContain("{{INVOKE}}");
     // What the line prints, run the way opencode runs it (from the project
-    // folder, no --project-dir): the shipped skill, byte for byte, and longer
-    // than opencode's 50 KiB tool-output cut.
+    // folder, no --project-dir): the shipped skill, byte for byte, whatever its
+    // size against opencode's 50 KiB tool-output cut.
     const r = spawnSync(
       process.execPath,
       [join(ENGINE, "tools", "aidlc.ts"), "engine", "skill-text", "--harness-dir", ".aidlc"],
@@ -422,7 +422,6 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     expect(r.status, r.stderr).toBe(0);
     const skill = readFileSync(join(ENGINE, "skills", "aidlc", "SKILL.md"), "utf-8");
     expect(r.stdout).toBe(skill.endsWith("\n") ? skill : `${skill}\n`);
-    expect(Buffer.byteLength(r.stdout, "utf-8")).toBeGreaterThan(50 * 1024);
   });
 
   // Claude Code and opencode may share one project (the lifecycle guide's

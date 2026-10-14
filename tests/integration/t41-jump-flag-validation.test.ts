@@ -130,9 +130,11 @@ describe("t41 SKILL.md forwarding-loop contract (migrated from t41-jump-flag-val
     "observability-setup",
   ] as const;
 
+  // The table lives in tables.md beside the skill.
+  const TABLES = readFileSync(join(AIDLC_SRC, "skills", "aidlc", "tables.md"), "utf-8");
   for (const slug of STAGE_SLUGS) {
     test(`stage-graph table includes slug: ${slug} [.sh test 11-15]`, () => {
-      expect(SKILL.includes(slug)).toBe(true);
+      expect(TABLES.includes(slug)).toBe(true);
     });
   }
 });

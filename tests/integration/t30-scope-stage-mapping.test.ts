@@ -73,7 +73,8 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-utility.ts";
 
 // --- Shipped artifacts (the SAME files the orchestrator + tool read) --------
-const SKILL_PATH = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
+// The generated tables live in tables.md beside the orchestrator skill.
+const SKILL_PATH = join(AIDLC_SRC, "skills", "aidlc", "tables.md");
 const SCOPE_GRID_PATH = join(AIDLC_SRC, "tools", "data", "scope-grid.json");
 const STAGE_GRAPH_PATH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 

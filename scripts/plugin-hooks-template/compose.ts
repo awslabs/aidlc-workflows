@@ -356,6 +356,14 @@ function installedOrchestratorSkillPath(): string {
   return harnessSkill;
 }
 
+// The generated scope and stage tables live in tables.md beside the skill; an
+// install from before that keeps them in SKILL.md itself.
+function installedSkillTablesPath(): string {
+  const skill = installedOrchestratorSkillPath();
+  const tables = join(dirname(skill), "tables.md");
+  return existsSync(tables) ? tables : skill;
+}
+
 function selectedPlugins(): Set<string> | null {
   try {
     const raw = readFileSync(join(HARNESS_DIR, "tools", "data", "harness.json"), "utf-8");
@@ -432,7 +440,7 @@ function refreshSkillGeneratedRegion(
   verb: "scope-table" | "stage-table",
   endMarker: string,
 ): void {
-  const skillMd = installedOrchestratorSkillPath();
+  const skillMd = installedSkillTablesPath();
   if (!existsSync(skillMd)) {
     recordDrop(`${verb} refresh skipped: ${relative(PROJECT_DIR, skillMd)} not present in this install`, "advisory");
     return;
@@ -444,13 +452,13 @@ function refreshSkillGeneratedRegion(
     new RegExp(`<!-- BEGIN: compiled ${kind}[^\\n]* -->`),
   );
   if (!beginMatch || beginMatch.index === undefined) {
-    recordDrop(`${verb} refresh skipped: SKILL.md missing BEGIN marker`, "advisory");
+    recordDrop(`${verb} refresh skipped: ${basename(skillMd)} missing BEGIN marker`, "advisory");
     return;
   }
   const beginIdx = beginMatch.index;
   const endIdx = before.indexOf(endMarker, beginIdx);
   if (endIdx === -1) {
-    recordDrop(`${verb} refresh failed: SKILL.md missing END marker after BEGIN marker`);
+    recordDrop(`${verb} refresh failed: ${basename(skillMd)} missing END marker after BEGIN marker`);
     return;
   }
 

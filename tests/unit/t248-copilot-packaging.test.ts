@@ -178,11 +178,12 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     );
     expect(orchestrator).not.toContain("{{HARNESS_DIR}}");
     expect(orchestrator).toContain("numbered prose");
-    expect(orchestrator).toContain("picker results do not fire");
+    // The picker rule is the question annex's, which every ask row sends the agent to.
+    expect(readFileSync(join(SHELL, "skills", "aidlc", "question-rendering.md"), "utf-8"))
+      .toContain("Never treat a picker tool result as a human turn.");
     expect(orchestrator).toContain("| `load-steering` |");
     expect(orchestrator).toContain("Run the command the part names (copy it as given)");
-    expect(orchestrator).toContain("The orchestration engine emits nine kinds today");
-    expect(orchestrator).toContain("stage-protocol-ensemble.md");
+    expect(orchestrator).toContain("| `notice` |");
     const ensembleProtocol = readFileSync(
       join(
         ENGINE,

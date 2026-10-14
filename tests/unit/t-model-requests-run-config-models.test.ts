@@ -42,14 +42,12 @@ describe("a model or effort request runs config models", () => {
     }
   });
 
-  test("every harness's /aidlc skill names the command", () => {
+  // The onboarding file every harness loads carries it (the test above), so the
+  // /aidlc skill does not repeat it on every turn (#1330).
+  test("every harness's /aidlc skill leaves the command to the onboarding file", () => {
     for (const harness of HARNESS_MATRIX) {
       const skill = readFileSync(join(harness.skillsRoot, "aidlc", "SKILL.md"), "utf-8");
-      expect(skill, harness.name).toContain("**Model and effort requests.**");
-      expect(skill, harness.name).toContain(`${harness.manifest.harnessDir}/tools/aidlc.ts ${COMMAND}`);
-      expect(skill, harness.name).toContain(NO_HAND_EDIT);
-      expect(skill, harness.name).toContain(MODEL_ONLY);
-      expect(skill, harness.name).toContain(NAMED_HARNESS);
+      expect(skill, harness.name).not.toContain("**Model and effort requests.**");
     }
   });
 

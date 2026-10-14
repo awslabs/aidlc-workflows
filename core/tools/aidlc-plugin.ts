@@ -1427,9 +1427,10 @@ function refreshGeneratedTable(
       }`,
     );
   }
+  // The generated tables live beside the skill, out of its body.
   const skillPath = harnessDir === ".codex"
-    ? join(stagedProject, ".agents", "skills", "aidlc", "SKILL.md")
-    : join(stagedProject, harnessDir, "skills", "aidlc", "SKILL.md");
+    ? join(stagedProject, ".agents", "skills", "aidlc", "tables.md")
+    : join(stagedProject, harnessDir, "skills", "aidlc", "tables.md");
   if (!existsSync(skillPath)) return;
   const before = readFileSync(skillPath, "utf-8");
   const region = new RegExp(
