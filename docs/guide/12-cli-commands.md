@@ -1255,8 +1255,12 @@ which of the five fences hold against an action no step of the running workflow 
 with a plain sentence naming what changed and asks for the approval again.
 `relaxed` and `off` record the change once as a `CHANGE_ACCEPTED` audit row, tell
 you in one line, and continue. Code that moved after you approved a code plan is
-the exception: on every value the build continues with that one line and row;
-only an edit to the plan or its test instructions asks again under `strict`. On the fences, `strict` leaves all five up,
+the exception: the build continues with that line and row, and only an edit to
+the plan or its test instructions asks again under `strict`. A build of Units in
+parallel under `strict` is the one case that also asks again for a change of
+yours (an edit, a commit, a `git pull`), and it stops the next Unit from landing
+until you undo it or set `relaxed` (see
+[Guard Policy](13-customization.md#guard-policy)). On the fences, `strict` leaves all five up,
 `relaxed` lowers `plan-approval` (plan re-approval: an edited plan is not asked
 about again) and `review-freeze`, and `off` lowers those two
 plus `state-transition` and `reviewer-scope`. `human-presence` is never lowered
