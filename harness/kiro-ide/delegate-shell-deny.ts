@@ -48,8 +48,6 @@ const exactQuery = (command: string): string[] => {
 const exclusionsFor = (command: string): string[] =>
   delegateMayRun(command) ? both(command) : exactQuery(command);
 
-// An engine route verb is admitted when the script and verb the dispatcher
-// runs for it are.
 const admittedRoute = (admitted: Readonly<Record<string, readonly string[]>>, words: string[]): boolean => {
   const action = resolveAction(["engine", ...words]);
   return action.type === "delegate" && (admitted[action.tool] ?? []).includes(action.args[0] ?? "");
@@ -89,9 +87,10 @@ function engineRouteExclusions(agent: string, engine: string): string[] {
 }
 
 // The copy channel's conductor allows the tool scripts, the dispatcher's
-// engine namespace, and the dispatcher's read-only commands exactly as written
-// (reading a setting, doctor, version, status), so the persona denies all
-// three. delegateAdmittedVerbs admits no persona any of those commands.
+// engine namespace, and the dispatcher's read-only and turn-back-on commands
+// exactly as written (reading a setting, doctor, version, status, turning a
+// check back on), so the persona denies all three. delegateAdmittedVerbs
+// admits no persona any of those commands.
 export function copyChannelDelegateShellDeny(harnessDir: string, agent: string): ShellDeny {
   const tool = (file: string) => `bun ${harnessDir}/tools/${file}`;
   const engine = `${tool("aidlc.ts")} ${TRUSTED_ROUTE_NAMESPACE}`;
