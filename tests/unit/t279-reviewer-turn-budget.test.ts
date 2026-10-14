@@ -65,6 +65,8 @@ const REVIEWERS = [
 
 const CAP = "60";
 const REVIEWER_MODULE = "aidlc-common/protocols/stage-protocol-reviewer.md";
+// A Unit's review rules, named on the reviews that take them.
+const REVIEWER_UNIT_MODULE = "aidlc-common/protocols/stage-protocol-reviewer-unit.md";
 const SKILL = join("skills", "aidlc", "SKILL.md");
 const MISSING_VERDICT_FINDING = "review did not complete within its turn budget";
 
@@ -339,8 +341,8 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     // so the protocol's dispatch-record roster must include it - it was
     // written before the Copilot harness landed and went stale.
     for (const path of [
-      join(REPO_ROOT, "core", REVIEWER_MODULE),
-      join(AIDLC_SRC, REVIEWER_MODULE),
+      join(REPO_ROOT, "core", REVIEWER_UNIT_MODULE),
+      join(AIDLC_SRC, REVIEWER_UNIT_MODULE),
     ]) {
       const body = readFileSync(path, "utf-8");
       expect(body).toContain(
@@ -445,6 +447,10 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       "utf-8",
     );
     expect(module).toContain(MISSING_VERDICT_FINDING);
-    expect(module).toContain("(Kiro IDE today), do not write the record");
+    const unitModule = readFileSync(
+      join(REPO_ROOT, "dist", "kiro-ide", ".kiro", REVIEWER_UNIT_MODULE),
+      "utf-8",
+    );
+    expect(unitModule).toContain("(Kiro IDE today), do not write the record");
   });
 });

@@ -192,6 +192,8 @@ interface Directive {
     executableNow: boolean;
   }>;
   message?: string;
+  reviewer?: string;
+  protocol_modules?: string[];
   [k: string]: unknown;
 }
 
@@ -335,6 +337,9 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
       "beta",
     ]);
     expect(d.wave?.entries.every((entry) => entry.build_required)).toBe(true);
+    // A Unit's review reads the per-Unit review rules.
+    expect(d.reviewer).toBeDefined();
+    expect(d.protocol_modules).toContain("reviewer-unit");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 2: gate suppressed on a non-last unit, alpha + beta both uncovered, so
@@ -482,6 +487,8 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.stage).toBe("domain-design");
     expect(d.unit).toBeUndefined();
     expect(d.produces?.some((p) => p.includes("/construction/"))).toBe(false);
+    expect(d.reviewer).toBeDefined();
+    expect(d.protocol_modules).not.toContain("reviewer-unit");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 8: second inline per-unit stage (nfr-requirements) iterates the same way,

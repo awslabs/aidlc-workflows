@@ -2518,7 +2518,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(beat.construction_checkpoint?.unit, JSON.stringify(beat)).toBe("alpha");
     expect(beat.construction_checkpoint?.rereview?.command).toContain(recheck.join(" "));
     expect(beat.reviewer).toBe(REVIEWER);
-    expect(beat.protocol_modules).toEqual(["reviewer", "construction", "checkpoint"]);
+    expect(beat.protocol_modules).toEqual(["reviewer", "reviewer-unit", "reviewer-repair", "construction", "checkpoint"]);
 
     const asked = next(p);
     expect(asked.construction_checkpoint).toMatchObject({

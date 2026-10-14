@@ -3601,7 +3601,7 @@ describe("t305 stage and protocol source-attribution requirements", () => {
   test("pins schema, Bolt-relative paths, review freeze, and workspace_requires semantics", () => {
     const stage=readFileSync(STAGE,"utf-8"); const reviewer=readFileSync(join(PROTOCOL,"stage-protocol-reviewer.md"),"utf-8"); const definition=readFileSync(join(PROTOCOL,"stage-definition.md"),"utf-8"); const swarm=readFileSync(join(PROTOCOL,"stage-protocol-swarm.md"),"utf-8");
     expect(stage).toContain('"version": 1'); expect(stage).toContain("created, modified, or deleted"); expect(stage).toContain("trailing `/` directory claim"); expect(stage).toContain("MUST omit `repo`"); expect(stage).toContain("unclaimed changed paths block stage completion; under relaxed or off they are\nkept"); expect(stage).toContain("engine-validated against its strict schema");
-    expect(reviewer).toContain("differentially at those paths"); expect(reviewer).toContain("source-manifest.json"); expect(reviewer).toContain("claimed source paths");
+    const reviewerUnit=readFileSync(join(PROTOCOL,"stage-protocol-reviewer-unit.md"),"utf-8"); expect(reviewerUnit).toContain("differentially at those paths"); expect(reviewer).toContain("source-manifest.json"); expect(reviewerUnit).toContain("claimed source paths");
     expect(swarm).toContain("before the in-Bolt review"); expect(swarm).toContain("worktree-relative and omit `repo`"); expect(definition).toContain("source-manifest.json"); expect(definition).toContain("stage-entry source baseline");
     expect(swarm).toContain("Post-finalize source landing"); expect(swarm).toContain("cleanup-only reconciliation"); expect(swarm).toContain("SWARM_SOURCE_MERGED");
   });

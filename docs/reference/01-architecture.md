@@ -762,6 +762,8 @@ dist/claude/.claude/
     |   +-- stage-protocol-recovery.md
     |   +-- stage-protocol-governance.md
     |   +-- stage-protocol-reviewer.md
+    |   +-- stage-protocol-reviewer-unit.md
+    |   +-- stage-protocol-reviewer-repair.md
     |   +-- stage-protocol-ensemble.md
     |   +-- stage-protocol-collaborators.md
     |   +-- stage-protocol-construction.md
