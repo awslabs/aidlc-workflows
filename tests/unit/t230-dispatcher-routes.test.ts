@@ -3255,7 +3255,7 @@ describe("t230 dispatcher help and errors", () => {
     });
     expect(text).toContain("aidlc system <noun> <verb> [args]");
     expect(text).toContain(
-      "Operations on this user's aidlc installation; never a system-wide or root install:",
+      "Operations on this user's aidlc installation; never system-wide (root only with --allow-root):",
     );
     expect(text).toContain("  rollback: [<version>|--version <version>|--list]");
     expect(text).toContain("  completions: <bash|zsh|fish|powershell>");

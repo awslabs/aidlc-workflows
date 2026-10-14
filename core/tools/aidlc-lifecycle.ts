@@ -16,7 +16,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { extractTarGz } from "./aidlc-archive.ts";
 import {
@@ -65,6 +65,8 @@ import {
   inspectProjectPinTarget,
   inspectInstalledVersion,
   installRoot,
+  lexicalBinRoot,
+  lexicalInstallRoot,
   machineTransactionRoot,
   packageManagerForExecutable,
   projectPinTargetPath,
@@ -92,7 +94,9 @@ import {
 import {
   acquireRelease,
   digest,
+  readReleaseManifest,
   releaseRuntimeAsset,
+  releaseSupportsRootLifecycle,
   ReleaseUnavailableError,
   resolvePreviewVersion,
 } from "./aidlc-release.ts";
@@ -204,6 +208,7 @@ const PUBLIC_LIFECYCLE_GRAMMARS: Readonly<
   uninstall: {
     values: new Set(["--project-dir"]),
     bare: new Set([
+      "--allow-root",
       "--json",
       "--no-color",
       "--purge",
@@ -1211,6 +1216,8 @@ export function activate(
   version: string,
   options: { failAfter?: number; replaceLauncher?: LauncherReplacement } = {},
 ): void {
+  const rootWarning = rootActivationWarning(version, currentUid(), retainedReleaseSupportsRootLifecycle);
+  if (rootWarning) process.stderr.write(`WARN ${rootWarning}\n`);
   const releaseReservation = reserveVersion(version);
   try {
     // The person's file moves only now, and comes back if activation fails.
@@ -2010,6 +2017,89 @@ function uninstallResultData(purge: boolean, plan: UninstallPlan) {
   };
 }
 
+// Root is refused unless the caller opts in, matching install.sh: an install
+// made with --allow-root (a container, CI job, or agent sandbox where root is
+// the only user) is removed the same way. A root shell reached from a normal
+// account stays refused even with the opt-in: under sudo (SUDO_USER is set),
+// or when $HOME is not owned by uid 0.
+export function rootUninstallRefusal(
+  argv: readonly string[],
+  uid: number | undefined,
+  env: NodeJS.ProcessEnv,
+  homeOwnerUid: () => number | undefined,
+): string | null {
+  if (uid !== 0) return null;
+  const allowed = argv.includes("--allow-root") ||
+    env.AIDLC_ALLOW_ROOT === "1" || env.AIDLC_ALLOW_ROOT === "true";
+  if (!allowed) {
+    return "refusing to uninstall a root-owned installation; pass --allow-root where root is the only user";
+  }
+  if (env.SUDO_USER) {
+    return `refusing a root uninstall under sudo; run aidlc uninstall as ${env.SUDO_USER} without sudo`;
+  }
+  if (homeOwnerUid() !== 0) {
+    return `refusing a root uninstall from a home directory not owned by root: ${homedir()}`;
+  }
+  return null;
+}
+
+// A root install stays per-user (#722): its command and install directories
+// must sit under root's own home, never in a shared system directory. Paths are
+// compared as written, the way install.sh accepted them, so a home whose
+// .local links to mounted storage is removable by the uninstall that follows.
+export function rootDestinationRefusal(
+  home: string,
+  destinations: ReadonlyArray<{ name: string; path: string }>,
+): string | null {
+  const base = resolve(home);
+  for (const { name, path } of destinations) {
+    const rel = relative(base, resolve(path));
+    if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      return `refusing a root lifecycle operation with ${name} outside root's home: ${path}`;
+    }
+  }
+  return null;
+}
+
+function rootDestinations(): Array<{ name: string; path: string }> {
+  return [
+    { name: "AIDLC_BIN_DIR", path: lexicalBinRoot() },
+    { name: "AIDLC_INSTALL_ROOT", path: lexicalInstallRoot() },
+  ];
+}
+
+// Under root, a release from before --allow-root refuses root uninstall. The
+// person chose it, so it is activated with the way to remove it later: its own
+// `update` runs as root and reaches a release that can.
+export function rootActivationWarning(
+  version: string,
+  uid: number | undefined,
+  supportsRootLifecycle: (version: string) => boolean,
+): string | null {
+  if (uid !== 0 || supportsRootLifecycle(version)) return null;
+  return `AI-DLC ${version} cannot uninstall itself as root; to remove it later, run aidlc update, then aidlc uninstall --allow-root`;
+}
+
+function retainedReleaseSupportsRootLifecycle(version: string): boolean {
+  try {
+    return releaseSupportsRootLifecycle(readReleaseManifest(versionRoot(version)));
+  } catch {
+    return false;
+  }
+}
+
+function currentUid(): number | undefined {
+  return typeof process.getuid === "function" ? process.getuid() : undefined;
+}
+
+function homeDirectoryOwnerUid(): number | undefined {
+  try {
+    return statSync(homedir()).uid;
+  } catch {
+    return undefined;
+  }
+}
+
 function uninstallCommand(argv: string[]): CommandResult {
   try {
     assertSafeUninstallRoot();
@@ -2025,9 +2115,10 @@ function uninstallCommand(argv: string[]): CommandResult {
       manager.remediation,
     );
   }
-  if (typeof process.getuid === "function" && process.getuid() === 0) {
-    return failure("refusing to uninstall a root-owned installation", EXIT.integrity);
-  }
+  const uid = currentUid();
+  const rootRefusal = rootUninstallRefusal(argv, uid, process.env, homeDirectoryOwnerUid) ??
+    (uid === 0 ? rootDestinationRefusal(homedir(), rootDestinations()) : null);
+  if (rootRefusal) return failure(rootRefusal, EXIT.integrity);
   const purge = argv.includes("--purge");
   // The cleanup worker inherits this window's token. A UAC-elevated window is
   // warned before anything is removed; the person asked, so it proceeds.

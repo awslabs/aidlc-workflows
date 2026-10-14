@@ -42,6 +42,10 @@ import {
   previousWindowsShimHelpers,
   previousWindowsShimHelperState,
   replacePreviousWindowsShimHelper,
+  rootActivationWarning,
+  rootDestinationRefusal,
+  rootUninstallRefusal,
+  validatePublicLifecycleArgs,
   windowsPosixShim,
 } from "../../core/tools/aidlc-lifecycle.ts";
 import {
@@ -58,6 +62,7 @@ import {
 } from "../../core/tools/aidlc-update.ts";
 import { _resetSettingsCacheForTests } from "../../core/tools/aidlc-settings.ts";
 import { transactionState } from "../../core/tools/aidlc-transaction.ts";
+import { releaseSupportsRootLifecycle, ROOT_LIFECYCLE_CAPABILITY } from "../../core/tools/aidlc-release.ts";
 import { assertSafeUninstallRoot } from "../../core/tools/aidlc-uninstall-plan.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
@@ -198,6 +203,7 @@ function writeVerifierCandidate(root: string): void {
   });
   const manifest = {
     schemaVersion: 1,
+    capabilities: [ROOT_LIFECYCLE_CAPABILITY],
     version: AIDLC_VERSION,
     date: "2026-08-28",
     sourceRef: `refs/tags/v${AIDLC_VERSION}`,
@@ -1759,6 +1765,64 @@ describe("t244 management lifecycle", () => {
     for (const root of [homedir(), parse(homedir()).root]) {
       expect(() => assertSafeUninstallRoot(root)).toThrow("refusing uninstall");
     }
+  });
+
+  test("uninstall refuses root unless the caller opts in, and never under sudo or a non-root home", () => {
+    const rootHome = () => 0;
+    const userHome = () => 501;
+    // Not root: the opt-in is irrelevant.
+    expect(rootUninstallRefusal([], 501, {}, rootHome)).toBeNull();
+    // Root without the opt-in keeps the old refusal and names the way out.
+    expect(rootUninstallRefusal([], 0, {}, rootHome)).toContain("refusing to uninstall a root-owned installation");
+    expect(rootUninstallRefusal([], 0, {}, rootHome)).toContain("--allow-root");
+    expect(rootUninstallRefusal([], 0, { AIDLC_ALLOW_ROOT: "0" }, rootHome)).toContain("root-owned");
+    // Root that opts in with the flag or the environment variable proceeds.
+    expect(rootUninstallRefusal(["--allow-root"], 0, {}, rootHome)).toBeNull();
+    expect(rootUninstallRefusal([], 0, { AIDLC_ALLOW_ROOT: "1" }, rootHome)).toBeNull();
+    expect(rootUninstallRefusal([], 0, { AIDLC_ALLOW_ROOT: "true" }, rootHome)).toBeNull();
+    // A root shell reached from a normal account stays refused.
+    expect(rootUninstallRefusal(["--allow-root"], 0, { SUDO_USER: "alice" }, rootHome)).toContain("under sudo");
+    expect(rootUninstallRefusal(["--allow-root"], 0, {}, userHome)).toContain("not owned by root");
+    expect(rootUninstallRefusal(["--allow-root"], 0, {}, () => undefined)).toContain("not owned by root");
+  });
+
+  test("a root install keeps its command and install directories inside root's home", () => {
+    const home = temp("aidlc-t244-root-home-");
+    const inside = [
+      { name: "AIDLC_BIN_DIR", path: join(home, ".local", "bin") },
+      { name: "AIDLC_INSTALL_ROOT", path: join(home, ".local", "share", "aidlc") },
+    ];
+    expect(rootDestinationRefusal(home, inside)).toBeNull();
+    for (const outside of [tmpdir(), "/usr/local/bin", join(home, "..", "elsewhere"), home]) {
+      expect(rootDestinationRefusal(home, [{ name: "AIDLC_BIN_DIR", path: outside }]))
+        .toContain("AIDLC_BIN_DIR outside root's home");
+    }
+    // Compared as written, like install.sh: a .local that links to mounted
+    // storage outside the home is still the home's own destination, so what
+    // the installer accepted, uninstall can remove.
+    const storage = temp("aidlc-t244-root-mounted-storage-");
+    symlinkSync(storage, join(home, ".local"));
+    expect(rootDestinationRefusal(home, inside)).toBeNull();
+  });
+
+  test("as root, activating a release that cannot uninstall as root warns with the way to remove it", () => {
+    const supports = (version: string) => version === "9.9.9";
+    expect(rootActivationWarning("1.0.0", 501, supports)).toBeNull();
+    expect(rootActivationWarning("9.9.9", 0, supports)).toBeNull();
+    const warning = rootActivationWarning("1.0.0", 0, supports);
+    expect(warning).toContain("1.0.0 cannot uninstall itself as root");
+    expect(warning).toContain("aidlc update, then aidlc uninstall --allow-root");
+  });
+
+  test("the release manifest marks root lifecycle support and rejects malformed capabilities", () => {
+    expect(releaseSupportsRootLifecycle({ capabilities: [ROOT_LIFECYCLE_CAPABILITY] })).toBe(true);
+    expect(releaseSupportsRootLifecycle({})).toBe(false);
+    expect(releaseSupportsRootLifecycle({ capabilities: ["other"] })).toBe(false);
+  });
+
+  test("uninstall accepts --allow-root in its public grammar", () => {
+    expect(validatePublicLifecycleArgs(["uninstall", "--allow-root", "--yes"])).toBeNull();
+    expect(validatePublicLifecycleArgs(["uninstall", "--allow-rooted"])).not.toBeNull();
   });
 
   test("uninstall rejects disposable project and malformed roots without changing files", () => {
@@ -3339,6 +3403,31 @@ describe("t244 Windows and completion release surfaces", () => {
     ], REPO_ROOT);
     expect(extraFieldResult.status).toBe(1);
     expect(extraFieldResult.stderr).toContain("has unexpected fields");
+
+    // A candidate must declare the root-lifecycle capability its installer and
+    // lifecycle rely on; one without it never reaches publication.
+    for (const capabilities of [undefined, [], ["other"]]) {
+      const candidate = temp("aidlc-t244-release-capabilities-");
+      writeVerifierCandidate(candidate);
+      const manifestPath = join(candidate, "version.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+      if (capabilities === undefined) delete manifest.capabilities;
+      else manifest.capabilities = capabilities;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const checksumsPath = join(candidate, "checksums.txt");
+      writeFileSync(
+        checksumsPath,
+        readFileSync(checksumsPath, "utf-8").replace(
+          /^[a-f0-9]{64} {2}version\.json$/m,
+          `${createHash("sha256").update(readFileSync(manifestPath)).digest("hex")}  version.json`,
+        ),
+      );
+      const result = run(RELEASE_VERIFIER, [
+        "candidate", "--directory", candidate, "--tag", `v${AIDLC_VERSION}`,
+      ], REPO_ROOT);
+      expect(result.status, JSON.stringify(capabilities)).toBe(1);
+      expect(result.stderr).toMatch(/has unexpected fields|capabilities must be/);
+    }
 
     const extra = temp("aidlc-t244-release-extra-");
     writeVerifierCandidate(extra);

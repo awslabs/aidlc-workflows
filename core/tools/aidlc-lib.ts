@@ -39901,6 +39901,24 @@ function waitAtErrorEmitSelectionBarrier(selection: WorkflowSelection): void {
   }
 }
 
+/**
+ * An engine subcommand's arguments ask for its usage (#2449). Read before any
+ * flag parsing, so `--help` never needs a value, is never an error, and adds no
+ * audit row. Only the first argument counts: later, a `--help` can be a piece
+ * of the person's words that a bare double quote split off (`Run "todo --help"
+ * first` arrives as `--details "Run todo" --help first`), and the tool's own
+ * split-value refusal keeps those words instead of printing usage over them.
+ */
+export function asksForHelp(args: readonly string[]): boolean {
+  return args[0] === "--help" || args[0] === "-h" || args[0] === "help";
+}
+
+/** Print a subcommand's usage and exit 0: help is never an error. */
+export function printUsageAndExit(usage: string): never {
+  process.stdout.write(usage.endsWith("\n") ? usage : `${usage}\n`);
+  process.exit(0);
+}
+
 // Failures are swallowed: we're already exiting, the caller gets the JSON
 // error on stderr regardless.
 //

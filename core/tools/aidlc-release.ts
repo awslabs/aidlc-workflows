@@ -42,7 +42,20 @@ export type ReleaseManifest = {
   sourceDigest?: string;
   distributions: Array<{ name: string; productName: string }>;
   assets: ReleaseAsset[];
+  // What this release's own lifecycle can do. Older releases omit the field,
+  // and older readers ignore it.
+  capabilities?: string[];
 };
+
+// A release that can be installed and removed as root with --allow-root.
+// Root installs are refused for releases without it, so a root install can
+// always be removed by the release it activates.
+export const ROOT_LIFECYCLE_CAPABILITY = "root-lifecycle";
+
+export function releaseSupportsRootLifecycle(manifest: Pick<ReleaseManifest, "capabilities">): boolean {
+  return Array.isArray(manifest.capabilities) &&
+    manifest.capabilities.includes(ROOT_LIFECYCLE_CAPABILITY);
+}
 
 export function releaseRuntimeAsset(version: string): string {
   return `aidlc-runtime-${requireVersion(version)}.tar.gz`;
@@ -337,6 +350,17 @@ export function readReleaseManifest(directory: string): ReleaseManifest {
     )
   ) {
     throw new Error("version.json contains an invalid release source identity");
+  }
+  if (
+    manifest.capabilities !== undefined &&
+    (
+      !Array.isArray(manifest.capabilities) ||
+      manifest.capabilities.some((capability) =>
+        typeof capability !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(capability)
+      )
+    )
+  ) {
+    throw new Error("version.json contains invalid capabilities");
   }
   if (!Array.isArray(manifest.distributions) || manifest.distributions.length === 0) {
     throw new Error("version.json contains no distributions");

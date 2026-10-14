@@ -21,7 +21,19 @@ Release assets cover:
 - Windows x64
 
 Native installs are per-user. The Unix installer refuses root and does not need
-`sudo`. Windows installation targets the account running PowerShell. Run it
+`sudo`. Where root is the only user, such as a container image without `USER`,
+a CI container job, or a cloud agent sandbox whose setup script runs as root,
+pass `--allow-root` (or set `AIDLC_ALLOW_ROOT=1`) to install under root's own
+`$HOME`. The opt-in is still refused under `sudo` (`SUDO_USER` is set), when
+`$HOME` is unset or not owned by root (a symlinked home is followed), and when
+`AIDLC_BIN_DIR` or `AIDLC_INSTALL_ROOT` points outside root's home, so
+`sudo sh install.sh` from a normal account keeps failing and a root install never
+becomes system-wide. A release from before `--allow-root` cannot uninstall
+itself as root; installing it, or activating it as root with `aidlc use`,
+`update` or `rollback`, proceeds with a warning that names the way to remove it
+later: its own `aidlc update`, then `aidlc uninstall --allow-root`.
+`aidlc uninstall` takes the same `--allow-root` opt-in with the same limits.
+Windows installation targets the account running PowerShell. Run it
 from a normal PowerShell window. A window opened with "Run as administrator"
 under UAC is warned that installing as administrator is less safe, because
 another program running as the same account could interfere with files the
@@ -198,6 +210,7 @@ installation uses `status: "failed"`, exit code 1, `data.installed: true`, and
 | `--ca-bundle <absolute-path>` | `-CaBundle <absolute-path>` | Use a custom CA bundle |
 | `--profile <absolute-path>` | Not available | Transactionally add the Unix PATH block |
 | Not available | `-NoModifyPath` | Skip persistent User PATH and current-process PATH changes; print a direct command |
+| `--allow-root` (or `AIDLC_ALLOW_ROOT=1`) | Not available | Install as root where root is the only user (container, CI job, agent sandbox). Still refused under `sudo`, with `$HOME` unset or not owned by root, and with `AIDLC_BIN_DIR` or `AIDLC_INSTALL_ROOT` outside root's home. A release from before `--allow-root` is installed with a warning, because it cannot uninstall itself as root |
 | `--yes` | `-Yes` | Automation mode; it does not bypass integrity checks. On Windows it also replaces an `aidlc` in the bin directory that AI-DLC did not write, keeping that file as a backup |
 | `--quiet` | `-Quiet` | Suppress progress and emit one result line |
 | `--json` | `-Json` | Suppress progress and emit one schema-versioned JSON result |
@@ -1524,6 +1537,15 @@ aidlc config --project-dir "$PWD" --harness claude --mcp none --quiet
 aidlc doctor --project-dir "$PWD" --quiet
 ```
 
+A CI container job or agent sandbox that runs as root, with root as its only
+user, adds `--allow-root` to the installer line. The pinned version must be a
+release that ships `--allow-root`: the recipe runs that tag's own `install.sh`,
+and an older one rejects the flag as an unknown argument.
+
+```bash
+sh "$tmp/install.sh" --version "$version" --quiet --yes --allow-root
+```
+
 ## Harness Selection
 
 Harness selection belongs to `aidlc config --harness <name>`. Machine-level
@@ -1889,7 +1911,9 @@ run preserves an earlier record, so that entry is still removed on uninstall.
 At a terminal, uninstall says what it removes and keeps, then proceeds; without
 a terminal it needs `--yes`. It refuses filesystem, home, shared-system, and
 project roots, as well as root-owned, package-manager-owned, or
-mixed-ownership commands. On Windows, a bound file list and expected checksums
+mixed-ownership commands. A root install made with `--allow-root` is removed
+with `aidlc uninstall --allow-root` (or `AIDLC_ALLOW_ROOT=1`); the opt-in is
+refused under `sudo` and when `$HOME` is not owned by root. On Windows, a bound file list and expected checksums
 are recorded before cleanup is scheduled. The worker rechecks paths and hashes,
 refuses reparse points, and deletes files individually after the running command
 exits; uninstall is done when the `aidlc` command is no longer found. An

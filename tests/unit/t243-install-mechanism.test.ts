@@ -5762,6 +5762,196 @@ describe("t243 release lifecycle", () => {
     }));
   });
 
+  test("Unix installer refuses root unless opted in, and never under sudo or a non-root home", () => {
+    if (process.platform === "win32") return;
+    // CI does not run as root, so an `id` shim first on PATH reports uid 0.
+    // An invalid --version makes every run stop right after the root check:
+    // reaching the usage error (exit 2) proves the root check let it through.
+    const shims = temp("aidlc-t243-installer-root-shim-");
+    writeFileSync(
+      join(shims, "id"),
+      '#!/bin/sh\nif [ "$1" = "-u" ]; then echo 0; else exec /usr/bin/id "$@"; fi\n',
+    );
+    chmodSync(join(shims, "id"), 0o755);
+    const userHome = temp("aidlc-t243-installer-root-user-home-");
+    const run = (args: string[], env: Record<string, string>) => {
+      const childEnv: Record<string, string | undefined> = { ...process.env, ...env };
+      childEnv.PATH = `${shims}${delimiter}${process.env.PATH ?? ""}`;
+      if (!("SUDO_USER" in env)) delete childEnv.SUDO_USER;
+      if (!("AIDLC_ALLOW_ROOT" in env)) delete childEnv.AIDLC_ALLOW_ROOT;
+      if (!("AIDLC_BIN_DIR" in env)) delete childEnv.AIDLC_BIN_DIR;
+      if (!("AIDLC_INSTALL_ROOT" in env)) delete childEnv.AIDLC_INSTALL_ROOT;
+      delete childEnv.XDG_DATA_HOME;
+      return spawnSync("sh", [INSTALLER, ...args, "--version", "not-a-version", "--json"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+        env: childEnv,
+      });
+    };
+    const parsed = (result: ReturnType<typeof run>) => JSON.parse(result.stdout ?? "") as {
+      code: number;
+      status: string;
+      message: string;
+    };
+
+    // "/" is owned by root on every Unix runner, so it stands in for root's own home.
+    const refused = run([], { HOME: "/" });
+    expect(refused.status).toBe(4);
+    expect(parsed(refused).message).toContain("refusing a root install");
+    expect(parsed(refused).message).toContain("--allow-root");
+
+    for (const [args, env] of [
+      [["--allow-root"], { HOME: "/" }],
+      [[], { HOME: "/", AIDLC_ALLOW_ROOT: "1" }],
+      [[], { HOME: "/", AIDLC_ALLOW_ROOT: "true" }],
+    ] as const) {
+      const allowed = run([...args], { ...env });
+      expect(allowed.status).toBe(2);
+      expect(parsed(allowed).status).toBe("usage");
+      expect(parsed(allowed).message).toContain("invalid --version");
+    }
+
+    const underSudo = run(["--allow-root"], { HOME: "/", SUDO_USER: "alice" });
+    expect(underSudo.status).toBe(4);
+    expect(parsed(underSudo).message).toContain("under sudo");
+
+    const userOwnedHome = run(["--allow-root"], { HOME: userHome });
+    expect(userOwnedHome.status).toBe(4);
+    expect(parsed(userOwnedHome).message).toContain("not owned by root");
+
+    // An unset HOME is refused rather than guessed.
+    const unsetHome = run(["--allow-root"], { HOME: "" });
+    expect(unsetHome.status).toBe(4);
+    expect(parsed(unsetHome).message).toContain("HOME unset");
+
+    // A symlinked home is judged by the directory it points at.
+    const linkedHome = join(temp("aidlc-t243-installer-root-linked-home-"), "home");
+    symlinkSync("/", linkedHome);
+    const linkedRootHome = run(["--allow-root"], { HOME: linkedHome });
+    expect(linkedRootHome.status).toBe(2);
+    expect(parsed(linkedRootHome).message).toContain("invalid --version");
+    const linkedUserHome = join(temp("aidlc-t243-installer-root-linked-user-"), "home");
+    symlinkSync(userHome, linkedUserHome);
+    const linkedToUser = run(["--allow-root"], { HOME: linkedUserHome });
+    expect(linkedToUser.status).toBe(4);
+    expect(parsed(linkedToUser).message).toContain("not owned by root");
+
+    // A root install stays per-user: destinations outside root's home are
+    // refused. /usr is root-owned on every Unix runner and stands in for a home.
+    // These runs use a missing --from directory instead of a bad --version:
+    // the destination check comes after version validation, and reaching the
+    // offline-source error (exit 2) proves the destinations were accepted.
+    const missingRelease = join(temp("aidlc-t243-installer-root-dest-"), "missing");
+    const runFrom = (env: Record<string, string>) => {
+      const childEnv: Record<string, string | undefined> = { ...process.env, ...env };
+      childEnv.PATH = `${shims}${delimiter}${process.env.PATH ?? ""}`;
+      for (const name of ["SUDO_USER", "AIDLC_ALLOW_ROOT", "AIDLC_BIN_DIR", "AIDLC_INSTALL_ROOT", "XDG_DATA_HOME"]) {
+        if (!(name in env)) delete childEnv[name];
+      }
+      return spawnSync("sh", [INSTALLER, "--allow-root", "--from", missingRelease, "--json"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+        env: childEnv,
+      });
+    };
+    for (const [variable, value] of [
+      ["AIDLC_BIN_DIR", "/opt/aidlc-bin"],
+      ["AIDLC_INSTALL_ROOT", "/opt/aidlc"],
+      ["AIDLC_BIN_DIR", "/usr/../opt/aidlc-bin"],
+    ] as const) {
+      const outside = runFrom({ HOME: "/usr", [variable]: value });
+      expect(outside.status, `${variable}=${value}`).toBe(4);
+      expect(parsed(outside).message).toContain(`${variable} outside root's home`);
+    }
+    const inside = runFrom({
+      HOME: "/usr",
+      AIDLC_BIN_DIR: "/usr/local/aidlc-bin",
+      AIDLC_INSTALL_ROOT: "/usr/local/aidlc",
+    });
+    expect(inside.status).toBe(2);
+    expect(parsed(inside).message).toContain("offline source is not a directory");
+  });
+
+  test("Unix installer warns, then installs, a root release that cannot uninstall itself as root", async () => {
+    if (process.platform === "win32") return;
+    const shims = temp("aidlc-t243-installer-root-release-shim-");
+    writeFileSync(
+      join(shims, "id"),
+      '#!/bin/sh\nif [ "$1" = "-u" ]; then echo 0; else exec /usr/bin/id "$@"; fi\n',
+    );
+    chmodSync(join(shims, "id"), 0o755);
+    const release = fixtureReleaseBytes();
+    const binaryName = releaseBinaryName();
+    const binaryPath = join(release, binaryName);
+    const sentinel = join(temp("aidlc-t243-installer-root-release-sentinel-"), "invoked");
+    // A stand-in binary: reaching it proves the installer accepted the release.
+    writeFileSync(
+      binaryPath,
+      ["#!/bin/sh", 'printf "invoked\\n" >"$AIDLC_BINARY_SENTINEL"', "exit 99", ""].join("\n"),
+      { mode: 0o755 },
+    );
+    const manifestPath = join(release, "version.json");
+    const writeRelease = (capabilities: string[] | undefined) => {
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+        assets: Array<{ name: string; sha256: string; bytes: number }>;
+        capabilities?: string[];
+      };
+      if (capabilities === undefined) delete manifest.capabilities;
+      else manifest.capabilities = capabilities;
+      const binaryAsset = manifest.assets.find((asset) => asset.name === binaryName);
+      if (!binaryAsset) throw new Error("fixture release has no binary asset");
+      binaryAsset.sha256 = digest(binaryPath);
+      binaryAsset.bytes = statSync(binaryPath).size;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      writeFileSync(
+        join(release, "checksums.txt"),
+        `${["version.json", ...manifest.assets.map((asset) => asset.name)]
+          .map((name) => `${digest(join(release, name))}  ${name}`).join("\n")}\n`,
+      );
+    };
+    const home = temp("aidlc-t243-installer-root-release-home-");
+    const machine = join(home, "machine");
+    const install = async () => {
+      rmSync(sentinel, { force: true });
+      const childEnv: Record<string, string | undefined> = {
+        ...process.env,
+        PATH: `${shims}${delimiter}${process.env.PATH ?? ""}`,
+        // "/" is owned by root everywhere, so it stands in for root's home;
+        // the destinations below sit under it.
+        HOME: "/",
+        AIDLC_BINARY_SENTINEL: sentinel,
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(machine, "bin"),
+      };
+      delete childEnv.SUDO_USER;
+      const child = Bun.spawn(
+        ["sh", INSTALLER, "--from", release, "--offline", "--json", "--allow-root"],
+        { cwd: REPO_ROOT, env: childEnv, stdout: "pipe", stderr: "pipe" },
+      );
+      const [status, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      return { status, output: `${stdout}${stderr}` };
+    };
+
+    // The person chose the release: it proceeds to the release binary, with
+    // the way to remove it later.
+    writeRelease(undefined);
+    const legacy = await install();
+    expect(existsSync(sentinel), legacy.output).toBe(true);
+    expect(legacy.output).toContain("cannot uninstall itself as root");
+    expect(legacy.output).toContain("run aidlc update, then aidlc uninstall --allow-root");
+
+    writeRelease(["root-lifecycle"]);
+    const capable = await install();
+    expect(existsSync(sentinel), capable.output).toBe(true);
+    expect(capable.output).not.toContain("cannot uninstall itself as root");
+  });
+
   test("Unix installer rejects an authenticated version mismatch before acquiring or invoking assets", async () => {
     if (process.platform === "win32") return;
     const release = fixtureReleaseBytes();
