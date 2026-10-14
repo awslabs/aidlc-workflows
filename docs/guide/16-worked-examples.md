@@ -83,7 +83,7 @@ You select **Approve**.
 The aidlc-product-agent persona loads and creates clarifying questions at `<record>/inception/requirements-analysis/requirements-analysis-questions.md`:
 
 ```markdown
-## Q1: Bug Severity Classification
+## Q1. [Product owner] Bug Severity Classification
 How severe is this bug for your users?
 A. Critical — causes data loss or security exposure
 B. High — blocks a core workflow for affected users
@@ -223,7 +223,7 @@ stakeholders, decision authority, communication needs, and scope:
 - [desc] Initial description: "A notification service for our task management app..."
 - [scope] Workflow-selected scope: `feature`.
 
-## Q1. Which notification channels are in scope?
+## Q1. [Product owner] Which notification channels are in scope?
 A. In-app only
 B. In-app + email
 C. In-app + email + push
