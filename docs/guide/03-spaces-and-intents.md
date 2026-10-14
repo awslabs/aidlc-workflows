@@ -467,9 +467,10 @@ to confirm the folder (in a script, pass `--project-dir`). What that means for
 
 - **Just you:** nothing to do. `aidlc/` stays on your disk, untracked.
 - **A team:** run `git init` in the folder and push it as its own small
-  workspace repo that holds everything `aidlc config` wrote at the top (`aidlc/`,
-  the harness folder, `.gitignore`, `aidlc.settings.json`, `.mcp.json`, and
-  `AGENTS.md` where your harness uses one) plus `repos.json`. The
+  workspace repo that holds everything `aidlc config` wrote there that git does
+  not ignore, plus `repos.json`. The exact files differ by harness, so after
+  `aidlc config` run `git status` and commit what it lists, rather than picking
+  paths by hand. The
   code repos stay separate repos with their own remotes, and the workspace repo
   must not track them. For the repos listed in `repos.json`, the
   [`aidlc-workspace-sync`](12-cli-commands.md#aidlc-workspace-sync-clone-and-reconcile-the-declared-repo-set)
@@ -490,7 +491,7 @@ to confirm the folder (in a script, pass `--project-dir`). What that means for
 | Several teams share the same repos | One workspace, with a space per team (see Spaces, above) |
 | Unrelated projects | A separate folder and `aidlc/` for each. They share no records, rules, or knowledge; only machine-wide settings and the active release reach both ([what carries over](#what-carries-over-and-what-doesnt)) |
 
-What to commit in each layout is in [What's committed and what's not](#whats-committed-and-whats-not), and the list of what `aidlc config` leaves at the top is in [Getting Started](01-getting-started.md).
+What to commit in each layout is in [What's committed and what's not](#whats-committed-and-whats-not).
 
 ---
 
@@ -570,7 +571,7 @@ and machines.
 | Output-format overrides (`memory/templates/`) | Shared | Per space. Not copied into a new space | Copy the files |
 | Agents you add (in the harness folder) | Shared | Shared by every space | Copy the files |
 | Repo list (`repos.json`) | One per workspace | One per workspace | Per project |
-| Model and flag policy | Shared | Shared | Set once in the machine settings file and applied to every project on the machine. A project's own `aidlc.settings.json` overrides it value by value, except bypasses, which add up across the files ([the hierarchy](18-install-and-lifecycle.md)). Model and effort policy does not apply on Kiro IDE, Cursor, and GitHub Copilot, where every agent uses the model you pick in the tool. On Kiro CLI, a preset or `aidlc config models` saves the session model and effort in your personal Kiro settings, which every Kiro CLI project uses |
+| Model and flag policy | Shared | Shared | Set once in the machine settings file and applied to every project on the machine. A project's own `aidlc.settings.json` overrides it value by value, except bypasses, which add up across the files ([the hierarchy](18-install-and-lifecycle.md)). Model and effort policy does not apply on Kiro IDE, Cursor, and GitHub Copilot, where every agent uses the model you pick in the tool. |
 | Update, offline, mirror, and CA-bundle settings | Shared | Shared | Machine-only. A project file cannot set them |
 | Kiro IDE's Workflows switch and, on Windows, its default terminal | Shared | Shared | Kept in Kiro's user settings, outside the project. Setup asks once (`aidlc config --yes` takes the recommended answer), and `aidlc config trust` changes them on request. They apply to every project you open in that IDE |
 | The AI-DLC release itself | Shared | Shared | A native project with no pinned release (`.aidlc-version`) runs the release the machine has active, so `aidlc update` changes it for every such project (its own files catch up at its next `aidlc config`). A copied project runs its own copied release |
