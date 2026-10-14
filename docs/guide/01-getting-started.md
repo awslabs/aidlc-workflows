@@ -97,7 +97,10 @@ command.
 
 ## 2. Set up your project
 
-Run `aidlc config` in the project folder. This run uses a new, empty folder:
+Run `aidlc config` in the project folder. AI-DLC does not look upward for a git
+root, so this folder is where `aidlc/` will live; with several repos, see
+[Where `aidlc/` lives](03-spaces-and-intents.md#where-aidlc-lives). This run uses
+a new, empty folder:
 
 ```text
 $ mkdir inventory-api && cd inventory-api && git init -q

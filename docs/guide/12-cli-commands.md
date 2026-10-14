@@ -38,7 +38,7 @@ diagnostic and lifecycle routes.
 | `/aidlc intent archive <name>` | Retire an in-flight or completed intent without deleting its record; `unarchive <name>` brings it back |
 | `/aidlc intent add-repo <name>` | Add a sibling repo to the active piece of work, until Units Generation is approved; `remove-repo <name>` takes one out (never the last) |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
-| `/aidlc space-create <name>` | Create a new space from the framework baseline |
+| `/aidlc space-create <name>` | Create a new space that starts from the default space's org rules and empty team and project practices |
 | `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`, `summarize`) |
 | `/aidlc --status` | Display a read-only status summary |
 | `/aidlc --config [section]` | Configure project policy conversationally, then land exact deterministic config flags |
@@ -421,8 +421,9 @@ names, and words typed after a name travel with the switch for the agent to act 
 ### `/aidlc space-create <name>` — Create a space
 
 Creates a new team space with the full `memory/`, `knowledge/`, `codekb/`, and
-`intents/` shape, seeded from the framework baseline rather than another
-team's learned practices. It does not switch spaces automatically. See
+`intents/` shape. It starts from a copy of the default space's `org.md` and the
+framework's phase rules, with empty `team.md` and `project.md`, rather than
+another team's learned practices. It does not switch spaces automatically. See
 [Spaces and Intents](03-spaces-and-intents.md) for the workspace model,
 switching examples, and what is committed.
 
