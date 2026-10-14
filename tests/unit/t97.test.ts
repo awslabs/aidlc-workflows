@@ -85,6 +85,7 @@ import {
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+import { writeLearningsSelections } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -472,10 +473,10 @@ describe("t97 surface (cli)", () => {
 // assertions (23/24/25) spawn the CLI twice and grep the real on-disk bytes.
 // =====================================================================
 describe("t97 persist (cli, idempotency-sensitive)", () => {
+  // The picks' file goes where `learnings surface` names it for their space,
+  // intent, and stage: the only place persist reads it (#1592).
   function writeSel(pd: string, body: string): string {
-    const p = join(pd, "sel.json");
-    writeFileSync(p, body, "utf-8");
-    return p;
+    return writeLearningsSelections(pd, JSON.parse(body));
   }
 
   // .sh 18 — learning (project scope) -> RULE_LEARNED + cid marker + practice

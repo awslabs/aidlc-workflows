@@ -33,6 +33,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AIDLC_SRC, toPortablePath } from "../harness/fixtures.ts";
+
+// Where `learnings surface` names the picks' file for an intent-less space
+// (#1592): the only place `persist` reads it.
+const SELECTIONS_FILE = "aidlc/spaces/default/intents/.aidlc-learnings/user-stories-selections.json";
 import { loadRules, memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -114,8 +118,9 @@ function seedProject(root: string): void {
   );
   // A team-scoped LEARNING selection routed to the `## Corrections` heading —
   // persist appends it as a practice line into the relocated team.md.
+  mkdirSync(join(root, SELECTIONS_FILE, ".."), { recursive: true });
   writeFileSync(
-    join(root, "sel.json"),
+    join(root, SELECTIONS_FILE),
     JSON.stringify({
       stage_slug: "user-stories",
       space: "default",
@@ -148,7 +153,7 @@ function runPersist(root: string): { status: number; out: string } {
       "--slug",
       "user-stories",
       "--selections-json",
-      join(root, "sel.json"),
+      join(root, SELECTIONS_FILE),
       "--project-dir",
       root,
     ],

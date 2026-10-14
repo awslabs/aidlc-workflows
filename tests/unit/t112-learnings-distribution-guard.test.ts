@@ -65,6 +65,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AIDLC_SRC, toPortablePath } from "../harness/fixtures.ts";
 
+// Where `learnings surface` names the picks' file for an intent-less space
+// (#1592): the only place `persist` reads it.
+const SELECTIONS_FILE = "aidlc/spaces/default/intents/.aidlc-learnings/user-stories-selections.json";
+
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
@@ -139,8 +143,9 @@ function seedProject(root: string): void {
   );
   // A sensor-binding selection — persist resolves the manifest path under the
   // project's .claude/sensors and runs it through isFrameworkDistributionPath.
+  mkdirSync(join(root, SELECTIONS_FILE, ".."), { recursive: true });
   writeFileSync(
-    join(root, "sel.json"),
+    join(root, SELECTIONS_FILE),
     JSON.stringify({
       stage_slug: "user-stories",
       space: "default",
@@ -172,7 +177,7 @@ interface PersistResult {
 
 /**
  * Run `bun aidlc-learnings.ts persist --slug user-stories --selections-json
- * <root>/sel.json --project-dir <root>` and capture the exit code + combined
+ * <root>/<SELECTIONS_FILE> --project-dir <root>` and capture the exit code + combined
  * output. The .sh ran with `set +e` and read `$?` (it swallows the exit code
  * for the assertion). AIDLC_STAGES_DIR is explicitly removed so the tool's
  * stagesDir() falls back to <projectDir>/.claude/aidlc-common/stages — the
@@ -191,7 +196,7 @@ function runPersist(root: string): PersistResult {
       "--slug",
       "user-stories",
       "--selections-json",
-      join(root, "sel.json"),
+      join(root, SELECTIONS_FILE),
       "--project-dir",
       root,
     ],

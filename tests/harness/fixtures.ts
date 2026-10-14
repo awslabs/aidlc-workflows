@@ -274,6 +274,24 @@ export function intentsDirOf(proj: string, space = DEFAULT_SPACE): string {
 }
 
 /**
+ * Write a learnings selections file where `learnings surface` names it for the
+ * picks' own space, intent, and stage (the only place `persist` reads it,
+ * #1592), and return its absolute path.
+ */
+export function writeLearningsSelections(
+  proj: string,
+  selections: { space: string; intent: string | null; stage_slug: string; [field: string]: unknown },
+): string {
+  const folder = selections.intent === null
+    ? join(intentsDirOf(proj, selections.space), ".aidlc-learnings")
+    : join(intentsDirOf(proj, selections.space), selections.intent, ".aidlc-engine", "learnings");
+  mkdirSync(folder, { recursive: true });
+  const path = join(folder, `${selections.stage_slug}-selections.json`);
+  writeFileSync(path, JSON.stringify(selections), "utf-8");
+  return path;
+}
+
+/**
  * The default intent's RECORD directory a fixture seeds:
  * `<proj>/aidlc/spaces/default/intents/<DEFAULT_RECORD_DIR>`. The data-path
  * helpers (seededStateFile/seededAuditDir) resolve under this; the chokepoint

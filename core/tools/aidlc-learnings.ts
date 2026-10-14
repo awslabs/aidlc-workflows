@@ -105,8 +105,8 @@
 // judgement (user). No LLM call lives in this tool.
 
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import {
@@ -221,9 +221,64 @@ interface SurfaceOutput {
   phase: string;
   space: string;
   intent: string | null;
+  /** Where the conductor writes the person's picks for `persist` (#1592). */
+  selections_file: string;
   memory_entries_total: number;
   candidates: SurfaceCandidate[];
   parked_open_questions: SurfaceParkedQuestion[];
+}
+
+// The selections file's one home per piece of work (#1592). Nothing used to
+// name it, so two sessions in one project wrote the same obvious spot and one
+// saved the other's picks while its own person's picks were lost. It lives in
+// the record's engine folder (gitignored by the shipped block); with no intent
+// record it lives in the space's intents folder under a dot name, which is
+// gitignored too and is never read as an intent record.
+function selectionsFileFor(space: string, intent: string | null, slug: string): string {
+  const folder = intent === null
+    ? `aidlc/spaces/${space}/intents/.aidlc-learnings`
+    : `aidlc/spaces/${space}/intents/${intent}/.aidlc-engine/learnings`;
+  return `${folder}/${slug}-selections.json`;
+}
+
+// persist reads only the file surface named for the piece of work the picks
+// are bound to: a plain file there, reached through no link. Anywhere else it
+// may be another session's picks, so it is refused with the file to write.
+function assertSelectionsFileHome(projectDir: string, given: string, sel: SelectionsFile): void {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(sel.stage_slug)) {
+    fail("selections-json is malformed: stage_slug must be a stage slug (bind it from surface's output)", 1);
+  }
+  const expected = selectionsFileFor(sel.space, sel.intent, sel.stage_slug);
+  const notHere = "selections-json is not the file surface named for this piece of work.";
+  const refuse = (why: string): never =>
+    fail(
+      `${why} Write the person's picks with your file tool to ${expected} (the selections_file ` +
+        `\`learnings surface\` returned for this stage), then run persist again with --selections-json ${expected}.`,
+      1
+    );
+  const expectedAbs = resolve(projectDir, expected);
+  let realParent = "";
+  try {
+    realParent = realpathSync(dirname(expectedAbs));
+  } catch {
+    refuse(notHere);
+  }
+  // The folder is reached through no link: its real path is the project's
+  // real path plus the same record-relative tail.
+  if (realParent !== join(realpathSync(projectDir), dirname(expected))) refuse(notHere);
+  const isExpected = (candidate: string): boolean => {
+    if (basename(candidate) !== basename(expectedAbs)) return false;
+    try {
+      return realpathSync(dirname(candidate)) === realParent;
+    } catch {
+      return false;
+    }
+  };
+  if (!isExpected(resolve(given)) && !isExpected(resolve(projectDir, given))) refuse(notHere);
+  const entry = lstatSync(expectedAbs, { throwIfNoEntry: false });
+  if (entry === undefined || entry.isSymbolicLink() || !entry.isFile() || entry.nlink !== 1) {
+    refuse("selections-json must be a plain file, not a link.");
+  }
 }
 
 // Resolve the (space, intent) provenance to bind at SURFACE time. Two
@@ -465,6 +520,7 @@ function handleSurface(args: string[], projectDir: string): void {
     phase,
     space,
     intent,
+    selections_file: selectionsFileFor(space, intent, slug),
     memory_entries_total: entries.length,
     candidates,
     parked_open_questions: parked,
@@ -858,6 +914,9 @@ function handlePersist(args: string[], projectDir: string): void {
           1
         );
       }
+      // The picks came from the file surface named for this piece of work,
+      // never a spot another session may have written (#1592).
+      assertSelectionsFileHome(projectDir, selectionsJson, selFile);
       // Read across every per-clone audit shard of the PINNED intent (single
       // shard in the common case).
       const auditContent = readAllAuditShards(projectDir, pinnedIntent, pinnedSpace);

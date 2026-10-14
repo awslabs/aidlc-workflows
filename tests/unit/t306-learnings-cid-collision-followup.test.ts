@@ -78,6 +78,7 @@ import {
   DEFAULT_SPACE,
   intentsDirOf,
   seededStateFile,
+  writeLearningsSelections,
 } from "../harness/fixtures.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -118,28 +119,32 @@ function selectionsFile(
   pd: string,
   name: string,
   text: string,
-  opts: { intent?: string | null; space?: string; candidateId?: string } = {},
+  opts: { intent?: string | null; space?: string; candidateId?: string; loose?: boolean } = {},
 ): string {
-  const p = join(pd, `${name}.json`);
-  writeFileSync(
-    p,
-    JSON.stringify({
-      stage_slug: STAGE_SLUG,
-      space: opts.space ?? DEFAULT_SPACE,
-      intent: opts.intent === undefined ? DEFAULT_RECORD_DIR : opts.intent,
-      selections: [
-        {
-          candidate_id: opts.candidateId ?? CANDIDATE_ID,
-          type: "learning",
-          scope: "project",
-          heading: "Corrections",
-          text,
-        },
-      ],
-    }),
-    "utf-8",
-  );
-  return p;
+  // The file goes where surface names it, the only place persist reads it
+  // (#1592). A case whose provenance must be refused first keeps it loose in
+  // the project, so writing it never creates the space or intent under test.
+  const write = opts.loose
+    ? (body: object): string => {
+        const p = join(pd, `${name}.json`);
+        writeFileSync(p, JSON.stringify(body), "utf-8");
+        return p;
+      }
+    : (body: { space: string; intent: string | null; stage_slug: string }): string => writeLearningsSelections(pd, body);
+  return write({
+    stage_slug: STAGE_SLUG,
+    space: opts.space ?? DEFAULT_SPACE,
+    intent: opts.intent === undefined ? DEFAULT_RECORD_DIR : opts.intent,
+    selections: [
+      {
+        candidate_id: opts.candidateId ?? CANDIDATE_ID,
+        type: "learning",
+        scope: "project",
+        heading: "Corrections",
+        text,
+      },
+    ],
+  });
 }
 
 function runPersist(
@@ -222,32 +227,28 @@ function sensorSelectionsFile(
   sensorId: string,
   opts: { originStage?: string; stageSlug?: string; candidateId?: string; intent?: string | null; space?: string } = {},
 ): string {
-  const p = join(pd, `${name}.json`);
-  writeFileSync(
-    p,
-    JSON.stringify({
-      stage_slug: opts.stageSlug ?? STAGE_SLUG,
-      space: opts.space ?? DEFAULT_SPACE,
-      intent: opts.intent === undefined ? DEFAULT_RECORD_DIR : opts.intent,
-      selections: [
-        {
-          candidate_id: opts.candidateId ?? CANDIDATE_ID,
-          type: "sensor",
-          origin_stage: opts.originStage ?? STAGE_SLUG,
-          manifest_fields: {
-            id: sensorId,
-            kind: "deterministic",
-            command: `bun .claude/tools/aidlc-sensor.ts fire ${sensorId}`,
-            default_severity: "advisory",
-            description: "Test sensor",
-            matches: "**/*",
-          },
+  // `name` only labels the case: the file goes where surface names it (#1592).
+  void name;
+  return writeLearningsSelections(pd, {
+    stage_slug: opts.stageSlug ?? STAGE_SLUG,
+    space: opts.space ?? DEFAULT_SPACE,
+    intent: opts.intent === undefined ? DEFAULT_RECORD_DIR : opts.intent,
+    selections: [
+      {
+        candidate_id: opts.candidateId ?? CANDIDATE_ID,
+        type: "sensor",
+        origin_stage: opts.originStage ?? STAGE_SLUG,
+        manifest_fields: {
+          id: sensorId,
+          kind: "deterministic",
+          command: `bun .claude/tools/aidlc-sensor.ts fire ${sensorId}`,
+          default_severity: "advisory",
+          description: "Test sensor",
+          matches: "**/*",
         },
-      ],
-    }),
-    "utf-8",
-  );
-  return p;
+      },
+    ],
+  });
 }
 
 describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 review)", () => {
@@ -492,7 +493,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
     test("path-traversing space fails before writing outside aidlc/spaces", () => {
       const pd = mkProject();
       const escaped = join(pd, "escaped-space");
-      const sel = selectionsFile(pd, "malformed-space-traversal", "must not escape", {
+      const sel = selectionsFile(pd, "malformed-space-traversal", "must not escape", { loose: true,
         space: "../../escaped-space",
       });
 
@@ -515,7 +516,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
 
     test("path-traversing intent fails before audit-path resolution", () => {
       const pd = mkProject();
-      const sel = selectionsFile(pd, "malformed-intent-traversal", "must not escape", {
+      const sel = selectionsFile(pd, "malformed-intent-traversal", "must not escape", { loose: true,
         intent: "../../escaped-intent",
       });
 
@@ -781,10 +782,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
   describe("finding #10 (P1, round 5) — dedup must include rows emitted earlier in the same batch", () => {
     test("duplicate content in one selections file emits one line and one RULE_LEARNED row", () => {
       const pd = mkProject();
-      const path = join(pd, "duplicate-content.json");
-      writeFileSync(
-        path,
-        JSON.stringify({
+      const path = writeLearningsSelections(pd, {
           stage_slug: STAGE_SLUG,
           space: DEFAULT_SPACE,
           intent: DEFAULT_RECORD_DIR,
@@ -793,9 +791,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
             { candidate_id: "c2", type: "learning", scope: "project", heading: "Corrections", text: "Same learning" },
             { candidate_id: "c3", type: "learning", scope: "team", heading: "Corrections", text: "Same learning" },
           ],
-        }),
-        "utf-8",
-      );
+      });
 
       const result = runPersist(pd, path);
       expect(result.status).toBe(0);
@@ -820,7 +816,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
     test("a syntactically valid but nonexistent intent record fails without writing", () => {
       const pd = mkProject();
       const text = "Must not land under a ghost intent";
-      const selection = selectionsFile(pd, "ghost-intent", text, { intent: "ghost-a1234567" });
+      const selection = selectionsFile(pd, "ghost-intent", text, { loose: true, intent: "ghost-a1234567" });
 
       const result = runPersist(pd, selection);
       expect(result.status).not.toBe(0);
@@ -834,7 +830,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
     test("a syntactically valid but nonexistent non-default space fails without creating it", () => {
       const pd = mkProject();
       const text = "Must not land under a ghost space";
-      const selection = selectionsFile(pd, "ghost-space", text, { space: "ghost", intent: null });
+      const selection = selectionsFile(pd, "ghost-space", text, { loose: true, space: "ghost", intent: null });
 
       const result = runPersist(pd, selection);
       expect(result.status).not.toBe(0);
@@ -844,7 +840,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
 
     test("a deleted default space fails instead of being synthesized and partially recreated", () => {
       const pd = mkProject();
-      const selection = selectionsFile(pd, "deleted-default", "Must not recreate default");
+      const selection = selectionsFile(pd, "deleted-default", "Must not recreate default", { loose: true });
       const defaultDir = join(pd, "aidlc", "spaces", DEFAULT_SPACE);
       rmSync(defaultDir, { recursive: true, force: true });
 
@@ -859,7 +855,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const external = join(pd, "external-space");
       mkdirSync(external, { recursive: true });
       symlinkSync(external, join(pd, "aidlc", "spaces", "redirect"));
-      const selection = selectionsFile(pd, "symlink-space", "Must not follow space links", {
+      const selection = selectionsFile(pd, "symlink-space", "Must not follow space links", { loose: true,
         space: "redirect",
         intent: null,
       });
