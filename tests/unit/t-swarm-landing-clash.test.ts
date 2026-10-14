@@ -196,7 +196,7 @@ describe("a parallel landing over changes not committed in the main checkout", (
     expect(r.code).toBe(1);
     const said = (JSON.parse(r.err) as { error: string }).error;
     expect(said).toContain("Unit alpha's landing changes .gitignore, which has changes not committed in");
-    expect(said).toContain("nothing changed");
+    expect(said).toContain("nothing in the checkout changed");
     expect(said).toContain("Commit those changes");
     expect(said).toContain("then run this same merge again");
     expect(said).not.toContain("Please commit your changes or stash them");

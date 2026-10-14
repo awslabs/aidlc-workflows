@@ -986,6 +986,31 @@ function preparedBoltWorktreeUnit(projectDir: string, targets: string[], units: 
   }
 }
 
+// Every target is a file of a landing AI-DLC staged in the main checkout for
+// one of `units` that git could not merge or that was combined since (the
+// landing owns which: stagedLandingClashFiles), reached through no symlink and
+// linked to no other file. Loaded only here, off every other tool call's path.
+async function landingClashFilesOnly(projectDir: string, targets: string[], units: readonly string[]): Promise<boolean> {
+  if (units.length === 0) return false;
+  try {
+    const { stagedLandingClashFiles } = await import("../tools/aidlc-worktree.ts");
+    const files = new Set(stagedLandingClashFiles(projectDir, units));
+    if (files.size === 0) return false;
+    const projectLexical = resolve(projectDir);
+    const projectReal = realpathSync(projectLexical);
+    return targets.every((target) => {
+      const targetAbs = resolve(target);
+      const inside = relative(projectLexical, targetAbs);
+      if (!files.has(inside.split(sep).join("/"))) return false;
+      assertNoSymlinkInChainOrThrow(projectReal, inside);
+      const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
+      return existing === undefined || (existing.isFile() && existing.nlink === 1);
+    });
+  } catch {
+    return false;
+  }
+}
+
 // The composer's grid proposal (composerProposalPath) is engine scratch that
 // only validate-grid reads: not source, not a plan file, and nothing reads an
 // approval from it. A composition requested while Code Generation is current
@@ -2226,6 +2251,13 @@ async function evaluate(
         if (
           !mutation.opaqueShell && mutation.targets.length > 0 &&
           preparedBoltWorktreeUnit(projectDir, mutation.targets, listed) !== null
+        ) return 0;
+        // A listed Unit's landing that clashed in the main checkout is finished
+        // there: the files git could not merge, or combined since, are the
+        // agent's to write, as the landing's own line says.
+        if (
+          !mutation.opaqueShell && mutation.targets.length > 0 &&
+          await landingClashFilesOnly(projectDir, mutation.targets, listed)
         ) return 0;
         // While every listed Unit's approved plan holds, a command whose writes
         // cannot be seen runs, as a serial build's does once its plan is
