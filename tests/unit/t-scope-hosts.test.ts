@@ -8,17 +8,21 @@
 //
 // Mechanism: function - the shipped wiring and recorded payloads, no hook runs.
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
-import { AgentStandIn, PersonScript, type RunResult, ScopeHost } from "../harness/scope-run.ts";
+import { AgentStandIn, PersonScript, type RunResult, ScopeHost, ScopeRunRefused } from "../harness/scope-run.ts";
 import {
   CodexScopeHost,
   codexPatch,
   codexWired,
   CopilotScopeHost,
   copilotWired,
+  cursorRefusal,
+  CursorScopeHost,
+  cursorStopVerdict,
+  OpencodeScopeHost,
   type KiroIdeCard,
   KiroCliScopeHost,
   kiroCliMatches,
@@ -96,8 +100,20 @@ class KiroIdeCapture extends KiroIdeScopeHost {
   }
 }
 
+class CursorCapture extends CursorScopeHost {
+  readonly seen: Seen[] = [];
+  override wired(): string[] {
+    return [];
+  }
+  protected override payload(event: string, fields: Record<string, unknown>): Record<string, unknown> {
+    const payload = super.payload(event, fields);
+    this.seen.push({ event, payload });
+    return payload;
+  }
+}
+
 /** Each moment the scope run plays, once. */
-function playMoments(host: CodexCapture | CopilotCapture | KiroCliCapture | KiroIdeCapture): Seen[] {
+function playMoments(host: CodexCapture | CopilotCapture | KiroCliCapture | KiroIdeCapture | CursorCapture): Seen[] {
   host.sessionStart("startup");
   host.typed("Guide me");
   if (host.picker) host.picked("Which option fits?", ["A", "B"], "A");
@@ -301,5 +317,87 @@ describe("the stand-in takes the step a person-turn hook set", () => {
     expect(first).toEqual({ kind: "done" });
     expect(host.ran).toEqual(["bun .kiro/tools/aidlc.ts engine orchestrate next --scope classic build it"]);
     expect(agent.fromTurn("AI-DLC kept your words.")).toBeNull();
+  });
+});
+
+describe("Cursor: .cursor/hooks.json and cursor-agent's own payloads", () => {
+  const wiring = json("dist/cursor/.cursor/hooks.json") as { hooks: Record<string, { command: string }[]> };
+  const cursor = recorded("cursor");
+  const adapter = (target: string) => `bun .cursor/hooks/aidlc-cursor-adapter.ts ${target}`;
+
+  test("each event fires the adapter targets the shipped wiring registers, with no matchers", () => {
+    const host = new CursorScopeHost(scratch());
+    // The shipped file, read the way the host reads it.
+    mkdirSync(join(host.proj, ".cursor"), { recursive: true });
+    writeFileSync(join(host.proj, ".cursor", "hooks.json"), JSON.stringify(wiring));
+    expect(host.wired("sessionStart")).toEqual([adapter("session-start")]);
+    expect(host.wired("beforeSubmitPrompt")).toEqual([adapter("mint")]);
+    expect(host.wired("preToolUse")).toEqual([adapter("guards")]);
+    expect(host.wired("postToolUse")).toEqual([adapter("audit-and-sensors"), adapter("runtime-compile")]);
+    expect(host.wired("stop")).toEqual([adapter("stop")]);
+  });
+
+  test("every payload carries the fields cursor-agent's recorded payload for that event carries; a helper's calls its own conversation", () => {
+    const seen = playMoments(new CursorCapture(scratch()));
+    expect(keys(find(seen, "sessionStart"))).toEqual(keys(cursor.sessionStart));
+    expect(keys(find(seen, "beforeSubmitPrompt"))).toEqual(keys(cursor.beforeSubmitPrompt));
+    expect(keys(find(seen, "preToolUse", "Shell"))).toEqual(keys(cursor.preToolUseShell));
+    expect(keys(find(seen, "postToolUse", "Shell"))).toEqual(keys(cursor.postToolUseShell));
+    expect(keys(find(seen, "preToolUse", "Write"))).toEqual(keys(cursor.preToolUseWrite));
+    expect(keys(find(seen, "postToolUse", "Write"))).toEqual(keys(cursor.postToolUseWrite));
+    expect(keys(find(seen, "preToolUse", "Task"))).toEqual(keys(cursor.preToolUseTask));
+    expect(keys(find(seen, "postToolUse", "Task"))).toEqual(keys(cursor.postToolUseTask));
+    expect(keys(find(seen, "stop"))).toEqual(keys(cursor.stop));
+    const task = find(seen, "preToolUse", "Task");
+    expect(task.generation_id).not.toBe(task.conversation_id);
+  });
+
+  test("an answer is read as Cursor reads it: a deny refuses with its message, anything but an allow refuses, a follow-up keeps the turn going", () => {
+    expect(cursorRefusal('{"permission":"allow"}\n')).toBeNull();
+    expect(cursorRefusal('{"permission":"deny","agent_message":"Approve the plan first."}\n')).toBe("Approve the plan first.");
+    expect(cursorRefusal("")).toContain("failClosed");
+    expect(cursorStopVerdict('{"followup_message":"AI-DLC is carrying on."}')).toEqual({ blocked: true, reason: "AI-DLC is carrying on." });
+    expect(cursorStopVerdict("")).toEqual({ blocked: false, reason: "" });
+  });
+});
+
+describe("opencode: one plugin instance in a process the host waits on", () => {
+  // A plugin that answers the way AI-DLC's does (a throw refuses, a turn end may
+  // nudge, a task's brief may be rewritten) and keeps what it saw.
+  const STUB = `export default async ({ client }) => {
+  const seen = [];
+  return {
+    "chat.message": async (input, output) => { seen.push(input.sessionID + ": " + output.parts[0].text); },
+    "tool.execute.before": async (input, output) => {
+      if (String(output.args.command ?? "").includes("refuse-me")) throw new Error("refused by the plugin");
+      if (input.tool === "task") output.args = { ...output.args, prompt: "the rewritten brief" };
+    },
+    "tool.execute.after": async () => {},
+    event: async ({ event }) => {
+      if (event.type === "session.idle") await client.session.prompt({ path: { id: event.properties.sessionID }, body: { parts: [{ type: "text", text: seen.join(" | ") }] } });
+    },
+  };
+};
+`;
+
+  test("its state lasts between calls, a throw is a refusal, a rewritten brief reaches the helper, and a nudge keeps the turn going", () => {
+    const proj = scratch();
+    mkdirSync(join(proj, ".opencode", "plugin"), { recursive: true });
+    writeFileSync(join(proj, ".opencode", "plugin", "aidlc-opencode-adapter.ts"), STUB);
+    const host = new OpencodeScopeHost(proj);
+    try {
+      host.typed("first words");
+      host.task("aidlc-developer-agent", "the brief as asked", () => {});
+      expect(() => host.bash("bun --version refuse-me")).toThrow(ScopeRunRefused);
+      const verdict = host.stop();
+      expect(verdict.blocked).toBe(true);
+      const [main, helper] = verdict.reason.split(" | ");
+      expect(main).toBe(`${host.session}: first words`);
+      expect(helper.startsWith(`${host.session}_child`)).toBe(true);
+      expect(helper.endsWith(": the rewritten brief")).toBe(true);
+      expect(host.refusals).toHaveLength(1);
+    } finally {
+      host.dispose();
+    }
   });
 });

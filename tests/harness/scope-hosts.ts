@@ -17,7 +17,9 @@
 // first answer (tests/unit/t149-codex-hook-adapter.test.ts owns that).
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
+import { Worker } from "node:worker_threads";
 import { basename, dirname, join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { auditShardHostSegment, cloneIdFileContent, cloneIdPath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -43,8 +45,8 @@ import {
   stopVerdict,
 } from "./scope-run.ts";
 
-export type HostName = "codex" | "copilot" | "kiro" | "kiro-ide";
-export const HOSTS: readonly ("claude" | HostName)[] = ["claude", "codex", "copilot", "kiro", "kiro-ide"];
+export type HostName = "codex" | "copilot" | "kiro" | "kiro-ide" | "cursor" | "opencode";
+export const HOSTS: readonly ("claude" | HostName)[] = ["claude", "codex", "copilot", "kiro", "kiro-ide", "cursor", "opencode"];
 
 type Payload = Record<string, unknown>;
 
@@ -168,6 +170,28 @@ export function kiroCliPayload(event: string, at: Moment, fields: Payload): Payl
 /** A Kiro IDE payload (1.2.37): snake_case, the chat's session on every event, a helper's calls included. */
 export function kiroIdePayload(event: string, at: Moment, fields: Payload): Payload {
   return { session_id: at.session, hook_event_name: event, cwd: at.proj, ...fields };
+}
+
+/**
+ * A Cursor payload (cursor-agent 2026.07.23, tests/fixtures/cursor-hook-payloads):
+ * every event carries the conversation, its generation and the workspace; a
+ * helper's own calls carry the helper's conversation. `transcript_path` is
+ * null, as on a chat's first turn.
+ */
+export function cursorPayload(event: string, at: Moment, generation: string, fields: Payload): Payload {
+  const conversation = at.helper?.id ?? at.session;
+  return {
+    conversation_id: conversation,
+    generation_id: generation,
+    model: "claude-opus-5",
+    session_id: conversation,
+    hook_event_name: event,
+    cursor_version: "2026.07.23-e383d2b",
+    workspace_roots: [at.proj],
+    user_email: "user@example.com",
+    transcript_path: null,
+    ...fields,
+  };
 }
 
 /** A Codex apply_patch envelope that writes `content` to `rel` (whole-file replacement when it existed). */
@@ -752,6 +776,304 @@ export class KiroIdeScopeHost extends NativeScopeHost {
   }
 }
 
+/**
+ * Cursor (cursor-agent): `.cursor/hooks.json` through the Cursor adapter, no
+ * matchers (the adapter reads the tool). Every answer is JSON at exit 0: a
+ * refusal is `{"permission":"deny","agent_message"}`, and with failClosed an
+ * answer that is not an allow is a refusal too. The turn end cannot block; it
+ * can only send `{"followup_message"}`, which Cursor hands the agent as the
+ * next message, so the journey reads it as a blocked hand-off. Questions are
+ * numbered prose. Git's own settings are kept out of the hooks, as t276 does,
+ * so a developer's aliases cannot change what the adapter reads.
+ */
+export class CursorScopeHost extends NativeScopeHost {
+  override readonly dir = ".cursor";
+  override readonly picker = false;
+  protected override readonly stopEvent = "stop";
+
+  protected override sessionName(n: number): string {
+    return `5d190fd9-${hex(this.hostNumber, 4)}-404e-bbae-${hex(n, 12)}`;
+  }
+
+  wired(event: string): string[] {
+    const wiring = JSON.parse(readFileSync(join(this.proj, ".cursor", "hooks.json"), "utf-8")) as {
+      hooks: Record<string, { command: string }[]>;
+    };
+    return (wiring.hooks[event] ?? []).map((hook) => hook.command);
+  }
+
+  private generation = "";
+
+  protected payload(event: string, fields: Payload): Payload {
+    return cursorPayload(event, this.moment(), this.generation || (this.helper?.id ?? this.session), fields);
+  }
+
+  protected transcript(): string {
+    return "";
+  }
+
+  protected override hookEnv(): NodeJS.ProcessEnv {
+    return {
+      ...this.env,
+      GIT_CONFIG_GLOBAL: join(this.proj, ".absent-global-gitconfig"),
+      GIT_CONFIG_SYSTEM: join(this.proj, ".absent-system-gitconfig"),
+    };
+  }
+
+  protected refusal(res: RunResult): string | null {
+    return cursorRefusal(res.stdout);
+  }
+
+  protected override startChat(): void {
+    this.fire("sessionStart", null, { is_background_agent: false });
+  }
+
+  override typed(words: string): string {
+    this.fire("beforeSubmitPrompt", null, { prompt: words, is_background_agent: false });
+    return "";
+  }
+
+  private call(tool: string, input: Payload, extra: Payload = {}): { use: string; fields: Payload } {
+    const use = `toolu_${hex(this.hostNumber, 4)}${randomUUID().replace(/-/g, "").slice(0, 20)}`;
+    return { use, fields: { tool_name: tool, tool_input: input, tool_use_id: use, ...extra } };
+  }
+
+  override bash(line: string): RunResult {
+    const input = { command: line, cwd: "", timeout: 30000 };
+    const { fields } = this.call("Shell", input, { cwd: "" });
+    this.refuseOn("Shell", input, this.fire("preToolUse", "Shell", fields));
+    const started = Date.now();
+    const res = this.run(line);
+    this.fire("postToolUse", "Shell", { ...fields, tool_output: `${res.stdout}${res.stderr}`, duration: Date.now() - started });
+    return res;
+  }
+
+  override write(rel: string, content: string): void {
+    const abs = join(this.proj, rel);
+    const before = existsSync(abs) ? readFileSync(abs, "utf-8") : null;
+    const [tool, input] = before === null
+      ? ["Write", { file_path: abs, content }] as const
+      : ["Edit", { file_path: abs, old_string: before, new_string: content }] as const;
+    const { fields } = this.call(tool, input);
+    this.refuseOn(tool, input, this.fire("preToolUse", tool, fields));
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+    this.fire("postToolUse", tool, { ...fields, tool_output: before === null ? "File created" : "File updated", duration: 1 });
+  }
+
+  override remove(rel: string): void {
+    const input = { command: `rm ${rel}`, cwd: "", timeout: 30000 };
+    const { fields } = this.call("Shell", input, { cwd: "" });
+    this.refuseOn("Shell", input, this.fire("preToolUse", "Shell", fields));
+    rmSync(join(this.proj, rel), { force: true });
+    this.fire("postToolUse", "Shell", { ...fields, tool_output: "", duration: 1 });
+  }
+
+  /** The Task tool; the helper's own calls carry a conversation of their own and no identity. */
+  override task(agent: string, prompt: string, work: () => void): void {
+    const input = { description: "stage work", prompt, subagent_type: agent };
+    this.generation = randomUUID();
+    const { fields } = this.call("Task", input, { model: "" });
+    try {
+      this.refuseOn("Task", input, this.fire("preToolUse", "Task", fields));
+    } finally {
+      this.generation = "";
+    }
+    this.helper = { agent, id: randomUUID() };
+    try {
+      work();
+    } finally {
+      this.helper = null;
+    }
+    this.fire("postToolUse", "Task", { ...fields, model: "", tool_output: "done", duration: 1 });
+  }
+
+  override stop(): { blocked: boolean; reason: string } {
+    return cursorStopVerdict(this.fire(this.stopEvent, null, this.stopFields()).map((res) => res.stdout).join("\n"));
+  }
+
+  protected stopFields(): Payload {
+    return { status: "completed" };
+  }
+}
+
+/** A Cursor preToolUse answer: null for an allow, else the refusal (with failClosed, anything but an allow refuses). */
+export function cursorRefusal(stdout: string): string | null {
+  const line = stdout.trim().split("\n").find((entry) => entry.startsWith("{"));
+  const answer = parseJson(line ?? "") as { permission?: string; agent_message?: string } | null;
+  if (answer?.permission === "allow") return null;
+  return answer?.permission === "deny"
+    ? String(answer.agent_message ?? "")
+    : `no allow came back, which Cursor refuses under failClosed: ${clip(stdout, 300)}`;
+}
+
+/** A Cursor stop answer: a follow-up message is the next message Cursor hands the agent, so the turn did not end. */
+export function cursorStopVerdict(stdout: string): { blocked: boolean; reason: string } {
+  const followup = (parseJson(stdout) as { followup_message?: string } | null)?.followup_message;
+  return typeof followup === "string" ? { blocked: true, reason: followup } : { blocked: false, reason: "" };
+}
+
+/** What the plugin answered for one hook call: a refusal (its thrown message), the output it changed, the nudges it sent. */
+interface PluginAnswer {
+  ok: boolean;
+  error?: string;
+  refused?: string | null;
+  output?: Record<string, unknown> | null;
+  nudges?: string[];
+}
+
+/**
+ * opencode: AI-DLC's plugin (`.opencode/plugin/aidlc-opencode-adapter.ts`)
+ * loaded into one opencode process, here a worker thread the host waits on
+ * (tests/harness/opencode-plugin-worker.ts), with the production guard profile
+ * in its environment, which the plugin's hooks inherit. A refusal is the hook's
+ * thrown error; a turn end that blocks sends a nudge through
+ * `client.session.prompt`. A helper is a child session whose parent the client
+ * names. A new chat after a stop for the day is a new opencode process, so the
+ * plugin starts again. The agent's shell carries `OPENCODE=1`.
+ */
+export class OpencodeScopeHost extends ScopeHost {
+  override readonly dir = ".aidlc";
+  override readonly picker = false;
+  override readonly removesDispatch = false;
+  private readonly sab = new SharedArrayBuffer(8 + (16 << 20));
+  private readonly flag = new Int32Array(this.sab, 0, 2);
+  private readonly worker: Worker;
+  private readonly hostNumber = ++hostCount;
+  private child: string | null = null;
+  private uses = 0;
+
+  constructor(proj: string) {
+    super(proj);
+    delete this.env.CLAUDE_PROJECT_DIR;
+    this.fullHost = true;
+    this.session = this.sessionName(1);
+    this.worker = new Worker(join(import.meta.dir, "opencode-plugin-worker.ts"), { workerData: { sab: this.sab, env: this.env } });
+    this.worker.unref();
+    this.startPlugin();
+  }
+
+  protected override sessionName(n: number): string {
+    return `ses_${hex(this.hostNumber, 4)}c0de${hex(n, 16)}`;
+  }
+
+  /** One request to the plugin's process, waited on as opencode waits on a hook. */
+  private request(message: Record<string, unknown>): PluginAnswer {
+    const started = Date.now();
+    Atomics.store(this.flag, 0, 0);
+    this.worker.postMessage(message);
+    const waited = Atomics.wait(this.flag, 0, 0, SCOPE_RUN_TIMEOUT_MS);
+    if (waited === "timed-out") throw new ScopeRunStuck(`the opencode plugin did not answer ${JSON.stringify(message).slice(0, 200)}`);
+    const answer = JSON.parse(new TextDecoder().decode(new Uint8Array(this.sab, 8, Atomics.load(this.flag, 1)).slice())) as PluginAnswer;
+    const what = message.op === "hook" ? `plugin ${String(message.name)}` : `plugin ${String(message.op)}`;
+    this.calls.push({ what, ms: Date.now() - started, status: answer.ok ? (answer.refused ? 2 : 0) : -1 });
+    this.trace.push(`$ ${what}\n  -> ${answer.refused ? `refused: ${clip(answer.refused)}` : answer.ok ? "ok" : `error: ${clip(answer.error ?? "")}`}`);
+    if (!answer.ok) throw new ScopeRunStuck(`the opencode plugin failed: ${answer.error}`);
+    return answer;
+  }
+
+  private startPlugin(): void {
+    this.request({ op: "start", plugin: join(this.proj, ".opencode", "plugin", "aidlc-opencode-adapter.ts"), directory: this.proj });
+  }
+
+  private hookCall(name: string, input: Record<string, unknown>, output?: Record<string, unknown>): PluginAnswer {
+    return this.request({ op: "hook", name, input, output });
+  }
+
+  /** A tool call through the plugin: before (a throw refuses it, as in opencode), the call, then after. */
+  private tool<T>(tool: string, args: Record<string, unknown>, act: (args: Record<string, unknown>) => T, result: (value: T) => string): T {
+    const sessionID = this.child ?? this.session;
+    const callID = `call_${hex(this.hostNumber, 4)}_${++this.uses}`;
+    const before = this.hookCall("tool.execute.before", { tool, sessionID, callID }, { args });
+    if (before.refused) {
+      this.refusals.push(`${tool} ${clip(JSON.stringify(args), 200)}: ${clip(before.refused, 600)}`);
+      throw new ScopeRunRefused(`the plugin refused ${tool} ${clip(JSON.stringify(args), 200)}`, before.refused);
+    }
+    const ran = (before.output?.args as Record<string, unknown> | undefined) ?? args;
+    const value = act(ran);
+    this.hookCall("tool.execute.after", { tool, sessionID, callID, args: ran }, { output: result(value) });
+    return value;
+  }
+
+  override hook(name: string): RunResult {
+    throw new Error(`${name} is a Claude Code hook name; opencode runs AI-DLC's plugin`);
+  }
+
+  // A chat's first message starts it in the plugin; there is no session-start event of its own.
+  protected override startChat(): void {}
+
+  override newSession(): void {
+    // The next day is a new opencode process: the plugin starts again.
+    this.startPlugin();
+    super.newSession();
+  }
+
+  override typed(words: string): string {
+    const skill = /^\/aidlc(?:\s+|$)/.exec(words);
+    if (skill) {
+      // opencode expands the command template, and the plugin shows what the person typed.
+      const args = words.slice(skill[0].length);
+      const template = readFileSync(join(this.proj, ".opencode", "command", "aidlc.md"), "utf-8")
+        .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").split("$ARGUMENTS").join(args);
+      const command = this.hookCall("command.execute.before", { command: "aidlc", sessionID: this.session, arguments: args }, { parts: [{ type: "text", text: template }] });
+      this.hookCall("chat.message", { sessionID: this.session, agent: "build" }, { parts: (command.output?.parts as unknown[]) ?? [] });
+      return "";
+    }
+    this.hookCall("chat.message", { sessionID: this.session, agent: "build" }, { parts: [{ type: "text", text: words }] });
+    return "";
+  }
+
+  override bash(line: string): RunResult {
+    return this.tool("bash", { command: line, description: "Run the step AI-DLC named" }, (args) => {
+      const words = commandWords(String(args.command ?? line));
+      if (words[0] !== "bun") throw new Error(`the stand-in runs only bun commands, got: ${line}`);
+      return this.spawn(String(args.command ?? line), [process.execPath, ...words.slice(1)], undefined, { ...this.env, OPENCODE: "1" });
+    }, (res) => `${res.stdout}${res.stderr}`);
+  }
+
+  override write(rel: string, content: string): void {
+    const abs = join(this.proj, rel);
+    const before = existsSync(abs) ? readFileSync(abs, "utf-8") : null;
+    const [tool, args] = before === null
+      ? ["write", { filePath: abs, content }] as const
+      : ["edit", { filePath: abs, oldString: before, newString: content }] as const;
+    this.tool(tool, args, () => {
+      mkdirSync(dirname(abs), { recursive: true });
+      writeFileSync(abs, content);
+    }, () => (before === null ? "Wrote file successfully." : "Edit applied successfully."));
+  }
+
+  override remove(rel: string): void {
+    this.tool("bash", { command: `rm ${rel}`, description: "Remove a file" }, () => rmSync(join(this.proj, rel), { force: true }), () => "");
+  }
+
+  /** The task tool: the helper's brief is the one the plugin hands it; its own calls run in a child session. */
+  override task(agent: string, prompt: string, work: () => void): void {
+    this.tool("task", { subagent_type: agent, prompt, description: "stage work" }, (args) => {
+      const child = `${this.session}_child${++this.uses}`;
+      this.request({ op: "parent", child, parent: this.session });
+      this.hookCall("chat.message", { sessionID: child, agent }, { parts: [{ type: "text", text: String(args.prompt ?? prompt) }] });
+      this.child = child;
+      try {
+        work();
+      } finally {
+        this.child = null;
+      }
+    }, () => "done");
+  }
+
+  override stop(): { blocked: boolean; reason: string } {
+    const idle = this.hookCall("event", { event: { type: "session.idle", properties: { sessionID: this.session } } });
+    const nudge = idle.nudges?.[0];
+    return nudge === undefined ? { blocked: false, reason: "" } : { blocked: true, reason: nudge };
+  }
+
+  /** End the plugin's process. */
+  dispose(): void {
+    void this.worker.terminate();
+  }
+}
+
 function parseJson(text: string): Record<string, unknown> | null {
   const t = text.trim();
   if (!t.startsWith("{")) return null;
@@ -773,6 +1095,8 @@ function hostFor(name: "claude" | HostName, proj: string): ScopeHost {
     case "copilot": return new CopilotScopeHost(proj);
     case "kiro": return new KiroCliScopeHost(proj);
     case "kiro-ide": return new KiroIdeScopeHost(proj);
+    case "cursor": return new CursorScopeHost(proj);
+    case "opencode": return new OpencodeScopeHost(proj);
   }
 }
 
@@ -891,6 +1215,7 @@ export function hostJourneySuite(name: "claude" | HostName): void {
     afterAll(cleanupScopeProjects);
     test("two Units one at a time, a fresh clone and a second chat: every step is the person's and the run ends done", () => {
       const journey = hostJourney(name);
+      if (journey.run.host instanceof OpencodeScopeHost) journey.run.host.dispose();
       const problems = hostJourneyProblems(journey);
       console.log(`scope host ${name}: ${journey.run.ms} ms, ${journey.run.host.calls.length} calls, ${journey.run.person.said.length} person turns`);
       expect(problems).toEqual([]);
