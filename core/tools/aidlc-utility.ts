@@ -1,5 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { hasStoredMessages, latestMessage } from "./aidlc-message-store.ts";
+import { hasStoredMessages } from "./aidlc-message-store.ts";
 import { createHash, randomUUID } from "node:crypto";
 import {
   constants as fsConstants,
@@ -419,6 +419,7 @@ import {
   humanPresenceGuardDisabled,
   OWN_TERMINAL_PRESENCE_STEP,
   personAtOwnTerminal,
+  personAskedForThisLowering,
   personSpokeSinceGate,
   personSaidProjectType,
   clearProjectTypeAsked,
@@ -8112,22 +8113,12 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   // the work they pick instead of a refusal telling the agent to create the work
   // and run the setter afterwards.
   // Their own words, or their own terminal: either makes the lowering theirs, so
-  // the work records it as set by them. Before any work exists there is no
-  // decision for a turn to be "since", and no HUMAN_TURN row either: the hook
-  // writes that row only once a state file is there, and keeps the person's
-  // message from their first prompt on (aidlc-message-store.ts). The message of
-  // this chat is the proof then, as the turn is once work exists. Per chat,
-  // never the project's messages: a teammate's turn in their own chat is not
-  // this one's.
-  const personAskedForThisLowering = (): boolean =>
-    commandAtPersonsTerminal() ||
-    (existsSync(stateFilePath(projectDir))
-      ? personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true })
-      : latestMessage(projectDir, initialSelection.sessionId) !== null);
+  // the work records it as set by them (personAskedForThisLowering).
   // A recorded presence bypass authorizes the lowering, as it does on main, but
   // it is nobody's word: the setting stays "set by a command".
   const loweringAuthorized = (): boolean =>
-    personAskedForThisLowering() || fenceKeyBypassed(projectDir, initialSelection.sessionId);
+    personAskedForThisLowering(projectDir, initialSelection.sessionId) ||
+    fenceKeyBypassed(projectDir, initialSelection.sessionId);
   // A check typed off is the person's call too, under the same rule. A team's
   // strict Guard Policy keeps it on, as it keeps a check granted before the
   // work existed (fencesAsked above): the work is created with the check on,

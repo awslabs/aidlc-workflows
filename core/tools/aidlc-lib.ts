@@ -12432,6 +12432,23 @@ export function personAskedSinceGate(projectDir: string): boolean {
     personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true });
 }
 
+// The person asked for the lowering the agent's command carries out: they ran
+// it at their own terminal, or a turn of theirs since the last decision stands
+// behind it. Before any work exists there is no decision for a turn to be
+// "since", and no HUMAN_TURN row either: the hook writes that row only once a
+// state file is there, and keeps the person's message from their first prompt
+// on (aidlc-message-store.ts). The message of this chat is the proof then, as
+// the turn is once work exists. Per chat, never the project's messages: a
+// teammate's turn in their own chat is not this one's.
+export function personAskedForThisLowering(projectDir: string, sessionId: string | null): boolean {
+  if (commandAtPersonsTerminal()) return true;
+  if (existsSync(stateFilePath(projectDir))) {
+    return personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true });
+  }
+  const { latestMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  return latestMessage(projectDir, sessionId) !== null;
+}
+
 // The person's checks a setter switches for this piece of work, and the values
 // that turn each one on (only adding a stop) or off (the person's call).
 const PERSON_CHECK_SWITCH_VALUES: Readonly<Record<string, { on: readonly string[]; off: readonly string[] }>> = {
@@ -41006,7 +41023,9 @@ export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[
 }
 
 export function guardSwitchRefusal(
-  wanted: GuardSwitch,
+  // A check with no per-work key (a project switch such as the human presence
+  // check) is named by its own words.
+  wanted: GuardSwitch | { check: string },
   projectDir?: string,
 ): string {
   // A terminal their own tool runs (Copilot in VS Code, Kiro IDE, Cursor): the
@@ -41014,7 +41033,9 @@ export function guardSwitchRefusal(
   // Their tool is named as they know it, with no environment variable in sight.
   const host = agentTerminalHost();
   if (host !== null) {
-    const what = wanted.key === "guard-policy"
+    const what = "check" in wanted
+      ? `turn the ${wanted.check} check off`
+      : wanted.key === "guard-policy"
       ? `set Guard Policy ${wanted.value}`
       : wanted.key === "plan-approval"
       ? "turn plan approval off"
@@ -41033,6 +41054,7 @@ export function guardSwitchRefusal(
   const wait = ownTerminal
     ? ""
     : " No reply from the person has arrived since the last decision: run it when they ask for it.";
+  if ("check" in wanted) return `Turning the ${wanted.check} check off is the person's call.${wait}${hint}`;
   if (wanted.key === "plan-approval") {
     return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call.${wait}${hint}`;
   }

@@ -135,11 +135,16 @@ import {
   activeWorkflowDescriptions,
   DEFAULT_SPACE,
   escapeRegex,
+  fenceKeyBypassed,
   fileIdentity,
+  guardSwitchRefusal,
+  type GuardSwitch,
   normalizeProjectFlagsRecord,
+  personAskedForThisLowering,
   RECORDABLE_PROJECT_BYPASSES,
   type ProjectFlagsRecord,
   normalizeDriveLetter,
+  resolveInvokingSessionId,
   sameFileIdentity,
   withAuditLock,
   writeFileAtomic,
@@ -324,6 +329,8 @@ import {
   LOCAL_SETTINGS_FILE,
   invalidateSettingsCache,
   modelPolicyForHarness,
+  PERSON_CHECK_SWITCH_LABELS,
+  PERSON_CHECK_SWITCHES,
   readSettingsTarget,
   resolveAidlcSettings,
   resolveAidlcSettingsWithOverride,
@@ -3237,6 +3244,14 @@ function prepareDiagnosticSection(
   };
 }
 
+// What a refusal calls a recorded switch: plan approval and summary confirmation
+// by their own words, every other check by its label.
+function bypassedCheck(name: RecordableProjectBypass): GuardSwitch | { check: string } {
+  if (name === "AIDLC_DISABLE_PLAN_APPROVAL_GUARD") return { key: "plan-approval", value: "off" };
+  if (name === "AIDLC_DISABLE_SUMMARY_CONFIRMATION") return { key: "summary-confirmation", value: "off" };
+  return { check: (PERSON_CHECK_SWITCH_LABELS[name] ?? name).replace(/ check$/, "") };
+}
+
 function validateChoiceArgs(
   section: ChoiceSection,
   argv: readonly string[],
@@ -3284,6 +3299,27 @@ function validateChoiceArgs(
   // back on is always done.
   if (section === "flags" && process.env.AIDLC_UNATTENDED === "1" && valuesAfter(argv, "--bypass").length > 0) {
     return "An unattended run does not turn a check off (AIDLC_UNATTENDED=1 is set): run it from an attended session.";
+  }
+  // A check the person relies on is switched off for the project only when they
+  // asked, by the rule every lowering follows (personAskedForThisLowering): from
+  // a chat, a turn of theirs since the last decision, or before any work their
+  // message there. A command no chat is named for (a script, a test) records as
+  // before.
+  const lowered = section === "flags"
+    ? valuesAfter(argv, "--bypass").find((name): name is RecordableProjectBypass =>
+      (PERSON_CHECK_SWITCHES as readonly string[]).includes(name))
+    : undefined;
+  if (lowered !== undefined) {
+    const projectDir = projectDirFrom(argv);
+    let chat: string | null = null;
+    try {
+      chat = resolveInvokingSessionId(projectDir);
+    } catch {
+      chat = null;
+    }
+    if (chat !== null && !personAskedForThisLowering(projectDir, chat) && !fenceKeyBypassed(projectDir, chat)) {
+      return guardSwitchRefusal(bypassedCheck(lowered), projectDir);
+    }
   }
   const mutationFlags = section === "flags"
     ? [

@@ -1660,7 +1660,13 @@ command that undoes it. With no `--local`, `--project`, or `--global`, a
 clears the switch from every file that records it. A switch is on while any of
 the files records it. An unattended run (`AIDLC_UNATTENDED=1`) records no
 `--bypass`, since nobody is there to ask for it; a `--clear-bypass` is always
-done. A command that also changes
+done. Run by the agent in a chat, a `--bypass` of one of the nine checks that
+take a check away from you (below) is recorded only when you asked for it, by
+the rule every setter that turns a check off follows: a message of yours since
+the last decision, or, before any work exists, a message of yours in that chat.
+Otherwise it records nothing and says it is your call, for example "Turning the
+human presence check off is the person's call. No reply from the person has
+arrived since the last decision: run it when they ask for it." A command that also changes
 another flag is a settings change too and is done the same way, with a line for
 each part, and so is a command that brings in other release files (a
 `--download`, or the update a project pinned to another release needs first).
