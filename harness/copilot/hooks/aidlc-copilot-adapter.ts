@@ -423,7 +423,9 @@ export async function run(
     });
     if (hook === "session-start") bootstrapOutput = bootstrap?.read() ?? "";
     const stderr = r.stderr?.toString() ?? "";
-    failedCoreHookDrop(hook, r.exitCode, r.signalCode ?? null, stderr, forwardedSessionId(stdin));
+    failedCoreHookDrop(
+      hook, r.exitCode, r.signalCode ?? null, stderr, forwardedSessionId(stdin), childWorkflow,
+    );
     return {
       stdout: r.stdout?.toString() ?? "",
       stderr,
@@ -445,19 +447,24 @@ export async function run(
 
   // Exit 0 is success and exit 2 is a hook's deny or block. Any other exit or
   // a signal is a failure the host never shows: record the hook, the exit, and
-  // the error line (Bun's `error:` line, else the last line) for doctor. The
-  // line is the hook's own text, so a severity tag in it is neutralized: only
-  // the hook that writes a drop decides whether doctor fails on it.
+  // the error line (the dispatcher's `aidlc:` line, else Bun's `error:` line,
+  // else the last line) for doctor. The line is the hook's own text, so a
+  // severity tag in it is neutralized: only the hook that writes a drop
+  // decides whether doctor fails on it.
   function failedCoreHookDrop(
     hook: string,
     exitCode: number | null,
     signalCode: string | null,
     stderr: string,
     hookSessionId: string,
+    // The workflow this hook was aimed at. A reconciled session-end is captured
+    // for the prior chat before the child starts; resolving again here would
+    // see this event's workflow, because that selection is already pinned.
+    workflow?: ReturnType<typeof captureHookWorkflow>,
   ): void {
     if (exitCode === 0 || exitCode === 2) return;
     const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
-    const line = (lines.find((entry) => entry.startsWith("error:")) ??
+    const line = (lines.find((entry) => entry.startsWith("aidlc:") || entry.startsWith("error:")) ??
       lines.filter((entry) => !/^Bun v\d/.test(entry)).at(-1) ?? "no error output")
       .replace(/\[(degraded|advisory)\]/gi, "($1)");
     const how = exitCode === null ? `was stopped by ${signalCode ?? "a signal"}` : `exited ${exitCode}`;
@@ -466,14 +473,22 @@ export async function run(
     let intent: string | undefined;
     let space: string | undefined;
     try {
-      const selection = resolveWorkflowSelection(projectDir, hookSessionId ? { sessionId: hookSessionId } : {});
-      if (isTerminalWorkflow(projectDir, selection)) return;
+      const selection = workflow?.selection ??
+        resolveWorkflowSelection(projectDir, hookSessionId ? { sessionId: hookSessionId } : {});
+      if (selection === null || isTerminalWorkflow(projectDir, selection)) return;
       intent = selection.intent ?? undefined;
       space = intent ? selection.space : undefined;
     } catch {
       // No resolvable record: the default one takes the line.
     }
-    recordHookDrop(projectDir, hook, `${hook} ${how} under the Copilot adapter: ${line.slice(0, 240)}`, intent, space);
+    // The health writer refuses a file aimed at a different record than this
+    // event. A reconciled session-end belongs to the prior chat, so record it
+    // there.
+    const record = () => recordHookDrop(
+      projectDir, hook, `${hook} ${how} under the Copilot adapter: ${line.slice(0, 240)}`, intent, space,
+    );
+    if (workflow) runInHookWorkflow(projectDir, workflow, record);
+    else record();
   }
 
   // The one deny dialect both surfaces honor (difference #4). stdout JSON,
@@ -508,19 +523,11 @@ export async function run(
     }
   }
 
-  function withWorkflowMutation<T>(action: () => T extends Promise<unknown> ? never : T) {
+  function withWorkflowMutation<T>(action: () => T extends Promise<unknown> ? never : T, admitTerminal = false) {
     const workflow = enterHookWorkflow(projectDir, sessionId);
     try {
-      return withHookWorkflowMutation(projectDir, workflow, action);
-    } finally {
-      workflow.restore();
-    }
-  }
-
-  function selectedWorkflowIsTerminal(): boolean {
-    const workflow = enterHookWorkflow(projectDir, sessionId);
-    try {
-      return hookWorkflowIsInactive(workflow);
+      return withHookWorkflowMutation(projectDir, workflow, action,
+        admitTerminal ? { maxRetries: 5, retryMs: 25, admitTerminal: true } : undefined);
     } finally {
       workflow.restore();
     }
@@ -2078,12 +2085,6 @@ export async function run(
         }
         if (command.status === "recognized") {
           if (!sessionId) return 0;
-          if (selectedWorkflowIsTerminal()) {
-            if (allow && !command.keepsPrompt) {
-              process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...allow } })}\n`);
-            }
-            return 0;
-          }
           // When this check cannot find or trust its own record, it stands aside
           // instead of refusing. A refusal could only send the agent back to a
           // fresh `next`, which re-issues the same step, and a record the hook
@@ -2112,7 +2113,7 @@ export async function run(
           };
           let claimed: ReturnType<typeof claimCopilotCommand>;
           try {
-            const result = withWorkflowMutation(() => claimCopilotCommand(projectDir, currentState(), command.claim));
+            const result = withWorkflowMutation(() => claimCopilotCommand(projectDir, currentState(), command.claim), true);
             if (result === undefined) return 0;
             claimed = result;
           }
@@ -2273,13 +2274,13 @@ export async function run(
         const command = orchestrationCommand();
         if (command.status === "recognized" && sessionId) {
           try {
-            withWorkflowMutation(() => settleCopilotCommand(projectDir, currentState(), command.claim, capturedDirective()));
+            withWorkflowMutation(() => settleCopilotCommand(projectDir, currentState(), command.claim, capturedDirective()), true);
           } catch {
             // A fresh next is the bounded recovery for an unsettled result.
           }
         }
         if (sessionId) {
-          try { withWorkflowMutation(() => settleCopilotIntentBoundary(projectDir, sessionId)); } catch { /* bounded marker evidence */ }
+          try { withWorkflowMutation(() => settleCopilotIntentBoundary(projectDir, sessionId), true); } catch { /* bounded marker evidence */ }
         }
       }
       return 0;
@@ -2467,7 +2468,6 @@ export async function run(
     // refusals are recomputed; prompt effects are never replayed.
     if (hookWorkflowIsInactive(workflow)) return dispatch();
     return publishHookOutput(projectDir, workflow, dispatch, () => {
-      if (target === "guard-tool-call") return run(target, input, _extraArgs);
       if (target === "session-start" && bootstrapOutput) process.stdout.write(bootstrapOutput);
       return 0;
     });

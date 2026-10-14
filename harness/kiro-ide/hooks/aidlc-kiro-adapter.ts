@@ -4157,7 +4157,10 @@ return await runInHookWorkflow(projectDir, workflow, () => {
     return dispatch();
   }
   return publishHookOutput(projectDir, workflow, dispatch, () =>
-    TERMINAL_OUTPUT_GUARDS.has(target) ? run(target, input, _extraArgs, true) : (() => {
+    // Re-run a guard here only for a record this call will not publish: the
+    // active path below runs it once. Running it in both places records two
+    // stand-aside rows for one write.
+    hookWorkflowIsInactive(workflow) && TERMINAL_OUTPUT_GUARDS.has(target) ? run(target, input, _extraArgs, true) : (() => {
       const output = independentBootstrap();
       if (output) process.stdout.write(output);
       return 0;

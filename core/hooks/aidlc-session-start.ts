@@ -241,7 +241,8 @@ const resolved = inheritedWorkflow?.selection ?? stampedSelection ??
 // stay out of that record. A resumed session's own UUID stamp does join it: only
 // a joined session is stamped, and a chat left open across an upgrade carries
 // only that stamp. A record name the binding cannot carry does not join.
-const joinsByStamp = inheritedWorkflow?.resumedFromStamp === true || stampedSelection !== null;
+const joinsByStamp = inheritedWorkflow?.resumedFromStamp === true ||
+  (stampedSelection?.intent ?? null) !== null;
 // The rule a new chat follows (classifyFirstContact) lives in the library, where
 // resolveChat applies it to a chat the engine first meets in a command.
 const contact = joinsByStamp ? null : classifyFirstContact(projectDir, resolved);

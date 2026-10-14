@@ -61,6 +61,14 @@ describe("ambient writes share the terminal transition barrier", () => {
     expect(withHookWorkflowMutation(f.project, f.workflow, () => 43)).toBe(43);
   });
 
+  test("a record with no Status line is in-progress work", () => {
+    const f = fixture();
+    writeFileSync(f.state, "- **Current Stage**: requirements-analysis\n");
+    const workflow = { ...f.workflow, lifecycle: workflowLifecycle(f.project, f.workflow.selection!) };
+    expect(workflow.lifecycle).toBe("running");
+    expect(withHookWorkflowMutation(f.project, workflow, () => 7)).toBe(7);
+  });
+
   test("the current state wins over a complete registry entry after reopening", () => {
     const f = fixture();
     writeFileSync(join(f.record, "..", "intents.json"), JSON.stringify([{ slug: "a", status: "complete" }]));

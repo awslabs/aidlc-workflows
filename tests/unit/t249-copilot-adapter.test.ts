@@ -3866,6 +3866,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         env: {
           ...process.env,
           AIDLC_SKIP_ARTIFACT_GUARD: "1",
+          AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
           AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
           AIDLC_SKIP_HUMAN_PRESENCE_GUARD: undefined,
           AIDLC_UNATTENDED: undefined,

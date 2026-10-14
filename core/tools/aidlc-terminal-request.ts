@@ -5,7 +5,7 @@ import {
   recordFileTargetOrThrow,
   sessionsDir,
   workflowLifecycle,
-  appendIntentToRegistry, auditBlockField, markSelectedWork, readAuditShardEvents, readIntentRegistry, readSessionBinding, registerIntentRecord,
+  appendIntentToRegistry, auditBlockField, markSelectedWork, readAuditShardEvents, readIntentRegistry, registerIntentRecord, resolveChat,
   resolveWorkflowSelection, stateFilePath, writeStateFile, writeRecordFileNoFollow,
   readRegularFileNoFollowOrThrow, projectDescriptionFilePath, writeFileAtomic,
   updateIntentScope, updateIntentStatus, selectIntentForSession,
@@ -237,7 +237,7 @@ function finishMutation(projectDir: string, message: TerminalReceipt, use: Termi
   }
   if (plan.creation !== undefined) {
     const creation = plan.creation;
-    const binding = message.session === null ? null : readSessionBinding(projectDir, message.session);
+    const binding = message.session === null ? null : resolveChat(projectDir, message.session, { bind: false })?.binding ?? null;
     // A pick can change the chat's work without producing a new prompt. A
     // retry may complete its old result, but must preserve that newer choice.
     const selectCreated = !finalizeOnly && (binding === null ||

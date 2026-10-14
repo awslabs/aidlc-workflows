@@ -289,8 +289,11 @@ export function applyIntentSettings(
   projectDir: string,
   content: string,
   requested: IntentSettingsRequest,
-  { sessionId = null, typedByPerson = false, fail: die = throwSettingsError, reviewScope, terminalRequest: suppliedTerminalRequest, ...selection }: {
+  { sessionId = null, typedByPerson = false, fail: die = throwSettingsError, reviewScope, terminalRequest: suppliedTerminalRequest, chatSpoke, ...selection }: {
     intent?: string; space?: string; sessionId?: string | null; typedByPerson?: boolean;
+    /** Whether the chat's own work has a person's request. Read before a target
+     * record is pinned, because that pin hides the chat's turn. */
+    chatSpoke?: boolean;
     /** A scope transaction carries the same current request through its settings. */
     terminalRequest?: TerminalRequest | null;
     fail?: (message: string) => never;
@@ -486,9 +489,12 @@ export function applyIntentSettings(
       ? currentTerminalRequest(projectDir, requestSelection, "settings")
       : suppliedTerminalRequest
     : null;
+  // The person's turn is recorded on the chat's own work, including when their
+  // line names a different piece of work. The target record's audit does not
+  // hold that turn.
   const requestInChat = personsRequest && (terminal
     ? terminalMessage !== null
-    : personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true, ...selection }));
+    : chatSpoke ?? personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true }));
   if (
     lowering.length > 0 && !typedByPerson && !atTheirTerminal && !fenceKeyBypassed(projectDir, sessionId) &&
     !requestInChat

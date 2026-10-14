@@ -50,6 +50,7 @@ import { publishHookOutput } from "../tools/aidlc-hook-output.ts";
 import {
   hookOutsideGate,
   hookWorkflowIsInactive,
+  isTerminalWorkflow,
   enterHookWorkflow,
   runInHookWorkflow,
   withCurrentHookWorkflowMutation,
@@ -932,7 +933,11 @@ export async function run(input: string): Promise<number> {
     return await runInHookWorkflow(projectDir, workflow, () => publishHookOutput(
       projectDir, workflow,
       () => checkScope(input, projectDir, hookOutsideGate(workflow), hookWorkflowIsInactive(workflow)),
-      () => checkScope(input, projectDir, hookOutsideGate(workflow), true),
+      // An active workflow writes its own block. Running the refusal here
+      // would publish that denial and skip the audit row.
+      () => hookWorkflowIsInactive(workflow) || (workflow.selection !== null && isTerminalWorkflow(projectDir, workflow.selection))
+        ? checkScope(input, projectDir, hookOutsideGate(workflow), true)
+        : 0,
     ));
   } finally {
     workflow.restore();

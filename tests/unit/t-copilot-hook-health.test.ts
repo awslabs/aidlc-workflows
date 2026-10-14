@@ -281,8 +281,8 @@ describe("Copilot: hooks that never ran are visible", () => {
     const drops = filesNamed(join(proj, "aidlc"), ".drops")
       .map((file) => readFileSync(file, "utf-8"))
       .join("");
-    expect(drops).toContain("write-audit-log exited 1 under the Copilot adapter: error: audit write probe failed");
-    expect(drops).toContain("reviewer-scope exited 1 under the Copilot adapter: error: reviewer scope probe failed");
+    expect(drops).toContain("write-audit-log exited 1 under the Copilot adapter: aidlc: audit write probe failed");
+    expect(drops).toContain("reviewer-scope exited 1 under the Copilot adapter: aidlc: reviewer scope probe failed");
   });
 
   test("a crash is recorded in the workflow of the chat it hit, not the one the shared cursor names", () => {
@@ -339,7 +339,7 @@ describe("Copilot: hooks that never ran are visible", () => {
     );
     startChat(proj);
     const drops = filesNamed(join(intents, other ?? ""), ".drops").map((file) => readFileSync(file, "utf-8")).join("");
-    expect(drops).toContain("session-end exited 1 under the Copilot adapter: error: session end probe failed");
+    expect(drops).toContain("session-end exited 1 under the Copilot adapter: aidlc: session end probe failed");
     expect(filesNamed(join(intents, cursor), ".drops")).toEqual([]);
   });
 
@@ -357,7 +357,7 @@ describe("Copilot: hooks that never ran are visible", () => {
       tool_input: { filePath: join(proj, "notes.md"), content: "x" },
     });
     const drops = filesNamed(join(proj, "aidlc"), ".drops").map((file) => readFileSync(file, "utf-8")).join("");
-    expect(drops).toContain("error: (degraded) probe text");
+    expect(drops).toContain("aidlc: (degraded) probe text");
     expect(drops).not.toContain("[degraded]");
     expect(doctor(proj)).not.toMatch(/fail {2}Hook drops \(write-audit-log\)/);
   });

@@ -34,6 +34,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -64,10 +65,7 @@ const ADAPTER_SRC = join(
   "hooks",
   "aidlc-copilot-adapter.ts",
 );
-const RUNTIME_PATHS_SRC = join(REPO_ROOT, "core", "tools", "aidlc-runtime-paths.ts");
-// The adapter reads AI-DLC's own command routes from the real dispatcher table.
-const DISPATCHER_SRCS = ["aidlc.ts", "aidlc-command.ts", "aidlc-color.ts", "aidlc-version.ts"]
-  .map((file) => join(REPO_ROOT, "core", "tools", file));
+const CORE_TOOLS = join(REPO_ROOT, "core", "tools");
 
 // Core hooks the #657 adapter subprocess-dispatches (from its switch).
 const CORE_HOOKS = [
@@ -103,16 +101,18 @@ const TARGETS = [
  *  a deliberate block into the Copilot deny dialect. */
 function stubHookBody(hookName: string, exitCode = 0, stderr = ""): string {
   return [
-    `const raw = await Bun.stdin.text();`,
-    `const dir = process.env.T250_CAPTURE ?? ".";`,
-    `const { appendFileSync } = await import("node:fs");`,
-    `const { join } = await import("node:path");`,
-    `appendFileSync(join(dir, ${JSON.stringify(`${hookName}.jsonl`)}), raw + "\\n");`,
-    stderr ? `process.stderr.write(${JSON.stringify(stderr)});` : ``,
-    `process.exit(${exitCode});`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+    `export async function run(input) {`,
+    `  const dir = process.env.T250_CAPTURE ?? ".";`,
+    `  const { appendFileSync } = await import("node:fs");`,
+    `  const { join } = await import("node:path");`,
+    `  appendFileSync(join(dir, ${JSON.stringify(`${hookName}.jsonl`)}), String(input) + "\\n");`,
+    stderr ? `  process.stderr.write(${JSON.stringify(stderr)});` : ``,
+    `  return ${exitCode};`,
+    `}`,
+    `if (import.meta.main || process.argv.includes("--internal-aidlc-record-human-turn")) {`,
+    `  process.exit(await run(await Bun.stdin.text()));`,
+    `}`,
+  ].filter(Boolean).join("\n");
 }
 
 // Minimal stubs for the adapter's audit and lib tool imports (../tools/*); its
@@ -166,7 +166,17 @@ export function enterHookWorkflow(projectDir: string, sessionId?: unknown) {
 }
 export function hookStandsOutside(): boolean { return false; }
 export function recordHookDrop(): void {}
-export function recordPreWorkflowHeartbeat(): void {}\n`;
+export function recordPreWorkflowHeartbeat(): void {}
+export function runInHookWorkflow(_projectDir: string, _workflow: unknown, fn: () => unknown): unknown { return fn(); }
+export function hookWorkflowIsInactive(): boolean { return false; }
+export function hookChildEnv(_projectDir: string, _sessionId: string | undefined, extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
+  return { ...process.env, ...extra };
+}
+export function currentHookWorkflow(): null { return null; }
+export function captureHookWorkflow(projectDir: string, sessionId?: unknown) { return enterHookWorkflow(projectDir, sessionId); }
+export function isTerminalWorkflow(): boolean { return false; }
+export function withHookWorkflowMutation(_projectDir: string, _workflow: unknown, fn: () => unknown): unknown { return fn(); }
+\n`;
 
 interface Scratch {
   projectRoot: string;
@@ -174,6 +184,34 @@ interface Scratch {
   captureDir: string;
   ledgerPath: string;
   cleanup: () => void;
+}
+
+// The shell-allow tests name a person's reply with an environment flag. The
+// copied engine otherwise reads the audit, which these fixtures do not write.
+function patchLibSeams(toolsDir: string): void {
+  const path = join(toolsDir, "aidlc-lib.ts");
+  let source = readFileSync(path, "utf-8");
+  source = source.replace(
+    `export function humanActedSinceGate(projectDir: string): boolean {\n  return humanTurnState(projectDir) === "acted";\n}`,
+    `export function humanActedSinceGate(_projectDir: string): boolean {\n  return process.env.T250_HUMAN_ACTED === "1";\n}`,
+  );
+  source = source.replace(
+    `export function personCheckSwitchAllowed(projectDir: string, key: string, value: string): boolean {\n  const values = Object.hasOwn(PERSON_CHECK_SWITCH_VALUES, key) ? PERSON_CHECK_SWITCH_VALUES[key] : undefined;`,
+    `export function personCheckSwitchAllowed(projectDir: string, key: string, value: string): boolean {\n  return (process.env.T250_CHECK_SWITCH ?? "").split(",").includes(key + "=" + value);\n  const values = Object.hasOwn(PERSON_CHECK_SWITCH_VALUES, key) ? PERSON_CHECK_SWITCH_VALUES[key] : undefined;`,
+  );
+  source = source.replace(
+    `export function constructionPolicyChangeAllowed(projectDir: string, field: string, value: string): boolean {\n  try {`,
+    `export function constructionPolicyChangeAllowed(projectDir: string, field: string, value: string): boolean {\n  return process.env.T250_POLICY_RECEIPT === field + "=" + value;\n  try {`,
+  );
+  source = source.replace(
+    `): CopilotClaimResult {\n  if (!input.sessionId ||`,
+    `): CopilotClaimResult {\n  return { allowed: true, attemptId: "00000000-0000-4000-8000-000000000001" };\n  if (!input.sessionId ||`,
+  );
+  source = source.replace(
+    `): "settled" | "duplicate" | "stale" {\n  return transactActiveDirective(projectDir, (marker, target) => {`,
+    `): "settled" | "duplicate" | "stale" {\n  return "settled";\n  return transactActiveDirective(projectDir, (marker, target) => {`,
+  );
+  writeFileSync(path, source);
 }
 
 function scratch(): Scratch {
@@ -187,14 +225,14 @@ function scratch(): Scratch {
     `aidlc-copilot-subagents-${createHash("sha256").update(projectRoot).digest("hex").slice(0, 16)}.json`,
   );
   mkdirSync(hooksDir, { recursive: true });
-  mkdirSync(toolsDir, { recursive: true });
   mkdirSync(captureDir, { recursive: true });
+  writeFileSync(join(projectRoot, "package.json"), "{}\n");
   copyFileSync(ADAPTER_SRC, join(hooksDir, "aidlc-copilot-adapter.ts"));
-  writeFileSync(join(toolsDir, "aidlc-audit.ts"), AUDIT_TOOL_STUB, "utf-8");
-  writeFileSync(join(toolsDir, "aidlc-question-store.ts"), QUESTION_STORE_STUB, "utf-8");
-  writeFileSync(join(toolsDir, "aidlc-lib.ts"), LIB_TOOL_STUB, "utf-8");
-  copyFileSync(RUNTIME_PATHS_SRC, join(toolsDir, "aidlc-runtime-paths.ts"));
-  for (const source of DISPATCHER_SRCS) copyFileSync(source, join(toolsDir, basename(source)));
+  cpSync(CORE_TOOLS, toolsDir, { recursive: true });
+  patchLibSeams(toolsDir);
+  // These scripts are absent until a test seeds a stand-in. A copied engine
+  // file would make `bun .aidlc/tools/aidlc-orchestrate.ts` look installed.
+  for (const file of TOOL_STAND_INS) rmSync(join(toolsDir, file), { force: true });
   for (const hook of CORE_HOOKS) {
     writeFileSync(join(hooksDir, hook), stubHookBody(hook), "utf-8");
   }

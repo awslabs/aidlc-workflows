@@ -7638,7 +7638,12 @@ export function workflowLifecycle(
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unreadable";
   }
-  switch (getField(content, "Status")) {
+  // A record with no Status line, or a blank one, is in-progress work. Older
+  // records, and the fixtures that only name the stage, never wrote one.
+  // Completed and Archived are the historical states. Any other explicit
+  // value is unreadable, so a corrupt line does not admit a write.
+  switch (getField(content, "Status") ?? "") {
+    case "":
     case "Running": return "running";
     case "Completed": return "completed";
     case "Archived": return "archived";
@@ -7693,10 +7698,17 @@ export function withHookWorkflowMutation<T>(
   projectDir: string,
   workflow: HookWorkflow,
   fn: () => T extends Promise<unknown> ? never : T,
-  lockBudget?: { maxRetries: number; retryMs: number },
+  lockBudget?: { maxRetries: number; retryMs: number; admitTerminal?: boolean },
 ): (T extends Promise<unknown> ? never : T) | undefined {
   const selection = workflow.selection;
-  if (selection === null || !hookWorkflowMayMutateRecord(workflow) ||
+  const admitTerminal = lockBudget?.admitTerminal === true &&
+    (workflow.lifecycle === "completed" || workflow.lifecycle === "archived");
+  // A command's own claim or result may still be recorded after the work it
+  // just finished. Ambient hooks leave that flag unset.
+  const mayRecord = hookWorkflowMayMutateRecord(workflow) || (
+    admitTerminal && workflow.mode !== "independent" && !hookStandsOutside(workflow)
+  );
+  if (selection === null || !mayRecord ||
       currentHookWorkflow(projectDir)?.mode === "independent") return undefined;
   // Ambient bookkeeping must not make an ordinary hook wait for a long
   // explicit operation. Authority-bearing intake has its own admission owner.
@@ -7705,7 +7717,8 @@ export function withHookWorkflowMutation<T>(
   withAuditLock(projectDir, () => {
     const mutate = (): void => {
       const lifecycle = workflowLifecycle(projectDir, selection);
-      if (lifecycle !== "running" && lifecycle !== "absent") return;
+      const terminalReceipt = admitTerminal && (lifecycle === "completed" || lifecycle === "archived");
+      if (lifecycle !== "running" && lifecycle !== "absent" && !terminalReceipt) return;
       result = withWorkflowSelection<T>(projectDir, selection, fn);
     };
     if (selection.intent === null) mutate();
@@ -7806,11 +7819,11 @@ export function enterHookWorkflow(
   }
   const raw = typeof payloadSessionId === "string" ? validSessionId(payloadSessionId) : null;
   const chat = raw === null ? null : resolveChat(projectDir, raw, { bind: false });
+  // The transport already names this event's record. A helper conversation's
+  // own id (a reviewer's, a delegate's) is not a different piece of work, and
+  // it must not drop the record: the guards on that call would not run.
   if (inherited?.selection?.sessionId && chat && chat.chatId !== inherited.selection.sessionId) {
-    return {
-      selection: null, participation: "indeterminate", lifecycle: "unreadable",
-      mode: "independent", restore: () => {},
-    };
+    return { ...inherited, restore: () => {} };
   }
   // Placed: this chat has a binding, or the id belongs to a chat an adapter named.
   const placed = chat !== null && (chat.binding !== null || chat.chatId !== raw);
@@ -7833,13 +7846,16 @@ export function enterHookWorkflow(
     const resumed = inherited === null && options.sessionStartSource === "resume"
       ? legacySessionResumeSelection(projectDir, payloadSessionId)
       : null;
+    // A stamp whose record name cannot be carried answers no record. Falling
+    // through here would join the shared cursor instead.
     const selection = resumed ?? resolveWorkflowSelection(projectDir);
+    const resumedRecord = resumed !== null && resumed.intent !== null;
     return {
       selection,
-      participation: inherited?.participation ?? (resumed ? "participant" : workflowParticipation(projectDir, selection)),
+      participation: inherited?.participation ?? (resumedRecord ? "participant" : workflowParticipation(projectDir, selection)),
       lifecycle: workflowLifecycle(projectDir, selection),
       ...(inherited?.mode === "independent" ? { mode: "independent" as const } : {}),
-      ...(inherited?.resumedFromStamp || resumed ? { resumedFromStamp: true as const } : {}),
+      ...(inherited?.resumedFromStamp || resumedRecord ? { resumedFromStamp: true as const } : {}),
       restore,
     };
   } catch {
@@ -7863,7 +7879,12 @@ export function legacySessionResumeSelection(
   if (chat === null || chat.binding !== null) return null;
   const stamp = readSessionIntentUuid(projectDir, chat.chatId);
   const target = stamp === null ? null : findIntentByUuid(projectDir, stamp);
-  if (target === null || !isBindableIntentRecordName(target.dirName)) return null;
+  if (target === null) return null;
+  // The stamp is this chat's. A name the binding cannot carry does not join
+  // that record, and it does not fall through onto the shared cursor.
+  if (!isBindableIntentRecordName(target.dirName)) {
+    return { space: target.space, intent: null, sessionId: chat.chatId, binding: null };
+  }
   // Keep delegated-checkout validation at the same shared selection owner.
   const selected = resolveWorkflowSelection(projectDir, {
     space: target.space, intent: target.dirName, sessionId: chat.chatId,

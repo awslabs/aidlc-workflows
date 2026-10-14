@@ -557,6 +557,7 @@ function scratchProject(): string {
   for (const t of [
     "aidlc.ts",
     "aidlc-lib.ts",
+    "aidlc-hook-output.ts",
     "aidlc-settings.ts",
     "aidlc-install-paths.ts",
     "aidlc-distribution.ts",
@@ -579,6 +580,7 @@ function scratchProject(): string {
     "aidlc-directive.ts",
     "aidlc-log.ts",
     "aidlc-message-store.ts",
+    "aidlc-terminal-request.ts",
     "aidlc-review-brief.ts",
     "aidlc-construction-checkpoints.ts",
     "aidlc-testing-posture.ts",

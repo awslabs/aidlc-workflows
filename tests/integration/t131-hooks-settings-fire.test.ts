@@ -281,6 +281,7 @@ function makeProject(withState: boolean): string {
   for (const t of [
     "aidlc-runtime.ts",
     "aidlc-lib.ts",
+    "aidlc-message-store.ts",
     "aidlc-settings.ts",
     "aidlc-install-paths.ts",
     "aidlc-distribution.ts",

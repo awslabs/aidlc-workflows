@@ -368,6 +368,9 @@ function projectWithReadyReview(): { project: string; artifact: string } {
   );
   mkdirSync(dirname(artifact), { recursive: true });
   writeFileSync(artifact, "# Requirements\n");
+  // The stage declares its questions file as a required output. Summary
+  // confirmation is skipped below; the review snapshot still needs the file.
+  writeFileSync(join(dirname(artifact), "requirements-analysis-questions.md"), "# Questions\n");
   const env = {
     ...process.env,
     AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
@@ -386,7 +389,7 @@ function projectWithReadyReview(): { project: string; artifact: string } {
     "--project-dir",
     project,
   ];
-  const request = spawnSync("bun", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+  const request = spawnSync("bun", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
   if (request.status !== 0) {
     throw new Error(`review request failed: ${request.stdout}${request.stderr}`);
   }
@@ -402,6 +405,7 @@ function projectWithReadyReview(): { project: string; artifact: string } {
   const verdict = spawnSync("bun", [...args, "--verdict", "READY"], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
+    env,
   });
   if (verdict.status !== 0) {
     throw new Error(`review verdict failed: ${verdict.stdout}${verdict.stderr}`);

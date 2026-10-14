@@ -8372,9 +8372,13 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
 
     const prepared: { state?: string; description?: string; output?: string; audit: TerminalMutationPlan["audit"] } | undefined =
       terminalLoweringUsed && terminalRequest !== null ? { audit: [] } : undefined;
-    const emit: typeof appendAuditEvent = (pd, eventType, fields, intent, space) => {
-      if (prepared) prepared.audit.push({ eventType, fields });
-      else appendAuditEvent(pd, eventType, fields, intent, space);
+    // The call text stays appendAuditEvent(...) so the audit-event drift check
+    // still sees each creation event. A terminal lowering queues them instead.
+    const creationAudit = {
+      appendAuditEvent: ((pd, eventType, fields, intent, space) => {
+        if (prepared) prepared.audit.push({ eventType, fields });
+        else appendAuditEvent(pd, eventType, fields, intent, space);
+      }) as typeof appendAuditEvent,
     };
     const ts = isoTimestamp();
 
@@ -8396,7 +8400,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // WORKFLOW_STARTED — mandatory first event of any new workflow. Captures the
     // creation timestamp so "when did this feature begin?" is answerable from the
     // audit alone. Lands in the created intent's audit (relocated from --init).
-    emit(projectDir, "WORKFLOW_STARTED", {
+    creationAudit.appendAuditEvent(projectDir, "WORKFLOW_STARTED", {
       Scope: scope,
       Request: `/aidlc ${flags.arguments || scope}`,
       ...(terminalLoweringUsed && terminalRequest !== null ? { "Message Id": terminalRequest.id } : {}),
@@ -8433,7 +8437,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     const initStageCount = stagesInScope(scope).filter(
       (s) => s.phase === "initialization" && s.action === "EXECUTE"
     ).length;
-    emit(projectDir, "PHASE_STARTED", {
+    creationAudit.appendAuditEvent(projectDir, "PHASE_STARTED", {
       Phase: "initialization",
       "Stage count": String(initStageCount),
       Scope: scope,
@@ -8449,7 +8453,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       if (phase === "initialization") continue;
       const inPhase = loadStageGraph().filter((s) => s.phase === phase);
       if (!runningPhases.has(phase) && inPhase.length > 0) {
-        emit(projectDir, "PHASE_SKIPPED", {
+        creationAudit.appendAuditEvent(projectDir, "PHASE_SKIPPED", {
           Phase: phase,
           Scope: scope,
           Reason: composedPlan ? `this plan excludes ${phase}` : `scope ${scope} excludes ${phase}`,
@@ -8457,7 +8461,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       }
     }
 
-    emit(projectDir, "STAGE_STARTED", {
+    creationAudit.appendAuditEvent(projectDir, "STAGE_STARTED", {
       Stage: "workspace-scaffold",
       Agent: "orchestrator",
     }, created.dirName, created.space);
@@ -8471,11 +8475,11 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     ensureWorkspaceDirs(projectDir, plannedStages.stages, created.dirName, created.space);
 
     const phaseDirDetail = `${runningPhases.size} in-scope phase dirs + verification/ + space-level knowledge/ ensured`;
-    emit(projectDir, "WORKSPACE_SCAFFOLDED", {
+    creationAudit.appendAuditEvent(projectDir, "WORKSPACE_SCAFFOLDED", {
       Request: `/aidlc ${flags.arguments || scope}`,
       Details: `${phaseDirDetail} (shell shipped by SEED)`,
     }, created.dirName, created.space);
-    emit(projectDir, "STAGE_COMPLETED", {
+    creationAudit.appendAuditEvent(projectDir, "STAGE_COMPLETED", {
       Stage: "workspace-scaffold",
       Details: phaseDirDetail,
     }, created.dirName, created.space);
@@ -8570,15 +8574,18 @@ function handleIntentCreateStateBuild(
   composedPlan: Record<string, "EXECUTE" | "SKIP"> | null,
   prepared?: { state?: string; description?: string; output?: string; audit: TerminalMutationPlan["audit"] },
 ): void {
-  const emit: typeof appendAuditEvent = (pd, eventType, fields, intent, space) => {
-    if (prepared) prepared.audit.push({ eventType, fields });
-    else appendAuditEvent(pd, eventType, fields, intent, space);
+  // Same queued spelling as intent creation: the drift check reads the call text.
+  const creationAudit = {
+    appendAuditEvent: ((pd, eventType, fields, intent, space) => {
+      if (prepared) prepared.audit.push({ eventType, fields });
+      else appendAuditEvent(pd, eventType, fields, intent, space);
+    }) as typeof appendAuditEvent,
   };
   const depthOverride = flags.depth;
   const testStrategyOverride = flags["test-strategy"];
   // ---- Workspace detection (stage 0.2) ----
 
-  emit(projectDir, "STAGE_STARTED", {
+  creationAudit.appendAuditEvent(projectDir, "STAGE_STARTED", {
     Stage: "workspace-detection",
     Agent: "orchestrator",
   }, createdDir, createdSpace);
@@ -8594,7 +8601,7 @@ function handleIntentCreateStateBuild(
       ? `${uninitSubmodules.length} uninitialized submodule path(s) (${enumerateSubmodulePaths(uninitSubmodules)}) - run '${SUBMODULE_INIT_REMEDY}' to fetch them`
       : "";
 
-  emit(projectDir, "WORKSPACE_SCANNED", {
+  creationAudit.appendAuditEvent(projectDir, "WORKSPACE_SCANNED", {
     "Project Type": scan.projectType,
     Languages: scan.languages,
     Frameworks: scan.frameworks,
@@ -8610,14 +8617,14 @@ function handleIntentCreateStateBuild(
         ? `Deterministic rule-based scan; ${submoduleRemedy}`
         : "Deterministic rule-based scan",
   }, createdDir, createdSpace);
-  emit(projectDir, "STAGE_COMPLETED", {
+  creationAudit.appendAuditEvent(projectDir, "STAGE_COMPLETED", {
     Stage: "workspace-detection",
     Details: `Classified ${scan.projectType}; languages=${scan.languages}; frameworks=${scan.frameworks}`,
   }, createdDir, createdSpace);
 
   // ---- State init (stage 0.3) ----
 
-  emit(projectDir, "STAGE_STARTED", {
+  creationAudit.appendAuditEvent(projectDir, "STAGE_STARTED", {
     Stage: "state-init",
     Agent: "orchestrator",
   }, createdDir, createdSpace);
@@ -8849,7 +8856,7 @@ ${stageProgress}
   // The state file is the last durable write: until it lands the record holds
   // only its creation stub, which `next` refuses to route, so an interrupted
   // creation never leaves a routable workflow without its initialization audit.
-  emit(projectDir, "WORKSPACE_INITIALISED", {
+  creationAudit.appendAuditEvent(projectDir, "WORKSPACE_INITIALISED", {
     Request: `/aidlc ${flags.arguments || scope}`,
     "Project Type": projectType,
     [PROJECT_TYPE_SOURCE_FIELD]: projectTypeSource,
@@ -8859,7 +8866,7 @@ ${stageProgress}
     "Build System": scan.buildSystem,
     Details: `${totalInScope} stages in scope, routing to ${firstPostInit}`,
   }, createdDir, createdSpace);
-  emit(projectDir, "STAGE_COMPLETED", {
+  creationAudit.appendAuditEvent(projectDir, "STAGE_COMPLETED", {
     Stage: "state-init",
     Details: `State initialized: ${scope} scope, ${totalInScope} stages, routing to ${firstPostInit}`,
   }, createdDir, createdSpace);
@@ -8871,19 +8878,19 @@ ${stageProgress}
   // subsequent `advance` call would appear to jump from workspace-scaffold
   // directly into a fresh phase.
   if (firstPostInitEntry && firstPostInitEntry.phase !== "initialization") {
-    emit(projectDir, "PHASE_COMPLETED", {
+    creationAudit.appendAuditEvent(projectDir, "PHASE_COMPLETED", {
       "From phase": "initialization",
       "To phase": firstPostInitEntry.phase,
       "Stages completed": String(completedInit),
     }, createdDir, createdSpace);
-    emit(projectDir, "PHASE_VERIFIED", {
+    creationAudit.appendAuditEvent(projectDir, "PHASE_VERIFIED", {
       "Phase boundary": `initialization → ${firstPostInitEntry.phase}`,
     }, createdDir, createdSpace);
-    emit(projectDir, "PHASE_STARTED", {
+    creationAudit.appendAuditEvent(projectDir, "PHASE_STARTED", {
       Phase: firstPostInitEntry.phase,
       Scope: scope,
     }, createdDir, createdSpace);
-    emit(projectDir, "STAGE_STARTED", {
+    creationAudit.appendAuditEvent(projectDir, "STAGE_STARTED", {
       Stage: firstPostInit,
       Agent: firstPostInitAgent,
     }, createdDir, createdSpace);
@@ -12594,6 +12601,9 @@ function writeSettings(
   options: { sessionId: string | null; fail?: (message: string) => never; typedByPerson?: boolean },
 ): string[] {
   let lines: string[] = [];
+  // The person's turn lives on the chat's work. Once the target record is
+  // pinned, that turn is no longer what a default read finds.
+  const chatSpoke = personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true });
   withWorkflowRecordLock(projectDir, (selection) => {
     const operation = terminalOperation("config-change", request);
     const resumed = resumeTerminalMutation(projectDir, options.sessionId, "settings", operation, plan => validateTerminalMutation(projectDir, plan), selection);
@@ -12604,6 +12614,7 @@ function writeSettings(
     const content = readConfigState(projectDir, { intent, space });
     const update = applyIntentSettings(projectDir, content, request, {
       intent, space, sessionId: options.sessionId, typedByPerson: options.typedByPerson,
+      chatSpoke,
       ...(options.fail ? { fail: options.fail } : {}),
     });
     if (update.content !== content) {

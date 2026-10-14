@@ -34,6 +34,7 @@ import {
   auditBlockField,
   inspectSubagentInflight,
   readAuditShardEvents,
+  recordPreWorkflowHeartbeat,
   subagentInflightMarkerPath,
   writeSessionBinding,
   stateDigest,
@@ -147,6 +148,12 @@ function copyCore(root: string, relativePath: string): void {
       "aidlc-guard-operation.ts",
       "aidlc-reply-reader.ts",
       "aidlc-runtime-budget.ts",
+      "aidlc-message-store.ts",
+      "aidlc-question-store.ts",
+      "aidlc-terminal-request.ts",
+      "aidlc-recorded-switches.ts",
+      "aidlc-audit.ts",
+      "aidlc-hook-output.ts",
     ]) {
       copyFileSync(
         join(REPO_ROOT, "core", "tools", dependency),
@@ -1246,6 +1253,9 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
   // first stage. The question ends the turn; an advance still leads to the nudge.
   test("in a new chat on work made from another chat, a plain question gets no nudge, and an advance still does", async () => {
     const root = freshInstalledProject();
+    // A chat's first message beats before any workflow. Without that beat, next
+    // stops to say the plugin is not loaded instead of offering the plan.
+    recordPreWorkflowHeartbeat(root, "record-human-turn");
     const engine = (session: string, ...args: string[]) => {
       const run = Bun.spawnSync({
         // This engine's own option rides ahead of the person's words, which is

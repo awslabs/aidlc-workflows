@@ -49,6 +49,7 @@ const LIB_SIBLINGS = [
   "aidlc-graph.ts",
   "aidlc-runtime-paths.ts",
   "aidlc-runtime-budget.ts",
+  "aidlc-message-store.ts",
   "aidlc-guard-fences.ts",
   "aidlc-guard-switch.ts",
   "aidlc-guard-operation.ts",
