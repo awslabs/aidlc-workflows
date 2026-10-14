@@ -100,6 +100,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/active-memory/ (the
           // engine's copy of the active space's method).
           "sha256:a618a3a615ef7159c7eed634a5a332bf9d017f8e28d6b0f0adad9db1d2d725e0",
+          // The variant shipped before the block ignored aidlc/.aidlc-request-text/
+          // (a request the engine has not read yet).
+          "sha256:3cc1cbd212d2ca0dbf1e525eb9a40d4694a585eb7864d8b877f8fe8bd99122dc",
         ],
       },
     },
