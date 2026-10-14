@@ -27,7 +27,7 @@
         "aidlc/spaces/**",
         ".kiro/sensors/**",
         "aidlc/.aidlc-compose-pending",
-        "[!.]*",
+        "./[!.]*",
         "[!.]*/**",
         ".aidlc/worktrees/*/aidlc/spaces/**"
       ]
