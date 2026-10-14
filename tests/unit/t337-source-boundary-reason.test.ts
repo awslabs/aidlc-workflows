@@ -1,10 +1,10 @@
 // covers: function:lastWorkspaceSourceFailure, function:workspaceSourceFailureSuffix, subcommand:aidlc-utility:doctor
 //
-// The workspace source walk returns null from many sites. Before this change a
-// user who hit "unbindable" at Plan Approval was told nothing about WHICH budget
-// or path failed. Every failing site now records a reason first, the messages
-// that say "cannot be bound" append it, and the doctor runs the same walk so
-// the reason is visible before the checkpoint refuses.
+// The workspace source walk returns null from many sites. A user who hit
+// "unbindable" at Plan Approval was told nothing about WHICH budget or path
+// failed. Every failing site records a reason first, the messages that say
+// "cannot be bound" append it, and the doctor runs the same walk so the reason
+// is visible before the checkpoint refuses.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,

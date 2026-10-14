@@ -112,7 +112,7 @@ function rustRejects(pattern: string): boolean {
   const chars = [...pattern];
   for (let i = 0; i < chars.length; i++) {
     if (chars[i] === "\\") {
-      i++; // escaped: skip the next char
+      i++;
       continue;
     }
     if (chars[i] === "{") {
@@ -241,7 +241,7 @@ const MUST_ALLOW = [
 ];
 
 // Forms that must require approval. The absolute-path argument-smuggling case
-// and unrestricted `cd` chain are regressions from the first 2.5.16 candidate.
+// and unrestricted `cd` chain are regressions.
 const MUST_ASK = [
   "bun .kiro/tools/../../outside-tool.ts",
   "bun .kiro/tools/../../../etc/evil.ts",

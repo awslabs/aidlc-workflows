@@ -38,7 +38,6 @@ const CLOSERS = [
 ];
 const GATE_EVENTS = ["GATE_APPROVED", "GATE_REJECTED"];
 
-/** The source text of `function <name>(` up to the next top-level `}`. */
 function functionBody(file: string, name: string): string {
   const src = readFileSync(join(ROOT, file), "utf-8");
   const start = src.search(new RegExp(`^(export )?function ${name}\\(`, "m"));

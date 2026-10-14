@@ -108,7 +108,6 @@ describe("config leaves what a host tool installed for itself alone", () => {
     expect(result.output).not.toContain("not valid projection content");
     expect(result.stdout).toContain("Recorded developer effort high in aidlc.settings.json.");
     expect(readFileSync(join(project, ".opencode", "agents", "aidlc-developer-agent.md"), "utf-8")).toContain("variant: high");
-    // opencode's own files stay as they are and are not taken over.
     expect(owned(project).filter(hostToolPath)).toEqual([]);
     expect(readFileSync(join(project, ".opencode", "package.json"), "utf-8")).toBe(packageBefore);
     if (LINKS) {
@@ -154,7 +153,6 @@ describe("config leaves what a host tool installed for itself alone", () => {
     );
     expect(result.output).not.toContain(scratch);
     expect(readdirSync(scratch).filter((name) => name.startsWith("aidlc-config-copy-source-"))).toEqual([]);
-    // The person puts the file itself there, and the same command is done.
     rmSync(team);
     writeFileSync(team, readFileSync(shared, "utf-8"));
     expect(config(project, machine, args, { TMPDIR: scratch }).status).toBe(0);

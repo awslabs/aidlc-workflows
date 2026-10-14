@@ -353,7 +353,6 @@ describe("t264 (a) judgeFreeze decision table", () => {
         stagePending: { recovery: true },
       }).block,
     ).toBe(true);
-    // A pending request that is not a recovery neither freezes nor thaws by itself.
     expect(
       judgeFreeze(RA, raFile, NONE, {
         stageVerdict: null,
@@ -917,11 +916,8 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     const p = projBeforeGate();
     const file = raArtifact(p);
 
-    // No receipt yet: normal stage work proceeds.
     expect(runHook(p, writePayload(file)).code).toBe(0);
 
-    // Fresh READY receipt: the same write is refused with the gate redirect,
-    // and the refusal is auditable.
     recordReview(p, "READY");
     openGate(p);
     const blocked = runHook(p, writePayload(file));
@@ -941,7 +937,6 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     reject(p);
     expect(runHook(p, writePayload(file)).code).toBe(0);
 
-    // The re-reviewed revision freezes again - same invariant, next attempt.
     recordReview(p, "READY");
     const revise = spawnSync(
       BUN,
@@ -1107,7 +1102,7 @@ describe("t264 (c) harness registration", () => {
         hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;
       };
       // One process runs the PreToolUse checks (#2066): the freeze is a member
-      // of the guard group, with the matcher its own row had.
+      // of the guard group, with its own matcher.
       const group = (s.hooks?.PreToolUse ?? []).find((g) =>
         (g.hooks ?? []).some((h) => (h.command ?? "").includes("hook guard-tool-call")),
       );
@@ -1118,8 +1113,6 @@ describe("t264 (c) harness registration", () => {
         ),
         root,
       ).toBe(false);
-      // The group row reaches both file writes and mutation-capable shell
-      // commands, and so does the member's own matcher inside it.
       const member = (hookGroupMembers("guard-tool-call") ?? [])
         .find((entry) => entry.hook === "review-freeze");
       for (const tool of ["Write", "Edit", "Bash"]) {
@@ -1322,7 +1315,6 @@ describe("t264 (d) Kiro IDE adapter route", () => {
       tool_name: "execute_pwsh",
       tool_input: { command: `Set-Location ${backslashed}; Set-Content notes.md x`, cwd: p },
     }).code).toBe(0);
-    // A home-relative backslash path, with the project as PowerShell's home.
     const home = { HOME: p, USERPROFILE: p };
     for (const command of [
       `Set-Content $HOME\\${backslashed}\\requirements.md changed`,
@@ -1344,11 +1336,10 @@ describe("t264 (d) Kiro IDE adapter route", () => {
 // (d) The refusal names `next`, and the next `next` asks the recovery question
 // ---------------------------------------------------------------------------
 //
-// The refusal used to end with the recovery question as a JSON line, which
-// the person read under the tool's hook error. The hook now says what was
-// refused and names `next`; the question waits in the refusal record and the
-// next `next` asks it once, unless it no longer stands (the stage was approved
-// or sent back, the check was lowered) or another question is already open.
+// The hook says what was refused and names `next`; the question waits in the
+// refusal record and the next `next` asks it once, unless it no longer stands
+// (the stage was approved or sent back, the check was lowered) or another
+// question is already open.
 
 const ORCH_TOOL = join(DIST_CLAUDE, "tools", "aidlc-orchestrate.ts");
 
@@ -1427,7 +1418,7 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
 
   // A live run picked Request Changes on this question after saying what should
   // change, and was asked "What should change?" again: a published question binds
-  // only words given after it. Asked as the hook used to print it, the pick is
+  // only words given after it. Asked without publication, the pick is
   // carried out with the person's own words.
   test("the question is not published, so the person's own words carry their Request Changes", () => {
     const p = projBeforeGate();
@@ -1515,7 +1506,6 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(picked.status, picked.stderr).toBe(0);
-    // The agent runs that choice's command with their reply, as its action says.
     const off = spawnSync(BUN, [
       dispatcher, "engine", "config", "set", "guard.review-freeze", "off", "--person-words", String(at + 1), "--project-dir", p,
     ], {

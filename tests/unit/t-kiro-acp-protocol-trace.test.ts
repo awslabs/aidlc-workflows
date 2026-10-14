@@ -277,7 +277,7 @@ test("raw vendor chunks and input updates remain visible without changing aggreg
   });
   const result = await driveKiroAcp({ projectDir: project, session, prompt: "fixture-only", keepAlive: true });
   expect(result.toolCallIssues).toEqual([]);
-  expect(result.toolCalls[0].rawInput).toEqual({}); // Existing aggregation is deliberately unchanged.
+  expect(result.toolCalls[0].rawInput).toEqual({});
   expect(result.toolCalls[0].title).toBe("initial");
   const rows = records(trace);
   expect(rows.find(row => row.update?.sessionUpdate === "tool_call_chunk")?.update).toEqual(chunk);

@@ -842,7 +842,7 @@ describe("t315 pipeline link receipts", () => {
       support_agents: [FINAL],
     }).completed).toEqual([LEAD, FINAL]);
 
-    // The same handoff name with --repo left off, as the agent tried next.
+    // The same handoff name with --repo left off.
     const other = pipelineProject();
     const otherRoot = codekbRepoName(other);
     appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, other);
@@ -858,7 +858,6 @@ describe("t315 pipeline link receipts", () => {
     });
     expect(bare.status, `${bare.stdout}${bare.stderr}`).toBe(0);
 
-    // Any other name is still not this project's repo.
     const third = pipelineProject();
     appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, third);
     const wrong = runLog(third, LEAD, "another-repo");
@@ -1453,7 +1452,6 @@ describe("t315 an approval given with the collaborators switch stands", () => {
     return { rc: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
   }
 
-  // Audit rows of one event for one stage.
   function rows(proj: string, event: string, stage = RE_STAGE): number {
     return readAllAuditShards(proj)
       .split(/^## /m)
@@ -1481,7 +1479,6 @@ describe("t315 an approval given with the collaborators switch stands", () => {
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(`- [x] ${RE_STAGE}`);
     expect(rows(proj, "GATE_APPROVED")).toBe(1);
     expect(readAllAuditShards(proj)).toContain(`**User Input**: ${APPROVE_WORDS}`);
-    // The approved stage never runs again.
     expect(rows(proj, "STAGE_STARTED")).toBe(1);
 
     const next = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
@@ -1537,7 +1534,6 @@ describe("t315 an approval given with the collaborators switch stands", () => {
     const resolve = (proj: string): string[] =>
       supportAgentsAtOpenGate(proj, stage, "enterprise", readFileSync(seededStateFile(proj), "utf-8"));
 
-    // The person's case: the gate opened under off, then the switch went on.
     const flipped = switchedProject("on");
     row(flipped, "STAGE_AWAITING_APPROVAL", 10, { Stage: RE_STAGE });
     row(flipped, "CEREMONY_SET", 20, { Key: "collaborators", Old: "off", New: "on", Source: "you" });
@@ -1563,7 +1559,6 @@ describe("t315 an approval given with the collaborators switch stands", () => {
     row(odd, "CEREMONY_SET", 20, { Key: "collaborators", Old: "whatever", New: "on", Source: "you" });
     expect(resolve(odd)).toEqual([FINAL]);
 
-    // The mirror: the gate opened under on, then the switch went off.
     const mirrored = switchedProject("off");
     row(mirrored, "STAGE_AWAITING_APPROVAL", 10, { Stage: RE_STAGE });
     row(mirrored, "CEREMONY_SET", 20, { Key: "collaborators", Old: "on", New: "off", Source: "you" });

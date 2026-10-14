@@ -183,7 +183,6 @@ describe("a copied project's refresh from a newer release runs that release's ow
       expect(result.status, result.out).toBe(0);
       expect(result.out).toContain(ranLine(NEWER));
       expect(result.out).not.toContain("conflict");
-      // The newer release's own dispatcher ran, from where the runtime is.
       expect(existsSync(mark), result.out).toBe(true);
       const ran = readFileSync(mark, "utf-8").split("\n")[0];
       expect(ran).toContain(basename(dirname(runtime)));

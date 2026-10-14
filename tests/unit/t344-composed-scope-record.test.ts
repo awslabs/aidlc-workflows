@@ -125,12 +125,9 @@ describe("t344 record format round-trip", () => {
     const record = RECORD + trailing;
     const parsed = parseComposedScopeRecord(record, "aidlc/scopes/lean-feature.md");
 
-    // The grid and the identity above the region are unaffected by it.
     expect(parsed.stages).toEqual(STAGES);
     expect(parsed.identity.trimEnd()).toBe(IDENTITY.trimEnd());
-    // The projection does NOT carry it — this is the asymmetry.
     expect(parsed.identity).not.toContain("My own appendix");
-    // Nor does it leak into the grid region on the way back out.
     expect(renderComposedScopeRecord(parsed.identity, parsed.stages)).not.toContain(
       "My own appendix",
     );
@@ -195,7 +192,6 @@ describe("t344 round-trip over a real composer-authored scope", () => {
     // Keys a hand-written imitation would not have thought to include.
     expect(liveMd).toContain("skeleton:");
     expect(liveMd).toContain("change_control:");
-    // A full 33-stage grid, and a prose body with its own `##` headings.
     expect(Object.keys(liveStages).length).toBeGreaterThan(30);
     expect(liveMd).toMatch(/^## /m);
   });
@@ -205,19 +201,16 @@ describe("t344 round-trip over a real composer-authored scope", () => {
     const parsed = parseComposedScopeRecord(record, "aidlc/scopes/live.md");
     expect(parsed.name).toBe("pipeline-hardening-observability");
     expect(parsed.stages).toEqual(liveStages);
-    // The projection is the composer's file back, untouched — every frontmatter
-    // key and every prose heading, with no re-rendering.
     expect(parsed.identity.trimEnd()).toBe(liveMd.trimEnd());
     expect(parsed.identity).not.toContain(BEGIN);
-    // And it is stable across repeated compiles.
     expect(renderComposedScopeRecord(parsed.identity, parsed.stages)).toBe(record);
   });
 });
 
 // The identity half of a record is PROSE THE USER WROTE, so the boundary between
-// it and the generated grid must be something they cannot write by accident. An
-// earlier draft split on a `## Stage Grid` heading; a scope author documenting
-// their own plan with that heading made the parser adopt the first ```json fence
+// it and the generated grid must be something they cannot write by accident.
+// Splitting on a `## Stage Grid` heading would let a scope author documenting
+// their own plan with that heading make the parser adopt the first ```json fence
 // in their prose as the grid — resolving the scope to a DIFFERENT set of executed
 // stages — and drop every authored line after the collision on the next
 // write-back. These cases pin that the sentinel boundary is immune.
@@ -412,8 +405,8 @@ describe("t344 record parse failures name the file and never degrade silently", 
     }
     expect(message).toContain(BEGIN);
     expect(message).toContain(END);
-    // Not the elided form it used to print. (A bare "..." check would be wrong:
-    // the message legitimately carries a `{"stages": {...}}` placeholder.)
+    // (A bare "..." check would be wrong: the message legitimately carries a
+    // `{"stages": {...}}` placeholder.)
     expect(message).not.toContain(`${BEGIN.slice(0, 42)}...`);
     // And the sentinels quoted are the ones the emitter actually writes.
     expect(renderComposedScopeRecord(IDENTITY, STAGES)).toContain(BEGIN);
@@ -608,7 +601,6 @@ describe("t344 a scope name that is not one is never written or run", () => {
       const newWork = tool("aidlc-orchestrate.ts", ["next", "--new-intent", "--scope", "feature", "add billing"]);
       expect(newWork.stdout).not.toContain("scope change");
       expect(readFileSync(state, "utf-8")).toContain("- **Scope**: x%USERNAME%");
-      // A switch with a plan change typed alongside carries both.
       const withPlan = tool("aidlc-orchestrate.ts", ["next", "--scope", "feature", "--skip", "user-stories"]);
       expect(withPlan.status, withPlan.stderr).toBe(0);
       expect(JSON.parse(withPlan.stdout).message).toContain("scope change --scope feature");

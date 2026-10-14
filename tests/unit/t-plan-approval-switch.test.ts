@@ -151,7 +151,6 @@ function reply(proj: string, prompt: string): string {
   return out;
 }
 
-// What the agent runs after the person asks to look at the plan.
 function askToReview(proj: string): string {
   const result = spawnSync(BUN, [
     join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
@@ -287,7 +286,6 @@ describe("plan approval off builds the plan as written", () => {
     // A closed record: it asks nothing and invites no answer.
     expect(record).toContain("This file is the record and asks nothing");
     expect(record).not.toContain("say done");
-    // The build may start, and the next `next` keeps building without a new notice.
     expect(guardWrite(proj, join(proj, "src", "slugify.ts"))).toBe(0);
     const again = next(proj);
     expect(again.kind).toBe("run-stage");
@@ -517,7 +515,6 @@ describe("only the person turns plan approval off", () => {
     expect(lowered.status, lowered.stderr).toBe(0);
     expect(planApprovalLine(proj)).toBe("off (set by you)");
     expect(auditText(proj)).toContain("**Event**: CEREMONY_SET");
-    // The open question is dropped and this plan builds.
     const build = next(proj);
     expect(build.kind).toBe("run-stage");
     expect(build.plan_approval.skipped).toBe(true);
@@ -583,7 +580,6 @@ describe("only the person turns plan approval off", () => {
     expect(off.status, `${off.stdout}${off.stderr}`).toBe(0);
     expect(planApprovalLine(proj)).toStartWith("off (");
     expect(off.stdout).toContain("You can ask to see one before it is built any time.");
-    // The way back runs as written.
     const back = utility(proj, ["config-change", "--plan-approval", "on"]);
     expect(back.status, back.stderr).toBe(0);
     expect(planApprovalLine(proj)).toBe("on (set by a command)");
@@ -603,7 +599,6 @@ describe("only the person turns plan approval off", () => {
   });
 });
 
-/** The setter as the agent runs it in the chat. */
 // A refusal's text from the JSON line the utility prints: the encoding doubles
 // a Windows path's backslashes, so the raw output never carries the path.
 function refusalText(stderr: string): string {
@@ -648,7 +643,6 @@ function askedMinutesAgo(proj: string, id: string, minutes: number): void {
 }
 
 describe("asked before the piece of work exists", () => {
-  /** The request next records for new work, as the creation line names it. */
   const requestOf = (proj: string, task: string, flags: string[] = []): { id: string; message: string } => {
     const printed = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "feature", ...flags, "--", task], {
       env: { ...process.env, ...CLEAR },
@@ -667,7 +661,6 @@ describe("asked before the piece of work exists", () => {
     expect(kept.status, kept.stderr).toBe(0);
     expect(kept.stdout).toContain("Plan approval (it shows you the plan before any code is written) will be off for the piece of work you start now (set by you)");
     expect(planApprovalCreationGranted(proj, SESSION, asked.id)).toBe(true);
-    // The creation line the person sees, for that request, says what creation will do.
     const line = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "feature", "--request", asked.id], {
       env: { ...process.env, ...CLEAR },
     });
@@ -675,7 +668,6 @@ describe("asked before the piece of work exists", () => {
     const made = utility(proj, ["intent-create", "--request", asked.id]);
     expect(made.status, made.stderr).toBe(0);
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
-    // Spent by that piece of work.
     expect(planApprovalCreationGranted(proj, SESSION, asked.id)).toBe(false);
   });
 
@@ -699,7 +691,6 @@ describe("asked before the piece of work exists", () => {
     if (id === null) throw new Error(`no request in ${printed.out}`);
     return id[1];
   };
-  /** Approving it: the conductor names the composition and passes the proposal's description. */
   const approveComposed = (proj: string, composition: string, description: string): { id: string; message: string } =>
     requestOf(proj, description, ["--request", composition]);
 
@@ -727,7 +718,6 @@ describe("asked before the piece of work exists", () => {
   test("rejected at a report-only compose gate, then other work: plan approval stays on", () => {
     for (const before of [false, true]) {
       const proj = emptyProject();
-      // Said at the gate, or just before the composition was asked for.
       if (before) {
         reply(proj, "skip plan approval for this work");
         expect(setterOff(proj, SKIP_ASKED).status).toBe(0);
@@ -863,7 +853,6 @@ describe("asked before the piece of work exists", () => {
       });
       const ask = routing.directive as { ask_type?: string; new_intent_command?: string } | null;
       expect(ask?.ask_type, routing.out).toBe("new-work-routing");
-      // The person picks new work.
       const command = String(ask?.new_intent_command);
       // No plan was named with the words, so that answer reaches the plan question
       // (the agent's proposal, through the test's stand-in reading) before the creation.
@@ -879,7 +868,6 @@ describe("asked before the piece of work exists", () => {
         env: { ...process.env, ...CLEAR },
       });
       const message = String((routed.directive as { message?: unknown } | null)?.message);
-      // The creation line says what creation will do: no plan approval.
       expect(message, routed.out).toMatch(/; no [^);]*plan approval[;)]/);
       expect(message).toContain("--plan-approval off");
       const id = /--request ([0-9a-f]{8})/.exec(message)?.[1];
@@ -1134,7 +1122,6 @@ describe("Guard Policy typed before or with the new work", () => {
     }
     return step;
   };
-  /** Creation as the agent runs it: the request and every flag the step names. */
   const createAsPrinted = (proj: string, step: { directive: unknown; out: string }) => {
     const message = String((step.directive as { message?: unknown } | null)?.message);
     const request = /--request ([0-9a-f]{8})/.exec(message)?.[1];

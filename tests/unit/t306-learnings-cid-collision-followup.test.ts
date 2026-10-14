@@ -1,19 +1,14 @@
 // covers: subcommand:aidlc-learnings:persist, subcommand:aidlc-learnings:surface
 //
-// t306 - aidlc-learnings.ts persist's cid marker + provenance binding.
-// Regression test for the defect reported in #735 AND the follow-up
-// findings from PR #747's four review rounds (leandrodamascena,
-// apackeer x3). Supersedes t278-learnings-cid-intent-scope.test.ts (that
-// slot is now owned by merged PR #617's t278-per-unit-wave suite) and was
-// itself renumbered from t300/t284/t278 as upstream v2's own test-slot
-// registry advanced out from under this branch each re-slot.
+// t306 - aidlc-learnings.ts persist's cid marker + provenance binding:
+// regression tests for the defect reported in #735 and its follow-up findings.
 //
 // Mechanism: cli. Internals (cidMarker/contentHash/handlePersist/
 // resolveSurfaceIntent/practiceFilePath/priorSensorProposedRow/
 // legacyLineMatchesText) are not exported, so the contract is exercised
 // behaviourally through the process boundary exactly as t112/t199 do.
 //
-// TWELVE findings fixed here, one test group each:
+// TWELVE findings, one test group each:
 //   1. Same-intent repeat-stage collision (P1) — candidate ids restart at
 //      c1 on every surface() call, so two DIFFERENT learnings landing on
 //      the same positional c1 within the SAME intent must both persist,
@@ -27,13 +22,13 @@
 //   4. Ambiguous intent resolution must fail closed (P2) — multiple intent
 //      records with no valid cursor must fail, not silently degrade to a
 //      shared "unscoped" identity.
-//   5. Practice file not pinned to the surfaced space (P1, round 2) —
+//   5. Practice file not pinned to the surfaced space (P1) --
 //      practiceFilePath must resolve under the space PINNED at surface
 //      time, not whatever space happens to be active when persist runs.
-//   6. Sensor dedup keyed on the unstable (stage, candidate_id) pair (P2,
-//      round 2) — a re-proposal of the SAME sensor id under a different
+//   6. Sensor dedup keyed on the unstable (stage, candidate_id) pair (P2) --
+//      a re-proposal of the SAME sensor id under a different
 //      (restarts-at-c1) candidate id must not re-emit SENSOR_PROPOSED.
-//   7. Legacy-marker match not gated on text equality (P2, round 2) — a
+//   7. Legacy-marker match not gated on text equality (P2) -- a
 //      legacy-format marker sharing a candidate id with a DIFFERENT
 //      learning's text must not be mistaken for a retry of that learning.
 //   8. An unscoped selections replay must fail closed if an intent is created
@@ -51,7 +46,7 @@
 // Source under test (dist/claude/.claude/tools/aidlc-learnings.ts):
 //   cidMarker(intentSlug, slug, hash) => `<!-- cid:${intentSlug}:${slug}:${hash} -->`
 //   contentHash(text) => full sha256(text) hex digest.
-//   SelectionsFile now REQUIRES { space, intent } — bound at surface() time,
+//   SelectionsFile REQUIRES { space, intent } -- bound at surface() time,
 //   read (never re-resolved) by handlePersist.
 //   resolveSurfaceIntent() fails closed on genuine multi-intent ambiguity.
 //   practiceFilePath(projectDir, scope, space) threads the pinned space into
@@ -83,7 +78,7 @@ import { parseStageFrontmatter, readAllAuditShards } from "../../dist/claude/.cl
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const LEARNINGS_TS = join(AIDLC_SRC, "tools", "aidlc-learnings.ts");
 const STAGE_SLUG = "user-stories";
 const CANDIDATE_ID = "c1";
@@ -202,9 +197,9 @@ function clearActiveIntentCursor(pd: string): void {
   rmSync(join(intentsDir, "active-intent"), { force: true });
 }
 
-/** Switch the workspace-wide active-SPACE cursor (aidlc/active-space) — the
- *  cursor practiceFilePath's pre-fix bug read live instead of using the
- *  space PINNED in the selections-json at surface() time. */
+/** Switch the workspace-wide active-SPACE cursor (aidlc/active-space), the
+ *  cursor persist must NOT read live: it must use the space PINNED in the
+ *  selections-json at surface() time. */
 function switchActiveSpaceTo(pd: string, space: string): void {
   // The cursor names a space only when the project has it.
   mkdirSync(join(pd, "aidlc", "spaces", space, "memory"), { recursive: true });
@@ -215,7 +210,6 @@ function otherSpaceProjectMd(pd: string, space: string): string {
   return join(pd, "aidlc", "spaces", space, "memory", "project.md");
 }
 
-/** Write a `type: "sensor"` selections file for one candidate. */
 function sensorSelectionsFile(
   pd: string,
   name: string,
@@ -316,12 +310,11 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       });
       const res2 = runPersist(pd, run2);
       expect(res2.status).toBe(0);
-      // Pre-fix, this would have been silently dropped: hasLine/hasRow would
-      // have matched run1's marker (same intent:stage:candidate-id), so the
-      // write is skipped while RULE_LEARNED still fires and rule_learned
-      // still reports 1 or 0 depending on emit path — the exact defect the
-      // reviewer reproduced. Asserting rule_learned AND file content (not
-      // just the reported count) is the point of this test.
+      // A marker keyed only on intent:stage:candidate-id would silently drop this:
+      // hasLine/hasRow would match run1's marker, so the write is skipped while
+      // RULE_LEARNED still fires and rule_learned still reports 1 or 0 depending on
+      // emit path. Asserting rule_learned AND file content (not just the reported
+      // count) is the point of this test.
       expect(JSON.parse(res2.out).rule_learned).toBe(1);
 
       const content = projectMd(pd);
@@ -348,9 +341,8 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       expect(JSON.parse(res.out).rule_learned).toBe(1);
 
       const content = projectMd(pd);
-      // Pre-fix, persist re-resolved activeIntent() live and would have
-      // written under B's marker despite the selection being surfaced under
-      // A — the reviewer's exact reproduction.
+      // Re-resolving activeIntent() live at persist time would write under B's
+      // marker despite the selection being surfaced under A.
       expect(content).toMatch(new RegExp(`cid:${DEFAULT_RECORD_DIR}:${STAGE_SLUG}:${HASH_RE.source}`));
       expect(content).not.toMatch(new RegExp(`cid:${SECOND_RECORD_DIR}:${STAGE_SLUG}:${HASH_RE.source}`));
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -358,11 +350,10 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
 
   describe("finding #3 (P1) — legacy marker/audit-row compatibility on upgrade", () => {
     test("the ORIGINAL pre-#735 marker (<!-- cid:<stage>:<id> -->, no intent component at all) is recognized; retry does not duplicate", () => {
-      // This is the literal scenario the reviewer named: "retrying a learning
-      // previously persisted as `<!-- cid:<stage>:<candidate> -->`" — the
-      // upstream format from BEFORE #735's own fix ever shipped, distinct
-      // from #735's own (intent, stage, candidate-id) 3-part format covered
-      // by the next test below. Both must independently work.
+      // Retrying a learning persisted as `<!-- cid:<stage>:<candidate> -->`
+      // exercises the legacy flat format, distinct from the (intent, stage,
+      // candidate-id) 3-part format covered by the next test below. Both must
+      // independently work.
       const pd = mkProject();
       const text = "Original pre-#735 learning, already persisted once";
 
@@ -394,9 +385,9 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const pd = mkProject();
       const text = "Pre-upgrade learning, already persisted once";
 
-      // Hand-seed exactly what the PRE-#747-fix tool would have left behind:
-      // an audit row keyed by (Stage, Candidate-ID) with no Content-Hash, and
-      // a practice line under the OLD (intent, stage, candidate-id) marker.
+      // Hand-seed the legacy shape: an audit row keyed by (Stage, Candidate-ID)
+      // with no Content-Hash, and a practice line under the OLD (intent, stage,
+      // candidate-id) marker.
       const legacyMarker = `<!-- cid:${DEFAULT_RECORD_DIR}:${STAGE_SLUG}:${CANDIDATE_ID} -->`;
       writeFileSync(
         join(pd, "aidlc", "spaces", DEFAULT_SPACE, "memory", "project.md"),
@@ -417,9 +408,9 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const sel = selectionsFile(pd, "retry", text, { intent: DEFAULT_RECORD_DIR, candidateId: CANDIDATE_ID });
       const res = runPersist(pd, sel);
       expect(res.status).toBe(0);
-      // Pre-fix (finding #3): the new marker format wouldn't match the old
-      // line, and the new Content-Hash audit check wouldn't match the old
-      // row — so this would append a SECOND, duplicate line.
+      // Without legacy recognition the new marker format wouldn't match the old
+      // line, and the new Content-Hash audit check wouldn't match the old row -- so
+      // this would append a SECOND, duplicate line.
       expect(JSON.parse(res.out).rule_learned).toBe(0);
 
       const content = projectMd(pd);
@@ -532,9 +523,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       // genuinely distinct from the "multiple records, no cursor" ambiguity
       // below. A bare/legacy workspace's state + runtime-graph resolve to
       // the space-root fallback (recordDir() -> null -> spaceRecordRoot()),
-      // i.e. directly under intents/, not under any per-intent subdirectory
-      // — confirmed by reading aidlc-lib.ts's own recordDir/docsRoot/
-      // stateFilePath before writing this fixture, not guessed.
+      // i.e. directly under intents/, not under any per-intent subdirectory.
       const pd = createTestProject();
       projects.push(pd);
       const bareRoot = intentsDirOf(pd, DEFAULT_SPACE);
@@ -561,14 +550,14 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
 
     test("multiple intent records with no valid cursor fails closed, not silently unscoped", () => {
       const pd = mkProject(); // DEFAULT_RECORD_DIR seeded
-      seedIntent(pd, SECOND_RECORD_DIR); // a second, real intent record
+      seedIntent(pd, SECOND_RECORD_DIR);
       seedIntent(pd, THIRD_RECORD_DIR); // a third — genuinely ambiguous
       clearActiveIntentCursor(pd);
 
       const res = runSurface(pd);
-      // Pre-fix, this would have silently resolved intent: null and let
-      // persist fall back to the shared "unscoped" identity — recreating
-      // the exact collision class #735 exists to prevent.
+      // Without the fail-closed check this would silently resolve intent: null and
+      // let persist fall back to the shared "unscoped" identity -- recreating the
+      // exact collision class #735 exists to prevent.
       expect(res.status).toBe(1);
       expect(res.out).toContain("cannot resolve the active intent unambiguously");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -604,18 +593,18 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
         space: DEFAULT_SPACE,
       });
 
-      // Switch the LIVE active-space cursor away from the space the
-      // selection was pinned to at surface() time — the reviewer's exact
-      // repro: seed in space default, switch active space to other, persist.
+      // Switch the LIVE active-space cursor away from the space the selection was
+      // pinned to at surface() time: seed in space default, switch active space to
+      // other, persist.
       switchActiveSpaceTo(pd, "other");
 
       const res = runPersist(pd, sel);
       expect(res.status).toBe(0);
       expect(JSON.parse(res.out).rule_learned).toBe(1);
 
-      // Pre-fix, practiceFilePath called memoryDirFor(projectDir) with no
-      // space argument, which reads the LIVE active-space cursor — landing
-      // the line in "other"'s project.md instead of the pinned "default"'s.
+      // A practiceFilePath that called memoryDirFor(projectDir) with no space
+      // argument would read the LIVE active-space cursor -- landing the line in
+      // "other"'s project.md instead of the pinned "default"'s.
       const content = projectMd(pd);
       expect(content).toContain("Bound to default at surface time");
 
@@ -635,9 +624,9 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
 
       // Candidate ids restart at c1 on every surface() run, so a LATER run
       // proposing the identical sensor id lands on a different candidate id
-      // (c7 here). Pre-fix, the dedup keyed on (stage, candidate_id) would
-      // miss the prior row under the new id and emit a duplicate
-      // SENSOR_PROPOSED for a sensor that was already proposed.
+      // (c7 here). A dedup keyed on (stage, candidate_id) would miss the prior row
+      // under the new id and emit a duplicate SENSOR_PROPOSED for a sensor that was
+      // already proposed.
       const sel2 = sensorSelectionsFile(pd, "sensor-run2", "acceptance-format", { candidateId: "c7" });
       const res2 = runPersist(pd, sel2);
       expect(res2.status).toBe(0);
@@ -649,13 +638,12 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("dedup must stay SCOPED to the proposing stage — a second, DIFFERENT stage independently proposing the same sensor id must still get bound", () => {
-      // Self-check on the fix above: dropping (stage, candidate_id) down to
-      // sensorId ALONE (not (origin_stage, sensorId)) would make the no-op
-      // branch global — once ANY stage has proposed a sensor, no OTHER
-      // stage could ever bind that same sensor to its own frontmatter again,
-      // since hasRow would stay true forever regardless of which stage is
-      // asking. A sensor manifest is a singleton, but binding is legitimately
-      // per-stage (Destinations is an array for exactly this reason).
+      // Dropping (stage, candidate_id) down to sensorId ALONE (not (origin_stage,
+      // sensorId)) would make the no-op branch global -- once ANY stage has proposed
+      // a sensor, no OTHER stage could ever bind that same sensor to its own
+      // frontmatter again, since hasRow would stay true forever regardless of which
+      // stage is asking. A sensor manifest is a singleton, but binding is
+      // legitimately per-stage (Destinations is an array for exactly this reason).
       const pd = mkProject();
       const stagesDir = join(pd, ".claude", "skills", "aidlc", "stages");
       seedStageFile(stagesDir, "inception", "user-stories");
@@ -693,7 +681,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
     test("a DIFFERENT learning reusing a legacy marker's candidate_id is NOT treated as a retry — it persists as a fresh, second learning", () => {
       const pd = mkProject();
       const originalText = "Original learning already persisted under the legacy marker";
-      const legacyMarker = `<!-- cid:${STAGE_SLUG}:${CANDIDATE_ID} -->`; // pre-#735 flat format
+      const legacyMarker = `<!-- cid:${STAGE_SLUG}:${CANDIDATE_ID} -->`; // legacy flat format
       writeFileSync(
         join(pd, "aidlc", "spaces", DEFAULT_SPACE, "memory", "project.md"),
         `# Project-Level Rules\n\n## Corrections\n\n- ${originalText} (learned 2026-07-01) ${legacyMarker}\n`,
@@ -708,11 +696,10 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       );
 
       // A GENUINELY DIFFERENT learning happens to land on the SAME positional
-      // candidate_id post-upgrade. Pre-fix, the legacy match keyed purely on
-      // (stage, candidate_id) treated this as a retry of the ORIGINAL
-      // learning and silently dropped it — "two different learnings landing
-      // on the same positional candidate id never collide" does not hold
-      // across the upgrade boundary.
+      // candidate_id post-upgrade. A legacy match keyed purely on (stage,
+      // candidate_id) would treat this as a retry of the ORIGINAL learning and
+      // silently drop it -- "two different learnings landing on the same positional
+      // candidate id never collide" does not hold across the upgrade boundary.
       const differentText = "A completely different learning, same candidate_id by coincidence";
       const sel = selectionsFile(pd, "different-learning", differentText, {
         intent: DEFAULT_RECORD_DIR,

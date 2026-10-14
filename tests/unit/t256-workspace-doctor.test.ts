@@ -245,9 +245,6 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
 
   test("W2 reports drift both ways: declared-but-not-cloned AND on-disk-but-undeclared", () => {
     const ws = freshGitWorkspace();
-    // Manifest declares checkout-api + checkout-web; disk has checkout-api +
-    // an undeclared 'legacy-svc'. So checkout-web is declared-but-not-cloned
-    // and legacy-svc is on-disk-but-undeclared.
     writeManifest(ws, MANIFEST);
     makeSibling(ws, "checkout-api");
     makeSibling(ws, "legacy-svc");
@@ -257,7 +254,6 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     expect(repos?.label).toContain("drift");
     expect(repos?.label).toContain("checkout-web"); // declared but not cloned
     expect(repos?.label).toContain("legacy-svc"); // on disk but not declared
-    // W2 fix-text names the sync tool for the not-cloned side.
     expect(repos?.label).toContain("aidlc-workspace-sync.ts");
   });
 
@@ -266,7 +262,6 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     writeManifest(ws, MANIFEST);
     makeSibling(ws, "checkout-api");
     makeSibling(ws, "checkout-web");
-    // A managed block listing a stale set (missing checkout-web).
     writeFileSync(
       join(ws, ".gitignore"),
       "# >>> aidlc workspace-sync managed (do not edit inside; regenerated from repos.json) >>>\n" +

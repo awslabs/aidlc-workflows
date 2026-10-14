@@ -290,7 +290,7 @@ describe("native TUI screen transcripts", () => {
 
   test("cursor-addressed repaint exposes approval rows even when old soft-wrap flags survive", async () => {
     const target = await screen(120, 14);
-    // Visible labels from Windows R32 t50's retained timeout frame, line 2617.
+    // Visible labels from Windows R32 t50's retained timeout frame.
     // The archive has logical text, not raw PTY bytes; these real VT operations
     // reproduce the stale-wrap state without assigning emulator internals.
     const rows = [

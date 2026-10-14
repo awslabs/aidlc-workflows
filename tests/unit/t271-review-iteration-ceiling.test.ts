@@ -475,7 +475,6 @@ describe("t271 review iteration ceiling", () => {
     expect(over.stderr).toContain("allows 1 review pass");
     // The refusal must teach the terminal path, not re-trigger a review loop.
     expect(over.stderr).toContain("include the findings in the approval summary");
-    // No REVIEW_REQUESTED row landed for the refused request.
     const audit = readAllAuditShards(proj);
     const rows = audit.match(/\*\*Event\*\*: REVIEW_REQUESTED/g) ?? [];
     expect(rows.length).toBe(1);
@@ -1132,7 +1131,6 @@ describe("t271 review iteration ceiling", () => {
     expect(completedOutput.reviewRecord).toMatch(
       /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
-    // The draft was consumed into the record; the artifact was never written.
     expect(existsSync(join(proj, requestOutput.reviewFile))).toBe(false);
     expect(readFileSync(artifact, "utf-8")).toBe("reviewed requirements\n");
 
@@ -1195,7 +1193,7 @@ describe("t271 review iteration ceiling", () => {
 
   // A live Copilot run: the reviewer wrote a whole READY review with one
   // `## What I verified` heading, the logger refused it, and the conductor ran
-  // the reviewer again (16 more minutes). Such a review now records as
+  // the reviewer again (16 more minutes). Such a review records as
   // written, with only that heading line made `###`.
   const r1Review = (verdictLine = "**Verdict:** READY", heading = "## What I verified") => [
     "**Reviewer:** aidlc-product-lead-agent",
@@ -1249,12 +1247,10 @@ describe("t271 review iteration ceiling", () => {
     const completed = auditBlocks(proj, "REVIEW_COMPLETED");
     expect(completed).toHaveLength(1);
     expect(auditBlockField(completed[0], "Verdict")).toBe("READY");
-    // One request and no retry: the reviewer ran once.
     expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(1);
     const { reviewRecord } = JSON.parse(recorded.stdout) as { reviewRecord: string };
     const body = (JSON.parse(readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8")) as ReviewRecord).body;
     expect(body).toBe(r1Review("**Verdict:** READY", "### What I verified"));
-    // The audit row says the reviewer's heading was changed, and which.
     expect(auditBlockField(completed[0], "Review Headings Made Level 3")).toBe("line 9: ## What I verified");
   });
 
@@ -1293,7 +1289,6 @@ describe("t271 review iteration ceiling", () => {
 
   test("a heading never hides another defect, and heading forms that cannot be made ### still refuse", () => {
     const { proj, record } = requestHeadingReview();
-    // A wrong verdict is named as such, not as a heading problem.
     const wrongVerdict = record(r1Review("**Verdict:** NOT-READY"));
     expect(wrongVerdict.status).not.toBe(0);
     expect(wrongVerdict.stderr).toContain("exactly one canonical verdict line matching --verdict");
@@ -1743,7 +1738,6 @@ describe("t271 review iteration ceiling", () => {
     expect(second.stderr).toMatch(/--iteration 1 --project-dir \S/);
     expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(1);
 
-    // The gate's recovery offers that same request.
     const state = readFileSync(seededStateFile(proj), "utf-8");
     const stage = resolveStage("requirements-analysis");
     if (!stage) throw new Error("requirements-analysis not in the stage graph");
@@ -1765,7 +1759,6 @@ describe("t271 review iteration ceiling", () => {
       auditBlockField(requests[0], "Artifact Fingerprint"),
     );
 
-    // Its review records, and it took the pass rather than adding one.
     const verdict = runReview(proj, [...request, "--iteration", "1", "--verdict", "READY"]);
     expect(verdict.status, verdict.stderr).toBe(0);
     const over = runReview(proj, [...request, "--iteration", "2"]);
@@ -1956,7 +1949,6 @@ describe("t271 review iteration ceiling", () => {
     unlinkSync(shared);
     expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
 
-    // The replacement's own review records.
     const recorded = runReview(proj, [...request, "--verdict", "READY"]);
     expect(recorded.status, recorded.stderr).toBe(0);
   });
@@ -2060,7 +2052,6 @@ describe("t271 review iteration ceiling", () => {
     const command = /`([^`]*review[^`]*--iteration 1[^`]*)`/.exec(verdict.stderr)?.[1];
     expect(command, verdict.stderr).toBeDefined();
     expect(command).toContain("--stage requirements-analysis");
-    // The named command is the same-pass request, and its review records.
     const again = runReview(proj, request);
     expect(again.status, again.stderr).toBe(0);
     expect(auditBlockField(auditBlocks(proj, "REVIEW_REQUESTED")[1], "Iteration")).toBe("1");
@@ -2140,7 +2131,6 @@ describe("t271 review iteration ceiling", () => {
     expect(partial.status).not.toBe(0);
     expect(partial.stderr).toContain("exactly one canonical verdict line");
 
-    // The retry keeps the binding and the id, and empties the slot.
     const retry = runReview(proj, [...request, "--retry-pending"]);
     expect(retry.status, retry.stderr).toBe(0);
     expect(retry.stdout).toContain('"retry":"pending-request"');
@@ -2159,7 +2149,6 @@ describe("t271 review iteration ceiling", () => {
     );
     expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(2);
 
-    // The retried dispatch's review completes normally.
     expect(runReview(proj, [...request, "--verdict", "READY"]).status).toBe(0);
     expect(readFileSync(artifact, "utf-8")).toBe(original);
   });
@@ -2177,7 +2166,6 @@ describe("t271 review iteration ceiling", () => {
       "--reviewer", "aidlc-product-lead-agent",
       "--iteration", "1",
     ];
-    // The request cannot open its slot through the link.
     const requested = runReview(proj, request);
     expect(requested.status).not.toBe(0);
     expect(requested.stderr).toContain("is a symlink");
@@ -2270,7 +2258,6 @@ describe("t271 review iteration ceiling", () => {
     expect(notOwn.status).not.toBe(0);
     expect(notOwn.stderr).toContain("is not the review file for iteration 1");
     expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
-    // A symlinked container for the slot is refused too.
     const attemptDir = dirname(draft);
     const detached = `${attemptDir}.real`;
     renameSync(attemptDir, detached);
@@ -2284,7 +2271,6 @@ describe("t271 review iteration ceiling", () => {
     unlinkSync(attemptDir);
     renameSync(detached, attemptDir);
     expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
-    // The request's own review file, named explicitly, records normally.
     writeFileSync(draft, readFileSync(elsewhere), "utf-8");
     const completed = runReview(
       proj,
@@ -2862,7 +2848,7 @@ describe("t271 review iteration ceiling", () => {
       snapshotObserver: ({ logicalPath }) => {
         if (!replaced && logicalPath === requested.reviewArtifact) {
           if (process.platform === "win32") {
-            // Windows renameSync does not replace an existing destination.
+            // Windows may refuse replacing the already-open destination.
             // Mutate the already-open file instead; the stable descriptor/path
             // identity check must reject this race too.
             writeFileSync(artifact, readFileSync(replacement));
@@ -3687,7 +3673,6 @@ describe("t271 review iteration ceiling", () => {
       );
       expect(existsSync(mainCopy), name).toBe(false);
     }
-    // A legacy embedded completion names no record and carries nothing, and it
     // A modern request cannot be answered without its named record. A legacy
     // request remains recordless, and its completion still consumes that request.
     const recordlessCompletion = completion().replace(

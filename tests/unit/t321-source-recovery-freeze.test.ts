@@ -365,7 +365,6 @@ describe("t321 the freeze stays on through a source-recovery review", () => {
       "recovery review for Unit beta is still in progress",
     );
 
-    // A review file whose verdict line does not match --verdict is refused.
     writeReviewFile(proj, reviewFile, "aidlc-architecture-reviewer-agent", 2, "NOT-READY");
     const mismatched = runLog(proj, [...recoveryArgs, "--verdict", "READY"]);
     expect(mismatched.status).not.toBe(0);
@@ -373,7 +372,7 @@ describe("t321 the freeze stays on through a source-recovery review", () => {
       "exactly one canonical verdict line matching --verdict",
     );
 
-    // The matching verdict records the review as a record and re-freezes beta;
+    // The matching verdict records the review as a record and keeps beta frozen;
     // the plan bytes were never touched.
     writeReviewFile(proj, reviewFile, "aidlc-architecture-reviewer-agent", 2);
     const verdict = runLog(proj, [...recoveryArgs, "--verdict", "READY"]);

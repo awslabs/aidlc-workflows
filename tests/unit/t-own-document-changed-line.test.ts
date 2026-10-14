@@ -31,7 +31,6 @@ const STAGE = "requirements-analysis";
 const LINE = "requirements.md changed after Requirements Analysis finished. I'm carrying on with it as it is. " +
   "Do you want me to redo Requirements Analysis with your change instead?";
 
-// Requirements Analysis approved with its completion record.
 function project(policy: "off" | "strict"): { proj: string; requirements: string } {
   const proj = createTestProject();
   created.push(proj);
@@ -69,7 +68,6 @@ describe("t-own-document-changed-line: an edit to a finished stage's own documen
       const issue = inspectStageValidity(proj, state).issues.find((entry) => entry.stage === STAGE);
       expect(issue?.direct, JSON.stringify(issue)).toBe(true);
       expect(staleStageNote("Requirements Analysis", issue!, state)).toBe(LINE);
-      // `/aidlc --status` says the same line.
       expect(status(proj)).toContain(LINE);
       expect(status(proj)).not.toContain("used changed after it finished");
     });
@@ -83,7 +81,6 @@ describe("t-own-document-changed-line: an edit to a finished stage's own documen
       expect(staleStageNote("Requirements Analysis", issue!, state)).toBe(
         "Something Requirements Analysis used changed after it finished. I'm carrying on with it as it is. Do you want me to redo Requirements Analysis with the change?",
       );
-      // The own-document line is not said for a document that is gone.
       expect(status(proj)).not.toContain("requirements.md changed after");
     });
   }

@@ -70,7 +70,6 @@ function project(): { proj: string; record: string } {
   return { proj, record: seededRecordDir(proj) };
 }
 
-/** An empty folder outside the project, and the record's engine folder planted as a link to it. */
 function plantEngineLink(record: string): string {
   const outside = mkdtempSync(join(tmpdir(), "nofollow-outside-"));
   outsideDirs.push(outside);

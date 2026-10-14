@@ -123,7 +123,6 @@ function checkpoint(p: string, args: string[]) {
   return tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", ...args]);
 }
 
-// The person types in a chat: the human-turn hook, as the host runs it.
 function person(p: string, prompt: string, session: string) {
   const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p };
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;

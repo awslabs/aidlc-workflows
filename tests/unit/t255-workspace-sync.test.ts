@@ -613,7 +613,7 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     const settings = () => JSON.parse(readFileSync(file, "utf-8")).settings;
     expect(runSync(ws).status).toBe(0);
     expect(settings()).toEqual({ "chat.agent.maxRequests": 200 });
-    // A file written before this release, with no settings yet, gets it too.
+    // A file with no settings yet gets it too.
     writeFileSync(file, `${JSON.stringify({ folders: [{ path: "." }] }, null, 2)}\n`);
     expect(runSync(ws).status).toBe(0);
     expect(settings()).toEqual({ "chat.agent.maxRequests": 200 });
@@ -730,18 +730,14 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
 
     const r = runSync(ws);
     expect(r.status).not.toBe(0);
-    // Tool prints the orphan's name and the --force hint
     expect(r.out).toContain("checkout-web");
     expect(r.out).toContain("--force");
     // Orphan dir was NOT removed (atomic: no changes made)
     expect(existsSync(join(ws, "checkout-web"))).toBe(true);
-    // aidlc.code-workspace was NOT created (mutation did not happen)
     expect(existsSync(join(ws, "aidlc.code-workspace"))).toBe(false);
   });
 
   test("orphan clean+pushed is removed from the active set and retained for recovery", () => {
-    // Same setup as above; with --force the tool removes the orphan and
-    // succeeds, writing .gitignore + aidlc.code-workspace for manifest repos only.
     const SINGLE_MANIFEST = `{
   "org": "acme",
   "repos": [
@@ -754,7 +750,6 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
 
     const r = runSync(ws, ["--force"]);
     expect(r.status).toBe(0);
-    // Orphan was removed from the active sibling path.
     expect(existsSync(join(ws, "checkout-web"))).toBe(false);
     const recovery = readdirSync(ws).find((name) =>
       name.startsWith(".aidlc-workspace-sync-recovery-"),
@@ -763,11 +758,9 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     expect(
       readFileSync(join(ws, recovery!, "checkout-web", "README.md"), "utf-8"),
     ).toContain("# checkout-web");
-    // .gitignore managed block lists only the manifest repo
     const gi = readFileSync(join(ws, ".gitignore"), "utf-8");
     expect(gi).toContain("/checkout-api/");
     expect(gi).not.toContain("/checkout-web/");
-    // aidlc.code-workspace contains only root + manifest repo
     const cw = JSON.parse(readFileSync(join(ws, "aidlc.code-workspace"), "utf-8"));
     expect(cw.folders).toEqual([{ path: "." }, { path: "checkout-api" }]);
   });
@@ -784,14 +777,11 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     const ws = freshRealWorkspace(SINGLE_MANIFEST);
     makeRepo(ws, "checkout-api");
     makeRepo(ws, "checkout-web");
-    // Make checkout-web dirty: add an untracked file
     writeFileSync(join(ws, "checkout-web", "dirty.txt"), "uncommitted change", "utf-8");
 
     const r = runSync(ws, ["--force"]);
     expect(r.status).not.toBe(0);
-    // Dir survives
     expect(existsSync(join(ws, "checkout-web"))).toBe(true);
-    // Output names the repo and signals a dirty/uncommitted reason
     expect(r.out).toContain("checkout-web");
     expect(r.out).toContain("dirty working tree");
   });
@@ -808,7 +798,6 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     const ws = freshRealWorkspace(SINGLE_MANIFEST);
     makeRepo(ws, "checkout-api");
     makeRepo(ws, "checkout-web");
-    // Add a commit that is NOT pushed to origin
     writeFileSync(join(ws, "checkout-web", "extra.md"), "unpushed", "utf-8");
     git(join(ws, "checkout-web"), "add", "-A");
     git(join(ws, "checkout-web"), "commit", "-q", "-m", "unpushed commit");
@@ -830,22 +819,18 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
   ]
 }`;
     const ws = freshRealWorkspace(SINGLE_MANIFEST);
-    // Init on feature/x so current branch != the manifest's branch
     makeRepo(ws, "checkout-api", { branch: "feature/x" });
 
     const r = runSync(ws);
     expect(r.status).toBe(2);
-    // Output contains a branch advisory naming both branches
     expect(r.out).toContain("feature/x");
     expect(r.out).toContain("main");
     // The advisory names its source: repos.json (the explicit branch is set).
     expect(r.out).toContain("repos.json");
-    // Output contains the honest final line
     expect(r.out).toContain("NOT fully in sync");
     // The warning/yellow path is also escape-free when captured (non-TTY) - this
     // exercises the color gate on the exit-2 path, not just the green success path.
     expect(r.out).not.toContain("\x1b[");
-    // Branch was NOT switched - repo is still on feature/x
     const head = git(join(ws, "checkout-api"), "rev-parse", "--abbrev-ref", "HEAD");
     expect(head).toBe("feature/x");
   });
@@ -878,7 +863,6 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     expect(r.status).not.toBe(0);
     // Orphan dir MUST survive - the detached commit would be destroyed otherwise
     expect(existsSync(join(ws, "checkout-web"))).toBe(true);
-    // Output names the repo and the unpushed reason
     expect(r.out).toContain("checkout-web");
     expect(r.out).toContain("unpushed commits");
   });
@@ -1619,7 +1603,6 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     // Source label for the omitted case names the origin default, not repos.json.
     expect(r.out).toContain("origin default");
     expect(r.out).toContain("NOT fully in sync");
-    // Branch was NOT switched.
     expect(git(dir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("feature/x");
     expect(r.out).not.toContain("\x1b[");
   });
@@ -1708,7 +1691,7 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
   });
 
   test("legacy defaultBranch key is ignored gracefully (exit 0)", () => {
-    // The old key is unknown JSON now - parses fine and behaves as "branch
+    // The old key is unknown JSON - parses fine and behaves as "branch
     // omitted": checkout on the detected origin default → no warning.
     const SINGLE_MANIFEST = `{
   "org": "acme",
@@ -1727,8 +1710,8 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
 
   test("per-entry url override is accepted (validated, not derived from org)", () => {
     // A non-empty "url" is valid and does not trip validation; an empty "url"
-    // is rejected before any git call. The clone path itself is network-bound
-    // and covered manually, so we only assert the validation contract here.
+    // is rejected before any git call. The clone path itself is covered with
+    // local bare remotes, so we only assert the validation contract here.
     const GOOD = `{
   "org": "acme",
   "repos": [

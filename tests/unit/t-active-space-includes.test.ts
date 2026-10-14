@@ -100,8 +100,6 @@ function seedSpaces(root: string, cursor?: string): void {
 }
 
 const copyFile = (root: string, rel: string): string => readFileSync(join(root, ...COPY.split("/"), ...rel.split("/")), "utf-8");
-// The first line of every copied file names the file to edit (an edit made in
-// the copy is replaced at the next refresh).
 const header = (space: string, rel: string): string =>
   `<!-- AI-DLC keeps this copy in step with aidlc/spaces/${space}/memory/${rel}. Edit that file; this copy is replaced. -->\n`;
 const copied = (space: string, rel: string, text: string): string => `${header(space, rel)}${text}`;
@@ -181,7 +179,6 @@ describe("t-active-space-includes: every shipped include reads the copy", () => 
       const ignore = readFileSync(join(REPO_ROOT, "harness", harness, "dot-gitignore"), "utf-8");
       expect(ignore.split("\n"), harness).toContain("aidlc/active-memory/");
     }
-    // The part a copy runtime adds to a team's .gitignore carries it too.
     expect(readFileSync(distSurface("copilot", ".aidlc", "tools", "data", "root-blocks", "gitignore"), "utf-8").split("\n"))
       .toContain("aidlc/active-memory/");
   });
@@ -218,7 +215,6 @@ describe("t-active-space-includes: refreshActiveMemory writes the space's memory
     expect(existsSync(join(root, ...COPY.split("/"), "team.md"))).toBe(false);
     expect(existsSync(join(root, ...COPY.split("/"), "phases", "ideation.md"))).toBe(false);
     expect(activeMemoryCopyDrift(root, "default")).toEqual([]);
-    // The drift names what the copy lacks for the other space.
     expect(activeMemoryCopyDrift(root, "teamB").sort()).toEqual(["notes.md", "org.md", "phases/ideation.md", "team.md"]);
   });
 
@@ -338,11 +334,9 @@ describe("t-active-space-includes: a space switch changes no tracked file", () =
     expect(git(root, "status", "--porcelain")).toBe("");
     expect(copyFile(root, "team.md")).toContain("dead-letter alarm");
     expect(copyFile(root, "org.md")).toBe(copied("teamb", "org.md", readFileSync(join(root, "aidlc", "spaces", "teamb", "memory", "org.md"), "utf-8")));
-    // The agent files still read the copy, byte for byte as installed.
     expect(JSON.parse(readFileSync(join(root, ".kiro", "agents", "aidlc-developer-agent.json"), "utf-8")).resources)
       .toContain(`file://${COPY}/**/*.md`);
 
-    // An edit of a memory file reaches the copy at the next session start.
     writeFileSync(join(root, "aidlc", "spaces", "teamb", "memory", "team.md"), "# Team\n\nEvery alarm names its runbook.\n");
     sessionStart(root, env);
     expect(copyFile(root, "team.md")).toContain("names its runbook");
@@ -435,7 +429,6 @@ describe("t-active-space-includes: AI-DLC's part of the team's root files", () =
     expect(addRootBlocks(root).sort()).toEqual([".gitignore", "AGENTS.md"]);
     expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(`node_modules\n.env.local\n\n${gitignorePart()}`);
     expect(readFileSync(join(root, "AGENTS.md"), "utf-8")).toBe(`# Shop\n\nOur own notes for agents.\n\n${agentsPart()}`);
-    // A second session changes nothing.
     expect(addRootBlocks(root)).toEqual([]);
     expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(`node_modules\n.env.local\n\n${gitignorePart()}`);
   });
@@ -541,7 +534,6 @@ describe("t-active-space-includes: AI-DLC's part of the team's root files", () =
       writeFileSync(join(root, ".aidlc", "tools", "data", "root-blocks", marker), "export EVIL=1\n");
     }
     symlinkSync(outside, join(root, "linked"), "dir");
-    // The team's AGENTS.md is a link to a file outside: it is not written through.
     writeFileSync(join(outside, "AGENTS.md"), "# elsewhere\n");
     symlinkSync(join(outside, "AGENTS.md"), join(root, "AGENTS.md"));
     expect(addRootBlocks(root)).toEqual([".gitignore"]);
@@ -566,7 +558,6 @@ describe("t-active-space-includes: AI-DLC's part of the team's root files", () =
     expect(started.status, `${started.stdout}${started.stderr}`).toBe(0);
     const agents = readFileSync(join(root, "AGENTS.md"), "utf-8");
     expect(agents).toContain("<!-- BEGIN AI-DLC:agents -->");
-    // The part reads the copy, whichever space is active; the copy holds that space's text.
     expect(agents).toContain(`@${COPY}/org.md`);
     expect(agents).not.toContain("@aidlc/spaces/");
     expect(copyFile(root, "org.md")).toBe(copied("team-b", "org.md", "# org team-b\n"));

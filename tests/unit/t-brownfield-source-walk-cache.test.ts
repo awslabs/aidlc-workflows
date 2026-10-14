@@ -6,7 +6,7 @@
 // brownfield command re-walked the tree 3+ times. withWorkspaceSourceStateCache
 // shares one observation within each admission or routing calculation.
 //
-// This suite pins Option B's contract:
+// This suite pins the contract:
 //   1. inside a cache scope, repeated calls for the same (projectDir,intent,
 //      space) return the IDENTICAL object — one walk, the rest are cache hits
 //      (the walk reduction), with byte-identical fingerprint+listing,
@@ -76,7 +76,6 @@ describe("t-brownfield-source-walk-cache: share the source walk within each read
     // were served from the memo (no second/third whole-tree pass).
     expect(b).toBe(a);
     expect(c).toBe(a);
-    // The derived accessors read through the same memo, still identical content.
     withWorkspaceSourceStateCache(() => {
       const fp1 = workspaceSourceFingerprint(dir);
       const fp2 = workspaceSourceFingerprint(dir);
@@ -84,7 +83,7 @@ describe("t-brownfield-source-walk-cache: share the source walk within each read
       expect(fp2).toBe(fp1);
       const l1 = workspaceSourceListing(dir);
       const l2 = workspaceSourceListing(dir);
-      expect(l1).toBe(l2); // same memoized listing object
+      expect(l1).toBe(l2);
     });
   });
 
@@ -95,7 +94,6 @@ describe("t-brownfield-source-walk-cache: share the source walk within each read
     // change between them IS observed (no stale cache bridging commands).
     const before = workspaceSourceFingerprint(dir);
     withWorkspaceSourceStateCache(() => {
-      // A first cached read.
       expect(workspaceSourceFingerprint(dir)).toBe(before);
     });
     // A new command (new scope) sees a content change — the prior scope's memo
@@ -112,7 +110,6 @@ describe("t-brownfield-source-walk-cache: share the source walk within each read
         // inner scope is a fresh memo
         expect(workspaceSourceState(dir)).not.toBeNull();
       });
-      // outer memo intact and still returns its identical object
       expect(workspaceSourceState(dir)).toBe(outer);
     });
   });
@@ -132,14 +129,12 @@ describe("t-brownfield-source-walk-cache: share the source walk within each read
     writeFileSync(join(dir, "dist", "bundle.js"), "generated(1);\n");
     writeFileSync(join(dir, "dist", "keep.ts"), "export const keep = 1;\n");
 
-    // Cached and uncached fingerprints agree (the cache is transparent).
     const uncached = workspaceSourceFingerprint(dir);
     const cached = withWorkspaceSourceStateCache(() => workspaceSourceFingerprint(dir));
     expect(cached).toBe(uncached);
 
     const listing = workspaceSourceListing(dir);
     expect(listing).not.toBeNull();
-    // Ignored generated output stays OUT.
     expect(listing?.has("\0dist/bundle.js")).toBe(false);
     // Registered source under the generated dir stays IN, and is raw sha256 of
     // bytes (64-hex) — the unchanged OID space, not a git blob OID.
@@ -148,7 +143,7 @@ describe("t-brownfield-source-walk-cache: share the source walk within each read
     expect(/^\d{6} [0-9a-f]{64}$/.test(kept ?? "")).toBe(true);
 
     // Generated output changing does NOT move the fingerprint; the registered
-    // source changing DOES — identical to the pre-cache floor.
+    // source changing DOES.
     const baseline = withWorkspaceSourceStateCache(() => workspaceSourceFingerprint(dir));
     writeFileSync(join(dir, "dist", "bundle.js"), "generated(2);\n");
     expect(withWorkspaceSourceStateCache(() => workspaceSourceFingerprint(dir))).toBe(baseline);
@@ -201,13 +196,12 @@ describe("t-brownfield-source-walk-cache: share the source walk within each read
       // Distinct keys -> the second call is a miss that computed its own object,
       // never a false hit returning the undefined-call's object.
       expect(viaUndefined).not.toBe(viaEmpty);
-      // And each is stable on repeat within the scope (its own slot memoizes).
       expect(workspaceSourceState(dir)).toBe(viaUndefined);
       expect(workspaceSourceState(dir, "")).toBe(viaEmpty);
     });
   });
 
-  // H2: guardAttemptState computes the source identity ONCE and THREADS it into
+  // guardAttemptState computes the source identity ONCE and THREADS it into
   // both freshReviewReceipts and pendingReviewRequestStatus via `options.sourceState`,
   // which branch `options.sourceState !== undefined ? options.sourceState :
   // workspaceSourceState(projectDir)`. The threading is faithful iff (a) the value
@@ -229,7 +223,7 @@ describe("t-brownfield-source-walk-cache: share the source walk within each read
       const threaded = workspaceSourceState(dir); // what guardAttemptState computes
       const recomputed = workspaceSourceState(dir); // what the callee's else-branch does
       expect(threaded).not.toBeNull();
-      expect(recomputed).toBe(threaded); // same memo slot -> faithful thread
+      expect(recomputed).toBe(threaded);
 
       // (b) The sentinel semantics the callee relies on. `undefined ?? null` in the
       // cache key resolves to a DIFFERENT slot than an explicit "" (test 6), and the
@@ -240,7 +234,7 @@ describe("t-brownfield-source-walk-cache: share the source walk within each read
         sourceState !== undefined ? sourceState : workspaceSourceState(dir);
       expect(pick(undefined)).toBe(threaded); // absent -> recompute (memoized object)
       expect(pick(null)).toBeNull(); // explicit null -> honored, NOT recomputed
-      expect(pick(threaded)).toBe(threaded); // supplied value -> used as-is
+      expect(pick(threaded)).toBe(threaded);
     });
   });
 });

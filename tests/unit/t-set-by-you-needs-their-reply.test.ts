@@ -50,7 +50,6 @@ function env(proj: string, session: string): NodeJS.ProcessEnv {
   return { ...process.env, ...CLEAR, AIDLC_SESSION_OVERRIDE: session, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj };
 }
 
-/** The agent's own setter call, as it runs it: `engine config set <args>`. */
 function configSet(proj: string, args: string[], session = SESSION): { status: number; out: string } {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", ...args, "--project-dir", proj], {
     cwd: proj,
@@ -71,7 +70,6 @@ function utility(proj: string, args: string[], session = SESSION): { status: num
   return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
-/** The person types this in their chat; the host's hook records it. */
 function said(proj: string, prompt: string, session = SESSION): void {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj,
@@ -271,7 +269,6 @@ describe("a setting the agent sends through next names their words", () => {
     expect(result.status, result.out).toBe(0);
     return String((result.directive as { message?: unknown } | null)?.message);
   };
-  /** The setter a step names, as the agent runs it: the reply that asked in place of <their words>. */
   const runNamed = (proj: string, message: string, words: string): { status: number; out: string } => {
     const named = /Run `[^`]*? engine config set ([^`]+)` to update the configuration/.exec(message)?.[1];
     expect(named, message).toBeDefined();
@@ -420,7 +417,6 @@ describe("every step that names the setter for the person's yes names their word
       const remedy = lowerFenceRemedy(fence);
       expect(remedy.action, fence).toContain(SLOT);
       expect(remedy.action, fence).toContain(FILL);
-      // The choice's own command stays the exact setter the question validates.
       expect(guardOperationMatchesCommand(remedy.operation!, remedy.command!), fence).toBe(true);
     }
   });
@@ -444,7 +440,6 @@ describe("every step that names the setter for the person's yes names their word
 
   test("the in-flight composer's approve step names their words for recompose and summary confirmation", () => {
     const { proj } = project();
-    // Their message arrives through the chat's hooks, as it does live.
     said(proj, "turn sensors off");
     const step = message(proj, ["compose", "turn sensors off"]);
     expect(step).toContain(`[approved setting flags ${SLOT}]\``);

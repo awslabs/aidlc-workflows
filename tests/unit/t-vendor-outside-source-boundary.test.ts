@@ -62,7 +62,6 @@ function fingerprint(project: string): string {
   return state!.fingerprint;
 }
 
-/** What a dependency install leaves behind: package source and a generated index. */
 function installDependencies(dir: string, version: string): void {
   const pkg = join(dir, "acme", "widgets", "src");
   mkdirSync(pkg, { recursive: true });
@@ -78,7 +77,6 @@ describe("t-vendor-outside-source-boundary: the directory a package manager fill
     const before = fingerprint(project);
     installDependencies(join(project, dir), "1.0.0");
     expect(fingerprint(project)).toBe(before);
-    // A later update rewrites the packages; still not a source change.
     installDependencies(join(project, dir), "1.1.0");
     expect(fingerprint(project)).toBe(before);
   });
@@ -122,7 +120,6 @@ describe("t-vendor-outside-source-boundary: the directory a package manager fill
     installDependencies(join(project, "vendor"), "1.0.0");
     const installed = fingerprint(project);
     expect(installed).not.toBe(before);
-    // The registered package changes: bound. The rest of vendor/ changes: not bound.
     writeFileSync(join(project, "vendor", "acme", "widgets", "src", "Widget.php"), "<?php\nclass Widget { const VERSION = 'edited'; }\n");
     const edited = fingerprint(project);
     expect(edited).not.toBe(installed);

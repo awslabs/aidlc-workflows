@@ -3,9 +3,9 @@
 // t273: SCOPE-AWARE PHASE DIRS at intent creation (deterministic, no-LLM,
 // no-network). Intent creation used to mkdir all five phase dirs unconditionally,
 // so narrow-scope records shipped empty phase dirs that read as
-// planned-then-skipped work. Creation now makes a phase dir only for a phase the
+// planned-then-skipped work. Creation makes a phase dir only for a phase the
 // SCOPE RUNS (one holding at least one EXECUTE stage), derived from the same
-// stagesInScope data that drives the PHASE_SKIPPED audit rows. Bugfix now omits
+// stagesInScope data that drives the PHASE_SKIPPED audit rows. Bugfix omits
 // `ideation/` but includes `operation/` for its deployment stages.
 //
 // Five contracts land here:
@@ -22,7 +22,7 @@
 //       still succeeds, because writers create their own parent chain. This is
 //       the disproof case for "trimming the dir breaks a late write".
 //
-// MECHANISM. SPAWNs the real shipped engine CLI (`aidlc.ts engine intent create`)
+// MECHANISM. SPAWNs the real shipped CLI (`aidlc-utility.ts intent-create`)
 // against temp project dirs, so the actual creation path runs end to end and the
 // assertions read disk truth. Zero tokens, zero network.
 
@@ -50,7 +50,7 @@ import { PHASES } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const UTILITY = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const INTENTS_REL = join("aidlc", "spaces", "default", "intents");
 
@@ -65,7 +65,6 @@ function mkTemp(tag: string): string {
   return d;
 }
 
-/** Create the first intent at `scope` via the real engine CLI. */
 function create(projectDir: string, scope: string): ReturnType<typeof spawnSync> {
   return spawnSync(
     BUN,
@@ -87,12 +86,10 @@ function createAndResolveRecord(projectDir: string, scope: string): string {
   return join(intentsDir, records[0]);
 }
 
-/** The phase names that have a directory in this record. */
 function phaseDirsPresent(record: string): string[] {
   return PHASES.filter((p) => existsSync(join(record, p)));
 }
 
-/** The phases the audit shards recorded as PHASE_SKIPPED. */
 function phasesSkippedInAudit(record: string): string[] {
   const auditDir = join(record, "audit");
   const body = readdirSync(auditDir)
@@ -130,7 +127,6 @@ describe("t271 scope-aware phase dirs at intent creation", () => {
     // verification/ is scope-independent: every record gets it.
     const verification = join(record, "verification");
     expect(existsSync(verification) && statSync(verification).isDirectory()).toBe(true);
-    // And the record is otherwise intact (the trimming did not eat the state file).
     expect(existsSync(join(record, "aidlc-state.md"))).toBe(true);
   });
 
@@ -142,7 +138,6 @@ describe("t271 scope-aware phase dirs at intent creation", () => {
     // (a) is scope-driven rather than a blanket removal.
     expect(phaseDirsPresent(record).sort()).toEqual([...PHASES].sort());
     expect(existsSync(join(record, "verification"))).toBe(true);
-    // No phase was skipped, so no PHASE_SKIPPED row exists to complement.
     expect(phasesSkippedInAudit(record)).toEqual([]);
   });
 
@@ -158,8 +153,6 @@ describe("t271 scope-aware phase dirs at intent creation", () => {
       // Non-vacuous: each of these scopes must skip at least one phase, else the
       // complement check below would pass on an empty set.
       expect(skipped.length, `${scope} skips at least one phase`).toBeGreaterThan(0);
-      // Complements: no phase is both present and skipped, and together they
-      // account for every phase.
       for (const phase of skipped) {
         expect(present, `${scope}: skipped ${phase} has no dir`).not.toContain(phase);
       }

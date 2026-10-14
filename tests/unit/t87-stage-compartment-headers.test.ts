@@ -54,16 +54,13 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 
-// AIDLC_SRC === <repo>/dist/claude/.claude — the same tree the .sh resolved as
-// STAGES_DIR's grandparent.
 const STAGES_DIR = join(AIDLC_SRC, "aidlc-common", "stages");
 
 /**
- * Discover every stage .md under aidlc-common/stages/<phase>/, the SAME walk
- * the .sh did (its nested globs: for phase_dir in STAGES_DIR/*; for stage_file
- * in phase_dir/*.md). Discovery, not a hard-coded list, so a newly-added stage
- * is automatically held to the contract (and counted by the plan-parity test).
- * Returns { phase, slug, path } sorted by phase then slug for stable reporting.
+ * Discover every stage .md under aidlc-common/stages/<phase>/. Discovery, not
+ * a hard-coded list, so a newly-added stage is automatically held to the
+ * contract (and counted by the plan-parity test). Returns { phase, slug,
+ * path } sorted by phase then slug for stable reporting.
  */
 function discoverStageFiles(): { phase: string; slug: string; path: string }[] {
   const out: { phase: string; slug: string; path: string }[] = [];
@@ -80,21 +77,17 @@ function discoverStageFiles(): { phase: string; slug: string; path: string }[] {
   return out;
 }
 
-const FENCE = "```"; // triple backtick — the code-fence delimiter the awk walker toggled on.
+const FENCE = "```";
 
 /**
- * Faithful TS port of t87.sh's heading_outside_fence() awk walker. Returns true
- * iff a line EXACTLY equal to the heading appears outside any triple-backtick
- * fenced code block. Toggling "fenced" on every line that starts with the fence
- * delimiter mirrors the awk rule that flips its flag on a fence line and skips
- * it; the whole-line equality mirrors awk's $0 == h.
+ * Returns true iff a line EXACTLY equal to the heading appears outside any
+ * triple-backtick fenced code block.
  */
 function headingOutsideFence(heading: string, fileBody: string): boolean {
   let fenced = false;
   for (const rawLine of fileBody.split("\n")) {
-    // awk reads lines without the trailing \n; a CRLF file would leave a \r.
-    // Strip it so the whole-line equality matches the heading the same way
-    // awk's record (sans record separator) would.
+    // A CRLF file would leave a \r after splitting on \n.
+    // Strip it so the whole-line equality matches the heading.
     const line = rawLine.replace(/\r$/, "");
     if (line.startsWith(FENCE)) {
       fenced = !fenced;
@@ -108,10 +101,8 @@ function headingOutsideFence(heading: string, fileBody: string): boolean {
 const STAGE_FILES = discoverStageFiles();
 
 describe("t87 stage-file compartment headers (migrated from t87-stage-compartment-headers.sh, plan 64)", () => {
-  // .sh L29-34: heading_outside_fence "## Sensors" on each stage file.
   test("every stage has a ## Sensors compartment heading (outside fenced code) [.sh test 1 ×32]", () => {
     for (const { phase, slug, path } of STAGE_FILES) {
-      // Sanity: the file the .sh walked must exist.
       expect(existsSync(path), `${phase}/${slug}.md missing`).toBe(true);
       const body = readFileSync(path, "utf-8");
       expect(
@@ -121,7 +112,6 @@ describe("t87 stage-file compartment headers (migrated from t87-stage-compartmen
     }
   });
 
-  // .sh L36-41: heading_outside_fence "## Learn" on each stage file.
   test("every stage has a ## Learn compartment heading (outside fenced code) [.sh test 2 ×32]", () => {
     for (const { phase, slug, path } of STAGE_FILES) {
       const body = readFileSync(path, "utf-8");
@@ -132,7 +122,7 @@ describe("t87 stage-file compartment headers (migrated from t87-stage-compartmen
     }
   });
 
-  // The fence guard is a behavioural guarantee the .sh's awk carried, even
+  // The fence guard is a behavioural guarantee, even
   // though no shipped stage currently hides a heading inside a fence. Pin it
   // directly so a future regression that buries "## Sensors" in a code fence
   // (and removes the real one) is caught: a heading that exists ONLY inside a
@@ -149,9 +139,9 @@ describe("t87 stage-file compartment headers (migrated from t87-stage-compartmen
     expect(headingOutsideFence("## Sensors", "## Sensors and friends\n")).toBe(false);
   });
 
-  // .sh L10: plan 64. Re-count to pin the plan and guard against a stage being
+  // Re-count to pin the plan and guard against a stage being
   // silently dropped from (or added to) the shipped tree without the suite
-  // noticing (2 compartments × 32 stages = 64 rows).
+  // noticing (2 compartments x 33 stages = 66 rows).
   test("covers EXACTLY 33 stages × 2 compartments = 66 assertions (TAP plan parity)", () => {
     const COMPARTMENTS_PER_STAGE = 2;
     expect(STAGE_FILES.length).toBe(33);

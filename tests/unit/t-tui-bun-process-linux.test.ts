@@ -315,7 +315,7 @@ describe.skipIf(process.platform !== "linux")("Linux native supervision fixtures
       expect(status).toMatchObject({ token: fixture.config.token, supervisorPid: fixture.proc.pid, cleanupComplete: false });
       expect(status.targetPid).toBeUndefined();
       expect(existsSync(join(fixture.dir, "target.stat"))).toBe(false);
-      fixture.proc.kill("SIGINT"); // Wrapper survives before any real target exists.
+      fixture.proc.kill("SIGINT");
       await pause(100);
       expect(fixture.proc.exitCode).toBeNull();
       expect(existsSync(join(fixture.dir, "target.stat"))).toBe(false);

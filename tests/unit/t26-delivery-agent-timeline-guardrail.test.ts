@@ -52,7 +52,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 
-// AIDLC_SRC === <repo>/dist/claude/.claude — the same tree the .sh resolved.
 // Each entry: [human-readable basename for the test name, path relative to AIDLC_SRC].
 const FILES: ReadonlyArray<readonly [string, string]> = [
   ["delivery-planning.md", "aidlc-common/stages/inception/delivery-planning.md"],
@@ -63,8 +62,6 @@ const FILES: ReadonlyArray<readonly [string, string]> = [
   ],
 ] as const;
 
-// The FORBIDDEN alternation, split into the six distinct terms the .sh's regex
-// (L11) encoded. Asserting each independently is STRONGER than one OR-grep.
 const FORBIDDEN_TERMS = [
   "velocity",
   "burndown",
@@ -78,8 +75,8 @@ const srcPath = (rel: string): string => join(AIDLC_SRC, rel);
 
 /**
  * Return the 1-based line numbers (and text) where a case-insensitive `term`
- * appears in `body`. Mirrors the .sh's `grep -Ein` diagnostic so a regression
- * reports WHERE the forbidden framing crept in.
+ * appears in `body`, so a regression reports WHERE the forbidden framing
+ * crept in.
  */
 function hits(body: string, term: string): string[] {
   const needle = term.toLowerCase();
@@ -88,18 +85,13 @@ function hits(body: string, term: string): string[] {
     .map((line, i) => ({ line, n: i + 1 }))
     .filter(({ line }) => line.toLowerCase().includes(needle))
     .map(({ line, n }) => `${n}:${line.trim()}`)
-    .slice(0, 3); // head -3, same as the .sh
+    .slice(0, 3);
 }
 
 describe("t26 delivery-surface human-timeline guardrail (migrated from t26-delivery-agent-timeline-guardrail.sh, plan 3)", () => {
   for (const [name, rel] of FILES) {
-    // .sh L21-29: one OR-grep per file => one `ok`. Strengthened to one
-    // independent assertion per forbidden term against the real bytes.
     test(`${name} has no human-timeline framing [.sh row for ${name}]`, () => {
       const file = srcPath(rel);
-      // Sanity: the file the .sh grepped must exist (the .sh's grep would have
-      // emitted not_ok with "matches:" empty on a missing file under -q 2>/dev/null;
-      // we make the precondition explicit).
       expect(existsSync(file), `${rel}: shipped file missing`).toBe(true);
       const body = readFileSync(file, "utf-8");
       for (const term of FORBIDDEN_TERMS) {
@@ -112,11 +104,11 @@ describe("t26 delivery-surface human-timeline guardrail (migrated from t26-deliv
     });
   }
 
-  // .sh L19: plan ${#FILES[@]} == 3. Re-count to pin the plan and guard against
-  // a delivery-surface file being silently dropped from the guardrail roster.
+  // Re-count to pin the plan and guard against a delivery-surface file being
+  // silently dropped from the guardrail roster.
   test("covers EXACTLY 3 delivery-surface files (TAP plan parity)", () => {
     expect(FILES.length).toBe(3);
-    // Every term in the .sh's FORBIDDEN alternation is represented (no term
+    // Every term in the FORBIDDEN alternation is represented (no term
     // silently dropped from the guardrail).
     expect(FORBIDDEN_TERMS.length).toBe(6);
     expect(FORBIDDEN_TERMS).toEqual([

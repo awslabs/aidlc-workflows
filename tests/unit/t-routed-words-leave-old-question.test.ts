@@ -127,7 +127,6 @@ function next(proj: string, args: string[] = []): Emitted {
   return result.directive as unknown as Emitted;
 }
 
-// A command the engine named, run as given: its `next` arguments.
 function nextNamed(proj: string, command: string | undefined): Emitted {
   expect(command).toMatch(/ next( [\w-]+)+$/);
   return next(proj, (command as string).replace(/^.* next /, "").split(" "));
@@ -166,7 +165,6 @@ function say(proj: string, prompt: string, harness: Harness = "claude", session 
     unset);
 }
 
-// Every plan question answer on record: the event and its choice.
 function planAnswers(proj: string): string[] {
   return readAuditShardEvents(proj)
     .filter((row) => ["PLAN_APPROVAL_RECORDED", "QUESTION_ANSWERED"].includes(row.event) &&
@@ -174,8 +172,6 @@ function planAnswers(proj: string): string[] {
     .map((row) => `${row.event}: ${auditBlockField(row.block, "Details")}`);
 }
 
-// The plan question, then the person's change typed with /aidlc, and the
-// routing question the print sends it to.
 function routingQuestionOverThePlan(proj: string, planQuestionOpen = true): Emitted {
   if (planQuestionOpen) expect(next(proj).ask_type).toBe("plan-approval");
   say(proj, `/aidlc ${CHANGE}`);
@@ -271,7 +267,6 @@ function engine(proj: string, args: string[], session = SESSION): { code: number
   return { code: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
-// The check command the person approves, quoted for the shell that runs it here.
 function verificationCommand(proj: string): string {
   const script = join(seededRecordDir(proj), "check.cjs");
   writeFileSync(script, "const fs=require('node:fs'); for(const unit of ['alpha','beta']) " +
@@ -322,8 +317,6 @@ function askCheckpoint(proj: string): void {
   expect(ask.code, ask.out).toBe(0);
 }
 
-// The person's change typed with /aidlc in `session`, and the routing question
-// the print sends it to.
 function routingQuestionOverTheStep(proj: string, session = SESSION): Emitted {
   const words = "also handle an empty list";
   say(proj, `/aidlc ${words}`, "claude", session);
@@ -375,7 +368,6 @@ function report(proj: string, result: string, extra: string[] = []): { code: num
 }
 
 
-// The routing question's answer for separate new work, run as it is named.
 function sendToNewWork(proj: string, routing: Emitted): void {
   const printed = nextNamed(proj, routing.new_intent_command);
   expect(printed.kind, JSON.stringify(printed)).toBe("print");
@@ -401,7 +393,6 @@ describe("words sent to separate new work leave the question the work in progres
       const routing = routingQuestionOverThePlan(proj);
       say(proj, "2");
       sendToNewWork(proj, routing);
-      // Back at the work in progress, its plan question is asked again.
       expect(next(proj).ask_type).toBe("plan-approval");
       const refused = spawnSync(BUN, [
         LOG, "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
@@ -457,7 +448,6 @@ describe("words sent to separate new work leave the question the work in progres
   test("a setting typed while the code plan question is open is not kept as its reply", () => {
     const proj = project("off");
     expect(next(proj).ask_type).toBe("plan-approval");
-    // The replies the code plan question keeps, as the hook kept them.
     const kept = (): string[] =>
       readPlanApprovalAsk(proj, activeIntentUuid(proj) ?? "bare-space")?.replies?.map((reply) => reply.text) ?? [];
     const setting = "turn the specialist reviewers off for the rest of this work";

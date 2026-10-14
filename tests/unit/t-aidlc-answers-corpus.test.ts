@@ -204,7 +204,6 @@ describe("the answers corpus: a tool records only an exact pick as shown, keeps 
         expect(exec.status, where).toBe(0);
         if (event !== "") {
           expect(row, `${event}: no row: ${exec.stdout}`).toBeDefined();
-          // The rows that carry the person's words beside the choice must carry them whenever words were typed.
           const carriesWords = ["GATE_APPROVED", "GATE_REJECTED", "QUESTION_ANSWERED"].includes(event);
           if (text !== "" && item.via !== "picker" && (carriesWords || (row!["Person Reply"] !== null && row!["Person Reply"] !== undefined))) {
             expect(row!["Person Reply"], `${event}: Person Reply missing: ${JSON.stringify(row)}`).not.toBeNull();

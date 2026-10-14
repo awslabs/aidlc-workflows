@@ -1,14 +1,16 @@
 // covers: function:fmtTokens, function:costSegment
 //
 // t269 - statusline cost segment (aidlc-statusline.ts). The statusline renders
-// the cost segment ONLY when the ledger exists and carries data (no env gate,
-// but no ledger => no segment), and must NEVER error out of a cost read. Two
-// pure units, imported in-process from the shipped dist hook (main() is guarded
-// by import.meta.main, so importing the module does not block on Bun.stdin):
+// the cost segment ONLY when usage tracking is on and the ledger exists and
+// carries session data (no ledger => no segment), and must NEVER error out of a
+// cost read. Two pure units, imported in-process from the shipped dist hook
+// (main() is guarded by import.meta.main, so importing the module does not block
+// on Bun.stdin):
 //   (1) fmtTokens - compact k/M formatting + boundaries.
 //   (2) costSegment - renders `up<in> down<out> $<usd>` from the rolled-up
-//       ledger (loadLedger, FAST - never re-parses the transcript), tokens-only
-//       when the cost is unknown, and "" on a missing ledger / any failure.
+//       ledger (sessionUsageAggregate over loadLedger, FAST - never re-parses
+//       the transcript), tokens-only when the cost is unknown, and "" on a
+//       missing ledger / any failure.
 //
 // Fixtures write a real usage-ledger.json under <tmp>/aidlc/.aidlc-sessions/ via
 // the shipped updateLedger, so the ledger path resolution is exercised for real.
@@ -86,10 +88,10 @@ describe("fmtTokens", () => {
     expect(fmtTokens(NaN)).toBe("0");
     expect(fmtTokens(1)).toBe("1");
     expect(fmtTokens(999)).toBe("999");
-    expect(fmtTokens(1000)).toBe("1k"); // trailing .0 trimmed
+    expect(fmtTokens(1000)).toBe("1k");
     expect(fmtTokens(1234)).toBe("1.2k");
     expect(fmtTokens(12345)).toBe("12.3k");
-    expect(fmtTokens(999999)).toBe("1000k"); // just under 1M
+    expect(fmtTokens(999999)).toBe("1000k");
     expect(fmtTokens(1_000_000)).toBe("1M");
     expect(fmtTokens(3_400_000)).toBe("3.4M");
   });

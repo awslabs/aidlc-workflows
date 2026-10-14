@@ -134,8 +134,6 @@ function buildStage(p: string, slug: string, unit: string, verdicts: Array<strin
   }, p);
 }
 
-// alpha's stages, each reviewed once and READY; Code Generation reviewed with
-// the verdicts given, then `afterReview`.
 function build(p: string, codeVerdicts: Array<string | undefined>, afterReview?: () => void) {
   for (const slug of STAGES) {
     if (slug === "code-generation") buildStage(p, slug, "alpha", codeVerdicts, afterReview);

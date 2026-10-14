@@ -29,8 +29,7 @@
 //     the exact `brief` command for the current step, which passes the guard,
 //     runs as printed, and whose output is a handoff the guard lets through;
 //   - no plan yet with Guard Policy off: the refusal names the plan files and
-//     the command, as it does with the fence on (it used to say only
-//     "code-generation-plan.md is missing or empty");
+//     the command, as it does with the fence on;
 //   - a native release names `aidlc engine orchestrate next`.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -180,7 +179,6 @@ function next(proj: string): Emitted {
   return result.directive as unknown as Emitted;
 }
 
-// The person's reply, through the real human-turn hook.
 function say(proj: string, prompt: string): string {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj,
@@ -193,7 +191,6 @@ function say(proj: string, prompt: string): string {
   return result.stdout ?? "";
 }
 
-// What the agent runs after reading the person's reply: the choice they made.
 function answer(proj: string, details: string): string {
   const recorded = spawnSync(BUN, [
     LOG, "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", details,
@@ -263,14 +260,12 @@ function said(refusal: { code: number; stderr: string }): string {
   return text.startsWith("{") ? (JSON.parse(text) as { error: string }).error : text;
 }
 
-// The command a refusal tells the agent to run.
 function namedCommand(words: string): string {
   const command = /[Rr]un `([^`]+)` exactly as written, as a command of its own/.exec(words)?.[1];
   expect(command, words).toBeDefined();
   return command as string;
 }
 
-// The `brief` a refusal tells the agent to hand over.
 function namedBrief(words: string): string {
   const command = /output of `([^`]+ brief [^`]+)` first/.exec(words)?.[1];
   expect(command, words).toBeDefined();
@@ -322,7 +317,6 @@ describe("a stale build step after approval: the refusal names the way back", ()
     approveBuildAndCompact(proj, null);
 
     const write = said(writeSource(proj));
-    // The reason comes first: what put the step out of date, and when.
     const why = /directive kind "error": the Code Generation step went out of date at \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC when the chat was compacted\. /;
     expect(write).toMatch(why);
     expect(write).toContain(`The plan for the zero-Unit stage-level implementation ${ALREADY_APPROVED}`);
@@ -341,7 +335,6 @@ describe("a stale build step after approval: the refusal names the way back", ()
     const prefixed = said(shell(proj, `cd ..; ${SOURCE_NEXT}`));
     expect(namedCommand(prefixed)).toBe(SOURCE_NEXT);
 
-    // The command as printed gets through and hands over the approved build.
     const command = namedCommand(write);
     const admitted = shell(proj, command);
     expect(admitted.code, admitted.stderr).toBe(0);
@@ -446,7 +439,6 @@ describe("the person answered the plan question another way, and the agent write
     writePlan(proj);
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     say(proj, "rename slugify to toSlug");
-    // The agent reads the change request and records it.
     expect(answer(proj, "Request Changes")).toContain('Recorded \\"Request Changes\\"');
     const write = said(writeSource(proj));
     expect(write).toContain("The person has answered the plan question.");
@@ -534,8 +526,6 @@ describe("a handoff that names two targets", () => {
     expect(refused).toContain("the developer handoff names several targets (backend-lookup, stage:code-generation)");
     expect(refused).not.toContain("not approved");
     if (policy === "off") expect(refused).toContain("The plan-approval setting is unchanged.");
-    // The brief it names passes the guard, runs as printed, and its output is a
-    // handoff the guard lets through.
     const brief = namedBrief(refused);
     expect(brief).toBe(SOURCE_BRIEF);
     const admitted = shell(proj, brief);
@@ -614,7 +604,6 @@ describe("a lowered fence never refuses because its audit row could not be writt
     }
     expect(readFileSync(join(hooksHealthDir(proj), "plan-approval-guard.drops"), "utf-8"))
       .toContain("GUARD_STOOD_ASIDE row not recorded");
-    // The brief for the edited plan goes through the same way.
     const brief = spawnSync(BUN, [".claude/tools/aidlc-testing-posture.ts", "brief", "--stage-level"], {
       cwd: proj,
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },

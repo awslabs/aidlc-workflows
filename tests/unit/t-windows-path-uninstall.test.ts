@@ -985,7 +985,6 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
       writeFileSync(join(root, "windows-path.json"), JSON.stringify(receipt));
       const pending = schedule();
       nativeCleanup(pending, { current: receipt.registeredValue, failBeforeWrite: true, attempts: 1 });
-      // A planned file is now a directory, and a planned directory is now a file.
       rmSync(activeExecutablePath());
       mkdirSync(activeExecutablePath());
       const reservations = join(root, "reservations");

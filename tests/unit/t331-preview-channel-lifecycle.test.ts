@@ -4,9 +4,9 @@
 // newest published preview through the releases-list API and installing it
 // through the explicit-version path; `update --check` reports "behind" against
 // the channel's newest release with the documented exit codes; API failure is
-// "unavailable", never a crash and never a fall back to stable; switching back
-// to stable converges on the newest stable even though it sorts lower; and
-// previews prune harder than stable releases.
+// "unavailable", never a crash and never a fall back to stable; explicitly
+// switching back with `update --channel stable` converges on the newest stable
+// even though it sorts lower; and previews prune harder than stable releases.
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
 } from "../harness/test-budget.ts";
@@ -278,7 +278,6 @@ describe("t331 preview release channel", () => {
     expect(readFileSync(join(machine, "update-check.json"), "utf-8")).toBe(before);
     expect(failing.requests.some((path) => path.includes("/latest/download/"))).toBe(false);
 
-    // A channel with no published preview is unavailable too.
     const empty = serve(release, [{ tag_name: `v${NEXT_STABLE}`, prerelease: false }]);
     rmSync(join(machine, "update-check.json"));
     const none = await run(DISPATCHER, [
@@ -339,7 +338,6 @@ describe("t331 preview release channel", () => {
     // older than the one running: it changes nothing and names both ways on.
     const followStable = await run(DISPATCHER, ["config", "--channel", STABLE_CHANNEL], project, env);
     expect(followStable.status).toBe(0);
-    // From a newer preview, config names the step that goes back now.
     expect(followStable.stdout).toContain(
       `release channel set to ${STABLE_CHANNEL}; aidlc update moves to a ${STABLE_CHANNEL} release once one is newer ` +
         `than ${PREVIEW_2}; to go to the newest ${STABLE_CHANNEL} release now, run aidlc update --channel ${STABLE_CHANNEL}`,
@@ -514,7 +512,7 @@ describe("t331 preview release channel", () => {
     // any release). PREVIEW_2 has no protection of its own but is one of the
     // two newest previews, so the window keeps it. PREVIEW_0 is an older
     // preview outside the window and the stable release lost its rollback
-    // protection to PREVIEW_1: both are pruned, the stable one exactly as before.
+    // protection to PREVIEW_1: both are pruned.
     expect(readFileSync(join(machine, "rollback-version"), "utf-8").trim()).toBe(PREVIEW_1);
     expect(data.pruned.sort()).toEqual([AIDLC_VERSION, PREVIEW_0].sort());
     expect(retained(machine)).toEqual([PREVIEW_1, PREVIEW_2, PREVIEW_3].sort());

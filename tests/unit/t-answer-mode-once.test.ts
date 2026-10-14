@@ -177,7 +177,6 @@ describe("answer mode across a piece of work", () => {
       reused_from: first,
       notice: "Answering the way you chose earlier: I'll edit the file. Say if you'd rather be guided through them here or chat.",
     });
-    // The person sees no stage name, flag or command in the line.
     expect(reused.notice).not.toContain(first);
     expect(reused.notice).not.toContain("/aidlc");
     // Reuse records the mode on the stage row, never as a question: nothing is
@@ -185,13 +184,11 @@ describe("answer mode across a piece of work", () => {
     expect(modeQuestionCount(proj)).toBe(1);
     expect(hasPendingDecision(proj, second, "STAGE_STARTED")).toBe(false);
 
-    // A later stage's own content question still opens and closes as before.
     const content = run(LOG, ["decision", "--stage", second, "--decision", "Q1-Q3", "--options", "A,B,C"], proj);
     expect(content.status, content.stderr).toBe(0);
     expect(hasPendingDecision(proj, second, "STAGE_STARTED")).toBe(true);
     expect(run(LOG, ["answer", "--stage", second, "--details", "A, C, B"], proj).status).toBe(0);
     expect(hasPendingDecision(proj, second, "STAGE_STARTED")).toBe(false);
-    // ...and a content answer never re-reads as a mode choice.
     expect(runStageAnswerMode(proj)).toMatchObject({ mode: "file", reused_from: first });
   });
 
@@ -266,8 +263,6 @@ describe("answer mode across a piece of work", () => {
     expect(runStageAnswerMode(proj)).toMatchObject({ ask: false, mode: "guide", reused_from: first });
   });
 
-  // A stage's own question that happens to start the way the mode question
-  // does is that stage's question: its answer is recorded as given.
   test("a content question that starts with the mode question's words is answered like any other", () => {
     const { proj, state } = project();
     const first = currentStage(state);

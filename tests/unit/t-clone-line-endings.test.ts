@@ -110,7 +110,6 @@ describe("#2057 line endings Git rewrites are not the person's change", () => {
     expect(sha256Matching(crlf, [sha256Bytes(lf)])).toBe(sha256Bytes(lf));
     expect(sha256Matching(Buffer.from(lf), [undefined, sha256Bytes(crlf)])).toBe(sha256Bytes(crlf));
     expect(sha256Matching(lf, [sha256Bytes(lf)])).toBe(sha256Bytes(lf));
-    // Any other byte is a real change: the value keeps its own hash.
     expect(sha256Matching("one\r\ntwo!\r\n", [sha256Bytes(lf)])).toBe(sha256Bytes("one\r\ntwo!\r\n"));
     expect(sha256Matching(crlf, [])).toBe(sha256Bytes(crlf));
   });

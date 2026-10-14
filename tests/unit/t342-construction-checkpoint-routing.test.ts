@@ -666,7 +666,6 @@ describe("t342 Construction checkpoint routing", () => {
     writeFileSync(join(p, "src", "beta.ts"), "export const beta = 2;\n");
     expect(presenceFloorHolds(p, state(), approveCommand)).toBe(true);
     writeFileSync(join(p, "src", "beta.ts"), "export const beta = 1;\n");
-    // The engine agrees: it records the gate without the person.
     expect(presenceFloorHolds(p, state(), approveCommand)).toBe(false);
     // A stage graph the floor cannot read leaves the gate to the person.
     const graph = process.env.AIDLC_STAGE_GRAPH;
@@ -738,7 +737,6 @@ describe("t342 Construction checkpoint routing", () => {
     expect(checkpointStatus(p, "alpha").approved).toBe(true);
     expect(checkpointStatus(p, "beta").approved).toBe(true);
 
-    // The workflow continues at the next stage gate, which is bookkeeping.
     const resumed = routed(p);
     expect(resumed.stage, JSON.stringify(resumed)).toBe("nfr-requirements");
     expect(resumed.construction_checkpoint).toBeUndefined();
@@ -1618,7 +1616,6 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(said).toContain("reopen --target nfr-design --stages nfr-design,infrastructure-design,code-generation --units beta ");
     expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "beta" });
     expect(approved(p, "alpha")).toBe(true);
-    // The line the person is given names that unit.
     expect(message).toContain("--stage nfr-requirements --unit beta` reopens it");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1738,7 +1735,6 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     // redone, the walk takes beta through Infrastructure Design again.
     expect(unitCompletedReceipts(p, "infrastructure-design").has("beta")).toBe(false);
     expect(unitCompletedReceipts(p, "infrastructure-design").has("alpha")).toBe(true);
-    // The status shows the step beta is on once it starts it.
     expect(tool(p, "state", ["unit", "start", "--stage", "nfr-design", "--unit", "beta"]).status).toBe(0);
     expect(tool(p, "utility", ["status"]).stdout).toContain("Current Step:   nfr-design for unit beta");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -1988,7 +1984,6 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(said.message).toContain("If they say yes, run `next --stage nfr-design --every-unit`");
     expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
     expect(jumped(p)).toBe(0);
-    // Saying "for every unit" then does it.
     const every = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--every-unit"]).stdout);
     expect(every.kind, JSON.stringify(every)).toBe("print");
     expect(every.message).toContain('"Reopened NFR Design and the steps after it for every unit."');
@@ -2445,7 +2440,6 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       expect(message).toContain(`Run \`next --stage ${stage}\``);
       expect(message).not.toContain("code-generation");
     }
-    // The step beta is on is beta's own redo.
     expect(redoNamed(p, "code-generation")).toContain('Redo accepted at "code-generation" for unit "beta"');
     const said = reopenFor(p, ["--stage", "functional-design"]);
     expect(said).toContain(
@@ -2592,8 +2586,6 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
 
     const handedBack = next(p);
     expect(handedBack, JSON.stringify(handedBack).slice(0, 800)).toMatchObject({ stage: design.slug, unit: "alpha" });
-    // The conductor's run of the step: start it, make the document, review it
-    // at the next pass, complete it.
     const started = tool(p, "state", ["unit", "start", "--stage", design.slug, "--unit", "alpha"]);
     expect(started.status, started.out).toBe(0);
     cover(p, "alpha", [design.slug], false);
@@ -3015,7 +3007,6 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
         stage: "nfr-requirements", iteration: index + 2,
       });
       if (index === 0) {
-        // Verifying first names what changed as the stage's own reviewed work.
         recordCommand(p);
         const early = tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "verify"]);
         expect(early.status, early.out).not.toBe(0);

@@ -309,7 +309,6 @@ describe("Claude Code: the memory the host loaded at the chat's last load", () =
     const sid = randomUUID();
     const env = { AIDLC_SESSION_OVERRIDE: sid, CLAUDE_CODE_SESSION_ID: sid, CLAUDECODE: "1" };
     await sessionStart(proj, "claude", sid, "startup");
-    // The chat's first step hands it the text once.
     expect(sentInFull(await next(proj, "claude", env))).toBe(true);
     const first = await next(proj, "claude", env);
     expect(pointerOnly(first), JSON.stringify(first.final).slice(0, 400)).toBe(true);
@@ -341,7 +340,6 @@ describe("Claude Code: the memory the host loaded at the chat's last load", () =
     await sessionStart(proj, "claude", sid, "startup");
     expect(sentInFull(await next(proj, "claude", env))).toBe(true);
     expect(pointerOnly(await next(proj, "claude", env))).toBe(true);
-    // A resume with the files unchanged keeps the pointer.
     await sessionStart(proj, "claude", sid, "resume");
     expect(pointerOnly(await next(proj, "claude", env))).toBe(true);
 
@@ -356,13 +354,11 @@ describe("Claude Code: the memory the host loaded at the chat's last load", () =
       AIDLC_SESSION_OVERRIDE: forked, CLAUDE_CODE_SESSION_ID: forked, CLAUDECODE: "1",
     }))).toBe(true);
 
-    // The command runs in another chat than the one recorded.
     const other = randomUUID();
     await sessionStart(proj, "claude", other, "startup");
     expect(sentInFull(await next(proj, "claude", {
       AIDLC_SESSION_OVERRIDE: other, CLAUDE_CODE_SESSION_ID: randomUUID(), CLAUDECODE: "1",
     }))).toBe(true);
-    // No session start recorded for this chat at all.
     const unseen = randomUUID();
     expect(sentInFull(await next(proj, "claude", {
       AIDLC_SESSION_OVERRIDE: unseen, CLAUDE_CODE_SESSION_ID: unseen, CLAUDECODE: "1",
@@ -529,7 +525,6 @@ describe("Codex: this thread was given the bundle and nothing since could have d
       // The model asked for a small output budget: Codex kept each rule's ends.
       const cut = await next(proj, "codex", env, { ...rollout, cut: true });
       expect(sentInFull(cut)).toBe(true);
-      // The thread holds only part of the text: all of it again, and again.
       const again = await next(proj, "codex", env, { ...rollout, cut: true });
       expect(sentInFull(again)).toBe(true);
       // The chat's first step also carried the conductor persona, so the rules
@@ -538,7 +533,6 @@ describe("Codex: this thread was given the bundle and nothing since could have d
       // the team's memory grows.
       expect(again.results.length > 1, `parts when grown=${grown}`).toBe(grown);
       expect(sentInFull(await next(proj, "codex", env, rollout))).toBe(true);
-      // A whole copy is in the rollout now.
       expect(pointerOnly(await next(proj, "codex", env, rollout))).toBe(true);
     }
   });
@@ -656,7 +650,6 @@ describe("Kiro IDE: the chat holds the steering file it captured when it started
       expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(sid))), command).toBe(true);
       expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(sid))), command).toBe(true);
     }
-    // A bare step noted and caught up leaves the record alone.
     await card("execute_bash", "aidlc engine orchestrate next");
     await card("execute_bash", "aidlc engine orchestrate next 2>&1");
     expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
@@ -687,7 +680,6 @@ describe("Kiro IDE: the chat holds the steering file it captured when it started
     // A's turn ends: C alone runs, and C holds the file.
     await kiroIdeStop(proj, a);
     expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(c)))).toBe(true);
-    // A command from a chat with no open turn: the text.
     await kiroIdeStop(proj, c);
     expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(c)))).toBe(true);
   });
@@ -848,8 +840,7 @@ describe("the conductor persona reaches every chat that works on the workflow", 
     const sid = randomUUID();
     const env = { AIDLC_SESSION_OVERRIDE: sid, CLAUDE_CODE_SESSION_ID: sid, CLAUDECODE: "1" };
     await sessionStart(proj, "claude", sid, "startup");
-    // Mid-workflow (the fixture has finished stages behind it), so the old rule
-    // sent nothing here.
+    // Mid-workflow (the fixture has finished stages behind it).
     expect(personaSent(await next(proj, "claude", env))).toBe(true);
     expect(personaSent(await next(proj, "claude", env))).toBe(false);
 
@@ -859,7 +850,6 @@ describe("the conductor persona reaches every chat that works on the workflow", 
     expect(personaSent(await next(proj, "claude", env))).toBe(true);
     expect(personaSent(await next(proj, "claude", env))).toBe(false);
 
-    // Another chat on the same piece of work gets its own copy, once.
     const second = randomUUID();
     const secondEnv = { AIDLC_SESSION_OVERRIDE: second, CLAUDE_CODE_SESSION_ID: second, CLAUDECODE: "1" };
     await sessionStart(proj, "claude", second, "startup");
@@ -873,7 +863,6 @@ describe("the conductor persona reaches every chat that works on the workflow", 
     expect(personaSent(await next(proj, "claude", env))).toBe(true);
     expect(personaSent(await next(proj, "claude", env))).toBe(false);
 
-    // An updated install's persona reaches a chat that already had the old one.
     editPersona(proj, "claude", "- Say the step, never the machinery.");
     const updated = await next(proj, "claude", env);
     expect(personaSent(updated)).toBe(true);

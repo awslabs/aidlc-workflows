@@ -150,7 +150,7 @@ interface Case {
   argv: string[];
   /** The person's words this line carries, in order, or null when it carries none. */
   tail: string[] | null;
-  /** The flag-shaped token before their first word, when the shape has one. */
+  /** The flag-shaped token `next` does not take, when the shape has one. */
   untaken?: string;
   /** For a known flag: what the parse must read. */
   reads?: { field: string; value: string };
@@ -297,7 +297,6 @@ const cases: Case[] = (() => {
   return Array.from({ length: CASES }, () => buildCase(next));
 })();
 
-/** Every failure says how to reproduce itself. */
 function where(testCase: Case): string {
   return `seed=${SEED} shape=${testCase.shape} argv=${JSON.stringify(testCase.argv)}`;
 }
@@ -319,7 +318,6 @@ describe("the flag parser over a seeded sweep of lines", () => {
       }
       expect(parsed, note).toBeDefined();
 
-      // A flag the engine takes, with a value it accepts, is always that flag.
       if (testCase.reads) {
         expect((parsed as Record<string, unknown>)[testCase.reads.field], note).toBe(testCase.reads.value);
         expect(parsed.untakenFlag, note).toBeUndefined();
@@ -385,8 +383,6 @@ describe("the flag parser over a seeded sweep of lines", () => {
         }
       }
 
-      // The person's words reach the request whole and in order, for every
-      // shape whose words the engine keeps.
       if (
         testCase.tail !== null &&
         testCase.untaken === undefined &&
@@ -415,7 +411,6 @@ describe("the flag parser over a seeded sweep of lines", () => {
         expect(parsed.intent, note).toBe((testCase.tail ?? []).join(" "));
       }
 
-      // A blank line asks for nothing and describes nothing.
       if (testCase.shape === "blank") {
         expect(parsed.untakenFlag, note).toBeUndefined();
         expect(parsed.parseError, note).toBeUndefined();
@@ -504,8 +499,6 @@ describe("the flag parser over a seeded sweep of lines", () => {
           // either way, because it is the same line.
           expect(quoted, `quoted ${note}`).toEqual(reading);
         } else if (SCOPES.has(testCase.argv[0])) {
-          // Split, a plan's name and one word is the plan in its own argument;
-          // quoted whole, the same line is the reading step: no count of words.
           expect(quoted.kind, `quoted ${note}`).toBe("plan-word");
         } else {
           // Otherwise the engine cannot see a flag or a noun inside one
@@ -528,7 +521,7 @@ describe("the flag parser over a seeded sweep of lines", () => {
 });
 
 describe("the engine routes a seeded slice of those lines", () => {
-  /** Shapes whose routing this change owns; the rest are parser-only here. */
+  /** Shapes whose routing is tested here; the rest are parser-only here. */
   const routable = cases.filter((testCase) =>
     ["words-only", "untaken-answer", "untaken-misspelt", "untaken-unknown", "untaken-equals", "after-delimiter", "ceremony-flag", "fence-flag"]
       .includes(testCase.shape));
@@ -579,7 +572,6 @@ describe("the engine routes a seeded slice of those lines", () => {
       // `--` is their text, so only the questions this call adds are its own.
       const questionsBefore = questionIds(proj);
       const result = runOrchestrateNext(ORCHESTRATE, proj, testCase.argv, { env: env(proj) });
-      // A line nobody wrote on purpose still returns one directive, never a stack.
       expect(result.out, note).not.toContain("error: Unhandled");
       expect(result.directive, `${note} out=${result.out.slice(0, 400)}`).not.toBeNull();
       const directive = result.directive as Record<string, unknown>;
@@ -591,7 +583,6 @@ describe("the engine routes a seeded slice of those lines", () => {
         expect(directive.ask_type, note).toBeUndefined();
         expect(String(directive.message), note).toContain(testCase.untaken);
         expect(result.out, note).not.toContain("I could not read");
-        // No question copy of this call's making says the person asked for it.
         expect(newQuestionTexts(proj, questionsBefore), note).not.toContain(testCase.untaken);
       }
       // `next` reads; it records nothing, whatever the line.
@@ -644,7 +635,6 @@ describe("a host's human-turn hook keeps the same reading of the line", () => {
         ? (parsed.personWords ?? parsed.intent)?.trim() || null
         : testCase.argv.join(" ");
       expect(records[0].words, `${note} record=${JSON.stringify(records[0])}`).toBe(expected);
-      // Either way the whole line is on record, as the host delivered it.
       expect(records[0].text, note).toBe(prompt);
       // The hook applies nothing and says nothing about a setting: no note for
       // the agent, no row, no record kept for the next work, no `applied` field.
@@ -725,13 +715,11 @@ describe("a flags-only lowering line before any work is kept by the setter the a
       expect(step.directive?.kind, `${note} out=${step.out.slice(0, 300)}`).toBe("print");
       expect(step.out, note).not.toContain("No workflow state found");
       expect(String((step.directive as { message?: unknown }).message), note).toContain("config set");
-      // The setter keeps exactly the record's settings, said once, and creates nothing.
       const kept = configSet(proj, record.settings.map((setting) => `${setting.key} ${setting.value}`));
       expect(kept.status, `${note} ${kept.out}`).toBe(0);
       expect(kept.out, note).toContain("for the piece of work you start now (set by you)");
       expect(existsSync(planApprovalRuntimeFile(proj, KEPT_RECORDS[3])), note).toBe(true);
       expect(readAuditShardEvents(proj), note).toEqual([]);
-      // The word back withdraws it: the dedicated record for that key goes.
       const back = modifiers.map((modifier) => {
         const [key, value] = modifier.split(" ");
         return `${key} ${key === "guard-policy" ? "strict" : value === "off" ? "on" : value}`;
@@ -948,13 +936,11 @@ afterAll(() => {
 });
 
 // Words that only ask for the work to go on are words like any other: no list in
-// the engine knows them (the five it listed, "carry on", "continue", "keep
-// going", "go on" and "resume", left with WO5), so however the person says it,
-// with "please" before or after, in any case, with a closing mark, split into
-// tokens or quoted whole, the line reads as their words, the seams stand back,
-// and over work in progress it gets the one reading print, which names the bare
-// `next` the agent then runs. Its own seeded stream, so the sweep above keeps
-// its exact lines.
+// the engine knows them, so however the person says it, with "please" before or
+// after, in any case, with a closing mark, split into tokens or quoted whole,
+// the line reads as their words, the seams stand back, and over work in progress
+// it gets the one reading print, which names the bare `next` the agent then
+// runs. Its own seeded stream, so the sweep above keeps its exact lines.
 describe("ways of saying go on over a seeded sweep", () => {
   const GO_ON_PHRASES = [
     "carry on", "continue", "keep going", "go on", "resume", "proceed", "ok go", "go ahead", "let's continue",
@@ -991,7 +977,6 @@ describe("ways of saying go on over a seeded sweep", () => {
       const parsed = parseNextFlags(c.argv);
       expect(parsed.parseError, note).toBeUndefined();
       expect(parsed.untakenFlag, note).toBeUndefined();
-      // Their words, whole and in order, with nothing read off them.
       expect((parsed.intent ?? "").replace(/\s+/g, " ").trim(), note).toBe(c.line);
       expect(nextArgsAreOnlyWords(c.argv), note).toBe(true);
       expect(readNextLine(c.argv).kind, note).toBe("words");
@@ -1074,7 +1059,6 @@ describe("ways of saying go on over a seeded sweep", () => {
       expect(directive.kind, `${note} directive=${JSON.stringify(directive).slice(0, 300)}`).toBe("print");
       expect(String(directive.message), note).toMatch(/next` with nothing after it/);
       expect(String(directive.message), note).toContain("intent switch <name>");
-      // Words that name one piece and ask for it to go on get the one-step pick.
       expect(String(directive.message), note).toContain("next --pick <name>");
       // Never offered as new work: the words stay out of the print and in the kept question.
       expect(JSON.stringify(directive), note).not.toContain(c.line);
@@ -1129,13 +1113,11 @@ describe("the proposal step over a seeded slice of fresh-workspace lines", () =>
       expect(message, note).not.toContain("This looks like");
       const id = /--request ([0-9a-f]{8})/.exec(message)?.[1];
       expect(id, note).toBeDefined();
-      // The agent's plan, whichever it reads: one question for the person.
       const plan = plans[Math.floor(pick() * plans.length)];
       const ask = runOrchestrateNext(ORCHESTRATE, proj, ["--propose", plan, "--request", id!], { env }).directive as Record<string, unknown>;
       expect(ask?.kind, `${note} plan=${plan} ask=${JSON.stringify(ask).slice(0, 300)}`).toBe("ask");
       expect(ask.ask_type, note).toBe(plan === "compose" ? "compose-offer" : "scope-confirm");
       expect(String(ask.question), note).not.toContain(PROPOSAL);
-      // The step re-run with its request is the same step, not a second copy.
       const again = runOrchestrateNext(ORCHESTRATE, proj, ["--request", id!], { env }).directive as Record<string, unknown>;
       expect(again, note).toEqual(first);
       // `next` reads; it records nothing.

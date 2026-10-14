@@ -206,7 +206,6 @@ function auditRows(project: string): string {
 
 const LOWER_FENCE_SWITCH = "config set guard.plan-approval off";
 
-// GUARD_STOOD_ASIDE rows whose Guard is plan-approval.
 function stoodAsideRows(project: string): number {
   if (!existsSync(join(seededRecordDir(project), "audit"))) return 0;
   return auditRows(project).split("\n## ").filter((block) =>

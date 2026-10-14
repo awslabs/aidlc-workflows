@@ -1,14 +1,7 @@
 // covers: file:aidlc-common/stages/inception/reverse-engineering.md, file:aidlc-common/stages/inception/requirements-analysis.md, file:aidlc-common/stages/inception/practices-discovery.md, file:aidlc-common/stages/inception/user-stories.md, file:aidlc-common/stages/construction/nfr-requirements.md
 //
 // t154 — codekb promotion. Deterministic, no-LLM, zero-token structural
-// contract over the SHIPPED stage files: P0 promoted the reverse-engineering
-// stage's outputs from the buried per-workflow path
-// `aidlc-docs/inception/reverse-engineering/` to the durable per-repo code
-// knowledge base, and re-pointed its verified downstream consumers to read from
-// the new location. The codekb-determinism placement fix then made that store
-// SPACE-SCOPED — `aidlc/spaces/<active-space>/codekb/<repo>/` (a sibling of
-// intents/), the dir the `codekb-path` tool resolves — so the prose now names
-// the space-level literal and the bare `aidlc/codekb/<repo>/` form is gone.
+// contract over the SHIPPED stage files.
 //
 // Mechanism: none. We read the shipped dist/claude stage .md files in-process
 // (the same AIDLC_SRC tree t05/t87 resolve) and parse frontmatter via the
@@ -45,27 +38,25 @@ import { join } from "node:path";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 import { parseStageFrontmatter } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
-// AIDLC_SRC === <repo>/dist/claude/.claude — the shipped tree (fixtures.ts:42),
-// the same one t05/t87 read. Assert on the regenerated DIST output so the
-// projection consumed by tests is covered directly.
+// AIDLC_SRC (tests/harness/fixtures.ts) is <repo>/dist/claude/.claude - the
+// shipped tree, the same one t05/t87 read. Assert on the regenerated DIST output
+// so the projection consumed by tests is covered directly.
 const STAGES_DIR = join(AIDLC_SRC, "aidlc-common", "stages");
 // Knowledge tree (per-agent reference docs). RE artifact templates live here
 // (aidlc-developer-agent/re-artifacts.md), so the bare-codekb sweep must cover
-// it too — a stale shorthand here is live knowledge the RE stage reads, and it
-// previously escaped because the sweep was stages-only.
+// it too - a stale shorthand here is live knowledge the RE stage reads.
 const KNOWLEDGE_DIR = join(AIDLC_SRC, "knowledge");
 
 // The codekb store is a SPACE-LEVEL sibling of intents/ — the engine resolves it
 // to `aidlc/spaces/<space>/codekb/<repo>/` and the stage prose names it with the
 // `<active-space>` token (the live cursor a literal can't hard-code). The RE
 // stage + its consumers carry THIS literal, deferring the concrete dir to the
-// `codekb-path` tool. (Was the bare `aidlc/codekb/<repo>/` before the
-// codekb-determinism placement fix; the bare form must no longer appear, asserted
-// by NO_BARE_CODEKB_PATH below.)
+// `codekb-path` tool. The bare form must not appear, asserted by
+// NO_BARE_CODEKB_PATH below.
 const NEW_CODEKB_PATH = "aidlc/spaces/<active-space>/codekb/<repo>/";
 const OLD_RE_OUTPUT_PATH = "aidlc-docs/inception/reverse-engineering/";
-// The bare workspace-root form the placement fix replaced — it must NOT survive
-// in any stage prose now that codekb is space-scoped.
+// The bare workspace-root form must NOT survive in any stage prose because
+// codekb is space-scoped.
 const NO_BARE_CODEKB_PATH = "aidlc/codekb/<repo>/";
 
 // The 9 RE artifact filenames the stage produces — kept inside the `outputs:`
@@ -91,7 +82,7 @@ function stageFrontmatter(phase: string, slug: string): Record<string, unknown> 
 }
 
 describe("t154 codekb promotion — RE outputs land at aidlc/spaces/<active-space>/codekb/<repo>/", () => {
-  // ── 1: RE stage outputs re-pointed, filenames preserved ──────────────────
+  // -- 1: RE stage outputs, filenames preserved --
   test("reverse-engineering `outputs:` names the space-level codekb path (not the old buried path)", () => {
     const fm = stageFrontmatter("inception", "reverse-engineering");
     const outputs = fm.outputs as string;
@@ -160,7 +151,7 @@ describe("t154 codekb promotion — RE outputs land at aidlc/spaces/<active-spac
     expect(body).not.toContain("reverse-engineering/scope-draft.md");
   });
 
-  // ── 4: frontmatter consumers — edge intact, read path re-pointed ─────────
+  // -- 4: frontmatter consumers - dependency edge and read path --
   test("requirements-analysis keeps the reverse-engineering requires_stage edge", () => {
     const fm = stageFrontmatter("inception", "requirements-analysis");
     expect(fm.requires_stage as string[]).toContain("reverse-engineering");
@@ -177,7 +168,7 @@ describe("t154 codekb promotion — RE outputs land at aidlc/spaces/<active-spac
     expect(fm.requires_stage as string[]).toContain("reverse-engineering");
   });
 
-  // ── 5: prose consumers re-pointed ────────────────────────────────────────
+  // -- 5: prose consumers --
   test("user-stories RE-read prose resolves aidlc/codekb/<repo>/ (not the old path)", () => {
     const body = stageBody("inception", "user-stories");
     expect(body).toContain(`Read relevant RE artifacts from \`${NEW_CODEKB_PATH}\``);
@@ -190,10 +181,9 @@ describe("t154 codekb promotion — RE outputs land at aidlc/spaces/<active-spac
     expect(body).not.toContain(OLD_RE_OUTPUT_PATH);
   });
 
-  // ── 6: no stage file retains the OLD RE output dir NOR the bare codekb form ──
-  // Sweep every shipped stage .md for BOTH retired literals: the pre-promotion
-  // record-dir path AND the bare workspace-root `aidlc/codekb/<repo>/` the
-  // codekb-determinism placement fix replaced with the space-scoped form.
+  // -- 6: no stage file retains the OLD RE output dir NOR the bare codekb form --
+  // Sweep every shipped stage .md for BOTH retired literals: the record-dir path
+  // AND the bare workspace-root `aidlc/codekb/<repo>/`.
   test("no shipped stage .md retains the old aidlc-docs/inception/reverse-engineering/ NOR the bare aidlc/codekb/<repo>/ path", () => {
     const oldOffenders: string[] = [];
     const bareOffenders: string[] = [];
@@ -212,11 +202,10 @@ describe("t154 codekb promotion — RE outputs land at aidlc/spaces/<active-spac
     expect(bareOffenders).toEqual([]);
   });
 
-  // ── 7: the bare codekb form must not survive in the KNOWLEDGE tree either ──
+  // -- 7: the bare codekb form must not survive in the KNOWLEDGE tree either --
   // RE artifact templates (aidlc-developer-agent/re-artifacts.md) are live
-  // knowledge the RE stage reads; the bare `aidlc/codekb/<repo>/` shorthand
-  // previously lingered here because test 6 swept only stages. Walk the whole
-  // knowledge tree (nested per-agent) so the space-scoped contract holds there too.
+  // knowledge the RE stage reads. Walk the whole knowledge tree (nested per-agent)
+  // so the space-scoped contract holds there too.
   test("no shipped knowledge .md retains the bare aidlc/codekb/<repo>/ path", () => {
     const offenders: string[] = [];
     const walk = (dir: string): void => {

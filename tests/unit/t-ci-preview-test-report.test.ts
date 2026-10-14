@@ -278,7 +278,6 @@ describe("t-ci-preview-test-report", () => {
     expect(trimmed).toStartWith(`${FAILED_SUITE_WARNING}${body}\n## Nightly test report\n\n- \`t0\`\n`);
     expect(trimmed).toEndWith("`\n- ...report truncated; the run summary has the full report.\n");
 
-    // Near the limit the source footer survives and the body still fits.
     const large = `- ${"x".repeat(124_700)}\n\nSource commit: owner/repo@a\n`;
     const near = stagePreviewNotes(large, report);
     expect(near.length).toBeLessThanOrEqual(RELEASE_BODY_LIMIT);
@@ -300,7 +299,6 @@ describe("t-ci-preview-test-report", () => {
     const report = `## Nightly test report\n\n${Array.from({ length: 200 }, (_, index) => `- \`t${index}\`\n`).join("")}`;
     const line = updateReport("https://x/run/9");
     expect(line).toContain("[the preview run](https://x/run/9)");
-    // A passing suite adds no report of its own, and nothing failed changes nothing.
     expect(stagePreviewNotes(body, report, RELEASE_BODY_LIMIT, { suite: false, updateRunUrl: "https://x/run/9" }))
       .toBe(`${FAILED_UPDATE_WARNING}${body}\n${line}`);
     expect(stagePreviewNotes(body, report, RELEASE_BODY_LIMIT, { suite: false })).toBe(body);
@@ -310,7 +308,6 @@ describe("t-ci-preview-test-report", () => {
     const cut = stagePreviewNotes(body, report, full.length - 1, both);
     expect(cut).toStartWith(`${FAILED_SUITE_WARNING}${FAILED_UPDATE_WARNING}${body}\n${line}\n## Nightly test report\n`);
     expect(cut).toEndWith("\n- ...report truncated; the run summary has the full report.\n");
-    // With no room for a report the update warning stays beside the pointer.
     const pointed = "x".repeat(RELEASE_BODY_LIMIT - FAILED_SUITE_POINTER.length - FAILED_UPDATE_WARNING.length);
     expect(stagePreviewNotes(pointed, report, RELEASE_BODY_LIMIT, both))
       .toBe(`${FAILED_SUITE_POINTER}${FAILED_UPDATE_WARNING}${pointed}`);

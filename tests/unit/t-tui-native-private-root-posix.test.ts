@@ -150,7 +150,6 @@ describe.skipIf(process.platform === "win32")("native private namespace", () => 
     };
     expect(() => validateAncestorStat("/", stat, 501, {})).not.toThrow();
     expect(() => validateAncestorStat("/home", { ...stat, uid: 501n }, 501, {})).not.toThrow();
-    // Off by default: a sandbox-owned ancestor is refused, and the refusal names the way out.
     const ownership = refusal(() => validateAncestorStat("/", sandbox, 501, {}));
     expect(ownership).toContain("ancestor is not owned by current uid or uid 0 (owner uid 65534");
     expect(ownership).toContain("AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS=1");

@@ -1,7 +1,7 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report
 //
 // CLI-contract tests for the orchestrator's bolt_dag self-heal path. The
-// internal readBoltDagBatches helper is not exported, so this file claims the
+// internal resolveBoltBatches helper is not exported, so this file claims the
 // legitimate registry surfaces that exercise it: the real next and report
 // subprocesses. Each case seeds a fresh per-intent record, writes the
 // unit-of-work-dependency.md artifact when needed, and asserts on the emitted
@@ -610,8 +610,7 @@ describe("t215 bolt dag self-heal", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 12b: the same corrupted graph with NO dependency artifact degrades to the
-  // single placeholder directive (the pre-existing behavior for that input),
-  // never an exit-1 crash on an undefined unit.
+  // single placeholder directive, never an exit-1 crash on an undefined unit.
   test("12b: empty cached batches with no artifact fall back to the degrade path", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, []);

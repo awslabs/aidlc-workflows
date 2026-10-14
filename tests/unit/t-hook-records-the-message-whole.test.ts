@@ -67,7 +67,6 @@ afterEach(() => {
   while (created.length > 0) cleanupTestProject(created.pop());
 });
 
-/** A poc workflow at code generation, in the chat this machine chose. */
 function openWork(
   policy: "strict" | "relaxed" | "off" = "relaxed",
   planApproval: "on" | "off" | "off-by-you" = "on",
@@ -147,7 +146,6 @@ function askFor(proj: string): void {
   expect(step.directive?.ask_type, step.out).toBe("plan-approval");
 }
 
-/** The person's message as their host delivers it to the prompt hook; the hook's stdout comes back. */
 function reply(proj: string, prompt: string, session = SESSION): string {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj,
@@ -160,7 +158,6 @@ function reply(proj: string, prompt: string, session = SESSION): string {
   return result.stdout ?? "";
 }
 
-/** The setter as the agent runs it in the chat. */
 function configSet(proj: string, args: string[], session: string | null = SESSION): { status: number; out: string } {
   const env: Record<string, string | undefined> = { ...process.env, ...CLEAR, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj };
   delete env.AIDLC_SESSION_OVERRIDE;
@@ -182,7 +179,6 @@ function utility(proj: string, args: string[], session: string | null = SESSION)
   return { status: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
-/** The agent records the choice the person made. */
 function answer(proj: string, details: string): { code: number; out: string } {
   const result = spawnSync(BUN, [
     LOG, "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", details, "--project-dir", proj,
@@ -387,7 +383,6 @@ describe("creation takes a check typed off, under the person-turn rule", () => {
       expect(command).toContain("--guard-policy relaxed");
       expect(command).toContain("--guard.review-freeze off");
     }
-    // The creation answers their request, as the offer's own commands do.
     const request = /--request ([0-9a-f]{8})/.exec(commands[0])?.[1];
     expect(request, commands[0]).toBeDefined();
     const made = utility(proj, [
@@ -411,10 +406,10 @@ describe("creation takes a check typed off, under the person-turn rule", () => {
 // The chain the agent is told to follow cannot loop. A bare `next` takes the
 // person's own recorded line (takePersonsOwnLine, the Copilot CLI shape where
 // the agent passes no arguments), so each step must lead somewhere: a stage
-// step, a setting applied and said, or one question for the person. The shape
-// Fable found in WO5's plan is the loop: a print that names a command, the
-// command run, then a bare `next` that takes the same line and prints the same
-// thing again, forever, applying the setting twice on the way.
+// step, a setting applied and said, or one question for the person. The loop:
+// a print that names a command, the command run, then a bare `next` that takes
+// the same line and prints the same thing again, forever, applying the setting
+// twice on the way.
 describe("the chain the agent follows ends, within three steps, and applies a setting once", () => {
   /**
    * The agent's own loop: ask the engine for the step with a bare `next`, say or
@@ -473,7 +468,6 @@ describe("the chain the agent follows ends, within three steps, and applies a se
   const settingRows = (proj: string): number =>
     rows(proj, "CEREMONY_SET").length + rows(proj, "GUARD_POLICY_SET").length + rows(proj, "GUARD_DISABLED").length;
 
-  /** Every chain ends somewhere, says nothing twice, and sets nothing twice. */
   function endsCleanly(proj: string, note: string, first: string[] = []): { prints: string[] } {
     const before = settingRows(proj);
     const walk = chainFromBareNext(proj, 3, first);
@@ -533,17 +527,15 @@ describe("the chain the agent follows ends, within three steps, and applies a se
     const first = chainFromBareNext(proj);
     expect(first.ran).toHaveLength(1);
     const second = chainFromBareNext(proj);
-    // Nothing of theirs is taken a second time: no print of the first chain
-    // comes back, and no second setter runs.
     for (const line of second.prints) expect(first.prints, "the same print came back").not.toContain(line);
     expect(second.ran, "a second setter ran for one line").toHaveLength(0);
     expect(rows(proj, "GUARD_POLICY_SET")).toHaveLength(1);
   });
 
-  // Fable's guard review of this branch found the shape the case above misses:
-  // a setter that changes nothing writes no row, so the person's turn stayed
-  // the latest row and a bare `next` named the same setter forever. The line
-  // is handed to the setter once, whatever the setter then says.
+  // The shape the case above misses: a setter that changes nothing writes no
+  // row, so the person's turn stayed the latest row and a bare `next` named the
+  // same setter forever. The line is handed to the setter once, whatever the
+  // setter then says.
   const SHAPES = [
     { shape: "a bare next (Copilot CLI)", first: (_line: string[]): string[] => [] },
     { shape: "next with their line (Claude Code)", first: (line: string[]): string[] => line },
@@ -585,8 +577,6 @@ describe("the chain the agent follows ends, within three steps, and applies a se
     reply(proj, "/aidlc --guard-policy relaxed");
     const step = next(proj, ["--guard-policy", "relaxed"]);
     const message = String(step.directive?.message);
-    // What the person reads: the line the step says, or the output of the
-    // command it names, printed as it came.
     const command = /Run `([^`]+)`/.exec(message)?.[1];
     const read = command === undefined ? message : runAsTheAgent(proj, command).out;
     expect(read.trim().startsWith("{"), read).toBe(false);

@@ -122,7 +122,6 @@ function recordCommand(p: string) {
   }
 }
 
-// Verify, ask and approve a Unit at its checkpoint.
 function approve(p: string, unit: string): void {
   recordCommand(p);
   const checkpoint = (args: string[]) => {
@@ -212,7 +211,6 @@ describe("t-checkpoint-approval-survives-clone: no checkpoint proof file on this
       rmSync(proofDir(p), { recursive: true, force: true });
       const status = checkpointStatus(p, "alpha");
       expect(status, JSON.stringify(status)).toMatchObject({ approved: true, errors: [] });
-      // Nothing was run again, and no approval was asked for or recorded again.
       expect(verificationRuns(p)).toBe(runs);
       expect(readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED")).toEqual([]);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

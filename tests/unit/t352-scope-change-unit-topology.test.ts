@@ -218,7 +218,7 @@ describe("the Units carry on per Unit after the switch (#1401)", () => {
     const p = fixture(ownership);
     gate(p, "STAGE_AWAITING_APPROVAL", "beta");
     switchTo(p);
-    // On main this fell back to one stage-level step that no Unit gate reads.
+    // A fallback to one stage-level step would leave work that no Unit gate reads.
     const directive = next(p);
     expect(directive).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "alpha" });
     expect((directive.produces as string[])[0]).toContain("/construction/alpha/functional-design/");

@@ -58,7 +58,6 @@ function report(proj: string, args: string[]) {
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
-// What the person types, through the real prompt hook.
 function person(proj: string, prompt: string) {
   const r = spawnSync(BUN, [DISPATCH, "engine", "hook", "record-human-turn"], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", cwd: proj,
@@ -86,7 +85,6 @@ describe("t-reject-needs-person-reply: only the person's reply to the approval q
   });
   afterEach(() => cleanupTestProject(proj));
 
-  // What the agent is told: record nothing, put the question to them, wait.
   function expectAsked(out: string) {
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("no new human reply has been received for this approval question");

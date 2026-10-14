@@ -1,64 +1,25 @@
 // covers: subcommand:aidlc-utility:init
 //
-// CLI-contract port of tests/unit/t20-unit-workspace-scanner.sh (TAP plan 21),
-// mechanism = cli. The .sh exercises the DETERMINISTIC workspace scanner that
-// runs INSIDE `aidlc-utility init`: it scaffolds a temp project, shells out to
-// `bun aidlc-utility.ts init --scope poc --project-dir <p>`, then greps the
-// emitted aidlc-docs/aidlc-state.md for the scanner's classification fields
-// (Project Type / Languages / Frameworks / Build System), plus the --force /
-// orphan-warning / .DS_Store-filter contract on re-init. Every assertion is an
-// observable of the `init` subcommand at the PROCESS boundary, so this stays a
-// spawn (spawnSync of the real BUN + tool .ts) rather than an in-process
-// detectWorkspace() twin — an in-process twin would lose the no-force-retry
-// exit code (case 17), the --force re-init file effect (case 18), the audit
-// WORKFLOW_STARTED row count the tool appends (case 19), and the orphan-warning
-// stderr stream (cases 20-21). detectWorkspace IS exported, but the .sh asserts
-// the full init pipeline (scan -> state write + audit), which is the contract.
+// CLI-contract test of the DETERMINISTIC workspace scanner that runs INSIDE
+// `aidlc-utility intent-create`, mechanism = cli. Each case scaffolds a temp
+// project, spawns `bun aidlc-utility.ts intent-create --scope poc --project-dir
+// <p>`, then reads the created intent's aidlc-state.md for the scanner's
+// classification fields (Project Type / Languages / Frameworks / Build System).
+// Every assertion is an observable of the subcommand at the PROCESS boundary
+// (scan -> state write + audit), so this stays a spawn (spawnSync of the real
+// BUN + tool .ts) rather than an in-process detectWorkspace() twin.
 //
 // SUBCOMMAND UNIT: credits subcommand:aidlc-utility:init — the single
 // subcommand the .sh fires (init, with and without --force). The covers id uses
 // the COLON form (subcommand:aidlc-utility:init), never the space form which the
 // claim parser truncates at the space.
 //
-// EQUAL-OR-STRONGER PARITY: the .sh used `assert_grep "$STATE" '<pattern>'`
-// (substring presence in aidlc-state.md). In-process we extract the EXACT field
-// value from the state file (stateField) and assert equality where the field is
-// fully determined — STRONGER than a substring grep — and use a contains check
-// only where the .sh itself only pinned a substring (Languages/Frameworks lists,
-// which carry secondary languages/frameworks). The audit count (.sh case 19,
-// `grep -c "^\*\*Event\*\*: WORKFLOW_STARTED"` before/after) becomes an exact
-// before/after delta on the same `**Event**: WORKFLOW_STARTED` line count.
-//   .sh 1  Project Type: Greenfield (empty dir)        -> Test 1:  stateField "Project Type" === "Greenfield"
-//   .sh 2  Languages: Unknown (empty dir)              -> Test 2:  stateField "Languages" === "Unknown"
-//   .sh 3  Project Type: Brownfield (react+ts app)     -> Test 3:  === "Brownfield"
-//   .sh 4  Languages lists TypeScript                  -> Test 4:  Languages contains "TypeScript"
-//   .sh 5  Frameworks lists React                      -> Test 5:  Frameworks contains "React"
-//   .sh 6  Build System: npm (package.json)            -> Test 6:  === "npm (package.json)" (STRONGER: exact)
-//   .sh 7  Project Type: Brownfield (deps-only)        -> Test 7:  === "Brownfield" (pins hasNonDevDeps)
-//   .sh 8  Languages: Unknown (deps-only, no src)      -> Test 8:  === "Unknown"
-//   .sh 9  Project Type: Brownfield (bare src/App.tsx) -> Test 9:  === "Brownfield" (pins hasSourceFiles)
-//   .sh 10 Languages lists TypeScript (bare src)       -> Test 10: contains "TypeScript"
-//   .sh 11 Project Type: Greenfield (devDeps-only)     -> Test 11: === "Greenfield"
-//   .sh 12 Languages: Unknown (devDeps-only)           -> Test 12: === "Unknown"
-//   .sh 13 Build System: npm (package.json) devDeps    -> Test 13: === "npm (package.json)" (STRONGER: exact)
-//   .sh 14 Project Type: Brownfield (python+poetry)    -> Test 14: === "Brownfield"
-//   .sh 15 Languages lists Python                      -> Test 15: contains "Python"
-//   .sh 16 Build System: poetry (pyproject.toml)       -> Test 16: === "poetry (pyproject.toml)" (STRONGER: exact)
-//   .sh 17 no-force retry exits non-zero               -> Test 17: res.status === 1 (STRONGER: exact code, not just >0) + diagnostic
-//   .sh 18 --force reinit: state still exists          -> Test 18: existsSync(state) === true after --force
-//   .sh 19 --force adds fresh WORKFLOW_STARTED          -> Test 19: workflowStartedCount after > before (delta, same observable)
-//   .sh 20 --force warns on orphan artifacts (stderr)  -> Test 20: stderr contains "non-init artifacts" + the seeded path
-//   .sh 21 orphan warning filters .DS_Store            -> Test 21: stderr does NOT contain ".DS_Store"
-//
-// 21 .sh asserts -> 21 expect()-bearing test() cases here (1:1).
-//
-// FIXTURE DISCIPLINE (mirrors the .sh's `mktemp -d` per block + cleanup_test_project):
-// each case builds a FRESH temp project dir via createTestProject() (which
-// toPortablePath-converts on Windows, so the tool's forward-slash state/audit
-// paths round-trip when read back). The Brownfield-signal files (package.json,
-// src/App.tsx, pyproject.toml) are written inline into that temp dir exactly as
-// the .sh did with heredocs/touch/echo. NOTHING is written under tests/fixtures/**.
-// All temp dirs are cleaned in afterAll.
+// FIXTURE DISCIPLINE: each case builds a FRESH temp project dir via
+// createTestProject() (which toPortablePath-converts on Windows, so the tool's
+// forward-slash state/audit paths round-trip when read back). The
+// Brownfield-signal files (package.json, src/App.tsx, pyproject.toml) are written
+// inline into that temp dir. NOTHING is written under tests/fixtures/**. All temp
+// dirs are cleaned in afterAll.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -79,7 +40,7 @@ import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOL = join(
   REPO_ROOT,
@@ -96,7 +57,6 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-/** Fresh bare temp project (createTestProject scaffolds an empty aidlc-docs/). */
 function proj(): string {
   const p = createTestProject();
   tempDirs.push(p);
@@ -105,12 +65,11 @@ function proj(): string {
 
 interface CliResult {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string; // combined stdout+stderr
   stderr: string;
   stdout: string;
 }
 
-/** Spawn `bun aidlc-utility.ts init --scope poc --project-dir <p> [extra...]`. Mirrors `bun "$TOOL" init ...`. */
 function init(p: string, ...extra: string[]): CliResult {
   const res = spawnSync(
     BUN,
@@ -122,10 +81,10 @@ function init(p: string, ...extra: string[]): CliResult {
   return { status: res.status ?? -1, out: `${stdout}${stderr}`, stderr, stdout };
 }
 
-// P4: intent-create writes state into the created intent's per-intent record dir
-// (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat aidlc-docs/. Resolve
-// the record dir from the active-space + active-intent cursors, falling back to
-// the flat layout for a not-yet-created project.
+// intent-create writes state into the created intent's per-intent record dir
+// (aidlc/spaces/<space>/intents/<YYMMDD>-<label>/), not the flat aidlc-docs/.
+// Resolve the record dir from the active-space + active-intent cursors, falling
+// back to the flat layout for a not-yet-created project.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -142,8 +101,8 @@ function recordDirOf(p: string): string {
   return join(p, "aidlc-docs");
 }
 const statePath = (p: string): string => join(recordDirOf(p), "aidlc-state.md");
-// Audit is written as per-clone shards under <record>/audit/<host>-<pid>.md
-// (Stage B). Concatenate every shard for a content read.
+// Audit is written as per-clone shards under <record>/audit/<host>-<clone-id>.md.
+// Concatenate every shard for a content read.
 function readAudit(p: string): string {
   const auditDir = join(recordDirOf(p), "audit");
   if (!existsSync(auditDir)) return "";
@@ -156,9 +115,8 @@ function readAudit(p: string): string {
 /**
  * Exact value of a `- **<key>**: <value>` field from aidlc-state.md. The state
  * file writes scanner fields as bullet lines (e.g. `- **Project Type**: Greenfield`,
- * `- **Languages**: TypeScript, JavaScript`). The .sh grepped the bare
- * `**Project Type**: Greenfield` substring; here we project the exact value so
- * fully-determined fields can be asserted with === (STRONGER). Returns "" when
+ * `- **Languages**: TypeScript, JavaScript`). We project the exact value so
+ * fully-determined fields can be asserted with ===. Returns "" when
  * absent.
  */
 function stateField(p: string, key: string): string {
@@ -169,7 +127,6 @@ function stateField(p: string, key: string): string {
   return m ? m[1] : "";
 }
 
-/** Count `**Event**: WORKFLOW_STARTED` rows. Mirrors the .sh's `grep -c "^\*\*Event\*\*: WORKFLOW_STARTED"`. */
 function workflowStartedCount(p: string): number {
   return readAudit(p)
     .split("\n")
@@ -213,7 +170,7 @@ python = "^3.11"
 const APP_TSX = "export const App = () => <div>hi</div>;\n";
 
 describe("t20 aidlc-utility init — workspace scanner (migrated from t20-unit-workspace-scanner.sh, plan 21)", () => {
-  // --- .sh Test 1-2: empty directory -> Greenfield, Unknown languages ---
+  // --- Empty directory -> Greenfield, Unknown languages ---
   test("1: empty dir classified Greenfield", () => {
     const p = proj();
     const r = init(p);
@@ -227,7 +184,7 @@ describe("t20 aidlc-utility init — workspace scanner (migrated from t20-unit-w
     expect(stateField(p, "Languages")).toBe("Unknown");
   });
 
-  // --- .sh Test 3-6: realistic React+TS app -> Brownfield, TS+React+npm ---
+  // --- Realistic React+TS app -> Brownfield, TS+React+npm ---
   test("3: node app classified Brownfield", () => {
     const p = proj();
     writeFileSync(join(p, "package.json"), PKG_REACT_TS, "utf-8");
@@ -246,7 +203,7 @@ describe("t20 aidlc-utility init — workspace scanner (migrated from t20-unit-w
     mkdirSync(join(p, "src"), { recursive: true });
     writeFileSync(join(p, "src", "App.tsx"), APP_TSX, "utf-8");
     init(p);
-    // .sh pinned the substring (the list may carry secondary langs); contains.
+    // The list may carry secondary langs; contains.
     expect(stateField(p, "Languages")).toContain("TypeScript");
   });
 
@@ -267,11 +224,10 @@ describe("t20 aidlc-utility init — workspace scanner (migrated from t20-unit-w
     mkdirSync(join(p, "src"), { recursive: true });
     writeFileSync(join(p, "src", "App.tsx"), APP_TSX, "utf-8");
     init(p);
-    // STRONGER than the .sh's anchored grep: exact field equality.
     expect(stateField(p, "Build System")).toBe("npm (package.json)");
   });
 
-  // --- .sh Test 7-8: bare `dependencies` only (no src/, no lockfile) pins hasNonDevDeps ---
+  // --- Bare `dependencies` only (no src/, no lockfile) pins hasNonDevDeps ---
   test("7: deps-only package.json -> Brownfield (pins hasNonDevDeps)", () => {
     const p = proj();
     writeFileSync(join(p, "package.json"), PKG_DEPS_ONLY, "utf-8");
@@ -286,7 +242,7 @@ describe("t20 aidlc-utility init — workspace scanner (migrated from t20-unit-w
     expect(stateField(p, "Languages")).toBe("Unknown");
   });
 
-  // --- .sh Test 9-10: bare src/App.tsx (no package.json) pins hasSourceFiles ---
+  // --- Bare src/App.tsx (no package.json) pins hasSourceFiles ---
   test("9: bare src/App.tsx -> Brownfield (pins hasSourceFiles)", () => {
     const p = proj();
     mkdirSync(join(p, "src"), { recursive: true });
@@ -303,7 +259,7 @@ describe("t20 aidlc-utility init — workspace scanner (migrated from t20-unit-w
     expect(stateField(p, "Languages")).toContain("TypeScript");
   });
 
-  // --- .sh Test 11-13: package.json with only devDependencies -> Greenfield ---
+  // --- package.json with only devDependencies -> Greenfield ---
   test("11: devDeps-only package.json is Greenfield", () => {
     const p = proj();
     writeFileSync(join(p, "package.json"), PKG_DEVDEPS_ONLY, "utf-8");
@@ -325,7 +281,7 @@ describe("t20 aidlc-utility init — workspace scanner (migrated from t20-unit-w
     expect(stateField(p, "Build System")).toBe("npm (package.json)");
   });
 
-  // --- .sh Test 14-16: pyproject.toml with poetry -> Brownfield Python ---
+  // --- pyproject.toml with poetry -> Brownfield Python ---
   test("14: python project Brownfield", () => {
     const p = proj();
     writeFileSync(join(p, "pyproject.toml"), PYPROJECT_POETRY, "utf-8");
@@ -353,36 +309,32 @@ describe("t20 aidlc-utility init — workspace scanner (migrated from t20-unit-w
     expect(stateField(p, "Build System")).toBe("poetry (pyproject.toml)");
   });
 
-  // --- Creation semantics (P4: --force/re-init guard retired) ---
-  // The old --init guarded re-init ("already exists" error; --force to wipe).
-  // P4 retires that: each intent-create creates a NEW intent (the workspace can
-  // hold many), so a second creation succeeds and adds a second intent + a second
-  // WORKFLOW_STARTED — no guard, no --force, no orphan-warning path.
+  // --- Creation semantics ---
+  // Each intent-create creates a NEW intent (the workspace can hold many), so a
+  // second creation succeeds and adds a second intent + a second
+  // WORKFLOW_STARTED: no guard, no --force, no orphan-warning path.
   test("17-19: a second creation succeeds (new intent), adds a fresh WORKFLOW_STARTED - no re-init guard", () => {
     const p = proj();
 
-    // First creation.
     const first = init(p);
     expect(first.status).toBe(0);
     expect(existsSync(statePath(p))).toBe(true);
     const before = workflowStartedCount(p);
 
-    // A second creation is NOT an error (no re-init guard) - it creates another
-    // intent in the workspace.
     const second = init(p);
     expect(second.status).toBe(0);
     expect(second.out).not.toContain("already exists");
     expect(second.out).not.toContain("--force");
 
-    // Two intent record dirs now exist under the default space.
     const intentsDir = join(p, "aidlc", "spaces", "default", "intents");
     const records = readdirSync(intentsDir).filter((d) =>
       existsSync(join(intentsDir, d, "aidlc-state.md")),
     );
     expect(records.length).toBe(2);
 
-    // The second creation adds a fresh WORKFLOW_STARTED (now keyed to the new
-    // active intent's audit — the count over the active record grew from 0).
+    // The second creation adds a fresh WORKFLOW_STARTED in the new active intent's
+    // audit; `before` and `after` read different active records, so each is >= 1
+    // rather than a delta.
     const after = workflowStartedCount(p);
     expect(after).toBeGreaterThanOrEqual(1);
     expect(before).toBeGreaterThanOrEqual(1);
