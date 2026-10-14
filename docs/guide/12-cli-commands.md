@@ -1707,6 +1707,16 @@ example:
 
 > The review freeze check (it stops edits to work you already approved) switch is cleared for this project, but it stays off for this piece of work: guard policy off (set by you). Do you want it on for this piece of work too?
 
+The other way round, when you turn a check back on for this piece of work while
+a switch still keeps it off (a settings file, the nearest one named), the line
+says so in place of the setting's own line and offers to clear it there, for
+example:
+
+> The review freeze check (it stops edits to work you already approved) is still off: aidlc.settings.local.json keeps it off for this project. Do you want it cleared there?
+
+At your own terminal it names the command that clears it instead, and when the
+editor or CLI was started with the variable it says to start it without.
+
 `config get` names where a switch keeps a check off: `off (AIDLC_DISABLE_REVIEW_FREEZE_HOOK in aidlc.settings.local.json)`
 when a settings file records it, or `off (env AIDLC_DISABLE_REVIEW_FREEZE_HOOK)`
 when the editor or CLI was started with the variable. During a plan-approval lockout the agent's own `config flags

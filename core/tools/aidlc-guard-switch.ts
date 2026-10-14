@@ -69,7 +69,7 @@ import {
 } from "./aidlc-lib.ts";
 import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { chatsSince, latestMessage, latestSpendingTimestamp, listMessages, replyOfTheirs } from "./aidlc-message-store.ts";
-import { quoted, widerPlaceOffer } from "./aidlc-recorded-switches.ts";
+import { quoted, stillOffLine, widerPlaceOffer } from "./aidlc-recorded-switches.ts";
 import { settingPurpose } from "./aidlc-settings.ts";
 
 function throwSettingsError(message: string): never {
@@ -719,6 +719,13 @@ export function applyIntentSettings(
             },
           });
         }
+        // Turned on, but a switch outside this piece of work keeps it off: what
+        // keeps it, and the way to clear it.
+        const held = request.value === "on" ? stillOffLine(projectDir, projectSwitchOf(`guard.${request.fence}`), "keeps") : null;
+        if (held !== null) {
+          lines.push(held);
+          continue;
+        }
         const already = `The ${checkLabel(request.fence)} is already ${after.value}`;
         const offer = request.value === "off" && after.value === "off" && !atTheirTerminal
           ? widerPlaceOffer(projectDir, projectSwitchOf(`guard.${request.fence}`), "work")
@@ -760,8 +767,17 @@ export function applyIntentSettings(
     const field = CEREMONY_FIELDS[key];
     const previous = getField(content, field);
     const line = formatCeremony(value, source);
+    // Turned on, but a switch outside this piece of work keeps it off: that is
+    // said in place of the setting's own line, which would read as on. Plan
+    // approval reads its environment switch only where it is trusted.
+    const held = value === "on" && !scopeDefault(flag)
+      ? stillOffLine(projectDir, CEREMONY_ENV[key], "keeps",
+        key === "plan_approval" ? planApprovalEnv(projectDir, sessionId) : process.env)
+      : null;
     if (previous === line || (source === "command" && previous === formatCeremony(value, "you"))) {
-      if (!scopeDefault(flag)) {
+      if (held !== null) {
+        lines.push(held);
+      } else if (!scopeDefault(flag)) {
         const already = `${field} is already ${previous}`;
         const offer = value === "off" && !atTheirTerminal ? widerPlaceOffer(projectDir, CEREMONY_ENV[key], "work") : null;
         lines.push(offer ? `${already}. ${offer}` : already);
@@ -780,6 +796,10 @@ export function applyIntentSettings(
         ...(askedIn && value === "off" && source === "you" ? { "Person Reply": askedIn } : {}),
       },
     });
+    if (held !== null) {
+      lines.push(held);
+      continue;
+    }
     const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
       ? resolution.rawStateValue : formatCeremony(resolution.value, resolution.source);
     if (!saidAsAsked(flag)) lines.push(`${field} changed: ${oldDisplay} to ${line}`);

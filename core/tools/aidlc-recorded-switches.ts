@@ -273,6 +273,39 @@ export function alreadyOffLines(
 }
 
 /**
+ * What still keeps a check off after the person turned it back on, and the way
+ * to it, or null when nothing does: the environment this command ran in first
+ * (only a launch without it changes that), then the nearest settings file that
+ * records the switch. `reason` is how that file stands to what they did: it
+ * `keeps` the check off when they turned it on for this piece of work, and
+ * `also` records it when they cleared it in another file. The line ends with
+ * the offer to clear it there, or at the person's own terminal names the
+ * command that does.
+ */
+export function stillOffLine(
+  projectDir: string,
+  name: string | undefined,
+  reason: "keeps" | "also",
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const label = name === undefined ? undefined : PERSON_CHECK_SWITCH_LABELS[name as RecordableProjectBypass];
+  if (name === undefined || label === undefined) return null;
+  const named = `The ${label}${settingPurpose(label)} is still off`;
+  if (env[name] === "1") {
+    return `${named}: ${name}=1 is set in the environment this command ran in. ` +
+      "Start the editor or CLI without it to turn the check back on.";
+  }
+  const still = switchesOff(projectDir, env).find((item) => item.name === name);
+  if (still === undefined) return null;
+  const file = still.target === "global" ? still.settingsPath : basename(still.settingsPath);
+  if (reason === "also") return `${named}: ${file} also records it. Do you want it cleared there too?`;
+  const back = commandAtPersonsTerminal(env)
+    ? `To turn it back on: ${clearSwitchCommand(still.name, projectDir)}`
+    : "Do you want it cleared there?";
+  return `${named}: ${file} keeps it off ${where(still.target)}. ${back}`;
+}
+
+/**
  * The one line the person hears while a switch is off: what the check is for,
  * what is off, where, since when, how it was set, and the way back.
  */
@@ -395,19 +428,10 @@ export function recordSwitchChange(
   // "On again" only when nothing else still keeps the check off.
   for (const name of removed) {
     const label = PERSON_CHECK_SWITCH_LABELS[name] ?? name;
-    const still = off.find((item) => item.name === name);
-    if (env[name] === "1") {
-      lines.push(
-        `The ${label}${settingPurpose(label)} is still off: ${name}=1 is set in the environment this command ran in. ` +
-          "Start the editor or CLI without it to turn the check back on.",
-      );
-    } else if (still) {
-      if (!otherFiles) continue;
-      const file = still.target === "global" ? still.settingsPath : basename(still.settingsPath);
-      lines.push(
-        `The ${label}${settingPurpose(label)} is still off: ${file} also records it. ` +
-          "Do you want it cleared there too?",
-      );
+    if (env[name] !== "1" && !otherFiles && off.some((item) => item.name === name)) continue;
+    const still = stillOffLine(projectDir, name, "also", env);
+    if (still !== null) {
+      lines.push(still);
     } else {
       const held = heldOffByWork(projectDir, name);
       lines.push(held === null
