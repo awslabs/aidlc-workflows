@@ -77,14 +77,22 @@ describe("the retry rule", () => {
     }
   });
 
-  test("reads a person-turn failure off bun's JUnit report, as the driver's own error writes it", () => {
+  test("reads a person-turn failure off bun's JUnit report or the error's own header, as the driver's error writes them", () => {
     const report = (cases: string) => `<?xml version="1.0"?><testsuites><testsuite name="x">${cases}</testsuite></testsuites>`;
     const personTurn = '<testcase name="a" time="30.0"><failure type="PersonTurnError" message="recorded 1 decision(s)" /></testcase>';
     const assertion = '<testcase name="b" time="0.1"><failure type="AssertionError" message="PersonTurnError in words only" /></testcase>';
     expect(personTurnFailed(report(personTurn + assertion))).toBe(true);
     expect(personTurnFailed(report(assertion))).toBe(false);
     expect(personTurnFailed("")).toBe(false);
-    // The real error, through real bun JUnit: the failure type is the error's name.
+    // Bun 1.3 writes every thrown error as a bare AssertionError; the header it
+    // prints for the uncaught error says what it was, on LF and CRLF output.
+    const bun13 = '<testcase name="a" time="0.1"><failure type="AssertionError" /></testcase>';
+    const printed = "15 |     throw new PersonTurnError(\"...\");\r\nPersonTurnError: The SDK drive recorded 1 decision(s)\r\n      at <anonymous> (t-x.test.ts:15:11)\r\n";
+    expect(personTurnFailed(report(bun13), printed)).toBe(true);
+    expect(personTurnFailed(report(bun13), printed.replaceAll("\r\n", "\n"))).toBe(true);
+    // A source excerpt or a sentence that names the error is not its header.
+    expect(personTurnFailed(report(bun13), "2 | class PersonTurnError extends Error {}\nerror: expected PersonTurnError: no\n")).toBe(false);
+    // The real error, through real bun: the JUnit type and the header both say it.
     const root = mkdtempSync(join(tmpdir(), "aidlc-person-turn-junit-"));
     roots.push(root);
     const harness = join(import.meta.dir, "..", "harness", "person-turns.ts").replaceAll("\\", "/");
@@ -98,7 +106,9 @@ describe("the retry rule", () => {
       cwd: root, encoding: "utf8", timeout: 60_000,
     });
     expect(child.status, child.stderr).toBe(1);
-    expect(personTurnFailed(readFileSync(junit, "utf8"))).toBe(true);
+    expect(personTurnFailed(readFileSync(junit, "utf8"), `${child.stdout}${child.stderr}`)).toBe(true);
+    // The header alone holds on every Bun, whatever its JUnit names the failure.
+    expect(personTurnFailed("", `${child.stdout}${child.stderr}`)).toBe(true);
   });
 
   test("reads case timeouts off bun's JUnit report", () => {
@@ -282,6 +292,17 @@ describe("the live retry report (Windows)", () => {
     const none = collected(undefined);
     expect(liveRetryReport(none.logs, none.root)).toEqual(["Retries: no live results were collected."]);
     const broken = collected("{");
-    expect(liveRetryReport(broken.logs, broken.root)[0]).toStartWith("Retries: live report skipped (");
+    expect(liveRetryReport(broken.logs, broken.root)).toEqual(["Retries: 1 collected results file(s) could not be read; not reported."]);
+  });
+
+  test("an unreadable results file costs only its own lines", () => {
+    const { root, logs } = collected([{ file: FLAKY, state: "PASS", passedOnRetry: true }], [FLAKY]);
+    const other = join(logs, "windows-isolated-1a", "2026-10-14T00-00-00Z-p3");
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(other, "e2e-results.json"), "{\"files\": [::error::x");
+    expect(liveRetryReport(logs, root)).toEqual([
+      flakyLiveLine(FLAKY),
+      "Retries: 1 collected results file(s) could not be read; not reported.",
+    ]);
   });
 });

@@ -50,9 +50,15 @@ export function retryEligible(first: RetryEvidence, maxWallMs: number, remaining
     remainingMs > RETRY_DEADLINE_RESERVE_MS;
 }
 
-/** True when a JUnit report has a case that failed a person-turn check (bun writes `type="PersonTurnError"`, tests/harness/person-turns.ts). */
-export function personTurnFailed(xml: string): boolean {
-  return [...xml.matchAll(/<(failure|error)\b([^>]*)>/g)].some((match) => /\btype="PersonTurnError"/.test(match[2]));
+/**
+ * True when a case failed a person-turn check (tests/harness/person-turns.ts).
+ * Bun 1.4 writes the error's name as the JUnit failure type; Bun 1.3 writes
+ * every thrown error as `AssertionError`, so the error's own header line,
+ * which every Bun prints for an uncaught error, counts too.
+ */
+export function personTurnFailed(xml: string, output = ""): boolean {
+  return [...xml.matchAll(/<(failure|error)\b([^>]*)>/g)].some((match) => /\btype="PersonTurnError"/.test(match[2])) ||
+    /^PersonTurnError: /m.test(output);
 }
 
 /** The line a live file that passed only on its second attempt gets, on every OS. */

@@ -78,30 +78,39 @@ function liveResults(dir: string, depth = 0): string[] {
 
 /** The Windows live job's Flaky and person-turn lines, from the collected results. Never throws. */
 export function liveRetryReport(logsDir: string, repoRoot = REPO_ROOT): string[] {
+  let reports: string[];
   try {
-    const reports = liveResults(logsDir);
-    if (reports.length === 0) return ["Retries: no live results were collected."];
-    const lines: string[] = [];
-    let unknown = 0;
-    for (const report of reports) {
-      const { files } = JSON.parse(readFileSync(report, "utf8")) as { files?: unknown[] };
-      for (const record of Array.isArray(files) ? files : []) {
-        const { file, passedOnRetry, personTurnFailure } = (record ?? {}) as Record<string, unknown>;
-        if (passedOnRetry !== true && personTurnFailure !== true) continue;
-        if (typeof file !== "string" || !TEST_FILE.test(file) || !existsSync(join(repoRoot, file))) {
-          unknown++;
-          continue;
-        }
-        if (passedOnRetry === true) lines.push(flakyLiveLine(file));
-        if (personTurnFailure === true) lines.push(personTurnLine(file));
-      }
-    }
-    if (unknown > 0) lines.push(`Retries: ${unknown} live result record(s) named no test file of this checkout; not reported.`);
-    return lines.length > 0 ? lines : ["Retries: no live test file needed a second attempt or failed a person-turn check."];
+    reports = liveResults(logsDir);
   } catch {
-    // Fixed words: an error's message can quote the file it could not read.
-    return ["Retries: live report skipped (a collected results file could not be read)."];
+    return ["Retries: live report skipped (the collected logs could not be listed)."];
   }
+  if (reports.length === 0) return ["Retries: no live results were collected."];
+  const lines: string[] = [];
+  let unknown = 0;
+  let unreadable = 0;
+  for (const report of reports) {
+    let files: unknown;
+    try {
+      ({ files } = JSON.parse(readFileSync(report, "utf8")) as { files?: unknown });
+    } catch {
+      // Fixed words: an error's message can quote the file it could not read.
+      unreadable++;
+      continue;
+    }
+    for (const record of Array.isArray(files) ? files : []) {
+      const { file, passedOnRetry, personTurnFailure } = (record ?? {}) as Record<string, unknown>;
+      if (passedOnRetry !== true && personTurnFailure !== true) continue;
+      if (typeof file !== "string" || !TEST_FILE.test(file) || !existsSync(join(repoRoot, file))) {
+        unknown++;
+        continue;
+      }
+      if (passedOnRetry === true) lines.push(flakyLiveLine(file));
+      if (personTurnFailure === true) lines.push(personTurnLine(file));
+    }
+  }
+  if (unknown > 0) lines.push(`Retries: ${unknown} live result record(s) named no test file of this checkout; not reported.`);
+  if (unreadable > 0) lines.push(`Retries: ${unreadable} collected results file(s) could not be read; not reported.`);
+  return lines.length > 0 ? lines : ["Retries: no live test file needed a second attempt or failed a person-turn check."];
 }
 
 if (import.meta.main) {

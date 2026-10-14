@@ -1224,7 +1224,7 @@ async function runBunTestFile(
     evidenceError: evidence.complete ? undefined : evidence.error,
     junitPath: junitXml,
     ...(status === "FAIL" && onlyCaseTimeouts(xml) ? { caseTimeoutsOnly: true } : {}),
-    ...(status === "FAIL" && personTurnFailed(xml) ? { personTurnFailure: true } : {}),
+    ...(status === "FAIL" && personTurnFailed(xml, run.output) ? { personTurnFailure: true } : {}),
     // Diagnostic evidence, never grounds for changing an assertion or retrying.
     throttlingSignals: (run.output.match(
       /ThrottlingException|TooManyRequestsException|(?:HTTP|status(?:Code)?)\s*[:=]?\s*429\b|rate[_ ]limit[_ ]exceeded/gi,

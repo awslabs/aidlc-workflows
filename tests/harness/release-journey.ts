@@ -153,12 +153,20 @@ function stageEvents(proj: string, event: string): number {
   return rows.filter((row) => row.event === event && auditBlockField(row.block, "Stage") === RELEASE_JOURNEY_STAGE).length;
 }
 
-/** The problem that says AI-DLC ran ahead of the person. */
-const RAN_AHEAD = "work was started before the person answered the plan question";
+/** AI-DLC started work before the person answered the plan question (turn 1). */
+function ranAhead(proj: string, turn: number): boolean {
+  return turn === 1 && workRecords(proj).length > 0;
+}
 
-/** A journey whose problems say AI-DLC ran ahead of the person fails as a PersonTurnError, which is never retried. */
-export function expectPersonFirstInJourney(problems: readonly string[]): void {
-  expectPersonFirst(!problems.some((problem) => problem.includes(RAN_AHEAD)), problems.join("\n"));
+/** Check the journey after the person's turn `turn` (1-based), typed `line`, and add what is wrong to the report. */
+export function checkReleaseJourneyTurn(report: ReleaseJourneyReport, proj: string, turn: number, line: string): void {
+  if (ranAhead(proj, turn)) report.ranAhead = true;
+  report.problems.push(...releaseJourneyProblems(proj, turn).map((problem) => `after "${line}": ${problem}`));
+}
+
+/** A journey where AI-DLC ran ahead of the person fails as a PersonTurnError, which is never retried. */
+export function expectPersonFirstInJourney(report: ReleaseJourneyReport): void {
+  expectPersonFirst(report.ranAhead !== true, report.problems.join("\n"));
 }
 
 /**
@@ -176,7 +184,7 @@ export function releaseJourneyProblems(proj: string, turn: number): string[] {
     if (!requestRecords(proj).some((record) => record.text === RELEASE_JOURNEY_REQUEST)) {
       problems.push("AI-DLC has no request for the person's words, so no plan question was asked for them");
     }
-    if (workRecords(proj).length) problems.push(RAN_AHEAD);
+    if (ranAhead(proj, turn)) problems.push("work was started before the person answered the plan question");
   }
   if (turn >= 2) {
     if (!workRecords(proj).some((record) => record.scope === "bugfix")) problems.push("\"1\" did not start the bugfix plan the question offered");
@@ -211,6 +219,8 @@ export interface ReleaseJourneyReport {
   /** Tool-specific counts: hook runs by kind, tokens, credits. */
   extra: Record<string, unknown>;
   problems: string[];
+  /** AI-DLC started work before the person answered the plan question. */
+  ranAhead?: boolean;
 }
 
 /**
