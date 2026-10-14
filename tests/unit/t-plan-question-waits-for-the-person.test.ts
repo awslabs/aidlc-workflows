@@ -153,6 +153,16 @@ describe("t-plan-question-waits-for-the-person", () => {
     expect(startsWork(next(proj, answerArgs(ask.confirm_command), env))).toBe(true);
   });
 
+  test("the tailored plan typed as a bare /aidlc compose answers the question", () => {
+    proj = fresh();
+    const env = chatEnv(proj, SESSION);
+    const ask = planQuestion(proj, env);
+    typed(proj, SESSION, "/aidlc compose");
+    const d = next(proj, answerArgs(ask.compose_command), env);
+    expect(waits(d), JSON.stringify(d).slice(0, 400)).toBe(false);
+    expect(String(d.message)).toContain("composer");
+  });
+
   test("another chat's message is no reply in this one", () => {
     proj = fresh();
     const env = chatEnv(proj, SESSION);
@@ -172,9 +182,12 @@ describe("t-plan-question-waits-for-the-person", () => {
 
   test("a message keeps whole seconds: one in the question's own second is after it, one a second before is not", () => {
     proj = fresh();
-    const kept = (at: string, session: string, text = "1", words: string | null = text): void => {
+    const kept = (
+      at: string, session: string, text = "1", words: string | null = text,
+      settings: Array<{ key: string; value: string }> = [],
+    ): void => {
       saveMessage(proj, {
-        session, at, source: "prompt", text, picker: null, words, settings: [],
+        session, at, source: "prompt", text, picker: null, words, settings,
         route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
       });
     };
@@ -191,9 +204,9 @@ describe("t-plan-question-waits-for-the-person", () => {
     kept(at(9_000), OTHER);
     expect(noReplySince(proj, SESSION, asked(6_100))).toBe(true);
     expect(noReplySince(proj, "named-by-the-engine", asked(6_100))).toBe(false);
-    // A typed line with no words and no route (settings only, a bare entry) is no reply;
-    // a prompt whose words the host did not pass on (text "") may be one.
-    kept(at(10_000), SESSION, "/aidlc --plan-approval off", null);
+    // A line that only sets something is no reply; a prompt whose words the host did
+    // not pass on (text "") may be one.
+    kept(at(10_000), SESSION, "/aidlc --plan-approval off", null, [{ key: "plan-approval", value: "off" }]);
     expect(noReplySince(proj, SESSION, asked(9_500))).toBe(true);
     kept(at(11_000), SESSION, "", null);
     expect(noReplySince(proj, SESSION, asked(10_500))).toBe(false);
