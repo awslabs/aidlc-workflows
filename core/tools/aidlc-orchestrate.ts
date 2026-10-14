@@ -7145,8 +7145,8 @@ function buildRunStageDirective(
   // The collaborators the stage ACTUALLY gets this run: the one switch owner.
   // Empty when the `collaborators` ceremony is off for this scope, which makes
   // the stage run lead-only on every topology (dispatch, gate, and promotion
-  // all read the same answer, so they can never disagree), and the inline
-  // roster then carries only the lead's persona and knowledge.
+  // all read the same answer, so they can never disagree), and the step then
+  // carries only the lead's persona and lists only the lead's knowledge.
   const effectiveSupports = effectiveSupportAgents(node, scope, stateContent);
   const inlineContext = inlineContextRoster({ ...node, support_agents: effectiveSupports }, codekbCtx, depth);
   const ruleEntries = codekbCtx
