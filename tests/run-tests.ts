@@ -45,7 +45,7 @@ import {
   TestBudgetExhaustedError,
 } from "./harness/test-budget.ts";
 import { buildMeta, renderMeta } from "./lib/bun-junit-to-meta.ts";
-import { CASE_TIMEOUT_RETRY_MAX_MS, flakyLiveLine, ISOLATED_RETRY_MAX_MS, MODEL_API_REASON, modelApiFailed, modelApiLine, onlyCaseTimeouts, ORDINARY_RETRY_MAX_MS, personTurnFailed, personTurnLine, preserveFirstAttempt, retryEligible, retryPassed } from "./lib/file-retry.ts";
+import { CASE_TIMEOUT_RETRY_MAX_MS, flakyLiveLine, ISOLATED_RETRY_MAX_MS, MODEL_API_REASON, modelApiFailed, modelApiLine, onlyModelApiFailures, onlyCaseTimeouts, ORDINARY_RETRY_MAX_MS, personTurnFailed, personTurnLine, preserveFirstAttempt, retryEligible, retryPassed } from "./lib/file-retry.ts";
 import {
   type OrderWeights,
   orderLongestFirst,
@@ -127,7 +127,7 @@ interface FileExecution {
   caseTimeoutsOnly?: boolean;
   /** A case failed a person-turn check, so the file is never retried. */
   personTurnFailure?: boolean;
-  /** A case failed because the model service did: infrastructure, not a test result. */
+  /** A case failed because the model service did; that failure is infrastructure, not a test result. */
   modelApiFailure?: boolean;
 }
 
@@ -1194,7 +1194,7 @@ async function runBunTestFile(
       : "No test cases executed (all skipped or empty)";
   }
   const modelApiFailure = meta.status === "FAIL" && modelApiFailed(xml, run.output);
-  if (modelApiFailure) meta.reason = MODEL_API_REASON;
+  if (modelApiFailure && onlyModelApiFailures(xml, run.output)) meta.reason = MODEL_API_REASON;
   // Preserve a duration even if a future Bun omits root time.
   if (meta.duration === "0") meta.duration = String(Math.max(0, (Date.now() - start) / 1000));
   writeMeta(name, meta);

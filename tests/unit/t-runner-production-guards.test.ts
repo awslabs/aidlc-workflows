@@ -780,6 +780,19 @@ describe("bounded file workers through the public runner", () => {
     expect(record("t-service-down.test.ts").attempts).toHaveLength(2);
   });
 
+  // A real assertion beside a service failure is still a result about AI-DLC:
+  // the file keeps its ordinary reason, and the warning says the service failed under it.
+  test("a file with a real failure beside a model service failure keeps its ordinary reason", () => {
+    const fixture = isolatedRunnerFixture({ "integration/t-mixed.test.ts": RETRY_CASES.modelApiBesideAssertion });
+    const result = fixture.run(["--integration", "--isolated-files", "-P", "1"], {
+      AIDLC_TUI_BACKEND: "bun", AIDLC_RETRY_OBSERVER: join(fixture.root, "observer"),
+    });
+    expect(result.status, result.out + result.failures).not.toBe(0);
+    expect(result.out).toContain(modelApiLine("tests/integration/t-mixed.test.ts"));
+    expect(result.failures).toContain("FAIL: t-mixed (2 failed assertions)");
+    expect(result.failures).not.toContain(MODEL_API_REASON);
+  });
+
   test("cleanup uncertainty stops reuse and leaves the remaining file incomplete", () => {
     const fixture = isolatedRunnerFixture({
       "integration/t-a-dirty.test.ts": `import { test } from "bun:test";
@@ -885,6 +898,12 @@ test("the model service fails on its first attempt only", () => {
     throw new ModelApiError("Claude Code returned an error result: API Error: Connection error.");
   }
 });`,
+  modelApiBesideAssertion: `${RETRY_PRELUDE}
+class ModelApiError extends Error { override name = "ModelApiError"; }
+test("the model service fails", () => {
+  throw new ModelApiError("Claude Code returned an error result: API Error: 503 Service Unavailable");
+});
+test("a real assertion fails", () => expect("what AI-DLC did").toBe("what the person asked for"));`,
   modelApiAlways: `${RETRY_PRELUDE}
 class ModelApiError extends Error { override name = "ModelApiError"; }
 test("the model service fails", () => {

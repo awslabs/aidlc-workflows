@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { liveRetryReport, type RetryRecord, retryReport } from "../../scripts/ci-retry-report.ts";
 import {
-  CASE_TIMEOUT_RETRY_MAX_MS, flakyLiveLine, ISOLATED_RETRY_MAX_MS, modelApiFailed, modelApiLine, ORDINARY_RETRY_MAX_MS, onlyCaseTimeouts,
+  CASE_TIMEOUT_RETRY_MAX_MS, flakyLiveLine, ISOLATED_RETRY_MAX_MS, modelApiFailed, modelApiLine, ORDINARY_RETRY_MAX_MS, onlyCaseTimeouts, onlyModelApiFailures,
   personTurnFailed, personTurnLine, preserveFirstAttempt, RETRY_DEADLINE_RESERVE_MS, type RetryEvidence, retryEligible, retryPassed,
 } from "../lib/file-retry.ts";
 import { driveFailure, ModelApiError } from "../harness/sdk-drive.ts";
@@ -166,6 +166,26 @@ describe("the retry rule", () => {
     expect(child.status, child.stderr).toBe(1);
     expect(modelApiFailed(readFileSync(junit, "utf8"), `${child.stdout}${child.stderr}`)).toBe(true);
     expect(modelApiFailed("", `${child.stdout}${child.stderr}`)).toBe(true);
+  });
+
+  // The reason says "not AI-DLC" for a whole file, so it needs every failed
+  // case to be the model service's; one service failure beside a real
+  // assertion keeps the ordinary reason (the warning still says it happened).
+  test("only a file whose every failed case is the model service's reads as infrastructure", () => {
+    const report = (cases: string) => `<?xml version="1.0"?><testsuites><testsuite name="x">${cases}</testsuite></testsuites>`;
+    const service = (name: string) => `<testcase name="${name}" time="1.0"><failure type="ModelApiError" message="API Error" /></testcase>`;
+    const assertion = '<testcase name="b" time="0.1"><failure type="AssertionError" message="expected 1 to be 2" /></testcase>';
+    const passed = '<testcase name="c" time="0.1" />';
+    expect(onlyModelApiFailures(report(service("a") + service("d") + passed))).toBe(true);
+    expect(onlyModelApiFailures(report(service("a") + assertion))).toBe(false);
+    expect(modelApiFailed(report(service("a") + assertion))).toBe(true);
+    expect(onlyModelApiFailures(report(passed))).toBe(false);
+    expect(onlyModelApiFailures("")).toBe(false);
+    // Bun 1.3 names every failure AssertionError: a header for each failed case counts.
+    const bun13 = (name: string) => `<testcase name="${name}" time="0.1"><failure type="AssertionError" /></testcase>`;
+    const header = "ModelApiError: Claude Code returned an error result: API Error: Connection error.\n";
+    expect(onlyModelApiFailures(report(bun13("a") + bun13("b")), header + header)).toBe(true);
+    expect(onlyModelApiFailures(report(bun13("a") + bun13("b")), `${header}error: expect(received).toBe(expected)\n`)).toBe(false);
   });
 
   test("reads case timeouts off bun's JUnit report", () => {
@@ -329,7 +349,7 @@ describe("the live retry report (Windows)", () => {
       { file: STEADY, state: "PASS" },
     ], [FLAKY, PERSON, STEADY]);
     expect(liveRetryReport(logs, root)).toEqual([modelApiLine(FLAKY), flakyLiveLine(FLAKY), modelApiLine(PERSON)]);
-    expect(modelApiLine(PERSON)).toStartWith("::warning title=Model service failure::t-exec-copilot-release-journey.serial.test.ts ");
+    expect(modelApiLine(PERSON)).toStartWith("::warning title=Model service failure::t-exec-copilot-release-journey.serial.test.ts: the model service failed under it ");
   });
 
   test("says the Flaky line and the person-turn line the POSIX jobs print, once per file", () => {

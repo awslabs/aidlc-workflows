@@ -75,7 +75,20 @@ export function modelApiFailed(xml: string, output = ""): boolean {
   return failedWith("ModelApiError", xml, output);
 }
 
-/** What a file that failed because the model service did says, in its result and failures.txt. */
+/**
+ * True when every failed case failed because the model service did: only then
+ * is the whole file's failure infrastructure. Bun 1.3 names every failure
+ * `AssertionError`, so there each failed case needs its own printed header.
+ */
+export function onlyModelApiFailures(xml: string, output = ""): boolean {
+  const failures = [...xml.matchAll(/<(failure|error)\b([^>]*)>/g)].map((match) => match[2]);
+  if (failures.length === 0) return false;
+  if (failures.every((attributes) => /\btype="ModelApiError"/.test(attributes))) return true;
+  return failures.every((attributes) => /\btype="AssertionError"/.test(attributes)) &&
+    (output.match(/^ModelApiError: /gm)?.length ?? 0) >= failures.length;
+}
+
+/** What a file whose every failed case was the model service's says, in its result and failures.txt. */
 export const MODEL_API_REASON = "the model service failed, not AI-DLC: infrastructure, not a test result";
 
 /** The line a live file that passed only on its second attempt gets, on every OS. */
@@ -89,10 +102,10 @@ export function personTurnLine(file: string): string {
     "(a decision recorded as theirs with no reply of theirs behind it, or work started before they answered).";
 }
 
-/** The line a live file that failed because the model service did gets, on every OS. */
+/** The line a live file the model service failed under gets, on every OS; its other failures are its own. */
 export function modelApiLine(file: string): string {
-  return `::warning title=Model service failure::${basename(file)} failed because the model service did ` +
-    "(throttled, a server error, or the connection dropped), not because of AI-DLC; infrastructure, not a test result.";
+  return `::warning title=Model service failure::${basename(file)}: the model service failed under it ` +
+    "(throttled, a server error, or the connection dropped); that failure is infrastructure, not a test result.";
 }
 
 /** True when a JUnit report has failed cases and every one ran past its case timeout (bun writes `type="TimeoutError"`). */

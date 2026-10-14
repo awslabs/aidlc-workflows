@@ -1751,8 +1751,10 @@ line. A pass on the retry prints a `Flaky live test` warning. A file that
 failed because the model service did (the SDK drive's `ModelApiError`: Claude
 Code ended the run on a 429, a 5xx or a dropped connection, never a 4xx the
 request caused) keeps its one retry and prints a `Model service failure`
-warning; its line in `failures.txt` and the preview report reads "the model
-service failed, not AI-DLC: infrastructure, not a test result". The Windows live
+warning; when every failed case is the service's, its line in `failures.txt` and
+the preview report reads "the model service failed, not AI-DLC: infrastructure,
+not a test result", and a real failure beside one keeps the file's ordinary
+reason. The Windows live
 job keeps the isolated child's output out of its log, so it says these lines
 from the collected `e2e-results.json` (`bun scripts/ci-retry-report.ts --live
 tests/logs`), in fixed words and the test file's name only. Passing
