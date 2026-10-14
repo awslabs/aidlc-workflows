@@ -11,7 +11,6 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { stateDigest, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { quoteCommandArgument } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 import { codeGenerationRecordDir } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { AIDLC_SRC, seededStateFile } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
@@ -27,8 +26,9 @@ afterEach(cleanupCheckpointFixtures);
 // prints a line of its own, then fails on a trailing space in the Unit's code.
 const APPROVED = "echo visible-test-output && git diff --check";
 
-const command = (pd: string) =>
-  `bun .claude/tools/aidlc.ts engine swarm check alpha --show-output --project-dir ${quoteCommandArgument(resolve(pd))}`;
+// The command as the brief and the review request spell it. It names no folder, so no shell has a path to
+// quote: cmd.exe hands a quoted Windows path to the program with its quotes, and splits it at a space.
+const COMMAND = "bun .claude/tools/aidlc.ts engine swarm check alpha --show-output";
 
 function prepared(): string {
   const pd = fixture(["alpha"], APPROVED);
@@ -88,24 +88,26 @@ describe("a parallel batch's Unit runs the approved tests through swarm check", 
     const brief = runCheckpointTool(pd, "tools/aidlc-testing-posture.ts", ["brief", "--unit", "alpha"]);
     expect(brief.code, `${brief.out}\n${brief.err}`).toBe(0);
     expect(brief.out).toContain(
-      `To run the tests the person approved (\`${APPROVED}\`), run \`${command(pd)}\` as a command of its own ` +
+      `To run the tests the person approved (\`${APPROVED}\`), run \`${COMMAND}\` as a command of its own ` +
         `from the project's main folder \`${resolve(pd)}\`, not from your worktree and with no \`cd\` before it: ` +
         "it runs them in your worktree and shows their output, and its JSON line says `\"converged\":true` when they pass.",
     );
+    expect(brief.out).not.toContain("--project-dir");
 
     // Under Guard Policy strict, with the batch out, the worker runs the command as the brief spells it.
-    admitted(pd, command(pd), DEVELOPER);
+    admitted(pd, COMMAND, DEVELOPER);
 
-    // The public form through the dispatcher: the tests' output on stderr, one verdict line on stdout.
+    // Through the dispatcher, from the main folder of a session that names its project, as the brief spells it:
+    // the tests' output on stderr, one verdict line on stdout. The public form also takes --project-dir.
     const run = (extra: string[]) =>
-      runCheckpointTool(pd, "tools/aidlc.ts", ["engine", "swarm", "check", "alpha", ...extra, "--project-dir", pd]);
+      runCheckpointTool(pd, "tools/aidlc.ts", ["engine", "swarm", "check", "alpha", ...extra]);
     const shown = run(["--show-output"]);
     expect(shown.code, `${shown.out}\n${shown.err}`).toBe(0);
     expect(shown.err).toContain("visible-test-output");
     expect(verdict(shown.out)).toMatchObject({ unit: "alpha", converged: true });
 
     // Without the flag, as before: the verdict alone, the same bytes.
-    const plain = run([]);
+    const plain = run(["--project-dir", pd]);
     expect(plain.code, `${plain.out}\n${plain.err}`).toBe(0);
     expect(plain.err).not.toContain("visible-test-output");
     expect(plain.out).toBe(shown.out);
@@ -128,8 +130,8 @@ describe("a parallel batch's Unit runs the approved tests through swarm check", 
       "--iteration", "1", "--project-dir", child,
     ]);
     expect(request.code, `${request.out}\n${request.err}`).toBe(0);
-    expect(JSON.parse(request.out).test_command).toBe(command(pd));
-    admitted(pd, command(pd), REVIEWER);
+    expect(JSON.parse(request.out).test_command).toBe(COMMAND);
+    admitted(pd, COMMAND, REVIEWER);
 
     const checked = swarm(pd, ["check", "alpha"]);
     expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
@@ -143,7 +145,7 @@ describe("a parallel batch's Unit runs the approved tests through swarm check", 
   test("a worker or reviewer may run swarm check; the batch's own steps stay the conductor's", () => {
     const pd = prepared();
     for (const agent of [DEVELOPER, REVIEWER]) {
-      const ran = hook(pd, STATE_GUARD, command(pd), agent);
+      const ran = hook(pd, STATE_GUARD, COMMAND, agent);
       expect(ran.code, `${agent}\n${ran.out}\n${ran.err}`).toBe(0);
     }
     for (const step of [
