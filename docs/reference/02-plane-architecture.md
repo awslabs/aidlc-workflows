@@ -15,7 +15,7 @@ the substrate operates on.
 
 ## 1. The problem
 
-v0.5.0 introduces rules, sensors, and a learning loop that captures
+AI-DLC has rules, sensors, and a learning loop that captures
 observations during workflow runs and writes them somewhere they fire
 automatically next time. The underlying model has real complexity:
 per-stage imports of multiple kinds, universal-default rules attached
@@ -98,7 +98,7 @@ dir of per-clone shards under `<record>/audit/`.)
 | Telemetry (NetFlow, sFlow) | Audit log, sensor firings, memory.md entries → the intent's `runtime-graph.json` |
 | Reactive flow install (PACKET_IN) | Learning loop: data plane reports an observation → user confirms → file write into rules/sensors plus a frontmatter edit on the originating stage when a new sensor binding is captured |
 | Proactive route install (BGP advertisement) | Framework PR: ships new stages/rules/sensors before any workflow runs |
-| Topology change → recompute routes | Workflow start → compile reads current source files; subsequent recomputes triggered by next workflow |
+| Topology change -> recompute routes | Package, install, or reconfigure (`graph compile`, a saved scope, a plugin selection or compose) -> compile reads current source files |
 | Pre-installed FIB stable across packet flight | Learning-loop writes during a workflow don't change the in-flight compiled selection; rule text in the selected files is re-read at each stage delivery, while new files and sensor bindings wait for the next compile (see §4) |
 | Line-rate forwarding by table lookup | Orchestrator + dispatcher read pre-resolved fields off graph nodes; no resolution walks at runtime |
 
@@ -115,29 +115,33 @@ The load-bearing insight: networking doesn't put filter evaluation or
 inheritance walks at packet rate because the work is too expensive
 there. The control plane computes once, installs into the FIB, the
 data plane forwards by lookup. AI-DLC follows the same pattern: compile
-once at workflow start, read the resolved view throughout the workflow,
-recompile at the next workflow start.
+once when the framework is packaged or installed, or when its inputs change
+(`aidlc engine graph compile`, a saved scope, a plugin selection, a plugin
+compose), read the resolved
+view throughout every workflow.
 
 ### What compiles, what stays on disk
 
 | State | Lifecycle | Source on disk | Compiled into | Read by |
 |---|---|---|---|---|
 | Stage DAG, scope routing, artifact production | Framework-versioned (changes via framework PR) | Stage frontmatter (`.claude/aidlc-common/stages/*.md`) | `stage-graph.json` | Orchestrator, doctor, designer |
-| **Rules** (prose, prescriptive) | Mutable; framework PR or learning-loop writes | `aidlc/spaces/<active-space>/memory/<scope>.md` (filename-derived; org/team/project attach to every stage) | `stage-graph.json` per-node `rules_in_context` | Orchestrator (resolved view); Claude Code auto-load reads source for in-context prose |
+| **Rules** (prose, prescriptive) | Mutable; framework PR or learning-loop writes | `aidlc/spaces/<space>/memory/<scope>.md` (filename-derived; org/team/project attach to every stage; compiled paths name `default`, delivery reads the active space) | `stage-graph.json` per-node `rules_in_context` | Orchestrator (resolved view); Claude Code auto-load reads source for in-context prose |
 | **Sensors** (manifests, verification checks) | Mutable; framework PR or learning-loop writes (manifest authored once; stages import by id) | `.claude/sensors/aidlc-<id>.md` | `stage-graph.json` per-node `sensors_applicable` | Dispatcher reads resolved list at stage entry; PostToolUse fires from it |
 | Workflow execution telemetry | Per-workflow, accumulating | `audit/` shards · `memory.md` · Bolt forks | `<record>/runtime-graph.json` | Doctor, gate ritual, future cross-workflow observer |
 | Per-stage observation log | Per-stage-run | `<record>/<phase>/<stage>/memory.md` | (no compile — read directly) | Gate ritual at this stage's gate |
 
-Two compiled artefacts, both per-workflow. `stage-graph.json` carries
+Two compiled artefacts with different homes. `stage-graph.json`, in the
+harness's `tools/data/`, serves every workflow in the project and carries
 the resolved control-plane view: stage DAG, scope routing, artifact
 production, plus per-stage rule and sensor lists with inheritance
-pre-resolved. `runtime-graph.json` is recompiled — a full event-sourced walk of the audit
+pre-resolved. `runtime-graph.json`, in each intent's record, is recompiled - a full event-sourced walk of the audit
 log — on every transition-class audit event. Source files on disk are the
 authoring surface; compiled graphs are what runtime reads.
 
-### One compile, at workflow start
+### One compile, before any workflow
 
-The compile reads stage frontmatter, walks `aidlc/spaces/<active-space>/memory/` and
+The compile reads stage frontmatter, walks `aidlc/spaces/default/memory/` (rule
+delivery then reads each file from the active space) and
 `.claude/sensors/`, attaches universal-default rules by filename
 (`org.md`, `team.md`, `project.md` apply to every
 stage), then looks up each stage's pull imports against the source
@@ -171,7 +175,7 @@ worktree-scoped — and the user can launch `/aidlc` in two terminals
 against the same checkout — so the compile needs defence regardless.
 
 - **Concurrent compiles** would race writes to `data/stage-graph.json`.
-  The compile runs under `withAuditLock` from v0.4.0 (see `lib.ts`)
+  The compile runs under `withAuditLock` (in `aidlc-lib.ts`)
   so concurrent invocations serialise — the second waits for the first
   to finish, then runs against fresh source state.
 - **Crash mid-write.** A compile interrupted mid-write must not leave
@@ -188,8 +192,10 @@ the compile inherits them.
 The two compiled artefacts have different consumers and different
 update cadences:
 
-- **`stage-graph.json`** — control plane. Compiled at workflow start.
-  Stable across the entire workflow's lifetime. Read by the
+- **`stage-graph.json`** - control plane. Compiled when the framework
+  is packaged or installed, or its inputs change. Stable while a workflow
+  runs unless the install is reconfigured (`aidlc engine graph compile`, a
+  saved scope, or a plugin selection change, each of which recompiles it). Read by the
   orchestrator (DAG topology, scope routing), the dispatcher (per-stage
   `sensors_applicable`); Claude Code's auto-load consumes the source
   rule files in parallel for prose context.
@@ -213,12 +219,14 @@ a sensor fired.
 
 The compile is symmetric across all control-plane inputs. Stage
 frontmatter, rule files, and sensor files are all read by
-`aidlc-graph.ts` at workflow start; all contribute to the resolved
+`aidlc-graph.ts` at compile; all contribute to the resolved
 per-stage view. Networking does this — BGP and OSPF feed the same FIB;
 ACLs and policies feed the same flow tables. One compiled view,
 multiple sources.
 
-Concretely, each stage node gains two fields:
+Concretely, each stage node gains two fields. From `aidlc engine graph
+export` on a native install (other fields left out, and each sensor entry
+also carries its manifest's `matches` glob):
 
 ```json
 {
@@ -232,8 +240,10 @@ Concretely, each stage node gains two fields:
     {"path": "aidlc/spaces/default/memory/phases/inception.md", "scope": "phase"}
   ],
   "sensors_applicable": [
-    {"id": "required-sections", "path": ".claude/sensors/aidlc-required-sections.md"},
-    {"id": "upstream-coverage", "path": ".claude/sensors/aidlc-upstream-coverage.md"}
+    {"id": "required-sections", "path": ".claude/sensors/aidlc-required-sections.md",
+     "fire_on": "gate", "default_severity": "advisory", "category": "document-shape"},
+    {"id": "upstream-coverage", "path": ".claude/sensors/aidlc-upstream-coverage.md",
+     "fire_on": "gate", "default_severity": "advisory", "category": "document-shape"}
   ]
 }
 ```
@@ -257,12 +267,12 @@ Two consequences:
 
 The control plane (compile) does the slow, clever work once; the data
 plane (orchestrator + dispatcher reads) then runs fast on the resolved
-view. Compile at workflow start resolves all per-stage imports —
+view. The compile resolves all per-stage imports -
 every `sensors:` id looked up, every `phase:` attached, the
 universal-default rules picked up by filename. Throughout the workflow,
 runtime reads pre-resolved fields off graph nodes. BGP doesn't
-recompute routes mid-packet-flight; AI-DLC doesn't recompile
-mid-workflow. Learning-loop writes during a workflow update source
+recompute routes mid-packet-flight; AI-DLC does not recompile the
+stage graph on its own mid-workflow. Learning-loop writes during a workflow update source
 files; already-selected rule files are re-read at each stage delivery,
 and new selections (files, sensor bindings) enter the compiled view at
 the next graph compile.
@@ -276,7 +286,7 @@ state docs, `memory.md`, artefact tree — has a property it didn't pay
 for. A fresh harness session, started after compaction or a clean
 restart, can read these five sources together and reconstruct enough
 of the workflow's state to pick up where the previous session left
-off. Recovery isn't a feature added to v0.5.0; it's an emergent
+off. Recovery isn't a separate feature; it's an emergent
 property of the design's data discipline.
 
 ### Five sources, one picture
@@ -318,10 +328,12 @@ to recreate the previous session's exact mental state.
 
 Five sources, written by different code paths, all have to stay
 reasonably consistent for recovery to work. The audit log is canonical
-(append-only, source of truth for "what happened"); the other four
-are consistent with it because their writes are gated by the same
-`withAuditLock` primitive from v0.4.0. A fresh session reading any of
-the five against the audit log can detect drift and reconcile.
+(append-only, source of truth for "what happened"). The tool-owned
+writes (state transitions, audit rows, the runtime graph) run under the
+same `withAuditLock` primitive; the artefacts and `memory.md` diaries the
+agent writes itself land before the audit hook records them. A fresh
+session reading any of the five against the audit log can detect drift
+and reconcile.
 
 ### What this means for the framework
 

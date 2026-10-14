@@ -768,8 +768,9 @@ describe("t230 dispatcher route parity", () => {
     expect(changed.exitCode, changed.stderr.toString()).toBe(0);
     const selectedState = readFileSync(join(selectedRecord, "aidlc-state.md"), "utf-8");
     for (const [field, value] of [
+      // Nobody asked for any of them, so each is the command's.
       ["Depth", "Minimal"], ["Test Strategy", "Comprehensive"], ["Review Override", "advisory"],
-      ["Guard Policy", "relaxed (set by you)"], ["Guards Off", "state-transition (set by you)"],
+      ["Guard Policy", "relaxed (set by a command)"], ["Guards Off", "state-transition (set by a command)"],
       ["Sensors", "off (set by a command)"],
       ["Learnings", "off (set by a command)"], ["Summary Confirmation", "off (set by a command)"],
     ]) expect(selectedState).toContain(`- **${field}**: ${value}\n`);
@@ -3254,7 +3255,7 @@ describe("t230 dispatcher help and errors", () => {
     });
     expect(text).toContain("aidlc system <noun> <verb> [args]");
     expect(text).toContain(
-      "Operations on this user's aidlc installation; never a system-wide or root install:",
+      "Operations on this user's aidlc installation; never system-wide (root only with --allow-root):",
     );
     expect(text).toContain("  rollback: [<version>|--version <version>|--list]");
     expect(text).toContain("  completions: <bash|zsh|fish|powershell>");

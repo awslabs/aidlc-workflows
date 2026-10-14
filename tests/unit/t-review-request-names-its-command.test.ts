@@ -69,7 +69,6 @@ function refusalFor(attempt: Record<string, unknown>): { remedies: Remedy[] } {
   } as Parameters<typeof evaluateGuardRefusal>[0]) as unknown as { remedies: Remedy[] };
 }
 
-// The steps after the request, as the action says them to the agent.
 function expectRequestSteps(action: string, command: string): void {
   expect(action).toContain(`run \`${command}\``);
   // The reviewer runs as its own agent (seen live: "have the reviewer review it"
@@ -134,10 +133,8 @@ function lastJson(out: string): Record<string, unknown> {
   return JSON.parse(line as string) as Record<string, unknown>;
 }
 
-// `report` as the agent runs it.
 const report = (proj: string, args: string[]) => lastJson(run(ORCHESTRATE, ["report", ...args, "--project-dir", proj]).out);
 
-// The command inside the way on's backticks, run as the agent would run it.
 function runNamedRequest(action: string): { rc: number; out: string; args: string[] } {
   const command = /run `([^`]+)`/.exec(action)?.[1];
   expect(command, action).toBeDefined();

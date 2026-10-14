@@ -1,10 +1,10 @@
 // covers: docs-gate:legacy-refs
 //
-// t174 — the P9 DOCS ALLOWLIST GATE. Mechanism: none (readFileSync over docs/,
+// t174 - the DOCS ALLOWLIST GATE. Mechanism: none (readFileSync over docs/,
 // zero spawn, zero LLM, zero tokens). Technique: deterministic closed predicate.
 //
-// P9 retired the flat `aidlc-docs/` record layout and the `/aidlc --init` command:
-// the docs now describe the per-intent workspace model + auto-create. This gate
+// The flat `aidlc-docs/` record layout and the `/aidlc --init` command are retired:
+// the docs describe the per-intent workspace model + auto-create. This gate
 // makes that a CLOSED, reviewable predicate rather than a free-text "is this
 // legitimately legacy?" judgement (which is trivially satisfiable by allowlisting
 // everything). It scans every docs/**/*.md line PLUS both user-facing onboarding
@@ -35,9 +35,9 @@ const FIXTURE = join(REPO_ROOT, "tests", "fixtures", "docs-legacy-refs.json");
 // roots beyond docs/: every `core/templates/*.md` (including both onboarding
 // skeletons — the FIRST surfaces a user reads), and each harness's
 // orchestrator `SKILL.md` (the conductor prose the harness loads at runtime — the
-// blind spot that let stale rules-dir prose ship in an earlier pass).
+// blind spot that let stale rules-dir prose ship).
 //   EXCLUDED by design: dist/** (generated — `package.ts --check` proves byte
-//   parity, so gating the authored source suffices for all 4 dist trees) and
+//   parity, so gating the authored source suffices for all dist trees) and
 //   core/aidlc-common/** (the engine-parsed stage/protocol method tree — its
 //   `aidlc-docs/` reroot is a separate deferred sweep; scanning it here would red
 //   on pre-existing debt this gate does not own).
@@ -47,7 +47,6 @@ function listExtraAuthoredDocs(): string[] {
   for (const name of readdirSync(join(REPO_ROOT, "core", "templates"))) {
     if (name.endsWith(".md")) out.push(`core/templates/${name}`);
   }
-  // each harness's orchestrator SKILL.md: harness/<h>/skills/aidlc/SKILL.md
   for (const h of readdirSync(join(REPO_ROOT, "harness"))) {
     const rel = `harness/${h}/skills/aidlc/SKILL.md`;
     try {
@@ -106,7 +105,7 @@ function scanOccurrences(): Occurrence[] {
       // A bare `--init` flag token: `--init` not preceded by another flag char.
       const hasInit = /(^|[^-\w])--init\b/.test(line);
       // Retired rules-DIR tokens (the dotted per-harness rules dirs). The method
-      // tree relocated to `aidlc/spaces/<space>/memory/` (graph.ts MEMORY_SEGMENTS);
+      // tree lives in `aidlc/spaces/<space>/memory/` (graph.ts MEMORY_SEGMENTS);
       // the dotted dirs survive in native-include prose (pinned in the fixture).
       // aidlc-onboarding.md is a current native instruction file, not a retired
       // copy of the method tree; other steering paths still require review.
@@ -114,7 +113,7 @@ function scanOccurrences(): Occurrence[] {
         line.includes(".claude/rules/") ||
         /\.kiro\/steering\/(?!aidlc-onboarding\.md(?:[^\w./-]|$))/.test(line) ||
         line.includes(".codex/aidlc-rules/");
-      // Retired dated learnings-LOG filenames. A confirmed learning is now a
+      // Retired dated learnings-LOG filenames. A confirmed learning is a
       // practice in `memory/{team,project}.md` (aidlc-learnings.ts); there is no
       // `*-learnings.md` surface. Filename-anchored so the live tool
       // `aidlc-learnings.ts` and the phrase "learnings ritual" never match.

@@ -6,7 +6,7 @@
 |-------|-------|
 | Name | aidlc-operations-agent |
 | Tier | **templated** |
-| Allowed Claude Code Tools | Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion |
+| Claude Code Tools | Inherits the full session toolset, MCP tools included (no `tools:` allowlist); expected to use Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion |
 | Disallowed Claude Code Tools | Task |
 
 ---
@@ -64,9 +64,9 @@ Path: `.claude/knowledge/aidlc-operations-agent/`
 
 ### Team (Tier 2)
 
-Path: `aidlc/knowledge/aidlc-operations-agent/` (the space-level knowledge dir; user-managed)
+Path: `aidlc/spaces/<active-space>/knowledge/aidlc-operations-agent/` (the space-level knowledge dir; user-managed)
 
-A space-level directory the team creates when it has content (the engine ships `aidlc/knowledge/` empty). Populated by the team with project-specific
+A space-level directory the team creates when it has content (the engine creates the space's `knowledge/` folder empty). Populated by the team with project-specific
 operational context such as existing runbooks, on-call schedules, SLO targets,
 or monitoring dashboards.
 

@@ -1,7 +1,7 @@
 // covers: subcommand:aidlc-orchestrate:next, file:harness/kiro/hooks/aidlc-kiro-adapter.ts
 //
-// SUBJECT: Branch 0 of aidlc-orchestrate.ts handleNext (~:887-929) — the
-// turn-scoped no-op-next guard (the Kiro roll-forward defense). On Kiro the
+// SUBJECT: Branch 0 of aidlc-orchestrate.ts handleNext - the turn-scoped
+// no-op-next guard (the Kiro roll-forward defense). On Kiro the
 // userPromptSubmit seam (harness/kiro/hooks/aidlc-kiro-adapter.ts) runs a
 // read-only/navigation command off-band, bumps aidlc/.aidlc-turn-counter, and
 // stamps aidlc/.aidlc-readonly-latch ({turn,flag,source,ts}) with the CURRENT
@@ -26,14 +26,6 @@
 //   3  counter=N, latch{turn:N}  next --status    -> {kind:"print"}  (readOnly exempts Branch 0)
 //   4  counter=N, latch{turn:N}  next --single ...  -> NOT done       (single exempts Branch 0 — the Phase-1 parity fix)
 //   5  NO counter/latch files     bare next        -> NOT done        (guard inert on the Claude/Codex path)
-//
-// Source cites (core/tools/aidlc-orchestrate.ts):
-//   :900 the exemption gate — Branch 0 runs ONLY when none of readOnly/
-//        workspaceVerb/stage/phase/scope/intent/resume/depth/testStrategy/
-//        single is set (so --status and --single both skip it).
-//   :910 reads aidlc/.aidlc-turn-counter (integer); absent -> counter stays -1.
-//   :914 reads aidlc/.aidlc-readonly-latch (JSON {turn,flag,source}).
-//   :922 fires {kind:"done"} only when counter>=0 AND latchTurn===counter.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -62,8 +54,6 @@ interface RunResult {
   out: string; // combined stdout+stderr (mirrors t114's 2>&1)
 }
 
-// Run `bun aidlc-orchestrate.ts next <args> --project-dir <proj>` — identical
-// spawn convention to t114's runNext.
 function runNext(proj: string, args: string[]): RunResult {
   const res = runOrchestrateNext(TOOL, proj, args, {
     cwd: proj,
@@ -73,7 +63,7 @@ function runNext(proj: string, args: string[]): RunResult {
 
 // Stamp the per-turn counter + the read-only latch the Kiro seam writes, at the
 // SAME paths the engine reads (resolveProjectDir(--project-dir)/aidlc/...). The
-// latch JSON shape matches aidlc-kiro-adapter.ts:137 ({turn,flag,source,ts}).
+// latch JSON shape matches aidlc-kiro-adapter.ts ({turn,flag,source,ts}).
 function seedLatch(
   proj: string,
   counter: number,
@@ -82,7 +72,7 @@ function seedLatch(
   source = "read-only-flag",
 ): void {
   const aidlc = join(proj, "aidlc");
-  mkdirSync(aidlc, { recursive: true }); // already created by the fixture; idempotent
+  mkdirSync(aidlc, { recursive: true });
   writeFileSync(join(aidlc, ".aidlc-turn-counter"), `${counter}\n`, "utf-8");
   writeFileSync(
     join(aidlc, ".aidlc-readonly-latch"),
@@ -118,7 +108,6 @@ describe("t179 Branch 0: fresh latch -> done", () => {
     // The done is the guard's, not some other terminal: its reason names the
     // read-only/navigation nothing-to-advance contract.
     expect(out).toContain("nothing to advance");
-    // It MUST NOT have routed into the active stage.
     expect(out).not.toContain('"kind":"run-stage"');
   });
 
@@ -170,16 +159,15 @@ describe("t179 Branch 0: stale latch -> not done", () => {
     const out = runNext(proj, []).out;
     expect(out).not.toContain('"kind":"done"');
     expect(out).not.toContain("nothing to advance");
-    // Falls through to the happy path for the in-flight stage.
     expect(out).toContain('"kind":"run-stage"');
   });
 });
 
 // ===========================================================================
 // Branch 0 exemption — a read-only flag (--status) sets flags.readOnly, so the
-// :900 gate is false and Branch 0 is skipped entirely; the next branch (Branch
-// 1, read-only dispatch) emits a print. A fresh latch present does NOT swallow
-// it into done.
+// handleNext exemption gate is false and Branch 0 is skipped entirely; the
+// next branch (Branch 1, read-only dispatch) emits a print. A fresh latch
+// present does NOT swallow it into done.
 // ===========================================================================
 describe("t179 Branch 0 exemption: --status -> print", () => {
   test("3: counter=N, latch{turn:N}, next --status -> {kind:\"print\"} (readOnly exempts Branch 0)", () => {
@@ -193,11 +181,11 @@ describe("t179 Branch 0 exemption: --status -> print", () => {
 });
 
 // ===========================================================================
-// Branch 0 exemption — --single sets flags.single, so the :900 gate is false
-// (the Phase-1 parity fix added !flags.single to the exclusion list). Even with
-// a fresh latch, a single-stage run is NOT swallowed into done; it routes to the
-// single run-stage path (Branch at :1067). Seeded MID_IDEATION is feature scope
-// with feasibility in scope, so --stage feasibility resolves to a run-stage.
+// Branch 0 exemption - --single sets flags.single, so the handleNext exemption
+// gate is false. Even with a fresh latch, a single-stage run is NOT swallowed
+// into done; it routes to the single run-stage path. Seeded MID_IDEATION is
+// feature scope with feasibility in scope, so --stage feasibility resolves to a
+// run-stage.
 // ===========================================================================
 describe("t179 Branch 0 exemption: --single -> not done", () => {
   test("4: counter=N, latch{turn:N}, next --single --stage feasibility -> NOT done (single exempts Branch 0)", () => {
@@ -207,16 +195,15 @@ describe("t179 Branch 0 exemption: --single -> not done", () => {
     const out = runNext(proj, ["--single", "--stage", "feasibility"]).out;
     expect(out).not.toContain('"kind":"done"');
     expect(out).not.toContain("nothing to advance");
-    // Routes to the single run-stage path, not the guard.
     expect(out).toContain('"kind":"run-stage"');
   });
 });
 
 // ===========================================================================
 // Branch 0 inert on the Claude/Codex path — with NO counter/latch files written
-// (no seam exists there), counter stays -1 (:907/:910 never set it), so the
-// :922 condition (counter>=0) is false and the guard falls through. A bare next
-// routes to the normal happy path (run-stage), never done.
+// (no seam exists there), counter stays -1, so the handleNext condition
+// (counter>=0) is false and the guard falls through. A bare next routes to the
+// normal happy path (run-stage), never done.
 // ===========================================================================
 describe("t179 Branch 0 inert: no latch files -> not done", () => {
   test("5: NO counter/latch files, bare next -> NOT done (guard inert)", () => {

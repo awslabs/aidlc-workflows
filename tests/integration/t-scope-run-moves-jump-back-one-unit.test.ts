@@ -4,8 +4,7 @@
 // both Units are built and approved, Build and Test's approval is open, and
 // the person says "go back to Code Generation for Unit 2 only". Only that Unit
 // redoes Code Generation: the other Unit keeps its approval and is asked
-// nothing, and Build and Test runs again. The refusal that used to answer
-// here ("only while Construction builds one unit at a time") is gone.
+// nothing, and Build and Test runs again.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import {

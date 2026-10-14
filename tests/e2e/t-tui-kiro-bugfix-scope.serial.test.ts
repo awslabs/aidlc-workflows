@@ -7,8 +7,8 @@
 // each approval prompt; bugfix asks no learnings question and shows no
 // consolidated summary to confirm. It then TERMINATES on the
 // on-disk Completed counter crossing the post-init milestone — the same
-// milestone the Claude twin (and its .sh ancestor) pinned: init=3 + >=2
-// Inception stages = Completed >= 5.
+// milestone the Claude twin pinned: init=3 + >=2 Inception stages =
+// Completed >= 5.
 //
 // The gate loop is the kiro-intent-capture pattern (idle footer → classify and
 // answer the visible prompt → re-check disk): disk is the terminator, never the
@@ -24,7 +24,7 @@
 //     actually landed).
 //
 // COST: the long Kiro journey (the Claude twin budgets 2400s). Gated behind
-// AIDLC_KIRO_TUI_LIVE=1 with skip-reasons; POSIX only (no Windows kiro-cli path).
+// AIDLC_KIRO_TUI_LIVE=1 with skip-reasons.
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
@@ -201,7 +201,7 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
         const questions = readFileSync(questionsPath, "utf-8");
         expect(questions).not.toContain("Consolidated Summary Confirmation");
 
-        // State surface — the Claude twin's assertion shapes (t50:309-330):
+        // State surface - the Claude twin's assertion shapes (t-tui-t50-bugfix-scope):
         // loose scope/brownfield matches (live init writes vary the field
         // wording), strict counter-vs-grid consistency.
         const state = readFileSync(stateFilePathFor(sandbox), "utf-8");
@@ -210,8 +210,6 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
         const xCount = (state.match(/^- \[x\]/gm) ?? []).length;
         expect(completedCount(sandbox)).toBe(xCount);
 
-        // Audit: the workflow really started and at least one gate approval
-        // landed through the numbered-prose protocol.
         const audit = readAllAuditShards(sandbox);
         expect(audit).toContain("WORKFLOW_STARTED");
         expect(audit).toContain("GATE_APPROVED");

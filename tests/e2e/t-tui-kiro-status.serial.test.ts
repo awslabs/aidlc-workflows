@@ -4,16 +4,16 @@
 // `kiro-cli chat` TUI on the shipped dist/kiro tree, both with and without an
 // active workflow. The Kiro twin of the t20 sdk-driver contract (status is
 // read-only: it reports the state fields and mutates NOTHING), exercised
-// through the print-directive arm of the forwarding loop:
-//   next --status → {"kind":"print", message: run aidlc-utility status …}
-//   conductor runs the named tool and prints its output, then STOPS.
+// through the userPromptSubmit seam (agents/aidlc.json -> aidlc-kiro-adapter.ts):
+//   the hook runs `aidlc-utility.ts status` off-band and hands the conductor
+//   its verbatim output; the conductor prints it, then STOPS.
 //
 // Cheap by design: one engine roundtrip per case, no gates, no artifacts —
 // the affordable breadth-builder beside the full intent-capture journey.
 // Still LIVE (real Kiro credits) so it stays behind the same opt-in flag.
 //
 // What each case proves on the SHIPPED tree:
-//   with state    — the conductor surfaces the seeded mid-ideation fields
+//   with state    - the conductor surfaces the seeded mid-inception fields
 //                   (scope/stage strings render in the pane) and the per-intent
 //                   record's state file is byte-untouched afterwards.
 //   without state — the run reports no active workflow (and does NOT
@@ -149,11 +149,10 @@ describe("t-tui-kiro-status (read-only status through the Kiro print-directive a
         // surface those strings in the pane. NOTE: the status tool renders the
         // stage DISPLAY name ("Requirements Analysis"), not the slug — it prints
         // `Current Stage:  ${stageDisplay}` from the graph entry's `name`
-        // (aidlc-utility.ts:347 / :267-282), so we wait on the display name, the
+        // (aidlc-utility.ts handleStatus), so we wait on the display name, the
         // same calibration lesson the ACP twin (t-acp-kiro-utilities) encodes.
         expect(waitFor(session, "Requirements Analysis", remainingWorkMs(), 0)).toBe(true);
         expect(waitFor(session, "feature", remainingWorkMs(), 0)).toBe(true);
-        // Read-only contract: the state file is byte-identical afterwards.
         expect(readFileSync(statePath, "utf8")).toBe(stateBefore);
       } finally {
         cleanupTuiProjectAfterKill(
@@ -175,7 +174,7 @@ describe("t-tui-kiro-status (read-only status through the Kiro print-directive a
         launch(session, sandbox);
         submitStatus(session);
         // The engine's no-state status path prints the utility's exact wording
-        // (aidlc-utility.ts:186, verified live): "No active AI-DLC workflow".
+        // (aidlc-utility.ts handleStatus, verified live): "No active AI-DLC workflow".
         expect(waitFor(session, "No active AI-DLC workflow", remainingWorkMs(), 0)).toBe(true);
         // And it must NOT scaffold: status is read-only even with no state. The
         // seeded record was stripped (noAidlcDocs); status creates nothing, so the

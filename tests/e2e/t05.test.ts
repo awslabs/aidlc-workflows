@@ -1,17 +1,16 @@
 // covers: subcommand:aidlc-worktree:create
 //
-// CLI-contract port of tests/e2e/t05-worktree-audit-first.sh (TAP plan 7),
-// mechanism = cli. The .sh drives `aidlc-worktree.ts create` to prove the
+// The test drives `aidlc-worktree.ts create` to prove the
 // audit-first invariant: the WORKTREE_CREATED audit-of-intent row lands BEFORE
 // the real `git worktree add` (so a kill-9 in between surfaces as a phantom
-// row doctor reconciles), AND a pre-git failure (read-only audit.md) exits
+// row doctor reconciles), AND a pre-git failure (read-only audit directory) exits
 // non-zero WITHOUT touching git or the audit. The covers UNIT credited is
 // subcommand:aidlc-worktree:create — the create subcommand whose ordering
 // guarantee is the whole point of this test (aidlc-worktree.ts:181-202).
 //
-// MECHANISM: this is a .cli file, so every observable is taken at the PROCESS
+// MECHANISM: every observable is taken at the PROCESS
 // boundary — SPAWN the real binary via spawnSync (BUN + the tool .ts path) and
-// assert on res.status and the audit.md the tool writes. The audit-first
+// assert on res.status and the audit the tool writes. The audit-first
 // ordering and the ERROR_LOGGED-after-git-failure sequence are real
 // side-effects of running the actual binary against real git; an in-process
 // twin would lose them.
@@ -30,28 +29,11 @@
 // and prunes child worktrees then rm -rf's the parent. Nothing is written
 // under tests/fixtures/**.
 //
-// PLATFORM GATE: Part A chmods audit.md to 0444 (read-only file) and Part B
-// chmods .aidlc/worktrees to 0555 (read-only dir). Native Windows ignores both
-// modes, so the write-failure these provoke cannot occur there. Mirroring the
-// .sh's POSIX assumption (it runs `set -euo pipefail` on bash) and t76's
-// readonly-probe precedent, Part B is gated behind a runtime read-only-dir
-// probe and skipped where the mechanism is a no-op. Part A's primary observable
-// (non-zero exit + no worktree dir) is gated likewise for the "audit not
-// mutated" sub-assertion, but the exit-code / no-dir checks hold regardless.
-//
-// PARITY NOTES — every .sh assertion has an equal-or-stronger counterpart:
-//   .sh A1 (l56)  Part A: create exits non-zero (audit.md read-only)     -> Test "1" (same)
-//   .sh A2 (l57)  Part A: no worktree dir created (audit-first pre-git)  -> Test "1" (same)
-//   .sh A3 (l67)  Part A: audit.md does NOT contain WORKTREE_CREATED     -> Test "1" (same,
-//                 plus STRONGER: still does not contain ERROR_LOGGED either)
-//   .sh B1 (l98)  Part B: create exits non-zero (git fails post-audit)   -> Test "2" (same)
-//   .sh B2 (l100) Part B: WORKTREE_CREATED audit-of-intent row landed    -> Test "2" (same)
-//   .sh B3 (l103) Part B: ERROR_LOGGED appended after git failure        -> Test "2" (same)
-//   .sh B4 (l105) Part B: ERROR_LOGGED Error field carries [slug=demo]   -> Test "2" (same)
-//
-// 7 .sh asserts -> 8 expect()s across 2 test() cases (Part A = 1 case / 4
-// expects incl. the STRONGER no-ERROR_LOGGED check; Part B = 1 case / 4
-// expects). Grouped where the .sh shared one fixture per part.
+// PLATFORM GATE: Part A chmods the audit shard directory to 0555 and Part B
+// chmods the worktrees parent to 0555. Native Windows ignores these
+// mode bits, so the write failures cannot be provoked there. Both parts are
+// gated behind a runtime read-only-directory probe and skipped where the
+// mechanism is a no-op.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
@@ -104,9 +86,9 @@ afterAll(() => {
 });
 
 /**
- * Fresh git-repo fixture on `main` + aidlc-docs/, with a seeded state file so
- * emitError's existsSync(stateFilePath) guard passes (mirrors the .sh's `cp
- * state-mid-ideation.md ... aidlc-state.md`). Registered for cleanup.
+ * Fresh git-repo fixture on `main` + a per-intent workspace shell, with a
+ * seeded state file so emitError's state-file guard passes. Registered for
+ * cleanup.
  */
 function freshFixture(): string {
   const p = setupWorktreeFixture();
@@ -122,7 +104,6 @@ interface CliResult {
   out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
 }
 
-/** Spawn `bun aidlc-worktree.ts create ... --project-dir <p>` from cwd=<p>. */
 function create(p: string, args: string[]): CliResult {
   const res = spawnSync(BUN, [TOOL, "create", ...args, "--project-dir", p], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: p,
@@ -137,7 +118,6 @@ function create(p: string, args: string[]): CliResult {
 const wtPath = (p: string, slug: string): string =>
   worktreePath(p, fixtureIntentId8(p), slug);
 
-/** Concatenate every audit shard (audit/*.md) for the seeded record. */
 const auditText = (p: string): string => {
   const dir = seededAuditDir(p);
   let names: string[];
@@ -151,8 +131,8 @@ const auditText = (p: string): string => {
 
 /**
  * Probe whether this platform enforces read-only directory permissions —
- * mirrors readonly_dirs_enforced (t76.cli.test.ts:256). The chmod-0555
- * (Part B) and chmod-0444 (Part A) mechanisms are no-ops on platforms that
+ * mirrors readonlyDirsEnforced (tests/unit/t76.test.ts). The chmod-0555
+ * mechanisms in both parts are no-ops on platforms that
  * ignore mode bits (native Windows); skip those cases rather than assert an
  * unobservable sequence.
  */
@@ -187,15 +167,13 @@ describe("t05 aidlc-worktree create audit-first (migrated from t05-worktree-audi
     "1: Part A — read-only audit.md ⇒ exit non-zero pre-git, no worktree dir, audit unmutated",
     () => {
       if (!readonlyEnforced()) {
-        // Platform ignores read-only file mode: the pre-git audit-write
-        // failure this case provokes cannot occur. Skip (mirrors the .sh's
-        // POSIX-only bash assumption / t76's SKIP precedent).
+        // Platform ignores read-only directory mode: the pre-git audit-write
+        // failure this case provokes cannot occur. Skip.
         return;
       }
       const p = freshFixture();
-      // Audit is a per-clone shard DIR now: lock the audit/ DIR read-only so the
-      // audit-first emit can't create its shard, the per-clone analog of the old
-      // chmod-0444 on the single audit.md. The shipped fixture.md shard is the
+      // Audit is a per-clone shard DIR: lock the audit/ DIR read-only so the
+      // audit-first emit can't create its shard. The shipped fixture.md shard is the
       // only content; the "not mutated" check stays exact.
       const auditDir = seededAuditDir(p);
       mkdirSync(auditDir, { recursive: true });
@@ -205,16 +183,16 @@ describe("t05 aidlc-worktree create audit-first (migrated from t05-worktree-audi
       const r = create(p, ["--slug", "demo", "--base", "main"]);
       chmodSync(auditDir, 0o755); // restore before reading/cleanup
 
-      // A1: create exits non-zero — the audit-first emit threw on the
+      // Create exits non-zero - the audit-first emit threw on the
       // read-only audit dir before git was ever invoked.
       expect(r.status).not.toBe(0);
-      // A2: no worktree directory created (audit-first prevented git add).
+      // No worktree directory created (audit-first prevented git add).
       expect(existsSync(wtPath(p, "demo"))).toBe(false);
-      // A3: the audit was NOT mutated — no WORKTREE_CREATED row (emit failed
-      // pre-git) ...
+      // The audit was NOT mutated - no WORKTREE_CREATED row (emit failed
+      // pre-git).
       const after = auditText(p);
       expect(after).not.toContain("WORKTREE_CREATED");
-      // ... and STRONGER than the .sh: no ERROR_LOGGED row either (the audit dir
+      // No ERROR_LOGGED row either (the audit dir
       // was itself read-only, so emitError's best-effort write also failed).
       expect(after).not.toContain("ERROR_LOGGED");
     },
@@ -227,15 +205,14 @@ describe("t05 aidlc-worktree create audit-first (migrated from t05-worktree-audi
       if (!readonlyEnforced()) {
         // Platform ignores read-only dir mode: `git worktree add` can't be
         // forced to fail via chmod 0555, so the post-audit failure sequence is
-        // unobservable. Skip (mirrors t76 test 6 / the .sh's POSIX assumption).
+        // unobservable. Skip.
         return;
       }
       const p = freshFixture();
       // Pre-create the worktrees PARENT and lock it read-only. The tool's
       // pre-audit existsSync(wtPath) only checks the absent Bolt leaf,
       // so the audit emit succeeds; then `git worktree add` fails because it
-      // can't mkdir the leaf under the read-only parent (the .sh: mkdir -p
-      // .aidlc/worktrees; chmod 0555).
+      // can't mkdir the leaf under the read-only parent.
       const worktreesDir = join(p, ".aidlc", "worktrees");
       mkdirSync(worktreesDir, { recursive: true });
       chmodSync(worktreesDir, 0o555);
@@ -243,16 +220,16 @@ describe("t05 aidlc-worktree create audit-first (migrated from t05-worktree-audi
       const r = create(p, ["--slug", "demo", "--base", "main"]);
       chmodSync(worktreesDir, 0o755); // restore before reading/cleanup
 
-      // B1: create exits non-zero (git failed post-audit).
+      // Create exits non-zero (git failed post-audit).
       expect(r.status).not.toBe(0);
 
       const after = auditText(p);
-      // B2: WORKTREE_CREATED audit-of-intent row landed BEFORE the git failure.
+      // WORKTREE_CREATED audit-of-intent row landed BEFORE the git failure.
       expect(after).toContain("WORKTREE_CREATED");
-      // B3: ERROR_LOGGED appended after git failed.
+      // ERROR_LOGGED appended after git failed.
       expect(after).toContain("ERROR_LOGGED");
-      // B4: the ERROR_LOGGED Error field carries [slug=demo] for doctor
-      // correlation (errorWithSlug, aidlc-worktree.ts:810).
+      // The ERROR_LOGGED Error field carries [slug=demo] for doctor
+      // correlation (errorWithSlug, aidlc-worktree.ts).
       expect(after).toContain("[slug=demo]");
     },
     NATIVE_FIXTURE_SETUP_TIMEOUT_MS,

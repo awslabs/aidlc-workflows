@@ -1,9 +1,8 @@
 // covers:
 //
-// Guard milestone 1's v0.6.0 fixture reconciliation: tests/harness must not read or
-// mention the retired scope routing JSON. The custom harness now seeds scope
-// metadata plus stage `scopes:` frontmatter into a temp project and lets compile
-// derive the grid.
+// tests/harness must not read or mention the retired scope routing JSON. The
+// custom harness seeds scope metadata plus stage `scopes:` frontmatter into a
+// temp project and lets compile derive the grid.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";

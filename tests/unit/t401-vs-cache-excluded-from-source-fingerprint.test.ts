@@ -12,7 +12,7 @@
 // and the gate stayed refused across restarts.
 //
 // These tests pin `.vs` OUT of the fingerprint and prove an unhashable file
-// inside it no longer breaks the bind.
+// inside it does not break the bind.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
@@ -68,7 +68,6 @@ describe("t401 Visual Studio .vs cache does not drift or break the source finger
     // it would get null from stableFileSha256 and refuse the whole bind.
     chmodSync(locked, 0o000);
     try {
-      // Before the fix this returned null (bind refused); now it binds.
       const state = workspaceSourceState(project);
       expect(state).not.toBeNull();
     } finally {

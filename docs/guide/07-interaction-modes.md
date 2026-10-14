@@ -31,6 +31,16 @@ When a stage gathers your input, the agent writes its questions to a file and of
    5. Chat about this
 ```
 
+In a questions file the agent creates, each ordinary question names who would
+usually answer it, such as `[Product owner]` or `[Developer]`, and questions for
+the same person are kept together, unless one of them has to wait for another
+person's answer. A team can split the questions that way, and on your own you
+can see which are about what the product does and which about how it is built.
+Anyone can still answer any question. A question added later goes at the end
+with its own label. The confirmation, change-request and approval sections carry
+no label. A file that already existed keeps its questions as they were, unless
+you ask to redo the stage from scratch, which replaces it with a new one.
+
 ### Guide Me
 
 The agent walks you through each question interactively using structured prompts. Best when you want the agent to lead the conversation and ensure nothing is missed.

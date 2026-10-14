@@ -38,9 +38,8 @@ import {
 // renamed to opencode's native `steps:` key (per-agent step cap, opencode
 // >= 1.0.134; at the cap opencode forces a final TEXT-ONLY turn - the agent
 // can return a summary but cannot make tool calls, so the persona's Turn
-// Budget prose still carries the write-early instruction). Unknown disallowed
-// tools fail the build instead of silently landing in opencode's inert
-// options bag.
+// Budget prose still carries the write-early instruction). A disallowedTools
+// value without Task fails the build.
 function emitSubagentMd(raw: string, srcPath: string, tierCap: EmitContext["tierCap"]): string {
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);

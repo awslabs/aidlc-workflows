@@ -13,7 +13,9 @@ const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
 const IS_WIN = process.platform === "win32";
 const DRIVER = join(import.meta.dir, "../harness/tui-drive.ts");
 const ABSENT_REASON = absentReason({ command: ["claude", "--dangerously-skip-permissions"] });
-const STARTUP_WALL_BOUND_MS = 20_000;
+// No fixed wall-clock bound: how fast a hosted runner starts Claude Code is not
+// AI-DLC's, and the startup loop returning at once is pinned by
+// t-startup-state-machine. Each launch must paint and reap its process tree.
 const WINDOWS_SAMPLE_COUNT = 3;
 const samples = () => {
   const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
@@ -28,16 +30,13 @@ const samples = () => {
 
 describe("t-tui-journey-orientation Windows startup", () => {
   test.skipIf(ABSENT_REASON !== null || !IS_WIN)(
-    `three native Windows launches stay within ${STARTUP_WALL_BOUND_MS}ms and reap each process tree` +
+    "three native Windows launches paint the orientation statusline and reap each process tree" +
       `${ABSENT_REASON ? ` — SKIP: ${ABSENT_REASON}` : !IS_WIN ? " — SKIP: Windows-only" : ""}`,
     () => {
+      // captureOrientationStatusline fails a launch that never paints within its
+      // startup budget or does not reap its process tree and fixture.
       const observed = samples();
       expect(observed).toHaveLength(WINDOWS_SAMPLE_COUNT);
-      for (const sample of observed) {
-        expect(sample.startupWallMs).toBeLessThanOrEqual(
-          STARTUP_WALL_BOUND_MS,
-        );
-      }
     },
     TEST_TIMEOUT_MS,
   );

@@ -189,6 +189,11 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(text).toContain(
       "fix: This is expected before your first chat message here. If you already sent one, trust this folder in Kiro IDE: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), send a message and run doctor again.",
     );
+    // Installed while Kiro IDE was open: it keeps its old PATH, and only a
+    // full restart, not Reload Window, lets its hooks find aidlc (#2396).
+    expect(text).toContain(
+      "If AI-DLC was installed while Kiro IDE was open, quit Kiro IDE fully and reopen it instead: it keeps the PATH it started with, so its hooks cannot find aidlc, and Reload Window does not change that.",
+    );
     expect(text).not.toContain("agent picker");
     expect(text).not.toContain("Hook heartbeats: not yet fired");
   });

@@ -22,12 +22,14 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlink
 import { dirname, join } from "node:path";
 import {
   activeDirectiveOutOfDateReason,
+  listIntents,
   readActiveDirectiveMarker,
   recordCopilotHumanSequence,
   stateDigest,
   writeActiveDirectiveMarker,
   writeSessionPidEntry,
 } from "../../dist/copilot/.aidlc/tools/aidlc-lib.ts";
+import { saveRestartRequest } from "../../dist/copilot/.aidlc/tools/aidlc-question-store.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -96,7 +98,6 @@ function shell(proj: string, command: string) {
   return { stdout: run.stdout ?? "", stderr: run.stderr ?? "", code: run.status ?? -1 };
 }
 
-// One of the project's own tools, run directly with no shell.
 function tool(proj: string, file: string, args: string[]) {
   const run = spawnSync(process.execPath, [join(proj, ".aidlc", "tools", file), ...args], {
     cwd: proj, encoding: "utf-8", env: env(), timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -123,7 +124,6 @@ function engine(proj: string, session: string, args: string[], id: string): Reco
   return JSON.parse(run.stdout.trim()) as Record<string, unknown>;
 }
 
-// `next`, then every rules part it asks for, as the conductor follows them.
 function nextToBuild(proj: string, session: string, id: string): Record<string, unknown> {
   let directive = engine(proj, session, ["next"], `${id}-next`);
   for (let part = 0; directive.kind === "load-steering"; part++) {
@@ -158,7 +158,6 @@ function approvedBuild(proj: string, session: string): string {
     hook_event_name: "UserPromptSubmit", session_id: session, prompt: "approve", timestamp: new Date().toISOString(),
   });
   expect(approved.code, approved.stderr).toBe(0);
-  // The agent reads the reply and records the choice the person made.
   const recorded = tool(proj, "aidlc-log.ts", [
     "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
     "--project-dir", proj,
@@ -204,7 +203,6 @@ describe("a step that went out of date says which write did it", () => {
       kind: "error",
       out_of_date: { by: "compaction", kind: "run-stage", stage: "code-generation" },
     });
-    // The build waits until the agent has read the step again.
     expect(dispatch(proj, session, contract).stdout).toContain('"permissionDecision":"deny"');
 
     const lines = doctorLines(proj);
@@ -216,7 +214,6 @@ describe("a step that went out of date says which write did it", () => {
     expect(lines[row + 1]).toContain("fix: run `bun .aidlc/tools/aidlc-orchestrate.ts next` as its own command");
     expect(lines[row + 1]).toContain("an approval that still matches is kept");
 
-    // The one command: the approved build comes straight back, not the question.
     expect(nextToBuild(proj, session, "after-compaction")).toMatchObject({
       kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
     });
@@ -349,7 +346,6 @@ describe("the record names only what it knows", () => {
     const a = issued(proj);
     const b = a.replace(/^- \*\*Depth\*\*:.*$/m, "- **Depth**: Minimal");
     const c = b.replace(/^- \*\*Test Strategy\*\*:.*$/m, "- **Test Strategy**: Minimal");
-    // Recorded A to B and B to C, then a hand edit back to B.
     writeState(proj, b);
     writeState(proj, c);
     writeFileSync(seededStateFile(proj), b);
@@ -386,7 +382,6 @@ describe("the record names only what it knows", () => {
       else expect(spawnSync("mkfifo", [record]).status).toBe(0);
       const moved = state.replace(/^- \*\*Depth\*\*:.*$/m, "- **Depth**: Minimal");
       writeState(proj, moved);
-      // The planted entry reads as no record and is replaced by a real one.
       expect(lstatSync(record).isFile(), plant).toBe(true);
       expect(recordCopilotHumanSequence(proj, moved, `chat-${plant}`)).toBe(true);
       expect(readActiveDirectiveMarker(proj, moved)?.out_of_date?.writers).toEqual(["aidlc-write-state.ts"]);
@@ -463,5 +458,28 @@ describe("the record names only what it knows", () => {
     }, null, 2)}\n`);
     writeActiveDirectiveMarker(proj, { kind: "error", stage: "code-generation", state_sha256: stateDigest(state), message: "engine said no" });
     expect(marker(proj).out_of_date).toBeUndefined();
+  });
+});
+
+// A `next` the hooks-off step stopped is kept for the chat the person starts
+// next and named there by its id. On Copilot the adapter claims the command as
+// it is run, `next --request <id>`, so the step it leads to is issued under
+// that claim rather than refused as another command's.
+describe("a stopped next run by its id is issued under the claim of the command that names it", () => {
+  test("Copilot claims next --request <id>, and the step it hands back is the one recorded", () => {
+    const proj = project();
+    const session = "restart-request-claim";
+    const record = listIntents(proj).find((entry) => entry.active) ?? listIntents(proj)[0];
+    expect(record?.uuid, "the fixture's workflow").toBeTruthy();
+    // A kept `--resume` is the shortest kept command that leads to a step the
+    // claim covers (a stop keeps none, but the claim reads only the command run).
+    const id = saveRestartRequest(proj, ["--resume"], "default", { intent: record.dirName ?? "", uuid: record.uuid ?? "" });
+    let handed = engine(proj, session, ["next", "--request", id], `${session}-named`);
+    for (let part = 0; handed.kind === "load-steering"; part++) {
+      if (part > 20) throw new Error("steering did not converge");
+      handed = engine(proj, session, ["continue", String(handed.receipt)], `${session}-continue-${part}`);
+    }
+    expect(handed.kind, JSON.stringify(handed)).toBe("run-stage");
+    expect(marker(proj)).toMatchObject({ kind: "run-stage", stage: "code-generation" });
   });
 });

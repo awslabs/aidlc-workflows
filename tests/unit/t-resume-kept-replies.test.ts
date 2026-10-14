@@ -92,7 +92,6 @@ const Q1 = "Who runs this command?";
 const Q2 = "How should months be grouped?";
 const SHOP = "A) A shop owner wants a monthly summary from the terminal";
 
-// The stage resumed from a later chat.
 function resumed(proj: string): { directive: Record<string, unknown>; parts: number } {
   const r = runOrchestrateNext(ORCHESTRATE, proj, [], { cwd: proj, env: env(LATER) });
   expect(r.directive?.kind, r.out).toBe("run-stage");
@@ -143,7 +142,6 @@ describe("a stage resumed with blank answers hands back what the person already 
     mkdirSync(dir, { recursive: true });
     questionsFile = join(dir, `${STAGE}-questions.md`);
     writeFileSync(questionsFile, QUESTIONS);
-    // The mode question, its reply and its answer: all on record.
     log(proj, ["decision", "--stage", STAGE, "--decision", "How would you like to answer the questions?",
       "--options", "Guide me,I'll edit the file,Chat"]);
     says(proj, "1");

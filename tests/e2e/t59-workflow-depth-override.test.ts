@@ -92,7 +92,6 @@ import {
 } from "../harness/fixtures.ts";
 import { driveAidlc, readStateField } from "../harness/sdk-drive.ts";
 
-// ---------------------------------------------------------------------------
 // AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
 const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 // Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
@@ -110,11 +109,11 @@ function remainingWorkMs(): number {
 }
 
 
-// Known-answer literals from the SHIPPED init handler (see header for file:line).
+// Known-answer literals from the SHIPPED creation handler (see header).
 const SCOPE = "bugfix";
-const DEPTH_OVERRIDE = "Comprehensive"; // VALID_DEPTHS["comprehensive"] (utility.ts:1941)
+const DEPTH_OVERRIDE = "Comprehensive"; // VALID_DEPTHS["comprehensive"] (aidlc-utility.ts handleIntentCreateStateBuild)
 const BUGFIX_DEFAULT_DEPTH = "Minimal"; // the bugfix scope default the override beats
-const INIT_STATE_SUMMARY = "State initialized:"; // utility.ts:2154
+const INIT_STATE_SUMMARY = "State initialized:"; // aidlc-utility.ts handleIntentCreateStateBuild
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
 const INIT_STAGES = ["workspace-scaffold", "workspace-detection", "state-init"];
 
@@ -151,30 +150,28 @@ describe("t59 /aidlc --scope bugfix --depth comprehensive depth override (sdk)",
           (t) => t.toolName === "Bash" && t.resultText.includes(INIT_STATE_SUMMARY),
         );
         expect(initCall).toBeDefined();
-        // The init summary line ends "... <depth> depth" (utility.ts:2154).
+        // The init summary line ends "... <depth> depth" (aidlc-utility.ts
+        // handleIntentCreateStateBuild).
         expect(initCall?.resultText.toLowerCase()).toContain("comprehensive depth");
 
-        // .sh test 1: state file created. sdk-drive reads it off disk post-run.
+        // State file created. sdk-drive reads it off disk post-run.
         expect(r.stateFile).toBeDefined();
         const state = r.stateFile as string;
 
-        // .sh test 2: depth comprehensive OVERRIDES the bugfix Minimal default.
-        // Exact field equality (stronger than `grep "Depth.*Comprehensive"`), AND
-        // prove it is NOT the scope default Minimal — the override is the subject.
+        // Depth comprehensive OVERRIDES the bugfix Minimal default. Exact field
+        // equality, AND prove it is NOT the scope default Minimal - the override is the
+        // subject.
         expect(readStateField(state, "Depth")).toBe(DEPTH_OVERRIDE);
         expect(readStateField(state, "Depth")).not.toBe(BUGFIX_DEFAULT_DEPTH);
 
-        // .sh test 3: bugfix scope recorded. Exact field (stronger than [Bb]ugfix).
         expect(readStateField(state, "Scope")).toBe(SCOPE);
 
-        // The deterministic init completion (the .sh's test 4 floor "at least 3
-        // init stages completed"): the 3 init stages are marked [x].
         for (const stage of INIT_STAGES) {
           expect(state).toContain(`[x] ${stage}`);
         }
 
-        // .sh test 6: audit recorded WORKFLOW_STARTED (the .sh's exact event for
-        // a known-scope invocation; parsed **Event**: line, utility.ts:1784).
+        // Audit recorded WORKFLOW_STARTED for a known-scope invocation
+        // (aidlc-utility.ts handleIntentCreate).
         assertAuditEvent(r, "WORKFLOW_STARTED");
       } finally {
         cleanupTestProject(proj);

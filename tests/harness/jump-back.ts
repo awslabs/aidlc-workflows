@@ -66,7 +66,6 @@ export function toBuildAndTest(policy: Policy, at: "gate" | "work"): { run: Scop
   if (!run) throw new Error("the run reached done without stopping where the person speaks");
   runs.push(run);
   if (at === "gate") return { run };
-  // The stage completions after the last checkpoint, up to Build and Test's work.
   const { agent } = run;
   let d = agent.next();
   for (let i = 0; i < 12 && !(d.kind === "run-stage" && d.stage === "build-and-test"); i++) {
@@ -77,7 +76,6 @@ export function toBuildAndTest(policy: Policy, at: "gate" | "work"): { run: Scop
   return { run, first: d };
 }
 
-/** Run the one engine command a print names, then `next`. */
 export function followPrint(agent: AgentStandIn, d: Directive): { ran: string; said: string; next: Directive } {
   const message = String(d.message ?? "");
   const command = /`(bun \.claude\/tools\/[^`]+)`/.exec(message)?.[1];
@@ -132,5 +130,4 @@ export function expectCodeGenerationFor(d: Directive, unit?: string): void {
   if (unit !== undefined && d.kind === "run-stage") expect(d.unit, shown).toBe(unit);
 }
 
-/** Only these Units' stage passes, and only at these stages. */
 export const unitWork = (lines: string[]) => lines.filter((line) => UNITS.some((unit) => line.endsWith(`/${unit}`)));

@@ -1,66 +1,51 @@
 // covers: hook:aidlc-write-audit-log, function:appendAuditEntry, function:acquireAuditLock, function:releaseAuditLock
 //
-// t33 — audit-logger lock contention under parallel writes. Migrated from
-// tests/integration/t33-hook-concurrency.sh (TAP plan 8). Mechanism: cli.
+// t33 - audit-logger lock contention under parallel writes. Mechanism: cli.
 //
 // WHY CLI (process-boundary, not in-process): the subject IS concurrency —
 // five independent OS processes racing for the same mkdir-based audit lock.
-// The .sh proved the lock by launching 5 backgrounded `bun <hook>` invocations
-// (`& ... wait`) against ONE project's audit.md and asserting no write was
-// lost. An in-process loop calling appendAuditEntry() five times would be
-// strictly serial inside one process and could never exercise the
-// inter-process lock contention the .sh measured. So this twin SPAWNS the real
+// An in-process loop calling appendAuditEntry() five times would be strictly
+// serial inside one process and could never exercise the inter-process lock
+// contention. This test SPAWNS the real
 // hook five times in parallel via node:child_process spawnSync, fired
-// concurrently (Promise.all over Bun.spawn) the same way Claude Code's
-// PostToolUse(Write|Edit) drives it from settings.json.
+// concurrently (today through Promise.all over Bun.spawn, no spawnSync) the
+// same way Claude Code's PostToolUse(Write|Edit) drives it from settings.json.
 //
 // SOURCE UNDER TEST:
 //   dist/claude/.claude/hooks/aidlc-write-audit-log.ts — PostToolUse(Write|Edit).
-//     - resolves projectDir from CLAUDE_PROJECT_DIR (resolveProjectDirFromHook,
+//     - resolves projectDir through resolveProjectDirFromHook (as first ported,
 //       aidlc-lib.ts:116).
-//     - reads PostToolUse JSON on stdin; only logs writes whose file_path
-//       includes "aidlc-docs/" (:47) AND only when audit.md already exists
-//       (:55). A Write to a NET-NEW file under aidlc-docs/ (statSync throws →
-//       catch → isNew=true, :87-90) emits ARTIFACT_CREATED via appendAuditEntry
-//       (:95) with fields Tool / File / Context.
+//     - reads PostToolUse JSON on stdin; logs writes under the active intent
+//       record or active space codekb tree, and only when the audit shard
+//       exists. A Write to a NET-NEW artifact emits ARTIFACT_CREATED with
+//       fields Tool / File / Context.
 //   dist/claude/.claude/tools/aidlc-audit.ts:214 appendAuditEntry — acquires
 //     the audit lock (acquireAuditLock), appends one block, then releases it
-//     (releaseAuditLock) in a finally (:225-233). The block format is
+//     (releaseAuditLock). The hook takes the same lock through withAuditLock
+//     and appends with appendAuditEntryUnlocked. The block format is
 //     "\n## <heading>\n**Timestamp**: ...\n**Event**: ...\n<fields>\n---\n".
 //   dist/claude/.claude/tools/aidlc-lib.ts:512 auditLockDir(projectDir) =
-//     join(tmpdir(), `.aidlc-audit-${md5(projectDir).slice(0,8)}.lock`); the
-//     mkdir-based mutex (acquireAuditLock :517, releaseAuditLock :536). The .sh
-//     recomputed this dir by hand (md5sum | cut -c1-8); here we ask the source
-//     for it via auditLockDir() — equivalent and self-checking.
+//     join(tmpdir(), `.aidlc-audit-<8 hex of md5(auditLockIdentity)>.lock`), the
+//     mkdir-based mutex's directory (acquireAuditLock / releaseAuditLock); we
+//     ask the source for it via auditLockDir() rather than recompute the hash.
 //
-// FIXTURE DISCIPLINE (mirrors the .sh's create_test_project + seed_audit_file):
-//   - createTestProject() -> a fresh temp dir with aidlc-docs/.
-//   - seedAuditFile() -> copies tests/fixtures/audit-sample.md to
-//     aidlc-docs/audit.md, which carries exactly ONE ARTIFACT_CREATED block
-//     (INITIAL_ENTRIES = 1, verified against the fixture). The hook self-gates
-//     on audit.md existing, so seeding it is the precondition for the emit.
-//   - The hook is spawned at the SHIPPED source path (AIDLC_SRC/hooks/...),
-//     exactly like the .sh's `$AIDLC_SRC/hooks/aidlc-write-audit-log.ts`; no
-//     copied skeleton is needed because audit-logger imports appendAuditEntry
-//     directly (no re-spawn of a project-local tool).
-//   - cleanupTestProject() rm -rf's the temp project; the lock dir lives under
+// FIXTURE DISCIPLINE:
+//   - createTestProject() -> a fresh temp project.
+//   - seedStateFile() establishes the active intent; the test pins a clone ID
+//     and copies tests/fixtures/audit-sample.md into its resolved audit shard,
+//     which carries exactly ONE ARTIFACT_CREATED block (INITIAL_ENTRIES = 1,
+//     verified against the fixture). The hook self-gates on the shard existing,
+//     so seeding it is the precondition for the emit.
+//   - The hook is spawned at the SHIPPED source path (AIDLC_SRC/hooks/...).
+//     No copied skeleton is needed because audit-logger imports its audit
+//     writer directly (no re-spawn of a project-local tool).
+//   - cleanupTestProject() removes the temp project; the lock dir lives under
 //     tmpdir() and is asserted-then-removed (afterEach safety) so no cross-test
 //     bleed. Nothing is written under tests/fixtures/**.
 //
-// Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
-//   .sh test 1  (NEW_ENTRIES == 5, no lost writes)        -> "all 5 parallel writes are recorded (no lost writes)"
-//   .sh test 2  (entry for artifact-1.md present)         -> "every parallel artifact path lands ..." (i=1)
-//   .sh test 3  (entry for artifact-2.md present)         -> "every parallel artifact path lands ..." (i=2)
-//   .sh test 4  (entry for artifact-3.md present)         -> "every parallel artifact path lands ..." (i=3)
-//   .sh test 5  (entry for artifact-4.md present)         -> "every parallel artifact path lands ..." (i=4)
-//   .sh test 6  (entry for artifact-5.md present)         -> "every parallel artifact path lands ..." (i=5)
-//   .sh test 7  (separators >= entries, no corruption)    -> "no interleaved/corrupted blocks ..." (STRONGER: every block well-formed)
-//   .sh test 8  (lock directory cleaned up)               -> "the mkdir audit lock is released ..."
-//
-// 8 .sh asserts -> 8 expect()-bearing test() cases (several STRONGER: the
-// no-corruption row asserts block/separator/event counts are mutually
-// consistent rather than only separators>=entries; the lock-cleanup row pins
-// the source-computed lock dir, not a hand-recomputed hash).
+// The no-corruption row checks separator counts and Timestamp/Event adjacency;
+// the lock-cleanup row pins the source-computed lock dir, not a hand-recomputed
+// hash.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { setDefaultTimeout, afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -83,17 +68,17 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts");
 
-// P9 per-intent layout: the audit trail is a DIR of per-clone shards. We PIN one
-// clone-id on disk so all five parallel processes resolve the SAME shard — that
-// reproduces the original contract (five racing appends to ONE audit file,
-// serialised by the workspace-sentinel lock), and pre-creating that one shard
-// satisfies the audit-logger's "shard exists" gate for every process.
-// seedStateFile makes the active-intent cursor resolve so the artifacts land
-// under docsRoot(); the lock test 8 keys auditLockDir(projectDir) (the sentinel
-// bucket appendAuditEntry uses with no --intent).
+// The audit trail is a DIR of per-clone shards. We PIN one clone-id on disk so
+// all five parallel processes resolve the SAME shard - that reproduces the
+// contract (five racing appends to ONE audit file, serialised by the
+// workspace-sentinel lock), and pre-creating that one shard satisfies the
+// audit-logger's "shard exists" gate for every process. seedStateFile makes
+// the active-intent cursor resolve so the artifacts land under docsRoot(); the
+// lock test keys auditLockDir(projectDir) (the sentinel bucket
+// appendAuditEntry uses with no --intent).
 let proj: string;
 
 const PINNED_CLONE_ID = "testcloneid33c";
@@ -107,21 +92,18 @@ function pinnedShardName(): string {
   return `${host}-${PINNED_CLONE_ID}.md`;
 }
 
-// The audit trail read as one buffer (every per-clone shard, merge-concatenated).
 function readAudit(p: string): string {
   return readAllAuditShards(p);
 }
 
-/** Count occurrences of an "**Event**: <type>" line. */
 function eventCount(body: string, type: string): number {
   return body.split("\n").filter((l) => l.trim() === `**Event**: ${type}`).length;
 }
 
 /**
  * Fire N audit-logger hooks IN PARALLEL against the same project, each fed a
- * PostToolUse(Write) JSON for a distinct net-new aidlc-docs/ artifact path.
- * Mirrors the .sh's `for i in 1..5; do echo {...} | bun "$HOOK" & done; wait`.
- * Uses Bun.spawn (async) + Promise.all so all five processes are launched
+ * PostToolUse(Write) JSON for a distinct net-new per-intent artifact path.
+ * Uses Bun.spawn (async) + Promise.all so all processes are launched
  * before any is awaited — genuine inter-process lock contention, not serial.
  */
 async function fireParallel(p: string, n: number): Promise<void> {
@@ -144,7 +126,6 @@ async function fireParallel(p: string, n: number): Promise<void> {
     });
     procs.push(child);
   }
-  // Await every process — the equivalent of the shell `wait`.
   await Promise.all(procs.map((c) => c.exited));
 }
 
@@ -187,15 +168,14 @@ describe("t33 audit-logger lock contention under parallel writes (mechanism cli 
     const before = eventCount(readAudit(proj), "ARTIFACT_CREATED");
     await fireParallel(proj, 5);
     const after = eventCount(readAudit(proj), "ARTIFACT_CREATED");
-    // .sh: NEW_ENTRIES == 5. The lock must serialise all five appends so none
-    // clobber another — exactly five new ARTIFACT_CREATED blocks land.
+    // The lock must serialise all five appends so none clobber another - exactly
+    // five new ARTIFACT_CREATED blocks land.
     expect(after - before).toBe(5);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("every parallel artifact path lands in audit.md (no dropped reference) [.sh tests 2-6]", async () => {
     await fireParallel(proj, 5);
     const body = readAudit(proj);
-    // .sh tests 2,3,4,5,6: assert_grep audit.md "artifact-<i>.md" for i=1..5.
     for (let i = 1; i <= 5; i++) {
       expect(body.includes(`artifact-${i}.md`)).toBe(true);
     }
@@ -207,14 +187,12 @@ describe("t33 audit-logger lock contention under parallel writes (mechanism cli 
     const lines = body.split("\n");
     const sepCount = lines.filter((l) => l === "---").length;
     const eventLines = lines.filter((l) => l.trim().startsWith("**Event**:")).length;
-    // .sh test 7: SEPARATOR_COUNT >= FINAL_ENTRIES (>= number of blocks).
     // Each well-formed block closes with a standalone "---", so separators must
-    // be at least the number of event blocks. STRONGER than the .sh: a
-    // concurrency bug that interleaved two appends would either drop a "---" or
-    // double-write a header, breaking this one-block-one-separator-one-event
-    // invariant. With one seeded block (SESSION_STARTED + ARTIFACT_CREATED +
-    // SUBAGENT_COMPLETED = 3 events / 3 separators) plus five appends, we get
-    // 8 events and at least 8 separators, all intact.
+    // be at least the number of event blocks. A concurrency bug that interleaved
+    // two appends could drop a "---" or corrupt header/field adjacency. With the
+    // seeded fixture (SESSION_STARTED + ARTIFACT_CREATED + SUBAGENT_COMPLETED = 3
+    // events / 3 separators) plus five appends, we get 8 events and at least 8
+    // separators.
     expect(sepCount).toBeGreaterThanOrEqual(eventLines);
     // And every "**Event**:" line is immediately preceded by a "**Timestamp**:"
     // line — proving no header/field interleaving from a torn concurrent write.
@@ -227,11 +205,9 @@ describe("t33 audit-logger lock contention under parallel writes (mechanism cli 
 
   test("the mkdir audit lock is released after all writes complete [.sh test 8]", async () => {
     await fireParallel(proj, 5);
-    // .sh test 8 recomputed the lock dir by hand: md5sum(projectDir) | cut -c1-8
-    // under ${TMPDIR:-/tmp}/.aidlc-audit-<hash>.lock. We ask the SOURCE for the
-    // exact same dir via auditLockDir() (aidlc-lib.ts:512) — equivalent and
-    // self-checking. appendAuditEntry's finally releases the lock after each
-    // append, so once every process has exited the dir must be gone.
+    // We ask the SOURCE for the lock dir via auditLockDir() (aidlc-lib.ts). The
+    // hook's withAuditLock releases the lock after each append, so once every
+    // process has exited the dir must be gone.
     const lockDir = auditLockDir(proj);
     expect(existsSync(lockDir)).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

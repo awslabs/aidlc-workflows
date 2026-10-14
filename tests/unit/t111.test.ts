@@ -2,22 +2,22 @@
 //
 // t111 — P0 deterministic floor. Mechanism = none (pure file I/O, zero LLM,
 // zero tokens). Exercises the audit-append core in aidlc-audit.ts:
-//   appendAuditEntry          (:199) — validate → lock → delegate → unlock
-//   appendAuditEntryUnlocked  (:228) — block format, CR/LF escaping, append
-//   handleAppend              (:266) — thin wrapper, prints JSON to stdout
+//   appendAuditEntry          - validate -> lock -> delegate -> unlock
+//   appendAuditEntryUnlocked  - block format, CR/LF escaping, append
+//   handleAppend              - thin wrapper, prints JSON to stdout
 //
-// Test design note (house style, see tests/unit/t69-worktree-path.sh): assert
-// the OBSERVABLE CONTRACT, not implementation parity. We never recompute the
-// block string the way the source does and diff it — that only catches
-// deletion. Instead we pin the things a real reader of audit.md relies on:
+// Test design note: assert the OBSERVABLE CONTRACT, not implementation parity.
+// We never recompute the block string the way the source does and diff it -
+// that only catches deletion. Instead we pin the things a real reader of
+// audit.md relies on:
 //   - the exact field order and literal markers in an appended block
 //   - that a CR/LF inside a field value is collapsed to the two-char "\n"
-//     escape (the forged-audit-entry defence the source comments on at :248)
+//     escape (the forged-audit-entry defence in renderAuditBlock)
 //   - that appending twice keeps BOTH blocks (append-not-overwrite invariant)
 //   - that an invalid event type is rejected by throw, before any disk write
-//   - that EVERY one of the 104 VALID_EVENT_TYPES is accepted
+//   - that EVERY one of the 104 event types in this fixture is accepted
 // A regression that dropped escaping, overwrote prior history, reordered the
-// header fields, or narrowed the accepted event set would turn one of these
+// header fields, or rejected an event in this fixture would turn one of these
 // red.
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -73,8 +73,6 @@ function readAudit(projectDir: string): string {
   return readAllAuditShards(projectDir, undefined, "default");
 }
 
-// Whether the resolved audit shard exists on disk (the per-intent successor to
-// "is there an aidlc-docs/audit.md?").
 function auditShardExists(projectDir: string): boolean {
   return existsSync(auditFilePath(projectDir));
 }
@@ -89,12 +87,13 @@ afterAll(() => {
   }
 });
 
-// The 104 canonical event types, mirrored from aidlc-audit.ts VALID_EVENT_TYPES.
-// Kept as an explicit literal (not re-derived from the source) so that a silent
-// addition/removal in the source surfaces here as a count mismatch worth a look.
-// The CLI_PROTECTED_EVENT_TYPES members are included: the suite runs with
-// AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1 (tests/run-tests.ts), which is what lets the
-// append path accept them here -- t261 covers the refusal with the var unset.
+// 104 of the event types in aidlc-audit.ts VALID_EVENT_TYPES (the source holds
+// more). Kept as an explicit literal (not re-derived from the source) so that a
+// silent removal from the source surfaces here as a rejected append.
+// The CLI_PROTECTED_EVENT_TYPES members are included: appendAuditEntry takes
+// them like any other type (only the CLI handlers such as handleAppend refuse
+// them without AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1, which the suite sets in
+// tests/harness/runner-profile.ts) -- t261 covers the refusal with the var unset.
 const VALID_EVENT_TYPES = [
   "STAGE_STARTED",
   "STAGE_AWAITING_APPROVAL",
@@ -235,8 +234,6 @@ describe("appendAuditEntry — locked variant", () => {
       `\n---\n`;
     expect(content).toContain(expectedBlock);
 
-    // The seed header is immediately followed by the block — nothing injected
-    // between the two. Pins that the append is a pure suffix on the seed.
     expect(content).toBe(`# AI-DLC Audit Log\n${expectedBlock}`);
   });
 
@@ -266,7 +263,7 @@ describe("appendAuditEntry — locked variant", () => {
     // behind. Assert the shard is absent, proving validate-then-write order.
     const proj = freshProject();
     expect(() => appendAuditEntry("bogus", {}, proj)).toThrow();
-    expect(auditShardExists(proj)).toBe(false); // shard never created
+    expect(auditShardExists(proj)).toBe(false);
   });
 });
 
@@ -284,7 +281,6 @@ describe("appendAuditEntryUnlocked — escaping and append-not-overwrite", () =>
     );
     const content = readAudit(proj);
 
-    // The value is written with newlines escaped to backslash-n, on ONE line.
     expect(content).toContain(
       `**Path**: /tmp/x\\n**Event**: FAKE_FORGED\\nmore\n`,
     );
@@ -297,7 +293,6 @@ describe("appendAuditEntryUnlocked — escaping and append-not-overwrite", () =>
     expect(eventLines).toEqual([`**Event**: ERROR_LOGGED`]);
     expect(content).not.toContain(`\n**Event**: FAKE_FORGED\n`);
 
-    // Sanity: the returned event echoes the real type, not the forged one.
     expect(result.event).toBe("ERROR_LOGGED");
   });
 
@@ -311,7 +306,6 @@ describe("appendAuditEntryUnlocked — escaping and append-not-overwrite", () =>
       proj,
     );
     const content = readAudit(proj);
-    // CRLF -> one escape, not two.
     expect(content).toContain(`**CrLf**: p\\nq\n`);
     expect(content).toContain(`**LoneCr**: x\\ny\n`);
     expect(content).not.toContain("\r");
@@ -334,26 +328,21 @@ describe("appendAuditEntryUnlocked — escaping and append-not-overwrite", () =>
 
     const content = readAudit(proj);
 
-    // Seed header intact at the top.
     expect(content.startsWith("# AI-DLC Audit Log\n")).toBe(true);
 
-    // Both event rows present.
     expect(content).toContain(`**Event**: BOLT_STARTED\n`);
     expect(content).toContain(`**Event**: BOLT_COMPLETED\n`);
     expect(content).toContain(`\n## Bolt Started\n`);
     expect(content).toContain(`\n## Bolt Completed\n`);
 
-    // Chronological ordering: the first block lands before the second.
     const idxFirst = content.indexOf("**Event**: BOLT_STARTED");
     const idxSecond = content.indexOf("**Event**: BOLT_COMPLETED");
     expect(idxFirst).toBeGreaterThanOrEqual(0);
     expect(idxSecond).toBeGreaterThan(idxFirst);
 
-    // Two distinct timestamps came back (each call computes its own).
     expect(first.appended).toBe(true);
     expect(second.appended).toBe(true);
 
-    // Exactly two closing separators were appended (one per block).
     const sepCount = content.split("\n---\n").length - 1;
     expect(sepCount).toBe(2);
   });
@@ -388,8 +377,6 @@ describe("appendAuditEntryUnlocked — escaping and append-not-overwrite", () =>
     expect(content.split("**Timestamp**:").length - 1).toBe(1);
     expect(content.split("**Event**:").length - 1).toBe(1);
 
-    // The surviving line is the emitter's, and the caller's value is gone
-    // entirely — not merely ordered second.
     expect(content).toContain(`**Timestamp**: ${result.timestamp}\n`);
     expect(content).not.toContain("2020-01-01T00:00:00Z");
 
@@ -411,7 +398,7 @@ describe("VALID_EVENT_TYPES — every canonical type is accepted", () => {
     expect(new Set(VALID_EVENT_TYPES).size).toBe(104);
   });
 
-  // Loop over ALL valid types: each must append a block whose **Event**
+  // Loop over all fixture types: each must append a block whose **Event**
   // line carries that exact token, and the return must echo it. A regression
   // that dropped a type from the Set would throw here and fail its case.
   for (const eventType of VALID_EVENT_TYPES) {
@@ -447,19 +434,16 @@ describe("handleAppend — thin wrapper over appendAuditEntry", () => {
         orig;
     }
 
-    // Side effect: the block is on disk.
     const content = readAudit(proj);
     expect(content).toContain(`**Event**: GATE_APPROVED\n`);
     expect(content).toContain(`**Stage**: 2.1-practices\n`);
 
-    // Output: exactly one trailing-newline JSON line carrying the result.
     expect(captured.length).toBe(1);
     expect(captured[0].endsWith("\n")).toBe(true);
     const printed = JSON.parse(captured[0]);
     expect(printed.appended).toBe(true);
     expect(printed.event).toBe("GATE_APPROVED");
     expect(typeof printed.timestamp).toBe("string");
-    // The printed timestamp matches the one written into the block.
     expect(content).toContain(`**Timestamp**: ${printed.timestamp}\n`);
   });
 

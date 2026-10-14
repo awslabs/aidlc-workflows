@@ -98,10 +98,9 @@ afterAll(() => {
 interface CliResult {
   status: number;
   stdout: string;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string;
 }
 
-/** Spawn `bun aidlc-worktree.ts <sub> ... --project-dir <p>` from cwd=<p>. */
 function wt(p: string, sub: string, args: string[]): CliResult {
   const res = spawnSync(BUN, [WT_TOOL, sub, ...args, "--project-dir", p], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: p,
@@ -116,7 +115,6 @@ function wt(p: string, sub: string, args: string[]): CliResult {
 
 const wtPath = (p: string, slug: string): string =>
   worktreePath(p, fixtureIntentId8(p), slug);
-/** Concatenate every audit shard (audit/*.md) for the seeded record. */
 const auditText = (p: string): string => {
   const dir = seededAuditDir(p);
   let names: string[];
@@ -129,8 +127,7 @@ const auditText = (p: string): string => {
 };
 
 /** Audit blocks are separated by lines of only `---`. The WORKTREE_DISCARDED
- *  block for slug `s` (the .sh's `Event.*WORKTREE_DISCARDED` + `Bolt slug.*s`
- *  on the same block). */
+ *  block for slug `s`. */
 function discardBlock(p: string, slug: string): string | undefined {
   return auditText(p)
     .split(/\n---\n/)
@@ -152,8 +149,6 @@ function discardCount(p: string, slug: string): number {
     ).length;
 }
 
-/** Parse `git worktree list --porcelain` for the registered worktree paths
- *  (the surface assert_worktree_absent grepped in worktree-helpers.sh:67-75). */
 function listedWorktrees(p: string): string[] {
   const r = spawnSync("git", ["-C", p, "worktree", "list", "--porcelain"], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     encoding: "utf-8",
@@ -165,8 +160,8 @@ function listedWorktrees(p: string): string[] {
 }
 
 describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-halt-and-ask-discard.sh, plan 8)", () => {
-  // Single shared fixture, set up once (the .sh ran as one linear script over
-  // one fixture). create establishes the precondition: a worktree on disk.
+  // Single shared fixture, set up once. create establishes the precondition: a
+  // worktree on disk.
   const p = setupWorktreeFixture();
   fixtures.push(p);
   // Put the selected intent in Construction for the discard lifecycle.
@@ -176,19 +171,17 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
   test(
     "1: discard removes the worktree dir AND deregisters it from git [.sh a1+a2+a3]",
     () => {
-      // a1: precondition — create succeeded and the worktree is on disk.
       expect(created.status).toBe(0);
       expect(existsSync(wtPath(p, "y"))).toBe(true);
 
       const d = wt(p, "discard", ["--slug", "y"]);
       expect(d.status).toBe(0);
 
-      // a2: the worktree directory is gone.
       expect(existsSync(wtPath(p, "y"))).toBe(false);
-      // a3: git no longer registers the worktree (the assert_worktree_absent
-      // surface: `git worktree list --porcelain` excludes the path). Compare
-      // against the canonical leaf basename so symlink-canonicalisation
-      // (macOS /var -> /private/var) does not produce a false miss.
+      // a3: git no longer registers the worktree (`git worktree list --porcelain`
+      // excludes the path). Compare against the canonical leaf basename so
+      // symlink-canonicalisation (macOS /var -> /private/var) does not produce a
+      // false miss.
       const stillListed = listedWorktrees(p).some((wpath) =>
         wpath.endsWith(join("worktrees", boltName(fixtureIntentId8(p), "y"))),
       );
@@ -201,15 +194,11 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
     "2: discard emits WORKTREE_DISCARDED with Reason agent-discard + Bolt slug + root Repo (co-located) [.sh a4+a5+a6]",
     () => {
       // After test 1 ran, the WORKTREE_DISCARDED row is on disk. Assert all
-      // four fields land in the SAME audit block (stronger than the .sh's
-      // three independent greps).
+      // four fields land in the SAME audit block.
       const block = discardBlock(p, "y");
       expect(block).toBeDefined();
-      // a4: Event line.
       expect(block).toMatch(/^\*\*Event\*\*:\s*WORKTREE_DISCARDED/m);
-      // a5: Reason field.
       expect(block).toMatch(/^\*\*Reason\*\*:\s*agent-discard\s*$/m);
-      // a6: Bolt slug field (exactly `y`).
       expect(block).toMatch(/^\*\*Bolt slug\*\*:\s*y\s*$/m);
       expect(block).toMatch(/^\*\*Repo\*\*:\s*-\s*$/m);
     },
@@ -223,14 +212,13 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
       expect(before).toBe(1); // exactly one WORKTREE_DISCARDED from test 1
 
       const second = wt(p, "discard", ["--slug", "y"]);
-      // a7: exit 0 (idempotent per the PR-7 contract).
+      // a7: exit 0 (idempotent).
       expect(second.status).toBe(0);
-      // STRONGER than the .sh: the no-re-emit JSON contract (emitted:null,
-      // reason "already-discarded", aidlc-worktree.ts:470-480) ...
+      // The no-re-emit JSON contract (emitted:null, reason "already-discarded",
+      // aidlc-worktree.ts handleDiscard).
       const json = JSON.parse(second.stdout.trim());
       expect(json.emitted).toBeNull();
       expect(json.reason).toBe("already-discarded");
-      // ... and no SECOND audit row was written.
       expect(discardCount(p, "y")).toBe(1);
     },
     NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -241,11 +229,10 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
     () => {
       const info = wt(p, "info", ["--slug", "y"]);
       expect(info.status).toBe(0);
-      // a8: stdout carries the `"path":` field (the .sh's assert_contains).
       expect(info.out).toContain('"path":');
-      // STRONGER: the resolved path is the original worktree path — info reads
-      // the most-recent WORKTREE_CREATED audit block (audit-of-intent), not the
-      // now-deleted directory.
+      // The resolved path is the original worktree path - info reads the most-recent
+      // WORKTREE_CREATED audit block (audit-of-intent), not the now-deleted
+      // directory.
       const json = JSON.parse(info.stdout.trim());
       expect(json.path).toBe(wtPath(p, "y"));
     },

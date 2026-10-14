@@ -57,7 +57,6 @@ describe("merge-queue runner notice", () => {
       .toBe(notice("Tests (macos-15, smoke): checkout could not reach github.com", `${RUNS}/36405772694`));
     expect(noticeFor(facts("setup-hung")))
       .toBe(notice("Tests (ubuntu-latest, unit-7): its tool install hung past the queue's time limit", `${RUNS}/36732390217`));
-    // Twelve macOS jobs had no runner when the queue's time limit ran out.
     expect(noticeFor(facts("runner-wait"))).toBe(notice(
       "Native terminal units (macos-15), Tests (macos-15, smoke), Tests (macos-15, integration) and 9 more: waited for a runner past the queue's time limit",
       `${RUNS}/36936394204`,

@@ -1,11 +1,11 @@
 // covers:
 //
-// t-custom-harness-compile — the Phase-5 Harness-Engineer DETERMINISTIC tier.
+// t-custom-harness-compile - the Harness-Engineer DETERMINISTIC tier.
 //
 // The companion to the live {sdk,tui} journey (t-tui-custom-harness): this file
 // proves a harness engineer's DATA-ONLY reshaping resolves correctly at COMPILE
-// time, with NO driver and NO Bedrock tokens (the registry derives the `—`
-// floor mechanism from the absence of any driveAidlc / tui-drive spawn). It runs
+// time, with NO driver and NO Bedrock tokens (the registry derives the floor
+// mechanism from the absence of any driveAidlc / tui-drive spawn). It runs
 // always, on every platform, with the same verdict — the OS-invariant floor the
 // live tier builds on.
 //
@@ -19,15 +19,12 @@
 // unique project-rule marker, with the custom stages led by a custom data
 // migration agent that has its own knowledge file.
 //
-// THE GAP IT FILLS — error paths. The golden "the edit resolves" path had some
-// coverage; the harness engineer's ERROR modes (a typo'd sensor id, a dangling
-// requires_stage edge, a forgotten stage-graph row, an orphan consume) were
-// COMPLETELY UNTESTED. A harness engineer hits these constantly — they are the
-// framework's contract with its reshaper. Each error test below seeds a VALID
-// customHarness project, then mutates ONE thing to trip ONE guard, and asserts
-// the compiler (or validate-scope) FAILS LOUD with the SPECIFIC guard message —
-// not just any failure. The exact strings were captured from the live guards
-// before coding (verify-never-guess), each cited to its throw site.
+// ERROR PATHS: a typo'd sensor id, a dangling requires_stage edge, an orphan
+// consume. A harness engineer hits these constantly - they are the framework's
+// contract with its reshaper. Each error test below seeds a VALID customHarness
+// project, then mutates ONE thing to trip ONE guard, and asserts the compiler
+// (or validate-scope) FAILS LOUD with the SPECIFIC guard message - not just any
+// failure.
 //
 // IRON RULE: every assertion checks a real, on-disk, deterministic signal (exit
 // code + the specific stderr substring). A guard that stops throwing — or starts
@@ -91,11 +88,11 @@ function stagePath(proj: string, phase: string, slug: string): string {
 function editFile(p: string, fn: (s: string) => string): void {
   writeFileSync(p, fn(readFileSync(p, "utf8")));
 }
-// P4: `init` (→ intent-create) writes the workflow record per-intent under
-// aidlc/spaces/<space>/intents/<slug>-<id8>/ (state, runtime-graph.json,
+// `intent-create` writes the workflow record per-intent under
+// aidlc/spaces/<space>/intents/<record-dir>/ (state, runtime-graph.json,
 // .aidlc-engine/hooks-health/), NOT the flat aidlc-docs/. Resolve the created record from
-// the active-space + active-intent cursors (flat fallback for a pre-creation/
-// pre-migration project).
+// the active-space + active-intent cursors (flat fallback for a pre-creation
+// project).
 function recordDirOf(proj: string): string {
   const spaceCursor = join(proj, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -118,8 +115,6 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
   // and shows up in both the compiled stage graph and the runtime graph.
   // =========================================================================
 
-  // G1 — compile succeeds at seed time + `compile --check` is clean (the
-  // emitted graph matches a fresh recompile; no drift from the seeding edits).
   test("G1: the seeded custom harness compiles and `compile --check` is clean", () => {
     const proj = setupIntegrationProject({ customHarness: true });
     try {
@@ -132,9 +127,6 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
     }
   });
 
-  // G2 — the custom scope routes EXACTLY the init trio + the two custom stages,
-  // in numeric order. This is the "define a custom workflow (which stages run)"
-  // dimension of harness engineering.
   test("G2: `aidlc-graph scope data-migration` routes the init trio + both custom stages", () => {
     const proj = setupIntegrationProject({ customHarness: true });
     try {
@@ -198,8 +190,8 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
       // PHASE rule (phases/inception.md) attaches because the stage's
       // `phase: inception` matches the rule filename — a value NO pre-seed
       // carries, so its presence is airtight proof compile resolved the chain.
-      // The method relocated (P5) to the harness-neutral aidlc/spaces/default/
-      // memory/ tree, so the display paths are neutral.
+      // The method lives in the harness-neutral aidlc/spaces/default/memory/ tree,
+      // so the display paths are neutral.
       for (const node of [head, tail]) {
         const paths = (node?.rules_in_context ?? []).map((r) => r.path);
         expect(paths).toContain("aidlc/spaces/default/memory/project.md");
@@ -211,8 +203,6 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
       expect(head?.produces).toContain(SNAPSHOT_ARTIFACT);
       expect(tail?.produces).toContain(PLAN_ARTIFACT);
 
-      // THE CHAIN: migration-plan consumes schema-snapshot's artefact AND
-      // declares the requires_stage edge — "how stages join up".
       expect((tail?.consumes ?? []).map((c) => c.artifact)).toContain(SNAPSHOT_ARTIFACT);
       expect(tail?.requires_stage).toContain(SNAPSHOT_STAGE_SLUG);
     } finally {
@@ -238,11 +228,10 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
 
   // G4b — the custom agent and custom knowledge are real data files in the
   // copied framework, and the custom agent's metadata flows through the SAME
-  // loadAgents() loader the statusline uses. (P4: creation no longer scaffolds a
-  // per-agent knowledge README — the workspace shell ships in dist/ via SEED and
-  // intent creation only ensures the per-intent record dirs exist, so the discovery proof
-  // is the loader, exercised through the statusline render, not an init-written
-  // README. The agent FILE + custom knowledge FILE checks below are unchanged.)
+  // loadAgents() loader the statusline uses. (The workspace shell ships in dist/
+  // via SEED and intent creation only mints the per-intent record, so the
+  // discovery proof is the loader, exercised through the statusline render, not
+  // an init-written README.)
   test("G4b: custom agent metadata and custom knowledge file are discoverable", () => {
     const proj = setupIntegrationProject({ customHarness: true });
     try {
@@ -271,8 +260,8 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
       // The statusline renders the agent display only for an ACTIVE workflow —
       // it prints "[AIDLC] ready" unless Lifecycle Phase + Current Stage are
       // present (aidlc-statusline.ts). Seed the same minimal CONSTRUCTION shape
-      // t61's statusline proof uses. P9: the statusline reads the ACTIVE INTENT's
-      // state via stateFilePath(), so seed into the per-intent record
+      // t61's statusline proof uses. The statusline reads the ACTIVE INTENT's
+      // state via stateFilePathForSelection(), so seed into the per-intent record
       // (seededStateFile — the cursor setupIntegrationProject seeds resolves it),
       // not a flat aidlc-docs/.
       const stateFile = seededStateFile(proj);
@@ -314,7 +303,7 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
 
       // init routed to the custom head stage (the scope's stage map drove this,
       // not a builtin) — proven in state before the runtime graph is even built.
-      // P4: creation writes per-intent - resolve the created record.
+      // Creation writes per-intent - resolve the created record.
       const record = recordDirOf(proj);
       const state = readFileSync(join(record, "aidlc-state.md"), "utf8");
       const current = state.match(/Current Stage\*\*:\s*(.+)/)?.[1]?.trim();
@@ -349,10 +338,10 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
   });
 
   // =========================================================================
-  // ERROR PATHS — the BIG GAP. Each test seeds a VALID custom harness, mutates
-  // ONE thing to trip ONE guard, and asserts compile (or validate-scope) fails
-  // loud with the SPECIFIC message. Strings captured from the live guards;
-  // each cite is the throw site in aidlc-graph.ts (or aidlc-stage-schema.ts).
+  // ERROR PATHS. Each test seeds a VALID custom harness, mutates ONE thing to
+  // trip ONE guard, and asserts compile (or validate-scope) fails loud with the
+  // SPECIFIC message. Strings captured from the live guards; each cite is the
+  // throw site in aidlc-graph.ts (or aidlc-stage-schema.ts).
   // =========================================================================
 
   // E1 — a stage imports a sensor id that has no manifest.
@@ -409,9 +398,9 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
   });
 
   // E4 — a stage .md exists with no {slug,number,name} row in stage-graph.json.
-  // This used to be a hard error (the pre-seed contract). It is now AUTO-SEEDED:
-  // compile assigns the next free index in the stage's phase and a title-cased
-  // default name, so "drop a stage file, run compile" works end-to-end (#364).
+  // It is AUTO-SEEDED: compile assigns the next free index in the stage's phase
+  // and a title-cased default name, so "drop a stage file, run compile" works
+  // end-to-end (#364).
   // Guard: compileStageGraph in aidlc-graph.ts.
   test("E4: a stage .md with no stage-graph.json row is auto-seeded on compile (#364)", () => {
     const proj = setupIntegrationProject({ customHarness: true });
@@ -437,7 +426,6 @@ outputs: none
 `,
       );
       const r = graph(proj, ["compile"]);
-      // Compile now succeeds, the new stage is auto-seeded, not rejected.
       expect(r.status).toBe(0);
       const compiled = JSON.parse(
         readFileSync(join(proj, ".claude", "tools", "data", "stage-graph.json"), "utf8"),
@@ -535,10 +523,8 @@ outputs: none
       editFile(stagePath(proj, SNAPSHOT_STAGE_PHASE, PLAN_STAGE_SLUG), (s) =>
         s.replace(`- artifact: ${SNAPSHOT_ARTIFACT}`, "- artifact: phantom-artefact"),
       );
-      // recompile so stage-graph.json reflects the broken consume...
       const recompile = graph(proj, ["compile"]);
       expect(recompile.status).toBe(0); // compile itself accepts a dangling consume
-      // ...then validate-scope catches the orphan.
       const r = graph(proj, ["validate-scope", CUSTOM_SCOPE]);
       expect(r.status).not.toBe(0);
       expect(r.stderr).toContain("no stage in the graph produces it");
@@ -554,8 +540,8 @@ outputs: none
   // command string is opaque to the compiler), but at fire time the PostToolUse
   // sensor-fire hook spawns the dispatcher, the dispatcher exits non-zero, and
   // the hook records a hook-drop AND STILL exits 0 — the advisory exit-0
-  // contract (aidlc-run-sensors.ts G5 :268; recordHookDrop :250-256). A broken
-  // sensor must never block the workflow; it must surface as an advisory drop.
+  // contract (aidlc-run-sensors.ts G5; recordHookDrop). A broken sensor must
+  // never block the workflow; it must surface as an advisory drop.
   //
   // Proven by invoking the REAL hook with a real PostToolUse payload over a
   // broken-sensor project at the custom stage — no driver, no Bedrock tokens,
@@ -609,7 +595,7 @@ outputs: none
       })).toBe(0);
 
       // THE EVIDENCE: a hook-drop was recorded naming the broken sensor + the
-      // dispatcher's missing-script reason (advisory surface, not silent). P4:
+      // dispatcher's missing-script reason (advisory surface, not silent).
       // .aidlc-engine/hooks-health/ resolves under the created intent's record (hooksHealthDir
       // → docsRoot), so read it from the per-intent record after init.
       const dropFile = join(recordDirOf(proj), ".aidlc-engine/hooks-health", "run-sensors.drops");
@@ -726,7 +712,6 @@ outputs: none
         .find((p) => p.endsWith("memory/project.md"));
       // VACUOUS-PASS GUARD: the compiled node really points at a project rule.
       expect(projectRulePath).toBeDefined();
-      // follow that resolved path to the file the agent would read at runtime
       const ruleFile = join(proj, projectRulePath as string);
       expect(readFileSync(ruleFile, "utf8")).toContain(CUSTOM_RULE_MARKER);
 

@@ -6,7 +6,7 @@
 |-------|-------|
 | Name | aidlc-architect-agent |
 | Tier | **judgment** |
-| Allowed Claude Code Tools | Read, Edit, Write, Glob, Grep, AskUserQuestion |
+| Claude Code Tools | Inherits the full session toolset, MCP tools included (no `tools:` allowlist); expected to use Read, Edit, Write, Glob, Grep, AskUserQuestion |
 | Disallowed Claude Code Tools | Task |
 
 The aidlc-architect-agent is the central design authority, handling the most
@@ -26,6 +26,7 @@ produce dominantly templated planning, CI/CD, and runbook output.
 | feasibility | Feasibility and Constraint Analysis | Assesses technical feasibility, identifies integration constraints, produces constraint registers and risk assessments |
 | domain-design | Domain Design | Designs system architecture: bounded contexts, component interfaces, architectural style selection, ADRs |
 | units-generation | Units Generation | Decomposes domain design into implementable Units of Work with boundaries and the dependency DAG. Economic ordering (what ships first, why) is the delivery-planning stage's decision |
+| contract-design | Contract Design | Defines the formal contracts between Units and the public APIs: what data crosses each boundary, in what shape and protocol, the failure behaviour, the integration mechanism, and contract ownership |
 | functional-design | Functional Design | Creates detailed domain models, sequence diagrams, API specifications, data models, and state transitions |
 | nfr-requirements | NFR Requirements | Enumerates non-functional requirements with measurable targets for performance, security, scalability, reliability, observability |
 | nfr-design | NFR Design | Designs technical approaches for NFRs: caching, circuit breakers, resilience, security architecture, observability |
@@ -76,9 +77,9 @@ Path: `.claude/knowledge/aidlc-architect-agent/`
 
 ### Team (Tier 2)
 
-Path: `aidlc/knowledge/aidlc-architect-agent/` (the space-level knowledge dir; user-managed)
+Path: `aidlc/spaces/<active-space>/knowledge/aidlc-architect-agent/` (the space-level knowledge dir; user-managed)
 
-A space-level directory the team creates when it has content (the engine ships `aidlc/knowledge/` empty). Populated by the team with project-specific
+A space-level directory the team creates when it has content (the engine creates the space's `knowledge/` folder empty). Populated by the team with project-specific
 architecture context such as existing architecture diagrams, technology radar,
 approved patterns, or constraints registers.
 

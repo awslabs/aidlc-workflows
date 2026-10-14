@@ -57,15 +57,14 @@ const SETTINGS = join(AIDLC_SRC, "settings.json");
  * Extract the YAML frontmatter block — the lines BETWEEN the first two `---`
  * delimiters — from SKILL.md. Anything in the document body (prose, code
  * fences) is excluded, so a `name:`/`hooks:` mention in the body cannot satisfy
- * a frontmatter assertion. Mirrors the `^field:` anchoring the .sh grepped for,
- * but scoped to the block instead of the whole file.
+ * a frontmatter assertion.
  */
 function frontmatterLines(): string[] {
   const text = readFileSync(SKILL, "utf-8");
   const lines = text.split("\n");
-  expect(lines[0]).toBe("---"); // opening delimiter on line 1
+  expect(lines[0]).toBe("---");
   const close = lines.indexOf("---", 1);
-  expect(close).toBeGreaterThan(0); // closing delimiter exists
+  expect(close).toBeGreaterThan(0);
   return lines.slice(1, close);
 }
 
@@ -91,17 +90,14 @@ function settings(): Settings {
   return JSON.parse(readFileSync(SETTINGS, "utf-8")) as Settings;
 }
 
-/** All hook commands registered under a given event name in settings.json. */
 function commandsForEvent(event: string): string[] {
   const blocks = settings().hooks?.[event] ?? [];
   return blocks.flatMap((b) => b.hooks.map((h) => h.command));
 }
 
 describe("t06 SKILL.md frontmatter (migrated from t06-skill-frontmatter.sh, plan 9)", () => {
-  // --- SKILL.md frontmatter (.sh tests 1-4) --------------------------------
+  // --- SKILL.md frontmatter --------------------------------
   test("frontmatter declares name: aidlc [.sh 1]", () => {
-    // STRONGER than `grep ^name: aidlc`: the value is read from inside the
-    // frontmatter block and matched exactly.
     const nameLine = frontmatterLines().find((l) => /^name:/.test(l));
     expect(nameLine).toBe("name: aidlc");
   });
@@ -117,9 +113,8 @@ describe("t06 SKILL.md frontmatter (migrated from t06-skill-frontmatter.sh, plan
   });
 
   test("frontmatter carries NO hooks: block — moved to settings.json [.sh 4]", () => {
-    // The v0.6.0 hooks-move contract. STRONGER than the .sh's whole-file
-    // `assert_not_grep "^hooks:"`: scoped to the frontmatter block, so the
-    // SKILL body's prose about settings.json hooks cannot trip a false negative.
+    // Scoped to the frontmatter block, so the SKILL body's prose about
+    // settings.json hooks cannot trip a false negative.
     expect(frontmatterHasKey("hooks")).toBe(false);
   });
 
@@ -146,29 +141,23 @@ describe("t06 SKILL.md frontmatter (migrated from t06-skill-frontmatter.sh, plan
     expect(runners).not.toContain("aidlc");
   });
 
-  // --- settings.json hook registration (.sh tests 5-9) ---------------------
+  // --- settings.json hook registration ---------------------
   test("settings.json registers aidlc-write-audit-log.ts on PostToolUse [.sh 5 + 6]", () => {
-    // .sh 5: aidlc-write-audit-log.ts appears; .sh 6: a PostToolUse block exists.
-    // STRONGER: the audit-logger command is bound to the PostToolUse event
-    // (the .sh only proved each appears SOMEWHERE in the file independently).
     const postCmds = commandsForEvent("PostToolUse");
-    expect(postCmds.length).toBeGreaterThan(0); // PostToolUse block present (.sh 6)
+    expect(postCmds.length).toBeGreaterThan(0);
     expect(
       postCmds.some((c) => c.includes("engine hook write-audit-log")),
-    ).toBe(true); // audit-logger registered there (.sh 5)
+    ).toBe(true);
   });
 
   test("settings.json registers the validate-state hook on PreCompact [.sh 7 + 8]", () => {
-    // .sh 7: a PreCompact block exists; .sh 8: validate-state appears.
-    // STRONGER: validate-state is the PreCompact hook (not just present).
     const preCompactCmds = commandsForEvent("PreCompact");
-    expect(preCompactCmds.length).toBeGreaterThan(0); // PreCompact block present (.sh 7)
+    expect(preCompactCmds.length).toBeGreaterThan(0);
     expect(preCompactCmds).toContain('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook validate-state');
   });
 
   test("settings.json registers the log-subagent hook on SubagentStop [.sh 9]", () => {
-    // STRONGER: log-subagent is the SubagentStop hook, the event that owns it
-    // (the .sh only proved the filename appears anywhere in settings.json).
+    // log-subagent is the SubagentStop hook, the event that owns it.
     const subagentCmds = commandsForEvent("SubagentStop");
     expect(subagentCmds).toContain('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook log-subagent');
   });

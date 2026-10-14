@@ -101,14 +101,13 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const ORCHESTRATE = join(TOOLS, "aidlc-orchestrate.ts");
 const JUMP = join(TOOLS, "aidlc-jump.ts");
 
-// Clear leaked AWS_AIDLC_DEFAULT_SCOPE so scope resolves from the state file
-// (mirrors the .sh's reset_aidlc_env at line 54).
+// Clear leaked AWS_AIDLC_DEFAULT_SCOPE so scope resolves from the state file.
 resetAidlcEnv();
 
 const tempDirs: string[] = [];
@@ -118,7 +117,7 @@ afterAll(() => {
 
 interface CliResult {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string; // combined stdout+stderr
   stdout: string;
 }
 
@@ -137,9 +136,9 @@ function run(
 }
 
 /** Fresh temp project seeded from a FIXTURES_DIR state fixture. Seeds the
- *  shipped method tree too: since the load-steering migration, `next` on a
- *  run-stage route FAILS CLOSED when a required rule file is missing, so a
- *  walk that reaches run-stage needs the memory tree the engine ships. */
+ *  shipped method tree too: `next` on a run-stage route FAILS CLOSED when a
+ *  required rule file is missing, so a walk that reaches run-stage needs the
+ *  memory tree the engine ships. */
 function projWithState(fixtureName: string): string {
   const p = createTestProject();
   tempDirs.push(p);
@@ -157,7 +156,7 @@ function nextDirective(p: string, args: string[] = []): any {
   return r.directive;
 }
 
-/** Fresh CLEAN temp project — an empty workspace, NO intent record (SP5a). P9:
+/** Fresh CLEAN temp project - an empty workspace, NO intent record (SP5a).
  *  createTestProject seeds a default record + cursor, so strip it; otherwise the
  *  engine resolves the seeded intent instead of naming intent-create. */
 function cleanProj(): string {
@@ -167,7 +166,7 @@ function cleanProj(): string {
   return p;
 }
 
-// P9 per-intent layout. seedStateFile writes the record's aidlc-state.md; the
+// Per-intent layout. seedStateFile writes the record's aidlc-state.md; the
 // audit lands in the record's per-clone shard dir (deterministic — the fixture
 // pins the clone-id). statePath is the record's state file; readAudit globs the
 // shard dir.
@@ -181,17 +180,11 @@ function readAudit(p: string): string {
     .join("\n");
 }
 
-// Parse the single directive JSON the engine emits on stdout (mirrors the .sh's
-// json_field python helper, but as a real JSON.parse of the whole object).
 // biome-ignore lint/suspicious/noExplicitAny: directives are a typed union; the test reads scalar fields
 function directive(r: CliResult): any {
   return JSON.parse(r.stdout.trim());
 }
 
-/**
- * Count audit blocks with `**Event**: <ev>` on a line by itself — mirrors the
- * .sh count_event helper `grep -c "\*\*Event\*\*: $2$"` (end-anchored).
- */
 // The one line a print step tells the agent to say to the person.
 function personLine(message: string): string {
   const said = /Tell the person in one line: "([\s\S]*?)"(?: |$)/.exec(message);
@@ -214,10 +207,8 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   // A WITH-STATE jump is a MUTATION (mark intervening [S], emit STAGE_JUMPED,
   // pivot Current Stage) the conductor commits, so `next --stage <fp>` emits a
   // `print` naming `aidlc-jump.ts execute` carrying the resolved target +
-  // direction, NOT a run-stage (the v0.6.0 engine cutover; pre-cutover this
-  // emitted run-stage directly, producing ZERO state change — the regression
-  // t24/t25/t26/t56/t57 caught). The corpus still pins engine-vs-tool agreement
-  // on the resolved direction.
+  // direction, NOT a run-stage (emitting run-stage directly produces ZERO state
+  // change). The corpus pins engine-vs-tool agreement on the resolved direction.
   test("SP1: jump forward -> print naming execute(code-generation), resolve direction=forward", () => {
     const p = projWithState("state-mid-ideation.md");
     const out = directive(
@@ -239,14 +230,12 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   });
 
   // SP1-exec: a forward `aidlc-jump.ts execute` does NOT auto-terminate the
-  // workflow (issue #369: the test-run forward-jump terminal-stop branch was
-  // removed; a forward jump now ALWAYS lands Running). The deterministic guard
-  // the deleted t54-compaction-and-test-run.test.ts used to carry - its SDK twin
+  // workflow (issue #369: a forward jump ALWAYS lands Running). Its SDK twin
   // (t56/t26) is claude-gated and skips without the live CLI, so this is the only
   // non-live test that pins the always-Running invariant. Asserts all three
   // observables: the tool's stdout JSON workflow_stopped:false, the post-jump
   // state Status:Running, and the audit STAGE_STARTED-present / WORKFLOW_COMPLETED-
-  // absent pair (a re-introduced terminal branch would flip any one of these).
+  // absent pair (a terminal branch would flip any one of these).
   test("SP1-exec: forward execute lands Running (workflow_stopped:false, STAGE_STARTED, no WORKFLOW_COMPLETED)", () => {
     const p = projWithState("state-mid-ideation.md");
     const res = run(JUMP, [
@@ -262,13 +251,11 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ]);
     expect(res.status).toBe(0);
     const jump = JSON.parse(res.stdout.trim());
-    // The jump committed and did NOT stop the workflow.
     expect(jump.workflow_stopped).toBe(false);
     // Post-jump state: the target is Active and Running, never Completed.
     const state = readFileSync(statePath(p), "utf-8");
     expect(state).toContain("- **Status**: Running");
     expect(state).toContain("- **Current Stage**: code-generation");
-    // Audit symmetry: the target emitted STAGE_STARTED; no terminal row.
     expect(eventCount(p, "STAGE_STARTED")).toBeGreaterThanOrEqual(1);
     expect(eventCount(p, "WORKFLOW_COMPLETED")).toBe(0);
   });
@@ -354,7 +341,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const report = (...extra: string[]) =>
       directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
 
-    // The person's words, or the old menu's numbers and labels, are never read
+    // The person's words, or menu numbers and labels, are never read
     // here: the conductor reads them and reports the typed choice.
     for (const words of [
       "1", "2", "3", "4", "5",
@@ -554,7 +541,6 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(forBeta.message).toContain("Run `next --stage requirements-analysis --unit beta`");
     const forEvery = report("--choice", "jump", "--target", "requirements-analysis", "--every-unit");
     expect(forEvery.message).toContain("Run `next --stage requirements-analysis --every-unit`");
-    // Redoing the step for a named Unit reopens that step for it.
     const redoBeta = report("--choice", "redo", "--unit", "beta");
     expect(redoBeta.kind).toBe("print");
     expect(redoBeta.message).toMatch(/Run `next --stage [a-z-]+ --unit beta`/);
@@ -674,7 +660,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ============================================================
-  // Special path 5: CREATE (P4: --init retired) — (a) named scope on a clean
+  // Special path 5: CREATE - (a) named scope on a clean
   // workspace prints the intent-create move + creates NO state; (b) a named scope
   // over existing state is a resume/scope-change, NOT a creation.
   // ============================================================
@@ -743,9 +729,8 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
 
   // ============================================================
   // Special path 7: NORMAL GATE - report drives aidlc-state.ts approve through
-  // the report dispatcher; the gate closes (kind==="done"). The --test-run
-  // round-trip that used to sit here was removed with the test-run mechanism
-  // (#369); this control proves the normal gate path is observable, not a no-op.
+  // the report dispatcher; the gate closes (kind==="done"). This control proves
+  // the normal gate path is observable, not a no-op.
   // ============================================================
   test("SP7-control: report --result approved --user-input -> done", () => {
     const p = projWithState("state-mid-ideation.md");
@@ -908,8 +893,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   // SAME stage with the now-DETERMINED gate (true). This is the THIRD component
   // walk: it exercises the report dispatcher's STANCE branch (records state
   // without committing a transition) AND the next decision rule's gate
-  // computation reading that recorded stance. (v0.6.0 Wave 2 milestone 9; per the
-  // engine design; .sh:235-260.)
+  // computation reading that recorded stance.
   test("WALK C (classify): next gate:unresolved -> report --skeleton-stance on (print, no transition) -> next gate:true", () => {
     const p = projWithState("state-construction-bolt1.md");
     // Step 1: the next decision rule defers the skeleton gate -> gate is the
@@ -918,9 +902,9 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(n1.stage).toBe("functional-design");
     expect(n1.gate).toBe("unresolved");
     // Step 2: the report dispatcher's STANCE branch records the typed stance and
-    // commits NO transition — a `print` (not done/advance). STRONGER than the
-    // .sh's `kind == print`: also pin the recorded-stance message so the branch
-    // is proven to be the stance-record path, not a generic print.
+    // commits NO transition - a `print` (not done/advance). Also pin the
+    // recorded-stance message so the branch is proven to be the stance-record
+    // path, not a generic print.
     const r = run(ORCHESTRATE, [
       "report",
       "--skeleton-stance",

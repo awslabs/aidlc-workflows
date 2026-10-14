@@ -1,22 +1,19 @@
 // covers: subcommand:aidlc-runtime:fragment-fork, subcommand:aidlc-runtime:fragment-merge
 //
-// bun:test port of tests/unit/t96-runtime-fragment-primitives.sh (TAP plan 14),
-// mechanism = cli. Faithful migration, not a rewrite: every .sh assertion is a
-// PROCESS-boundary contract (exit code + stdout JSON + stderr text), so each is
-// ported as a spawnSync of the real CLI rather than a weaker .none import-twin.
+// A bun:test file, mechanism = cli. Every assertion is a PROCESS-boundary
+// contract (exit code + stdout JSON + stderr text), so each uses a spawnSync
+// of the real CLI rather than an import-twin.
 //
-// SPAWN vs IN-PROCESS split: ALL 14 .sh assertions cross the process boundary —
-// the .sh asserts on $? (exit code), captured stdout, and captured stderr of
-// `bun aidlc-runtime.ts [--project-dir <pd>] <subcommand> ...`. There are NO
-// pure-function assertions in the source (the byte-equal-copy and hash checks
-// are done by reading files / shasum AFTER the spawn, observing the tool's
-// side-effects, not by calling a function in-process). So this is a pure .cli
-// file with zero in-process function units. As a .cli-mechanism file it
-// legitimately credits the `aidlc-runtime fragment-fork` + `aidlc-runtime
-// fragment-merge` subcommand units (minMechanism: cli) that a .none twin could
-// not.
+// SPAWN vs IN-PROCESS split: the assertions cross the process boundary - exit
+// code, captured stdout, and captured stderr of
+// `bun aidlc-runtime.ts [--project-dir <pd>] <subcommand> ...`. The
+// byte-equal-copy and hash checks are done by reading files AFTER the spawn,
+// observing the tool's side-effects, not by calling a function in-process.
+// This file has zero in-process function units. It credits the
+// `aidlc-runtime fragment-fork` + `aidlc-runtime fragment-merge` subcommand
+// units (minMechanism: cli).
 //
-// Surface mirrored 1:1 from the .sh:
+// Surface under test:
 //   T1  fragment-fork happy path: byte-equal copy + JSON envelope + matching hash + source_present:true
 //   T2  fragment-fork source-absent: writes empty graph, source_present:false
 //   T3  fragment-fork one-shot guard: second invocation errors + leaves fragment unchanged
@@ -30,14 +27,12 @@
 //   T11 fragment-merge worktree-missing: defensive fragment-absent
 //   T12 --help lists both subcommands with orchestration context
 //   T13 unknown subcommand error path
-//   T14 --project-dir plumbing (B1): pre-strip in spawnSibling-style invocation order
+//   T14 --project-dir plumbing: pre-strip in spawnSibling-style invocation order
 //
 // FIXTURE DISCIPLINE: each case builds a self-contained temp project via
-// createTestProject() + seedStateFile() (the .ts analogues of the .sh's
-// make_project, which cp'd state-construction.md into aidlc-docs/) and removes
-// it after. The runtime-graph.json + intent-scoped worktree layout is
-// test-specific so it is written inline (the .sh wrote it inline too). NOTHING
-// is written under tests/fixtures/**.
+// createTestProject() + seedStateFile() and removes it after. The
+// runtime-graph.json + intent-scoped worktree layout is test-specific so it
+// is written inline. NOTHING is written under tests/fixtures/**.
 
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
@@ -62,12 +57,11 @@ import {
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-// Main runtime-graph path under the seeded per-intent record (was flat aidlc-docs/).
 function mainGraphPath(proj: string): string {
   return join(seededRecordDir(proj), "runtime-graph.json");
 }
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const TOOL = join(
   import.meta.dir,
   "..",
@@ -78,8 +72,8 @@ const TOOL = join(
   "aidlc-runtime.ts",
 );
 
-// Mirrors the .sh's GRAPH literal — the exact bytes written to main
-// runtime-graph.json so the source-hash assertion has a known expected value.
+// The exact bytes written to main runtime-graph.json so the source-hash
+// assertion has a known expected value.
 const GRAPH =
   '{"workflow_id":"t96-1","scope":"feature","started_at":"2026-05-28T10:00:00Z","stages":[]}';
 
@@ -87,12 +81,12 @@ const GRAPH =
 
 let projDir = "";
 
-// make_project analogue (t96-runtime-fragment-primitives.sh:68-86):
-//   - fresh temp project with aidlc-docs/aidlc-state.md seeded from
+// Per-case fixture:
+//   - fresh temp project with the per-intent aidlc-state.md seeded from
 //     state-construction.md (createTestProject + seedStateFile).
-//   - mainGraph !== null  -> write main aidlc-docs/runtime-graph.json bytes.
+//   - mainGraph !== null -> write the per-intent runtime-graph.json bytes.
 //   - slug !== null       -> pre-create the canonical worktree's intent record
-//     and byte-copy main state into it (simulating what state-fork populates).
+//     and byte-copy main state into it (simulating state-fork population).
 function makeProject(slug: string | null, mainGraph: string | null): string {
   const proj = createTestProject();
   seedStateFile(proj, "state-construction.md");
@@ -104,7 +98,7 @@ function makeProject(slug: string | null, mainGraph: string | null): string {
     // checkout (aidlc/spaces/default/intents/<record>/), not a flat aidlc-docs/.
     const wtDocs = wtRecordDir(proj, slug);
     mkdirSync(wtDocs, { recursive: true });
-    // state-fork byte-copies main state to worktree — simulate that.
+    // state-fork populates worktree state - simulate that.
     writeFileSync(
       join(wtDocs, "aidlc-state.md"),
       readFileSync(join(seededRecordDir(proj), "aidlc-state.md")),
@@ -113,7 +107,6 @@ function makeProject(slug: string | null, mainGraph: string | null): string {
   return proj;
 }
 
-// The worktree mirror's per-intent record dir.
 function wtRecordDir(proj: string, slug: string): string {
   return join(worktreePath(proj, fixtureIntentId8(proj), slug), "aidlc",
   "spaces",
@@ -122,15 +115,13 @@ function wtRecordDir(proj: string, slug: string): string {
   DEFAULT_RECORD_DIR,);
 }
 
-// wt_fragment_path analogue (t96:88-90) — under the worktree mirror record.
 function wtFragmentPath(proj: string, slug: string): string {
   return join(wtRecordDir(proj, slug), "runtime-graph.json");
 }
 
-// run_runtime analogue (t96:94-100): invoke with --project-dir BEFORE the
-// subcommand (the spawnSibling order the pre-strip handles), capture stdout +
-// stderr + exit code separately so individual assertions read the same field
-// the .sh read ($RUNTIME_OUT / $RUNTIME_ERR / $RUNTIME_RC).
+// Invoke with --project-dir BEFORE the subcommand (the spawnSibling order the
+// pre-strip handles); capture stdout + stderr + exit code separately so each
+// assertion reads the relevant field.
 function runRuntime(
   proj: string,
   ...args: string[]
@@ -163,7 +154,6 @@ describe("t96 fragment-fork happy path", () => {
 
     expect(r.rc).toBe(0);
     expect(existsSync(wtFrag)).toBe(true);
-    // diff -q main vs fragment: byte-equal copy.
     expect(readFileSync(wtFrag)).toEqual(readFileSync(mainGraphPath(projDir)));
     expect(r.out).toContain('"status":"fragment-forked"');
     expect(r.out).toContain('"slug":"auth"');
@@ -195,9 +185,9 @@ describe("t96 fragment-fork one-shot guard", () => {
     projDir = makeProject("auth", GRAPH);
     const wtFrag = wtFragmentPath(projDir, "auth");
 
-    runRuntime(projDir, "fragment-fork", "--slug", "auth"); // first ok
+    runRuntime(projDir, "fragment-fork", "--slug", "auth");
     const preHash = sha256File(wtFrag);
-    const r = runRuntime(projDir, "fragment-fork", "--slug", "auth"); // second errors
+    const r = runRuntime(projDir, "fragment-fork", "--slug", "auth");
     const postHash = sha256File(wtFrag);
 
     expect(r.rc).not.toBe(0);
@@ -245,7 +235,7 @@ describe("t96 fragment-fork slug-validation: regex rejection", () => {
 describe("t96 fragment-merge happy path", () => {
   test("unlinks fragment + JSON envelope + matching pre-unlink hash", () => {
     projDir = makeProject("auth", GRAPH);
-    runRuntime(projDir, "fragment-fork", "--slug", "auth"); // set up the fragment
+    runRuntime(projDir, "fragment-fork", "--slug", "auth");
     const wtFrag = wtFragmentPath(projDir, "auth");
     const preHash = sha256File(wtFrag);
 
@@ -305,11 +295,11 @@ describe("t96 fragment-merge worktree-missing", () => {
   });
 });
 
-// --- 12. --help lists both new subcommands --------------------------------
+// --- 12. --help lists both subcommands --------------------------------
 describe("t96 --help listing", () => {
   test("lists fragment-fork + fragment-merge with orchestration context", () => {
     // Help path takes no project; spawn the tool directly with --help and
-    // combine stdout+stderr like the .sh's `2>&1`.
+    // combine stdout+stderr.
     const res = spawnSync(BUN, [TOOL, "--help"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
     const helpOut = `${res.stdout ?? ""}${res.stderr ?? ""}`;
 
@@ -329,13 +319,13 @@ describe("t96 unknown subcommand", () => {
   });
 });
 
-// --- 14. --project-dir plumbing (B1 from milestone 11 plan) ----------------------
+// --- 14. --project-dir plumbing ----------------------
 describe("t96 --project-dir plumbing (B1)", () => {
   test("pre-strip works in spawnSibling-style invocation order", () => {
     // Verify the spawnSibling-style invocation order works:
     //   bun aidlc-runtime.ts --project-dir <pd> fragment-fork --slug <slug>
-    // (--project-dir BEFORE the subcommand, mirroring spawnSibling at
-    // aidlc-bolt.ts:79-103). runRuntime already injects --project-dir first.
+    // (--project-dir BEFORE the subcommand, mirroring spawnSibling in
+    // aidlc-bolt.ts). runRuntime already injects --project-dir first.
     projDir = makeProject("auth", GRAPH);
     const wtFrag = wtFragmentPath(projDir, "auth");
     const r = runRuntime(projDir, "fragment-fork", "--slug", "auth");

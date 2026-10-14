@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { CODEX_FILE, coordinatorReportPath } from "../lib/e2e-deferred-cleanup.ts";
 import { FILE_CLEANUP_RESERVE_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
+import { codexSandboxProblems } from "./stock-permissions.ts";
 
 export interface CodexExecution {
   rc: number;
@@ -61,7 +62,10 @@ export function codexPersonTurn(proj: string, prompt: string): PersonTurnLedger 
 }
 
 // Every live exec passes its turn (codexPersonTurn, before the spawn), so no
-// journey can record a decision the check never sees.
+// journey can record a decision the check never sees. A `--json` turn also
+// shows each command the shipped workspace-write sandbox refused: one of
+// AI-DLC's own is a prompt (or, with approvals off, a dead end) for a person on
+// stock settings, so it fails the turn.
 export function recordCodexExec(
   label: string,
   cwd: string,
@@ -73,7 +77,10 @@ export function recordCodexExec(
   const decisions = unbacked.length > 0
     ? `Unbacked decisions (no turn from the person after the gate or question opened):\n${unbacked.map((line) => `  ${line}`).join("\n")}\n`
     : "";
-  const header = `Command: ${JSON.stringify(argv)}\nCwd: ${cwd}\n${decisions}`;
+  const sandbox = codexSandboxProblems(result.stdout ?? "");
+  const refusals = [...sandbox.problems, ...sandbox.listed];
+  const refused = refusals.length > 0 ? `Sandbox refusals:\n${refusals.map((line) => `  ${line}`).join("\n")}\n` : "";
+  const header = `Command: ${JSON.stringify(argv)}\nCwd: ${cwd}\n${decisions}${refused}`;
   const summary = header + codexExecDiagnostic(result);
   const context = diagnostics.getStore();
   if (context) context.last = limit(summary);
@@ -84,6 +91,9 @@ export function recordCodexExec(
       (result.out ?? `STDOUT:\n${result.stdout ?? ""}\nSTDERR:\n${result.stderr ?? ""}`));
   }
   if (unbacked.length > 0) throw unbackedFailure(`The codex exec "${label}"`, unbacked);
+  if (sandbox.problems.length > 0) {
+    throw new Error(`The codex exec "${label}" met the sandbox a person on stock settings meets:\n${sandbox.problems.map((line) => `  ${line}`).join("\n")}`);
+  }
 }
 
 const samePath = (a: string, b: string): boolean => {

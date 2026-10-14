@@ -76,7 +76,6 @@ import {
 } from "../harness/fixtures.ts";
 import { auditDirFor, type DriveResult, driveAidlc, readAuditEvents, readAuditText, stateFilePathFor } from "../harness/sdk-drive.ts";
 
-// ---------------------------------------------------------------------------
 // AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
 const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 // Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
@@ -94,13 +93,12 @@ function remainingWorkMs(): number {
 }
 
 
-const INIT_STATE_SUMMARY = "State initialized:"; // utility.ts:2154
+const INIT_STATE_SUMMARY = "State initialized:"; // aidlc-utility.ts handleIntentCreateStateBuild
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
-// The retired --init flag became an unknown task word and elicited a question
+// The --init flag is an unknown task word and elicits a question
 // instead of intent creation. Exercise the supported entry point with a task.
 const CREATE_BUGFIX = "/aidlc --scope bugfix fix the todo checkbox state not persisting after reload";
 
-/** Count occurrences of a specific event type in a parsed event-type list. */
 function countEvent(events: string[], event: string): number {
   return events.filter((e) => e === event).length;
 }
@@ -166,9 +164,9 @@ function reportInitFailure(projectDir: string, result: DriveResult | undefined):
 
 describe("t54 /aidlc --scope bugfix audit completeness (sdk)", () => {
   // -------------------------------------------------------------------------
-  // Fresh project: the audit.md structure lands at explicit init. Assert the header,
-  // canonical field shapes, separators, ISO timestamps, no duplicate
-  // SESSION_STARTED, and the init-phase event population on the landed file.
+  // Fresh project: the audit-shard structure lands at intent creation. Assert the
+  // header, canonical field shapes, separators, ISO timestamps, no duplicate
+  // SESSION_STARTED, and the init-phase event population on the landed shards.
   // -------------------------------------------------------------------------
   test(
     "init writes a structurally complete audit log: header, canonical fields, separators, ISO timestamps, no duplicate SESSION_STARTED",
@@ -183,42 +181,34 @@ describe("t54 /aidlc --scope bugfix audit completeness (sdk)", () => {
           stopAfterToolResult: STOP_AFTER_INIT,
         });
 
-        // P4: audit is SHARDED per clone under <record>/audit/ (the active
+        // Audit is SHARDED per clone under <record>/audit/ (the active
         // intent's record dir), NOT the flat aidlc-docs/audit.md. readAuditText
         // resolves the created intent and concatenates its shards.
         const auditRaw = readAuditText(proj);
 
-        // .sh test 1: audit exists (the merged shard text is non-empty).
         expect(auditRaw.length).toBeGreaterThan(0);
 
-        // .sh test 2: audit > 200 bytes (merged shard text length).
         expect(auditRaw.length).toBeGreaterThan(200);
 
         const events = readAuditEvents(proj) ?? [];
 
-        // .sh test 7: the AI-DLC Audit Log header.
         expect(auditRaw).toContain("AI-DLC Audit Log");
 
-        // .sh test 8: canonical **Timestamp**: field shape present.
         expect(auditRaw).toContain("**Timestamp**:");
 
-        // .sh test 9: horizontal-rule block separators present.
+        // Horizontal-rule block separators present.
         expect(auditRaw.split("\n").some((l) => l.startsWith("---"))).toBe(true);
 
-        // .sh test 5: at least one ISO timestamp (YYYY-MM-DDThh:mm:ssZ).
+        // At least one ISO timestamp (YYYY-MM-DDThh:mm:ssZ).
         expect(auditRaw).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/);
 
-        // .sh test 10: multiple audit events logged (the .sh's assert_gt 2).
         expect(events.length).toBeGreaterThan(2);
 
-        // .sh test 3: >= 3 STAGE_COMPLETED (the 3 init stages; assert_gt 2). Typed
-        // **Event** parse, stronger than a substring grep.
+        // >= 3 STAGE_COMPLETED: the 3 init stages complete at intent creation.
         expect(countEvent(events, "STAGE_COMPLETED")).toBeGreaterThanOrEqual(3);
 
-        // .sh test 6: no duplicate SESSION_STARTED (the .sh's <= 1 bound).
         expect(countEvent(events, "SESSION_STARTED")).toBeLessThanOrEqual(1);
 
-        // The audit's reason to exist: the WORKFLOW_STARTED creation event fired.
         assertAuditEvent(r, "WORKFLOW_STARTED");
       } catch (error) {
         // Preserve bounded SDK evidence before finally removes the fixture.

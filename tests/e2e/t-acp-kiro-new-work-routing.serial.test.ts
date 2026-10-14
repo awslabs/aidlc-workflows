@@ -108,6 +108,7 @@ function expectExactCompletedRendering(
   assistantText: string,
   directive: RoutingDirective,
 ): void {
+  // person-facing: on Kiro ACP the question is the agent's numbered prose, so its words are what the person reads.
   expect(assistantText).toContain(directive.numbered_prose_question);
   expect(
     assistantText.trimEnd().endsWith(directive.numbered_prose_question),
@@ -175,6 +176,7 @@ describe("t-acp-kiro-new-work-routing (live engine-ask authority)", () => {
         expect(other.toolCallIssues).toEqual([]);
         expect(other.stopReason).toBe("end_turn");
         expect(other.toolCalls).toEqual([]);
+        // person-facing: after choosing Other, the agent's reply is the line the person reads.
         expect(visibleMarkdown(other.assistantText)).toBe(OTHER_DETAIL_PROMPT);
 
         const alternative = await driveKiroAcp({
@@ -191,6 +193,7 @@ describe("t-acp-kiro-new-work-routing (live engine-ask authority)", () => {
         const nextCalls = invocations.filter((invocation) =>
           invocation?.verb === "next"
         );
+        // person-facing: the person's alternative reaches the engine once, word for word; a second next would act on it twice.
         expect(nextCalls).toHaveLength(1);
         expect(nextCalls[0]?.args.join(" ")).toBe(ALTERNATIVE);
         const alternativeAskIndex = engineAskIndex(
@@ -257,6 +260,7 @@ describe("t-acp-kiro-new-work-routing (live engine-ask authority)", () => {
         expect(directive.response_route).toBe("next");
         expect(directive.available_intents).toHaveLength(2);
         for (const selector of directive.available_intents ?? []) {
+          // person-facing: each piece of work the person can pick is named in the question they read.
           expect(result.assistantText).toContain(selector);
         }
         expectExactCompletedRendering(result.assistantText, directive);

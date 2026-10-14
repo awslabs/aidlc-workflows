@@ -19,10 +19,10 @@
 //   - the planted-mkdir-lock contention path (auditLockDir = md5(projectDir)[0:8]) [aidlc-lib.ts:512-514]
 //   - the chmod-readonly post-emit failure path → ERROR_LOGGED [fork-emitted:<ts>]  [:407-422]
 // An in-process twin would lose the process.exit shell, the env seam, the
-// JSON-on-stdout contract, and the cross-process lock contention the .sh
-// proves. So every case SPAWNS the real binary (BUN + the .ts path) and the
+// JSON-on-stdout contract, and the cross-process lock contention.
+// So every case SPAWNS the real binary (BUN + the .ts path) and the
 // audit-fork/merge prerequisites use the real `aidlc-worktree.ts create`
-// subcommand against a genuine git fixture — exactly the .sh's shape.
+// subcommand against a genuine git fixture.
 //
 // FIXTURE (mirrors make_fixture, t07:53-61): aidlc-audit audit-fork resolves a
 // worktree via worktreePath(projectDir, intentId8, slug) and refuses if that
@@ -37,43 +37,9 @@
 // byte-for-byte. cleanupWorktreeFixture prunes child worktrees then rm -rf's the
 // parent. Nothing is written under tests/fixtures/**.
 //
-// Old TAP -> new test parity (31 .sh assertions -> 31 expect()s):
-//   A1  audit-fork exits 0                                  -> "A: fork happy path" expect 1
-//   A2  stdout '"emitted":"AUDIT_FORKED"'                   -> "A: fork happy path" expect 2
-//   A3  main audit contains AUDIT_FORKED row                -> "A: fork happy path" expect 3
-//   A4  main audit carries Fork Boundary field              -> "A: fork happy path" expect 4
-//   A5  worktree audit file created                         -> "A: fork happy path" expect 5
-//   A6  worktree audit byte-identical at fork instant       -> "A: fork happy path" expect 6
-//   A7  Fork Boundary matches main vs worktree              -> "A: fork happy path" expect 7
-//   A8  audit-merge exits 0                                 -> "A: merge happy path" expect 1
-//   A9  main audit contains merged STAGE_STARTED row        -> "A: merge happy path" expect 2
-//   A10 main audit contains AUDIT_MERGED row                -> "A: merge happy path" expect 3
-//   A11 worktree audit does NOT contain AUDIT_MERGED        -> "A: merge happy path" expect 4
-//   B1.1 empty-delta merge exits 0                          -> "B1 empty-delta" expect 1
-//   B1.2 reports entries_merged=0                           -> "B1 empty-delta" expect 2
-//   B1.3 appends exactly one --- block to main              -> "B1 empty-delta" expect 3
-//   B2.1 worktree aidlc-docs/ absent pre-fork               -> "B2 mkdir -p" expect 1
-//   B2.2 fork created <wt>/aidlc-docs/audit.md              -> "B2 mkdir -p" expect 2
-//   B3.1 fork exits non-zero, main audit missing            -> "B3 missing main audit" expect 1
-//   B3.2 error names "main audit not found"                 -> "B3 missing main audit" expect 2
-//   B4.1 merge exits non-zero, prefix edited                -> "B4 prefix-hash" expect 1
-//   B4.2 error names "prefix-hash"                          -> "B4 prefix-hash" expect 2
-//   B5.1 staggered N=2 mergers both exit 0                  -> "B5 lock contention" expect 1+2
-//   B5.2 exactly 2 AUDIT_MERGED rows                        -> "B5 lock contention" expect 3
-//   B6  lock-timeout: non-zero + "Failed to acquire audit lock" -> "B6 lock timeout" expect 1+2
-//   B7  65-char slug rejected, "65 chars|max is 64"         -> "B7 slug length" expect 1+2
-//   B8  failed fork ERROR_LOGGED [fork-emitted:<iso-ts>]    -> "B8 ERROR_LOGGED correlation" expect 1
-//   C1  alphabetical N=4 bracket order                      -> "C1 alphabetical" expect 1
-//   C2  reverse-alphabetical N=4 bracket order              -> "C2 reverse" expect 1
-//   C3  same-second-timestamps N=4 bracket order            -> "C3 same-second" expect 1
-//   C4  N=4 one-empty-delta bracket order                   -> "C4 one-empty-delta" expect 1
-//   C5  C4 main audit has exactly 4 AUDIT_MERGED rows        -> "C5/C6 structural" expect 1
-//   C6  C4 main audit has exactly 4 AUDIT_FORKED rows        -> "C5/C6 structural" expect 2
-//
-// STRONGER than the .sh in several places: B3/B7 also assert NO side effect
-// landed (no worktree audit, no AUDIT_FORKED row); B8 asserts the ISO-timestamp
-// shape on the SAME [fork-emitted:...] tag AND that an integer Fork-Boundary
-// value was NOT used as the correlation key.
+// B3/B7 also assert NO side effect landed (no worktree audit, no AUDIT_FORKED
+// row); B8 asserts the ISO-timestamp shape on the SAME [fork-emitted:...] tag
+// AND that an integer Fork-Boundary value was NOT used as the correlation key.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
@@ -101,7 +67,7 @@ import {
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
-// P4: the lock dir is keyed on the COMPOSITE identity (projectDir + intent |
+// The lock dir is keyed on the COMPOSITE identity (projectDir + intent |
 // __workspace__ sentinel), not bare projectDir — import the real resolver so the
 // planted-lock bucket matches the one audit-merge actually acquires.
 import { auditLockDir as realAuditLockDir, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -113,7 +79,7 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 // per-clone audit shard is deterministic and SINGLE: the main shard the header
 // is written to is the SAME one audit-fork copies and audit-merge reads, and a
 // worktree-side `append` lands in the SAME shard the fork copied (so its delta
-// merges). This is the per-clone-shard analog of the old single audit.md.
+// merges).
 const FIXED_CLONE_ID = "abcdef012345";
 function shardName(): string {
   const host =
@@ -141,7 +107,7 @@ const fixtures: string[] = [];
 afterAll(() => {
   for (const f of fixtures) {
     // chmod the parent (and any chmod'd children) back to writable so cleanup
-    // (and the readonly-worktree B8 case) doesn't leave undeletable dirs.
+    // doesn't leave undeletable dirs.
     try {
       chmodSync(f, 0o755);
     } catch {
@@ -185,7 +151,7 @@ function runAudit(args: string[], env?: Record<string, string>): CliResult {
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
 }
 
-/** Real `aidlc-worktree.ts create` — the same prerequisite the .sh ran. After
+/** Real `aidlc-worktree.ts create`. After
  *  the real create, seed the SAME fixed clone-id into the worktree so a
  *  worktree-side `aidlc-audit append` lands in the SAME shard audit-fork copied
  *  (audit-merge reads only that one shard's post-fork delta). */
@@ -207,7 +173,7 @@ function createWorktree(p: string, slug: string): void {
 }
 
 /**
- * make_fixture (t07:53-61): a git fixture on main + a seeded state file (so the
+ * A git fixture on main + a seeded state file (so the
  * active-intent cursor resolves AND emitError's stateFilePath check passes) + a
  * one-line "# AI-DLC Audit Log\n" main audit written into the per-clone shard
  * (the fixed clone-id makes the shard name deterministic). Returns the fixture
@@ -254,7 +220,6 @@ function makeFixture(): string {
   return p;
 }
 
-/** Count rows of the form `**Event**: <EVENT>` in a file. */
 function countEvent(file: string, event: string): number {
   if (!existsSync(file)) return 0;
   return readFileSync(file, "utf-8")
@@ -262,7 +227,6 @@ function countEvent(file: string, event: string): number {
     .filter((l) => l === `**Event**: ${event}`).length;
 }
 
-/** Count standalone `---` separator lines (grep -c '^---$'). */
 function countSeparators(file: string): number {
   if (!existsSync(file)) return 0;
   return readFileSync(file, "utf-8")
@@ -271,9 +235,9 @@ function countSeparators(file: string): number {
 }
 
 /**
- * assert_per_bolt_bracket_order (t07:90-129): for each AUDIT_FORKED row's Bolt
+ * For each AUDIT_FORKED row's Bolt
  * slug, a matching AUDIT_MERGED row for the same slug must appear LATER in the
- * document. Walks event/slug pairs in document order, exactly like the .sh awk.
+ * document. Walks event/slug pairs in document order.
  * Returns null on success or a human-readable failure reason.
  */
 function bracketOrderViolation(file: string): string | null {
@@ -305,7 +269,7 @@ function bracketOrderViolation(file: string): string | null {
   return null;
 }
 
-/** The lock dir audit-merge acquires. P4: keyed on the composite identity
+/** The lock dir audit-merge acquires. Keyed on the composite identity
  *  (projectDir + intent | __workspace__ sentinel). handleAuditMerge threads the
  *  RAW --intent flag to acquireAuditLock (NOT the resolved active intent — unlike
  *  state-fork/merge), so a merge with NO --intent keys the WORKSPACE SENTINEL
@@ -346,18 +310,16 @@ describe("t07 Phase A — primitive smoke (migrated from t07-audit-fork-merge.sh
     createWorktree(p, "demo");
     const fork = runAudit(["audit-fork", "--slug", "demo", "--project-dir", p]);
 
-    expect(fork.status).toBe(0); // A1
-    expect(fork.out).toContain('"emitted":"AUDIT_FORKED"'); // A2
-    expect(countEvent(auditPath(p), "AUDIT_FORKED")).toBeGreaterThanOrEqual(1); // A3
-    expect(readFileSync(auditPath(p), "utf-8")).toContain("Fork Boundary"); // A4
-    expect(existsSync(wtAuditPath(p, "demo"))).toBe(true); // A5
+    expect(fork.status).toBe(0);
+    expect(fork.out).toContain('"emitted":"AUDIT_FORKED"');
+    expect(countEvent(auditPath(p), "AUDIT_FORKED")).toBeGreaterThanOrEqual(1);
+    expect(readFileSync(auditPath(p), "utf-8")).toContain("Fork Boundary");
+    expect(existsSync(wtAuditPath(p, "demo"))).toBe(true);
 
-    // A6: worktree audit byte-identical to main audit at fork instant.
     const mainBytes = readFileSync(auditPath(p));
     const wtBytes = readFileSync(wtAuditPath(p, "demo"));
     expect(wtBytes.equals(mainBytes)).toBe(true);
 
-    // A7: Fork Boundary value identical in both files.
     const fb = (file: string): string => {
       const m = readFileSync(file, "utf-8").match(/\*\*Fork Boundary\*\*:\s*(\d+)/);
       return m ? m[1] : "";
@@ -378,11 +340,10 @@ describe("t07 Phase A — primitive smoke (migrated from t07-audit-fork-merge.sh
     ]);
     const merge = runAudit(["audit-merge", "--slug", "demo", "--project-dir", p]);
 
-    expect(merge.status).toBe(0); // A8
-    // A9: the appended STAGE_STARTED row landed in main (Stage: foo).
+    expect(merge.status).toBe(0);
     expect(readFileSync(auditPath(p), "utf-8")).toContain("**Stage**: foo");
-    expect(countEvent(auditPath(p), "AUDIT_MERGED")).toBeGreaterThanOrEqual(1); // A10
-    // A11 (Decision 5: main-only emit): worktree audit has no AUDIT_MERGED row.
+    expect(countEvent(auditPath(p), "AUDIT_MERGED")).toBeGreaterThanOrEqual(1);
+    // Main-only emit: worktree audit has no AUDIT_MERGED row.
     expect(countEvent(wtAuditPath(p, "demo"), "AUDIT_MERGED")).toBe(0);
   });
 });
@@ -398,16 +359,16 @@ describe("t07 Phase B — edge cases", () => {
     const preSeps = countSeparators(auditPath(p));
 
     const merge = runAudit(["audit-merge", "--slug", "e1", "--project-dir", p]);
-    expect(merge.status).toBe(0); // B1.1
-    expect(merge.out).toContain('"entries_merged":0'); // B1.2
-    // B1.3: empty-delta merge appends exactly one block (the AUDIT_MERGED row).
+    expect(merge.status).toBe(0);
+    expect(merge.out).toContain('"entries_merged":0');
+    // Empty-delta merge appends exactly one block (the AUDIT_MERGED row).
     expect(countSeparators(auditPath(p)) - preSeps).toBe(1);
   });
 
   test("B2: missing worktree audit shard is mkdir -p'd at fork", () => {
     const p = makeFixture();
     createWorktree(p, "e2");
-    // B2.1: aidlc-worktree create does NOT scaffold the audit shard in the
+    // aidlc-worktree create does NOT scaffold the audit shard in the
     // worktree mirror (the audit/ dir is gitignored, so the fork branch lacks it).
     const wtAuditDir = join(
       wtDir(p, "e2"),
@@ -420,7 +381,6 @@ describe("t07 Phase B — edge cases", () => {
     );
     expect(existsSync(wtAuditDir)).toBe(false);
     runAudit(["audit-fork", "--slug", "e2", "--project-dir", p]);
-    // B2.2: audit-fork's mkdir -p created the worktree mirror's audit shard.
     expect(existsSync(wtAuditPath(p, "e2"))).toBe(true);
   });
 
@@ -494,11 +454,11 @@ describe("t07 Phase B — edge cases", () => {
     rmSync(auditPath(p), { force: true });
 
     const fork = runAudit(["audit-fork", "--slug", "e3", "--project-dir", p]);
-    expect(fork.status).not.toBe(0); // B3.1
-    expect(fork.out).toContain("main audit not found"); // B3.2
-    // STRONGER: the pre-emit guard means no worktree audit was forged.
+    expect(fork.status).not.toBe(0);
+    expect(fork.out).toContain("main audit not found");
+    // The pre-emit guard means no worktree audit was forged.
     expect(existsSync(wtAuditPath(p, "e3"))).toBe(false);
-    // Restore so the trap/afterAll cleanup doesn't choke.
+    // Restore so the afterAll cleanup doesn't choke.
     writeFileSync(auditPath(p), "# AI-DLC Audit Log\n", "utf-8");
   });
 
@@ -522,10 +482,10 @@ describe("t07 Phase B — edge cases", () => {
     writeFileSync(auditPath(p), edited, "utf-8");
 
     const merge = runAudit(["audit-merge", "--slug", "e4", "--project-dir", p]);
-    expect(merge.status).not.toBe(0); // B4.1
-    expect(merge.out).toContain("prefix-hash"); // B4.2
+    expect(merge.status).not.toBe(0);
+    expect(merge.out).toContain("prefix-hash");
     // Windows must finish fixture creation and both setup commands before the
-    // negative merge assertion; d353 hit the outer 30s cap during this case.
+    // negative merge assertion; the outer 30s cap was reached during this case.
   });
 
   test("B5: lock contention — staggered N=2 mergers both exit 0, exactly 2 AUDIT_MERGED rows", async () => {
@@ -543,7 +503,6 @@ describe("t07 Phase B — edge cases", () => {
       "--project-dir", wtDir(p, "lock-b"),
     ]);
 
-    // Background the first merge, stagger 50ms, run the second; await both.
     const mergeAsync = (slug: string): Promise<number> =>
       new Promise((resolve) => {
         const child = spawn(BUN, [
@@ -557,9 +516,8 @@ describe("t07 Phase B — edge cases", () => {
     const fgRc = await mergeAsync("lock-b");
     const bgRc = await bg;
 
-    expect(bgRc).toBe(0); // B5.1 (bg)
-    expect(fgRc).toBe(0); // B5.1 (fg)
-    // B5.2: both merges landed; exactly 2 AUDIT_MERGED rows in main audit.
+    expect(bgRc).toBe(0);
+    expect(fgRc).toBe(0);
     expect(countEvent(auditPath(p), "AUDIT_MERGED")).toBe(2);
   });
 
@@ -620,12 +578,12 @@ describe("t07 Phase B — edge cases", () => {
 
   test("audit-merge accepts the delta a swarm worktree legitimately produces", () => {
     // The swarm contract REQUIRES the worktree to deliver these rows: the
-    // SKILL instructs recording the per-unit reviewer receipts with
-    // --project-dir <worktree>, sensors fire on worktree writes, and the
-    // stage engine emits stage/artifact rows there. A validator that refuses
+    // stage-protocol-swarm.md protocol instructs recording the per-unit reviewer
+    // receipts with --project-dir <worktree>, sensors fire on worktree writes, and
+    // the stage engine emits stage/artifact rows there. A validator that refuses
     // any of them makes `bolt complete --merge` deterministically
     // unrecoverable (the delta bytes never change), which is exactly the
-    // regression t49 caught. Pinned here at the unit of the validator so the
+    // regression t49 caught. Pinned here at the CLI boundary so the
     // integration tier is not the only guard.
     const p = makeFixture();
     const slug = "legit-work";
@@ -708,7 +666,7 @@ describe("t07 Phase B — edge cases", () => {
       "--project-dir", wtDir(p, "timeout"),
     ]);
     // Plant a stuck lock by mkdir-ing the exact dir the tool acquires. Stamp a
-    // LIVE, FRESH owner (this test process) so the P3 reaper REFUSES to reclaim
+    // LIVE, FRESH owner (this test process) so the reaper REFUSES to reclaim
     // it — without the stamp a bare lock dir ages past the unstamped-grace window
     // and the reaper steals it, letting the merge succeed and defeating this case.
     const lock = auditLockDir(p);
@@ -724,8 +682,8 @@ describe("t07 Phase B — edge cases", () => {
         ["audit-merge", "--slug", "timeout", "--project-dir", p],
         { AIDLC_AUDIT_LOCK_RETRIES: "2", AIDLC_AUDIT_LOCK_RETRY_MS: "50" },
       );
-      expect(merge.status).not.toBe(0); // B6 (rc)
-      expect(merge.out).toContain("Failed to acquire audit lock"); // B6 (message)
+      expect(merge.status).not.toBe(0);
+      expect(merge.out).toContain("Failed to acquire audit lock");
     } finally {
       rmSync(lock, { recursive: true, force: true });
     }
@@ -736,10 +694,8 @@ describe("t07 Phase B — edge cases", () => {
     const longSlug = "a".repeat(65);
     const fork = runAudit(["audit-fork", "--slug", longSlug, "--project-dir", p]);
 
-    expect(fork.status).not.toBe(0); // B7 (rc)
-    expect(fork.out).toMatch(/65 chars|max is 64/); // B7 (message)
-    // STRONGER: the .sh's "before any disk side-effect" intent — no worktree
-    // audit, no AUDIT_FORKED row landed for the rejected slug.
+    expect(fork.status).not.toBe(0);
+    expect(fork.out).toMatch(/65 chars|max is 64/);
     expect(existsSync(wtAuditPath(p, longSlug))).toBe(false);
     expect(countEvent(auditPath(p), "AUDIT_FORKED")).toBe(0);
   });
@@ -767,12 +723,11 @@ describe("t07 Phase B — edge cases", () => {
     runAudit(["audit-fork", "--slug", "erro", "--project-dir", p]);
     const main = readFileSync(auditPath(p), "utf-8");
     // The correlation tag is the ISO 8601 timestamp (isoTimestamp), NOT the
-    // integer Fork Boundary — doctor (milestone 15) joins the orphan AUDIT_FORKED row
+    // integer Fork Boundary - doctor joins the orphan AUDIT_FORKED row
     // to this ERROR_LOGGED by exact-string timestamp match.
     expect(main).toMatch(
       /\[fork-emitted:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\]/,
     );
-    // STRONGER: the tag is NOT a bare integer (Fork Boundary value).
     expect(main).not.toMatch(/\[fork-emitted:\d+\]/);
   });
 });
@@ -781,7 +736,6 @@ describe("t07 Phase B — edge cases", () => {
 // Phase C — property (N=4 orderings preserve per-Bolt fork→merge brackets)
 // ===========================================================================
 describe("t07 Phase C — property", () => {
-  /** N=4 fork+append+merge cycles in the given slug order (run_n4_scenario). */
   function runN4(p: string, slugs: string[]): void {
     for (const s of slugs) {
       createWorktree(p, s);
@@ -833,7 +787,6 @@ describe("t07 Phase C — property", () => {
       createWorktree(p, s);
       runAudit(["audit-fork", "--slug", s, "--project-dir", p]);
     }
-    // Three of four append a delta; z3 stays empty.
     for (const s of ["z1", "z2", "z4"]) {
       runAudit([
         "append", "STAGE_STARTED", "--field", `Stage=${s}`, "--field", "Agent=test",
@@ -843,11 +796,8 @@ describe("t07 Phase C — property", () => {
     for (const s of ["z1", "z2", "z3", "z4"]) {
       runAudit(["audit-merge", "--slug", s, "--project-dir", p]);
     }
-    // C4: bracket order preserved across the one-empty-delta ordering.
     expect(bracketOrderViolation(auditPath(p))).toBeNull();
-    // C5: exactly 4 AUDIT_MERGED rows (no merger silently dropped).
     expect(countEvent(auditPath(p), "AUDIT_MERGED")).toBe(4);
-    // C6: exactly 4 AUDIT_FORKED rows.
     expect(countEvent(auditPath(p), "AUDIT_FORKED")).toBe(4);
   });
 });

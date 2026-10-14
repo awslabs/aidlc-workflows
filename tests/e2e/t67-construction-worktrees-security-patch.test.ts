@@ -1,65 +1,41 @@
 // covers: data:scope-grid(security-patch), cli:aidlc-bolt(dispatch-event), cli:aidlc-utility(init), data:state-template(v0.4.0-fields)
 //
 // t67 — Construction worktrees per scope: the security-patch contract.
-// Migrated from tests/e2e/t67-construction-worktrees-security-patch.sh
-// (TAP plan 4). The .sh sourced its shared construction helper and proved
-// the v0.4.0 milestone 13 per-scope orchestration contract for `security-patch`
-// WITHOUT a full `claude -p` round-trip. Four distinct behavioural assertions:
-//
-//   .sh L25 assert_scope_codegen_mode "security-patch" "EXECUTE"
-//   .sh L26 assert_dispatch_event_runs_for_scope "security-patch" "$PROJ"
-//   .sh L29-34 scope-grid.json security-patch SKIPs practices-discovery
-//   .sh L36-41 the init-produced v7 state carries Worktree Path + Bolt Refs
-//
-// The four SKILL.md prose-presence checks were RETIRED at the engine cutover
-// (helpers L67-95): the per-Bolt dispatch routing the .sh once grepped from
-// SKILL.md is now an engine concern, so the .sh's plan dropped to 4. This twin
-// covers exactly those surviving 4.
 //
 // Mechanism: MIXED.
 //   - Assertions 1 + 3 are pure structural reads of the compiled
-//     scope-grid.json (the runtime source of truth; scope-mapping.json was
-//     retired in milestone 12 — helpers L46-48). Mechanism none: require the JSON and
-//     assert the cell. The .sh shelled `bun -e require(...)`; the contract is
-//     the data, so we read it directly with zero process spawn.
-//   - Assertions 2 + 4 are process-boundary contracts: `aidlc-utility.ts init`
-//     must WRITE a v7 state file with the two v0.4.0 fields, and
+//     scope-grid.json (the runtime source of truth). Mechanism none: require the
+//     JSON and assert the cell. The contract is the data, so we read it directly
+//     with zero process spawn.
+//   - Assertions 2 + 4 are process-boundary contracts: `aidlc-utility.ts
+//     intent-create` must WRITE a v8 state file with the two fields, and
 //     `aidlc-bolt.ts dispatch-event` must EMIT a real MERGE_DISPATCH_INVOKED
 //     audit row into that initialized project. Mechanism cli: spawnSync the
 //     real tools via BUN against the .ts paths and assert on the bytes they
-//     write — the same seam assert_dispatch_event_runs_for_scope (helpers
-//     L99-114) and the .sh's grep on aidlc-state.md exercised.
+//     write.
 //
 // Source under test:
 //   - dist/claude/.claude/tools/data/scope-grid.json
 //       security-patch.stages["code-generation"] === "EXECUTE"
 //       security-patch.stages["practices-discovery"] === "SKIP"
 //   - dist/claude/.claude/tools/aidlc-bolt.ts:660 handleDispatchEvent
-//       MERGE_DISPATCH_INVOKED branch (:670-685): requires --slug +
+//       MERGE_DISPATCH_INVOKED branch: requires --slug +
 //       --practices-excerpt; emits via emitAudit -> appendAuditEntry with
 //       fields { "Bolt slug": slug, "Practices section excerpt": excerpt };
 //       prints {"emitted":"MERGE_DISPATCH_INVOKED","slug":...} to stdout.
 //   - dist/claude/.claude/tools/aidlc-audit.ts:168 EVENT_HEADINGS maps
 //       MERGE_DISPATCH_INVOKED -> "Merge Dispatch Invoked"; the **Event**:
-//       and **Bolt slug**: lines land in audit.md.
-//   - aidlc-utility.ts init writes aidlc-docs/aidlc-state.md from the v7
-//       template, which carries `- **Worktree Path**:` and `- **Bolt Refs**:`
-//       (the v0.4.0 Construction-worktree fields).
+//       and **Bolt slug**: lines land in the audit shards.
+//   - aidlc-utility.ts handleIntentCreateStateBuild writes the record's
+//       aidlc-state.md from the v8 template, which carries `- **Worktree Path**:`
+//       and `- **Bolt Refs**:` (the Construction-worktree fields).
 //
-// Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
-//   .sh assert 1 (scope codegen mode EXECUTE)       -> "scope-grid: security-patch code-generation = EXECUTE"
-//   .sh assert 2 (dispatch-event emits for scope)   -> "dispatch-event emits a real MERGE_DISPATCH_INVOKED row + Bolt slug for security-patch"
-//   .sh assert 3 (SKIPs practices-discovery)        -> "scope-grid: security-patch SKIPs practices-discovery"
-//   .sh assert 4 (v7 state has v0.4.0 fields)       -> "init writes a v7 state carrying Worktree Path + Bolt Refs for security-patch"
-//
-// STRONGER than the .sh where cheap:
-//   - assert 2: the .sh grepped MERGE_DISPATCH_INVOKED + a loose "Bolt slug.*"
-//     pattern. Here we also pin the CLI stdout JSON {"emitted","slug"}, the
-//     exact "**Bolt slug**: t-security-patch-bolt-1" line, the "Merge Dispatch
-//     Invoked" heading the EVENT_HEADINGS map produces, and exit code 0.
-//   - assert 4: the .sh did two independent greps; here we assert the two field
-//     LABEL lines render in the state file the init tool wrote, on the v7
-//     `- **<field>**:` shape.
+// Also pinned:
+//   - assert 2: the CLI stdout JSON {"emitted","slug"}, the exact
+//     "**Bolt slug**: t-security-patch-bolt-1" line, the "Merge Dispatch Invoked"
+//     heading the EVENT_HEADINGS map produces, and exit code 0.
+//   - assert 4: both field labels appear in the state file the intent-create
+//     tool wrote.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
@@ -71,16 +47,16 @@ import {
   cleanupTestProject,
   createTestProject,
 } from "../harness/fixtures.ts";
-// P4: init CREATES a per-intent record; state lives under
-// aidlc/spaces/<space>/intents/<slug>-<id8>/ and audit is SHARDED per clone
+// intent-create CREATES a per-intent record; state lives under
+// aidlc/spaces/<space>/intents/<YYMMDD>-<slug>/ and audit is SHARDED per clone
 // under <record>/audit/. Read state through the resolved record dir and audit
 // through the shipped merge helper (default-resolves the active intent, falls
-// back to flat aidlc-docs for a not-yet-created project).
+// back to the space-level shard when no intent resolves).
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const SCOPE_GRID_PATH = join(AIDLC_SRC, "tools", "data", "scope-grid.json");
@@ -89,7 +65,7 @@ const SCOPE = "security-patch";
 
 // scope-grid.json: { <scope>: { stages: { <stage>: <MODE> } } } — the
 // transpose of per-stage `scopes:` frontmatter, compiled at build, the runtime
-// source of truth (helpers L46-48). Read once, structurally.
+// source of truth. Read once, structurally.
 interface ScopeGrid {
   [scope: string]: { stages: Record<string, string> };
 }
@@ -101,10 +77,10 @@ afterAll(() => {
 });
 
 /**
- * setup_construction_project (helpers L36-43): a project with aidlc-docs/,
- * then `aidlc-utility.ts init --force --scope <scope>` so aidlc-state.md and
- * the rest of the v7 workspace exist (the dispatch-event + state probes both
- * read that path). Returns the project dir.
+ * A project with aidlc-docs/, then `aidlc-utility.ts intent-create --force
+ * --scope <scope>` so aidlc-state.md and the rest of the v8 workspace exist (the
+ * dispatch-event + state probes both read the created intent's record). Returns
+ * the project dir.
  */
 function setupConstructionProject(scope: string): string {
   const proj = createTestProject();
@@ -119,9 +95,9 @@ function setupConstructionProject(scope: string): string {
   return proj;
 }
 
-// P4: resolve the created intent's record dir from the active-space + active-intent
+// resolve the created intent's record dir from the active-space + active-intent
 // cursors (a record dir is the one holding aidlc-state.md), falling back to the
-// flat aidlc-docs/ layout for a not-yet-created project. Copied verbatim from t63.
+// flat aidlc-docs/ layout for a not-yet-created project.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -139,21 +115,18 @@ function recordDirOf(p: string): string {
 }
 
 describe("t67 construction worktrees — security-patch (migrated from t67-construction-worktrees-security-patch.sh, plan 4)", () => {
-  // === .sh assert 1 — scope-grid codegen mode (mechanism none) ===============
   test("scope-grid: security-patch code-generation = EXECUTE [.sh assert 1]", () => {
     const entry = grid[SCOPE];
     expect(entry).toBeDefined();
     expect(entry.stages["code-generation"]).toBe("EXECUTE");
   });
 
-  // === .sh assert 3 — scope-grid practices-discovery SKIP (mechanism none) ===
   test("scope-grid: security-patch SKIPs practices-discovery [.sh assert 3]", () => {
     const entry = grid[SCOPE];
     expect(entry).toBeDefined();
     expect(entry.stages["practices-discovery"]).toBe("SKIP");
   });
 
-  // === .sh assert 2 — dispatch-event emits for scope (mechanism cli) =========
   test("dispatch-event emits a real MERGE_DISPATCH_INVOKED row + Bolt slug for security-patch [.sh assert 2]", () => {
     const proj = setupConstructionProject(SCOPE);
     const slug = `t-${SCOPE}-bolt-1`;
@@ -173,31 +146,24 @@ describe("t67 construction worktrees — security-patch (migrated from t67-const
       ],
       { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
-    // STRONGER than the .sh (which only grepped audit.md): the CLI exits 0 and
-    // prints the emit-confirmation JSON to stdout.
     expect(res.status).toBe(0);
     const stdout = JSON.parse((res.stdout ?? "").trim());
     expect(stdout).toEqual({ emitted: "MERGE_DISPATCH_INVOKED", slug });
 
-    // The audit row landed in the initialized project (the .sh's two greps).
-    // P4: read the merged per-clone audit shards, not the retired flat audit.md.
+    // Read the merged per-clone audit shards, not the flat audit.md.
     const audit = readAllAuditShards(proj);
     expect(audit.includes("**Event**: MERGE_DISPATCH_INVOKED")).toBe(true);
-    // STRONGER: the exact slug line, not the .sh's loose "Bolt slug.*" pattern.
     expect(audit.includes(`**Bolt slug**: ${slug}`)).toBe(true);
-    // STRONGER: EVENT_HEADINGS maps the event to this ## heading (aidlc-audit.ts:168).
+    // EVENT_HEADINGS maps the event to this ## heading (aidlc-audit.ts).
     expect(audit.includes("## Merge Dispatch Invoked")).toBe(true);
   });
 
-  // === .sh assert 4 — v7 state has v0.4.0 fields (mechanism cli) =============
   test("init writes a v7 state carrying Worktree Path + Bolt Refs for security-patch [.sh assert 4]", () => {
     const proj = setupConstructionProject(SCOPE);
     const state = readFileSync(
       join(recordDirOf(proj), "aidlc-state.md"),
       "utf-8",
     );
-    // The .sh grepped the two field labels independently; assert both on the
-    // v7 `- **<field>**:` shape the init template writes.
     expect(state).toContain("**Worktree Path**:");
     expect(state).toContain("**Bolt Refs**:");
   });

@@ -50,7 +50,6 @@ function run(proj: string, tool: string, args: string[]): { status: number; out:
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 
-// The line the first Construction step says on a plan made with these flags.
 function firstConstructionLine(createArgs: string[], first: string): string {
   const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
   tempDirs.push(proj);

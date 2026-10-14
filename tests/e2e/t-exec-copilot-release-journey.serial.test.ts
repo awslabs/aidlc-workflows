@@ -8,7 +8,9 @@
 //
 //   case 1: the folder is trusted, the way Copilot's own trust dialog records
 //           it. Every line the person types has a message record (the hooks
-//           ran), the plan question waits for them, "1" starts the bugfix
+//           ran) and no other record holds words they never typed (a
+//           subagent's brief is no turn of theirs), the plan question waits
+//           for them, "1" starts the bugfix
 //           plan, Reverse Engineering asks for approval and "Approve"
 //           approves it, and doctor no longer says the hooks never ran.
 //   case 2: the folder is NOT trusted. `copilot -p` then skips the project's
@@ -36,13 +38,14 @@ import { join } from "node:path";
 import { copilotTurn, trustCopilotFolder } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
+  checkReleaseJourneyTurn,
   doctorChecks,
+  expectPersonFirstInJourney,
   hooksRanProblems,
   RELEASE_JOURNEY_TURNS,
   type ReleaseJourneyReport,
   recordedPersonLines,
   releaseJourneyEvidence,
-  releaseJourneyProblems,
   runReleaseJourney,
   setupReleaseJourneyProject,
 } from "../harness/release-journey.ts";
@@ -138,14 +141,21 @@ describe("t-exec-copilot-release-journey: a person's first day on Copilot CLI, b
           report.turns.push({ line, seconds: Math.round((Date.now() - started) / 1000) });
           lastOut = turn.out;
           if (turn.rc !== 0) report.problems.push(`Copilot ended "${line}" with exit ${turn.rc}: ${turn.out.slice(-1500)}`);
-          report.problems.push(...releaseJourneyProblems(project.proj, index + 1).map((problem) => `after "${line}": ${problem}`));
+          checkReleaseJourneyTurn(report, project.proj, index + 1, line);
           if (report.problems.length) break;
+        }
+        // A subagent's brief reaches the hooks as a prompt too: only the lines
+        // the person typed may be on their record.
+        const typed: readonly string[] = RELEASE_JOURNEY_TURNS;
+        for (const line of recordedPersonLines(project.proj).filter((recorded) => !typed.includes(recorded))) {
+          report.problems.push(`a message record holds words the person never typed: "${line.slice(0, 120)}"`);
         }
         if (!report.problems.length) report.problems.push(...hooksRanProblems(doctorChecks(project, env)));
         const runs = hookRuns(copilotHome);
         report.extra = { "hook runs": Object.values(runs).reduce((sum, count) => sum + count, 0), ...tokens(usageFile), hooksByKind: runs };
         if (report.problems.length) report.extra.evidence = { ...releaseJourneyEvidence(project.proj), output: lastOut.slice(-4000) };
       });
+      expectPersonFirstInJourney(report);
       expect(report.problems).toEqual([]);
       rmSync(project.root, { recursive: true, force: true });
     },

@@ -225,8 +225,8 @@ describe.skipIf(process.platform !== "darwin")("Darwin native supervision fixtur
   });
 
   test("the process-table identity matches proc_pidinfo for this process and reads any user's process", async () => {
-    // Pins the kinfo_proc offsets against the call it replaced, which only
-    // answered for our own user: same PID, parent, user and start time.
+    // Pins the kinfo_proc offsets against proc_pidinfo, which only
+    // answers for our own user: same PID, parent, user and start time.
     const { dlopen } = await import("bun:ffi");
     const libproc = dlopen("libSystem.B.dylib", {
       proc_pidinfo: { args: ["i32", "i32", "u64", "ptr", "i32"], returns: "i32" },
@@ -293,7 +293,7 @@ describe.skipIf(process.platform !== "darwin")("Darwin native supervision fixtur
       expect(status).toMatchObject({ token: fixture.config.token, supervisorPid: fixture.proc.pid, cleanupComplete: false });
       expect(status.targetPid).toBeUndefined();
       expect(existsSync(join(fixture.dir, "target.stat"))).toBe(false);
-      fixture.proc.kill("SIGINT"); // Wrapper survives before any real target exists.
+      fixture.proc.kill("SIGINT");
       await pause(100);
       expect(fixture.proc.exitCode).toBeNull();
       expect(existsSync(join(fixture.dir, "target.stat"))).toBe(false);

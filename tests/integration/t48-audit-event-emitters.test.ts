@@ -1,23 +1,20 @@
 // covers: doc:12-state-machine.md(audit-event-taxonomy), doc:audit-format.md(event-registry), data:aidlc-audit.ts(VALID_EVENT_TYPES), function:handleApprove, function:handleReject, function:handleGateStart, function:handleRevise, function:handleSkip, function:handleCompleteWorkflow, function:handleAdvance, function:handleReuseArtifact, function:handleIntentCreate
 //
 // t48 — Drift test for the audit event taxonomy: docs vs code.
-// Migrated from tests/integration/t48-audit-event-emitters.sh (TAP plan 16). The
-// .sh declared NO `# covers:` header — its subject is the cross-consistency of
-// three SOURCE-TEXT surfaces (it is a static-analysis meta-test, not a runtime
-// behaviour test): the emitter registry in docs/reference/12-state-machine.md,
-// the VALID_EVENT_TYPES Set literal in tools/aidlc-audit.ts, the Event Registry
-// in knowledge/aidlc-shared/audit-format.md, and the emission call sites across
+// Its subject is the cross-consistency of SOURCE-TEXT surfaces (it is a
+// static-analysis meta-test, not a runtime behaviour test): the emitter
+// registry in docs/reference/12-state-machine.md, the VALID_EVENT_TYPES Set
+// literal in tools/aidlc-audit.ts, the Event Registry in
+// knowledge/aidlc-shared/audit-format.md, and the emission call sites across
 // tools/ + hooks/.
 //
-// Mechanism: NONE. The .sh was "L1 — pure bash + grep + awk. No bun, no
-// claude." There is no process boundary, no argv, no exit code, no stdout, no
-// audit.md write to cross — the entire subject is the BYTES of shipped source
-// and doc files read off disk. So this twin reads the same files and applies
-// the same scanning logic in TypeScript, in-process. Zero spawns, zero LLM,
-// zero tokens. (The point of a drift test is text-vs-text agreement; parsing
-// the source text — rather than importing VALID_EVENT_TYPES, which aidlc-audit
-// .ts does NOT export — is the faithful surface, and is exactly what the .sh
-// did via `sed -n '/new Set(\[/,/\]);/p'`.)
+// Mechanism: NONE. There is no process boundary, no argv, no exit code, no
+// stdout, no audit write to cross - the entire subject is the BYTES of shipped
+// source and doc files read off disk. The test reads those files and applies
+// its scanning logic in TypeScript, in-process. Zero spawns, zero LLM, zero
+// tokens. (The point of a drift test is text-vs-text agreement; parsing the
+// source text - rather than importing VALID_EVENT_TYPES, which aidlc-audit.ts
+// does NOT export - is the faithful surface.)
 //
 // Source / surfaces under test:
 //   - docs/reference/12-state-machine.md   (## Audit event taxonomy tables)
@@ -28,33 +25,16 @@
 //   - dist/claude/.claude/tools/aidlc-utility.ts   (handleIntentCreate body)
 //   - dist/claude/.claude/skills/aidlc/            (forbidden prose-append scan)
 //
-// The four named checks the .sh documents (forward / reverse / tertiary /
-// pairing) plus the md-md catalog cross-check and the prose-append bonus are
-// each reproduced below against the SAME emission-pattern definitions:
+// The four named checks (forward / reverse / tertiary / pairing) plus the
+// md-md catalog cross-check and the prose-append check use these
+// emission-pattern definitions:
 //   * emission helper call with the event literal on one line:
 //       (emitAudit|appendAuditEntry|appendAuditEntryUnlocked|appendAuditEvent)(...,"EVENT"...)
 //   * the audit-logger ternary:   eventType = ... "EVENT"
 //   * a multi-line helper call where the event literal sits on its own line.
+//   * an appendAuditEntries batch member:   eventType: "EVENT"
 //   * a "decommented" view (strip //- and *-prefixed lines) so a commented-out
-//     emission does not falsely count — the .sh's decommented() / has_emission().
-//
-// Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
-//   .sh test 1  assert_file_exists DOC               -> "state-machine doc exists"
-//   .sh test 2  assert_eq REGISTRY_COUNT TS_COUNT     -> "emitter registry row count matches VALID_EVENT_TYPES"
-//   .sh test 3  forward: doc row -> call site         -> "forward: every doc (event, emitter) row has a matching call site"
-//   .sh test 4  reverse: call site -> doc row         -> "reverse: every source emission site is in the doc"
-//   .sh test 5  tertiary: deleted events not present  -> "tertiary: deleted events have no emission sites and are not in VALID_EVENT_TYPES"
-//   .sh test 6  check_pairing handleApprove           -> "pairing: handleApprove emits GATE_APPROVED + STAGE_COMPLETED"
-//   .sh test 7  check_pairing handleReject            -> "pairing: handleReject emits GATE_REJECTED + STAGE_REVISING"
-//   .sh test 8  check_pairing handleGateStart         -> "pairing: handleGateStart emits STAGE_AWAITING_APPROVAL"
-//   .sh test 9  check_pairing handleRevise            -> "pairing: handleRevise emits STAGE_AWAITING_APPROVAL"
-//   .sh test 10 check_pairing handleSkip              -> "pairing: handleSkip emits STAGE_SKIPPED"
-//   .sh test 11 check_pairing handleCompleteWorkflow  -> "pairing: handleCompleteWorkflow emits PHASE_COMPLETED + PHASE_VERIFIED + WORKFLOW_COMPLETED"
-//   .sh test 12 check_pairing handleAdvance           -> "pairing: handleAdvance emits STAGE_STARTED"
-//   .sh test 13 check_pairing handleReuseArtifact     -> "pairing: handleReuseArtifact emits ARTIFACT_REUSED"
-//   .sh test 14 check_pairing handleIntentCreate              -> "pairing: handleIntentCreate emits WORKFLOW_STARTED + PHASE_STARTED + STAGE_STARTED"
-//   .sh test 15 md-md catalog cross-check             -> "md-md: audit-format.md and 12-state-machine.md agree on the event set"
-//   .sh test 16 forbidden prose append calls          -> "no prose aidlc-audit.ts append calls in skills/aidlc/"
+//     emission does not falsely count.
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -73,7 +53,7 @@ const SKILLS_DIR = join(AIDLC_SRC, "skills", "aidlc");
 const EMITTERS = "(emitAudit|appendAuditEntry|appendAuditEntryUnlocked|appendAuditEvent)";
 
 /** Strip line comments so a commented-out emission does not count.
- *  Mirrors the .sh decommented(): drop //-prefixed lines and JSDoc *-lines. */
+ *  Drop //-prefixed lines and JSDoc *-lines. */
 function decommented(text: string): string {
   return text
     .split("\n")
@@ -81,8 +61,7 @@ function decommented(text: string): string {
     .join("\n");
 }
 
-/** Recursively false; just the .ts files directly under a dir (the .sh globbed
- *  "$DIR"/*.ts — non-recursive). */
+/** Just the .ts files directly under a dir - non-recursive. */
 function tsFiles(dir: string): string[] {
   return readdirSync(dir)
     .filter((f) => f.endsWith(".ts"))
@@ -92,8 +71,8 @@ function tsFiles(dir: string): string[] {
 const ALL_SOURCE_FILES = [...tsFiles(TOOLS_DIR), ...tsFiles(HOOKS_DIR)];
 
 /**
- * has_emission (.sh:40-60): is there a LIVE emission call site for `event` in
- * `text`? Four patterns, on the decommented view:
+ * Is there a LIVE emission call site for `event` in `text`? Four patterns, on
+ * the decommented view:
  *   1. helper(...,"EVENT"...) on one line
  *   2. eventType = ... "EVENT"   (audit-logger ternary)
  *   3. an indented `"EVENT" ,`   line (multi-line helper, literal on own line)
@@ -109,8 +88,8 @@ function hasEmission(event: string, text: string): boolean {
 }
 
 /** Read the emitter taxonomy registry rows from 12-state-machine.md.
- *  awk '/^## Audit event taxonomy/,/^## Audit-first atomicity/' then keep rows
- *  matching /^| `EVENT`/ (.sh:70-71). */
+ *  From `## Audit event taxonomy` to `## Audit-first atomicity`, keep rows
+ *  starting with `| ` followed by a backticked event name. */
 function registryRows(): string[] {
   const lines = readFileSync(DOC, "utf-8").split("\n");
   const start = lines.findIndex((l) => /^## Audit event taxonomy/.test(l));
@@ -127,14 +106,12 @@ function registryRows(): string[] {
     .filter((l) => /^\| `[A-Z_]+`/.test(l));
 }
 
-/** The event name for a registry row: first backticked [A-Z_]+ token (.sh:97). */
+/** The event name for a registry row: first backticked [A-Z_]+ token. */
 function rowEvent(row: string): string {
   const m = row.match(/`([A-Z_]+)`/);
   return m ? m[1] : "";
 }
 
-/** VALID_EVENT_TYPES count, parsed from the Set literal text exactly as the .sh
- *  did: sed -n '/new Set(\[/,/\]);/p' | grep -cE '"[A-Z_]+"' (.sh:82-83). */
 function validEventTypeCount(): number {
   const lines = readFileSync(AUDIT_TS, "utf-8").split("\n");
   const start = lines.findIndex((l) => /new Set\(\[/.test(l));
@@ -146,28 +123,25 @@ function validEventTypeCount(): number {
 }
 
 describe("t48 audit event-emitter drift (migrated from t48-audit-event-emitters.sh, plan 16)", () => {
-  // .sh test 1 ---------------------------------------------------------------
   test("state-machine doc exists [.sh test 1]", () => {
     expect(existsSync(DOC)).toBe(true);
   });
 
-  // .sh test 2 ---------------------------------------------------------------
   test("emitter registry row count matches VALID_EVENT_TYPES [.sh test 2]", () => {
     const rows = registryRows();
-    expect(rows.length).toBeGreaterThan(0); // .sh's `[ -z "$REGISTRY" ]` guard
+    expect(rows.length).toBeGreaterThan(0);
     // The source of truth is VALID_EVENT_TYPES; a stale hard-coded count would
-    // silently hide drift, so we derive both and compare (.sh:81-85).
+    // silently hide drift, so we derive both and compare.
     expect(rows.length).toBe(validEventTypeCount());
   });
 
-  // .sh CHECK 1 / test 3 -----------------------------------------------------
   test("forward: every doc (event, emitter) row has a matching call site [.sh test 3]", () => {
     const failures: string[] = [];
     let checked = 0;
     for (const row of registryRows()) {
       const event = rowEvent(row);
       const col2 = row.split("|")[2] ?? "";
-      // Reserved rows are declared-but-not-emitted by design (.sh:101-103).
+      // Reserved rows are declared-but-not-emitted by design.
       if (/reserved/i.test(col2)) continue;
       const emitters = (col2.match(/`[a-z/_.-]+\.ts`/g) ?? []).map((s) =>
         s.replace(/`/g, ""),
@@ -193,9 +167,7 @@ describe("t48 audit event-emitter drift (migrated from t48-audit-event-emitters.
     expect(checked).toBeGreaterThan(0);
   });
 
-  // .sh CHECK 2 / test 4 -----------------------------------------------------
   test("reverse: every source emission site is in the doc [.sh test 4]", () => {
-    // Collect every event NAME emitted across tools/ + hooks/ (decommented).
     const emitted = new Set<string>();
     const p1 = new RegExp(`${EMITTERS}\\([^)]*"[A-Z_]+"`, "g");
     const p2 = /eventType = [^;]*"[A-Z_]+"/g;
@@ -223,7 +195,7 @@ describe("t48 audit event-emitter drift (migrated from t48-audit-event-emitters.
         if (lit) emitted.add(lit[1]);
       }
       // Pattern 3: multi-line helper — helper-name line opens (no close paren),
-      // then the first "EVENT" literal on a following line closes it (.sh:164-175).
+      // then the first "EVENT" literal on a following line closes it.
       const lines = live.split("\n");
       let inside = false;
       for (const line of lines) {
@@ -243,14 +215,13 @@ describe("t48 audit event-emitter drift (migrated from t48-audit-event-emitters.
       }
     }
     // Only the FIRST backticked token per registry row is the event name; later
-    // columns can mention deleted events in notes (.sh:180-183).
+    // columns can mention deleted events in notes.
     const registered = new Set(registryRows().map(rowEvent).filter(Boolean));
     const reverseFailures = [...emitted].filter((e) => !registered.has(e));
     expect(reverseFailures).toEqual([]);
     expect(emitted.size).toBeGreaterThan(0);
   });
 
-  // .sh CHECK 3 / test 5 -----------------------------------------------------
   test("tertiary: deleted events have no emission sites and are not in VALID_EVENT_TYPES [.sh test 5]", () => {
     const deleted = [
       "JUMP_AUTO_STOPPED",
@@ -265,7 +236,6 @@ describe("t48 audit event-emitter drift (migrated from t48-audit-event-emitters.
     const failures: string[] = [];
     const auditLive = decommented(readFileSync(AUDIT_TS, "utf-8"));
     for (const event of deleted) {
-      // No live emission call site anywhere in source.
       const resurrected = ALL_SOURCE_FILES.some((f) => {
         const live = decommented(readFileSync(f, "utf-8"));
         return new RegExp(`${EMITTERS}\\([^)]*"${event}"`).test(live);
@@ -273,7 +243,6 @@ describe("t48 audit event-emitter drift (migrated from t48-audit-event-emitters.
       if (resurrected) {
         failures.push(`${event} has an emission call site (deleted event resurrected)`);
       }
-      // Not reinstated into VALID_EVENT_TYPES (decommented view).
       if (new RegExp(`"${event}"`).test(auditLive)) {
         failures.push(`${event} reinstated in VALID_EVENT_TYPES`);
       }
@@ -281,12 +250,12 @@ describe("t48 audit event-emitter drift (migrated from t48-audit-event-emitters.
     expect(failures).toEqual([]);
   });
 
-  // .sh CHECK 4 / tests 6-14 (pairing) ---------------------------------------
+  // Pairing checks ---------------------------------------------------------
   //
-  // function_body (.sh:251-261): the body from the named function's signature
-  // to the next top-level function / const-arrow declaration. check_pairing
-  // (.sh:271-302): every listed event must appear inside a LIVE emission call
-  // in that body (helper(...,"EVENT") | eventType="EVENT" | indented "EVENT", |
+  // functionBody: the body from the named function's signature to the next
+  // top-level function / const-arrow declaration. pairingMissing: every listed
+  // event must appear inside a LIVE emission call in that body
+  // (helper(...,"EVENT") | eventType="EVENT" | indented "EVENT", |
   // eventType: "EVENT" in an appendAuditEntries batch).
   function functionBody(name: string, file: string): string | null {
     const lines = readFileSync(file, "utf-8").split("\n");
@@ -318,8 +287,8 @@ describe("t48 audit event-emitter drift (migrated from t48-audit-event-emitters.
     const live = decommented(body);
     const missing: string[] = [];
     for (const event of events) {
-      // .sh allows the event literal anywhere inside the emission call (multi-
-      // line tolerant: `([^)]|$)*`), the ternary, an indented `"E",`, or an
+      // Allow the event literal anywhere inside the emission call (multi-
+      // line tolerant: `([^)]|\n)*`), the ternary, an indented `"E",`, or an
       // appendAuditEntries batch object member.
       const inCall = new RegExp(`${EMITTERS}\\(([^)]|\\n)*"${event}"`).test(live);
       const inTernary = new RegExp(`eventType = [^;]*"${event}"`).test(live);
@@ -331,19 +300,18 @@ describe("t48 audit event-emitter drift (migrated from t48-audit-event-emitters.
   }
 
   const PAIRINGS: Array<[string, string, string[]]> = [
-    ["handleApprove", STATE_TS, ["GATE_APPROVED", "STAGE_COMPLETED"]], // test 6
-    ["handleReject", STATE_TS, ["GATE_REJECTED", "STAGE_REVISING"]], // test 7
-    ["handleGateStart", STATE_TS, ["STAGE_AWAITING_APPROVAL"]], // test 8
-    ["handleRevise", STATE_TS, ["STAGE_AWAITING_APPROVAL"]], // test 9
-    ["handleSkip", STATE_TS, ["STAGE_SKIPPED"]], // test 10
-    ["handleCompleteWorkflow", STATE_TS, ["PHASE_COMPLETED", "PHASE_VERIFIED", "WORKFLOW_COMPLETED"]], // test 11
-    ["handleAdvance", STATE_TS, ["STAGE_STARTED"]], // test 12
-    ["handleReuseArtifact", STATE_TS, ["ARTIFACT_REUSED"]], // test 13
-    // P4: the creation handler was renamed handleInit -> handleIntentCreate (the
-    // user-facing --init is retired; the engine auto-creates). The three creation
-    // events still pair off it (WORKFLOW_STARTED + the init PHASE_STARTED + the
-    // workspace-scaffold STAGE_STARTED), now into the created intent's record.
-    ["handleIntentCreate", UTIL_TS, ["WORKFLOW_STARTED", "PHASE_STARTED", "STAGE_STARTED"]], // test 14
+    ["handleApprove", STATE_TS, ["GATE_APPROVED", "STAGE_COMPLETED"]],
+    ["handleReject", STATE_TS, ["GATE_REJECTED", "STAGE_REVISING"]],
+    ["handleGateStart", STATE_TS, ["STAGE_AWAITING_APPROVAL"]],
+    ["handleRevise", STATE_TS, ["STAGE_AWAITING_APPROVAL"]],
+    ["handleSkip", STATE_TS, ["STAGE_SKIPPED"]],
+    ["handleCompleteWorkflow", STATE_TS, ["PHASE_COMPLETED", "PHASE_VERIFIED", "WORKFLOW_COMPLETED"]],
+    ["handleAdvance", STATE_TS, ["STAGE_STARTED"]],
+    ["handleReuseArtifact", STATE_TS, ["ARTIFACT_REUSED"]],
+    // The three creation events pair off handleIntentCreate (WORKFLOW_STARTED + the
+    // init PHASE_STARTED + the workspace-scaffold STAGE_STARTED), into the created
+    // intent's record.
+    ["handleIntentCreate", UTIL_TS, ["WORKFLOW_STARTED", "PHASE_STARTED", "STAGE_STARTED"]],
   ];
 
   for (const [handler, file, events] of PAIRINGS) {
@@ -352,10 +320,9 @@ describe("t48 audit event-emitter drift (migrated from t48-audit-event-emitters.
     });
   }
 
-  // .sh CHECK 5 / test 15 ----------------------------------------------------
   test("md-md: audit-format.md and 12-state-machine.md agree on the event set [.sh test 15]", () => {
     // audit-format.md Event Registry: backticked [A-Z_]+ between
-    // '## Event Registry' and '## Hook-Generated' (.sh:321-322).
+    // '## Event Registry' and '## Hook-Generated'.
     const af = readFileSync(AUDIT_FORMAT, "utf-8").split("\n");
     const afStart = af.findIndex((l) => /## Event Registry/.test(l));
     const afEnd = af.findIndex((l, i) => i > afStart && /## Hook-Generated/.test(l));
@@ -374,10 +341,9 @@ describe("t48 audit event-emitter drift (migrated from t48-audit-event-emitters.
     expect(afEvents.size).toBeGreaterThan(0);
   });
 
-  // .sh bonus / test 16 ------------------------------------------------------
   test("no prose aidlc-audit.ts append calls in skills/aidlc/ [.sh test 16]", () => {
     // The doc forbids `bun .claude/tools/aidlc-audit.ts append <EVENT>` as a
-    // prose instruction; confirm none remain (with the .sh's carve-outs for the
+    // prose instruction; confirm none remain (with carve-outs for the
     // recovery-workflow note / never-hand-write warning / cross-reference).
     const appendRe = /bun .*aidlc-audit\.ts append [A-Z_]+/;
     const carveOut = /(reserved for the future recovery workflow|never hand-write|see §4|Canonical state transitions)/;

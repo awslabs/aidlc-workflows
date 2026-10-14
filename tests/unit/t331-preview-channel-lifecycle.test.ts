@@ -4,9 +4,9 @@
 // newest published preview through the releases-list API and installing it
 // through the explicit-version path; `update --check` reports "behind" against
 // the channel's newest release with the documented exit codes; API failure is
-// "unavailable", never a crash and never a fall back to stable; switching back
-// to stable converges on the newest stable even though it sorts lower; and
-// previews prune harder than stable releases.
+// "unavailable", never a crash and never a fall back to stable; explicitly
+// switching back with `update --channel stable` converges on the newest stable
+// even though it sorts lower; and previews prune harder than stable releases.
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
 } from "../harness/test-budget.ts";
@@ -278,7 +278,6 @@ describe("t331 preview release channel", () => {
     expect(readFileSync(join(machine, "update-check.json"), "utf-8")).toBe(before);
     expect(failing.requests.some((path) => path.includes("/latest/download/"))).toBe(false);
 
-    // A channel with no published preview is unavailable too.
     const empty = serve(release, [{ tag_name: `v${NEXT_STABLE}`, prerelease: false }]);
     rmSync(join(machine, "update-check.json"));
     const none = await run(DISPATCHER, [
@@ -339,7 +338,6 @@ describe("t331 preview release channel", () => {
     // older than the one running: it changes nothing and names both ways on.
     const followStable = await run(DISPATCHER, ["config", "--channel", STABLE_CHANNEL], project, env);
     expect(followStable.status).toBe(0);
-    // From a newer preview, config names the step that goes back now.
     expect(followStable.stdout).toContain(
       `release channel set to ${STABLE_CHANNEL}; aidlc update moves to a ${STABLE_CHANNEL} release once one is newer ` +
         `than ${PREVIEW_2}; to go to the newest ${STABLE_CHANNEL} release now, run aidlc update --channel ${STABLE_CHANNEL}`,
@@ -514,7 +512,7 @@ describe("t331 preview release channel", () => {
     // any release). PREVIEW_2 has no protection of its own but is one of the
     // two newest previews, so the window keeps it. PREVIEW_0 is an older
     // preview outside the window and the stable release lost its rollback
-    // protection to PREVIEW_1: both are pruned, the stable one exactly as before.
+    // protection to PREVIEW_1: both are pruned.
     expect(readFileSync(join(machine, "rollback-version"), "utf-8").trim()).toBe(PREVIEW_1);
     expect(data.pruned.sort()).toEqual([AIDLC_VERSION, PREVIEW_0].sort());
     expect(retained(machine)).toEqual([PREVIEW_1, PREVIEW_2, PREVIEW_3].sort());
@@ -565,5 +563,120 @@ describe("t331 preview release channel", () => {
     const malformed = await run(INIT, ["config", "--pin", "2.7.2-rc.1", "--project-dir", project], project, env);
     expect(malformed.status).toBe(2);
     expect(malformed.stdout + malformed.stderr).toContain("invalid version");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A real-sized list (release-note body plus ~15 asset records per entry) is
+  // far larger than a page cap when asked for 100 at once. Paged in small
+  // chunks, every page stays under its own cap, so the newest preview is still
+  // found and installed even when it sits on a later page. On a build that asks
+  // for 100 per page under the 1 MiB cap, the first page alone overflows.
+  test("a large release list is paged, so the newest preview is still found and installed", async () => {
+    if (process.platform === "win32") return;
+    const previewRelease = fixture(PREVIEW_3);
+    // 40 preview entries at today's shape. The newest (PREVIEW_3) sorts last by
+    // id, so GitHub's newest-first list puts it on the first page; the oldest
+    // land on the second. Each entry carries a real body and 15 asset records.
+    const listed: FixtureRelease[] = [];
+    listed.push({ tag_name: `v${PREVIEW_3}`, prerelease: true, bodyBytes: 20_000 });
+    listed.push({ tag_name: `v${PREVIEW_2}`, prerelease: true, bodyBytes: 20_000 });
+    for (let i = 0; i < 38; i++) {
+      listed.push({
+        tag_name: `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.202608${String(10 + Math.floor(i / 5)).padStart(2, "0")}.${(i % 5) + 1}`,
+        prerelease: true,
+        bodyBytes: 20_000,
+      });
+    }
+    const server = serve(previewRelease, listed);
+    const { machine, project, env } = machineEnv();
+    const base = ["--release-base-url", server.baseUrl, "--release-api-url", server.apiUrl];
+
+    const checked = await run(
+      DISPATCHER,
+      ["update", "--check", "--channel", PREVIEW_CHANNEL, ...base, "--json"],
+      project,
+      env,
+    );
+    expect(checked.status, checked.stdout + checked.stderr).toBe(5);
+    const state = JSON.parse(checked.stdout);
+    expect(state.data.state).toBe("behind");
+    expect(state.data.latestVersion).toBe(PREVIEW_3);
+    // The first page of 20 holds the newest preview, so the check reads only it.
+    const listRequests = server.requests.filter((path) => path === "/api/releases");
+    expect(listRequests.length).toBe(1);
+
+    const installed = await run(
+      LIFECYCLE,
+      ["update", "--channel", PREVIEW_CHANNEL, ...base, "--json"],
+      project,
+      env,
+    );
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    expect(JSON.parse(installed.stdout).data.version).toBe(PREVIEW_3);
+    expect(readFileSync(join(machine, "active-version"), "utf-8").trim()).toBe(PREVIEW_3);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // GitHub lists releases newest first, so the first page that holds a preview
+  // holds the newest one. Each further page would cost one of GitHub's 60
+  // unauthenticated requests an hour and time from doctor's 750 ms refresh, so
+  // the lookup stops there, and reads on only past pages with no preview.
+  test("the lookup stops at the first page that holds a preview", async () => {
+    const previewRelease = fixture(PREVIEW_3);
+    // The fixture pages in array order, as GitHub does newest first.
+    const previews: FixtureRelease[] = [{ tag_name: `v${PREVIEW_3}`, prerelease: true }];
+    for (let i = 0; i < 39; i++) {
+      previews.push({
+        tag_name: `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.202608${String(10 + Math.floor(i / 5)).padStart(2, "0")}.${(i % 5) + 1}`,
+        prerelease: true,
+      });
+    }
+    const stablesFirst: FixtureRelease[] = [];
+    for (let i = 0; i < 25; i++) {
+      stablesFirst.push({ tag_name: `v${MAJOR}.${MINOR}.${PATCH + 1 + i}`, prerelease: false });
+    }
+    stablesFirst.push({ tag_name: `v${PREVIEW_3}`, prerelease: true });
+
+    for (const [listed, requests] of [[previews, 1], [stablesFirst, 2]] as const) {
+      const server = serve(previewRelease, listed);
+      const { project, env } = machineEnv();
+      const base = ["--release-base-url", server.baseUrl, "--release-api-url", server.apiUrl];
+      const checked = await run(
+        DISPATCHER,
+        ["update", "--check", "--channel", PREVIEW_CHANNEL, ...base, "--json"],
+        project,
+        env,
+      );
+      expect(checked.status, checked.stdout + checked.stderr).toBe(5);
+      expect(JSON.parse(checked.stdout).data.latestVersion).toBe(PREVIEW_3);
+      const listRequests = server.requests.filter((path) => path === "/api/releases");
+      expect(listRequests.length).toBe(requests);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A page that is itself larger than the list's own cap is refused, and the
+  // failure tells the user how to update now instead of printing the API URL.
+  test("a list page past its own cap is refused with actionable guidance", async () => {
+    const previewRelease = fixture(PREVIEW_2);
+    // 20 entries (one page) each with a ~300 KB body is well over the 4 MiB
+    // list cap, so even the first page cannot be read.
+    const listed: FixtureRelease[] = Array.from({ length: 20 }, (_, i) => ({
+      tag_name: `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.202608${String(10 + Math.floor(i / 5)).padStart(2, "0")}.${(i % 5) + 1}`,
+      prerelease: true,
+      bodyBytes: 300_000,
+    }));
+    const server = serve(previewRelease, listed);
+    const { project, env } = machineEnv();
+    const base = ["--release-base-url", server.baseUrl, "--release-api-url", server.apiUrl];
+
+    const checked = await run(
+      DISPATCHER,
+      ["update", "--check", "--channel", PREVIEW_CHANNEL, ...base, "--json"],
+      project,
+      env,
+    );
+    expect(checked.status, checked.stdout + checked.stderr).toBe(3);
+    const message = JSON.parse(checked.stdout).message as string;
+    expect(message).toContain("too large");
+    expect(message).toContain("aidlc update --version");
+    expect(message).not.toContain("byte download limit");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

@@ -43,7 +43,6 @@ function shardName(): string {
   return `${host}-${CLONE_ID}.md`;
 }
 
-// A core hook stand-in that records the hook name and what the adapter handed it.
 function recorder(capture: string, hook: string): string {
   return [
     'import { appendFileSync } from "node:fs";',
@@ -199,7 +198,6 @@ describe("t-kiro-ide-catch-up: what Kiro ran after a write or a command runs in 
     expect(ran.map((r) => r.hook)).toEqual(["rebuild-stage-graph", "sync-workflow-state"]);
     // The rebuild gets the command's chat, as the after-command card gave it.
     expect(ran[0].input.session_id).toBe(SESSION);
-    // Once: the next card has nothing left to do for that command.
     expect(guard(dir, "execute_pwsh", { command: "node --version", cwd: dir }).code).toBe(0);
     expect(recorded(capture).filter((r) => r.hook === "rebuild-stage-graph")).toHaveLength(1);
   });

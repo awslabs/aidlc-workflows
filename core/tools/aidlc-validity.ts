@@ -182,7 +182,8 @@ function fingerprintInstance(instance: ArtifactInstance): InstanceFingerprint {
     if (!statSync(path).isFile()) {
       return { instance, sha256: "not-a-file", present: false };
     }
-    // A line ending is no change: text is read with CRLF and lone CR as LF.
+    // A CRLF line ending is no change: text is read with CRLF as LF; a file Git
+    // would take as binary (a lone CR, a NUL) is read as it is.
     const bytes = readFileSync(path);
     const text = committedTextBytes(bytes);
     return {
@@ -397,7 +398,6 @@ function captureOutputBasis(
   return sortedArtifactBases(outputs);
 }
 
-/** Capture a compact stage-level basis from concrete runtime instances. */
 export function captureStageValidationBasis(
   projectDir: string,
   stage: StageValidityNode,
@@ -766,11 +766,6 @@ export function propagateStageInvalidation(
 }
 
 /**
- * Compare current completed-stage receipts with the current AI-DLC artifact
- * tree, then propagate drift through observed stage-level dependencies.
- * The function is read-only with respect to workflow state.
- */
-/**
  * A stage as the person hears it named: a shipped stage by its own name, and a
  * plugin's stage by its slug, the name the person types to go there (its
  * display name is the plugin's own text). A slug of any other shape is not
@@ -785,7 +780,8 @@ export function stageLabel(stage: { slug: string; name: string; plugin?: string 
 /**
  * What the person hears about a finished stage that is behind, and the one way
  * to act on it. When the project type changed to existing code after the stage
- * ran, the code arriving is the reason it gives; otherwise an input changed.
+ * ran, the code arriving is the reason it gives; when its own documents changed
+ * after it finished, it names them; otherwise an input changed.
  * The engine's advisory and status both say it this way.
  */
 export function staleStageNote(
@@ -810,12 +806,16 @@ export function ownDocumentChangedLine(name: string, files: readonly string[]): 
     `Do you want me to redo ${name} with your ${several ? "changes" : "change"} instead?`;
 }
 
-// A finished stage that ran before the project's code was there, and the redo.
 export function codeArrivedStageLine(name: string): string {
   return `${name} ran before the code was here. I'm carrying on with it as it is. ` +
     `Do you want me to redo ${name} with the code?`;
 }
 
+/**
+ * Compare current completed-stage receipts with the current AI-DLC artifact
+ * tree, then propagate drift through observed stage-level dependencies.
+ * The function is read-only with respect to workflow state.
+ */
 export function inspectStageValidity(
   projectDir: string,
   stateContent: string,

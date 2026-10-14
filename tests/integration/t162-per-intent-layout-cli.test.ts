@@ -4,24 +4,21 @@
 // and prove the threaded space+intent selector actually re-roots writes/reads to
 // aidlc/spaces/<sp>/intents/<slug>-<id8>/ — NOT the flat aidlc-docs/ fallback.
 //
-// WHY THIS TEST EXISTS (the test-integrity coverage gap, itself a review MAJOR):
-// when first written, NO CLI-driven test seeded a per-intent layout — the
-// per-intent threading (commit 8306892) was exercised by resolver UNIT tests only
-// (t160/t161 call the resolvers directly, never spawning a tool). A threading
-// regression — a caller dropping the intent arg, or auditFilePath resolving the
-// wrong record when an intent is active — would pass the whole suite. This test
-// puts a real tool in front of a per-intent layout so such a regression FAILS
-// here. (P9 has since migrated the whole fixture corpus to the per-intent layout
-// and retired the transitional flat fallback entirely.)
+// WHY THIS TEST EXISTS: the per-intent threading is otherwise exercised by
+// resolver UNIT tests only (t160/t161 call the resolvers directly, never
+// spawning a tool). A threading regression - a caller dropping the intent arg,
+// or auditFilePath resolving the wrong record when an intent is active - would
+// pass those. This test puts a real tool in front of a per-intent layout so
+// such a regression FAILS here.
 //
-// It is also the regression test for the Stage-B BLOCKER: audit-fork (PID A) and
-// audit-merge (PID B) ran as SEPARATE processes whose per-PID shard name
+// It is also the regression test for a shard-identity split: audit-fork (PID A)
+// and audit-merge (PID B) run as SEPARATE processes, and a per-PID shard name
 // (<host>-<pid>.md) diverged → merge re-resolved a different shard → existsSync
-// fail → "main audit not found ... run --init first" → every Bolt merge failed on
-// a new-layout project. The fix makes the shard identity PER-CLONE (a stable
-// gitignored aidlc/.aidlc-clone-id token), so both PIDs resolve ONE shard. Case
-// "bolt fork+merge round-trips" drives that real two-process fork→merge and
-// asserts it succeeds. Against the pre-fix code it FAILS at complete --merge.
+// fail -> "main audit not found ... run --init first" -> every Bolt merge failed
+// on a per-intent project. The shard identity is PER-CLONE (a stable gitignored
+// aidlc/.aidlc-clone-id token), so both PIDs resolve ONE shard. Case "bolt
+// fork+merge round-trips" drives that real two-process fork->merge and asserts
+// it succeeds.
 //
 // Mechanism: cli. Full real-tool flow (git worktree + aidlc-worktree + aidlc-bolt
 // + aidlc-state + aidlc-audit as spawned subprocesses), asserting on the on-disk
@@ -104,12 +101,11 @@ function runIn(proj: string, tool: string, args: string[]): Run {
 
 const DEFAULT_SPACE = "default";
 
-/** Absolute per-intent record dir for a seeded intent. */
 function recordPath(proj: string, recordDir: string): string {
   return join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents", recordDir);
 }
 
-/** The audit/ shard dir for an intent; [] when absent. */
+/** The audit/ shard filenames for an intent; [] when absent. */
 function shardNames(proj: string, recordDir: string): string[] {
   const dir = join(recordPath(proj, recordDir), "audit");
   try {
@@ -132,7 +128,7 @@ function readShards(proj: string, recordDir: string): string {
 }
 
 /**
- * Build a git-init'd project seeded with the NEW (per-intent) layout — NOT flat
+ * Build a git-init'd project seeded with the per-intent layout - NOT flat
  * aidlc-docs/. Seeds: aidlc/active-space cursor, two intent records under
  * spaces/default/intents/<record>/aidlc-state.md (construction-stage state), an
  * intents.json registry, and the active-intent cursor pointing at recordA. The
@@ -225,11 +221,9 @@ describe("t162 — real tools against a per-intent (new-layout) project", () => 
     () => {
       const proj = makeNewLayoutProj(RECORD_A, RECORD_B);
 
-      // The seeded WORKFLOW_STARTED/STAGE_STARTED wrote into recordA's shard.
       const aShards = shardNames(proj, RECORD_A);
       expect(aShards.length).toBe(1); // ONE per-clone shard (clone-id, not per-PID)
       expect(readShards(proj, RECORD_A)).toContain("WORKFLOW_STARTED");
-      // The flat fallback was NEVER created (no aidlc-docs/ tree at all).
       expect(existsSync(join(proj, "aidlc-docs"))).toBe(false);
       expect(existsSync(join(proj, "aidlc-docs", "audit.md"))).toBe(false);
     },
@@ -237,10 +231,11 @@ describe("t162 — real tools against a per-intent (new-layout) project", () => 
   );
 
   // ===========================================================================
-  // (b) BLOCKER regression: a real two-process Bolt fork → merge round-trips on
-  //     the new layout. audit-fork (one process) and audit-merge (another) must
-  //     resolve the SAME main shard via the per-clone token. Pre-fix this FAILED
-  //     at complete --merge with "main audit not found ... run --init first".
+  // (b) Regression: a real two-process Bolt fork -> merge round-trips on
+  //     the per-intent layout. audit-fork (one process) and audit-merge
+  //     (another) must resolve the SAME main shard via the per-clone token. A
+  //     per-PID shard name fails at complete --merge with "main audit not found
+  //     ... run --init first".
   // ===========================================================================
   test(
     "bolt fork+merge round-trips on the per-intent layout (blocker regression)",
@@ -266,7 +261,7 @@ describe("t162 — real tools against a per-intent (new-layout) project", () => 
         "complete", "--name", slug, "--batch", "1", "--merge", "--slug", slug,
         "--intent", RECORD_A,
       ]);
-      // The regression: pre-fix this exits non-zero because audit-merge resolved
+      // The regression: this exits non-zero if audit-merge resolves
       // a different PID shard than audit-fork wrote.
       expect(completed.status).toBe(0);
       expect(readShards(proj, RECORD_A)).toContain("AUDIT_MERGED");
@@ -288,13 +283,11 @@ describe("t162 — real tools against a per-intent (new-layout) project", () => 
       const proj = makeNewLayoutProj(RECORD_A, RECORD_B);
       const slug = "iso-y";
 
-      // recordB starts with no audit shard.
       expect(shardNames(proj, RECORD_B).length).toBe(0);
       const bStateBefore = readFileSync(
         join(recordPath(proj, RECORD_B), "aidlc-state.md"), "utf-8",
       );
 
-      // Create a worktree + state-fork pinned to recordA.
       const created = runIn(proj, WORKTREE_TOOL, [
         "create", "--slug", slug, "--base", "main", "--intent", RECORD_A,
       ]);
@@ -302,18 +295,15 @@ describe("t162 — real tools against a per-intent (new-layout) project", () => 
       const forked = runIn(proj, STATE_TOOL, ["fork", "--slug", slug, "--intent", RECORD_A]);
       expect(forked.status).toBe(0);
 
-      // recordA got STATE_FORKED + an updated state (Bolt Refs gained the slug).
       expect(readShards(proj, RECORD_A)).toContain("STATE_FORKED");
       expect(
         readFileSync(join(recordPath(proj, RECORD_A), "aidlc-state.md"), "utf-8"),
       ).toContain(slug);
 
-      // recordB is byte-for-byte untouched: no shard, identical state file.
       expect(shardNames(proj, RECORD_B).length).toBe(0);
       expect(
         readFileSync(join(recordPath(proj, RECORD_B), "aidlc-state.md"), "utf-8"),
       ).toBe(bStateBefore);
-      // And the flat fallback still does not exist.
       expect(existsSync(join(proj, "aidlc-docs"))).toBe(false);
     },
     TEST_TIMEOUT,

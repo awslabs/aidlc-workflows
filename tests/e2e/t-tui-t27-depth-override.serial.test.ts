@@ -1,14 +1,13 @@
 // covers: subcommand:aidlc-utility:config-change
 //
-// t-tui-t27-depth-override.serial.tui.test.ts — drive the `/aidlc --depth <level>`
+// t-tui-t27-depth-override.serial.test.ts - drive the `/aidlc --depth <level>`
 // config-override journey through a REAL claude TUI and prove the depth change
-// LANDS on disk + RENDERS. A faithful port of
-// tests/integration/t27-integration-depth-override.sh (plan 7). The depth override
+// LANDS on disk + RENDERS. The depth override
 // is a pure one-shot config edit that never needs gate auto-approval, so the
 // landed surface is unaffected by how the run is driven. Pattern A (landed +
 // rendered, NO answer-gate).
 //
-// WHAT IT PROVES (equal-or-stronger than the .sh, on the same on-disk surface):
+// WHAT IT PROVES:
 //   Case A — depth override on an EXISTING workflow:
 //     setup state-mid-ideation (Depth=Standard, scope=feature) + audit, type
 //     `/aidlc --depth minimal`. SKILL.md step 8 (SKILL.md:124-125) sees `--depth`
@@ -22,20 +21,17 @@
 //     event (the .sh's `DEPTH_CHANGED` grep). Assert RENDERED: the pane shows the
 //     printed confirmation `Depth changed: Standard → Minimal` (:2415) AND the
 //     workflow statusline `[AIDLC] IDEATION` is still painted (the override does
-//     not start/stop a workflow). Stronger than the .sh: the .sh greps a loose
-//     `Depth.*Minimal`; we additionally pin the OLD->NEW transition (Standard ->
-//     Minimal) in both the rendered confirmation and the implicit audit delta.
+//     not start/stop a workflow).
 //
 //   Case C — a depth word the engine does not take:
 //     setup the same fixture, type `/aidlc --depth extreme`. `next` refuses the
 //     word itself (it never names a config command for a value outside
 //     minimal, standard, and comprehensive): an error directive, or the print
 //     naming the words `--depth` does take and handing the line to the agent to
-//     read (since #2293). The agent may carry the value on its own `next
+//     read. The agent may carry the value on its own `next
 //     --resume` (the resume line tells it to); `next` reads the refused value
-//     first either way. Two designed shapes follow (conductor 2026-10-11, per
-//     Arden's 10-10 calls: the agent reads the line and next is its helper;
-//     infer, ask only when ambiguous): the agent asks the person once, in
+//     first either way. Two designed shapes follow:
+//     the agent asks the person once, in
 //     prose (the turn settles) or as one picker (open until they answer), with
 //     nothing changed, not even Last Updated; or it reads the word as one of
 //     the levels, the engine records that level
@@ -45,8 +41,8 @@
 //     question is answered in their place. Refusal semantics are checked in
 //     the retained live trace, not a prose regex.
 //
-// CASE B OMITTED (deliberately, not a weakening): the .sh's Test B
-// (`/aidlc bugfix --depth comprehensive`) creates a NEW workflow from a
+// CASE B OMITTED (deliberately):
+// `/aidlc bugfix --depth comprehensive` creates a NEW workflow from a
 // brownfield stub and overrides the scope default depth. That is a SCOPE-START
 // journey, not a depth-OVERRIDE journey — `--depth` arriving WITH `--scope`
 // routes through the init/start path (SKILL.md:531 `init ... --depth`), a
@@ -60,23 +56,19 @@
 // journeys in one file and pull in answer-gate territory. The config-change
 // one-shot (Cases A + C) is the journey t27 names.
 //
-// PATTERN-A RENDER FINDING (surfaced, not chased): depth is NOT a statusline
+// PATTERN-A RENDER: depth is NOT a statusline
 // field — aidlc-statusline.ts paints phase + progress bar + counter + stage name,
-// never the depth value. So the tui-only render value-add for a depth override is
-// thin: the pane proves (a) the printed `Depth changed: ...` confirmation line and
-// (b) that the workflow statusline row survives the override (the workflow was not
-// torn down or started). Both the confirmation text and the disk landing are also
-// visible to the SDK path's stdout — the genuinely-unique tui observation is only
-// the persisting `[AIDLC] IDEATION` row. This is the honest render surface for a
-// config-only command; we assert it rather than pretend depth paints somewhere.
+// never the depth value. So the tui-only render observation is
+// that the workflow statusline row survives the override (the workflow was not
+// torn down or started). The persisting `[AIDLC] IDEATION` row is the render
+// surface asserted here.
 //
-// COST: spends real Bedrock tokens (the orchestrator LLM reads SKILL.md and shells
-// the config-change/error path — short turns, but live). Gated behind
-// AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs; selected TUI substrate/claude/distributable
-// absence also SKIPs with a reason. NEVER asserts racy terminal completion
-// (Pattern A): there is no completion here — the override lands and the
-// orchestrator STOPs, so we wait on the landed surface (the rendered confirmation
-// + the on-disk field), never on a result event.
+// COST: spends real Bedrock tokens (the orchestrator LLM reads SKILL.md and
+// shells the config-change/error path - short turns, but live). Gated behind
+// AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs; selected TUI
+// substrate/claude/distributable absence also SKIPs with a reason. Case A waits
+// on the DEPTH_CHANGED audit event and then reads the on-disk Depth field; Case
+// C waits on each permitted shape's own signal, never on a result event.
 //
 // Spawn tui-drive.ts using the shared runtime selector for the native Bun and
 // POSIX tmux backends. The driver subprocess remains the source of the `tui`
@@ -160,11 +152,10 @@ function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: 
 }
 
 // Poll an ON-DISK predicate until true or timeout. The deterministic completion
-// signal for a config-change command: SKILL.md:125 instructs only "Print output,
-// STOP" (NOT "verbatim" — contrast --status/--help/env-scope at :67/:101 which DO
-// say verbatim), so the orchestrator may PARAPHRASE the tool's confirmation line
-// (observed live: "Done. Depth changed from Standard → Minimal …"). Greping that
-// reworded prose is the §1 anti-pattern and flaked 1/4 runs. We instead terminate
+// signal for a config-change command is its structured emission. The
+// orchestrator has paraphrased the tool's confirmation line (observed live:
+// "Done. Depth changed from Standard -> Minimal ..."). Greping that reworded
+// prose is the section 1 anti-pattern and flaked 1/4 runs. We instead terminate
 // on the tool's structured emission (the DEPTH_CHANGED audit event / the Depth
 // state field), never the screen text.
 async function waitForDisk(pred: () => boolean, timeoutMs: number, session?: string): Promise<boolean> {
@@ -233,7 +224,7 @@ function refusedDirective(row: NativeRow, callId: string): { kind: string; messa
 }
 
 // The engine's own two refusals of the typed value: the error directive, and
-// (since the reading step) the print naming the words `--depth` does take.
+// the print naming the words `--depth` does take.
 const DEPTH_REFUSALS: Record<string, RegExp> = {
   error: /^--depth requires <minimal\|standard\|comprehensive>; received "extreme"\.$/,
   print: /^`next` takes `--depth` with minimal\|standard\|comprehensive, and does not take "extreme"\./,
@@ -242,7 +233,7 @@ const DEPTH_REFUSALS: Record<string, RegExp> = {
 // The call that carried the person's `--depth extreme` to `next`. The agent may
 // add a flag of its own that takes no value (`--resume`, as the resume line
 // tells it to); `next` reads the refused value first and takes nothing else
-// from the line, so that call is the same refusal (Full Suite 38087105892).
+// from the line, so that call is the same refusal.
 const CANONICAL_NEXT = ["bun", ".claude/tools/aidlc.ts", "engine", "orchestrate", "next"];
 const ENGINE = ["bun", ".claude/tools/aidlc.ts", "engine"];
 const DEPTH_LEVELS = ["minimal", "standard", "comprehensive"] as const;
@@ -301,14 +292,12 @@ function resultRowFor(row: NativeRow, callId: string): boolean {
     row.message.content.some((block) => block.type === "tool_result" && block.tool_use_id === callId);
 }
 
-// The text a tool result carried for one call (the engine's own line).
 function toolResultText(rows: NativeRow[], callId: string): string | undefined {
   const row = rows.find((candidate) => resultRowFor(candidate, callId));
   const block = row?.message?.content?.find((candidate) => candidate.type === "tool_result" && candidate.tool_use_id === callId);
   return typeof block?.content === "string" ? block.content : undefined;
 }
 
-// The audit rows, counted by event name (the canonical `**Event**: <name>` line).
 function auditEventCounts(projectDir: string): Map<string, number> {
   const counts = new Map<string, number>();
   for (const line of readAllAuditShards(projectDir).split("\n")) {
@@ -353,8 +342,8 @@ function workflowArtifacts(statePath: string): Record<string, string> {
 
 // Does the per-intent audit shard dir carry a canonical `**Event**: <name>` line?
 // (line-anchored so a stray token in a field value cannot satisfy it — the
-// aidlc-audit.ts:259 format.) Reads every `.md` shard under <record>/audit/ and
-// concatenates, since P9 shards the audit per clone.
+// aidlc-audit.ts appendAuditEntry format.) Reads every `.md` shard under
+// <record>/audit/ and concatenates, because the audit is sharded per clone.
 function auditHasEvent(auditDir: string, event: string): boolean {
   try {
     return readdirSync(auditDir)
@@ -391,7 +380,6 @@ const SKIP_REASON = skipReason();
 function bootSeededWorkflow(tag: string, sessionId?: string): { session: string; proj: string } {
   const session = `aidlc_tui_t27_${tag}_${process.pid}`;
   const proj = setupTuiProject({ withState: "state-mid-ideation.md", withAudit: true });
-  // launch
   expect(
     drive([
       "start",
@@ -424,7 +412,7 @@ function bootSeededWorkflow(tag: string, sessionId?: string): { session: string;
 }
 
 // Send a slash command that contains spaces: literal, no auto-Enter, then a named
-// Enter (the spike's exact two-step). Mirrors the workshop template.
+// Enter.
 function sendSlash(session: string, command: string): void {
   drive(["send", "--session", session, "--keys", command, "--literal", "--no-enter"]);
   drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
@@ -443,18 +431,16 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
         // the DEPTH_CHANGED delta is Standard -> Minimal, not a no-op).
         expect(readFileSync(statePath, "utf8")).toMatch(/-\s*\*\*Depth\*\*:\s*Standard/);
 
-        // type the override
         sendSlash(session, "/aidlc --depth minimal");
 
         // --- TERMINATE on the DETERMINISTIC on-disk signal, NOT screen prose -----
         // The landed-signal for this config-change is the DEPTH_CHANGED audit event
-        // (aidlc-utility.ts:2400) + the Depth state field — both written by the
-        // tool, deterministic. We do NOT wait on the confirmation TEXT: SKILL.md:125
-        // says only "Print output, STOP" (NOT verbatim), so the orchestrator may
-        // paraphrase it ("Done. Depth changed from Standard → Minimal …" was
-        // observed live, defeating a `Depth changed:` grep — the §1 prose-grep
-        // anti-pattern, which flaked 1/4 runs). Disk is the truth; the screen prose
-        // is the LLM's to reword.
+        // (aidlc-utility.ts writeSettings) + the Depth state field - both written by
+        // the tool, deterministic. We do NOT wait on the confirmation TEXT: the
+        // orchestrator may paraphrase it ("Done. Depth changed from Standard ->
+        // Minimal ..." was observed live, defeating a `Depth changed:` grep - the
+        // section 1 prose-grep anti-pattern, which flaked 1/4 runs). Disk is the truth;
+        // the screen prose is the LLM's to reword.
         const landed = await waitForDisk(
           () => auditHasEvent(auditDir, "DEPTH_CHANGED"),
           remainingWorkMs(),
@@ -468,14 +454,12 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
           );
         }
 
-        // --- ON DISK (the .sh's two greps, equal-or-stronger) ------------------
+        // --- ON DISK ------------------
         const stateAfter = readFileSync(statePath, "utf8");
-        // .sh: assert_grep "$STATE_A" 'Depth.*Minimal' — pin the exact field.
         expect(stateAfter).toMatch(/-\s*\*\*Depth\*\*:\s*Minimal/);
         const auditAfter = readAllAuditShards(proj);
-        // .sh: assert_grep "$AUDIT_A" 'DEPTH_CHANGED' — anchor on the canonical
-        // audit-line format (**Event**: <name>) so a stray DEPTH_CHANGED token in
-        // a field value can't satisfy it.
+        // Anchor on the canonical audit-line format (**Event**: <name>) so a stray
+        // DEPTH_CHANGED token in a field value can't satisfy it.
         const depthChanged = auditAfter
           .split("\n")
           .filter((l) => l.startsWith("**Event**: DEPTH_CHANGED")).length;
@@ -509,13 +493,10 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
       try {
         const statePath = seededStateFile(proj);
         const auditDir = seededAuditDir(proj);
-        // Snapshot the exact bytes BEFORE the word (the .sh's md5-before). A
-        // full-content compare is strictly stronger than md5.
         const before = readFileSync(statePath, "utf8");
         const artifactsBefore = workflowArtifacts(statePath);
         const rowsBefore = auditEventCounts(proj);
 
-        // type the word the engine does not take
         sendSlash(session, "/aidlc --depth extreme");
 
         // The wait ends on each shape's own deterministic signal: the native
@@ -537,7 +518,6 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
         const inferred = recorded();
         const picker = !inferred && pickerAfterRefusal();
         if (!inferred && !picker) {
-          // The existing TUI completion pattern with a stable screen.
           expect(waitFor(session, completedClaudeTurnPattern("extreme"), remainingWorkMs(), 1_000)).toBe(true);
         }
 
@@ -609,7 +589,6 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
         const carried = setterAndCarryOn()!;
         const level = depthSetterLevel(carried.calls[carried.setter], proj)!;
         const setterId = (carried.calls[carried.setter] as NativeToolCall & { id: string }).id;
-        // The setter's own line names the level it set and the one it replaced.
         expect(toolResultText(carried.rows, setterId), `the setter's line for ${level}`)
           .toMatch(new RegExp(`^Depth changed: Standard -> ${capitalized(level)}$`, "m"));
 

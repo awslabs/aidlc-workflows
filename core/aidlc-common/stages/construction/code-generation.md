@@ -69,7 +69,7 @@ outputs: application code + code-generation-plan.md, code-generation-questions.m
 - Brownfield: modify files in-place. NEVER create duplicates like ClassName_modified.java
 - Add data-testid attributes to interactive UI elements for test automation
 - Work in this order: plan (Step 2), Step 3 (the person's Plan Approval; with plan approval off, only its one-line notice), generation (Step 4), the Step 5 files, then the review (when `directive.protocol_modules` lists `reviewer`) and the completion handoff (Step 6). The review checks the finished work: never dispatch the reviewer before the Step 5 files exist. When the directive already carries `plan_approval.status: "approved"` (a resumed or continued build), the plan and test instructions on disk are the approved ones: skip Steps 2 and 3 and build them as they are. Never rewrite an approved plan or its test instructions; change them only when the person asks
-- For a Unit (`directive.unit` present), write `source-manifest.json` in Step 5, before the review, listing every application-source path this unit created, modified, or deleted, including shell-, scaffolding-, and generator-written files. Zero-Unit work writes no `source-manifest.json`
+- For a Unit (`directive.unit` present), write `source-manifest.json` in Step 5, before the review, listing every application-source path this unit created, modified, or deleted in this stage, including shell-, scaffolding-, and generator-written files; a unit reopened by a rejection keeps the paths its earlier attempts listed. Zero-Unit work writes no `source-manifest.json`
 - Measurable quality targets from NFR Requirements, NFR Design, and the Testing
   Contract coverage floor are inputs, not suggestions. NEVER relax, lower, or
   disable a defined target, including threshold settings in test or build
@@ -300,12 +300,12 @@ After approval:
 or the machine switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` can turn the plan
 stop off for this piece of work; the engine then routes straight to the build
 with the notice above. When the person asks for it, in their own words or with
-`/aidlc --plan-approval off`, run `{{INVOKE}} engine config set guard.plan-approval off`
+`/aidlc --plan-approval off`, run `{{INVOKE}} engine config set guard.plan-approval off --person-words '<their words>'`
 and say in one line that it is off. When they only ask about it ("skip plan
 approval?"), answer in one line, offer to turn it off for this piece of work, and
 show the plan question again; their yes is the ask. Never suggest turning it off
 otherwise.
-Turning it back on (`config set plan-approval on`) is fine whenever they ask.
+Turning it back on (`config set plan-approval on --person-words '<their words>'`) is fine whenever they ask.
 - A new stage attempt (a jump, a rejected gate, a workflow restart) needs its own
   approval: `next` asks again, or, while plan approval is off, builds the plan
   for that attempt with the same one-line notice. After a rejected gate, while the plan is still
@@ -339,8 +339,8 @@ bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoi
 
 Tell the person the `say` line it prints, once, then run `next`.
 
-> **Build-and-Test loop-back:** The construction protocol module
-> (`aidlc-common/protocols/stage-protocol-construction.md`) defines this replay.
+> **Build-and-Test loop-back:** The loop-back protocol module
+> (`aidlc-common/protocols/stage-protocol-loopback.md`) defines this replay.
 > A backward jump opens a new stage attempt, so the prior approval no longer
 > applies. Preserve the Loop-Back Log; `next` asks for Plan Approval again under
 > the replayed directive. The earlier "Retry with fix" choice authorizes the jump,
@@ -476,7 +476,14 @@ with this strict schema:
 
 List every application-source path this unit created, modified, or deleted,
 including files written by shell commands, scaffolding, or generators. Use a
-trailing `/` directory claim for generated trees. In the main workspace,
+trailing `/` directory claim for generated trees. The engine measures changed
+source from where this attempt's source baseline was taken. A rejection at the
+gate (Request Changes) keeps that baseline, so when the unit is reopened that
+way, keep every path an earlier attempt listed and add the paths this attempt
+writes; a manifest that lists only the corrective change leaves the unit's
+earlier files outside every unit. A jump back into the stage, such as a Build
+and Test loop-back, takes a new baseline, so list what the unit changes from
+there. In the main workspace,
 multi-repo entries name their recorded `repo`; inside the worktree hosting the Bolt, paths are
 relative to its single selected repo and MUST omit `repo`. The engine refuses
 to record the unit review without this manifest. Under Guard Policy strict,

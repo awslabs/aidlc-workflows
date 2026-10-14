@@ -13,12 +13,10 @@ export const EVIDENCE_ARTIFACT = "full-suite-result";
 const COMMIT = /^[a-f0-9]{40}$/;
 const RUN_FIELDS = "databaseId,event,headBranch,headSha,conclusion";
 
-/** Why a full-suite-result cannot qualify a stable release of `sha`; empty when it does. */
 export function evidenceProblems(result: unknown, sha: string, runId: string): string[] {
   if (typeof result !== "object" || result === null || Array.isArray(result)) return ["the result is not a JSON object"];
   const report = result as Record<string, unknown>;
   const problems: string[] = [];
-  // The result must name this commit and the run it was downloaded from.
   const expected: Record<string, unknown> = {
     sha, runId, purpose: "release", verificationFamily: "all", coveragePolicy: FULL_SUITE_COVERAGE_POLICY, passed: true,
   };
@@ -38,7 +36,6 @@ export function evidenceProblems(result: unknown, sha: string, runId: string): s
   if (typeof legs !== "object" || legs === null || Array.isArray(legs)) {
     problems.push("legs are missing");
   } else {
-    // Every job this commit declares must pass, and so must any extra leg.
     const statuses = legs as Record<string, unknown>;
     for (const job of new Set<string>([...FULL_SUITE_JOBS, ...Object.keys(statuses)])) {
       const expected = (RELEASE_OMITTED_JOBS as readonly string[]).includes(job) ? "skipped" : "success";
@@ -93,7 +90,6 @@ export function evidenceRuns(gh: GhRunner, repository: string, sha: string): Evi
   });
 }
 
-/** The id of the first trusted run whose downloaded result qualifies `sha`, if any. */
 export function findEvidence(options: {
   sha: string;
   repository: string;

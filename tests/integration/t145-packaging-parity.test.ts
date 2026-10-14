@@ -2,11 +2,11 @@
 //
 // covers: file:scripts/package.ts, file:harness/claude/manifest.ts, file:harness/codex/emit.ts
 //
-// WHAT. The one-core-N-harnesses layout (dist-unified MR-1) makes dist/ a
-// GENERATED artifact: `bun scripts/package.ts` projects the harness-neutral
-// core/ tree + harness/<name>/ surfaces into ignored local dist/ and
-// dist-release/ roots. `package.ts --check` builds all selected projections
-// twice in independent temp roots and byte-compares those builds.
+// WHAT. The one-core-N-harnesses layout makes dist/ a GENERATED artifact: `bun
+// scripts/package.ts` projects the harness-neutral core/ tree + harness/<name>/
+// surfaces into ignored local dist/ and dist-release/ roots. `package.ts --check`
+// builds all selected projections twice in independent temp roots and
+// byte-compares those builds.
 //
 // This test IS that guard, run from the suite: it asserts `package.ts --check`
 // exits 0 from source alone and rejects an intentionally nondeterministic

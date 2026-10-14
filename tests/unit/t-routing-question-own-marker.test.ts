@@ -130,7 +130,6 @@ function env(proj: string): NodeJS.ProcessEnv {
 }
 
 function next(proj: string, args: string[] = []): Emitted {
-  // The agent's proposal step follows the plan proposal print, as it does live.
   const options = { env: env(proj) };
   const result = followProposal(runOrchestrateNext(ORCHESTRATE, proj, args, options), ORCHESTRATE, proj, options);
   expect(result.status, result.out).toBe(0);
@@ -138,7 +137,6 @@ function next(proj: string, args: string[] = []): Emitted {
   return result.directive as unknown as Emitted;
 }
 
-// A command the engine named, run as given: its `next` arguments.
 function nextNamed(proj: string, command: string | undefined): Emitted {
   expect(command).toMatch(/ next( [\w-]+)+$/);
   return next(proj, (command as string).replace(/^.* next /, "").split(" "));
@@ -185,7 +183,6 @@ function answer(proj: string, details: string): string {
   return result.stdout;
 }
 
-// Every plan question answer on record: the event and its choice.
 function planAnswers(proj: string): string[] {
   return readAuditShardEvents(proj)
     .filter((row) => ["PLAN_APPROVAL_RECORDED", "QUESTION_ANSWERED"].includes(row.event) &&
@@ -197,8 +194,6 @@ function blankAnswer(proj: string): boolean {
   return /^\[Answer\]:[ \t]*$/m.test(readFileSync(join(stageDir(proj), "code-generation-questions.md"), "utf-8"));
 }
 
-// The plan question, then the person's change typed with /aidlc, and the
-// routing question the print sends it to.
 function routingQuestionOverThePlan(proj: string, planQuestionOpen = true): Emitted {
   if (planQuestionOpen) expect(next(proj).ask_type).toBe("plan-approval");
   say(proj, `/aidlc ${CHANGE}`);
@@ -279,8 +274,6 @@ describe("a stage report of the approval while the plan question is open names t
       expect(step.message).not.toContain("No reply from the person is on record");
       expect(planAnswers(proj)).toEqual(before);
       expect(readAuditShardEvents(proj).some((row) => row.event === "GATE_APPROVED")).toBe(false);
-      // The report added nothing: with no reply the plan question is asked
-      // again; with their exact pick on record, the engine carries the work on.
       const after = next(proj);
       if (replied) expect(after.plan_approval?.status, JSON.stringify(after)).toBe("approved");
       else expect(after.ask_type, JSON.stringify(after)).toBe("plan-approval");
@@ -515,7 +508,6 @@ function engine(proj: string, args: string[], session = SESSION): { code: number
   return { code: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
-// The check command the person approves, quoted for the shell that runs it here.
 function verificationCommand(proj: string): string {
   const script = join(seededRecordDir(proj), "check.cjs");
   writeFileSync(script, "const fs=require('node:fs'); for(const unit of ['alpha','beta']) " +
@@ -591,8 +583,6 @@ function askCheckpoint(proj: string): void {
   expect(ask.code, ask.out).toBe(0);
 }
 
-// The person's change typed with /aidlc in `session`, and the routing question
-// the print sends it to.
 function routingQuestionOverTheStep(proj: string, session = SESSION): Emitted {
   const words = "also handle an empty list";
   say(proj, `/aidlc ${words}`, "claude", session);
@@ -711,7 +701,6 @@ describe("an answer to another question is no reply to a stage gate", () => {
     say(proj, `/aidlc --new-intent ${words}`);
     expect(next(proj, ["--new-intent", words]).ask_type).toBe("scope-confirm");
     say(proj, "1");
-    // The refusal comes back as the agent's next step.
     expect(report(proj, "approved", ["--user-input", "Approve"]).out).toContain("no new human reply");
     expect(readAuditShardEvents(proj).filter((row) => row.event === "GATE_APPROVED")).toEqual([]);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(/^- \[\?\] feasibility /m);

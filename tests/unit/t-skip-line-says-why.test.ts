@@ -61,7 +61,6 @@ function lastDirective(stdout: string): Directive {
   return JSON.parse(lines[lines.length - 1] ?? "{}") as Directive;
 }
 
-// An express plan on existing code, with Reverse Engineering started.
 function startedProject(): string {
   const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
   tempDirs.push(proj);
@@ -79,7 +78,6 @@ describe("the line after a skip says why the stage was skipped", () => {
     const asked = next(proj, ["--skip", "reverse-engineering"]);
     expect(asked.kind, JSON.stringify(asked)).toBe("print");
     expect(String(asked.message)).toContain('"Skipped Reverse Engineering. It can still be run on its own with');
-    // The agent runs the report the step names, as it names it.
     const named = /`[^`]*\breport (--stage reverse-engineering --result skipped --reason '([^']*)')`/.exec(String(asked.message));
     expect(named, String(asked.message)).not.toBeNull();
     const skipped = run(proj, "aidlc-orchestrate.ts", [

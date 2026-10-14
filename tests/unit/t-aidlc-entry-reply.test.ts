@@ -36,7 +36,7 @@ function parserFlags(): string[] {
   const end = source.indexOf("\n}\n", start);
   const body = source.slice(start, end);
   const compared = [...body.matchAll(/\ba === "(--[a-z][a-z-]*)"/g)].map((match) => match[1]);
-  const lookedUp = [...body.matchAll(/args\.indexOf\("(--[a-z][a-z-]*)"\)/g)].map((match) => match[1]);
+  const lookedUp = [...body.matchAll(/(?:args|beforeDelimiter\(args\))\.indexOf\("(--[a-z][a-z-]*)"\)/g)].map((match) => match[1]);
   return [...new Set([...compared, ...lookedUp])];
 }
 

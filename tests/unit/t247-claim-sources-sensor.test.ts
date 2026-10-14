@@ -2083,6 +2083,7 @@ describe("t247 claim-sources sensor", () => {
       ["keycap", "intent-capture-questions.md", "## Q1.", "## 1️⃣ Q1."],
       ["flag", "intent-capture-questions.md", "## Sources", "## 🇻🇳 Sources"],
       ["closing ATX run with decoration", "intent-capture-questions.md", "## Sources", "## ℹ️ Sources ##"],
+      ["question heading that names its trade", "intent-capture-questions.md", "## Q1.", "## Q1. [Product owner]"],
     ];
     for (const [name, file, heading, replacement] of decorated) {
       test(`${name}: ${replacement} names the contract section`, () => {

@@ -103,8 +103,6 @@ describe("t343 intent-create refuses orphaned positionals", () => {
   test("both creation spellings still work — the guard must not eat a verb token", () => {
     // A guard that counts every positional past the first rejects the two-token
     // `intent create` alias outright, because its `create` reads as an orphan.
-    // Measured: the first version of this fix broke it, and a single-spelling
-    // test missed it.
     if (!existsSync(TOOL)) return;
     for (const verb of [["intent-create"], ["intent", "create"]]) {
       const project = setupIntegrationProject();

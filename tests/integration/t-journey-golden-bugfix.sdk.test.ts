@@ -61,7 +61,6 @@ function seedRepo(proj: string): void {
   expect(git("commit", "-qm", "price formatting").status).toBe(0);
 }
 
-// The fix, read by running the project's own code.
 function priceOf(proj: string, cents: number): string {
   const res = spawnSync(process.execPath, ["-e", `import { formatPrice } from "./src/price.js"; process.stdout.write(String(formatPrice(${cents})));`],
     { cwd: proj, encoding: "utf8", timeout: 60_000 });

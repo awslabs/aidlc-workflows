@@ -92,7 +92,8 @@ function detection(
   harnesses: Record<string, { found: boolean; version?: string }> = {
     claude: { found: true, version: "claude 2.1.220" },
   },
-  runtimeIssue = false,
+  // "probe" injects nothing, so setup probes the runtime itself.
+  runtimeIssue: boolean | "probe" = false,
   // Harnesses left to the real `--version` probe of the stubs on PATH.
   probed: readonly string[] = [],
 ): string {
@@ -119,13 +120,15 @@ function detection(
       regions: ["us-east-2"],
       files: [],
     },
-    runtimeIssues: runtimeIssue
-      ? [{
-          id: "runtime-aidlc-missing",
-          message: "aidlc is absent from the non-interactive hook PATH",
-          remediation: "Add ~/.local/bin to PATH.",
-        }]
-      : [],
+    ...(runtimeIssue === "probe" ? {} : {
+      runtimeIssues: runtimeIssue
+        ? [{
+            id: "runtime-aidlc-missing",
+            message: "aidlc is absent from the non-interactive hook PATH",
+            remediation: "Add ~/.local/bin to PATH.",
+          }]
+        : [],
+    }),
     bedrockReachable: true,
   });
 }
@@ -380,7 +383,10 @@ function runWizard(
   options: {
     harnesses?: Record<string, { found: boolean; version?: string }>;
     aidlc?: boolean;
-    runtimeIssue?: boolean;
+    runtimeIssue?: boolean | "probe";
+    // aidlc only on this shell's PATH, in a folder the hook PATH (the stub
+    // getconf's answer) does not hold; setup probes the runtime itself.
+    shellOnlyAidlc?: boolean;
     env?: NodeJS.ProcessEnv;
     prepare?: (project: string) => void;
     // Real git after the stubs, for checks that ask git about the project.
@@ -409,6 +415,8 @@ function runWizard(
   }
   executable(join(bin, "getconf"), bin);
   if (options.aidlc !== false) executable(join(bin, "aidlc"));
+  const shell = options.shellOnlyAidlc ? temp("aidlc-t299-shell-") : null;
+  if (shell !== null) executable(join(shell, "aidlc"));
   options.prepare?.(project);
   const context: CliContext = {
     project,
@@ -416,14 +424,18 @@ function runWizard(
     env: {
       ...hostEnv(),
       ...isolatedMachineEnv(),
-      PATH: options.gitOnPath ? `${bin}${delimiter}${dirname(Bun.which("git") ?? "git")}` : bin,
+      PATH: [
+        bin,
+        ...(options.gitOnPath ? [dirname(Bun.which("git") ?? "git")] : []),
+        ...(shell !== null ? [shell] : []),
+      ].join(delimiter),
       NO_COLOR: "1",
       AIDLC_RUNTIME_ROOT: RUNTIME,
       AIDLC_TEST_CONFIG_TTY: "1",
       AIDLC_TEST_CONFIG_DETECTION_JSON: detection(
         bin,
         options.harnesses,
-        options.runtimeIssue,
+        shell !== null ? "probe" : options.runtimeIssue,
         options.probed,
       ),
       ...options.env,
@@ -669,6 +681,29 @@ describe("t299 first-run setup wizard", () => {
     ).models.preset).toBe("balanced");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A live first run on Kiro CLI read "Runtime    one PATH fix needed - shown
+  // at the end", and the end showed none. A harness started from a terminal
+  // hands that terminal's PATH to AI-DLC's hooks, so aidlc found only there
+  // needs no fix at the end; the line at the top promises none and says where
+  // to start the harness, as the status summary does.
+  test("the Runtime line promises only the PATH fix the end shows", () => {
+    const shellOnly = runWizard("\n", { aidlc: false, shellOnlyAidlc: true });
+    expect(shellOnly.status, shellOnly.stdout + shellOnly.stderr).toBe(0);
+    expect(shellOnly.stdout).toContain("Writing project files ... done");
+    expect(shellOnly.stdout).not.toContain("Hooks run outside your interactive shell PATH");
+    expect(shellOnly.stdout).not.toContain("shown at the end");
+    expect(shellOnly.stdout).toContain(
+      "    Runtime    aidlc on this shell's PATH only: start Claude Code from a terminal\n",
+    );
+    // aidlc on no PATH at all: the top and the end both name the fix.
+    const missing = runWizard("\n", { aidlc: false, runtimeIssue: "probe" });
+    expect(missing.status, missing.stdout + missing.stderr).toBe(0);
+    expect(missing.stdout).toContain("    Runtime    one PATH fix needed - shown at the end\n");
+    expect(missing.stdout).toContain(
+      "Hooks run outside your interactive shell PATH, and aidlc is not available there.",
+    );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("recommended defaults name a .gitignore rule that hides committed records", () => {
     const result = runWizard("\n", {
       gitOnPath: true,
@@ -762,7 +797,7 @@ describe("t299 first-run setup wizard", () => {
     );
     // A blank line parts the saved block from whatever follows it (the next
     // steps, or a machine's own runtime item such as a hooks PATH on Windows).
-    expect(result.stdout).toMatch(/\/model\.\n\n {2}\S/);
+    expect(result.stdout).toMatch(/\/model set-current-as-default to save it\.\n\n {2}\S/);
     const writes = kiroWrites(seam.writes);
     expect(writes[0]).toEqual(["settings", "chat.defaultModel", "claude-opus-5"]);
     expect(JSON.parse(writes[1][2])).toEqual({ "claude-opus-5": { output_config: { effort: "medium" } } });
@@ -1066,6 +1101,43 @@ describe("t299 first-run setup wizard", () => {
     expect(JSON.parse(
       readFileSync(join(result.project, "aidlc.settings.local.json"), "utf-8"),
     ).models.preset).toBe("balanced");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Cursor's default preset is unchanged and Claude Code's is balanced, so a
+  // pick of unchanged on Claude Code equals the default of the harness passed
+  // through on the way back.
+  test("a preset the person picked stays when the harness changes and changes back", () => {
+    const env = isolatedMachineEnv();
+    const result = runWizard(
+      `${["2", "", "", "4", "", "", "1", "4", "1", "1", ""].join("\n")}\n`,
+      { env },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Using Cursor.");
+    const last = result.stdout.slice(result.stdout.lastIndexOf("Your choices"));
+    expect(last).toContain("1. Harness      Claude Code");
+    expect(last).toContain("3. Preset       none (unchanged)");
+    expect(result.stdout).toContain("Model preset ... left unchanged");
+    for (const path of [
+      join(result.project, "aidlc.settings.json"),
+      join(result.project, "aidlc.settings.local.json"),
+      join(env.AIDLC_INSTALL_ROOT as string, "aidlc.settings.json"),
+    ]) {
+      const settings = existsSync(path) ? JSON.parse(readFileSync(path, "utf-8")) : {};
+      expect(settings).not.toHaveProperty("models");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("the default preset follows a harness change", () => {
+    const result = runWizard(
+      `${["2", "", "", "", "", "", "", "1", "4", "n"].join("\n")}\n`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Using the balanced preset.");
+    const last = result.stdout.slice(result.stdout.lastIndexOf("Your choices"));
+    expect(last).toContain("1. Harness      Cursor");
+    expect(last).toContain("3. Preset       none (unchanged)");
+    expect(result.stdout).toContain("Nothing written.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("review accepts a step number, re-enters it, then applies", () => {

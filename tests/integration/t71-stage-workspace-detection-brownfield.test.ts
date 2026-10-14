@@ -108,22 +108,20 @@ const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 // Known-answer classification literals for the brownfield-todo stub, as the
 // creation handler writes them (state file) / prints them (stdout block). Read from
 // the SHIPPED handler + verified by running detectWorkspace() over the stub.
-const PROJECT_TYPE = "Brownfield"; // scan.projectType, creation state write / stdout :2377
-const LANGUAGES = "TypeScript"; // scan.languages,  creation state write / stdout :2378
-const FRAMEWORKS = "Vite, React"; // scan.frameworks, creation state write / stdout :2379
-const BUILD_SYSTEM = "npm (package.json)"; // scan.buildSystem, creation state write / stdout :2380
+const PROJECT_TYPE = "Brownfield"; // scan.projectType, creation state write / stdout (handleIntentCreateStateBuild)
+const LANGUAGES = "TypeScript"; // scan.languages, creation state write / stdout (handleIntentCreateStateBuild)
+const FRAMEWORKS = "Vite, React"; // scan.frameworks, creation state write / stdout (handleIntentCreateStateBuild)
+const BUILD_SYSTEM = "npm (package.json)"; // scan.buildSystem, creation state write / stdout (handleIntentCreateStateBuild)
 const STATE_VERSION = "8"; // creation state template
-const WORKSPACE_SCANNED = "WORKSPACE_SCANNED"; // handleIntentCreate:2144
-// Verbatim creation stdout block lines (utility.ts:2377-2380) - the deterministic
-// surface that proves the creation dispatch ran.
+const WORKSPACE_SCANNED = "WORKSPACE_SCANNED"; // handleIntentCreateStateBuild
+// Verbatim creation stdout block lines (handleIntentCreateStateBuild) - the
+// deterministic surface that proves the creation dispatch ran.
 const STDOUT_TYPE = `Project type: ${PROJECT_TYPE}`;
 const STDOUT_LANGS = `Languages: ${LANGUAGES}`;
 const STDOUT_FW = `Frameworks: ${FRAMEWORKS}`;
 const STDOUT_BUILD = `Build System: ${BUILD_SYSTEM}`;
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: STDOUT_TYPE } as const;
 
-/** Count `^- [x]` (completed) stage-progress lines in a state-file string —
- *  the deterministic re-expression of the .sh's `grep -c '^\- \[x\]'`. */
 function completedCheckboxCount(stateText: string): number {
   return stateText.split("\n").filter((l) => /^- \[x\]/.test(l)).length;
 }
@@ -131,9 +129,9 @@ function completedCheckboxCount(stateText: string): number {
 describe("t71 workspace detection — brownfield classification writes state (sdk)", () => {
   // -------------------------------------------------------------------------
   // A CLEAN creation (`/aidlc --scope poc "build a todo app"`) over a brownfield
-  // stub — NO --init --force, NO seeded state (a seeded flat state would trigger
-  // `intent-create` migrate-flat short-circuit and skip the scan; see header). The
-  // creation path has no gate. handleIntentCreate runs the scan +
+  // stub, with NO seeded state (a seeded flat state would trigger `intent-create`
+  // migrate-flat short-circuit and skip the scan; see header). The driver stops
+  // after the creation stdout. handleIntentCreate runs the scan +
   // state write deterministically; the scan classifies the stub Brownfield and
   // the written per-intent state + audit carry the result. We assert on the
   // verbatim creation stdout (proves the dispatch fired), then on the on-disk
@@ -163,59 +161,45 @@ describe("t71 workspace detection — brownfield classification writes state (sd
         // The deterministic creation dispatch ACTUALLY FIRED: the conductor prints
         // the creation tool's stdout verbatim, and assertToolResultContains refuses
         // to pass vacuously if Bash never fired. These are the tool's stdout
-        // bytes (utility.ts:2377-2380), NOT the LLM's prose. This is the
-        // stronger-than-.sh proof the classification came from the scanner.
+        // bytes (handleIntentCreateStateBuild), NOT the LLM's prose. This is the
+        // proof the classification came from the scanner.
         assertToolResultContains(r, "Bash", STDOUT_TYPE);
         assertToolResultContains(r, "Bash", STDOUT_LANGS);
         assertToolResultContains(r, "Bash", STDOUT_FW);
         assertToolResultContains(r, "Bash", STDOUT_BUILD);
 
-        // .sh test 1: the state file still exists after the run. handleIntentCreate
-        // writes it into the created intent's record; driveAidlc reads it back off
-        // disk via the per-intent resolver (recordDirFor).
+        // handleIntentCreate writes the state into the created intent's record;
+        // driveAidlc reads it back off disk via the per-intent resolver (recordDirFor).
         expect(r.stateFile).toBeDefined();
         const state = r.stateFile as string;
 
-        // .sh test 3: Project Type is brownfield. The .sh used a case-insensitive
-        // [Bb]rownfield regex; the written literal is the exact "Brownfield".
         assertStateField(r, "Project Type", PROJECT_TYPE);
 
-        // .sh tests 4 + 10: Frameworks lists React AND the field is present.
-        // assertStateField (exact) subsumes the .sh's contains-React grep and
-        // the bare field-present grep; we also assert the exact full value.
         assertStateField(r, "Frameworks", FRAMEWORKS);
         assertStateFieldContains(r, "Frameworks", "React");
         expect(readStateField(state, "Frameworks")).toBeDefined();
 
-        // .sh tests 5 + 9: Languages lists TypeScript AND the field is present.
         assertStateField(r, "Languages", LANGUAGES);
         assertStateFieldContains(r, "Languages", "TypeScript");
         expect(readStateField(state, "Languages")).toBeDefined();
 
-        // .sh test 8: State Version is 7 (creation state template). Exact equality is
-        // stronger than the .sh's `State Version.*: 7` substring grep.
         assertStateField(r, "State Version", STATE_VERSION);
 
-        // .sh test 2: the Completed counter equals the [x] count. Both are read
-        // off the WRITTEN file: creation sets Completed=3 (completedInit, the 3 init
-        // stages) and marks each init stage [x]. Asserting the invariant (counter
-        // === marker count) is stronger than the .sh — it proves the two sides
-        // agree, computed from the same file.
+        // The Completed counter equals the [x] count. Both are read off the WRITTEN
+        // file: creation sets Completed=3 (completedInit, the 3 init stages) and marks
+        // each init stage [x]. Asserting the invariant (counter === marker count)
+        // proves the two sides agree, computed from the same file.
         const xCount = completedCheckboxCount(state);
         const completed = readStateField(state, "Completed");
         expect(completed).toBeDefined();
         expect(Number.parseInt(completed as string, 10)).toBe(xCount);
 
-        // .sh test 7: [x] count >= 3 (all three initialization stages complete).
         expect(xCount).toBeGreaterThanOrEqual(3);
 
-        // .sh test 6: audit recorded WORKSPACE_SCANNED (handleIntentCreate:2144). The
-        // named event is stronger than the .sh's bare grep — it proves the scan
-        // stage emitted, not just that the string appears somewhere.
+        // WORKSPACE_SCANNED (handleIntentCreateStateBuild) is a named event: it proves
+        // the scan stage emitted, not just that the string appears somewhere.
         assertAuditEvent(r, WORKSPACE_SCANNED);
 
-        // The creation path prints state and STOPs (no gate on this path): no
-        // AskUserQuestion menu should have fired.
         expect(r.askedQuestions.length).toBe(0);
 
         // The creation tool exited 0. The driver intentionally aborts once the

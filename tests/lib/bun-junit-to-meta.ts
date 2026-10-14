@@ -1,24 +1,18 @@
 #!/usr/bin/env bun
-// bun-junit-to-meta.ts — D7 "tier-zero" glue tool.
+// bun-junit-to-meta.ts - maps bun's JUnit XML onto the 6-line `.meta` sidecar
+// the runner writes per file and aggregates (run-tests.ts writeMeta +
+// aggregateTierResults).
 //
-// Normalizes bun's JUnit XML output into the existing `.meta` sidecar shape
-// so the bash runner's aggregation (run-tests.sh aggregate_tier_results,
-// :322-347) stays UNCHANGED. The runner's bash-file branch writes a 6-line
-// `.meta` per file from TAP output (:283-294); a bun `.test.ts` file produces
-// JUnit XML instead, and this tool maps that XML onto the identical 6-line
-// shape so the parent's `source <meta>` + per-FILE aggregation are agnostic to
-// how the file ran.
+// WHY THE GLUE EXISTS: bun's process exit is 0/1 (pass/any-fail) and cannot
+// express the runner's "exit == number of FAILED FILES" contract
+// (runnerFailureExitCode in runner-profile.ts). The runner derives failedFiles
+// by counting `.meta` files whose STATUS=FAIL (aggregateTierResults) - one
+// increment per FILE regardless of how many testcases failed inside it. STATUS
+// in the `.meta` is the single source of truth the parent reads, and RC here is
+// bun's exit code when supplied (else 0 PASS / 1 FAIL), which the tool itself
+// returns for any direct caller.
 //
-// WHY THE GLUE EXISTS (decision D7): bun's process exit is 0/1 (pass/any-fail)
-// and cannot express the runner's "exit == number of FAILED FILES" contract
-// (run-tests.sh :413 smoke fail-fast, :577 final). The runner derives
-// FAILED_FILES by counting `.meta` files whose STATUS=FAIL — one increment per
-// FILE regardless of how many testcases failed inside it. So the bun exit code
-// is discarded; STATUS in the `.meta` is the single source of truth the parent
-// reads, and RC here is a self-consistent exit code (0 PASS / 1 FAIL) the tool
-// itself returns for any direct caller.
-//
-// ─── VERIFIED bun 1.2.22 JUnit XML SHAPE (probed this session) ───────────────
+// --- VERIFIED bun 1.2.22 JUnit XML SHAPE ---
 // Command: bun test <file> --reporter=junit --reporter-outfile=<X>
 //
 //   <testsuites name="bun test" tests=".." assertions=".." failures=".."
@@ -44,15 +38,14 @@
 //   - bun process exit: 1 on any failure, 0 otherwise (incl. all-skip).
 //   - EMPTY suite (describe with zero tests / no runnable tests): bun writes NO
 //     outfile at all and exits 0. This tool treats a missing/empty input file as
-//     0 tests / 0 failures / PASS / RC=0 — consistent with bun's exit 0.
+//     0 tests / 0 failures / PASS / RC=0 when bun's exit code is 0 or omitted.
 //   - IMPORT/COLLECTION CRASH: a `.test.ts` that throws at import makes bun exit
 //     NONZERO but ALSO write no outfile — byte-identical XML signal to the empty
 //     suite above. The two are distinguishable ONLY by bun's exit code, so the
 //     caller MUST pass `--bun-rc <$?>`; with it, a nonzero rc + empty XML maps to
-//     STATUS=FAIL / FAILED=1 (not a vacuous PASS). See buildMeta + check 4 of the
-//     W2 adversarial verify.
+//     STATUS=FAIL / FAILED=1 (not a vacuous PASS). See buildMeta.
 //
-// ─── .meta CONTRACT (run-tests.sh :287-292, re-confirmed this session) ───────
+// --- .meta CONTRACT (renderMeta; bun-junit-to-meta.test.ts) ---
 // Exactly 6 lines, bash-sourceable (KEY=value, no spaces around =), in order:
 //   NAME=<basename, no extension>
 //   STATUS=<PASS|FAIL>
@@ -65,31 +58,33 @@
 //   - ONE input JUnit file -> ONE `.meta`. The runner names one `.meta` per
 //     FILE, and one bun `.test.ts` file produces one JUnit document with exactly
 //     one root <testsuites>. If a document ever contains MULTIPLE root-level
-//     <testsuite> elements (not the bun-1.2.22 shape, but defended for safety),
+//     <testsuite> elements without a <testsuites> wrapper,
 //     they are SUMMED into the single `.meta` — because the runner's unit is the
 //     FILE, and a file is one `.meta`. We never emit more than one `.meta`.
-//   - TESTS  = root <testsuites tests>  (total testcases, including skipped),
-//     falling back to the sum of root-level <testsuite tests> if the root attr
-//     is absent.
-//   - FAILED = root <testsuites failures> (fallback: sum of <testsuite failures>,
-//     final fallback: count of <failure ...> elements).
-//   - STATUS = FAIL iff FAILED > 0; PASS otherwise. (Skips do NOT fail a file —
-//     mirrors bun exit 0 on all-skip, and the runner treats only rc!=0 as FAIL.)
-//   - DURATION = root <testsuites time> float seconds (fallback: 0). Sources fine
-//     in bash; the bash-file branch emits an integer here, the contract permits a
-//     float, and aggregate does float-free integer += only on TESTS/FAILED.
-//   - RC = 0 when PASS, 1 when FAIL. Self-consistent with STATUS; the parent never
-//     reads RC for aggregation (it keys off STATUS), but RC keeps the `.meta`
-//     faithful to the bash-file shape and gives a direct caller a real exit code.
+//   - TESTS = root <testsuites tests>, including skipped; if the root attr is
+//     absent, count <testcase> elements. Without a <testsuites> wrapper, sum
+//     <testsuite tests> instead.
+//   - FAILED = root <testsuites failures>; if the root attr is absent, count
+//     <failure> elements. Without a <testsuites> wrapper, sum <testsuite
+//     failures> instead.
+//   - STATUS = FAIL iff parsed failures > 0 or a supplied bun rc is nonzero;
+//     PASS otherwise. Skips do NOT fail a file - bun exits 0 on all-skip.
+//   - DURATION = root <testsuites time> float seconds (fallback: 0), or the sum
+//     of <testsuite time> without a <testsuites> wrapper. The contract permits a
+//     float; aggregateTierResults sums only TESTS/FAILED.
+//   - RC = bun's rc when supplied, else 0 when PASS, 1 when FAIL. The parent never
+//     reads RC for aggregation (it keys off STATUS), but RC gives a direct caller
+//     the supplied or derived exit code.
 //
 // CLI CONTRACT:
 //   bun bun-junit-to-meta.ts --xml <junit.xml> --out <target.meta> [--name <NAME>] [--bun-rc <N>]
 //   bun bun-junit-to-meta.ts <junit.xml> <target.meta> [<NAME>]   (positional)
 //
 //   --xml / 1st positional : path to the JUnit XML (bun --reporter-outfile target).
-//                            May be missing/empty -> treated as the empty-suite case.
+//                            May be missing/empty -> the empty-suite case (unless
+//                            bun rc is nonzero).
 //   --out / 2nd positional : path to write the 6-line `.meta` (written atomically:
-//                            temp file + rename, mirroring the runner's mv).
+//                            temp file + rename).
 //   --name / 3rd positional: the NAME value. If omitted, derived from the `.meta`
 //                            target's basename minus a single trailing extension
 //                            (e.g. t106.none.meta -> t106.none ... see deriveName).
@@ -115,7 +110,6 @@ export interface MetaCounts {
   rc: number;
 }
 
-/** Pull the first integer-valued attribute `attr` from `tag`'s opening element. */
 function attrInt(openTag: string, attr: string): number | null {
   const m = openTag.match(new RegExp(`\\b${attr}\\s*=\\s*"([^"]*)"`));
   if (!m) return null;
@@ -131,7 +125,7 @@ function attrStr(openTag: string, attr: string): string | null {
 
 /**
  * Sanitize a NAME so the emitted `.meta` line `NAME=<value>` is safe to
- * `source` in bash UNQUOTED (the runner's exact idiom, run-tests.sh:331).
+ * `source` in bash UNQUOTED (checked by bun-junit-to-meta.test.ts).
  * Legitimate names are test-file basenames (`t106.none`) drawn from
  * `[A-Za-z0-9._-]`, so this is a no-op on real input; it only neutralizes a
  * hostile name (spaces, `;`, backticks, `$()`, `=`) that would otherwise let
@@ -182,8 +176,8 @@ export function parseJUnit(xml: string): { tests: number; failed: number; durati
     duration = attrStr(root, "time");
   }
 
-  // Fallback: sum every <testsuite ...> OPENING tag that is a direct/standalone
-  // suite element. We match opening tags only (not self-closing, none expected)
+  // Fallback: sum every <testsuite ...> OPENING tag when no <testsuites>
+  // wrapper is present. We match opening tags (including self-closing)
   // and sum their `tests` / `failures`. This covers a document with multiple
   // root-level <testsuite> blocks and no <testsuites> wrapper.
   if (tests === null || failed === null) {
@@ -225,13 +219,12 @@ export function parseJUnit(xml: string): { tests: number; failed: number; durati
 }
 
 /**
- * Derive NAME from the `.meta` target path the same way the bash runner does
- * for a TAP file: basename, then strip a single trailing extension. For a
- * target like `/results/t106.none.meta`, basename is `t106.none.meta` and we
- * strip the `.meta` -> `t106.none`. The runner's `name` is the source filename
- * minus its extension (e.g. `t106.none.test.ts` -> stripped per its own logic),
- * but since this tool is handed the `.meta` target, the basename minus `.meta`
- * reproduces the intended NAME exactly.
+ * Derive NAME from the `.meta` target path: basename, then strip a single
+ * trailing extension. For a target like `/results/t106.none.meta`, basename is
+ * `t106.none.meta` and we strip the `.meta` -> `t106.none`. The runner's `name`
+ * is the source filename minus its extension (e.g. `t106.none.test.ts` ->
+ * stripped per its own logic), but since this tool is handed the `.meta`
+ * target, the basename minus `.meta` reproduces the intended NAME exactly.
  */
 export function deriveName(metaPath: string): string {
   const base = basename(metaPath);
@@ -244,17 +237,17 @@ export function deriveName(metaPath: string): string {
  *
  * `bunRc` is bun's process exit code (0 = no failures, nonzero = any failure
  * INCLUDING an import/collection-time crash). It is the channel that closes the
- * load-bearing D7 hole: when a `.test.ts` throws at import, bun exits nonzero
+ * load-bearing hole: when a `.test.ts` throws at import, bun exits nonzero
  * but writes NO JUnit file, so the parsed XML is empty (0 tests / 0 failures) —
  * indistinguishable from a genuine zero-test describe (which bun also exits 0
  * for). Without bunRc the glue would map the crash to STATUS=PASS and the file
- * would contribute +0 to FAILED_FILES, silently under-reporting the failure.
+ * would contribute +0 to failedFiles, silently under-reporting the failure.
  *
  * Rule: STATUS=FAIL iff (parsed failures > 0) OR (bunRc is known and nonzero).
  * In the crash case (bunRc != 0 but parsed failed == 0) we synthesize
  * `failed = 1` so the FAIL is visible in the count, and RC mirrors bunRc.
  *
- * `bunRc` is OPTIONAL (default null): omitting it preserves the original
+ * `bunRc` is OPTIONAL (default null): omitting it preserves the
  * XML-only behaviour exactly, so a caller that cannot supply the exit code (or
  * the tool's own happy-path tests) is unaffected. The runner SHOULD always pass
  * it.
@@ -274,13 +267,12 @@ export function buildMeta(xml: string, name: string, bunRc: number | null = null
     tests,
     failed,
     duration: sanitizeDuration(parsed.duration),
-    // RC stays faithful to the real signal: bun's rc when known, else derived.
     rc: bunRc !== null ? bunRc : status === "FAIL" ? 1 : 0,
   };
 }
 
 /**
- * Render the EXACT 6-line `.meta` shape (run-tests.sh :287-292). No trailing
+ * Render the EXACT 6-line `.meta` shape (bun-junit-to-meta.test.ts). No trailing
  * newline beyond the final line's — matches `echo` lines piped into a file
  * (each `echo` adds one `\n`, so 6 echoes => 6 lines each terminated by `\n`).
  */
@@ -295,7 +287,6 @@ export function renderMeta(m: MetaCounts): string {
   ].join("\n")}\n`;
 }
 
-/** Atomic write: temp file in the same dir, then rename (mirrors runner's mv). */
 function writeMetaAtomic(outPath: string, content: string): void {
   const tmp = `${outPath}.${process.pid}.tmp`;
   writeFileSync(tmp, content, "utf8");
@@ -357,7 +348,6 @@ function main(): number {
   return meta.rc;
 }
 
-// Run as CLI only when invoked directly (not when imported by the test).
 if (import.meta.main) {
   process.exit(main());
 }

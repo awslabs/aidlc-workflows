@@ -202,7 +202,6 @@ describe("t231 config get/list/set handlers", () => {
       "--learnings", "off", "--summary-confirmation", "off", "--guard.state-transition", "off",
     ], project, FENCE_ENV_CLEAR);
     expect(changed.status, changed.stderr).toBe(0);
-    // Their setter already landed the policy, so this run says it stands.
     expect(changed.stdout).toContain("Guard Policy is already relaxed (set by you)");
     expect(changed.stdout).toContain("The state transition check is already off");
     expect(renameNotices(changed.stderr)).toBe(0);
@@ -251,14 +250,15 @@ describe("t231 config get/list/set handlers", () => {
     );
     expect(changed.status, changed.stderr).toBe(0);
     expect(renameNotices(changed.stderr)).toBe(1);
-    expect(stateField(project, "Guard Policy")).toBe("relaxed (set by you)");
+    // Nobody asked for it, so it is the command's.
+    expect(stateField(project, "Guard Policy")).toBe("relaxed (set by a command)");
     expect(stateField(project, "Change Control")).toBe("");
     const retiredRead = utility(["config-get", "change-control"], project);
     expect(retiredRead.status, retiredRead.stderr).toBe(0);
-    expect(retiredRead.stdout).toBe("relaxed (set by you)\n");
+    expect(retiredRead.stdout).toBe("relaxed (set by a command)\n");
     expect(renameNotices(retiredRead.stderr)).toBe(1);
     const currentRead = utility(["config-get", "guard-policy"], project);
-    expect(currentRead.stdout).toBe("relaxed (set by you)\n");
+    expect(currentRead.stdout).toBe("relaxed (set by a command)\n");
     expect(renameNotices(currentRead.stderr)).toBe(0);
     const listed = utility(["config-list", "--json"], project);
     expect(Object.keys(parseJson<Record<string, string>>(listed.stdout))).not.toContain("change-control");
@@ -296,8 +296,9 @@ describe("t231 config get/list/set handlers", () => {
     ["depth", "minimal", "Depth", "Minimal"],
     ["test-strategy", "comprehensive", "Test Strategy", "Comprehensive"],
     ["review", "advisory", "Review Override", "advisory"],
-    ["guard-policy", "relaxed", "Guard Policy", "relaxed (set by you)"],
-    ["guard-policy", "off", "Guard Policy", "off (set by you)"],
+    // Nobody asked for any of these, so each is the command's.
+    ["guard-policy", "relaxed", "Guard Policy", "relaxed (set by a command)"],
+    ["guard-policy", "off", "Guard Policy", "off (set by a command)"],
     ["sensors", "off", "Sensors", "off (set by a command)"],
     ["learnings", "off", "Learnings", "off (set by a command)"],
     ["summary-confirmation", "off", "Summary Confirmation", "off (set by a command)"],

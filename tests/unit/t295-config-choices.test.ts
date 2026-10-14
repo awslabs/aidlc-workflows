@@ -729,7 +729,6 @@ describe("t295 flags section", () => {
       expect(layered).toContain("config flags --show` shows which file sets each).");
     }
     expect(resolvedFlags(project)?.hookDebug).toBe(true);
-    // A default scope is for new work, and says so.
     expect(flags("--project", "--default-scope", "bugfix"))
       .toContain(`The default scope applies to new work; 1 open workflow (default/${dirName}) keeps the scope it started with.`);
     expect(resolvedFlags(project)).toMatchObject({ swarm: false, hookDebug: true, questionRetentionDays: 30, sensorTimeoutMs: 5000 });
@@ -753,7 +752,6 @@ describe("t295 flags section", () => {
     );
     const named = flags("--project", "--swarm", "on");
     expect(named).not.toContain("Ignore the person");
-    // The intent's own slug names it instead.
     expect(named).toContain("2 open workflows (default/evil, default/active-flags) pick this up from the next step");
   });
 
@@ -790,7 +788,6 @@ describe("t295 flags section", () => {
     const bypasses = (file: string): string[] | undefined => existsSync(join(project, file))
       ? (JSON.parse(readFileSync(join(project, file), "utf-8")) as { flags?: { bypasses?: string[] } }).flags?.bypasses
       : undefined;
-    // Clearing a switch no file records changes nothing, and says only that.
     const nothing = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes");
     expect(nothing.status, nothing.stdout + nothing.stderr).toBe(0);
     expect(nothing.stdout.trim()).toBe(
@@ -830,7 +827,6 @@ describe("t295 flags section", () => {
     expect(mine.stdout).not.toContain("--clear-bypass AIDLC_DISABLE_SENSORS --local --yes");
     expect(bypasses("aidlc.settings.local.json")).toEqual(["AIDLC_DISABLE_SENSORS"]);
     expect(bypasses("aidlc.settings.json")).toBeUndefined();
-    // Recorded for the team, a clear with no layer clears it there.
     expect(flags("--project", "--bypass", "AIDLC_DISABLE_LEARNINGS", "--yes").status).toBe(0);
     const cleared = flags("--clear-bypass", "AIDLC_DISABLE_LEARNINGS");
     expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
@@ -839,8 +835,6 @@ describe("t295 flags section", () => {
     expect(cleared.stdout).not.toContain("configured flags settings for");
     expect(bypasses("aidlc.settings.json")).toBeUndefined();
     expect(resolvedFlags(project)?.bypasses).toEqual(["AIDLC_DISABLE_SENSORS"]);
-    // Recorded in both files, a clear with no layer clears both; two names spread
-    // across the files both clear.
     expect(flags("--project", "--bypass", "AIDLC_DISABLE_SENSORS", "--bypass", "AIDLC_DISABLE_LEARNINGS", "--yes").status).toBe(0);
     expect(flags("--local", "--bypass", "AIDLC_DISABLE_LEARNINGS", "--yes").status).toBe(0);
     const both = flags("--clear-bypass", "AIDLC_DISABLE_SENSORS", "--clear-bypass", "AIDLC_DISABLE_LEARNINGS");
@@ -852,7 +846,6 @@ describe("t295 flags section", () => {
     // What it prints is the state after every file it cleared.
     expect(both.stdout).not.toContain("weakens a deterministic guard");
     expect(resolvedFlags(project)?.bypasses).toBeUndefined();
-    // A clear aimed at one file says where the switch is still on.
     expect(flags("--project", "--bypass", "AIDLC_DISABLE_SENSORS", "--yes").status).toBe(0);
     expect(flags("--local", "--bypass", "AIDLC_DISABLE_SENSORS", "--yes").status).toBe(0);
     const aimed = flags("--local", "--clear-bypass", "AIDLC_DISABLE_SENSORS", "--yes");
@@ -867,7 +860,6 @@ describe("t295 flags section", () => {
     invalidateSettingsCache();
     expect(resolveProjectFlag("AIDLC_DISABLE_SENSORS", {}, project)).toBe("1");
     expect(resolveProjectFlag("AIDLC_DISABLE_LEARNINGS", {}, project)).toBe("1");
-    // --show names the file each switch comes from, and that file's clear ends it.
     const shown = flags("--show", "--json");
     expect(shown.status, shown.stdout + shown.stderr).toBe(0);
     const sources = (JSON.parse(shown.stdout) as { data: { sources: Record<string, string> } }).data.sources;
@@ -880,7 +872,6 @@ describe("t295 flags section", () => {
     invalidateSettingsCache();
     expect(resolveProjectFlag("AIDLC_DISABLE_SENSORS", {}, project)).toBeUndefined();
     expect(resolveProjectFlag("AIDLC_DISABLE_LEARNINGS", {}, project)).toBe("1");
-    // Any other flag with no layer still asks which one.
     const other = flags("--swarm", "on", "--yes");
     expect(other.status).toBe(2);
     expect(other.stdout + other.stderr).toContain("requires exactly one of --local, --project, or --global");
@@ -933,7 +924,6 @@ describe("t295 flags section", () => {
     expect(other.status).toBe(2);
     expect(other.stdout + other.stderr).toContain("non-interactive flags mutation requires --yes");
     expect(resolvedFlags(project)?.swarm).toBeUndefined();
-    // Typed at a terminal it is done as typed, and says how to undo it.
     const typed = run(
       ["config", "flags", "--project-dir", project, "--local", "--swarm", "on"],
       project,

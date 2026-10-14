@@ -155,7 +155,6 @@ describe("t214 keyword-hit confirm carries the effective cost clause", () => {
     const q = String(d.question);
     expect(q).toContain('"bugfix"');
     const bf = counts(GRID.bugfix.stages, true);
-    // bugfix asks no learnings question and no summary confirmation, and says so up front.
     expect(q).toContain(`${costClause(bf)}; no learnings ritual or summary confirmation; lead agent only.`);
     expect(q).not.toContain("per unit of work");
   });
@@ -191,7 +190,8 @@ describe("t214 compose offer carries the example counts (no feature-workflow tra
     expect(q).toContain(`classic = ${classic.shown}`);
     expect(q).toContain(`feature = ${feature.shown}`);
     expect(q).not.toContain("of 33");
-    // t198:200 pins this substring's absence on the compose-offer arm.
+    // t198's "rich prose (no clear hit) -> the compose offer, never a silent
+    // default" test pins this substring's absence on the compose-offer arm.
     expect(q).not.toContain('"feature" workflow');
   });
 });
@@ -237,7 +237,8 @@ describe("t214 every plan the offer lists carries the engine's own count", () =>
 describe("t214 creation print carries the cost parenthetical", () => {
   test("next bugfix prints intent-create AND the computed cost", () => {
     proj = createTestProject();
-    // A genuinely empty workspace creates instead of prompting to pick (t198:208).
+    // A genuinely empty workspace creates instead of prompting to pick (t198's
+    // "known-scope positional with a description still creates (Branch 7b)" test).
     // The plan with a description creates; named alone it first asks (#2355).
     removeWorkspaceRecord(proj);
     const d = directiveOf(runNext(proj, ["bugfix", "Fix the login crash"]).out);

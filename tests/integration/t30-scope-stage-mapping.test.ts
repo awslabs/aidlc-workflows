@@ -1,64 +1,39 @@
 // covers: scope:bugfix, scope:classic, subcommand:aidlc-utility:scope-table
 //
-// t30 — Scope-to-Stage Mapping consistency. Migrated from
-// tests/integration/t30-scope-stage-mapping.sh (TAP plan 17). The .sh had no
-// `# covers:` header; the subject is the consistency between three compiled
-// data artifacts — SKILL.md's compiled scope-grid table (rendered by
-// `aidlc-utility.ts scope-table`), scope-grid.json (the transpose), and
-// stage-graph.json (phase membership) — so the covers ids name the
-// scope-table subcommand that emits the table and the two scopes whose
-// phase-presence shape the .sh load-bears on (bugfix, classic).
+// t30 - Scope-to-Stage Mapping consistency. The subject is the consistency
+// between three compiled data artifacts - SKILL.md's compiled scope-grid table
+// (rendered by `aidlc-utility.ts scope-table`), scope-grid.json (the
+// transpose), and stage-graph.json (phase membership) - so the covers ids name
+// the scope-table subcommand that emits the table and the two scopes whose
+// phase-presence shape is pinned (bugfix, classic).
 //
 // Mechanism: none. Every assertion is a pure structural / data check —
 // read the SHIPPED files (dist/claude/.claude/...), parse JSON / slice the
 // SKILL.md region, and assert in-process. No argv, no exit code, no stdout,
 // no process boundary, zero LLM, zero tokens. (One in-process IMPORT of the
-// tool's exported `renderScopeTable` strengthens Section A/B/C into a single
-// byte-equality proof that the committed table IS the transpose of the grid;
-// still no spawn.)
+// tool's exported `renderScopeTable` supplies a single byte-equality proof
+// that the committed table IS the transpose of the grid; still no spawn.)
 //
 // Source under test:
-//   - dist/claude/.claude/tools/data/scope-grid.json — the compiled grid
-//     (milestone 12 retired scope-mapping.json). Shape: { <scope>: { stages:
-//     { <slug>: "EXECUTE"|"SKIP" } } }. Source of truth for routing.
+//   - dist/claude/.claude/tools/data/scope-grid.json - the compiled grid.
+//     Shape: { <scope>: { stages: { <slug>: "EXECUTE"|"SKIP" } } }. Source of
+//     truth for routing.
 //   - dist/claude/.claude/tools/data/stage-graph.json — array of stage nodes
 //     carrying { slug, phase, ... }. Phase membership for Section D.
 //   - dist/claude/.claude/skills/aidlc/SKILL.md — carries a compiled summary
-//     table between BEGIN/END markers (lines 104-118). Markers + render
-//     format defined in aidlc-utility.ts: SCOPE_TABLE_BEGIN (:2578),
-//     SCOPE_TABLE_END (:2580), renderScopeTable() (:2584),
-//     canonicalScopeTableRegion() (:2606).
+//     table between BEGIN/END markers. Markers + render format defined in
+//     aidlc-utility.ts: SCOPE_TABLE_BEGIN, SCOPE_TABLE_END, renderScopeTable(),
+//     canonicalScopeTableRegion().
 //
-// The .sh extracted the EXECUTE cell with `grep -oE '[0-9]+ / [0-9]+'` and a
-// row with `grep -cE '^\| [a-z-]+ '`; the table TOTAL is 32 (the .sh's `/ 31`
-// comment is stale prose — its regex matched whatever total was rendered).
 // We assert exact integers, not a regex match, so a wrong total is caught.
 //
-// Old TAP -> new test parity (1:1, every .sh `ok` line -> a named test()):
-//   Section A (region shape, 4 asserts):
-//     .sh 1 (BEGIN marker)               -> "A1: SKILL.md region has the BEGIN marker"
-//     .sh 2 (END marker)                 -> "A2: SKILL.md region has the END marker"
-//     .sh 3 (| Scope header)             -> "A3: region carries the | Scope header row"
-//     .sh 4 (| EXECUTE / Total column)   -> "A4: region carries the | EXECUTE / Total column"
-//   Section B (row count, 1 assert):
-//     .sh 5 (row count == JSON keys)     -> "B: region row count matches scope-grid.json key count"
-//   Section C (per-scope EXECUTE, 10 asserts):
-//     .sh 6-14 (one per scope, alpha)    -> "C: <scope> EXECUTE cell matches scope-grid.json"
-//       (one test() per scope: bugfix, enterprise, feature, infra, mvp, poc,
-//        refactor, security-patch, classic, express — same 10, same order)
-//   Section D (phase-presence semantics, 3 asserts):
-//     .sh 15 (bugfix 0 ideation EXEC)    -> "D1: bugfix executes zero ideation-phase stages"
-//     .sh 16 (classic 0 ideation EXEC)  -> "D2: classic executes zero ideation-phase stages"
-//     .sh 17 (bugfix 2 operation EXEC)   -> "D3: bugfix executes exactly two operation-phase stages"
-//
-// STRONGER than the .sh (kept, not weakened):
-//   - Section A/B/C are additionally proven by a single byte-equality of the
-//     committed SKILL.md region against canonicalScopeTableRegion(
-//     renderScopeTable()) — the committed table is provably the transpose of
-//     the grid, not merely "contains the markers / count agrees".
-//   - Section C asserts exact integers (including bugfix's 9) derived
-//     from the grid AND read from the table cell, on the SAME scope row —
-//     co-located, not "the number appears somewhere".
+//   - Section A/B/C are proven by a single byte-equality of the committed
+//     SKILL.md region against canonicalScopeTableRegion(renderScopeTable()) -
+//     the committed table is provably the transpose of the grid, not merely
+//     "contains the markers / count agrees".
+//   - Section C asserts exact integers (including bugfix's 9) derived from the
+//     grid AND read from the table cell, on the SAME scope row - co-located,
+//     not "the number appears somewhere".
 //   - Section D guards against a vacuous pass: both the ideation slug set and
 //     the operation slug set must be non-empty, or "zero EXECUTE among them"
 //     would be trivially true.
@@ -73,14 +48,14 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-utility.ts";
 
 // --- Shipped artifacts (the SAME files the orchestrator + tool read) --------
-const SKILL_PATH = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
+// The generated tables live in tables.md beside the orchestrator skill.
+const SKILL_PATH = join(AIDLC_SRC, "skills", "aidlc", "tables.md");
 const SCOPE_GRID_PATH = join(AIDLC_SRC, "tools", "data", "scope-grid.json");
 const STAGE_GRAPH_PATH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 
 const BEGIN = "<!-- BEGIN: compiled scope grid";
 const END = "<!-- END: compiled scope grid -->";
 
-// The eleven scopes the suite iterates, in alphabetical order.
 const SCOPES = [
   "bugfix",
   "classic",
@@ -109,7 +84,6 @@ function readGraph(): StageNode[] {
   return JSON.parse(readFileSync(STAGE_GRAPH_PATH, "utf-8")) as StageNode[];
 }
 
-/** The compiled-table region of SKILL.md (the .sh's sed BEGIN..END slice). */
 function skillRegion(): string {
   const raw = readFileSync(SKILL_PATH, "utf-8");
   const beginIdx = raw.indexOf(BEGIN);
@@ -120,14 +94,12 @@ function skillRegion(): string {
   return raw.substring(beginIdx, endIdx + END.length);
 }
 
-/** EXECUTE count for a scope, derived straight from scope-grid.json. */
 function gridExecuteCount(grid: ScopeGrid, scope: string): number {
   return Object.values(grid[scope].stages).filter((v) => v === "EXECUTE").length;
 }
 
-/** The "N / M" EXECUTE cell from a scope's table row (the .sh's grep -oE). */
+/** The "N / M" EXECUTE cell from a scope's table row. */
 function tableExecuteCount(region: string, scope: string): number {
-  // .sh: grep "^| <scope> " then grep -oE '[0-9]+ / [0-9]+' | awk '{print $1}'.
   const row = region
     .split("\n")
     .find((l) => l.startsWith(`| ${scope} `));
@@ -164,19 +136,18 @@ describe("t30 Section A — SKILL.md compiled scope-grid region is well-formed",
 describe("t30 Section B — table row count matches scope-grid.json", () => {
   test("B: region row count matches scope-grid.json key count [.sh 5]", () => {
     const region = skillRegion();
-    // .sh: grep -cE '^\| [a-z-]+ ' counts data rows (the header is "| Scope ").
+    // `^\| [a-z-]+ ` counts data rows (the header is "| Scope ").
     const rowCount = region
       .split("\n")
       .filter((l) => /^\| [a-z-]+ /.test(l)).length;
     const jsonCount = Object.keys(readGrid()).length;
     expect(rowCount).toBe(jsonCount);
-    // Cross-check: the data rows are exactly the eleven scopes we iterate below.
     expect(jsonCount).toBe(SCOPES.length);
   });
 });
 
 // =============================================================================
-// Section C — per-scope EXECUTE counts: table cell == grid truth (10 asserts)
+// Section C - per-scope EXECUTE counts: table cell == grid truth (11 asserts)
 // =============================================================================
 describe("t30 Section C — each scope's EXECUTE cell matches scope-grid.json", () => {
   for (const scope of SCOPES) {
@@ -186,21 +157,21 @@ describe("t30 Section C — each scope's EXECUTE cell matches scope-grid.json", 
       const fromGrid = gridExecuteCount(grid, scope);
       const fromTable = tableExecuteCount(region, scope);
       // Same scope row: the rendered cell equals the count derived from the
-      // grid stages map. Co-located on one row (STRONGER than two greps).
+      // grid stages map. Co-located on one row.
       expect(fromTable).toBe(fromGrid);
     });
   }
 });
 
 // =============================================================================
-// STRENGTHENING — the committed table IS the transpose (covers A/B/C at once)
+// The committed table IS the transpose (covers A/B/C at once)
 // =============================================================================
 describe("t30 — committed SKILL.md table is byte-identical to the rendered transpose", () => {
   test("committed region === canonicalScopeTableRegion(renderScopeTable())", () => {
     // renderScopeTable() reads scope-grid.json and emits the row format; the
     // committed SKILL.md region must equal canonicalScopeTableRegion of it
     // (the same byte-compare aidlc-utility scope-table --check enforces,
-    // aidlc-utility.ts:2668-2674). If this holds, the markers, the row count,
+    // aidlc-utility.ts handleScopeTable). If this holds, the markers, the row count,
     // and every EXECUTE cell are provably the grid's transpose, not a stale
     // hand-edit that merely happens to contain the right substrings.
     const expected = canonicalScopeTableRegion(renderScopeTable());
@@ -209,7 +180,7 @@ describe("t30 — committed SKILL.md table is byte-identical to the rendered tra
 });
 
 // =============================================================================
-// Section D — phase-presence semantics preserved from pre-milestone-10 t30 (3 asserts)
+// Section D - phase-presence semantics (3 asserts)
 // =============================================================================
 describe("t30 Section D — scope phase-presence semantics (read JSON directly)", () => {
   test("D1: bugfix executes zero ideation-phase stages [.sh 15]", () => {

@@ -111,7 +111,6 @@ function tool(p: string, name: string, args: string[]) {
   return { status: result.status, json, out: `${result.stdout}${result.stderr}` };
 }
 
-// What the person types, through the real prompt hook every harness uses.
 function says(p: string, prompt: string, session = SESSION): void {
   const env: NodeJS.ProcessEnv = { ...agentEnv(), AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p };
   const result = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
@@ -137,7 +136,6 @@ function recordCommand(p: string): void {
   }
 }
 
-// Alpha's Code Generation written and completed.
 function build(p: string): void {
   const stage = findStageBySlug(CG)!;
   const output = join(seededRecordDir(p), "construction", "alpha", CG);
@@ -162,7 +160,6 @@ function requestReview(p: string): string {
   return String(requested.json?.reviewFile);
 }
 
-// The reviewer's READY lands.
 function reviewLands(p: string, file: string): void {
   mkdirSync(dirname(join(p, file)), { recursive: true });
   writeFileSync(join(p, file), `**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`);
@@ -174,7 +171,6 @@ function checkpoint(p: string, action: string, extra: string[] = [], session = S
   return tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", action, "--session", session, ...extra]);
 }
 
-// The review lands, the agent verifies alpha and asks about it in this chat.
 function verifyAndAsk(p: string, file: string) {
   reviewLands(p, file);
   const verified = checkpoint(p, "verify");
@@ -212,7 +208,6 @@ describe("t-checkpoint-reply-before-ask: the person answers before the Unit's qu
       const gates = unitGates(p, "GATE_APPROVED");
       expect(gates).toHaveLength(1);
       expect(auditBlockField(gates[0].block, "Person Reply")).toBe("approve it as it is");
-      // The one question on record is the one the agent asked; the person was not asked again.
       expect(questionsAsked(p)).toHaveLength(1);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

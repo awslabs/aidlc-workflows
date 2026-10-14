@@ -201,7 +201,7 @@ describe.skipIf(process.platform !== "win32")("Windows record sharing runtime", 
       expect(transientCodes).toContain((error as NodeJS.ErrnoException).code ?? "");
       expect(attempts).toBeGreaterThan(1);
       expect(now).toBe(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
-      expect(holder.child.exitCode).toBeNull(); // Still holding after the writer gave up.
+      expect(holder.child.exitCode).toBeNull();
       unchanged();
       expect(JSON.parse(fs.readFileSync(record, "utf8")).cleanupComplete).toBe(false);
       expect(fs.existsSync(holder.closed)).toBe(false);

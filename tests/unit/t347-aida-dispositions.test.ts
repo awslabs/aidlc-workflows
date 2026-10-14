@@ -108,7 +108,6 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
     const loaded = ledgerWith(entry("F1", "P1", [A42]), entry("F2", "P1", [A43]), entry("F3", "P2", [A42]), entry("F4", "P1", [lineAnchor(PATH, "RIGHT", "gone")]), entry("F5", "P3", [A43]), entry("F6", "P1", [lineAnchor("core/other.ts", "RIGHT", "x")]));
     const presence = (anchor: { sha256: string }) => anchor.sha256 !== lineAnchor(PATH, "RIGHT", "gone").sha256;
     const dispositions = new Map<string, "resolved" | "still-open">([["F1", "resolved"], ["F2", "still-open"], ["F3", "resolved"], ["F5", "still-open"], ["F6", "resolved"]]);
-    // Incremental review that changed only core/other.ts since the last review.
     const result = reconcileLedger(loaded, [], HEAD, AT, presence, dispositions, new Set(["core/other.ts"]));
     // F1 (P1, code and file unchanged) is NOT closed on the judge's word: retained for a maintainer.
     // F3 (P2) follows the judge. F6 (P1) closes because its file changed since the review.
@@ -251,7 +250,6 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
       const advisory = ledgerWith(entry("F1", "P2", [A42]));
       const kept = applyLedgerToReview(parseStructuredReview(review([], [{ id: "F1", disposition: "still-open", findingIndex: null }]), BASE, HEAD, MANIFEST, METADATA), advisory, root, root, AT);
       expect(kept.review.ledger?.retained.map(item => item.id)).toEqual(["F1"]);
-      // Not blocking: the action is the maintainer's merge decision and no blocking event is raised.
       expect(kept.review.decision.action).toBe("merge");
       expect(kept.review.decision.rationale).toContain("No P0 or P1 finding survives, so the next action is the maintainer's merge decision");
       expect(renderReview(kept.review, CONTEXT_ID).event).toBe("COMMENT");

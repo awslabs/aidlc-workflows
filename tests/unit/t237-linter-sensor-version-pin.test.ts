@@ -17,7 +17,7 @@
 // needs a writable PATH dir + registry access and is racy under -P;
 // the invariant is fully visible in the source.
 //
-// All four dist projections carry the same byte-identical script (the
+// All dist projections carry the same byte-identical script (the
 // packager copies core/tools verbatim; t145-packaging-parity guards
 // cross-dist parity), so asserting on dist/claude covers the rest.
 

@@ -1,44 +1,41 @@
 // covers: cli:aidlc-bolt(complete-merge,abort-discard), cli:aidlc-runtime(compile), cli:aidlc-worktree(create), cli:aidlc-audit(append), function:auditLockDir
 //
 // t49 — Integration: Bolt fork/merge for runtime-graph + parallel instances[]
-// + failure-mode coverage (v0.5.0 milestone 11). Migrated from
-// tests/integration/t49-bolt-sensor-failures.sh (TAP plan 8). The .sh declared
-// NO `# covers:` header; the covers ids above were derived from the units its
-// body exercises end-to-end.
+// + failure-mode coverage.
 //
 // Mechanism: cli. This is a full real-tool flow — it drives `git worktree`,
 // `aidlc-worktree create`, `aidlc-bolt start --worktree`, `aidlc-bolt complete
 // --merge`, `aidlc-bolt abort --discard`, and `aidlc-runtime compile` as real
-// subprocesses, then asserts on the file side-effects (aidlc-docs/audit.md,
-// aidlc-docs/runtime-graph.json) and process boundaries (exit codes, stderr
+// subprocesses, then asserts on the file side-effects (the per-intent audit
+// shards and runtime-graph.json) and process boundaries (exit codes, stderr
 // envelopes). An in-process twin would lose the spawn chain
 // handleComplete -> spawnSibling(state-merge) -> spawnSibling(audit-merge) ->
 // spawnSibling(fragment-merge) that every failure-ordering assertion depends
 // on, including real lock contention (case 6). So everything stays
-// spawned, exactly as the .sh ran it. spawnCount = all.
+// spawned. spawnCount = all.
 //
 // IMPORTANT cwd contract (same as the .sh, t49:99-126): aidlc-worktree.ts's
 // assertNotSiblingWorktree (aidlc-worktree.ts:101-121) checks
 // `git rev-parse --show-toplevel` against `git rev-parse --git-common-dir`'s
-// parent — i.e. against CWD, not --project-dir. Running from this test's cwd
-// would trip the sibling-worktree refusal. So every worktree/bolt spawn runs
-// with `cwd: proj` (the .sh did `(cd "$1" && bun ... )`).
+// parent, probing the git checkout resolved from --project-dir (its repoCwd)
+// rather than the process cwd. Every worktree/bolt spawn here still runs with
+// `cwd: proj`.
 //
 // Source under test:
-//   - dist/claude/.claude/tools/aidlc-bolt.ts handleComplete (:307) — the
-//     merge chain ordering: BOLT_COMPLETED emit (:354) → state-merge (:371) →
-//     audit-merge (:390) → fragment-merge (:412). Each step's failure calls
-//     failBolt (BOLT_FAILED recovery row) + failJson (envelope + exit 1).
-//   - aidlc-bolt.ts handleAbort (:498) — abort --discard tears down the
-//     worktree then emits BOLT_FAILED (Reason: aborted).
-//   - aidlc-runtime.ts compile populator (:401-551) — instances[] detection
-//     (≥2 distinct Bolt slug STATE_FORKED rows in window), alphabetical sort
-//     (:486), per-instance outcome (STATE_MERGED→approved, else BOLT_FAILED→
-//     failed, else pending, :504-508), parent rollup (anyFailed→failed,
-//     :527), per-instance sensor_firings:[] forward-noted gap (:518).
-//   - aidlc-lib.ts auditLockDir (:512) — md5(projectDir).slice(0,8) prefixed
-//     `.aidlc-audit-` + `.lock` under tmpdir; the directory whose presence
-//     case 6 plants to force a lock-acquire failure.
+//   - dist/claude/.claude/tools/aidlc-bolt.ts handleComplete - the merge chain
+//     ordering: BOLT_COMPLETED emit -> state-merge -> audit-merge ->
+//     fragment-merge. Each step's failure calls failBolt (BOLT_FAILED recovery
+//     row) + failJson (envelope + exit 1).
+//   - aidlc-bolt.ts handleAbort - abort --discard tears down the worktree then
+//     emits BOLT_FAILED (Reason: aborted).
+//   - aidlc-runtime.ts compile populator - instances[] detection (>=2 distinct
+//     Bolt slug STATE_FORKED rows in window), alphabetical sort, per-instance
+//     outcome (STATE_MERGED->approved, else BOLT_FAILED->failed, else pending),
+//     parent rollup (anyFailed->failed), per-instance sensor_firings:[]
+//     forward-noted gap.
+//   - aidlc-lib.ts auditLockDir - md5(auditLockIdentity(projectDir, intent,
+//     space)).slice(0,8) prefixed `.aidlc-audit-` + `.lock` under tmpdir; the
+//     directory whose presence case 6 plants to force a lock-acquire failure.
 //
 // Old TAP -> new test parity (1:1, every .sh `ok` -> a named test()):
 //   .sh (1) instances[].length=3 alphabetical        -> "1: 3-Bolt parallel batch — instances[] = [auth,cart,pay] (alphabetical)"
@@ -79,11 +76,9 @@ import { auditLockDir, worktreePath } from "../../dist/claude/.claude/tools/aidl
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-// The per-intent record dir the inline git project seeds (was flat aidlc-docs/).
 function recordDir(proj: string): string {
   return join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents", DEFAULT_RECORD_DIR);
 }
-// Concatenate every main audit shard (audit/*.md) for the seeded record.
 function readMainAudit(proj: string): string {
   const dir = join(recordDir(proj), "audit");
   let names: string[];
@@ -95,7 +90,7 @@ function readMainAudit(proj: string): string {
   return names.map((n) => readFileSync(join(dir, n), "utf-8")).join("\n");
 }
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const WORKTREE_TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
 const BOLT_TOOL = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
 const RUNTIME_TOOL = join(AIDLC_SRC, "tools", "aidlc-runtime.ts");
@@ -106,11 +101,9 @@ const tempProjects: string[] = [];
 afterAll(() => {
   for (const p of tempProjects) {
     // Each project hosts real `git worktree` children under .aidlc/worktrees/;
-    // their git metadata blocks a plain rm -rf, so prune them first (mirrors
-    // the harness's cleanupWorktreeFixture). Then drop the per-project audit
-    // lock dir (TMPDIR-level, outside the project) and rm -rf the tree. This is
-    // stronger than the .sh's chmod+rm EXIT trap, which leaked git-worktree
-    // dirs across runs.
+    // prune them first so rm -rf doesn't orphan git metadata (mirrors the
+    // harness's cleanupWorktreeFixture). Then drop the per-project audit lock dirs
+    // (TMPDIR-level, outside the project) and rm -rf the tree.
     const list = spawnSync("git", ["-C", p, "worktree", "list", "--porcelain"], {
       encoding: "utf-8",
     });
@@ -148,7 +141,6 @@ interface Run {
   out: string; // combined, mirrors the .sh's 2>&1
 }
 
-/** Spawn a tool against `proj` FROM `proj` (cwd contract above). */
 function runIn(proj: string, tool: string, args: string[], env?: Record<string, string>): Run {
   const res = spawnSync(BUN, [tool, "--project-dir", proj, ...args], {
     cwd: proj,
@@ -173,7 +165,6 @@ const boltAbortDiscard = (proj: string, slug: string): Run =>
   runIn(proj, BOLT_TOOL, ["abort", "--name", slug, "--reason", "test", "--slug", slug, "--discard"]);
 const runtimeCompile = (proj: string): Run => runIn(proj, RUNTIME_TOOL, ["compile"]);
 
-/** Append an audit row to a (worktree or main) project dir via the real CLI. */
 function auditAppend(dir: string, event: string, fields: [string, string][]): void {
   const flagArgs: string[] = [];
   for (const [k, v] of fields) flagArgs.push("--field", `${k}=${v}`);
@@ -194,8 +185,8 @@ const fragPath = (proj: string, slug: string): string =>
 /**
  * Build a clean git-init'd project with seeded construction state + empty
  * audit + the framework gitignore, then seed WORKFLOW_STARTED + STAGE_STARTED
- * for code-generation so the compile populator has a window. Mirrors the .sh's
- * make_proj (t49:68-97). Returns the canonical project root.
+ * for code-generation so the compile populator has a window. Returns the
+ * canonical project root.
  */
 function makeProj(): string {
   let proj = mkdtempSync(join(process.env.TMPDIR || tmpdir(), "aidlc-t49-"));
@@ -214,7 +205,7 @@ function makeProj(): string {
   git(["init", "-q"]);
   git(["symbolic-ref", "HEAD", "refs/heads/main"]);
   writeFileSync(join(proj, "README.md"), "seed\n");
-  // Seed the PER-INTENT workspace layout (the flat aidlc-docs/ root is retired).
+  // Seed the PER-INTENT workspace layout.
   // The record state + intents.json are COMMITTED so the git worktree (branched
   // from main) carries them; the active-intent cursor + audit shards / runtime
   // graph stay gitignored (per-user / machine-local), so a worktree resolves the
@@ -271,19 +262,16 @@ type Graph = any;
 // biome-ignore lint/suspicious/noExplicitAny: a stage row / instance is arbitrary compiled JSON
 type StageRow = any;
 
-/** Load the compiled main runtime-graph.json (per-intent record), or null. */
 function loadGraph(proj: string): Graph | null {
   const p = join(recordDir(proj), "runtime-graph.json");
   if (!existsSync(p)) return null;
   return JSON.parse(readFileSync(p, "utf-8"));
 }
 
-/** The code-generation stage row from a compiled graph. */
 function codegenStage(graph: Graph): StageRow | undefined {
   return graph?.stages?.find((s: StageRow) => s.stage_slug === "code-generation");
 }
 
-/** Count `**Event**: <EVENT>` occurrences across main audit shards (the .sh's grep -c). */
 function countEvent(proj: string, event: string): number {
   return readMainAudit(proj)
     .split("\n")
@@ -295,8 +283,7 @@ const TEST_TIMEOUT = NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS; // real git + multip
 describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-bolt-sensor-failures.sh, plan 8)", () => {
   // ===========================================================================
   // Cases 1-3 — End-to-end 3-Bolt batch with a sensor failure on `pay`.
-  // Shared project so the single expensive flow drives all three assertions
-  // (same as the .sh, which ran the batch once then asserted 1/2/3).
+  // Shared project so the single expensive flow drives all three assertions.
   // ===========================================================================
   let batchProj: string;
   let batchGraph: Graph;
@@ -306,12 +293,12 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     batchProj = makeProj();
     for (const slug of ["pay", "auth", "cart"]) {
       const c = wtCreate(batchProj, slug);
-      expect(c.status).toBe(0); // worktree create succeeded (sibling-refusal not tripped)
+      expect(c.status).toBe(0);
       const s = boltStart(batchProj, slug);
       expect(s.status).toBe(0);
     }
 
-    // Simulate the milestone 10 hook + milestone 9 dispatcher: a SENSOR_FIRED + SENSOR_FAILED
+    // Simulate the hook + dispatcher: a SENSOR_FIRED + SENSOR_FAILED
     // pair written to pay's WORKTREE audit. Direct-append (deterministic) so we
     // verify the audit-merge + compile propagation, not any sensor predicate.
     const payWt = worktreePath(batchProj, fixtureIntentId8(batchProj), "pay");
@@ -321,8 +308,7 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     // main-token shard. Without this the worktree mints its OWN clone-id → the
     // SENSOR rows land in a sibling shard audit-merge never reads, and the rows
     // never reach main (audit-merge merges only the single main-token shard's
-    // post-fork delta). This is the per-clone-shard analog of the old flat layout,
-    // where the worktree had ONE audit.md both the fork-copy and the append shared.
+    // post-fork delta).
     const mainCloneId = readFileSync(
       join(batchProj, "aidlc", ".aidlc-clone-id"),
       "utf-8",
@@ -343,7 +329,6 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
       ["Bolt slug", "pay"],
     ]);
 
-    // Complete all 3 in arbitrary order, then compile.
     expect(boltComplete(batchProj, "cart").status).toBe(0);
     expect(boltComplete(batchProj, "pay").status).toBe(0);
     expect(boltComplete(batchProj, "auth").status).toBe(0);
@@ -356,7 +341,7 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     const stage = codegenStage(batchGraph);
     expect(stage).toBeDefined();
     const slugs = (stage.instances ?? []).map((i: StageRow) => i.bolt);
-    expect(slugs).toEqual(["auth", "cart", "pay"]); // length 3, alphabetical-by-slug
+    expect(slugs).toEqual(["auth", "cart", "pay"]);
   }, TEST_TIMEOUT);
 
   test("2: sensors advisory — SENSOR_FAILED in main audit yet all 3 instances approved", () => {
@@ -364,9 +349,7 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     const stage = codegenStage(batchGraph);
     const instances = stage.instances ?? [];
     expect(instances.length).toBe(3);
-    // SENSOR_FAILED ≠ Bolt failure: every instance still outcome:approved.
     expect(instances.every((i: StageRow) => i.outcome === "approved")).toBe(true);
-    // The merged worktree audit carries ≥1 SENSOR_FAILED row into main.
     expect(countEvent(batchProj, "SENSOR_FAILED")).toBeGreaterThanOrEqual(1);
   }, TEST_TIMEOUT);
 
@@ -381,9 +364,6 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     ).toBe(true);
   }, TEST_TIMEOUT);
 
-  // ===========================================================================
-  // Case 4 — Bolt failure rollup: pay aborts mid-Bolt (abort --discard).
-  // ===========================================================================
   test("4: Bolt failure rollup — pay abort --discard => instance pay:failed + parent:failed", () => {
     const proj = makeProj();
     for (const slug of ["auth", "cart", "pay"]) {
@@ -402,24 +382,19 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     expect(slugs).toEqual(["auth", "cart", "pay"]);
     const pay = (stage.instances ?? []).find((i: StageRow) => i.bolt === "pay");
     expect(pay?.outcome).toBe("failed");
-    // Any failed instance rolls the parent up to failed.
     expect(stage.outcome).toBe("failed");
   }, TEST_TIMEOUT);
 
-  // ===========================================================================
-  // Case 5 — Idempotent re-merge: second complete --merge errors at state-merge.
-  // ===========================================================================
   test("5: idempotent re-merge — second complete --merge errors 'already merged' at state-merge", () => {
     const proj = makeProj();
     expect(wtCreate(proj, "solo").status).toBe(0);
     expect(boltStart(proj, "solo").status).toBe(0);
-    expect(boltComplete(proj, "solo").status).toBe(0); // first merge succeeds
+    expect(boltComplete(proj, "solo").status).toBe(0);
 
-    const second = boltComplete(proj, "solo"); // second errors
-    // STRONGER than the .sh's two independent greps: both the "already merged"
-    // cause AND the state-merge-failed reason ride on the SAME failJson
-    // envelope (fragment-merge never reached because state-merge is first in
-    // the chain). Exit is non-zero (failJson → process.exit(1)).
+    const second = boltComplete(proj, "solo");
+    // Both the "already merged" cause AND the state-merge-failed reason ride on the
+    // SAME failJson envelope (fragment-merge never reached because state-merge is
+    // first in the chain). Exit is non-zero (failJson -> process.exit(1)).
     expect(second.out).toContain("already merged");
     expect(second.out).toContain("state-merge-failed");
     expect(second.status).not.toBe(0);
@@ -442,13 +417,13 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     // Plant the exact lock-dir path aidlc-lib.ts auditLockDir() computes. The
     // merge keys the PER-INTENT bucket (the active-intent cursor resolves the lone
     // seeded record), NOT the workspace sentinel — they hash to distinct dirs, so
-    // a sentinel lock would not block the per-intent state-merge. STRONGER than the
-    // .sh's inline crypto snippet: call the real function so the test breaks if the
-    // lock-path contract changes. The lock is a DIRECTORY (mkdirSync atomicity).
+    // a sentinel lock would not block the per-intent state-merge. Call the real
+    // function so the test breaks if the lock-path contract changes. The lock is a
+    // DIRECTORY (mkdirSync atomicity).
     const lockDir = auditLockDir(proj, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
     mkdirSync(lockDir, { recursive: true });
     // Stamp the planted lock with a LIVE, FRESH owner (this test-runner process)
-    // so the P3 stale-lock reaper correctly REFUSES to reclaim it — a live,
+    // so the stale-lock reaper correctly REFUSES to reclaim it - a live,
     // under-threshold holder is never robbed. Without the stamp, a bare lock dir
     // ages past the unstamped-grace window during the merge's retry budget and
     // the reaper steals it (the reaper's whole point), letting the merge succeed
@@ -546,10 +521,6 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     //   BOLT_COMPLETED → STATE_MERGED → AUDIT_MERGED → BOLT_FAILED(fragment-merge-failed)
     expect(comp.out).toContain("fragment-merge-failed");
     expect(countEvent(softGapProj, "AUDIT_MERGED")).toBeGreaterThanOrEqual(1);
-    // STRONGER than the .sh's grep -B5: assert the BOLT_FAILED block that
-    // carries the fragment-merge-failed reason actually exists. Split into
-    // per-block units and find the one mentioning the reason; confirm it is a
-    // BOLT_FAILED row.
     const auditBody = readMainAudit(softGapProj);
     const blocks = auditBody.split(/\n---\n/);
     const failBlock = blocks.find((b) => b.includes("fragment-merge-failed"));
@@ -561,9 +532,6 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     if (existsSync(`${softGapFrag}.bak`)) renameSync(`${softGapFrag}.bak`, softGapFrag);
   }, TEST_TIMEOUT);
 
-  // ===========================================================================
-  // Case 8 — Determinism: re-compile after the chaos is byte-equivalent.
-  // ===========================================================================
   test("8: determinism (L11) — re-compile after BOLT_FAILED + recovery is byte-equivalent", () => {
     expect(softGapProj).toBeDefined(); // case 7 ran first within this describe
     // Simulate the defense-in-depth fragment cleanup (git worktree remove).

@@ -1,14 +1,14 @@
-// bun-junit-to-meta.test.ts — own bun:test for the D7 glue tool.
+// bun-junit-to-meta.test.ts - own bun:test for the glue tool.
 //
 // Asserts on INLINE FIXTURE XML strings (not by spawning bun), shaped exactly
-// like the real bun 1.2.22 JUnit output probed this session:
+// like the real bun 1.2.22 JUnit output:
 //   - ROOT <testsuites ... tests=.. failures=.. skipped=.. time="<float>">
 //   - per-FILE <testsuite> wrapper (time="0")
 //   - nested per-describe() <testsuite> blocks
 //   - failing <testcase> carries <failure type="AssertionError" />
 //   - skipped <testcase> carries <skipped />
 //
-// Cases covered (per the brief):
+// Cases covered:
 //   1. 3 testcases / 1 failure   => TESTS=3 FAILED=1 STATUS=FAIL
 //   2. 5 testcases / 3 failures  => TESTS=5 FAILED=3 STATUS=FAIL
 //   3. N testcases / 0 failures  => FAILED=0 STATUS=PASS
@@ -28,7 +28,6 @@ import {
   renderMeta,
 } from "./bun-junit-to-meta.ts";
 
-// Module-scope round-trip helper used by the W2-regression describes below.
 // Builds a .meta (optionally with a bunRc), writes it to a FIXED-name file in a
 // temp dir (so a hostile `name` exercises NAME-CONTENT sanitization, not a
 // hostile filename), and `source`s it in a clean bash to prove safety.
@@ -39,7 +38,7 @@ afterEach(() => {
 function writeAndSourceRc(xml: string, name: string, bunRc: number | null) {
   const dir = mkdtempSync(join(tmpdir(), "junit-meta-rc-"));
   _rcTmps.push(dir);
-  const metaPath = join(dir, "out.meta"); // fixed, safe filename
+  const metaPath = join(dir, "out.meta");
   const content = renderMeta(buildMeta(xml, name, bunRc));
   writeFileSync(metaPath, content, "utf8");
   const out = execFileSync(
@@ -52,7 +51,6 @@ function writeAndSourceRc(xml: string, name: string, bunRc: number | null) {
 
 // ── Fixtures: byte-shaped like real bun 1.2.22 output ───────────────────────
 
-// 3 testcases, 1 failure (one nested describe block).
 const XML_3_1 = `<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="bun test" tests="3" assertions="3" failures="1" skipped="0" time="0.012345">
   <testsuite name="t.test.ts" file="t.test.ts" tests="3" assertions="3" failures="1" skipped="0" time="0" hostname="h">
@@ -66,7 +64,6 @@ const XML_3_1 = `<?xml version="1.0" encoding="UTF-8"?>
   </testsuite>
 </testsuites>`;
 
-// 5 testcases, 3 failures.
 const XML_5_3 = `<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="bun test" tests="5" assertions="5" failures="3" skipped="0" time="0.020000">
   <testsuite name="t.test.ts" file="t.test.ts" tests="5" assertions="5" failures="3" skipped="0" time="0" hostname="h">
@@ -84,8 +81,7 @@ const XML_5_3 = `<?xml version="1.0" encoding="UTF-8"?>
   </testsuite>
 </testsuites>`;
 
-// 9 testcases, 0 failures — the real t106.none.test.ts shape (two describe
-// blocks of 4 + one of 1), transcribed from the probe this session.
+// 9 testcases, 0 failures - two describe blocks of 4 + one of 1.
 const XML_9_0 = `<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="bun test" tests="9" assertions="14" failures="0" skipped="0" time="0.028891">
   <testsuite name="tests/unit/t106.none.test.ts" file="tests/unit/t106.none.test.ts" tests="9" assertions="14" failures="0" skipped="0" time="0" hostname="h">
@@ -210,7 +206,6 @@ describe("deriveName strips a single trailing extension from the .meta path", ()
 describe("renderMeta emits the EXACT 6-line .meta shape", () => {
   test("6 lines in NAME/STATUS/TESTS/FAILED/DURATION/RC order, KEY=value", () => {
     const out = renderMeta(buildMeta(XML_3_1, "t106.none"));
-    // Trailing newline after the 6th line; split drops the final empty token.
     const lines = out.split("\n");
     expect(lines[lines.length - 1]).toBe(""); // file ends with a newline
     const body = lines.slice(0, -1);
@@ -271,10 +266,9 @@ describe("emitted .meta is bash-sourceable and round-trips", () => {
   });
 });
 
-// ── W2 adversarial-verify regressions: the two defects the skeptic found ─────
-// (1) import/collection crash: bun rc!=0 + NO xml must be FAIL, not vacuous PASS
-//     (check 4 — the load-bearing D7 break). (2) hostile NAME/DURATION must not
-//     break `source` (check 3 — robustness against the runner's unquoted source).
+// Regressions:
+// (1) import/collection crash: bun rc!=0 + NO xml must be FAIL, not vacuous PASS.
+// (2) hostile NAME/DURATION must not break `source`.
 describe("bun-rc channel — import-crash must not vacuously PASS (check 4)", () => {
   test("nonzero bunRc + empty XML => FAIL, FAILED=1, RC mirrors bunRc", () => {
     const m = buildMeta("", "t500.none", 1);
@@ -292,7 +286,6 @@ describe("bun-rc channel — import-crash must not vacuously PASS (check 4)", ()
   });
 
   test("omitted bunRc preserves original XML-only behaviour (back-compat)", () => {
-    // No third arg → identical to the pre-fix happy path; existing tests rely on this.
     const m = buildMeta(XML_9_0, "t106.none");
     expect(m.status).toBe("PASS");
     expect(m.failed).toBe(0);
@@ -300,7 +293,6 @@ describe("bun-rc channel — import-crash must not vacuously PASS (check 4)", ()
   });
 
   test("nonzero bunRc does NOT mask a real parsed failure count", () => {
-    // XML already shows 3 failures; bunRc=1 agrees — FAILED stays 3, not clobbered to 1.
     const m = buildMeta(XML_5_3, "t106.none", 1);
     expect(m.status).toBe("FAIL");
     expect(m.failed).toBe(3);
@@ -324,7 +316,7 @@ describe("source-safety — hostile NAME/DURATION cannot execute (check 3)", () 
   test("hostile NAME is sanitized to [A-Za-z0-9._-]; source cannot execute it", () => {
     // A name engineered to break out of `source`: spaces, ;, backticks, $().
     // The security property is that the SHELL METACHARACTERS are neutralized so
-    // nothing executes — NOT that the literal letters "PWNED" disappear (they
+    // nothing executes - NOT that the literal letters "OWNED" disappear (they
     // survive harmlessly as part of the inert NAME token). Proof of no-execution:
     // `id` never ran, so no uid=/gid= output appears, and NAME is one safe token.
     const hostile = "evil name=x; echo OWNED `id` $(id)";

@@ -9,7 +9,8 @@
 // reentrant lock and prove nothing about two PROCESSES).
 //
 // Subject under test: dist/claude/.claude/tools/aidlc-knowledge.ts (the SHIPPED
-// distributable), so a guard reverted only in core/ cannot pass.
+// distributable); a guard reverted only in core/ reaches it only once dist is
+// regenerated, which the test runner does first.
 //
 // What each invariant prevents, and why the mechanism is what it is:
 //
@@ -27,9 +28,11 @@
 //   passed `undefined` and filed into `intents/<slug>/audit/`. The fixture below
 //   therefore ALWAYS creates an intent first; without one, the test cannot fail.
 //
-//   EXTRACTION OUTSIDE THE LOCK. The lock's acquire budget is ~5s, so holding it
-//   across a multi-second external parse would make UNRELATED commands fail to
-//   acquire rather than merely wait.
+//   EXTRACTION OUTSIDE THE LOCK. The lock's acquire budget is bounded, so
+//   holding it across a long external parse would make UNRELATED commands fail
+//   to acquire rather than merely wait. onboard's own commit uses the larger
+//   LONG_SUBPROCESS_TIMEOUT_MS budget, since concurrent onboards queue behind
+//   index publications and audit appends.
 //
 //   DIGEST RE-VALIDATION INSIDE IT. Without it, a document edited during staging
 //   is indexed with the new digest and the OLD text -- a silent correctness
@@ -243,7 +246,6 @@ function waitForFile(marker: string): string {
   return `for i in $(seq 1 ${polls}); do [ -f ${JSON.stringify(marker)} ] && break; sleep 0.05; done; [ -f ${JSON.stringify(marker)} ] || exit 91`;
 }
 
-/** Every audit shard under the space, with its contents. */
 function auditShards(p: string): { path: string; body: string }[] {
   const out: { path: string; body: string }[] = [];
   const walk = (dir: string): void => {
@@ -538,9 +540,8 @@ describe("t298 the journal: absent-or-complete, and collectable", () => {
     const p = projectWithIntent();
     doc(p, "a.md");
     onboard(p, SPACE, undefined, NOW);
-    // Simulate a crash between stage and rename: a txn dir referenced by no row,
-    // with NO liveness stamp (a real crash never gets to write one past
-    // process death — or this predates the stamp entirely) and aged past the
+    // Simulate a crash after the txn dir was created but before its liveness
+    // stamp landed: a txn dir referenced by no row, with NO stamp, aged past the
     // unstamped grace, so the collector must treat it as dead rather than as a
     // live writer mid-acquire.
     const orphan = journalTxnDir(p, SPACE, "019fda80-0000-7000-8000-000000000001");
@@ -553,10 +554,10 @@ describe("t298 the journal: absent-or-complete, and collectable", () => {
   });
 
   test("a LIVE writer's staging dir (fresh stamp, this process's own pid) is left alone", () => {
-    // The invariant this round adds: `collectStaleJournals` must not delete a
-    // txn dir whose stamp names a PID that is still alive. Using this test
-    // process's own pid is the simplest live PID available, and matches the
-    // real shape -- onboard's OWN process id is what the stamp records.
+    // The invariant: `collectStaleJournals` must not delete a txn dir whose stamp
+    // names a PID that is still alive. Using this test process's own pid is the
+    // simplest live PID available, and matches the real shape -- onboard's OWN
+    // process id is what the stamp records.
     const p = projectWithIntent();
     doc(p, "a.md");
     onboard(p, SPACE, undefined, NOW);
@@ -586,8 +587,8 @@ describe("t298 the journal: absent-or-complete, and collectable", () => {
 
   test("collecting journals never touches a PUBLISHED document", () => {
     // A journal dir is named by txn id and referenced by no index row, which is
-    // what makes removal unconditionally safe -- but only if the collector cannot
-    // wander out of .journal/.
+    // what makes removal safe once its writer is dead -- but only if the collector
+    // cannot wander out of .journal/.
     const p = projectWithIntent();
     doc(p, "a.md");
     const { indexed } = onboard(p, SPACE, undefined, NOW);
@@ -602,13 +603,13 @@ describe("t298 the journal: absent-or-complete, and collectable", () => {
   });
 
   test("a txn dir stamped by a REAL, DIFFERENT, still-running process survives a concurrent sync", async () => {
-    // The round-9 review finding, driven cross-process rather than by trusting
-    // `isPidAlive` against this test's own pid (which is trivially true and
-    // proves less). A second real bun process holds a txn dir open -- mkdirs
-    // it and stamps it with ITS OWN pid, exactly like onboard's staging phase
-    // does, then waits -- while THIS process's `sync` (via `collectStaleJournals`)
-    // runs concurrently. The live txn dir must survive; once the holder exits,
-    // the SAME dir (now genuinely stale) must be collectable.
+    // Driven cross-process rather than by trusting `isPidAlive` against this
+    // test's own pid (which is trivially true and proves less). A second real bun
+    // process holds a txn dir open -- mkdirs it and stamps it with ITS OWN pid,
+    // exactly like onboard's staging phase does, then waits -- while THIS
+    // process's `sync` (via `collectStaleJournals`) runs concurrently. The live txn
+    // dir must survive; once the holder exits, the SAME dir (now genuinely stale)
+    // must be collectable.
     const p = projectWithIntent();
     doc(p, "a.md");
 
@@ -713,16 +714,15 @@ describe("t298 the digest is re-validated INSIDE the lock", () => {
     // Driven by a REAL race rather than a mock, but a race whose ORDER is fixed:
     // a second process takes the audit lock and holds it until the mutator says
     // it has written, so our onboard stages, blocks on acquire, and reaches its
-    // commit-time digest re-check only AFTER the file has been rewritten. The
-    // earlier version held for a flat 3s and hoped the mutator's own 1.5s timer
-    // landed inside the window; when the subject won that race instead it
-    // committed correctly and the assertion below compared its row against bytes
-    // written afterwards.
+    // commit-time digest re-check only AFTER the file has been rewritten. Holding
+    // for a flat 3s and hoping the mutator's own 1.5s timer landed inside the
+    // window would not do: when the subject won that race it committed correctly
+    // and the assertion below compared its row against bytes written afterwards.
     //
-    // Two earlier attempts failed and are worth recording: mocking `readIndex`
-    // never entered the window (the guard came out UNPINNED -- removing it changed
-    // nothing), and mocking `readRegularFileNoFollowOrThrow` recursed forever
-    // because the mock's fallback resolved to the mock itself.
+    // Two rejected approaches: mocking `readIndex` never entered the window (the
+    // guard came out UNPINNED -- removing it changed nothing), and mocking
+    // `readRegularFileNoFollowOrThrow` recursed forever because the mock's
+    // fallback resolved to the mock itself.
     const p = projectWithIntent();
     const abs = doc(p, "a.md", "original\n");
 
@@ -757,13 +757,12 @@ describe("t298 the digest is re-validated INSIDE the lock", () => {
     });
     const out = (r.stdout ?? "") + (r.stderr ?? "");
 
-    // The mutation is now guaranteed to precede the commit, so the refusal is the
-    // expected path. Both branches stay, because ordering fixes only the half that
-    // was broken: the mutation can still land BEFORE staging finishes (a slow
-    // onboard startup under load), and then onboard legitimately stages the NEW
-    // bytes and indexes them consistently. What must hold in every case is the one
-    // contract asserted here: a row on disk matches the bytes on disk. A
-    // stale-content row is the bug.
+    // The mutation is guaranteed to precede the commit, so the refusal is the
+    // expected path. Both branches stay, because the mutation can still land
+    // BEFORE staging finishes (a slow onboard startup under load), and then
+    // onboard legitimately stages the NEW bytes and indexes them consistently.
+    // What must hold in every case is the one contract asserted here: a row on
+    // disk matches the bytes on disk. A stale-content row is the bug.
     if (out.includes("changed while it was being staged")) {
       expect(existsSync(indexPath(p, SPACE)), "a refused txn writes no index").toBe(false);
     }
@@ -882,19 +881,17 @@ describe("t298 concurrency: N parallel onboards lose no row", () => {
     // test -- and the failure mode is a LOST row, not an error, because each
     // process would write back an index copy read before the lock.
     //
-    // 12, not 4: an earlier version of this test launched only 4 processes, and
-    // they did NOT reliably contend -- process-startup jitter let them finish
-    // one at a time without ever overlapping on the lock, so it passed even
-    // with withAuditLock removed. 12 concurrent launches is the number that
-    // made contention observable: removing withAuditLock now reliably drops
-    // rows below 12.
+    // 12, not 4: with only 4 processes, startup jitter let them finish one at a
+    // time without ever overlapping on the lock, so the test passed even with
+    // withAuditLock removed. 12 concurrent launches is the number that made
+    // contention observable: removing withAuditLock reliably drops rows below 12.
     const p = projectWithIntent();
     const names = Array.from({ length: 12 }, (_, i) => `f${i}`);
     for (const n of names) doc(p, `${n}.md`, `${n}\n`);
 
     // Launch all twelve native Bun children before waiting for any of them.
     // Each keeps its own stdout/stderr/exit files. Native argv arrays also avoid
-    // the Windows quoting failure in the former generated Bash batch.
+    // the Windows quoting failure in a generated Bash batch.
     const tool = join(AIDLC_TOOLS, "aidlc-knowledge.ts");
     const childOut = (i: number): string => join(p, `child-${i}.out`);
     const childErr = (i: number): string => join(p, `child-${i}.err`);
@@ -1026,14 +1023,14 @@ describe("t298 an atomic replace is never read as a hardlink (#1369)", () => {
 
 describe("t298 an EDITED row is protected from the same race as a fresh one", () => {
   test("a row tombstoned by a concurrent process, mid-edit-commit, is left tombstoned -- not resurrected in a contradictory state", () => {
-    // Same race shape as "the digest is re-validated INSIDE the lock" above,
-    // but on the EDIT path this story adds: pass 1 evidences identity by a LIVE
-    // match at the same path, then blocks waiting for the lock. While it
-    // waits, a concurrent process (standing in for a real `sync` that observed
-    // the original removed) TOMBSTONES that same row. If the commit blindly
-    // `Object.assign`s the refreshed fields onto the now-tombstoned row, the
-    // result is self-contradictory: `removed_at` set AND a fresh `content`
-    // pointing at newly-written text -- a state no reader agrees on.
+    // Same race shape as "the digest is re-validated INSIDE the lock" above, but
+    // on the EDIT path: pass 1 evidences identity by a LIVE match at the same
+    // path, then blocks waiting for the lock. While it waits, a concurrent
+    // process (standing in for a real `sync` that observed the original removed)
+    // TOMBSTONES that same row. If the commit blindly `Object.assign`s the
+    // refreshed fields onto the now-tombstoned row, the result is
+    // self-contradictory: `removed_at` set AND a fresh `content` pointing at
+    // newly-written text -- a state no reader agrees on.
     const p = projectWithIntent();
     const abs = doc(p, "a.md", "v1\n");
     onboard(p, SPACE, undefined, NOW);
@@ -1051,11 +1048,11 @@ describe("t298 an EDITED row is protected from the same race as a fresh one", ()
     // tombstoned by someone else -- the shape of the race, not its trigger.
     //
     // The tombstone is what releases the holder's lock, so "ALREADY been
-    // tombstoned" is now true by construction. It used to be true only when the
-    // mutator's 1.5s timer beat onboard's commit; when onboard won, it committed
-    // the edited digest FIRST, the mutator then tombstoned that already-updated
-    // row, and the assertion below read a tombstone carrying the edited digest --
-    // the exact contradiction it exists to catch, produced by the test itself.
+    // tombstoned" is true by construction. Relying on the mutator's 1.5s timer
+    // to beat onboard's commit would not do: when onboard won, it committed the
+    // edited digest FIRST, the mutator then tombstoned that already-updated row,
+    // and the assertion below read a tombstone carrying the edited digest -- the
+    // exact contradiction it exists to catch, produced by the test itself.
     const mutator = join(p, "mutator.ts");
     writeFileSync(
       mutator,
@@ -1199,17 +1196,15 @@ describe("t298 the index is read FRESH inside the lock", () => {
 describe("t298 the journal is actually GITIGNORED, not just described as such", () => {
   test("git check-ignore agrees the journal path is ignored, in every harness tree", () => {
     // The code comment claims ".journal/ is GITIGNORED" and the design calls that
-    // load-bearing -- but a comment is not a rule. This was shipped WRONG once:
-    // the claim existed in three places and the ignore line existed in none, so
-    // `git add -A` after a crashed onboard would have committed a staged
-    // transaction dir as if it were work.
+    // load-bearing -- but a comment is not a rule. Without the ignore line,
+    // `git add -A` after a crashed onboard would commit a staged transaction dir
+    // as if it were work.
     //
     // Asserted with `git check-ignore`, not a grep for the pattern text: a grep
     // proves a string is present, while check-ignore proves git AGREES -- which
     // is what a user's `git add` actually consults.
     // DERIVED from harness/, not listed: a hardcoded list cannot fail for a
-    // harness it has never heard of. Upstream added `copilot` mid-slice and a
-    // five-name list here stayed green while that sixth tree went unchecked.
+    // harness it has never heard of.
     const harnesses = readdirSync(join(import.meta.dir, "..", "..", "harness"), {
       withFileTypes: true,
     })
@@ -1249,9 +1244,8 @@ describe("t298 the journal is actually GITIGNORED, not just described as such", 
 
 describe("t298 I16: no lock inversion", () => {
   test("a concurrent per-intent write and a space-level onboard BOTH complete", () => {
-    // The design's own acceptance criterion, which an earlier version of this
-    // file claimed without testing. Two locks taken in two orders across two
-    // processes is a textbook deadlock; the contract is that onboard takes the
+    // The design's own acceptance criterion: two locks taken in two orders across
+    // two processes is a textbook deadlock; the contract is that onboard takes the
     // SPACE lock only and never reaches for a per-intent one while holding it.
     //
     // The failure mode is a HANG, not an error -- so the assertion is that both
@@ -1357,7 +1351,6 @@ describe("t298 I12: every refusal's prescribed remedy actually repairs the state
     expect(r.status).not.toBe(0);
     const msg = (r.stdout ?? "") + (r.stderr ?? "");
     expect(msg).toMatch(/Copy it under/);
-    // Follow the instruction literally, then re-run.
     const target = join(documentsDir(p, SPACE), "elsewhere.md");
     execFileSync("cp", [outside, target], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     const after = spawnSync(
@@ -1547,7 +1540,7 @@ describe("t298 commit-time reconciliation and idempotent recovery", () => {
       .not.toThrow();
     const merged = readFileSync(shard, "utf-8");
     expect(merged).toContain("**Event**: STAGE_STARTED");
-    expect(merged.startsWith(original)).toBe(true); // append-only: nothing truncated
+    expect(merged.startsWith(original)).toBe(true);
   });
 
   test("same-second imported association events cannot outrank the current shard", () => {
@@ -1724,7 +1717,7 @@ describe("t298 commit-time reconciliation and idempotent recovery", () => {
   test.skipIf(process.platform !== "win32")("Windows native-path redaction and legal nested provenance converge", () => {
     const p = projectWithIntent();
     // Exercise the exact drive-qualified spellings as string data, not invalid
-    // filenames. The POSIX literal-filename case above remains unchanged in scope.
+    // filenames.
     for (const spelling of [p, p.replaceAll("\\", "/")]) {
       expect(redactProjectDirPrefix(`documents/${spelling}/spec.txt`, p))
         .toBe("documents/<project-dir>/spec.txt");

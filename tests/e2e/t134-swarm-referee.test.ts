@@ -118,18 +118,16 @@ afterAll(() => {
 }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 /**
- * make_swarm_fixture (t134.sh:80-95): a real git repo on `main` in Construction
- * phase with the framework gitignore set, committed at HEAD so the worktree fork
- * carries it (and so `git worktree add` does NOT byte-copy audit.md /
- * runtime-graph.json into the child).
+ * A real git repo on `main` in Construction phase with the framework gitignore
+ * set, committed at HEAD so the worktree fork carries it (and so `git worktree
+ * add` does NOT byte-copy audit shards / runtime-graph.json into the child).
  */
 function makeSwarmFixture(units: string[] = []): string {
   const proj = setupWorktreeFixture();
   fixtures.push(proj);
   // Seed Construction-phase state into the per-intent record + a fresh audit log
-  // shard (.sh: cp state + `printf "# AI-DLC Audit Log\n"`). The record state +
-  // intents.json commit (so the worktree fork carries them); cursors + audit
-  // shards stay machine-local.
+  // shard. The record state + intents.json commit (so the worktree fork carries
+  // them); cursors + audit shards stay machine-local.
   writeFileSync(
     seededStateFile(proj),
     readFileSync(join(FIXTURES_DIR, "state-construction.md"), "utf-8"),
@@ -169,7 +167,7 @@ function makeSwarmFixture(units: string[] = []): string {
   // workflow start the approval rests on is part of every prepared attempt.
   approveVerificationCommand(proj, "test -f impl.txt");
   // Stage everything and amend the seed commit so HEAD carries the gitignore +
-  // state, mirroring the .sh's `git add -A && commit --amend --no-edit`.
+  // state.
   const git = (args: string[]): void => {
     spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
   };
@@ -187,7 +185,6 @@ function makeSwarmFixture(units: string[] = []): string {
   return proj;
 }
 
-/** The per-unit worktree path the swarm derives from its internal Bolt slug. */
 function wtPath(proj: string, unit: string): string {
   return worktreePath(proj, fixtureIntentId8(proj), boltSlugForUnit(unit));
 }
@@ -198,10 +195,10 @@ interface RefResult {
 }
 
 /**
- * run_ref (t134.sh:103-112): drive a referee subcommand against a real project,
- * capturing stdout + the exit code without letting a non-zero exit abort. The
- * tool's intended non-zero exits (check red = 1, finalize baton = 2) are part of
- * the contract, so we keep the status.
+ * Drive a referee subcommand against a real project, capturing stdout + the exit
+ * code without letting a non-zero exit abort. The tool's intended non-zero exits
+ * (check red = 1, finalize baton = 2) are part of the contract, so we keep the
+ * status.
  */
 function runRef(
   proj: string,
@@ -297,7 +294,6 @@ const auditBody = (p: string): string => {
   return names.map((n) => readFileSync(join(dir, n), "utf-8")).join("\n");
 };
 
-/** Exact `**Event**: <type>` row count across the audit shards (STRONGER than grep -q). */
 function eventCount(p: string, event: string): number {
   return auditBody(p)
     .split("\n")
@@ -356,19 +352,17 @@ function prepareAsLegacy(proj: string, unit: string): void {
 describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swarm-referee.sh, plan 13)", () => {
   // ===========================================================================
   // Cases 1-4 + 6 share ONE fixture: prepare + stateless check + finalize on a
-  // converged unit, mirroring the .sh's first PROJ block.
+  // converged unit.
   // ===========================================================================
   test("1 prepare: forks a worktree per unit + emits SWARM_STARTED", () => {
     const proj = makeSwarmFixture(["alpha", "beta"]);
     const r = runRef(proj, ["prepare", "--batch", "1", "--units", "alpha", "--base", "main"]);
-    // .sh grepped `"ok": true` — but handlePrepare's envelope carries no top-level
-    // `ok` field; the .sh's grep matched the nested per-unit `"ok": true` row.
-    // Assert that real contract: prepare succeeded (exit 0), the batch started,
-    // and the unit forked.
+    // handlePrepare's envelope carries no top-level `ok` field; the per-unit row
+    // carries `"ok": true`. Assert that real contract: prepare succeeded (exit 0),
+    // the batch started, and the unit forked.
     expect(r.rc).toBe(0);
     const env = JSON.parse(r.out);
     expect(env.units.find((u: { unit: string }) => u.unit === "alpha")?.ok).toBe(true);
-    // SWARM_STARTED fired exactly once for the batch.
     expect(eventCount(proj, "SWARM_STARTED")).toBe(1);
     const startedBlock = auditBody(proj)
       .split("\n---\n")
@@ -988,9 +982,8 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   );
 
-  // Cases 2, 3, 4, 6 are asserted inside test 1's shared-fixture flow above
-  // (the .sh ran them sequentially against the same PROJ). Named here for the
-  // 1:1 parity map; their expects live in "1 prepare ...".
+  // Cases 2, 3, 4, 6 are asserted inside test 1's shared-fixture flow above.
+  // The standalone cases below re-prove their behavior on fresh fixtures.
   test("2 check: genuinely converged unit -> exit 0, converged:true", () => {
     // Covered by the case-2 block in "1 prepare ..." (shared fixture). Re-prove
     // standalone: a fresh fixture, prepared + impl-staged unit checks green.
@@ -1078,13 +1071,10 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       "test -f win.txt",
     ]);
     const env = JSON.parse(f.out);
-    // STRONGER than the .sh's `grep -A2`: locate the parsed `lie` row and assert
-    // status === "failed" with the tool's own re-verify reason "error".
     const lie = env.units.find((u: { unit: string }) => u.unit === "lie");
     expect(lie).toBeDefined();
     expect(lie.status).toBe("failed");
     expect(lie.reason).toBe("error");
-    // The full audit baton trail fired for the failed unit.
     expect(eventCount(proj, "SWARM_UNIT_FAILED")).toBeGreaterThanOrEqual(1);
     expect(eventCount(proj, "SWARM_BATON_RETURNED")).toBeGreaterThanOrEqual(1);
 
@@ -1097,9 +1087,8 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("9 finalize mixed batch: 1 converged + 1 failed; SWARM_COMPLETED; exit 2", () => {
-    // The .sh asserted cases 7 + 9 on a single finalize run; re-prove case 9
-    // standalone on a fresh fixture so the tally invariant is independently
-    // anchored.
+    // Re-prove case 9 standalone on a fresh fixture so the tally invariant is
+    // independently anchored.
     const proj = makeSwarmFixture(["wn", "le"]);
     runRef(proj, ["prepare", "--batch", "2", "--units", "wn,le", "--base", "main"]);
     writeFileSync(join(wtPath(proj, "wn"), "wn.txt"), "done\n");
@@ -1178,7 +1167,6 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       "--degraded-from",
       "ultracode",
     ]);
-    // SWARM_DEGRADED fired, and it records the requested driver (ultracode).
     expect(eventCount(proj, "SWARM_DEGRADED")).toBe(1);
     expect(auditBody(proj)).toContain("**Requested driver**: ultracode");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -1237,7 +1225,6 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(stuck).toBeDefined();
     // The typed attribution lands in the envelope (NOT the cap-exhausted default).
     expect(stuck.reason).toBe("unsatisfiable");
-    // ...and in the SWARM_UNIT_FAILED audit row's Reason field.
     expect(auditBody(proj)).toContain("**Reason**: unsatisfiable");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -1319,12 +1306,10 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     // Exit 2: the merge failure demands the baton back.
     expect(f.rc).toBe(2);
     const env = JSON.parse(f.out);
-    // The unit genuinely converged (envelope row + tally say so)...
     expect(env.converged).toBe(1);
     expect(env.units.find((u: { unit: string }) => u.unit === "orphan")?.status).toBe(
       "converged",
     );
-    // ...and the failure envelope names it as unmerged.
     expect(env.merge_failures.map((m: { unit: string }) => m.unit)).toEqual(["orphan"]);
     // The load-bearing advance signal did NOT fire — and no false FAILED row either.
     expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);

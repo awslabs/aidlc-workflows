@@ -10,22 +10,21 @@
 // walks unit-major instead: for each unit in Bolt build order (outer), for each
 // design stage in graph order (inner), it emits the FIRST uncovered (stage, unit)
 // pair with the gate suppressed (false), so one unit's design documents are
-// authored consecutively - and, since the walk's block was widened to include
-// code-generation, the unit is BUILT - before the next unit begins. The
-// per-stage gates are UNCHANGED: they fire late, in stage order, once the whole
-// (stage x unit) grid is covered (the fully-covered walk delegates to the
-// stage-major pick === null branch, presenting the current stage's real gate on
-// the last unit; handleApprove then advances to the next block stage, whose
-// next re-emits its gate, so the gates cascade). t272 pins the code-generation
-// half of the walk. The early-approve per-unit coverage guard is unchanged.
+// authored consecutively - and the unit is BUILT - before the next unit begins.
+// The per-stage gates fire late, in stage order, once the whole (stage x unit)
+// grid is covered (the fully-covered walk delegates to the stage-major pick ===
+// null branch, presenting the current stage's real gate on the last unit;
+// handleApprove then advances to the next block stage, whose next re-emits its
+// gate, so the gates cascade). t272 pins the code-generation half of the walk.
+// The early-approve per-unit coverage guard applies.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/tools/aidlc-orchestrate.ts):
 //   - readConstructionIteration (strict read; only "unit-major" activates it),
 //     constructionUnitMajorBlock, emitUnitMajorRunStage, and the emitForSlug
 //     routing branch (unit-major -> emitUnitMajorRunStage).
 //   - aidlc-state.ts set-construction-iteration (the knob's write path).
-// NONE are exported (the tools have zero exports), so the behaviour is observable
-// only on the JSON directive the spawned engine emits, MECHANISM = cli: SPAWN
+// NONE of these helpers are exported, so the behaviour is observable only on
+// the JSON directive the spawned engine emits, MECHANISM = cli: SPAWN
 // `bun aidlc-orchestrate.ts next|report` / `bun aidlc-state.ts
 // set-construction-iteration` and assert on the parsed output, the SAME process
 // boundary t186 (per-unit iteration) drives.
@@ -129,8 +128,7 @@ const REVIEW_ARTIFACTS: Record<string, string> = {
   "infrastructure-design": "cicd-pipeline",
 };
 // The walk's inner list in graph order: the four inline design stages, then
-// code-generation (mode: subagent, in the walk since the block filter was
-// widened per the original increment's follow-up).
+// code-generation (mode: subagent).
 const BLOCK = [
   "functional-design",
   "nfr-requirements",
@@ -215,7 +213,6 @@ ${iterationLine}
 `;
 }
 
-/** Mark `unit` COVERED for `slug` by writing each of its produces artifacts. */
 function coverUnit(proj: string, unit: string, slug: string): void {
   const dir = join(seededRecordDir(proj), "construction", unit, slug);
   mkdirSync(dir, { recursive: true });
@@ -224,12 +221,10 @@ function coverUnit(proj: string, unit: string, slug: string): void {
   }
 }
 
-/** Cover every (block stage x unit) pair (the fully-covered design grid). */
 function coverFullGrid(proj: string, units: string[]): void {
   for (const u of units) for (const s of BLOCK) coverUnit(proj, u, s);
 }
 
-/** Seed a fresh unit-major Construction project. Returns the proj dir. */
 function seedProject(
   iteration?: string,
   designBlockAction?: "EXECUTE" | "SKIP",
@@ -249,7 +244,6 @@ interface NextRun {
   stderr: string;
 }
 
-/** Run `aidlc-orchestrate.ts next`, capturing both its directive and diagnostics. */
 function runNextWithStderr(
   proj: string,
   enforceSummaryConfirmationGuard = false,
@@ -277,7 +271,6 @@ function runNext(proj: string): Directive {
   return runNextWithStderr(proj).directive;
 }
 
-/** Run `aidlc-orchestrate.ts report ...` and parse the emitted directive. */
 function runReport(proj: string, args: string[]): Directive {
   const r = spawnSync(BUN, [ORCH, "report", ...args, "--project-dir", proj], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -297,7 +290,6 @@ function runReport(proj: string, args: string[]): Directive {
   }
 }
 
-/** Run `aidlc-state.ts set-construction-iteration <value>`; return rc + output. */
 function setIteration(proj: string, value: string): { rc: number; out: string } {
   const r = spawnSync(
     BUN,
@@ -406,8 +398,6 @@ function seedStaleKindDependency(proj: string): void {
 }
 
 describe("t209 opt-in unit-major construction design iteration", () => {
-  // 1: empty coverage under unit-major -> the walk starts at the first unit, first
-  // block stage: functional-design/alpha, gate suppressed.
   test("1: empty grid emits functional-design/alpha, gate false", () => {
     const proj = seedProject("unit-major");
     seedBoltDag(proj, ["alpha", "beta"]);
@@ -432,11 +422,6 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.unit).toBe("alpha");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // 2: THE PIVOTAL ORDERING ASSERTION. With functional-design/alpha covered, the
-  // unit-major walk stays on alpha and moves to the NEXT block stage
-  // (nfr-requirements/alpha), NOT functional-design/beta (which is what
-  // stage-major would emit). One unit's design documents are authored
-  // consecutively.
   test("2: fd/alpha covered emits nfr-requirements/alpha (not functional-design/beta)", () => {
     const proj = seedProject("unit-major");
     seedBoltDag(proj, ["alpha", "beta"]);
@@ -453,8 +438,8 @@ describe("t209 opt-in unit-major construction design iteration", () => {
 
   // 3: THE TIME-TO-FIRST-CODE ASSERTION. After alpha's four design stages, the
   // walk emits code-generation/alpha - alpha is BUILT before beta's design
-  // begins. This is the widened block: the first code directive arrives after
-  // ONE unit's design documents, not after every unit's.
+  // begins. The first code directive arrives after ONE unit's design documents,
+  // not after every unit's.
   test("3: alpha's design covered emits code-generation/alpha (not functional-design/beta)", () => {
     const proj = seedProject("unit-major");
     seedBoltDag(proj, ["alpha", "beta"]);
@@ -469,8 +454,6 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // 3b: only after alpha is covered for ALL FIVE block stages (design + build)
-  // does the walk move to the next unit: functional-design/beta.
   test("3b: alpha fully covered incl. code-generation emits functional-design/beta", () => {
     const proj = seedProject("unit-major");
     seedBoltDag(proj, ["alpha", "beta"]);
@@ -497,8 +480,6 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.gate).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // 5: the early-approve coverage guard is unchanged. With beta uncovered,
-  // approving functional-design is refused by the existing per-unit guard.
   test("5: early approve while a unit is uncovered is refused", () => {
     const proj = seedProject("unit-major");
     seedBoltDag(proj, ["alpha", "beta"]);
@@ -515,17 +496,11 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.message).toContain("work items are not complete");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // 6: revision re-entry. From a fully-covered grid, deleting one artifact of
-  // nfr-design/alpha leaves the grid uncovered again; the next `next` re-enters the
-  // walk and emits EXACTLY that uncovered pair (nfr-design/alpha), gate false.
   test("6: a revision that uncovers nfr-design/alpha re-emits exactly that pair", () => {
     const proj = seedProject("unit-major");
     seedBoltDag(proj, ["alpha", "beta"]);
     coverFullGrid(proj, ["alpha", "beta"]);
-    // Remove one produces artifact of nfr-design/alpha (overwrite the dir with a
-    // partial set): rewrite it with all but the first artifact missing.
     const dir = join(seededRecordDir(proj), "construction", "alpha", "nfr-design");
-    // Delete one file by rewriting the directory contents minus one artifact.
     const { rmSync } = require("node:fs") as typeof import("node:fs");
     rmSync(join(dir, `${PRODUCES["nfr-design"][0]}.md`));
     const d = runNext(proj);
@@ -535,7 +510,6 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.gate).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // 7a: subcommand validation, a bogus value is rejected with a non-zero exit.
   test("7a: set-construction-iteration rejects an invalid value", () => {
     const proj = seedProject();
     const r = setIteration(proj, "bogus");
@@ -665,7 +639,6 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     return readAllAuditShards(proj).split(`**Event**: ${event}\n`).length - 1;
   }
 
-  /** Complete every block stage before `stage` and make `stage` current. */
   function atStage(proj: string, stage: string): void {
     const path = seededStateFile(proj);
     let state = readFileSync(path, "utf-8");
@@ -699,7 +672,6 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     const skipped = runReport(proj, skipArgs("infrastructure-design", "alpha"));
     expect(skipped.kind).toBe("done");
     expect(String(skipped.reason)).toContain('for unit "alpha" only');
-    // The walk goes on to alpha's next step, and the done says so.
     expect(skipped.workflow_continues).toBe(true);
     const state = readFileSync(seededStateFile(proj), "utf-8");
     expect(state).toMatch(/^- \[ \] infrastructure-design /m);
@@ -733,7 +705,6 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(parked).toMatchObject({ kind: "parked", stage: "code-generation" });
     expect(String(parked.reason)).toContain('parked at "code-generation" for unit "alpha"');
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Current Stage**: functional-design");
-    // A later plain next says the same thing.
     expect(runNext(proj)).toMatchObject({ kind: "parked", stage: "code-generation" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

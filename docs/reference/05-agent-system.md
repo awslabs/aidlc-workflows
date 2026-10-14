@@ -12,22 +12,29 @@ Each authored agent is a flat `.md` file in `core/agents/` with YAML frontmatter
 
 ### Frontmatter Contract
 
-Every authored core agent file must include this YAML frontmatter:
+Every authored core agent file opens with YAML frontmatter. The shipped architect agent's, from `core/agents/aidlc-architect-agent.md`:
 
 ```yaml
 ---
-name: aidlc-architect-agent               # Agent identifier (matches filename without .md)
-description: >                      # Brief role summary (shown in Claude Code agent list)
-  System architect responsible for domain design,
-  NFR design, and component decomposition.
-disallowedTools: Task               # Agents cannot spawn subagents
-tier: judgment                      # judgment | balanced | templated (see Agent Tiers)
+name: aidlc-architect-agent
+display_name: Architect Agent
+examples:
+  - tech-stack.md
+  - infrastructure-preferences.md
+description: >
+  Solutions architect responsible for domain design, contract design, NFR patterns, and component decomposition.
+  Leads Feasibility, Domain Design, Units Generation, Contract Design, Functional Design, NFR Requirements, and NFR Design stages,
+  and serves as the dispatched final link of the Reverse Engineering pipeline.
+disallowedTools: Task
+tier: judgment
 ---
 ```
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | Yes | Agent identifier, must match filename |
+| `display_name` | Yes | The persona's human-facing name, shown in the statusline. The agent loader refuses an AI-DLC agent file without it, as it does one without `name` |
+| `examples` | No | Suggested knowledge file names for the agent's team folder. The two reviewers and the composer carry none |
 | `description` | Yes | Brief role summary |
 | `tools` | No | Optional allowlist; omit to inherit the full session toolset. Listing it narrows the agent and drops inherited MCP tools unless `mcp__<server>__<tool>` ids are also listed |
 | `disallowedTools` | Yes in authored core | Must include `Task` -- only the conductor delegates. The packager removes or translates this Claude-dialect key when a harness uses a different native tool-policy surface |
@@ -85,7 +92,7 @@ On Claude Code, every agent *can* reach Bash and WebSearch by inheritance; the t
 
 ### Agent Tiers
 
-The authored dial on every agent is `tier:` -- it names the KIND of work the persona does, and the packager (`bun scripts/package.ts`) projects it into each harness's native model/effort form. Previous behaviour (v2.2.15 through v2.2.19; before that the key was the inert `modelOverride:`) pinned a raw `model: opus|sonnet` per agent, which forcibly downgraded sessions running a bigger model; the tier projection replaces that pin.
+The authored dial on every agent is `tier:` -- it names the KIND of work the persona does, and the packager (`bun scripts/package.ts`) projects it into each harness's native model/effort form.
 
 | Tier | Agents | Meaning |
 |------|--------|---------|
@@ -183,12 +190,12 @@ L = Lead, S = Support
 
 Agent display names and example knowledge files are authoritative in each agent's `.md` frontmatter via the `display_name` and `examples` fields — no TypeScript edits required. See [Contributing: Adding an Agent](11-contributing.md#adding-an-agent) for the full recipe (required frontmatter fields, verification steps, and what validates automatically vs. manually). Quick summary of the steps:
 
-1. Create `core/agents/{name}-agent.md` with the required frontmatter: `name`, `display_name`, `examples`, `description`, `disallowedTools` (including `Task`), `tier`. Never author raw `model:`/`effort:` in core frontmatter -- they are projection outputs (see Agent Tiers above). An optional `tools:` allowlist narrows the inherited toolset; omit it to inherit the full session toolset. `loadAgents()` in `core/tools/aidlc-lib.ts` discovers the file on next invocation.
-   The installed agents directory (`.claude/agents/`, `.kiro/agents/`, `.cursor/agents/`, …) is shared with the host, which reads its own subagents from it. `loadAgents()` treats a file as an AI-DLC persona when its name starts with `aidlc-` or its frontmatter carries any of `display_name`, `examples`, `tier`, or `plugin`, and holds such a file to the full schema. Any other file is the host's: AI-DLC does not load it, cannot name it as a stage's `lead_agent`, and does not attach stage rules when it is dispatched. `aidlc doctor --verbose` lists those files as an advisory.
+1. Create `core/agents/{name}-agent.md` with the required frontmatter: `name`, `display_name`, `description`, `disallowedTools` (including `Task`), `tier`, plus `examples` if the agent has suggested knowledge files. Never author raw `model:`/`effort:` in core frontmatter -- they are projection outputs (see Agent Tiers above). An optional `tools:` allowlist narrows the inherited toolset; omit it to inherit the full session toolset. `loadAgents()` in `core/tools/aidlc-lib.ts` discovers the file on next invocation.
+   The installed agents directory (`.claude/agents/`, `.kiro/agents/`, `.cursor/agents/` and the rest) is shared with the host, which reads its own subagents from it. `loadAgents()` treats a file as an AI-DLC persona when its name starts with `aidlc-` or its frontmatter carries any of `display_name`, `examples`, `tier`, or `plugin`, and requires such a file to carry `name` and `display_name`. Any other file is the host's: AI-DLC does not load it, cannot name it as a stage's `lead_agent`, and does not attach stage rules when it is dispatched. `aidlc doctor --verbose` lists those files as an advisory.
 2. Add knowledge files to `core/knowledge/{name}-agent/`
 3. Add the agent to the stage files (`core/aidlc-common/stages/`) where it participates — set `lead_agent` / `support_agents` in each stage's frontmatter. The compiled `tools/data/stage-graph.json` is GENERATED from that frontmatter by `bun scripts/package.ts`; never hand-edit generated output.
 4. Materialize the ignored local distributions with `bun scripts/package.ts`, then run `--check` to build twice and verify deterministic output.
-5. Add the agent→examples row to the hand-maintained knowledge tables (the space-level team-knowledge dir is `aidlc/knowledge/{name}-agent/`, created by the team when it has content — the engine does not scaffold it)
+5. Add the agent-to-examples row to the hand-maintained knowledge tables (the agent's team-knowledge folder is `aidlc/spaces/<space>/knowledge/{name}-agent/`, created by the team when it has content; the engine does not scaffold it)
 6. Update tests: smoke tests for file existence, feature tests for stage-agent cross-references
 7. Update documentation in this file and [reference/agents/](agents/)
 

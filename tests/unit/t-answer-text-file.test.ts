@@ -144,6 +144,7 @@ const POWERSHELL = ["pwsh", "powershell"].find((exe) =>
     for (const named of [
       (p: string, name: string) => relative(p, join(seededRecordDir(p), FOLDER, name)),
       (p: string, name: string) => relative(p, join(seededRecordDir(p), FOLDER, name)).replaceAll("/", "\\"),
+      (p: string, name: string) => `./${relative(p, join(seededRecordDir(p), FOLDER, name)).replaceAll("\\", "/")}`,
       (p: string, name: string) => join(seededRecordDir(p), FOLDER, name),
     ]) {
       const p = project();

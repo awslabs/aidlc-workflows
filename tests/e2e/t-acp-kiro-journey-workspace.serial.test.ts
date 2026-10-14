@@ -81,7 +81,7 @@ function completedStartupProbe<T extends { error?: Error }>(result: T): T {
 }
 
 // A multi-turn live journey (heaviest e2e). On ACP the forwarding loop runs
-// IN-TURN once a workflow is active (kiro-acp-drive.ts:354-359), so the per-repo
+// IN-TURN once a workflow is active (see driveKiroAcp), so the per-repo
 // reverse-engineering codekb beat (9 artifacts × 2 repos) keeps executing inside
 // one turn for many minutes. Each turn uses actual remaining case/file time;
 // no allowance is subtracted for future turns that have not run yet.
@@ -124,10 +124,10 @@ const SKIP_REASON = skipReason();
 
 // Count the per-repo codekb artifacts the RE stage wrote, tolerant of WHERE the
 // stage chose to anchor the store. The stage prose authoritatively targets the
-// workspace-root store `aidlc/codekb/<repo>/` (reverse-engineering.md:111), but the
-// live LLM occasionally writes to the SPACE-scoped sibling
-// `aidlc/spaces/<space>/codekb/<repo>/` instead (the same path family — codekb is a
-// space-level sibling of intents per the vision). Either location is a valid
+// space-scoped store `aidlc/spaces/<space>/codekb/<repo>/` (reverse-engineering.md
+// Step 3), but the live LLM occasionally writes to the workspace-root sibling
+// `aidlc/codekb/<repo>/` instead (the same path family - codekb is a space-level
+// store shared across intents). Either location is a valid
 // per-repo codekb store for this beat's promise ("per-repo multi-repo codekb"), so
 // accept BOTH; only the absence of any per-repo store is a real failure.
 function codekbFiles(root: string, repo: string): string[] {
@@ -257,7 +257,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
       const root = journey.root;
       // Beats 1-2 share ONE live `aidlc`-conductor ACP session (keepAlive). Beat 3
       // opens a FRESH `aidlc` session (`offer`) — DELIBERATE: beat 2's RE `--single`
-      // run is cancelled mid-gate by stopAfterToolTitle (the conductor's IN-TURN
+      // run is cancelled by driveCodekbUntilBothRepos (the conductor's IN-TURN
       // forwarding loop never voluntarily ends), which leaves THAT session "inside"
       // the RE stage; reusing it for beat 3 made the conductor resume the RE gate
       // (learnings ritual + memory.md edit) instead of parsing the new-work prose,
@@ -266,9 +266,8 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
       // new-work prose, and renders the offer. Beats 4-5 open a THIRD fresh `aidlc`
       // session (`space`) for the same reason: beat 3's `offer` session is cancelled
       // mid-creation, so reusing it would resume that creation rather than parse the new
-      // `/aidlc space-create` prompt. Each space verb is a terminal print directive
-      // ("…then stop"), so all of beats 4-5 reuse this ONE keepAlive `space` session
-      // (spike-verified: three sequential space verbs run clean on one session).
+      // `/aidlc space-create` prompt. Each space verb is seam-dispatched and ends its
+      // turn cleanly, so all of beats 4-5 reuse this ONE keepAlive `space` session.
       const conductor = new AcpSession(root, "aidlc", true);
       const offer = new AcpSession(root, "aidlc", true);
       const space = new AcpSession(root, "aidlc", true);
@@ -391,6 +390,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
             offerR1.toolCalls.slice(typedAskIndex + 1),
             "a typed new-work ask must end tool use for the turn",
           ).toEqual([]);
+          // person-facing: on Kiro ACP the offer is the agent's numbered prose, so these options are what the person reads.
           expect(offerR1.assistantText).toMatch(/(?:^|\n)\s*1\./m);
           expect(offerR1.assistantText).toMatch(/(?:^|\n)\s*2\./m);
           expect(offerR1.assistantText).toMatch(/(?:^|\n)\s*3\./m);
@@ -400,10 +400,10 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         // `intent --json`, a registry read, or the engine ask - all legitimate.
         // What the offer turn must NOT do is deterministic: no creation (never
         // auto-create; the engine's Branch 9c also refuses to create from bare
-        // prose, so a dark offer can no longer stumble into one) and no stage
-        // work on A (state byte-identical). The dark-offer hazard the old
-        // compare-read pin guarded is now caught downstream: without a rendered
-        // offer the confirm turn cannot create an intent, and beat 3b's registry pin reds.
+        // prose, so a dark offer cannot stumble into one) and no stage work on A
+        // (state byte-identical). The dark-offer hazard is caught downstream: without
+        // a rendered offer the confirm turn cannot create an intent, and beat 3b's
+        // registry pin reds.
         expect(
           offerR1.toolCalls.some((tc) => /intent-create/.test(tc.title)),
         ).toBe(false);
@@ -453,7 +453,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         // stop.) Each verb reuses the keepAlive `space` session; the seam ends every
         // verb turn cleanly so reuse is safe.
         // 4a: create teamB; assert org.md byte-copied from default, fresh empty
-        // team/project stubs, knowledge/ ABSENT at create time.
+        // team/project stubs, knowledge/ PRESENT at create time.
         const createSpace = await driveKiroAcp({
           projectDir: root,
           session: space,
@@ -470,7 +470,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         expect(readFileSync(join(teamBMemory, "org.md"), "utf-8")).toBe(defaultOrg);
         expect(readFileSync(join(teamBMemory, "team.md"), "utf-8")).toBe("# Team practices\n");
         expect(readFileSync(join(teamBMemory, "project.md"), "utf-8")).toBe("# Project overrides\n");
-        // space-create (#5) provisions the full space shape incl. the codekb/ +
+        // space-create provisions the full space shape incl. the codekb/ +
         // knowledge/ siblings (with .gitkeep floors), matching default.
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(true);
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "codekb"))).toBe(true);
@@ -488,9 +488,8 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
 
         // 4c: intent creation in teamB via the conductor's creation gate - in teamB (zero
         // intents) a `/aidlc --scope poc "<desc>"` hits Branch 9a → createPrintDirective
-        // → the conductor runs `intent-create …` directly. knowledge/ now PRESENT
-        // (lazy ensure on first creation); teamB holds its 1 intent, default still holds
-        // its 2 (no cross-space leak).
+        // -> the conductor runs `intent-create ...` directly. knowledge/ still PRESENT;
+        // teamB holds its 1 intent, default still holds its 2 (no cross-space leak).
         const teamBCreation = await driveKiroAcp({
           projectDir: root,
           session: space,
@@ -515,7 +514,6 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         });
         expect(backToDefault.toolCallIssues).toEqual([]);
         expect(activeSpace(root)).toBe("default");
-        // A's workflow state survived the round trip; no foreign creation bled in.
         expect(readFileSync(join(recordADir, "aidlc-state.md"), "utf-8")).toBe(stateABefore);
         expect(workflowStartedCount(recordADir)).toBe(1);
         expect(listIntents(root, "default").length).toBe(2);

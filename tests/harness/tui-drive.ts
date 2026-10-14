@@ -4,9 +4,7 @@
 //
 // Test harness / dev-only tooling. Lives in tests/harness/ beside its SDK
 // sibling sdk-drive.ts (logic vs render), assert.ts, and fixtures.ts — NOT in
-// the shipped dist/claude/.claude/tools/ distributable. (Relocated from
-// the repo-root tools/aidlc-tui-drive.ts spike; the aidlc- prefix is dropped to
-// match sdk-drive.ts.)
+// the shipped dist/claude/.claude/tools/ distributable.
 //
 // This is the deterministic half of the harness ("three concerns, three
 // mechanisms": the send/capture/assert loop is a tool; the thing it drives
@@ -96,9 +94,9 @@
 //                                          when BOTH state fields match. Approve
 //                                          writes Last Completed Stage before
 //                                          handleAdvance writes Current Stage
-//                                          (aidlc-state.ts:5719 and :4506;
-//                                          verified 2026-09-13). Wait for both to
-//                                          avoid stopping in that two-write window.
+//                                          (aidlc-state.ts handleApprove and
+//                                          handleAdvance). Wait for both to avoid
+//                                          stopping in that two-write window.
 //            --assert-file-absent-at-option <label>
 //            --assert-file-absent <relpath>
 //                                          When the named option is first painted,
@@ -107,8 +105,7 @@
 //                                          together. The run also fails if the
 //                                          option is never observed.
 //            (neither)                     STOP on the practices-affirmation
-//                                          timestamp (the workshop default;
-//                                          existing callers unchanged).
+//                                          timestamp (the workshop default).
 //          One implementation, both backends: it only drives capture + send. The
 //          screen DETECTS a waiting menu; the disk signal TERMINATES the loop (the
 //          transcript is not a leading event bus — §1.1). The per-gate/overall
@@ -661,8 +658,7 @@ export function preseedClaudeOnboarding(
 }
 
 // ---------------------------------------------------------------------------
-// Backend selection — the one os.platform() switch. Everything above the line
-// is platform-agnostic.
+// Backend selection.
 // ---------------------------------------------------------------------------
 
 function selectBackend(): Backend {
@@ -840,7 +836,7 @@ function patternView(a: Args): TuiPatternView {
 
 async function captureTextViews(backend: Backend, session: string): Promise<TuiTextViews> {
   if (backend.captureViews) return await backend.captureViews(session);
-  // Legacy Windows has always exposed only physical rows, without wrap metadata.
+  // Without captureViews a backend exposes only physical rows, no wrap metadata.
   const text = await backend.capture(session, false, "physical");
   return { physical: text, logical: text };
 }
@@ -1266,14 +1262,14 @@ async function cmdWaitDead(backend: Backend, a: Args): Promise<void> {
 // answer-gate — the shared AskUserQuestion answer loop (§3, D-TUI-3).
 //
 // One implementation, both backends: it only uses backend.capture + backend.send,
-// so the Bun and tmux paths drive it identically. It is the value of the
-// whole exercise — the per-tab Enter loop proven in tmp/auq-loop.sh, made reusable.
+// so the Bun and tmux paths drive it identically.
 //
 // Detection is SCREEN-based (the `Enter to select` / `Submit answers` footer on
-// the captured grid); termination is the ON-DISK affirmation timestamp. The
+// the captured grid); termination is the configured ON-DISK signal, or the
+// unanswered approval menu with --stop-at-approval-gate. The
 // transcript JSONL is NOT a leading event bus (the AUQ tool_use is written on
 // RESOLUTION, not presentation — §1.1), so an event-driven detect-loop would
-// deadlock. Disk is the terminator; the screen only tells us WHEN to press Enter.
+// deadlock. Disk is the default terminator; the screen tells us WHEN to press Enter.
 // ---------------------------------------------------------------------------
 
 // Read the active intent record's aidlc-state.md and report whether practices affirmation has
@@ -1305,12 +1301,10 @@ function affirmedOnDisk(projectDir: string): boolean {
 // intent-statement, a memory.md, a state field reaching a value. So the
 // terminator is PLUGGABLE: a test names its journey's real on-disk completion
 // signal, and the SAME keystroke loop (Enter = Recommended per menu) drives ANY
-// gated journey to it. This is the generalisation of the workshop-only affirmed
-// terminator — the keystroke STRATEGY was always journey-agnostic; only the
-// TERMINATOR was hardcoded.
+// gated journey to it.
 //
 // Flags (all relative to --project-dir; the affirmation default holds when none
-// is given, so existing callers are unchanged):
+// is given):
 //   --until-file <relpath>          terminate when this file exists & is non-empty
 //                                   (a glob segment `*` matches within one dir level)
 //   --until-state-field <name=re>   terminate when aidlc-state.md's
@@ -1320,9 +1314,9 @@ function affirmedOnDisk(projectDir: string): boolean {
 //   (none)                          terminate on the practices-affirmation timestamp
 //
 // --also-state-field closes the approve tool's two-write window: handleApprove
-// writes Last Completed Stage (aidlc-state.ts:5719), then handleAdvance writes
-// Current Stage (aidlc-state.ts:4506; verified 2026-09-13). Wait for both before
-// returning, so a caller's session kill cannot land between those writes.
+// writes Last Completed Stage, then handleAdvance writes Current Stage (both in
+// aidlc-state.ts). Wait for both before returning, so a caller's session kill
+// cannot land between those writes.
 type Terminator = { describe: string; done: () => boolean };
 
 export type PortablePathKind =
@@ -1465,7 +1459,6 @@ export function fileSignalMet(
   const platform = portablePathPlatform();
   const resolved = resolvePortablePathPattern(root, rel, platform);
   const joinPath = platform === "win32" ? win32.join : posix.join;
-  // Walk the path segment by segment, expanding a `*` segment to its dir entries.
   let dirs = [resolved.root];
   const segs = resolved.segments;
   for (let i = 0; i < segs.length; i++) {
@@ -1474,7 +1467,6 @@ export function fileSignalMet(
     const next: string[] = [];
     for (const d of dirs) {
       if (seg.includes("*")) {
-        // glob this segment against the dir's entries
         let entries: string[] = [];
         try {
           entries = existsSync(d) ? readdirSync(d) : [];
@@ -1492,7 +1484,6 @@ export function fileSignalMet(
     dirs = next;
     if (dirs.length === 0) return false;
     if (!isLast) {
-      // keep only existing directories to descend into
       dirs = dirs.filter((p) => {
         try {
           return existsSync(p) && statSync(p).isDirectory();
@@ -1502,7 +1493,6 @@ export function fileSignalMet(
       });
     }
   }
-  // Any matched terminal path that is an existing, non-empty file = signal met.
   for (const p of dirs) {
     try {
       if (
@@ -1806,7 +1796,6 @@ function parseMenuOptions(grid: string): { num: number; label: string }[] {
   return out;
 }
 
-/** True when the painted menu contains an option with the given label text. */
 export function gridHasOption(grid: string, optionLabel: string): boolean {
   const wanted = optionLabel.trim().toLowerCase();
   return (
@@ -1863,9 +1852,8 @@ function gridLooksLikeRevisionFreeTextPrompt(grid: string): boolean {
   return /which artifact needs fixing|what(?:'|’)s wrong with it|tell me the file/i.test(grid);
 }
 
-// After "Request changes" on an approval gate, the v0.6.0 engine no longer asks
-// for revision feedback as FREE TEXT. It paints a RECOVERY MENU (verified live
-// 2026-06-09) — e.g. `1. Actually approve & continue` (which UN-rejects), then
+// After "Request changes" on an approval gate, the engine can paint a RECOVERY
+// MENU - e.g. `1. Actually approve & continue` (which UN-rejects), then
 // real revise directives (`2. Narrow root cause…`, `3. Drop … steer`, `4. Add
 // more detail`), plus generic `Type something` / `Chat about this` trailers.
 // Picking the right option is what makes `reject --feedback` fire (Revision
@@ -2043,8 +2031,8 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   // engineering) legitimately runs minutes with no menu, and runs SLOWER on a slower
   // box, so any fixed per-stage number eventually false-fires on a working run (it
   // killed t50's RE stage at 360s on the Windows box, mid-work, 2026-06-06). Folding
-  // it into the overall deadline means the only thing that can trip it is a genuine
-  // wedge (nothing ever reaches the disk terminator), and bun's own test timeout is
+  // it into the overall deadline means the only thing that can trip it is a run that
+  // never reaches the disk terminator in time, and bun's own test timeout is
   // the hard ceiling above it. An explicit --per-gate-timeout-ms still overrides for
   // the rare case that wants faster wedge-detection.
   let overallMs: number;
@@ -2101,14 +2089,13 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   // of the run. This is the ONLY way to drive a reject→revise→approve cycle: the
   // gate must be distinguished from the clarifying-QUESTION menus that precede it
   // (which carry A–E option text, never "Request changes"), so a blind pre-loop
-  // keystroke can't target it (it lands on a question — the t128 finding,
-  // 2026-06-07). Keyed on the option label "Request changes"
-  // (stage-protocol.md:42), the option unique to an approval gate. Once consumed,
-  // the loop is approve-only, so the rejected stage re-presents its gate and gets
-  // approved on the next pass — the full cycle, driven like a human.
+  // keystroke can't target it (it lands on a question). Keyed on the option label
+  // "Request changes" (stage-protocol.md), the option unique to an approval gate.
+  // Once consumed, the loop is approve-only, so the rejected stage re-presents its
+  // gate and gets approved on the next pass - the full cycle, driven like a human.
   // Bare valueless flag → parseArgs stores it in `bools`, not `flags` (see how
-  // --literal / --no-enter / --ansi are read). Reading a.flags here was the bug
-  // that left this always-false (the t128 third-red finding, 2026-06-07).
+  // --literal / --no-enter / --ansi are read). Reading a.flags here would leave
+  // this always-false.
   let rejectFirstGate = a.bools["reject-first-gate"] === true;
   const stopAtApprovalGate =
     a.bools["stop-at-approval-gate"] === true;
@@ -2409,12 +2396,10 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       await backend.send(session, "Enter", false, true);
       rejectFirstGate = false;
       process.stdout.write("answer-gate: rejected first approval gate (Request changes)\n");
-      // What the engine does NEXT changed in v0.6.0, so we READ the screen and
-      // respond to whatever actually painted instead of blind-typing a fixed
-      // string (the old code typed free-text feedback unconditionally; against
-      // the new recovery MENU that text landed in the filter slot, the reject
-      // never committed, and Revision Count stayed 0 — the t139 finding,
-      // 2026-06-09). A multi-tab form must be submitted first: after selecting
+      // We READ the screen and respond to whatever actually painted instead of
+      // blind-typing a fixed string (free-text feedback typed against a recovery MENU
+      // lands in the filter slot, the reject never commits, and Revision Count stays
+      // 0). A multi-tab form must be submitted first: after selecting
       // Request Changes the user still needs to answer later tabs such as
       // Learnings and press Submit before the real revision prompt appears.
       if (requestChangesNeedsSubmit) {

@@ -1,7 +1,7 @@
 // covers: subcommand:aidlc-state:set, subcommand:aidlc-state:reject, subcommand:aidlc-state:approve, subcommand:aidlc-state:skip, subcommand:aidlc-state:set-skeleton-stance, function:withAuditLock, function:holdsAuditLock
 //
-// t145 — C2b lost-update safety: the 11 state read-modify-write handlers in
-// aidlc-state.ts now hold the audit lock across their whole read→decide→
+// t145 - lost-update safety: the state read-modify-write handlers in
+// aidlc-state.ts hold the audit lock across their whole read->decide->
 // emit-audit→write critical section (withAuditLock), so concurrent writers
 // can't clobber each other's updates. Mechanism: cli (process-boundary).
 //
@@ -14,18 +14,18 @@
 // referee, parallel Bolts, and hooks drive aidlc-state.ts from many processes.
 // Same approach as t33-hook-concurrency (audit-logger lock contention).
 //
-// THE BUG (pre-C2b): each handler did an UNLOCKED read-modify-write —
+// THE BUG: an UNLOCKED read-modify-write -
 //   let content = readStateFile(pd); ...mutate...; writeStateFile(pd, content);
 // Two writers both read V1, both mutate their own copy, both write: the
-// second write clobbers the first's field (lost update). C2a made the write
-// atomic (no torn bytes) but did NOT serialise the read-decide-write, so the
-// lost update survived. C2b wraps the critical section in withAuditLock so the
-// read and the write see one snapshot under one lock.
+// second write clobbers the first's field (lost update). An atomic write (no
+// torn bytes) does NOT serialise the read-decide-write; wrapping the critical
+// section in withAuditLock makes the read and the write see one snapshot under
+// one lock.
 //
 // SOURCE UNDER TEST:
 //   dist/claude/.claude/tools/aidlc-state.ts — handleSet / handleReject /
-//     handleApprove / handleSkip / handleSetSkeletonStance (+ the rest of the
-//     11) now open with `withAuditLock(pd, () => { ... })`.
+//     handleApprove / handleSkip / handleSetSkeletonStance (+ the rest) open
+//     with `withAuditLock(pd, () => { ... })`.
 //   dist/claude/.claude/tools/aidlc-lib.ts:withAuditLock — reentrant per-pd
 //     audit lock (the OS mutex is mkdir-based, so cross-process contention
 //     serialises through EEXIST + the retry budget).
@@ -34,11 +34,11 @@
 //     appendAuditEntry (no lock), so an in-transaction emit can't self-deadlock.
 //
 // FIXTURE DISCIPLINE: each test gets a fresh createTestProject() (temp dir with
-// aidlc-docs/) seeded by a REAL `aidlc-utility init --scope bugfix` run, so the
-// state file is the genuine v7 template the handlers expect (Revision Count,
-// checkbox slugs, Scope, the lot). cleanup rm -rf's the temp dir; the audit
-// lock lives under tmpdir() and is asserted-then-removed (afterEach safety).
-// Nothing is written under tests/fixtures/**.
+// an aidlc/ shell) seeded by a REAL `aidlc-utility intent-create --scope bugfix`
+// run, so the state file is the genuine v8 template the handlers expect
+// (Revision Count, checkbox slugs, Scope, the lot). cleanup rm -rf's the temp
+// dir; the audit lock lives under tmpdir() and is asserted-then-removed
+// (afterEach safety). Nothing is written under tests/fixtures/**.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { setDefaultTimeout, afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -63,7 +63,7 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const STATE_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-state.ts");
 const UTIL_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
@@ -75,12 +75,12 @@ const STATE_LOCK_STRESS_ROUNDS = Math.max(
 
 let proj: string;
 
-// P4: init now CREATES a per-intent record - state lands at
-// aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md and audit at
+// intent-create CREATES a per-intent record - state lands at
+// aidlc/spaces/<space>/intents/<YYMMDD>-<short-label>/aidlc-state.md and audit at
 // <record>/audit/<host>-<clone>.md (per-clone shards), NOT the flat aidlc-docs/.
 // Resolve the created record from the active-space + active-intent cursors (flat
-// fallback for a not-yet-created project). The concurrency under test is unchanged
-// — the per-intent lock serialises the concurrent writers exactly as before.
+// fallback for a not-yet-created project). The per-intent lock serialises the
+// concurrent writers.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -117,7 +117,6 @@ function readAudit(p: string): string {
   const flat = join(p, "aidlc-docs", "audit.md");
   return existsSync(flat) ? readFileSync(flat, "utf-8") : "";
 }
-/** Count occurrences of an "**Event**: <type>" line across the audit shards. */
 function eventCount(p: string, type: string): number {
   return readAudit(p)
     .split("\n")
@@ -218,9 +217,9 @@ async function fireParallel(p: string, argSets: string[][]): Promise<number[]> {
 describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spawn)", () => {
   beforeEach(() => {
     proj = createTestProject();
-    // Seed a genuine v7 state file via the real init path (Scope=bugfix gives a
-    // running INCEPTION workflow at requirements-analysis with code-generation
-    // next — the shape the gate handlers expect).
+    // Seed a genuine v8 state file via the real intent-create path (Scope=bugfix
+    // gives a running INCEPTION workflow at requirements-analysis with
+    // code-generation next - the shape the gate handlers expect).
     const init = Bun.spawnSync({
       cmd: [BUN, UTIL_TOOL, "intent-create", "--scope", "bugfix", "--project-dir", proj],
       stdout: "ignore",
@@ -244,13 +243,13 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
   // TEST 1 — the guard-the-guard. N concurrent `set "Revision Count=+1"`
   // increments. The +1 form is a read-modify-write of one counter: without the
   // lock, writers read the same value and clobber, so the final count is < N
-  // (lost updates). With C2b's lock, all N increments serialise → exactly N.
-  // This is the assertion that FAILS on the pre-C2b (unlocked) handler and
-  // passes after — proving the lock has teeth.
+  // (lost updates). With the lock, all N increments serialise -> exactly N.
+  // This is the assertion that FAILS on an unlocked handler and passes with it -
+  // proving the lock has teeth.
   // ---------------------------------------------------------------------------
   test("N concurrent `set Revision Count=+1` all land — no lost increments [guard-the-guard]", async () => {
     const N = 20;
-    expect(field(proj, "Revision Count")).toBe("0"); // fixture precondition
+    expect(field(proj, "Revision Count")).toBe("0");
     for (let round = 0; round < STATE_LOCK_STRESS_ROUNDS; round++) {
       const codes = await fireParallel(
         proj,
@@ -258,7 +257,8 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
       );
       // Every writer succeeded (lock serialises; none errors out).
       expect(codes.every((c) => c === 0), `stress round ${round + 1}`).toBe(true);
-      // The counter reflects ALL N increments. Pre-fix this is < N (lost updates).
+      // The counter reflects ALL N increments. Without locking this can be < N (lost
+      // updates).
       expect(field(proj, "Revision Count"), `stress round ${round + 1}`)
         .toBe(String((round + 1) * N));
     }
@@ -311,7 +311,6 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
     // leave requirements-analysis un-completed or code-generation un-skipped
     // because one transaction's full-file rewrite clobbered the other's flip.
     expect(/- \[x\] requirements-analysis /.test(finalState)).toBe(true);
-    // skip flips code-generation → [S] (skipped).
     expect(/- \[S\] code-generation /.test(finalState)).toBe(true);
 
     // Both audit rows present — neither transaction's emit was lost. (These two
@@ -386,7 +385,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
     // Put requirements-analysis into the awaiting-approval [?] gate state.
     logReview("requirements-analysis", "aidlc-product-lead-agent", proj);
     expect(stateSync(["gate-start", "requirements-analysis"], proj).status).toBe(0);
-    expect(field(proj, "Revision Count")).toBe("0"); // precondition
+    expect(field(proj, "Revision Count")).toBe("0");
 
     const N = 8;
     const codes = await fireParallel(
@@ -409,7 +408,6 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
     // counter is exactly 1, and there is exactly ONE GATE_REJECTED audit row.
     expect(field(proj, "Revision Count")).toBe("1");
     expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
-    // The stage landed in the revising [R] state.
     expect(/- \[R\] requirements-analysis /.test(readState(proj))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -440,8 +438,6 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
       logReview("requirements-analysis", "aidlc-product-lead-agent", proj);
       expect(stateSync(["revise", "requirements-analysis"], proj).status).toBe(0);
     }
-    // Exactly CYCLES accepted rejections → Revision Count === CYCLES, and exactly
-    // that many GATE_REJECTED rows. No burst double-counted.
     expect(field(proj, "Revision Count")).toBe(String(CYCLES));
     expect(eventCount(proj, "GATE_REJECTED")).toBe(CYCLES);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

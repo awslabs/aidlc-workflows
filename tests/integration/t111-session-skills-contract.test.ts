@@ -1,19 +1,16 @@
 // covers: cli:aidlc-runtime(summary), contract:session-skills-summary-seam
 //
-// CLI-contract port of tests/integration/t111-session-skills-contract.sh (TAP plan
-// 10), mechanism = cli. The .sh has NO `# covers:` header line; its subject is
-// the behavioural seam between the three read-only session skills and the
-// `aidlc-runtime.ts summary --json` data plane they consume. (The unrelated
-// tests/unit/t111.none.test.ts is a DIFFERENT subject — the audit-append core —
-// and is ignored per the same-number-different-tier rule.)
+// Mechanism = cli. The subject is the behavioural seam between the three
+// read-only session skills and the `aidlc-runtime.ts summary --json` data plane
+// they consume.
 //
 // WHAT IS UNDER TEST
 //   1. `aidlc-runtime.ts summary --json` emits the 8 top-level keys the skills'
 //      render templates depend on (workflow_id, scope, duration_minutes, stages,
 //      by_phase, memory, sensors, learnings). Source shape: RuntimeSummary
 //      (dist/claude/.claude/tools/aidlc-runtime.ts:880-905), produced by
-//      summarize() (:907-979) and printed by handleSummary (:1282-1295) under
-//      `--json` as JSON.stringify(summary, null, 2).
+//      summarize() and printed by handleSummary under `--json` as
+//      JSON.stringify(summary, null, 2).
 //   2. FORWARD drift: every dotted JSON field the three skills cite resolves in
 //      real tool output — no skill names a phantom (renamed/typo'd) field.
 //   3. REVERSE drift: every scalar leaf the tool emits is referenced by name in
@@ -25,47 +22,35 @@
 //       summarize / renderSummary are MODULE-PRIVATE (no `export`), and the
 //       emitted JSON is only observable on the `summary --json` STDOUT after a
 //       `compile` materialises runtime-graph.json. handleSummary terminates the
-//       process (process.exit(1) on no-graph, :1288). => process-boundary seam,
-//       so this is mechanism = cli (spawnSync BUN + the .ts path), exactly the
-//       broadened cli arm the .sh used (it ran `bun "$RUNTIME_TS" compile` then
-//       `bun "$RUNTIME_TS" summary --json`). An in-process import cannot reach
-//       summarize() at all.
-//   - Skills (read off disk, the same files the .sh grepped):
+//       process (process.exit(1) on no-graph). => process-boundary seam, so this
+//       is mechanism = cli (spawnSync BUN + the .ts path). An in-process import
+//       cannot reach summarize() at all.
+//   - Skills (read off disk):
 //       dist/claude/.claude/skills/aidlc-session-cost/SKILL.md
 //       dist/claude/.claude/skills/aidlc-replay/SKILL.md
 //       dist/claude/.claude/skills/aidlc-outcomes-pack/SKILL.md
 //
-// DRIFT-CHECK PARITY (the .sh's bash pipelines reproduced in TS, byte-faithful):
+// DRIFT CHECK:
 //   EMITTED   = JSON leaf scalar paths, with concrete phase names collapsed to
 //               `<phase>` so by_phase.* compares as one shape regardless of
-//               which phases ran (the .sh's `jq paths(scalars) | join(".")`
-//               then `sed -E 's/\.(init…|operation)\./.<phase>./'`).
+//               which phases ran.
 //   REFERENCED= dotted field paths grepped from the three skills under the known
 //               JSON parents, `summary.` prefix stripped, `.md` prose filenames
 //               excluded, `by_phase.<leaf>` normalised to the tool's
-//               by_phase.<phase>.<leaf> (the .sh's grep|sed|grep -v|sed|sort -u).
-//   The .sh's `started_at` carve-out (internal field the render does not
-//   surface) is preserved in the reverse check.
+//               by_phase.<phase>.<leaf>.
+//   `started_at` is skipped in the reverse check: the JSON emits it, but the
+//   human render does not surface it.
 //
-// Old TAP -> new test parity (1:1, plan 10):
-//   .sh tests 1-8 (top-level key present, one per key)
-//        -> "summary --json emits all 8 top-level keys the skills depend on"
-//           (test.each over the 8 keys: 8 distinct assertions, same as the .sh
-//           loop's 8 `ok` lines — STRONGER: also asserts each value's JSON type
-//           matches the render template's expectation, not merely `has(key)`).
-//   .sh test 9  (every referenced field is emitted — no phantom)
-//        -> "every summary field the skills reference is emitted by the tool"
-//           (STRONGER: on failure names the exact phantom set, like the .sh,
-//           AND independently pins that the referenced set is non-empty so a
-//           grep that silently matched nothing can't pass vacuously).
-//   .sh test 10 (every emitted field name is consumed — no orphan)
-//        -> "every summary field the tool emits is consumed by at least one
-//           skill" (same `started_at` carve-out; names the orphan set on fail).
+//   - The 8 top-level key checks also pin each value's JSON type against the
+//     render template's expectation, not merely key presence.
+//   - The forward check names the exact phantom set on failure and pins that the
+//     referenced set is non-empty, so a grep that silently matched nothing
+//     cannot pass vacuously.
+//   - The reverse check names the orphan set on failure.
 //
-// FIXTURE DISCIPLINE (mirrors the .sh's `mktemp -d` + trap rm -rf): one fresh
-// temp project with the .sh's exact audit.md / state / memory.md heredocs,
-// `compile`d once, then `summary --json` captured once. Torn down in afterAll.
-// Nothing is written under tests/fixtures/** or dist/**.
+// FIXTURE DISCIPLINE: one fresh temp project with a synthetic audit shard /
+// state / memory.md, `compile`d once, then `summary --json` captured once. Torn
+// down in afterAll. Nothing is written under tests/fixtures/** or dist/**.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -75,16 +60,16 @@ import { dirname, join } from "node:path";
 import { AIDLC_SRC, toPortablePath } from "../harness/fixtures.ts";
 import { auditFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
-// P9: with no intent cursor seeded, compile/summary resolve the BARE space
+// With no intent cursor seeded, compile/summary resolve the BARE space
 // record root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/.
 // State, runtime-graph, per-stage memory, and the per-clone audit SHARD all
-// live under it (the flat aidlc-docs/ root is retired — there is no fallback).
+// live under it (there is no flat aidlc-docs/ fallback).
 const RECORD_REL = join("aidlc", "spaces", "default", "intents");
 function recordRoot(proj: string): string {
   return join(proj, RECORD_REL);
 }
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const RUNTIME_TS = join(AIDLC_SRC, "tools", "aidlc-runtime.ts");
 const SKILLS_DIR = join(AIDLC_SRC, "skills");
 const SKILL_FILES = [
@@ -99,9 +84,9 @@ afterAll(() => {
 });
 
 /**
- * Build the .sh's synthetic compiled graph: one completed stage (intent-capture)
- * with two memory entries. Byte-for-byte the .sh heredocs (t111:44-74), then
- * `compile`. Returns the project dir (registered for afterAll teardown).
+ * Build the synthetic compiled graph: one completed stage (intent-capture) with
+ * two memory entries, then `compile`. Returns the project dir (registered for
+ * afterAll teardown).
  */
 function buildSyntheticProject(): string {
   const proj = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t111-")));
@@ -163,7 +148,6 @@ function buildSyntheticProject(): string {
   return proj;
 }
 
-/** `summary --json` STDOUT, parsed (the .sh's `JSON=$(... summary --json)`). */
 function summaryJson(proj: string): unknown {
   const res = spawnSync(BUN, [RUNTIME_TS, "summary", "--json"], {
     encoding: "utf-8",
@@ -181,8 +165,7 @@ const PHASES = /\.(initialization|ideation|inception|construction|operation)\./;
 
 /**
  * EMITTED set: every scalar leaf path of the JSON, dot-joined, with concrete
- * phase names collapsed to `<phase>`, sorted-unique. Reproduces the .sh's
- *   jq -r 'paths(scalars) | join(".")' | sed -E 's/\.(…)\./.<phase>./' | sort -u
+ * phase names collapsed to `<phase>`, unique.
  */
 function emittedLeafSet(json: unknown): Set<string> {
   const leaves: string[] = [];
@@ -207,15 +190,6 @@ function emittedLeafSet(json: unknown): Set<string> {
   return new Set(normalised);
 }
 
-/**
- * REFERENCED set: dotted field paths the three skills cite. Reproduces the .sh's
- *   grep -ohE "(summary\.)?(stages|memory|sensors|learnings|by_phase)\.[a-z_]+
- *               |(summary\.)?(workflow_id|scope|duration_minutes)" <skills>
- *     | sed -E 's/^summary\.//'
- *     | grep -vE '\.md$'
- *     | sed -E 's/^by_phase\.(.+)$/by_phase.<phase>.\1/'
- *     | sort -u
- */
 function referencedFieldSet(): Set<string> {
   const re =
     /(summary\.)?(stages|memory|sensors|learnings|by_phase)\.[a-z_]+|(summary\.)?(workflow_id|scope|duration_minutes)/g;
@@ -232,7 +206,6 @@ function referencedFieldSet(): Set<string> {
   return out;
 }
 
-/** Whether `name` appears anywhere in any skill file (the .sh's `grep -qhE "$name"`). */
 function nameMentionedInAnySkill(name: string): boolean {
   const re = new RegExp(name);
   return SKILL_FILES.some((f) => re.test(readFileSync(f, "utf-8")));
@@ -242,10 +215,10 @@ describe("t111 session-skills <-> summary --json seam (migrated from t111-sessio
   const proj = buildSyntheticProject();
   const json = summaryJson(proj) as Record<string, unknown>;
 
-  // --- .sh tests 1-8: the 8 top-level keys the render templates depend on ----
-  // STRONGER than `jq has(key)`: also pin each value's JSON type against the
-  // shape the SKILL.md render templates assume (scalar headers vs nested
-  // objects), so a key present-but-retyped still trips.
+  // --- The 8 top-level keys the render templates depend on ----
+  // Also pin each value's JSON type against the shape the SKILL.md render
+  // templates assume (scalar headers vs nested objects), so a key
+  // present-but-retyped still trips.
   const TOP_LEVEL: Array<[string, "string" | "number-or-null" | "object"]> = [
     ["workflow_id", "string"],
     ["scope", "string"],
@@ -274,7 +247,7 @@ describe("t111 session-skills <-> summary --json seam (migrated from t111-sessio
     },
   );
 
-  // --- .sh test 9: forward drift — no skill cites a phantom field ------------
+  // --- Forward drift - no skill cites a phantom field ------------
   test("every summary field the skills reference is emitted by the tool (no phantom) [.sh test 9]", () => {
     const emitted = emittedLeafSet(json);
     const referenced = referencedFieldSet();
@@ -285,15 +258,15 @@ describe("t111 session-skills <-> summary --json seam (migrated from t111-sessio
     expect(phantom).toEqual([]);
   });
 
-  // --- .sh test 10: reverse drift — no emitted field ships unconsumed --------
+  // --- Reverse drift - no emitted field ships unconsumed --------
   test("every summary field the tool emits is consumed by at least one skill (no orphan) [.sh test 10]", () => {
     const emitted = emittedLeafSet(json);
     expect(emitted.size).toBeGreaterThan(0);
     const orphan: string[] = [];
     for (const leaf of emitted) {
       const name = leaf.split(".").pop() ?? leaf;
-      // started_at is an internal field the human/JSON render does not surface
-      // — the .sh skips it explicitly; preserve the carve-out.
+      // started_at is an internal field the human render does not surface;
+      // preserve the carve-out.
       if (name === "started_at") continue;
       if (!nameMentionedInAnySkill(name)) orphan.push(leaf);
     }

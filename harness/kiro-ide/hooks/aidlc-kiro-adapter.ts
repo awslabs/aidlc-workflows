@@ -122,6 +122,7 @@ import {
   decodeHarnessPlainText,
   fenceCommandOutput,
   relayAsTextBlock,
+  planApprovalAskIsOpen,
   presenceFloorHolds,
   clearKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalViolation,
@@ -164,7 +165,10 @@ import {
   memoryFilePath,
   normalizeDriveLetter,
   nextFlagShape,
+  nextLineFlags,
   nextTokenKind,
+  ORCHESTRATOR_LAUNCHER_OPTIONS,
+  readOrchestratorLauncherOptions,
   REQUEST_TEXT_DIR,
 } from "../tools/aidlc-lib.ts";
 import {
@@ -191,6 +195,7 @@ import {
   isKiroAppendTool,
   isKiroDelegationTool,
   isKiroGenericDelegationTool,
+  isKiroMcpTool,
   isKiroPipelineDelegationTool,
   isKiroPowerShellTool,
   isKiroShellTool,
@@ -1113,7 +1118,7 @@ function nextQuotedFlagValues(args: PowerShellWord[], next: number): Set<number>
     if (i === 0 && !word.opaque && word.value === "compose") continue;
     // The engine takes these off the line with their value before it reads
     // its flags (stripOrchestratorLauncherOptions, nextArgsWithRequestFile).
-    if (!word.opaque && ["--request-file", "--project-dir", "--aidlc-attempt-id"].includes(word.value)) {
+    if (!word.opaque && ["--request-file", ...ORCHESTRATOR_LAUNCHER_OPTIONS].includes(word.value)) {
       i++;
       continue;
     }
@@ -1883,7 +1888,13 @@ function toolTerminalInvocation(command: string): TerminalInvocation | null {
   const runner = match[1] ?? match[2] ?? match[3] ?? "";
   if (runner && !/(^|[\\/])bun(?:\.exe)?$/i.test(runner)) return null;
   const raw = (match[4] ?? "").trim();
-  return { raw, args: splitKiroCommandArgs(raw) };
+  // The words after `next` as the engine reads them: its launcher options
+  // taken off first (readOrchestratorLauncherOptions), as its main() does. A
+  // line that names a folder keeps them as typed, so the seam, which runs
+  // commands in this project only, never runs one meant for another.
+  const words = splitKiroCommandArgs(raw);
+  const launcher = readOrchestratorLauncherOptions(["next", ...words]);
+  return { raw, args: launcher.projectDir !== undefined ? words : launcher.args.slice(1) };
 }
 
 // Whether `latch` is this chat's terminal command of its recorded turn, read
@@ -2153,6 +2164,16 @@ function loweringGuardFlags(args: string[], allowFences: boolean): GuardLowering
     lowering ??= found;
   }
   return lowering;
+}
+
+// The Guard Policy a `next` line lowers, read from the words as typed the way
+// the engine reads them: its launcher options off, then the flags it takes
+// (nextLineFlags). A word of the person's that looks like the flag, behind `--`
+// or not, lowers nothing.
+function nextLoweringGuardFlags(args: string[]): GuardLowering {
+  const own = readOrchestratorLauncherOptions(["next", ...args]).args.slice(1);
+  const taken = nextLineFlags(own).flatMap(({ token, value }) => (value === undefined ? [token] : [token, value]));
+  return loweringGuardFlags(taken, false);
 }
 
 function loweringGuardInvocation(
@@ -2527,7 +2548,7 @@ if (target === "terminal-command-guard") {
   // this, Branch 0, reads only the agent-v1 project-wide latch; the engine
   // could tell this chat's latch from another's only by process ancestry,
   // which one IDE window shares.)
-  const refused = invocation !== null ? loweringGuardFlags(invocation.args, false) : lowering;
+  const refused = invocation !== null ? nextLoweringGuardFlags(splitKiroCommandArgs(invocation.raw)) : lowering;
   const held = readTerminalLatch(sessionId);
   if (holdsThisTurn(held, recordedTurn) && refused !== null && promptWasEmpty(sessionId, recordedTurn)) {
     process.stderr.write(loweringRefusal(refused));
@@ -2590,6 +2611,22 @@ if (target === "terminal-command-guard") {
   writeTerminalLatch(sessionId, turn, invocation, result);
   process.stderr.write(terminalRefusal(result));
   return 2;
+}
+
+// Whether the workflow this chat selects has the engine's Plan Approval
+// question open (planApprovalAskIsOpen), judged in that workflow as the gate
+// floor judges it. A chat outside the workflow never has it open.
+function planApprovalQuestionOpen(pd: string, sessionId: string): boolean {
+  try {
+    const workflow = enterHookWorkflow(pd, sessionId);
+    try {
+      return !hookOutsideGate(workflow) && planApprovalAskIsOpen(pd);
+    } finally {
+      workflow.restore();
+    }
+  } catch {
+    return false;
+  }
 }
 
 // UserPromptSubmit forwards to the core human-turn hook below. That hook
@@ -3104,6 +3141,26 @@ function buildForward(): Forward {
           input: {
             reason:
               "Plan Approval blocked this mutation because a legacy write did not complete PostToolUse mediation. Exact human recovery is required before any legacy or modern write.",
+          },
+        };
+      }
+      // While the engine asks the person to approve the plan, a call to one of
+      // their MCP servers goes to the core guard marked as theirs, which runs it
+      // like their other requests beside the build; Kiro's own card and their
+      // Kiro settings decide it. Outside that question it takes the checks below.
+      if (
+        isKiroMcpTool(toolName) &&
+        planApprovalQuestionOpen(projectDir, resolvedPlanApprovalSessionId(ide))
+      ) {
+        return {
+          hook: "aidlc-plan-approval-guard.ts",
+          input: {
+            hook_event_name: "PreToolUse",
+            tool_name: toolName,
+            tool_input: toolArgs,
+            cwd: projectDir,
+            // Set here, outside the agent's input.
+            aidlc_external_tool: "mcp",
           },
         };
       }

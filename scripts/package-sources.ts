@@ -38,7 +38,6 @@ function inputFiles(repoRoot: string): string[] {
   return files.sort();
 }
 
-/** A SHA-256 over every input's path and bytes; about 20 ms for this repository. */
 export function packageInputsFingerprint(repoRoot: string): string {
   const hash = new Bun.CryptoHasher("sha256");
   for (const file of inputFiles(repoRoot)) {
@@ -90,7 +89,6 @@ export function recordPackagedSources(repoRoot: string, harnesses: string[], bui
   return true;
 }
 
-/** Null when dist/<harness> was packaged from the working tree's sources; otherwise the one line to show. */
 export function stalePackageMessage(repoRoot: string, harness: string): string | null {
   const recorded = readRecord(repoRoot)[harness];
   if (recorded === packageInputsFingerprint(repoRoot)) return null;

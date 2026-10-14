@@ -19,7 +19,7 @@ import { projectionFiles, sha256File, walkFiles } from "./aidlc-distribution.ts"
 // so equivalent spellings of the same directories (macOS /tmp and /private/tmp,
 // a symlinked XDG_DATA_HOME, a re-spelled AIDLC_INSTALL_ROOT) describe one
 // install instead of rejecting each other's launcher as tampered.
-function lexicalInstallRoot(): string {
+export function lexicalInstallRoot(): string {
   const explicit = process.env.AIDLC_INSTALL_ROOT?.trim();
   if (explicit) return isAbsolute(explicit) ? explicit : resolve(process.cwd(), explicit);
   if (platform() === "win32") {
@@ -40,7 +40,7 @@ export function versionRoot(version: string): string {
   return join(versionsRoot(), requireVersion(version));
 }
 
-function lexicalBinRoot(): string {
+export function lexicalBinRoot(): string {
   const explicit = process.env.AIDLC_BIN_DIR?.trim();
   if (explicit) return isAbsolute(explicit) ? explicit : resolve(process.cwd(), explicit);
   return platform() === "win32"

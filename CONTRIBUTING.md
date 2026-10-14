@@ -64,8 +64,8 @@ Before submitting a PR, verify:
 shards, integration tests, and production-guard checks; the merge queue reruns
 them on the merge commit and adds the focused macOS/Windows/arm64 platform checks.
 `deterministic-tests.yml` supplies the shared test definition. The nightly
-`full-suite.yml` runs the scope runs and the guard matrix through it on Linux,
-macOS and Windows, alongside required live coverage; a manual
+`full-suite.yml` runs the scope runs, the scope-host runs and the guard matrix
+through it on Linux, macOS and Windows, alongside required live coverage; a manual
 `full_verification` Full Suite runs every deterministic tier through it on all
 three. Preview runs contract checks and Full Suite without repeating the PR
 test matrix. Stable publication through `release.yml` requires a passing Full

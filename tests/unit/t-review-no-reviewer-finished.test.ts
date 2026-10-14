@@ -113,7 +113,6 @@ function request(p: string): string {
   return join(p, reviewFile);
 }
 
-/** The verdict: its change_notices and the one REVIEW_COMPLETED row. */
 function verdict(p: string, env: Record<string, string> = CLAUDE_SHELL): { notices: string[]; completion: string } {
   const r = logReview(p, ["--verdict", "READY"], env);
   expect(r.status, r.out).toBe(0);
@@ -134,7 +133,6 @@ function gateStart(p: string): string {
   return r.out;
 }
 
-/** The main agent (or the reviewer) writes the review file the request named. */
 function writes(file: string): void {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(

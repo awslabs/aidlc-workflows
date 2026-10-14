@@ -132,7 +132,6 @@ function gridInRecord(record: string): Record<string, string> {
   return (JSON.parse(fence) as { stages?: Record<string, string> }).stages ?? {};
 }
 
-/** The durability row, whatever its pass/fail decoration. */
 function durabilityRow(report: string): string {
   const line = report
     .split("\n")
@@ -207,12 +206,10 @@ describe("t341 composed scope survives an engine reinstall (#963)", () => {
     // impossible - there is no second file to lose.
     expect(record).toContain(`name: ${SCOPE}`);
     for (const key of LIVE_FRONTMATTER_KEYS) expect(record).toContain(key);
-    // The composer's whole prose body survives verbatim, headings and all.
     expect(record).toContain(LIVE_SCOPE_MD.trimEnd());
     expect(record).toContain("BEGIN aidlc composed-scope-grid");
     expect(record).toContain("<!-- END aidlc composed-scope-grid -->");
     expect(gridInRecord(record)).toEqual(authored);
-    // The compile itself is non-destructive: the column is still there.
     expect(readGrid(proj)[SCOPE].stages).toEqual(authored);
 
     // 2. REINSTALL. Both halves of the harness projection are gone.
@@ -220,8 +217,8 @@ describe("t341 composed scope survives an engine reinstall (#963)", () => {
     expect(readGrid(proj)[SCOPE]).toBeUndefined();
     expect(existsSync(identityPath(proj))).toBe(false);
 
-    // 3. DETECTION. Before the fix nothing said a word here. Doctor now fails
-    //    with the record named as unprojected and the remedy spelled out.
+    // 3. DETECTION. Doctor fails with the record named as unprojected and the
+    //    remedy spelled out.
     const broken = doctor(proj);
     const brokenRow = durabilityRow(broken.out);
     expect(brokenRow).toContain("Composed scope durability");
@@ -241,7 +238,6 @@ describe("t341 composed scope survives an engine reinstall (#963)", () => {
       LIVE_SCOPE_MD.trimEnd(),
     );
 
-    // ...and the health row goes green, so recovery is verifiable.
     const after = doctor(proj);
     const healedRow = durabilityRow(after.out);
     expect(healedRow).toContain("recorded and projected");
@@ -303,13 +299,12 @@ describe("t341 composed scope survives an engine reinstall (#963)", () => {
     expect(state).toContain(`${AUTHORED_EXECUTE} — EXECUTE`);
   });
 
-  // The one error in this feature that used to carry no path. The way in is a
-  // hand-restore that copies a RECORD into the harness scopes directory - where a
-  // scope file must hold only the authored half - and then loses the record. The
-  // throw lands after stage-graph.json and scope-grid.json are already written, so
-  // every later compile fails identically and this message is the whole diagnosis.
-  // Driven through the real compile CLI rather than by calling the writer directly,
-  // because what P3 asked for is that the SHIPPED path name the file.
+  // The way in is a hand-restore that copies a RECORD into the harness scopes
+  // directory - where a scope file must hold only the authored half - and then
+  // loses the record. The throw lands after stage-graph.json and scope-grid.json
+  // are already written, so every later compile fails identically and this
+  // message is the whole diagnosis. Driven through the real compile CLI rather than
+  // by calling the writer directly, because the SHIPPED path must name the file.
   test("a harness scope file carrying a generated region names itself when compile refuses", () => {
     const proj = freshProject();
     authorLegacyComposedScope(proj);
@@ -330,7 +325,6 @@ describe("t341 composed scope survives an engine reinstall (#963)", () => {
     const refused = compile(proj);
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain("already contains an aidlc composed-scope-grid sentinel");
-    // The point of the case: which file.
     expect(refused.out).toContain(`aidlc-${probe}.md`);
   });
 
@@ -359,8 +353,7 @@ describe("t341 composed scope survives an engine reinstall (#963)", () => {
     expect(row).toContain("untagged-probe");
     expect(row).toContain("no record to rebuild it from");
 
-    // The remedy has to say compile will not reach this, and name a route that
-    // does. Before this it said only "run graph compile".
+    // The remedy has to say compile will not reach this, and name a route that does.
     expect(report).toContain("cannot rebuild a column with no record behind it");
     expect(report).toContain("scopes:");
 
@@ -413,12 +406,10 @@ describe("t341 the update path recovers a composed scope too", () => {
     ]);
     expect(installed.status, installed.out).toBe(0);
 
-    // Compose the old way, then let compile mint the durable record.
     const authored = authorLegacyComposedScope(proj);
     expect(compile(proj).status).toBe(0);
     expect(existsSync(recordPath(proj))).toBe(true);
 
-    // Now destroy the harness projection — the state a reinstall leaves.
     simulateReinstall(proj);
     expect(existsSync(identityPath(proj))).toBe(false);
     expect(readGrid(proj)[SCOPE]).toBeUndefined();
@@ -431,7 +422,6 @@ describe("t341 the update path recovers a composed scope too", () => {
     expect(existsSync(identityPath(proj))).toBe(true);
     expect(readFileSync(identityPath(proj), "utf-8").trimEnd()).toBe(LIVE_SCOPE_MD.trimEnd());
     expect(readGrid(proj)[SCOPE]?.stages).toEqual(authored);
-    // And the installed tree is healthy by its own report.
     expect(durabilityRow(doctor(proj).out)).toContain("recorded and projected");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

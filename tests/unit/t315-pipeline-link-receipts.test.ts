@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-log:link, audit:PIPELINE_LINK_COMPLETED, function:codekbStoreIsCurrent, function:codekbSourceRoot, function:latestPipelineLinkArtifactMtime, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:singleStageAttemptIsOpen, function:checkPipelineLinkEvidence
+// covers: subcommand:aidlc-log:link, audit:PIPELINE_LINK_COMPLETED, function:codekbStoreIsCurrent, function:codekbSourceRoot, function:latestPipelineLinkArtifactMtime, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:singleStageAttemptIsOpen, function:checkPipelineLinkEvidence, function:pipelineLinkWayOn
 //
 // Pipeline links are durable, ordered completion evidence. The log tool owns
 // each receipt; the engine and direct state transitions require the complete
@@ -777,10 +777,24 @@ describe("t315 pipeline link receipts", () => {
     appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
     expect(runLog(proj, LEAD).rc).toBe(0);
 
+    // The engine's refusal for the same missing link names the conductor's step.
+    const engine = report(proj, ["--stage", RE_STAGE, "--result", "awaiting-approval"]);
+    expect(engine.directive?.kind).toBe("error");
+    const engineMessage = String(engine.directive?.message ?? "");
+    const wayOn = engineMessage.slice(engineMessage.indexOf("Re-run `"));
+    expect(wayOn).toStartWith("Re-run `");
+
     const gate = state(proj, ["gate-start", RE_STAGE]);
     expect(gate.rc).not.toBe(0);
     expect(gate.out).toContain("pipeline handoffs have not been recorded");
     expect(gate.out).toContain(FINAL);
+    // The state tool's floor gives the same way on, and never the person's switch.
+    const refusalLine = gate.out.split("\n").find((line) => line.startsWith("{\"error\""));
+    const gateMessage = String(
+      (JSON.parse(refusalLine ?? "{}") as { error?: string }).error ?? "",
+    ).split("\n", 1)[0];
+    expect(gateMessage).toEndWith(`. ${wayOn}`);
+    expect(gate.out).not.toContain("AIDLC_DISABLE_ENSEMBLE_EVIDENCE");
 
     expect(state(proj, ["gate-start", RE_STAGE], true).rc).toBe(0);
     const approve = state(
@@ -789,6 +803,7 @@ describe("t315 pipeline link receipts", () => {
     );
     expect(approve.rc).not.toBe(0);
     expect(approve.out).toContain("pipeline handoffs have not been recorded");
+    expect(approve.out).not.toContain("AIDLC_DISABLE_ENSEMBLE_EVIDENCE");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
       `- [?] ${RE_STAGE}`,
     );
@@ -842,7 +857,7 @@ describe("t315 pipeline link receipts", () => {
       support_agents: [FINAL],
     }).completed).toEqual([LEAD, FINAL]);
 
-    // The same handoff name with --repo left off, as the agent tried next.
+    // The same handoff name with --repo left off.
     const other = pipelineProject();
     const otherRoot = codekbRepoName(other);
     appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, other);
@@ -858,7 +873,6 @@ describe("t315 pipeline link receipts", () => {
     });
     expect(bare.status, `${bare.stdout}${bare.stderr}`).toBe(0);
 
-    // Any other name is still not this project's repo.
     const third = pipelineProject();
     appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, third);
     const wrong = runLog(third, LEAD, "another-repo");
@@ -1453,7 +1467,6 @@ describe("t315 an approval given with the collaborators switch stands", () => {
     return { rc: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
   }
 
-  // Audit rows of one event for one stage.
   function rows(proj: string, event: string, stage = RE_STAGE): number {
     return readAllAuditShards(proj)
       .split(/^## /m)
@@ -1481,7 +1494,6 @@ describe("t315 an approval given with the collaborators switch stands", () => {
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(`- [x] ${RE_STAGE}`);
     expect(rows(proj, "GATE_APPROVED")).toBe(1);
     expect(readAllAuditShards(proj)).toContain(`**User Input**: ${APPROVE_WORDS}`);
-    // The approved stage never runs again.
     expect(rows(proj, "STAGE_STARTED")).toBe(1);
 
     const next = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
@@ -1537,7 +1549,6 @@ describe("t315 an approval given with the collaborators switch stands", () => {
     const resolve = (proj: string): string[] =>
       supportAgentsAtOpenGate(proj, stage, "enterprise", readFileSync(seededStateFile(proj), "utf-8"));
 
-    // The person's case: the gate opened under off, then the switch went on.
     const flipped = switchedProject("on");
     row(flipped, "STAGE_AWAITING_APPROVAL", 10, { Stage: RE_STAGE });
     row(flipped, "CEREMONY_SET", 20, { Key: "collaborators", Old: "off", New: "on", Source: "you" });
@@ -1563,7 +1574,6 @@ describe("t315 an approval given with the collaborators switch stands", () => {
     row(odd, "CEREMONY_SET", 20, { Key: "collaborators", Old: "whatever", New: "on", Source: "you" });
     expect(resolve(odd)).toEqual([FINAL]);
 
-    // The mirror: the gate opened under on, then the switch went off.
     const mirrored = switchedProject("off");
     row(mirrored, "STAGE_AWAITING_APPROVAL", 10, { Stage: RE_STAGE });
     row(mirrored, "CEREMONY_SET", 20, { Key: "collaborators", Old: "on", New: "off", Source: "you" });

@@ -46,7 +46,9 @@ const DELEGATION_AGENTS = [
 // (the proposalPath detect --json prints). It writes no scope and not the
 // scope grid; saving a scope is the engine's `scope save`.
 const composerProposalPath = "aidlc/spaces/*/intents/.aidlc-engine/composer-proposal.json";
-const spacePaths = ["aidlc/spaces/**"];
+// A side-by-side worker's own unit records sit in its worktree, a top-level dot
+// entry (`.aidlc/worktrees/bolt-<id8>_<slug>`); its code there still asks.
+const spacePaths = ["aidlc/spaces/**", ".aidlc/worktrees/*/aidlc/spaces/**"];
 
 const quoted = (paths: readonly string[]) =>
   paths.map((path) => `        - "${path}"`);
@@ -82,13 +84,15 @@ const SHELL_FORM_ASKS = RISKY_SHELL_FORMS.map((form) => `bun .kiro/tools/aidlc*$
 // conductor's tools list selects those (agents/aidlc-aidlc.md). On that path its
 // shell allow is not applied, the conductor's is (delegate-shell-deny.ts); the
 // allow still serves a persona the person selects directly. tools is enforced on
-// every dispatch path; it names no MCP server, so a persona reaches none (an
-// @mcp wildcard would expose every user- and workspace-level server).
+// every dispatch path. includeMcpJson gives a persona every server in the
+// person's workspace and user mcp.json; no rule allows an MCP call, so each
+// one asks.
 function personaFrontmatter(agent: string): string[] {
   const writePaths = agent === "aidlc-composer-agent" ? [composerProposalPath] : spacePaths;
   // Engine-owned trees are never a persona's to write; a deny beats every allow.
   return [
     `tools: ["read", "write", "shell"]`,
+    "includeMcpJson: true",
     "permissions:",
     "  rules:",
     "    - capability: shell",
@@ -143,10 +147,10 @@ const KIRO_ACP_CLIENT = "If you drive Kiro from an ACP client, the Kiro IDE guid
 const KIRO_CLI_ACP_STEP = `${KIRO_CLI_RESTART}. ${KIRO_ACP_CLIENT}`;
 
 // The agent's own step when the hooks never ran: the new chat never saw the
-// request, so the person is told to type the entry there. With no workflow
-// selected the engine keeps the request for that first bare entry; inside a
-// workflow the entry resumes from saved state. The missed-reply line is shown
-// unfilled, so <entry> stays out of the constant it shares.
+// request, so the person is told to type the entry there, and the engine fills
+// it with the id it kept the stopped command under (`<entry> --request <id>`),
+// before a workflow or inside one. The missed-reply line is shown unfilled, so
+// <entry> stays out of the constant it shares.
 const KIRO_CLI_ACP_RESTART_STEP = `${KIRO_CLI_RESTART}, then type <entry> to carry on. ${KIRO_ACP_CLIENT}`;
 
 // The words the agent relays when the person's answer was not recorded.
@@ -229,7 +233,9 @@ const manifest: HarnessManifest = {
       "folder in Kiro IDE: choose Trust Folder & Continue when Kiro asks whether you trust it, or " +
       "select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window " +
       "from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), send a message and run " +
-      "doctor again. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.",
+      "doctor again. If AI-DLC was installed while Kiro IDE was open, quit Kiro IDE fully and reopen " +
+      "it instead: it keeps the PATH it started with, so its hooks cannot find aidlc, and Reload " +
+      "Window does not change that. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.",
     // A second cause, measured live on Kiro IDE 1.2.37 (#2167): a folder
     // trusted after Kiro opened it runs the agent's commands, but Kiro's agent
     // started with hooks off for the untrusted folder ("hooks.v2.execution
@@ -272,6 +278,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/active-memory/ (the
           // engine's copy of the active space's method).
           "sha256:a21217e44700aa0d6e703ebb524c4e07a3c4c12f7097d1923034b10b9a6d0549",
+          // The variant shipped before the block ignored aidlc/.aidlc-request-text/
+          // (a request the engine has not read yet).
+          "sha256:6c6ff7641c17829d77fdd023f340b938db11dcc26c734a0c452d5213f9bd19cf",
         ],
       },
     },
@@ -326,6 +335,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
+    { src: "skills/aidlc/tables.md", dst: "skills/aidlc/tables.md" },
     // The reference form; the packager writes the shipped memory's text over
     // it, as the engine does with the project's own memory for every chat.
     { src: "steering/aidlc-active-memory.md", dst: "steering/aidlc-active-memory.md" },

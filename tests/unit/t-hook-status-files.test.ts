@@ -163,7 +163,6 @@ describe("hook status files are written without following links", () => {
   });
 
   test("a real hook carries on past a linked hooks-health directory and writes nothing through it", () => {
-    // The same hook in a plain project writes its heartbeat.
     const plain = project();
     expect(fireAuditHook(plain)).toBe(0);
     expect(existsSync(join(hooksHealthDir(plain), "write-audit-log.last"))).toBe(true);

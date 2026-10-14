@@ -116,7 +116,6 @@ export function waitsFor(item: CorpusItem): string | null {
   return landed.get(item.after) ? null : item.after;
 }
 
-/** The chat the item is typed from, and whether the host's hook runs before the engine. */
 export const sessionOf = (item: CorpusItem): string => (item.state === "second-chat" ? SECOND_SESSION : SESSION);
 export const hookRuns = (item: CorpusItem): boolean => item.state !== "hooks-off";
 export const itemEnv = (item: CorpusItem): Record<string, string> => (item.state === "unattended" ? { AIDLC_UNATTENDED: "1" } : {});
@@ -140,7 +139,7 @@ export function argvVariants(item: CorpusItem): Array<[ArgvVariant, string[]]> {
 export interface Exec { status: number; stdout: string; stderr: string }
 export async function exec(cmd: string[], opts: { cwd: string; env: NodeJS.ProcessEnv; input?: string }): Promise<Exec> {
   // The input is a file the child reads as its stdin, not a pipe this process has to write: the Kiro IDE hook once gave a
-  // pipe two seconds before settling for an empty payload (it now waits for the close), and on a loaded Windows runner this single-threaded parent
+  // pipe two seconds before settling for an empty payload, and on a loaded Windows runner this single-threaded parent
   // (copying fixtures for other items) has written the pipe later than that, recording an empty turn. A file is complete
   // before the child starts, whatever the parent is doing.
   const payload = opts.input === undefined ? null : join(tmpdir(), `aidlc-input-stdin-${process.pid}-${randomUUID()}.json`);
@@ -276,7 +275,6 @@ export async function buildState(proj: string, state: State): Promise<void> {
       const shown = await exec([process.execPath, LOG, "decision", ...summaryArgs, "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes"], { cwd: proj, env: env(proj) });
       if (shown.status !== 0) throw new Error(`summary confirmation ask failed: ${shown.stdout}${shown.stderr}`);
       await say(proj, "Looks correct", "claude");
-      // The agent writes the person's answer into the questions file, then records it.
       writeFileSync(questions, readFileSync(questions, "utf-8").replace(/\[Answer\]: \n$/, "[Answer]: Looks correct\n"), "utf-8");
       recordArtifactWriteViaHook(proj, questions, "Edit");
       const confirmed = await exec([process.execPath, LOG, "answer", ...summaryArgs, "--details", "Looks correct"], { cwd: proj, env: env(proj) });
@@ -313,7 +311,6 @@ export async function buildState(proj: string, state: State): Promise<void> {
       return;
     }
     case "plan-offer-open": {
-      // The person typed "build a notes app" on a fresh workspace and the plan offer is on screen.
       await say(proj, "/aidlc build a notes app", "claude");
       const read = await next(proj, ["build", "a", "notes", "app"]);
       // The agent's step after the plan proposal print: no ready-made plan fits a new app, so it proposes compose.
@@ -335,7 +332,6 @@ export async function buildState(proj: string, state: State): Promise<void> {
       return;
     }
     case "stage-question-asked": {
-      // Open work at Requirements Analysis; the agent asked the person a stage question in chat.
       writeFileSync(seededStateFile(proj), midInception(), "utf-8");
       writeStageFiles(proj, false);
       appendAuditEntry("STAGE_STARTED", { Stage: STAGE }, proj);
@@ -362,7 +358,6 @@ export async function buildState(proj: string, state: State): Promise<void> {
   }
 }
 
-/** A fresh project with the shipped engine and method tree at the item's state. */
 export async function projectAt(state: State): Promise<string> {
   const proj = createOrchestrationTestProject();
   await buildState(proj, state);

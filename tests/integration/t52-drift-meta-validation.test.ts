@@ -1,7 +1,6 @@
 // covers: test:t48-audit-event-emitters
 //
-// Meta-test on t48-audit-event-emitters.sh. Migrated from
-// tests/integration/t52-drift-meta-validation.sh (TAP plan 5).
+// Meta-test on t48-audit-event-emitters.test.ts.
 //
 // SUBJECT: the t48 drift test's detection LOGIC. t48 enforces doc/code
 // consistency for the audit-event taxonomy with five checks — forward
@@ -10,24 +9,22 @@
 // pairing (handlers emit their paired events), and MD↔MD (audit-format.md and
 // 12-state-machine.md agree). This meta-test verifies t48 actually CATCHES each
 // failure mode by injecting a synthetic regression into a sandboxed copy of the
-// source tree, running t48 against it, and asserting t48 fails (`not ok`) with
+// source tree, running t48 against it, and asserting t48 fails (`(fail)`) with
 // the relevant diagnostic. Without this guard, a bug in t48's detection could
-// let real drift slip through silently — so a happy-path-only twin would NOT be
-// equal-or-stronger (§6-E non-golden: the failure event must actually fire).
+// let real drift slip through silently - so a happy-path-only test would NOT
+// be enough: the failure event must actually fire.
 //
 // MECHANISM: cli. The subject is the t48 drift DETECTOR, so this stays a bun
-// test that SHELLS OUT (spawns the detector as a subprocess) and asserts in TS
-// (not a 1:1 transliteration). Like the .sh, each case stands up a git-clean
-// sandbox copy of dist/claude + docs + tests in a fresh temp dir, mutates ONE
-// file in dist/claude, then runs t48 from inside that sandbox.
+// test that SHELLS OUT (spawns the detector as a subprocess) and asserts in TS.
+// Each case stands up a sandbox copy of dist/claude + docs + tests in a fresh
+// temp dir, mutates ONE file in dist/claude, then runs t48 from inside that
+// sandbox.
 //
-// milestone 4 UPDATE: t48 is now the bun:test twin
-// (tests/integration/t48-audit-event-emitters.test.ts), not the retired .sh. The
-// twin resolves its scan roots via tests/harness/fixtures.ts REPO_ROOT
-// (= HARNESS_DIR/../.., harness-relative — NOT cwd). So running the twin from
-// inside the sandbox tree (sandbox/tests/integration/...) makes its
-// REPO_ROOT/AIDLC_SRC resolve to the sandbox — exactly the mutate-and-detect
-// contract the .sh got from its cwd-relative REPO_ROOT. We drive the twin with
+// The t48 twin (tests/integration/t48-audit-event-emitters.test.ts) resolves
+// its scan roots via tests/harness/fixtures.ts REPO_ROOT (= HARNESS_DIR/../..,
+// harness-relative - NOT cwd). So running the twin from inside the sandbox
+// tree (sandbox/tests/integration/...) makes its REPO_ROOT/AIDLC_SRC resolve
+// to the sandbox (the mutate-and-detect contract). We drive the twin with
 // `bun test` and parse bun's `(fail) <name>` rows (whose names carry the
 // check keyword: forward/reverse/tertiary/pairing/md-md) instead of bash TAP
 // `not ok`. bun resolves bun:test + node builtins natively, so the sandbox needs
@@ -35,35 +32,23 @@
 // (the twin asserts `toEqual([])` over arrays of offending event names).
 //
 // Source under test:
-//   - tests/integration/t48-audit-event-emitters.test.ts (the detector; 16-row TAP plan)
+//   - tests/integration/t48-audit-event-emitters.test.ts (the detector)
 //       * forward check    -> t48:87-137  (ok/not_ok "forward: ...")
 //       * reverse check     -> t48:139-199 (ok/not_ok "reverse: ...")
 //       * tertiary check    -> t48:201-230 (DELETED_EVENTS incl. JUMP_AUTO_STOPPED)
 //       * pairing check     -> t48:232-312 (check_pairing handleApprove ...)
 //       * md-md check       -> t48:314-335 (audit-format.md ⇄ 12-state-machine.md)
-//   - dist/claude/.claude/tools/aidlc-state.ts
-//       * emitAudit(pd, "GATE_APPROVED", gateFields)        :745  (injection 1 target)
-//       * function handleApprove(args: string[]): void      :717  (injection 4 target)
+//   - dist/claude/.claude/tools/aidlc-state.ts handleApprove
+//       * emitAudit(pd, "GATE_APPROVED", gateFields) (injection 1 target)
+//       * function handleApprove(args: string[]): void (injection 4 target)
 //   - dist/claude/.claude/knowledge/aidlc-shared/audit-format.md
-//       * | `ARTIFACT_REUSED` | ... | row                   :82   (injection 5 target)
-//   - docs/reference/12-state-machine.md retains ARTIFACT_REUSED :228 (drift partner)
+//       * | `ARTIFACT_REUSED` | ... | row (injection 5 target)
+//   - docs/reference/12-state-machine.md retains ARTIFACT_REUSED (drift partner)
 //
-// Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
-//   .sh test 1 (forward catches renamed emission)            -> "forward check catches a renamed emission"
-//   .sh test 2 (reverse catches undocumented emission)        -> "reverse check catches an undocumented emission"
-//   .sh test 3 (tertiary catches resurrected deleted event)   -> "tertiary check catches a resurrected deleted event"
-//   .sh test 4 (pairing catches renamed handler)              -> "pairing check catches a renamed handler"
-//   .sh test 5 (md-md catches audit-format ↔ state-machine)   -> "md-md check catches audit-format ⇄ 12-state-machine drift"
-//
-// STRONGER than the .sh: the .sh grepped `not ok.*forward|GATE_APPROVED` etc.
-// (a `not ok` row OR a bare token match — a token mention alone could pass even
-// if the check did not fail). Each twin below asserts BOTH (a) t48 prints a
-// `not ok` row for the TARGETED check AND (b) the injected token / diagnostic
-// appears, AND it confirms the SAME injection on a pristine sandbox (no
-// mutation) leaves the targeted check GREEN — so the red is attributable to the
-// injection, not to a pre-existing failure. A clean sandbox baseline is verified
-// once in a guard test so a structurally-broken copy can't make every case
-// trivially "catch".
+// Each case below asserts BOTH (a) t48 prints a `(fail)` row for the TARGETED
+// check AND (b) the injected token / diagnostic appears, so a token mention
+// alone cannot pass. A clean sandbox baseline is verified once in a guard test
+// so a structurally-broken copy can't make every case trivially "catch".
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -77,7 +62,7 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 // which exceeds bun's 5s hook default under --parallel 4.
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test drives the t48 twin
+const BUN = process.execPath;
 const T48_REL = join("tests", "integration", "t48-audit-event-emitters.test.ts");
 
 const tempDirs: string[] = [];
@@ -133,12 +118,10 @@ function runT48(sandbox: string): T48Result {
   };
 }
 
-/** Convenience: path to a dist/claude file inside the sandbox. */
 function distFile(sandbox: string, rel: string): string {
   return join(sandbox, "dist", "claude", ".claude", rel);
 }
 
-/** Convenience: path to a docs file inside the sandbox. */
 function docFile(sandbox: string, rel: string): string {
   return join(sandbox, "docs", rel);
 }
@@ -146,8 +129,7 @@ function docFile(sandbox: string, rel: string): string {
 /** The failing-test lines from the t48 twin's bun output. bun prints
  *  `(fail) <describe> > <test name> [Nms]` for each failure; the test name
  *  carries the check keyword (forward/reverse/tertiary/pairing/md-md), so a
- *  keyword filter on these lines isolates the targeted check exactly as the
- *  .sh's `not ok.*<check>` did over TAP. */
+ *  keyword filter on these lines isolates the targeted check. */
 function notOkLines(out: string): string[] {
   return out.split("\n").filter((l: string) => /\(fail\)/.test(l));
 }
@@ -167,7 +149,7 @@ describe("t52 — meta-test on t48 drift detection (migrated from t52-drift-meta
   test("guard: t48 passes clean against an unmutated sandbox copy", () => {
     // If the sandbox copy were structurally broken, every injection would
     // trivially "catch" — so anchor on a green baseline first. t48 exits 0 and
-    // prints zero `not ok` rows when the source tree is consistent.
+    // prints zero `(fail)` rows when the source tree is consistent.
     expect(cleanResult.status).toBe(0);
     expect(notOkLines(cleanResult.out)).toEqual([]);
   });
@@ -175,7 +157,8 @@ describe("t52 — meta-test on t48 drift detection (migrated from t52-drift-meta
   test("forward check catches a renamed emission [.sh test 1]", () => {
     const sb = makeSandbox();
     // Rename the GATE_APPROVED emission at its call site. The forward check then
-    // loses the emission site for the GATE_APPROVED doc row (t48:745 source).
+    // loses the emission site for the GATE_APPROVED doc row (aidlc-state.ts
+    // handleApprove).
     const f = distFile(sb, STATE_TS);
     const before = readFileSync(f, "utf-8");
     const after = before.replaceAll(
@@ -186,8 +169,8 @@ describe("t52 — meta-test on t48 drift detection (migrated from t52-drift-meta
     writeFileSync(f, after);
 
     const r = runT48(sb);
-    // STRONGER than the .sh (`not ok.*forward|GATE_APPROVED`): require a `not ok`
-    // row whose subject is the forward check, AND that GATE_APPROVED is named.
+    // Require a `(fail)` row whose subject is the forward check, AND that
+    // GATE_APPROVED is named.
     const fwdNotOk = notOkLines(r.out).filter((l) => /forward/i.test(l));
     expect(fwdNotOk.length).toBeGreaterThan(0);
     expect(r.out).toContain("GATE_APPROVED");
@@ -198,7 +181,7 @@ describe("t52 — meta-test on t48 drift detection (migrated from t52-drift-meta
     const sb = makeSandbox();
     // Append a stray emission with an event name in neither VALID_EVENT_TYPES
     // nor the doc registry. A real emitAudit(...) line bypasses the
-    // comment-stripping decommented() helper (t48:33-35).
+    // comment-stripping decommented() helper (t48-audit-event-emitters.test.ts).
     const f = distFile(sb, STATE_TS);
     writeFileSync(
       f,
@@ -214,9 +197,9 @@ describe("t52 — meta-test on t48 drift detection (migrated from t52-drift-meta
 
   test("tertiary check catches a resurrected deleted event [.sh test 3]", () => {
     const sb = makeSandbox();
-    // JUMP_AUTO_STOPPED is one of the deleted events the tertiary check guards
-    // (t48:202 DELETED_EVENTS). Re-introducing an emission site for it must trip
-    // the resurrected-event diagnostic.
+    // JUMP_AUTO_STOPPED is one of the deleted events the tertiary check guards (the
+    // `deleted` list in t48-audit-event-emitters.test.ts). Re-introducing an
+    // emission site for it must trip the resurrected-event diagnostic.
     const f = distFile(sb, STATE_TS);
     writeFileSync(
       f,
@@ -232,9 +215,9 @@ describe("t52 — meta-test on t48 drift detection (migrated from t52-drift-meta
 
   test("pairing check catches a renamed handler [.sh test 4]", () => {
     const sb = makeSandbox();
-    // Rename handleApprove (t48:304 check_pairing handleApprove ...). The
-    // function_body lookup then returns empty and pairing reports
-    // "handler handleApprove not found" (t48:278).
+    // Rename handleApprove (t48-audit-event-emitters.test.ts pairingMissing). The
+    // functionBody lookup then returns null and pairing reports
+    // "handler handleApprove not found (renamed/deleted?)".
     const f = distFile(sb, STATE_TS);
     const before = readFileSync(f, "utf-8");
     const after = before.replace(
@@ -253,9 +236,9 @@ describe("t52 — meta-test on t48 drift detection (migrated from t52-drift-meta
 
   test("md-md check catches audit-format ⇄ 12-state-machine drift [.sh test 5]", () => {
     const sb = makeSandbox();
-    // Remove the ARTIFACT_REUSED row from audit-format.md ONLY (audit-format.md
-    // :82). 12-state-machine.md still carries it (:228), so the two catalogs
-    // diverge and the md-md check (t48:314-335) must flag the difference.
+    // Remove the ARTIFACT_REUSED row from audit-format.md ONLY.
+    // 12-state-machine.md still carries it, so the two catalogs
+    // diverge and the md-md check must flag the difference.
     const f = distFile(sb, AUDIT_FORMAT);
     const before = readFileSync(f, "utf-8");
     const after = before
@@ -265,7 +248,6 @@ describe("t52 — meta-test on t48 drift detection (migrated from t52-drift-meta
     expect(after).not.toBe(before);
     writeFileSync(f, after);
 
-    // Sanity: 12-state-machine.md in the sandbox still has ARTIFACT_REUSED.
     expect(readFileSync(docFile(sb, join("reference", "12-state-machine.md")), "utf-8")).toContain(
       "ARTIFACT_REUSED",
     );

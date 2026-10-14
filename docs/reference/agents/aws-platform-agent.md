@@ -6,7 +6,7 @@
 |-------|-------|
 | Name | aidlc-aws-platform-agent |
 | Tier | **judgment** |
-| Allowed Claude Code Tools | Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion |
+| Claude Code Tools | Inherits the full session toolset, MCP tools included (no `tools:` allowlist); expected to use Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion |
 | Disallowed Claude Code Tools | Task |
 
 ---
@@ -26,6 +26,7 @@
 |-------|------|-----------------------------|
 | feasibility | Feasibility and Constraint Analysis | Assesses AWS service availability, regional constraints, and cloud platform limitations |
 | domain-design | Domain Design | Advises on cloud-native patterns, managed service integration, and serverless options |
+| contract-design | Contract Design | Support agent on the stage; its persona lists Contract Design among its supported stages without a duty specific to it |
 | nfr-design | NFR Design | Translates NFRs into infrastructure specifications, auto-scaling policies, and resilience configurations |
 | feedback-optimization | Feedback and Optimization | Identifies cost optimization opportunities and infrastructure tuning based on production metrics |
 
@@ -64,9 +65,9 @@ Path: `.claude/knowledge/aidlc-aws-platform-agent/`
 
 ### Team (Tier 2)
 
-Path: `aidlc/knowledge/aidlc-aws-platform-agent/` (the space-level knowledge dir; user-managed)
+Path: `aidlc/spaces/<active-space>/knowledge/aidlc-aws-platform-agent/` (the space-level knowledge dir; user-managed)
 
-A space-level directory the team creates when it has content (the engine ships `aidlc/knowledge/` empty). Populated by the team with project-specific
+A space-level directory the team creates when it has content (the engine creates the space's `knowledge/` folder empty). Populated by the team with project-specific
 infrastructure context such as existing VPC designs, AWS account structure,
 approved service catalog, or cost baselines.
 

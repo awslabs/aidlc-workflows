@@ -78,7 +78,6 @@ async function observe(item: CorpusItem, hostHooks: boolean): Promise<Observed> 
       const step = await next(proj, argv, opts);
       result.steps[variant] = { argv, ...step };
     }
-    // The other hosts' hooks, each on a fresh project at the same state, for the sampled items.
     if (hostHooks && hookRuns(item)) {
       for (const harness of HOST_HOOKS) {
         const own = await projectAt(item.state);
@@ -160,7 +159,6 @@ for (const category of categories) {
           }
         }
 
-        // The first step, per way the host hands the line over.
         for (const [variant, step] of Object.entries(seen!.steps)) {
           const label = `${variant} ${JSON.stringify(step.argv)}`;
           expect(step.directive, `${label}: no directive: ${step.out}`).not.toBeNull();

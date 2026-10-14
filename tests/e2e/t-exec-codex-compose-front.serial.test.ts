@@ -1,13 +1,10 @@
 // covers: file:skills/aidlc/SKILL.md
 //
 // t-exec-codex-compose-front.serial.test.ts - the INTERACTIVE front-compose
-// journey on Codex, expressed in the driver's native turn shape plus the one
-// capability the older codex tests never used: `codex exec resume --last`
-// continues the SAME recorded session (same session id, same rollout file,
-// full context), so a gate that ends turn 1 can be answered by a scripted
-// turn 2. Spike-proven 2026-07-02 (three-turn echo continuity + a full live
-// beats-1-2 aidlc probe); artefacts under
-// tmp/adaptive-workflows/spike-codex-resume/.
+// journey on Codex, expressed in the driver's native turn shape plus
+// `codex exec resume --last`, which continues the SAME recorded session (same
+// session id, same rollout file, full context), so a gate that ends turn 1 can
+// be answered by a scripted turn 2.
 //
 //   beat 1:  codex exec `/aidlc compose "<task>"` - the conductor dispatches
 //            the composer, renders the proposal, and ends the turn AT the
@@ -35,11 +32,9 @@
 // match it, which is correct and leaves no Plan line to assert.
 //
 // Under workspace-write codex carves the project-root `.codex/` out of the
-// writable root (same read-only-by-design treatment as `.git/`), which is why
-// the old composed-scope write needed a grant. Approve no longer writes there;
-// the grant below stays so a stray write would land and be caught by the
-// stock-only assertion instead of failing as EPERM. Denied-path + mechanism
-// pinned by tmp/adaptive-workflows/spike-codex-resume/FINDINGS.md §5.
+// writable root (same read-only-by-design treatment as `.git/`). Approve does
+// not write there; the grant below stays so a stray write would land and be
+// caught by the stock-only assertion instead of failing as EPERM.
 //
 // `--last` filters recorded sessions by cwd, so beat 2 MUST run with the same
 // cwd as beat 1 (both use the project dir).
@@ -221,9 +216,6 @@ function intentRecords(proj: string): string[] {
     .map((e) => e.name);
 }
 
-// Sanctioned scope files on disk: `.codex/scopes/aidlc-<name>.md`. The set the
-// dist ships, plus any the composer authored this session (the grant lets the
-// authored one land here rather than only in the env-seam mapping).
 function scopeFiles(proj: string): string[] {
   const dir = join(proj, ".codex", "scopes");
   if (!existsSync(dir)) return [];
@@ -257,8 +249,8 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
         // next turn must land on the gate. Still: nothing written yet.
         // Gate detection: the reply is already the approval gate offering
         // choices when it speaks of approving OR of choosing among the plan
-        // options (a third live phrasing observed on this head: "Please
-        // choose one of the plan options above to continue.").
+        // options (a live phrasing: "Please choose one of the plan options
+        // above to continue.").
         let gateOut = gateText(b1);
         let gateDiagnostic = codexExecDiagnostic(b1);
         if (!/approv|choose/i.test(gateOut)) {
@@ -273,7 +265,6 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
         // root assistant message, even if its final message was just a reminder.
         expect(/approv|choose/i.test(gateOut), gateDiagnostic).toBe(true);
         expect(/reject/i.test(gateOut), gateDiagnostic).toBe(true);
-        // Nothing written before approval: no state file, no intent record.
         expect(intentRecords(proj)).toEqual([]);
         expect(
           existsSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent")),
@@ -282,10 +273,8 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
         // Beat 2: answer the gate in the SAME session.
         const b2 = codexTurn(proj, home, "Approve", { resume: true });
         expect(b2.rc, codexExecDiagnostic(b2)).toBe(0);
-        // Same-session proof: resume continued beat 1's conversation.
         expect(b2.sessionId).toBe(b1Session);
 
-        // The approve completed the write + creation arc on disk.
         const records = intentRecords(proj);
         expect(records.length).toBe(1);
         const rec = join(proj, "aidlc", "spaces", "default", "intents", records[0]);

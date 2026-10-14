@@ -1,4 +1,4 @@
-// custom-harness.ts — the Harness-Engineer fixture (Phase 5).
+// custom-harness.ts - the Harness-Engineer fixture.
 //
 // Models what a HARNESS ENGINEER does (docs/harness-engineering/00-overview.md): reshape the
 // framework WITHOUT code by editing DATA — define their own workflow (a custom
@@ -26,7 +26,7 @@
 // Note the deliberate slug≠artefact split, matching shipped convention (the
 // `intent-capture` stage produces `intent-statement`, not "intent-capture"):
 // the STAGE is the activity, the ARTEFACT is the named deliverable it emits.
-// migration-strategy's required consume (source-schema) is satisfied by an
+// migration-plan's required consume (source-schema) is satisfied by an
 // ON-PATH producer (schema-snapshot), so validateScope stays clean — the "be
 // accurate, seed artefacts that match the scope" requirement is met by
 // construction (no orphan consume, no off-path producer).
@@ -37,19 +37,18 @@
 // setupTuiProject({ customHarness: true }) (tui) — one seeding surface, no
 // duplication, so the {sdk,tui} two-driver test drives byte-identical config.
 //
-// EVERY shape below was verified against the shipped sources before coding
-// (the "shipped shapes ARE the spec" discipline):
+// The shipped shapes each seeded piece follows:
 //   - scope metadata/routing shape .... scopes/aidlc-bugfix.md +
 //     aidlc-common/stages/* `scopes:` frontmatter transposed into scope-grid
-//   - stage frontmatter required set .. tools/aidlc-stage-schema.ts:75-88
-//     (REQUIRED_FIELDS: slug,phase,execution,condition,lead_agent,support_agents,
-//      mode,produces,consumes,requires_stage,inputs,outputs; sensors OPTIONAL at
-//      :90; the presence check that emits "missing required field" is at :142)
+//   - stage frontmatter required set .. aidlc-stage-schema.ts REQUIRED_FIELDS
+//     (slug,phase,execution,condition,lead_agent,support_agents,
+//      mode,produces,consumes,requires_stage,inputs,outputs; sensors is in
+//      OPTIONAL_FIELDS; validateStageFrontmatter emits "missing required field")
 //   - consumes[] authoring shape ...... a list of { artifact, required } maps
-//     (verified against the shipped market-research.md frontmatter)
+//     (as in the shipped market-research.md frontmatter)
 //   - sensor manifest shape ........... sensors/aidlc-required-sections.md +
 //     aidlc-sensor-schema.ts (id,kind,command,default_severity,description,
-//     matches?; NO applies_to — that's a fossil)
+//     matches?; NO applies_to)
 //   - stage-graph seeding ............. compileStageGraph harvests {number,name}
 //     from existing JSON for known slugs; a NEW slug is AUTO-SEEDED (next free
 //     per-phase index + title-cased name). This fixture still pre-seeds explicit
@@ -60,30 +59,24 @@
 //   - agent lookup ................... aidlc-graph.ts compile calls loadAgents()
 //     and validates lead_agent/support_agents against the copied .claude/agents/
 //     directory; the custom agent must be written before stage compile.
-//   - edge-local invariant ............ aidlc-graph.ts:996 (every requires_stage
-//     dep must be LOWER-numbered than the stage; numericStageOrder :877-882
-//     splits on "." and parseInts each part, so 2.05 sorts AFTER 2.1 —
-//     parseInt("05")=5 > parseInt("1")=1. The two stages are 2.0 and 2.9; the
-//     shipped inception stages 2.1-2.8 are SKIP in this scope, so the only live
-//     edge is 2.0->2.9, and numericStageOrder("2.0","2.9") < 0 satisfies it.)
-//   - reachability .................... aidlc-utility.ts:1995-2002 + :2179 —
-//     init marks every initialization-phase stage [x] complete and
-//     determineFirstPostInitStage SKIPS init-phase stages, so a custom stage
-//     must be a NON-init stage AND the lowest-numbered non-init EXECUTE in its
-//     scope to become Current Stage (firstPostInit) at init. schema-snapshot at
-//     2.0 (inception) is the lowest non-init EXECUTE -> init writes
-//     Current Stage=schema-snapshot. migration-plan (2.10) is reached after
-//     schema-snapshot's gate.
+//   - edge-local invariant ............ aidlc-graph.ts compileStageGraph (every
+//     requires_stage dep must be LOWER-numbered than the stage;
+//     numericStageOrder splits on "." and parseInts each part, so 2.05 sorts
+//     AFTER 2.1: parseInt("05")=5 > parseInt("1")=1. The two stages are 2.0 and
+//     2.10; the shipped inception stages 2.1-2.9 are SKIP in this scope, so the
+//     only live inception edge is 2.0->2.10, and numericStageOrder("2.0","2.10")
+//     < 0 satisfies it.)
+//   - reachability .................... aidlc-utility.ts
+//     determineFirstPostInitStage: init marks every initialization-phase stage
+//     [x] complete and determineFirstPostInitStage SKIPS init-phase stages, so a
+//     custom stage must be a NON-init stage AND the lowest-numbered non-init
+//     EXECUTE in its scope to become Current Stage (firstPostInit) at init.
+//     schema-snapshot at 2.0 (inception) is the lowest non-init EXECUTE -> init
+//     writes Current Stage=schema-snapshot. migration-plan (2.10) is reached
+//     after schema-snapshot's gate.
 //   - sensor->stage binding ........... stage frontmatter `sensors: [<id>]` only
-//     (aidlc-graph.ts:497 resolveSensorsForStage); manifest `matches:` glob is
-//     the fire filter (aidlc-run-sensors.ts:198)
-//
-// The recipe was proven end-to-end in a throwaway project: compile succeeds,
-// `aidlc-graph scope data-migration` routes exactly [workspace-scaffold,
-// workspace-detection, state-init, schema-snapshot, migration-plan], a real
-// `init --scope data-migration` writes Current Stage=schema-snapshot, and the
-// compiled schema-snapshot node carries schema-validator in sensors_applicable +
-// aidlc-project.md in rules_in_context.
+//     (aidlc-graph.ts resolveSensorsForStage); manifest `matches:` glob is
+//     the fire filter (aidlc-run-sensors.ts fireSensors)
 
 import { spawnSync } from "node:child_process";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
@@ -123,7 +116,7 @@ export const CUSTOM_KNOWLEDGE_MARKER =
  *  stage. The activity: capture the source database's schema. Lives in INCEPTION
  *  at 2.0 (sorts before reverse-engineering 2.1). Placement is load-bearing for
  *  reachability: init auto-completes every init-phase stage and
- *  determineFirstPostInitStage (aidlc-utility.ts:2179) skips them, so the custom
+ *  determineFirstPostInitStage (aidlc-utility.ts) skips them, so the custom
  *  head stage must be NON-init; as the scope's lowest-numbered non-init EXECUTE
  *  it becomes firstPostInit -> init writes `Current Stage: schema-snapshot`.
  *  Edge-local invariant holds: numericStageOrder("0.3","2.0") < 0, so requiring
@@ -136,8 +129,8 @@ export const SNAPSHOT_STAGE_PHASE = "inception";
 /** The artefact the schema-snapshot stage PRODUCES: an inventory of the source
  *  database's tables/columns to migrate. Distinct from the stage slug (shipped
  *  convention: stage = activity, artefact = deliverable). The migration-plan
- *  stage consumes this — the join-up. Its write under aidlc-docs/ trips the
- *  custom sensor's glob. */
+ *  stage consumes this: the join-up. Its write under the active intent's record
+ *  trips the custom sensor's glob. */
 export const SNAPSHOT_ARTIFACT = "source-schema";
 
 // --- TAIL stage: migration-plan — plans the cutover ------------------------
@@ -145,7 +138,7 @@ export const SNAPSHOT_ARTIFACT = "source-schema";
 /** The migration-plan STAGE — the chain's tail. The activity: read the captured
  *  source-schema and plan the cutover. Number 2.10 (NOT 2.05: numericStageOrder
  *  parseInts the minor part, so 2.05 would sort AFTER 2.1). 2.10 sorts after 2.0
- *  and after the SKIP'd shipped 2.1-2.9 (delivery-planning now owns 2.9); the
+ *  and after the SKIP'd shipped 2.1-2.9 (delivery-planning owns 2.9); the
  *  only live edge is 2.0->2.10, and numericStageOrder("2.0","2.10") < 0
  *  satisfies the edge-local invariant. */
 export const PLAN_STAGE_SLUG = "migration-plan";
@@ -356,8 +349,8 @@ function ensureStageListsCustomScope(stageFile: string): void {
   writeFileSync(stageFile, updated);
 }
 
-/** Pre-seed the {slug, number, name} stage-graph rows the compiler needs to
- *  bootstrap new stages (aidlc-graph.ts:944-952). The rest of each node is
+/** Pre-seed the {slug, number, name} stage-graph rows to pin the custom
+ *  stage ordering (aidlc-graph.ts compileStageGraph). The rest of each node is
  *  recomputed from the stage YAML at compile; the rules_in_context /
  *  sensors_applicable arrays are filled by the compile resolvers. */
 function seedStageGraphRows(claude: string): void {
@@ -411,12 +404,12 @@ function seedStageGraphRows(claude: string): void {
 }
 
 /** Write both custom stage files. Each frontmatter carries every REQUIRED field
- *  (aidlc-stage-schema.ts:75-88), declares the artefact it PRODUCES, joins the
- *  graph via requires_stage, and imports the custom sensor. The `## Steps` body
- *  tells the orchestrator to write the produced artefact under aidlc-docs/ — the
- *  write that trips the sensor while the stage is active — and to cite the
- *  custom rule marker in it. The migration-plan stage declares the
- *  produce->consume chain by consuming source-schema. */
+ *  (aidlc-stage-schema.ts REQUIRED_FIELDS), declares the artefact it PRODUCES,
+ *  joins the graph via requires_stage, and imports the custom sensor. The
+ *  `## Steps` body tells the orchestrator to write the produced artefact under
+ *  the active intent's record (the write that trips the sensor while the stage
+ *  is active) and to cite the custom rule marker in it. The migration-plan stage
+ *  declares the produce->consume chain by consuming source-schema. */
 function seedStageFiles(claude: string): void {
   const snapshotDir = join(claude, "aidlc-common", "stages", SNAPSHOT_STAGE_PHASE);
   mkdirSync(snapshotDir, { recursive: true });
@@ -587,9 +580,9 @@ sensors_applicable).
 /** Add the custom rule bullet to the project method layer under ## Mandated. The
  *  rule FILE path is already in every stage's rules_in_context (project rules
  *  attach universally); this seeds the unique-marker CONTENT the agent reads.
- *  The method relocated (P5) from <harness>/rules/aidlc-project.md to the
- *  workspace-root aidlc/spaces/default/memory/project.md (neutral name), so seed
- *  it there — `claude` is <proj>/.claude, the method sits beside it. */
+ *  The method lives at the workspace-root aidlc/spaces/default/memory/project.md
+ *  (neutral name), so seed it there: `claude` is <proj>/.claude, the method sits
+ *  beside it. */
 function seedProjectRule(claude: string): void {
   const p = join(claude, "..", "aidlc", "spaces", "default", "memory", "project.md");
   let text = readFileSync(p, "utf8");

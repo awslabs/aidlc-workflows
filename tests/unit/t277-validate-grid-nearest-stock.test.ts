@@ -7,7 +7,7 @@
 // it post-approval with a different rule (exact equality), minting a custom
 // scope for a proposal the persona's own +/-2 rule called a stock match.
 // nearestStockScopes() makes the distance a validator-computed number:
-// validate-grid now returns `nearest_stock` (stock scopes ranked by grid
+// validate-grid returns `nearest_stock` (stock scopes ranked by grid
 // diff against the PROPOSAL), and both the composer and the conductor route
 // on nearest_stock[0], never on their own recount.
 //

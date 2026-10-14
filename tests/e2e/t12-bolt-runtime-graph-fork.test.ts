@@ -1,13 +1,11 @@
 // covers: subcommand:aidlc-bolt:start, subcommand:aidlc-bolt:complete, subcommand:aidlc-bolt:abort, subcommand:aidlc-worktree:discard, subcommand:aidlc-runtime:fragment-fork, subcommand:aidlc-runtime:fragment-merge, subcommand:aidlc-runtime:compile
 //
-// CLI-contract port of tests/e2e/t12-bolt-runtime-graph-fork.sh (TAP plan
-// 9), mechanism = cli. The .sh carried no `# covers:` header; the units credited
-// here are the ones its body actually drives end-to-end — the runtime-graph
-// fragment fork/merge triad as it rides on the Bolt-worktree lifecycle:
+// The units credited here are the ones the test drives end-to-end - the
+// runtime-graph fragment fork/merge triad as it rides on the Bolt-worktree
+// lifecycle:
 //   - aidlc-bolt start --worktree   (forks state + audit + fragment)
 //   - aidlc-bolt complete --merge   (merges state + audit + removes fragment)
-//   - aidlc-bolt abort [--discard]  (the abort subcommand — UNCOVERED in the
-//                                    registry as of this migration)
+//   - aidlc-bolt abort [--discard]
 //   - aidlc-worktree discard        (transitive fragment cleanup, defense-in-depth)
 //   - aidlc-runtime fragment-fork / fragment-merge (the fragment primitives the
 //                                    bolt tool delegates to)
@@ -28,43 +26,22 @@
 //   (aidlc-state fork, aidlc-audit audit-fork, aidlc-runtime fragment-fork) via
 //   spawnSync (aidlc-bolt.ts:89-116) — an in-process twin would lose the very
 //   cross-process fork/merge dance under test. So every scenario SPAWNS the real
-//   binaries (BUN + the .ts path) against a genuine git fixture, exactly the
-//   .sh's shape. spawnCount = all.
+//   binaries (BUN + the .ts path) against a genuine git fixture.
+//   spawnCount = all.
 //
 // FIXTURE (mirrors make_bolt_fixture, t12:57-76): aidlc-worktree create runs a
 // real `git worktree add` and asserts it is invoked from the main checkout
 // (assertNotSiblingWorktree, aidlc-worktree.ts:101) — so each scenario needs an
 // actual git repo on `main` with one commit, a Construction-phase state file
 // (state-construction.md gives the phase/scope that lets Bolt operations run),
-// a present-but-empty audit.md, and the framework .gitignore set so worktree
-// create doesn't byte-copy audit.md / runtime-graph.json into the worktree via
-// git checkout. setupWorktreeFixture + seedStateFile + the gitignore + a
-// commit --amend replicate the .sh byte-for-byte. cleanupWorktreeFixture prunes
-// child worktrees then rm -rf's the parent. Nothing is written under
-// tests/fixtures/**.
+// a bare-header audit shard, and the framework .gitignore set so worktree create
+// doesn't byte-copy audit shards / runtime-graph.json into the worktree via git
+// checkout. setupWorktreeFixture + seedStateFile + the gitignore + a commit
+// --amend build this fixture. cleanupWorktreeFixture prunes child worktrees
+// then rm -rf's the parent. Nothing is written under tests/fixtures/**.
 //
-// Old TAP -> new test parity (9 .sh assertions -> 9 expect()-bearing tests):
-//   (a.1) start --worktree: fragment exists + JSON has RUNTIME_GRAPH_FORKED
-//          -> "a.1 single-Bolt start" (fragment on disk + token in stdout)
-//   (a.2) complete --merge: fragment removed + JSON has RUNTIME_GRAPH_MERGED
-//          -> "a.2 single-Bolt complete" (fragment gone + token in stdout)
-//   (a.3) single-Bolt compile: no instances[] on the parent (L5 >=2 threshold)
-//          -> "a.3 single-Bolt compile: no instances[]"
-//   (b.1) 3-Bolt parallel: all three fragments exist
-//          -> "b.1 3-Bolt parallel: all fragments exist"
-//   (b.2) 3-Bolt complete --merge: all fragments removed
-//          -> "b.2 3-Bolt complete --merge: all fragments removed"
-//   (b.3) 3-Bolt compile: instances[].bolt = [auth, cart, pay] (alphabetical)
-//          -> "b.3 3-Bolt compile: instances[] alphabetical regardless of merge order"
-//   (c.1) abort --discard: worktree dir + fragment gone transitively
-//          -> "c.1 abort --discard: worktree + fragment gone transitively"
-//   (c.2) abort without --discard: worktree + fragment preserved
-//          -> "c.2 abort (no --discard): worktree + fragment preserved"
-//   (c.3) manual aidlc-worktree discard: fragment removed transitively
-//          -> "c.3 manual worktree discard: fragment removed transitively"
-//
-// STRONGER than the .sh in places: (a.1)/(a.2)/(b.*) assert the bolt tool exited
-// 0 (the .sh only grepped stdout); (c.1) asserts the abort subcommand reported
+// (a.1)/(a.2)/(b.*) assert the bolt tool exited 0; (c.1) asserts the abort
+// subcommand reported
 // discarded:true on its stdout envelope on top of the on-disk teardown.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
@@ -106,11 +83,10 @@ afterAll(() => {
 
 interface CliResult {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string;
   stdout: string;
 }
 
-/** Spawn `bun <tool> ... --project-dir <proj>` from inside the project dir. */
 function run(tool: string, args: string[], proj: string): CliResult {
   const res = spawnSync(BUN, [tool, ...args, "--project-dir", proj], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: proj,
@@ -134,16 +110,16 @@ function wtFragment(proj: string, slug: string): string {
   );
 }
 
-/** Worktree directory for a Bolt slug (worktreePath, aidlc-lib.ts:148). */
+/** Worktree directory for a Bolt slug (worktreePath, aidlc-lib.ts). */
 function wtDir(proj: string, slug: string): string {
   return worktreePath(proj, fixtureIntentId8(proj), slug);
 }
 
 /**
- * make_bolt_fixture (t12:57-76): a git fixture on main + a Construction-phase
- * state file + a present-but-empty audit.md + the framework .gitignore, then a
- * commit --amend so the gitignore is part of the committed tree (worktree
- * create won't byte-copy audit.md / runtime-graph.json into the worktree).
+ * A git fixture on main + a Construction-phase state file + a bare-header audit
+ * shard + the framework .gitignore, then a commit --amend so the gitignore is
+ * part of the committed tree (worktree create won't byte-copy audit shards /
+ * runtime-graph.json into the worktree).
  */
 function makeBoltFixture(): string {
   const proj = setupWorktreeFixture();
@@ -187,7 +163,6 @@ function makeBoltFixture(): string {
   return proj;
 }
 
-/** bolt_start_worktree (t12:78-92): worktree create + bolt start --worktree. */
 function boltStartWorktree(proj: string, slug: string): CliResult {
   const create = run(WORKTREE_TOOL, ["create", "--slug", slug, "--base", "main"], proj);
   if (create.status !== 0) {
@@ -207,7 +182,6 @@ function boltStartWorktree(proj: string, slug: string): CliResult {
   );
 }
 
-/** bolt_complete_merge (t12:94-102): bolt complete --merge. */
 function boltCompleteMerge(proj: string, slug: string): CliResult {
   return run(
     BOLT_TOOL,
@@ -216,14 +190,12 @@ function boltCompleteMerge(proj: string, slug: string): CliResult {
   );
 }
 
-/** bolt_abort (t12:104-113): bolt abort with an optional --discard. */
 function boltAbort(proj: string, slug: string, discard: boolean): CliResult {
   const args = ["abort", "--name", slug, "--reason", "test", "--slug", slug];
   if (discard) args.push("--discard");
   return run(BOLT_TOOL, args, proj);
 }
 
-/** Append an audit event via the real CLI (t12:154-159). */
 function appendAudit(proj: string, event: string, fields: string[][]): void {
   const args = ["append", event];
   for (const [k, v] of fields) args.push("--field", `${k}=${v}`);
@@ -233,8 +205,6 @@ function appendAudit(proj: string, event: string, fields: string[][]): void {
   }
 }
 
-/** Read the compiled main runtime-graph.json's code-generation stage row (under
- *  the per-intent record now, not flat aidlc-docs/). */
 function codeGenStage(proj: string): Record<string, unknown> | null {
   const p = join(seededRecordDir(proj), "runtime-graph.json");
   if (!existsSync(p)) return null;
@@ -251,7 +221,6 @@ describe("t12 (a) single-Bolt round-trip (migrated from t12-bolt-runtime-graph-f
   test("a.1 single-Bolt start --worktree: fragment exists + success-JSON carries RUNTIME_GRAPH_FORKED", () => {
     const proj = makeBoltFixture();
     const start = boltStartWorktree(proj, "solo");
-    // STRONGER than the .sh (grep-only): the bolt tool exited cleanly.
     expect(start.status).toBe(0);
     expect(start.stdout).toContain("RUNTIME_GRAPH_FORKED");
     expect(existsSync(wtFragment(proj, "solo"))).toBe(true);
@@ -276,7 +245,7 @@ describe("t12 (a) single-Bolt round-trip (migrated from t12-bolt-runtime-graph-f
     // Seed WORKFLOW_STARTED + STAGE_STARTED + STAGE_COMPLETED so compile has a
     // code-generation stage row to inspect. The single Bolt's STATE_FORKED row
     // pre-dates this STAGE_STARTED window AND slugsInWindow.size < 2 anyway, so
-    // the parent stays single-instance (aidlc-runtime.ts:479).
+    // the parent stays single-instance (aidlc-runtime.ts compile).
     appendAudit(proj, "WORKFLOW_STARTED", [
       ["Workflow ID", "t12-1bolt"],
       ["Scope", "feature"],
@@ -287,13 +256,12 @@ describe("t12 (a) single-Bolt round-trip (migrated from t12-bolt-runtime-graph-f
     run(RUNTIME_TOOL, ["compile"], proj);
 
     const cg = codeGenStage(proj);
-    // The .sh's assertion: "if there's a code-generation row, it has no
-    // instances[]" — single-Bolt L5 path stays single-instance.
+    // If there's a code-generation row, it has no instances[] - single-Bolt L5
+    // path stays single-instance.
     if (cg) {
       expect("instances" in cg).toBe(false);
     } else {
-      // No code-generation row at all is also "no instances[]" — the .sh's
-      // bun -e printed Boolean(cg && 'instances' in cg) === false in that case.
+      // No code-generation row at all is also "no instances[]".
       expect(cg).toBeNull();
     }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -303,9 +271,9 @@ describe("t12 (a) single-Bolt round-trip (migrated from t12-bolt-runtime-graph-f
 // Scenario (b) — 3-Bolt parallel batch (3 assertions)
 // ===========================================================================
 describe("t12 (b) 3-Bolt parallel batch + deterministic merge ordering", () => {
-  // Build the 3-Bolt fixture once: STAGE_STARTED for code-generation is injected
+  // Build the 3-Bolt fixture: STAGE_STARTED for code-generation is injected
   // FIRST so every subsequent STATE_FORKED row from bolt-start falls WITHIN the
-  // stage's [started_at, now) window (t12:181-188). Then start pay/auth/cart in
+  // stage's [started_at, now) window. Then start pay/auth/cart in
   // non-alphabetical order, complete --merge in arbitrary order cart/pay/auth.
   function buildThreeBoltFixture(): { proj: string; frags: Record<string, string> } {
     const proj = makeBoltFixture();
@@ -317,7 +285,7 @@ describe("t12 (b) 3-Bolt parallel batch + deterministic merge ordering", () => {
     appendAudit(proj, "STAGE_STARTED", [["Stage", "code-generation"]]);
     for (const slug of ["pay", "auth", "cart"]) {
       const r = boltStartWorktree(proj, slug);
-      expect(r.status).toBe(0); // each fork landed cleanly
+      expect(r.status).toBe(0);
     }
     return {
       proj,
@@ -359,7 +327,7 @@ describe("t12 (b) 3-Bolt parallel batch + deterministic merge ordering", () => {
     const instances = (cg?.instances ?? null) as Array<{ bolt: string }> | null;
     expect(instances).not.toBeNull();
     // Alphabetical by Bolt slug regardless of the user's merge order
-    // (aidlc-runtime.ts:485-486).
+    // (aidlc-runtime.ts compile).
     expect((instances ?? []).map((i) => i.bolt)).toEqual(["auth", "cart", "pay"]);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
@@ -371,12 +339,10 @@ describe("t12 (c) abort-discard leaves no orphan fragments", () => {
   test("c.1 abort --discard: worktree dir + fragment gone transitively (no manual fragment-merge)", () => {
     const proj = makeBoltFixture();
     boltStartWorktree(proj, "doomed");
-    // Precondition: the fragment must exist before abort (t12:245-247).
     expect(existsSync(wtFragment(proj, "doomed"))).toBe(true);
 
     const abort = boltAbort(proj, "doomed", true);
     expect(abort.status).toBe(0);
-    // STRONGER than the .sh: the abort envelope reports discarded:true.
     expect(abort.stdout).toContain('"discarded":true');
     // abort --discard tears down the worktree dir AND the fragment transitively
     // via git worktree remove — no manual fragment-merge call needed.
@@ -398,7 +364,7 @@ describe("t12 (c) abort-discard leaves no orphan fragments", () => {
   test("c.3 manual aidlc-worktree discard: fragment removed transitively (defense-in-depth)", () => {
     const proj = makeBoltFixture();
     boltStartWorktree(proj, "kept");
-    boltAbort(proj, "kept", false); // preserve first
+    boltAbort(proj, "kept", false);
     expect(existsSync(wtFragment(proj, "kept"))).toBe(true);
 
     // Manual aidlc-worktree discard cleans up the orphan fragment transitively

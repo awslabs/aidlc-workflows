@@ -484,6 +484,16 @@ export function kiroAutoRecommendation(preset: KiroPreset | null): string {
     : "AI-DLC recommends choosing a model, so your effort preset applies to it.";
 }
 
+// Kiro starts an agent whose file names no model on the model saved in the
+// person's Kiro settings, not on the one their chat runs, and /model switches
+// only that chat until /model set-current-as-default saves it. So `config
+// models --show` says which model agents start on, and a line that names
+// /model as a way to change the session model names the save too.
+export const KIRO_SAVED_MODEL_NOTE =
+  "On Kiro CLI your session model is the one saved in your Kiro settings: agents start on it, and a /model switch changes only the chat you are in until you save it with /model set-current-as-default.";
+
+const KIRO_MODEL_IN_CHAT = "/model, then /model set-current-as-default to save it";
+
 export type KiroSessionPlan = {
   cli: string;
   session: Extract<KiroPersonalSession, { ok: true }>;
@@ -624,8 +634,8 @@ async function applyPlan(
   if (write.effort) lines.push(`  effort   ${write.effort.effort}, for ${write.effort.model}`);
   lines.push(
     plan.kiroCliOnly
-      ? `Change it any time with \`${plan.modelsCommand}\`, or inside Kiro CLI with /model.`
-      : `Your other models' settings were not changed. Change this any time with \`${plan.modelsCommand}\`, or inside Kiro with /model.`,
+      ? `Change it any time with \`${plan.modelsCommand}\`, or inside Kiro CLI with ${KIRO_MODEL_IN_CHAT}.`
+      : `Your other models' settings were not changed. Change this any time with \`${plan.modelsCommand}\`, or inside Kiro with ${KIRO_MODEL_IN_CHAT}.`,
   );
   return { ok: true, lines, model, effort, saved: write };
 }
@@ -722,7 +732,7 @@ export async function kiroSessionDoctorFindings(input: {
     findings.push({
       pass: false,
       label: `Session model: ${model} is not offered on your Kiro account any more; every prompt fails with "The model ... is not available"`,
-      fix: `run \`${input.modelsCommand}\`, or choose one in Kiro with /model`,
+      fix: `run \`${input.modelsCommand}\`, or choose one in Kiro with ${KIRO_MODEL_IN_CHAT}`,
     });
   } else if (!input.preset) {
     findings.push({ pass: true, label: `Session model: ${model}, from your personal Kiro settings` });

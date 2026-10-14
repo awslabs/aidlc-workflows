@@ -133,8 +133,7 @@ export function main(argv: string[]): void {
 	// and a slug that appears only in the Q&A or the builder's diary is
 	// not upstream coverage. Every fire within a stage thus converges on
 	// the same stage-level verdict. Without --deliverables (direct
-	// invocation, older dispatcher) only the fired file is read, as
-	// before.
+	// invocation, older dispatcher) only the fired file is read.
 	const firedPath = resolve(flags.outputPath);
 	const dir = dirname(firedPath);
 	const deliverables = (flags.deliverables ?? "")

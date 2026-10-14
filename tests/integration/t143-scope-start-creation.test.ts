@@ -1,8 +1,8 @@
 // covers: scope:bugfix
 //
-// t143-scope-start-creation.test.ts — the restored explicit-scope workflow creation
+// t143-scope-start-creation.test.ts - the explicit-scope workflow creation
 // journey (sdk). Drives a REAL `/aidlc --scope bugfix <description>` on a fresh project
-// (no aidlc-docs/aidlc-state.md) through the Claude Agent SDK and proves the
+// (no active intent state) through the Claude Agent SDK and proves the
 // creation seam end-to-end:
 //
 //   engine: `next --scope bugfix` over no state emits the run-then-continue
@@ -12,22 +12,20 @@
 //   conductor: ACTS on the print — runs `aidlc.ts engine intent create --scope bugfix`
 //           and re-enters the loop;
 //   disk:   the created intent's aidlc-state.md (under aidlc/spaces/<space>/intents/
-//           <slug>-<id8>/, resolved by sdk-drive's per-intent readers) lands with
-//           Scope: bugfix and a populated Current Stage — the workflow started.
+//           <YYMMDD>-<short-label>/, resolved by sdk-drive's per-intent readers) lands
+//           with Scope: bugfix and a populated Current Stage - the workflow started.
 //
 // The deterministic halves of this seam are pinned by the t118 unit trio
 // (creation print shape) and t117/t114 (branch routing); this journey proves the
-// LIVE conductor closes the loop the engine names — the surface the earlier
-// retreated journeys (t52/t54/t59/t138) deliberately stopped short of.
+// LIVE conductor closes the loop the engine names.
 // Assertions stay at the JOURNEY level (state on disk + the creation tool-result),
 // tolerant of conversational variance, mirroring t52/t141 — NEVER on assistantText.
 //
 // Known-answer literals (read from the SHIPPED tools, not guessed):
 //   - creation print:  aidlc-orchestrate.ts:302/311 — names
 //                   `intent create --scope <scope>` and ends "re-run `next` to continue"
-//                   (P4: the retired `init` alias is gone)
-//   - creation summary: `State initialized:` (aidlc-utility.ts handleIntentCreate stdout, :2395)
-//   - state fields: State-Version-7 template (aidlc-utility.ts handleIntentCreate)
+//   - creation summary: `State initialized:` (aidlc-utility.ts handleIntentCreate stdout)
+//   - state fields: State-Version-8 template (aidlc-utility.ts handleIntentCreate)
 //
 // It SPENDS TOKENS — driveAidlc drives the real /aidlc on Opus/Bedrock. The
 // run stops the instant the creation tool-result lands (stopAfterToolResult), so
@@ -86,9 +84,9 @@ describe("t143 explicit-scope workflow creation (/aidlc --scope bugfix, sdk live
         // (a) The session ran the engine and got the CREATION PRINT: a Bash
         // tool-result carries the engine's JSON directive naming the creation move
         // for the explicitly named scope. (The directive JSON is the engine's
-        // verbatim stdout — deterministic, never the LLM's rewording.) P4: the
+        // verbatim stdout - deterministic, never the LLM's rewording.) The
         // engine NAMES `intent create --scope <scope>` (the deterministic creation
-        // handler) — the retired `init` alias is gone (aidlc-orchestrate.ts:302).
+        // handler).
         assertToolResultContains(r, "Bash", `intent create --scope ${SCOPE}`);
 
         // (a, cont.) ... and ACTED on it: the named intent-create tool ran and its

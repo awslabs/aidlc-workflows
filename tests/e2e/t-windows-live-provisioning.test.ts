@@ -803,7 +803,7 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
         });
         // The production catch's stderr for an incomplete collection: the fixed
         // stage line plus one fixed pointer to the retained evidence, and never
-        // the arbitrary exception text (AIDA F4 on PR 1369).
+        // the arbitrary exception text.
         if (completes) {
           expect(record.failClosedOutput).toBeUndefined();
         } else {
