@@ -316,8 +316,8 @@ ledger says so) is not counted: it is almost certainly that subagent's brief,
 whether VS Code changed the brief's text or the record is unreadable, and a
 message the person did type in that window is asked for again. Any other
 prompt counts as before, including one typed while the subagent still runs. On
-the CLI a brief never arrives in the launching chat, so the window does not
-apply there.
+the CLI a brief never arrives in the launching chat, so the window never
+catches a brief there.
 
 Each prompt the 5-second window holds back leaves an advisory
 `SUBAGENT_PROMPT_UNMATCHED` audit row (`Counted: no`, with a Reason naming
