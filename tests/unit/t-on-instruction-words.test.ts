@@ -16,7 +16,7 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { MESSAGE_TEXT_MAX_CHARS, readMessage, saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
+import { holdsQuote, MESSAGE_TEXT_MAX_CHARS, readMessage, saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { cleanupTestProject, createTestProject, seededRecordDir, seedStateFile } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
@@ -129,6 +129,34 @@ describe("t-on-instruction-words: a choice left to the agent quotes words the pe
     askQuestions(p);
     const r = leftToAgent(p, "\u304a\u4efb\u305b\u3057\u307e\u3059");
     expect(r.status, r.out).toBe(0);
+  });
+
+  test("the same letters inside other words they said are not a quote", () => {
+    const p = project();
+    typed(p, "Scale it up to your expected load, and let me look at it first.");
+    askQuestions(p);
+    refused(leftToAgent(p, "up to you"));
+    refused(leftToAgent(p, "ok"));
+    expect(answers(p)).toHaveLength(0);
+  });
+
+  // A word's edge is a space or either end; in a script written without spaces,
+  // a seam between two of its letters too, but never inside a number or a letter.
+  test("a quote holds only as whole words", () => {
+    expect(holdsQuote("Scale it up to your expected load", "up to you")).toBe(false);
+    expect(holdsQuote("Fine, up to you", "up to you")).toBe(true);
+    expect(holdsQuote("let me look at it first", "ok")).toBe(false);
+    expect(holdsQuote("ok, go", "ok")).toBe(true);
+    expect(holdsQuote("measure twice", "sure")).toBe(false);
+    expect(holdsQuote("ship version 20", "version 2")).toBe(false);
+    // An emoji typed after their words, with a space or without, is a word of its own.
+    expect(holdsQuote("up to you \u{1F44D}", "up to you")).toBe(true);
+    expect(holdsQuote("up to you\u{1F44D}", "up to you")).toBe(true);
+    expect(holdsQuote("\u8cea\u554f\u306f\u304a\u4efb\u305b\u3057\u307e\u3059\u3002", "\u304a\u4efb\u305b\u3057\u307e\u3059")).toBe(true);
+    // Thai: a quote after a tone mark holds; a letter cut from its vowel, or a digit from its number, does not.
+    expect(holdsQuote("\u0e43\u0e2b\u0e49\u0e04\u0e38\u0e13\u0e40\u0e25\u0e37\u0e2d\u0e01\u0e40\u0e25\u0e22", "\u0e04\u0e38\u0e13\u0e40\u0e25\u0e37\u0e2d\u0e01")).toBe(true);
+    expect(holdsQuote("\u0e17\u0e35\u0e48", "\u0e17")).toBe(false);
+    expect(holdsQuote("version \u0e52\u0e50", "version \u0e52")).toBe(false);
   });
 
   test("words in a file pass the same check", () => {

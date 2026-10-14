@@ -302,18 +302,43 @@ export function chatsSince(rows: readonly AuditShardEvent[], pd: string, spentAt
 // A quote's text as the person typed it, whatever the case, spacing or
 // punctuation: compatibility forms folded, lower case, apostrophes dropped
 // ("it's" and "its" read alike, a typographic one too), and anything else that
-// is not a letter, digit, mark or emoji read as a space. It reads no meaning.
+// is not a letter, digit, mark or emoji read as a space, with a run of emoji a
+// word of its own. It reads no meaning.
 function quoteText(text: string): string {
   return text.normalize("NFKC").toLowerCase()
     .replace(/['\u2018\u2019\u02BC]/g, "")
     .replace(/[^\p{L}\p{N}\p{M}\p{So}]+/gu, " ")
+    .replace(/\p{So}+/gu, " $& ")
+    .replace(/ {2,}/g, " ")
     .trim();
 }
 
-/** Whether `said` holds the words `quoted` gives, case, spacing and punctuation aside. */
+// Scripts written without spaces between words, where a word can end at any
+// seam between two letters.
+const UNSPACED = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
+
+// Whether a word can end at `at` in quoteText's `text`: either end, a space, or
+// a seam beside an unspaced script, never one inside a number or before a mark
+// (it belongs to the letter it follows).
+function wordEdge(text: string, at: number): boolean {
+  if (at === 0 || at === text.length) return true;
+  const before = Array.from(text.slice(Math.max(0, at - 2), at)).at(-1) ?? "";
+  const after = String.fromCodePoint(text.codePointAt(at) ?? 0);
+  if (before === " " || after === " ") return true;
+  if (/\p{M}/u.test(after)) return false;
+  const opens = (c: string) => UNSPACED.test(c) && !/\p{N}/u.test(c);
+  return opens(before) || opens(after);
+}
+
+/** Whether `said` holds the words `quoted` gives as whole words, case, spacing and punctuation aside. */
 export function holdsQuote(said: string, quoted: string): boolean {
   const wanted = quoteText(quoted);
-  return wanted !== "" && quoteText(said).includes(wanted);
+  if (wanted === "") return false;
+  const text = quoteText(said);
+  for (let at = text.indexOf(wanted); at !== -1; at = text.indexOf(wanted, at + 1)) {
+    if (wordEdge(text, at) && wordEdge(text, at + wanted.length)) return true;
+  }
+  return false;
 }
 
 /**
