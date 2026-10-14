@@ -505,7 +505,10 @@ prompt. On Kiro IDE it also reads Kiro's Workflows switch
 sub-agent tool from chats; `core/tools/aidlc-kiro-ide-workflows.ts` changes that
 one JSONC key on the person's answer (`--kiro-workflows`, setup, `config --yes`,
 or the once-per-machine chat ask from session start) and keeps the answer in the
-install root's `kiro-ide-workflows` marker. On Windows it also reads Kiro's
+install root's `kiro-ide-workflows` marker. A settings file it cannot read as
+JSONC is reported as unknown, never as off (trust, setup, doctor), and session
+start tells the chat once per error, keeping the file's path and fingerprint in
+the `kiro-ide-settings-error-told` marker. On Windows it also reads Kiro's
 default terminal profile (`terminal.integrated.defaultProfile.windows`): in
 Command Prompt the agent's AI-DLC commands split the person's words and every
 command reports exit code -1, so `core/tools/aidlc-kiro-ide-terminal.ts` sets

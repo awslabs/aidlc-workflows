@@ -292,6 +292,18 @@ describe("the chat asks once", () => {
     });
   });
 
+  test("two Kiro settings files with errors are each told once", () => {
+    const a = machine(MISSING_COMMA);
+    const b = machine(MISSING_COMMA);
+    const shared = { AIDLC_INSTALL_ROOT: a.env.AIDLC_INSTALL_ROOT, AIDLC_BIN_DIR: a.env.AIDLC_BIN_DIR };
+    for (const m of [a, b]) {
+      withEnv({ ...inKiro(m), ...shared }, () => expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toStartWith("TELL ONCE:"));
+    }
+    for (const m of [a, b]) {
+      withEnv({ ...inKiro(m), ...shared }, () => expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toBe(""));
+    }
+  });
+
   test("never asked: the error is told first, and the question still comes once the file is fixed", () => {
     const m = machine(MISSING_COMMA);
     withEnv(inKiro(m), () => {

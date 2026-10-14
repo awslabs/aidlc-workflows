@@ -193,27 +193,34 @@ export function kiroWorkflowsUnreadableFix(settingsPath: string): string {
   return `fix the error in ${settingsPath}`;
 }
 
-// The chat line for that file, once for each error: the marker holds the file
-// and its text, so a different error, or one in another Kiro's file, is told
-// again. null while the file reads.
+// The chat line for that file, once for each error: the marker keeps one line
+// per settings file (its path, then a fingerprint of its text), so a different
+// error is told again and another Kiro's file keeps its own line. null while
+// the file reads.
 function kiroSettingsErrorNotice(env: NodeJS.ProcessEnv): string | null {
   const state = readKiroIdeWorkflows(env);
   if (state.readable) return null;
   let error: string;
   try {
-    error = createHash("sha256").update(`${state.settingsPath}\n`).update(readFileSync(state.settingsPath)).digest("hex");
+    error = createHash("sha256").update(readFileSync(state.settingsPath)).digest("hex");
   } catch {
     return "";
   }
   const told = join(installRoot(), KIRO_SETTINGS_ERROR_TOLD_FILE);
+  const lines = new Map<string, string>();
   try {
-    if (readFileSync(told, "utf-8").trim() === error) return "";
+    for (const line of readFileSync(told, "utf-8").split("\n")) {
+      const tab = line.lastIndexOf("\t");
+      if (tab > 0) lines.set(line.slice(0, tab), line.slice(tab + 1));
+    }
   } catch {
     // Not told yet.
   }
+  if (lines.get(state.settingsPath) === error) return "";
+  lines.set(state.settingsPath, error);
   try {
     mkdirSync(dirname(told), { recursive: true });
-    writeFileAtomic(told, `${error}\n`);
+    writeFileAtomic(told, [...lines].map(([path, hash]) => `${path}\t${hash}\n`).join(""));
   } catch {
     // Not told rather than told in every chat.
     return "";
