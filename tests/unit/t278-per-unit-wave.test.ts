@@ -992,12 +992,15 @@ describe("t278 engine-emitted wave contract", () => {
         ...(event === "GATE_REJECTED" ? { Feedback: "revise alpha" } : {}),
       }, proj);
     }
+    // The person's "revise alpha" comes first; the agent's revision then
+    // records its review (stage work the carve-out counts, #2400) and has its
+    // next write refused.
+    markHumanTurn(proj);
     review(proj, "alpha");
     const artifact = join(seededRecordDir(proj), "construction", "alpha", "functional-design", "functional-spec.md");
     const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" };
     delete env.AWS_AIDLC_DEFAULT_SCOPE;
     delete env.AIDLC_STOP_HOOK_PROBE;
-    markHumanTurn(proj);
     expect(freezeWrite(proj, artifact).status).toBe(2);
     const probed = runOrchestrateNext(ORCH, proj, [], { env: { ...env, AIDLC_STOP_HOOK_PROBE: "1" } });
     expect(probed.directive, probed.out).toMatchObject({ kind: "ask", ask_type: "guard-recovery", agent_work: true });
