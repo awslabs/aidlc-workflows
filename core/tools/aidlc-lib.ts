@@ -4118,20 +4118,25 @@ export function normalizeScopePath(path: string): string {
 // Coverage test for publish and the compare mode: does the incoming run's
 // analyzed set cover a store entry? An incoming path covers it when both name
 // the same path (a leading "./" or a backslash does not change that, see
-// normalizeScopePath), or when the incoming path is a DIRECTORY and the entry sits
+// normalizeScopePath), or when the incoming path is a directory and the entry sits
 // under it. A trailing slash is the one spelling that is not free: `a` and `a/`
-// name the same entry only when `a` is a directory. So a caller that can look at
-// the repo passes `isDirectory`: a bare `a` that is a directory then covers what is
-// under it, and a file replacing a directory of the same name hides nothing. Without
-// `isDirectory` only a trailing slash marks a directory, and the two spellings are
-// taken as equal. The repo root is not a case here: a full scan is `kind: full`
-// (compare mode) or the literal `./` snapshot (publish), each handled by its caller.
-// Deliberately prefix-only - scope paths are authored as repo-relative dirs/files,
-// not globs - and a prefix ends at a "/", so `a/` never covers `a.txt`.
+// name the same entry only when `a` is a directory. A caller that can look at the
+// repo passes `kindOf`: a bare `a` that is a directory then covers what is under
+// it, a file replacing a directory of the same name hides nothing, and a symlink
+// covers only itself, because the source fingerprint records a symlink as its link
+// text, not its target's files. A path written with a slash is taken as a directory
+// unless it is a symlink, so a directory that moved while it was scanned still
+// publishes as scanned. Without `kindOf` only the slash marks a directory, and the
+// two spellings are taken as equal. The repo root is not a case here: a full scan is
+// `kind: full` (compare mode) or the literal `./` snapshot (publish), each handled by
+// its caller. Deliberately prefix-only - scope paths are authored as repo-relative
+// dirs/files, not globs - and a prefix ends at a "/", so `a/` never covers `a.txt`.
+export type ScopePathKind = "directory" | "symlink" | "other" | "missing";
+
 export function scopePathCovered(
   incoming: string[],
   storePath: string,
-  isDirectory?: (normalizedPath: string) => boolean,
+  kindOf?: (normalizedPath: string) => ScopePathKind,
 ): boolean {
   const store = normalizeScopePath(storePath);
   const storeSlash = storePath.replaceAll("\\", "/").endsWith("/");
@@ -4139,25 +4144,24 @@ export function scopePathCovered(
     const covering = normalizeScopePath(p);
     const coveringSlash = p.replaceAll("\\", "/").endsWith("/");
     if (covering === store) {
-      return coveringSlash === storeSlash || isDirectory === undefined || isDirectory(store);
+      return coveringSlash === storeSlash || kindOf === undefined || kindOf(store) === "directory";
     }
-    return (
-      covering !== "" &&
-      store.startsWith(`${covering}/`) &&
-      (coveringSlash || isDirectory?.(covering) === true)
-    );
+    if (covering === "" || !store.startsWith(`${covering}/`)) return false;
+    if (kindOf === undefined) return coveringSlash;
+    const kind = kindOf(covering);
+    return coveringSlash ? kind !== "symlink" : kind === "directory";
   });
 }
 
-// `isDirectory` for scopePathCovered, answering from the repo on disk. A symlink to a
-// directory is not one: the source fingerprint records a symlink as its link text,
-// not its target's files, so a bare symlink covers only itself.
-export function scopeDirectoryChecker(repoDir: string): (normalizedPath: string) => boolean {
+// `kindOf` for scopePathCovered, answering from the repo on disk without following
+// symlinks.
+export function scopePathKinds(repoDir: string): (normalizedPath: string) => ScopePathKind {
   return (normalizedPath) => {
     try {
-      return lstatSync(join(repoDir, normalizedPath)).isDirectory();
+      const stat = lstatSync(join(repoDir, normalizedPath));
+      return stat.isDirectory() ? "directory" : stat.isSymbolicLink() ? "symlink" : "other";
     } catch {
-      return false;
+      return "missing";
     }
   };
 }

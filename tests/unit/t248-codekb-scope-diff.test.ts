@@ -48,8 +48,8 @@ import {
   codekbStoreIsCurrent,
   gitAlternateEntry,
   parseReScope,
-  scopeDirectoryChecker,
   scopePathCovered,
+  scopePathKinds,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -454,16 +454,23 @@ describe("t248 scopePathCovered", () => {
     expect(scopePathCovered(["src/config"], "src/config/db.ts")).toBe(false);
     expect(scopePathCovered(["src/config"], "src/config/")).toBe(true);
     // with the repo to ask, a bare directory covers what sits under it, and a bare file does not
-    const asDirs = (p: string) => p === "src/config";
-    expect(scopePathCovered(["src/config"], "src/config/db.ts", asDirs)).toBe(true);
-    expect(scopePathCovered(["src/other"], "src/other/x.ts", asDirs)).toBe(false);
-    // with the repo to ask, the two spellings are one entry only for a directory
-    const dirs = new Set(["src/config"]);
-    expect(scopePathCovered(["src/config"], "src/config/", (p) => dirs.has(p))).toBe(true);
-    expect(scopePathCovered(["src/config/"], "src/config", (p) => dirs.has(p))).toBe(true);
-    expect(scopePathCovered(["src/config"], "src/config/", () => false)).toBe(false);
-    // a narrower path still does not cover a wider one, however it is spelled
-    expect(scopePathCovered(["src/payments"], "src/")).toBe(false);
+    const kinds: Record<string, "directory" | "symlink" | "other" | "missing"> = {
+      "src/config": "directory", "src/other": "other", "src/link": "symlink",
+    };
+    const kindOf = (p: string) => kinds[p] ?? "missing";
+    expect(scopePathCovered(["src/config"], "src/config/db.ts", kindOf)).toBe(true);
+    expect(scopePathCovered(["src/other"], "src/other/x.ts", kindOf)).toBe(false);
+    // the two spellings are one entry only for a directory
+    expect(scopePathCovered(["src/config"], "src/config/", kindOf)).toBe(true);
+    expect(scopePathCovered(["src/config/"], "src/config", kindOf)).toBe(true);
+    expect(scopePathCovered(["src/other"], "src/other/", kindOf)).toBe(false);
+    expect(scopePathCovered(["src/gone"], "src/gone/", kindOf)).toBe(false);
+    // a path written with a slash is a directory unless it is a symlink, so one that
+    // moved while it was scanned still publishes as scanned
+    expect(scopePathCovered(["src/gone/"], "src/gone/x.ts", kindOf)).toBe(true);
+    expect(scopePathCovered(["src/link/"], "src/link/x.ts", kindOf)).toBe(false);
+    expect(scopePathCovered(["src\\link\\"], "src/link/x.ts", kindOf)).toBe(false);
+    expect(scopePathCovered(["src/link"], "src/link/x.ts", kindOf)).toBe(false);
   });
 
   test.skipIf(process.platform === "win32")("a symlink to a directory is not a directory: it covers only itself (#2578)", () => {
@@ -473,12 +480,14 @@ describe("t248 scopePathCovered", () => {
     mkdirSync(join(proj, "real", "sub"), { recursive: true });
     writeFileSync(join(proj, "real", "sub", "f.ts"), "export const f = 1;\n");
     symlinkSync(join(proj, "real"), join(proj, "link"));
-    const isDirectory = scopeDirectoryChecker(proj);
-    expect(isDirectory("real")).toBe(true);
-    expect(isDirectory("link")).toBe(false);
-    expect(scopePathCovered(["real"], "real/sub/f.ts", isDirectory)).toBe(true);
-    expect(scopePathCovered(["link"], "link/sub/f.ts", isDirectory)).toBe(false);
-    expect(scopePathCovered(["link"], "link/", isDirectory)).toBe(false);
+    const kindOf = scopePathKinds(proj);
+    expect(kindOf("real")).toBe("directory");
+    expect(kindOf("link")).toBe("symlink");
+    expect(kindOf("nothing")).toBe("missing");
+    expect(scopePathCovered(["real"], "real/sub/f.ts", kindOf)).toBe(true);
+    expect(scopePathCovered(["link"], "link/sub/f.ts", kindOf)).toBe(false);
+    expect(scopePathCovered(["link/"], "link/sub/f.ts", kindOf)).toBe(false);
+    expect(scopePathCovered(["link"], "link/", kindOf)).toBe(false);
   });
 
   test("the repo root is not a coverage case: full scans are decided by the caller", () => {
