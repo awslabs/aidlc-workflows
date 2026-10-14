@@ -273,7 +273,7 @@ Verifies the orchestrator's structural correctness without invoking the LLM. If 
 - Scope-stage mapping, graph consistency, stage I/O contract chains, protocol compliance (integration)
 - Stage output-to-step validation: all declared outputs referenced in instruction steps (integration, deterministic via the `aidlc-validate.ts` CLI tool)
 - Scope runs: every shipped scope driven from the person's first request to done (integration, `tests/integration/t-scope-run-*`; see below)
-- Scope-host runs: one classic journey on every harness tree (Claude, Codex, Copilot CLI, Kiro CLI, Kiro IDE, Cursor, opencode), through each tree's own hooks (integration, `tests/integration/t-scope-host-*`; see below)
+- Scope-host runs: one classic journey on every harness tree (Claude, Codex, Copilot CLI, Kiro CLI, Kiro IDE, Cursor, opencode, Antigravity), through each tree's own hooks (integration, `tests/integration/t-scope-host-*`; see below)
 - Guard matrix: what the person meets when files change under approved work, per Guard Policy, review cap and plan approval (integration, `tests/integration/t-guard-matrix-*`; see below)
 
 **Run:** `bun tests/run-tests.ts --no-llm`. The default profile includes the
@@ -335,8 +335,11 @@ hook cards (`.kiro/hooks/*.json`, regex matchers in file-name order; no card run
 after a write or a command, so the next card does that work, as in Kiro),
 Cursor's `.cursor/hooks.json` (no matchers; every answer is JSON at exit 0, and
 the turn end can only send a follow-up message, which the journey reads as a
-blocked hand-off) and opencode's plugin (loaded into one opencode process, a
-worker thread the host waits on; a refusal is the hook's thrown error).
+blocked hand-off), opencode's plugin (loaded into one opencode process, a
+worker thread the host waits on; a refusal is the hook's thrown error) and
+Antigravity's `.agents/hooks.json` (every answer is JSON at exit 0, no answer
+is a deny, the person's typed lines and picks are read from the transcript the
+host keeps per conversation, and a turn end can be refused with `continue`).
 `tests/unit/t-scope-hosts.test.ts` pins those payloads against the ones recorded
 from each tool (`tests/fixtures/<tool>-hook-payloads`). Each tool's answer is
 read in its own form: Codex and Kiro refuse with exit 2, Copilot with a deny
@@ -349,7 +352,7 @@ through the person's `aidlc`, and the stand-in acts on the `aidlc engine ...`
 commands the installed engine names. The release's update check uses that.
 
 Each `t-scope-host-<harness>.test.ts` (`claude`, `codex`, `copilot`, `kiro`,
-`kiro-ide`, `cursor`, `opencode`) drives one
+`kiro-ide`, `cursor`, `opencode`, `antigravity`) drives one
 journey: classic with its design stages skipped and two Units built one at a
 time, a checkpoint each. After the first Unit's checkpoint the person stops for
 the day, picks the work up from a fresh clone (the folder left with only what a

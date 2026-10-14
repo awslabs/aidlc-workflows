@@ -409,6 +409,18 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           expect(wiring, `${harness.name}: harness dir argument`).toContain(
             `aidlc-plugin-compose.ts ${harness.manifest.harnessDir}`,
           );
+        } else if (harness.name === "antigravity") {
+          // Antigravity reads hooks.json from the plugin root, in its
+          // named-hook shape, and runs the hook from the plugin root.
+          const registration = JSON.parse(wiring) as Record<
+            string,
+            { SessionStart?: Array<{ command?: string }> }
+          >;
+          const hook = registration[`aidlc-${PLUGIN}-compose`]?.SessionStart?.[0];
+          expect(hook?.command).toBe(
+            `bun ./hooks/aidlc-plugin-compose.ts ${harness.manifest.harnessDir} antigravity`,
+          );
+          expect(existsSync(join(built, "hooks", "aidlc-plugin-compose.ts"))).toBe(true);
         } else {
           expect(wiring, `${harness.name}: harness dir wiring`).toContain(
             `AIDLC_HARNESS_DIR=${harness.manifest.harnessDir}`,

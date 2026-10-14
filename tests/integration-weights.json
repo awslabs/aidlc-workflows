@@ -35,6 +35,7 @@
     "t-review-freeze-earlier-unit": 443.2,
     "t-review-verdict-unit-state": 132.3,
     "t-runner-process-lifecycle": 160,
+    "t-scope-host-antigravity": 140,
     "t-scope-host-claude": 72,
     "t-scope-host-codex": 98,
     "t-scope-host-copilot": 142,

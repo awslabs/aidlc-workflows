@@ -45,7 +45,7 @@ import { sharedKnowledgeWithoutFormatDocs } from "./aidlc-inline-context.ts";
 import { committedTextBytes, runWithOwnerStampedLock } from "./aidlc-lib.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 
-export type PluginTargetKind = "store" | "kiro" | "kiro-ide" | "cursor";
+export type PluginTargetKind = "store" | "kiro" | "kiro-ide" | "cursor" | "antigravity";
 
 export interface PluginTarget {
   harnessName: string;
@@ -220,7 +220,8 @@ export function readPluginTargets(path: string): PluginTargetTable {
       (value.kind !== "store" &&
         value.kind !== "kiro" &&
         value.kind !== "kiro-ide" &&
-        value.kind !== "cursor")
+        value.kind !== "cursor" &&
+        value.kind !== "antigravity")
     ) {
       throw new Error(
         `plugin target table ${path} has an invalid entry for "${harness}"`,
@@ -462,6 +463,7 @@ function copyHookTemplates(
     if (
       file === "aidlc-plugin-compose.ts" &&
       target.kind !== "cursor" &&
+      target.kind !== "antigravity" &&
       target.kind !== "kiro-ide"
     ) {
       continue;
@@ -496,6 +498,9 @@ function composeCommand(target: PluginTarget, hostName: string): string {
       : `\${PLUGIN_ROOT}`;
   if (target.kind === "cursor") {
     return `bun ./hooks/aidlc-plugin-compose.ts ${target.harnessLeaf}`;
+  }
+  if (target.kind === "antigravity") {
+    return `bun ./hooks/aidlc-plugin-compose.ts ${target.harnessLeaf} ${target.harnessName}`;
   }
   if (target.kind === "kiro-ide") {
     // One entry, as Kiro IDE shows a card for each hook; || reads the same in
@@ -652,6 +657,21 @@ function writeHookWiring(
           // root and workspace in the environment; the one whose runtime is
           // absent fails without stopping the other.
           hooks: { sessionStart: [{ command: nativePluginSync(target) }, { command }] },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return;
+  }
+  if (target.kind === "antigravity") {
+    // Antigravity reads a plugin's hooks.json from the plugin ROOT, in its
+    // named-hook shape; the hook runs with the plugin root as its cwd.
+    writeFileSync(
+      join(outDir, "hooks.json"),
+      `${JSON.stringify(
+        {
+          [`aidlc-${pluginName}-compose`]: { SessionStart: [{ command }] },
         },
         null,
         2,

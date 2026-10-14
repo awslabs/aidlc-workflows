@@ -816,6 +816,7 @@ function configPositionals(argv: readonly string[]): Array<{ value: string; inde
 
 function modelHarness(value: string): ModelHarness {
   if (
+    value === "antigravity" ||
     value === "claude" ||
     value === "codex" ||
     value === "copilot" ||
@@ -8373,7 +8374,9 @@ function renderHarnessChoices(
       ...(tags.length > 0 ? [`(${tags.join(", ")})`] : []),
       ...(candidate.descriptor.choiceNote ? [candidate.descriptor.choiceNote] : []),
     ].join("  ");
-    writeMenuRow(`    ${index + 1}. ${choiceName(candidate).padEnd(16)}`, note);
+    const name = choiceName(candidate);
+    const padded = name.length >= 16 ? `${name} ` : name.padEnd(16);
+    writeMenuRow(`    ${index + 1}. ${padded}`, note);
   }
 }
 
@@ -8523,6 +8526,9 @@ function firstRunNextCommands(distribution: string): [string, string] {
   }
   if (distribution === "cursor") {
     return ["cursor                         open Cursor in this repo", '/aidlc "what you want built"  describe your first intent'];
+  }
+  if (distribution === "antigravity") {
+    return ["agy                            open Antigravity (or run agy) in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "kiro-ide") {
     return ["kiro                          open Kiro IDE (or kiro-cli) in this repo", '/aidlc "what you want built"  describe your first intent'];

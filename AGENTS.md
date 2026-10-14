@@ -2,7 +2,7 @@
 
 This directory contains a native implementation of the AI-DLC (AI-Driven
 Development Life Cycle) methodology that ships to many harnesses (today Claude Code, Kiro CLI, Kiro
-IDE, Codex CLI, Cursor, opencode, and GitHub Copilot, and any capable CLI
+IDE, Codex CLI, Cursor, opencode, GitHub Copilot, and Google Antigravity, and any capable CLI
 [you port it to](docs/harness-engineering/09-porting-to-a-new-harness.md))
 from a single hand-authored source.
 
@@ -11,7 +11,7 @@ from a single hand-authored source.
 AI-DLC is a software factory for spec-driven design: the person drives it, and
 it delivers their project, from the idea to the spec and plan, the code and the
 deployment. The harness the person drives it from (Claude Code, Kiro CLI, Kiro
-IDE, Codex, Cursor, opencode, Copilot) is the building the factory runs in. It
+IDE, Codex, Cursor, opencode, Copilot, Antigravity) is the building the factory runs in. It
 is the same factory in every building and on every platform (Linux, macOS,
 Windows, native or WSL), so a normal run means any of them; judge a finding and
 design a fix with all of them in mind.
@@ -213,9 +213,9 @@ ceremony, a per-intent setting, or the conversation language whenever they ask.
 
 ## Project Structure
 
-- `core/`: **The hand-authored, harness-neutral source of truth.** Tools, stages (`aidlc-common/`), agents, memory (the rule/method layer), scopes, sensors, knowledge, hooks, and the 4 skills (3 read-only session skills and `aidlc-knowledge`, the team-document index). Prose names the harness directory with the `{{HARNESS_DIR}}` token; the packager substitutes `.claude`/`.kiro`/`.codex`/`.aidlc`/`.cursor` per tree.
-- `harness/<name>/`: **The thin per-harness authored surface.** Each holds `manifest.ts` (how to project `core/` into that harness's dist) plus the orchestrator skill and harness-specific files; `harness/codex/`, `harness/opencode/`, and `harness/copilot/` add an `emit.ts` (per-shell emissions). `claude/`, `kiro/`, `kiro-ide/`, `codex/`, `cursor/`, `opencode/`, `copilot/`.
-- `plugins/<name>/`: **Optional, owned AIDLC plugins** (the plugin mechanism; design in the single chapter `docs/reference/18-plugin-mechanism.md`, authoring guide `docs/harness-engineering/10-authoring-a-plugin.md`). Each holds `.aidlc-plugin/plugin.json` (the declarative manifest) + core-shaped subtrees (`stages/`, `contributions/`, `sensors/`, `tools/`, ...) + `tests/`. `bun scripts/package.ts` emits a real host plugin per harness at `dist/plugins/<name>/{claude,codex,copilot,cursor,kiro,kiro-ide,opencode}/`; a compose hook merges the plugin into an install (new stages + the additive contribution seam). Plugins add, the install selects: `tools/data/harness.json` `plugins` filters the enabled graph/scope/runner surfaces while keeping installed files re-enableable. `plugins/test-pro/` is the reference fixture. Guarded by `tests/integration/t188-plugin-compose.serial.test.ts` (mechanism) + `plugins/test-pro/tests/` (content, wired into the integration tier).
+- `core/`: **The hand-authored, harness-neutral source of truth.** Tools, stages (`aidlc-common/`), agents, memory (the rule/method layer), scopes, sensors, knowledge, hooks, and the 4 skills (3 read-only session skills and `aidlc-knowledge`, the team-document index). Prose names the harness directory with the `{{HARNESS_DIR}}` token; the packager substitutes `.claude`/`.kiro`/`.codex`/`.aidlc`/`.cursor`/`.agents` per tree.
+- `harness/<name>/`: **The thin per-harness authored surface.** Each holds `manifest.ts` (how to project `core/` into that harness's dist) plus the orchestrator skill and harness-specific files; `harness/codex/`, `harness/opencode/`, and `harness/copilot/` add an `emit.ts` (per-shell emissions). `claude/`, `kiro/`, `kiro-ide/`, `codex/`, `cursor/`, `opencode/`, `copilot/`, `antigravity/`.
+- `plugins/<name>/`: **Optional, owned AIDLC plugins** (the plugin mechanism; design in the single chapter `docs/reference/18-plugin-mechanism.md`, authoring guide `docs/harness-engineering/10-authoring-a-plugin.md`). Each holds `.aidlc-plugin/plugin.json` (the declarative manifest) + core-shaped subtrees (`stages/`, `contributions/`, `sensors/`, `tools/`, ...) + `tests/`. `bun scripts/package.ts` emits a real host plugin per harness at `dist/plugins/<name>/{antigravity,claude,codex,copilot,cursor,kiro,kiro-ide,opencode}/`; a compose hook merges the plugin into an install (new stages + the additive contribution seam). Plugins add, the install selects: `tools/data/harness.json` `plugins` filters the enabled graph/scope/runner surfaces while keeping installed files re-enableable. `plugins/test-pro/` is the reference fixture. Guarded by `tests/integration/t188-plugin-compose.serial.test.ts` (mechanism) + `plugins/test-pro/tests/` (content, wired into the integration tier).
 - `scripts/package.ts`: **The build entry.** `bun scripts/package.ts` materializes every local `dist/<harness>/` and `dist-release/<harness>/`; `bun scripts/package.ts --check` builds twice in independent temp roots and byte-compares the results as the determinism guard. `manifest-types.ts` is the shared manifest contract.
 - `dist/` and `dist-release/`: **GENERATED, ignored local outputs.** They are never committed or hand-edited. CI, tests, binary builds, and release packaging regenerate them before use. Native users install release assets; copy-channel users take `runtime/<harness>/` from the versioned `aidlc-copy-runtime-X.Y.Z.tar.gz` release asset.
 - `tests/`: All-TypeScript test suite (`t*.test.ts`, run via bun), four levels (smoke/unit/integration/e2e). Run `bash tests/run-tests.sh --help` for levels and profiles.

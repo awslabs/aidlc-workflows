@@ -1,0 +1,30 @@
+{
+  "aidlc": {
+    "SessionStart": [
+      { "command": "cd .. && bun .agents/hooks/aidlc-antigravity-adapter.ts session-start" }
+    ],
+    "PreInvocation": [
+      { "command": "cd .. && bun .agents/hooks/aidlc-antigravity-adapter.ts turn" }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "command": "cd .. && bun .agents/hooks/aidlc-antigravity-adapter.ts guards", "timeout": 120 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "command": "cd .. && bun .agents/hooks/aidlc-antigravity-adapter.ts audit-and-sensors", "timeout": 120 },
+          { "command": "cd .. && bun .agents/hooks/aidlc-antigravity-adapter.ts runtime-compile", "timeout": 120 }
+        ]
+      }
+    ],
+    "Stop": [
+      { "command": "cd .. && bun .agents/hooks/aidlc-antigravity-adapter.ts stop", "timeout": 120 }
+    ]
+  }
+}
