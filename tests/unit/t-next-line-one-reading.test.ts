@@ -1,4 +1,4 @@
-// covers: function:readNextTokens, function:nextLineFlags, function:beforeDelimiter, function:readOrchestratorLauncherOptions, function:isReadOnlyNextArgv, function:classifyTerminalCommand, function:isEngineEngagementSegment, function:parseNextFlags
+// covers: function:readNextTokens, function:nextLineFlags, function:nextFlagLacksValue, function:beforeDelimiter, function:readOrchestratorLauncherOptions, function:isReadOnlyNextArgv, function:classifyTerminalCommand, function:isEngineEngagementSegment, function:parseNextFlags
 //
 // One reading of which tokens on a `next` line are the engine's own and which
 // are the person's (readNextTokens, readOrchestratorLauncherOptions in
@@ -95,6 +95,18 @@ describe("a flag's value is never read as a flag of its own", () => {
     expect(classifyTerminalCommand(["--report", "--status"])).toBeNull();
     expect(isReadOnlyNextArgv(["--report", "--status"])).toBe(false);
     expect(classifyTerminalCommand(["--status"])).toEqual({ subcommand: "status", source: "read-only-flag" });
+  });
+
+  test("a flag left without its value is the engine's refusal, so no seam runs the utility after it", () => {
+    // The engine answers `--depth --status` with the `--depth` refusal first.
+    expect(parseNextFlags(["--depth", "--status"]).parseError).toContain("--depth requires");
+    expect(classifyTerminalCommand(["--depth", "--status"])).toBeNull();
+    expect(classifyTerminalCommand(["--review", "--doctor"])).toBeNull();
+    // `--propose` with no plan is the agent's own step, which the engine gives first too.
+    expect(parseNextFlags(["--propose", "--status"]).propose).toBe("");
+    expect(classifyTerminalCommand(["--propose", "--status"])).toBeNull();
+    expect(classifyTerminalCommand(["--depth", "minimal", "--status"]))
+      .toEqual({ subcommand: "status", source: "read-only-flag" });
   });
 });
 

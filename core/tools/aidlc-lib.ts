@@ -1883,6 +1883,9 @@ export function classifyTerminalCommand(argv: string[], projectDir?: string, ses
   // The utility the engine runs is the last one its reading takes, never a
   // flag's value (`--report --status` reports from a file named `--status`).
   const { tokens } = readNextTokens(args);
+  // A flag `next` takes with nothing it can take after it (`--depth --status`)
+  // is answered by the engine about that flag before any utility runs.
+  if (tokens.some(nextFlagLacksValue)) return null;
   const utility = tokens.filter((token) => token.role === "read-only").at(-1);
   if (utility === undefined) return null;
   const subcommand = utility.token.replace(/^--/, "");
@@ -40429,6 +40432,16 @@ export function readNextTokens(args: readonly string[]): {
     if (value !== undefined) at++;
   }
   return { head, literal: mark < 0 ? null : args.slice(mark + 1), tokens };
+}
+
+/**
+ * Whether a flag `next` takes stands with nothing it can take as its value, so
+ * the engine answers the line about that flag (its refusal, or for an empty
+ * `--propose` the agent's own step) before anything else on it.
+ */
+export function nextFlagLacksValue(token: NextToken): boolean {
+  if (token.role !== "flag" || token.value !== undefined) return false;
+  return nextFlagShape(token.token)?.value !== "none";
 }
 
 /** The flags `next` takes on this line, each with the value it takes (readNextTokens). */
