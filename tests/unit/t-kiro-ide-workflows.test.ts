@@ -304,10 +304,12 @@ describe("config trust and doctor", () => {
   // AI-DLC cannot read: unknown, never off, and the step is the person's.
   test("a settings file AI-DLC cannot read is named as unknown, never as off, with the person's own step", () => {
     const m = machine(MISSING_COMMA);
-    const unknown = `Kiro Workflows: ${m.settingsPath} could not be read as JSONC, so AI-DLC cannot tell whether Workflows is on`;
+    const unknown = "Kiro Workflows: Kiro's settings file could not be read as JSONC, so AI-DLC cannot tell whether Workflows is on";
+    const step = `correct ${m.settingsPath}, or in Kiro run Disable Workflows from the Command Palette`;
     const setup = installKiroIde(m.env);
     expect(readFileSync(m.settingsPath, "utf-8")).toBe(MISSING_COMMA);
     expect(setup.out).toContain(unknown);
+    expect(setup.out).toContain(step);
     const { project } = setup;
     const show = runInit(["config", "trust", "--project-dir", project, "--show", "--json"], project, m.env);
     expect(show.status, show.out).toBe(0);
@@ -318,15 +320,30 @@ describe("config trust and doctor", () => {
     const check = runInit(["config", "trust", "--project-dir", project, "--check"], project, m.env);
     expect(check.status, check.out).toBe(0);
     expect(check.out).toContain(unknown);
+    // The trust walk says the person's step before its own review question.
+    const walk = runInit(
+      ["config", "trust", "--project-dir", project, "--harness", "kiro-ide"],
+      project,
+      { ...m.env, AIDLC_TEST_CONFIG_TTY: "1", AIDLC_TEST_CONFIG_INPUT: "n\n" },
+    );
+    expect(walk.status, walk.out).toBe(0);
+    const said = walk.out.indexOf(`${unknown}: ${step}`);
+    expect(said, walk.out).toBeGreaterThan(-1);
+    expect(walk.out.indexOf("Separately, record that you reviewed")).toBeGreaterThan(said);
     expect(kiroIdeWorkflowsDoctorCheck(project, ".kiro", m.env)).toMatchObject({ pass: false, severity: "warn", label: unknown });
+    expect(kiroIdeWorkflowsDoctorCheck(project, ".kiro", m.env)?.fix).toContain(step);
     withEnv(m.env, () => {
       const action = postApplyOutstandingActions(project, ".kiro", "kiro-ide").find((entry) => entry.id === "kiro-workflows-unreadable");
       expect(action?.message).toBe(unknown);
-      expect(action?.step).toContain("Disable Workflows from the Command Palette");
+      // The step is shown alone in setup's list, so it names the file.
+      expect(action?.step).toContain(step);
       expect(action?.command).toMatch(/config trust --check$/);
-      // The person kept Workflows on: nothing is left to tell them.
-      recordKiroWorkflowsAnswer("on");
-      expect(trustStatus(project, ".kiro", "kiro-ide").issues.some((entry) => entry.id === "kiro-workflows-unreadable")).toBe(false);
+      // Whatever the person answered before, Kiro may read the file as on.
+      for (const answer of ["off", "asked", "on"] as const) {
+        recordKiroWorkflowsAnswer(answer);
+        expect(trustStatus(project, ".kiro", "kiro-ide").issues.some((entry) => entry.id === "kiro-workflows-unreadable"), answer)
+          .toBe(true);
+      }
     });
     expect(readFileSync(m.settingsPath, "utf-8")).toBe(MISSING_COMMA);
   });

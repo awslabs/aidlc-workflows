@@ -1,10 +1,10 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import {
   KIRO_WORKFLOWS_ISSUE_ID,
-  KIRO_WORKFLOWS_UNREADABLE_FIX,
   KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID,
   kiroWorkflowsFix,
   kiroWorkflowsIssueMessage,
+  kiroWorkflowsUnreadableFix,
   kiroWorkflowsUnreadableMessage,
   readKiroIdeWorkflows,
   readKiroWorkflowsAnswer,
@@ -2823,13 +2823,13 @@ export function trustStatus(
       settingsPath: state.settingsPath,
       answer: readKiroWorkflowsAnswer(),
     };
-    // A file AI-DLC cannot read may hold Workflows on, so it is named until the
-    // person chose to keep Workflows on.
-    if (!state.readable && kiroWorkflows.answer !== "on") {
+    // A file AI-DLC cannot read may hold Workflows on whatever the person
+    // answered before, so it is named while the file stays that way, as doctor does.
+    if (!state.readable) {
       issues.push({
         id: KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID,
-        message: kiroWorkflowsUnreadableMessage(state.settingsPath),
-        remediation: KIRO_WORKFLOWS_UNREADABLE_FIX,
+        message: kiroWorkflowsUnreadableMessage(),
+        remediation: kiroWorkflowsUnreadableFix(state.settingsPath),
         severity: "warn",
       });
     }
@@ -3428,8 +3428,8 @@ export function kiroIdeWorkflowsDoctorCheck(
     return {
       pass: false,
       severity: "warn",
-      label: kiroWorkflowsUnreadableMessage(state.settingsPath),
-      fix: KIRO_WORKFLOWS_UNREADABLE_FIX,
+      label: kiroWorkflowsUnreadableMessage(),
+      fix: kiroWorkflowsUnreadableFix(state.settingsPath),
     };
   }
   if (!state.enabled) return { pass: true, label: "Kiro Workflows is off" };

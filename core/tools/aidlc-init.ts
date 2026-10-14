@@ -188,6 +188,7 @@ import {
 import {
   KIRO_WORKFLOWS_ISSUE_ID,
   KIRO_WORKFLOWS_QUESTION,
+  KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID,
   kiroWorkflowsKeptLine,
   kiroWorkflowsOffLine,
   kiroWorkflowsOnLine,
@@ -2259,13 +2260,19 @@ function diagnosticWizard(
   if (selected.harness === "kiro-ide") askKiroTerminal(projectDir);
   // Codex's own hook trust comes first, so the review question below never
   // reads as that step.
-  const codexStep = selected.harness === "codex"
+  const issues = selected.harness === "codex" || selected.harness === "kiro-ide"
     ? trustStatus(projectDir, selected.harnessDir, selected.harness).issues
-      .map((issue) => codexHookTrustStep(issue.id)).find((step) => step !== null)
+    : [];
+  const codexStep = selected.harness === "codex"
+    ? issues.map((issue) => codexHookTrustStep(issue.id)).find((step) => step !== null)
     : undefined;
   if (codexStep) writeMenuRow("  ", `${CODEX_HOOK_TRUST_UNMET}: ${codexStep}.`);
+  // Kiro settings AI-DLC cannot read are the person's to correct, in the file
+  // or in Kiro; the review question below does not clear them.
+  const kiroUnreadable = issues.find((issue) => issue.id === KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID);
+  if (kiroUnreadable) writeMenuRow("  ", `${kiroUnreadable.message}: ${kiroUnreadable.remediation}.`);
   const answer = promptYesDefault(
-    codexStep
+    codexStep || kiroUnreadable
       ? "  Separately, record that you reviewed AI-DLC's trust and allowlist files?"
       : "  Record that you reviewed the trust and allowlist files?",
     false,

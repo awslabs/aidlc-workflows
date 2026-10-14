@@ -179,13 +179,17 @@ export function kiroWorkflowsFix(invoke: string): string {
 
 // A settings file AI-DLC cannot read as JSONC may still be one Kiro reads
 // (measured: Kiro IDE 1.2.37 turned Workflows on from a file missing a comma),
-// so it is named as unknown, never as off. AI-DLC cannot edit it either, so the
-// step is the person's, in the file or in Kiro.
-export function kiroWorkflowsUnreadableMessage(settingsPath: string): string {
-  return `Kiro Workflows: ${settingsPath} could not be read as JSONC, so AI-DLC cannot tell whether Workflows is on`;
+// so it is named as unknown, never as off, until the file reads again. AI-DLC
+// cannot edit it either, so the step is the person's, in the file or in Kiro;
+// the step names the file, since setup's list shows it alone.
+export function kiroWorkflowsUnreadableMessage(): string {
+  return "Kiro Workflows: Kiro's settings file could not be read as JSONC, so AI-DLC cannot tell whether Workflows is on";
 }
 
-export const KIRO_WORKFLOWS_UNREADABLE_FIX = "correct the file, or in Kiro run Disable Workflows from the Command Palette";
+export function kiroWorkflowsUnreadableFix(settingsPath: string): string {
+  return `correct ${settingsPath}, or in Kiro run Disable Workflows from the Command Palette ` +
+    "(Ctrl+Shift+P, or Cmd+Shift+P on macOS)";
+}
 
 /**
  * The one chat line a Kiro IDE chat gives the agent while Workflows is on and the

@@ -473,6 +473,7 @@ repo. Two kinds of file are deliberately **gitignored** instead:
 |---|---|
 | `aidlc/active-space`, `…/intents/active-intent` | Cursors — "where am I right now." Committing them would turn per-user navigation into shared repository state and have teammates fight over intent creates and cursor switches. |
 | `.../intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/`, `aidlc/.aidlc-active-space-*.tmp` | Derived, machine-local runtime state, including per-session bindings and PID ancestry entries. |
+| `aidlc/.aidlc-request-text/` | A request the agent wrote to a file for the engine to read. Removed once the command goes ahead; one left there when it did not is your words, not shared work. |
 | `…/knowledge/documentkb/.journal/` | One directory per in-flight document transaction. Transient and per-clone; a committed journal would be a merge conflict on every concurrent `sync`. |
 | `…/knowledge/.sources.local.json` | Where *this machine* resolves documents linked from outside the repo. The path is machine-specific by definition, so committing it would break every teammate's checkout. |
 
