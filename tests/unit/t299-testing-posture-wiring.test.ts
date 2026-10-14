@@ -979,10 +979,9 @@ describe("t299 (5) authored consumers use the same contract", () => {
       "opencode",
       "copilot",
     ]) {
-      const skill = read(`harness/${harness}/skills/aidlc/SKILL.md`);
-      expect(skill, harness).toContain(
-        "stage-protocol-construction.md` - load on the first Construction directive of the session and on every `invoke-swarm`",
-      );
+      // The swarm step names its modules; the skill's row loads them.
+      const row = read(`harness/${harness}/skills/aidlc/SKILL.md`).split("\n").find((line) => line.startsWith("| `invoke-swarm` |"));
+      expect(row, harness).toContain("plus `construction` and `swarm`");
     }
   });
 });

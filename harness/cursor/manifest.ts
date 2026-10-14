@@ -118,6 +118,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
+    { src: "skills/aidlc/tables.md", dst: "skills/aidlc/tables.md" },
     // Cursor-native shortcut skills. Cursor's commands/ surface is legacy;
     // skills are the current slash-invocation primitive.
     { src: "skills/aidlc-status/SKILL.md", dst: "skills/aidlc-status/SKILL.md" },

@@ -155,6 +155,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
+    { src: "skills/aidlc/tables.md", dst: "skills/aidlc/tables.md" },
     // The AIDLC method @-import stub: .claude/rules/aidlc.md pulls the method
     // into Claude's ambient context by reference (explicit @-imports of the
     // engine's git-ignored copy of the active space's memory,

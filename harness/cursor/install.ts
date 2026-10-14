@@ -999,6 +999,8 @@ function isRuntimeOwnedManagedFile(
   return (
     rel === ".cursor/tools/data/stage-graph.json" ||
     rel === ".cursor/tools/data/scope-grid.json" ||
+    // The composed tables; an install from before them composed them into SKILL.md.
+    rel === ".cursor/skills/aidlc/tables.md" ||
     rel === ".cursor/skills/aidlc/SKILL.md"
   );
 }

@@ -67,7 +67,8 @@ import { join } from "node:path";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 import { parseStageFrontmatter } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
-const SKILL = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
+// The generated Stage Graph table lives in tables.md beside the orchestrator skill.
+const SKILL = join(AIDLC_SRC, "skills", "aidlc", "tables.md");
 const STAGES_DIR = join(AIDLC_SRC, "aidlc-common", "stages");
 
 /** A parsed Stage Graph table row (only the columns t38 reads off `|`-split). */
@@ -92,8 +93,9 @@ function extractGraphRows(): GraphRow[] {
 
   // sed -n '/^## Stage Graph/,/^---$/p'
   const start = lines.findIndex((l) => /^## Stage Graph/.test(l));
-  if (start < 0) throw new Error("SKILL.md: no '## Stage Graph' heading found");
-  let end = start;
+  if (start < 0) throw new Error("tables.md: no '## Stage Graph' heading found");
+  // tables.md ends with the stage graph; a rule after it ends it otherwise.
+  let end = lines.length - 1;
   for (let i = start + 1; i < lines.length; i++) {
     if (/^---$/.test(lines[i])) {
       end = i;

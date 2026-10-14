@@ -251,22 +251,12 @@ describe("t272 §4 Construction keeps its own voice rules", () => {
     expect(flat).toContain("`narration` value already says exactly that");
   });
 
-  test("every conductor SKILL carries the Construction quiet rule, worded identically", () => {
-    // Byte-alignment across the matrix for the same reason t181 pins the
-    // narration block that way: authored once, copied seven times, so a
-    // per-harness reword is drift rather than intent.
-    const MARKER = "**Inside Construction.**";
-    const paragraphs = new Map<string, string[]>();
+  test("the Construction quiet rule has one copy, the protocol's, in no conductor SKILL", () => {
+    // Every step reads the stage protocol, so a copy in each SKILL was a
+    // second account of the same rule (#1330).
     for (const { name, rel } of authoredSkills()) {
-      const body = read(rel);
-      const start = body.indexOf(MARKER);
-      expect(start, `${name} lacks the Construction quiet rule`).toBeGreaterThan(-1);
-      const paragraph = body.slice(start).split("\n\n")[0];
-      const seen = paragraphs.get(paragraph) ?? [];
-      seen.push(name);
-      paragraphs.set(paragraph, seen);
+      expect(read(rel), name).not.toContain("**Inside Construction.**");
     }
-    expect([...paragraphs.values()].map((v) => v.sort())).toHaveLength(1);
   });
 
   test("the load-steering row forbids a substitute progress sentence", () => {

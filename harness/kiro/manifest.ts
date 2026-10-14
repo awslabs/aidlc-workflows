@@ -183,6 +183,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
+    { src: "skills/aidlc/tables.md", dst: "skills/aidlc/tables.md" },
     { src: "agents/aidlc.json", dst: "agents/aidlc.json" },
     { src: "agents/aidlc-architect-agent.json", dst: "agents/aidlc-architect-agent.json" },
     { src: "agents/aidlc-developer-agent.json", dst: "agents/aidlc-developer-agent.json" },

@@ -343,7 +343,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
    - `name` (required): the scope name; must equal the filename stem.
    - `depth` (required): `Minimal` | `Standard` | `Comprehensive`.
    - `keywords` (optional): hint words the agent reads when it proposes a plan for `/aidlc <freeform text>`; no tool matches them. Flat string lists may use block (`- item`) or flow (`[item, item]`) form. An empty list carries no hints. See [the agent proposes the plan](../guide/05-scopes-and-depth.md#the-agent-proposes-the-plan).
-   - `description` (optional): one-line summary rendered in `/aidlc --help` and in SKILL.md's compiled scope-table.
+   - `description` (optional): one-line summary rendered in `/aidlc --help` and in the compiled scope table in `tables.md`, beside the orchestrator skill.
    - `testStrategy` (optional): override test strategy independent of depth. Defaults to matching depth.
    - `review_cap` (optional): `adversarial` | `advisory` | `none`. Caps stage review classes for this scope; absence means no scope-level lowering. The cap can lower but never raise a stage declaration. Autonomous swarm reviews are exempt.
    - `runner` (optional): set `true` to include the scope in the default generated runner set.
@@ -376,7 +376,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 
 2. **Tag the member stages** — in each stage that should run under `hotfix` (under `core/aidlc-common/stages/<phase>/`), add `hotfix` to its frontmatter `scopes:` list. A stage you don't tag is `SKIP` for the scope. The 3 initialization stages (`workspace-scaffold`, `workspace-detection`, `state-init`) must include it — they always run.
 
-3. **Recompile + regenerate the scope-table** — `aidlc engine graph compile` transposes the `scopes:` tags into `tools/data/scope-grid.json`. Then `aidlc engine gen scope-table` prints the canonical Markdown region for SKILL.md's compiled scope table. Keep the region between the `<!-- BEGIN: compiled ... -->` / `<!-- END: compiled ... -->` markers generated, then run `aidlc engine graph compile --check` and `aidlc engine gen scope-table --check` to confirm exit 0 (no drift).
+3. **Recompile + regenerate the scope-table** — `aidlc engine graph compile` transposes the `scopes:` tags into `tools/data/scope-grid.json`. Then `aidlc engine gen scope-table` prints the canonical Markdown region for the compiled scope table in `tables.md`, beside the orchestrator skill. Keep the region between the `<!-- BEGIN: compiled ... -->` / `<!-- END: compiled ... -->` markers generated, then run `aidlc engine graph compile --check` and `aidlc engine gen scope-table --check` to confirm exit 0 (no drift).
 
 4. **Verify the scope resolves** - `bun core/tools/aidlc-utility.ts intent-create --scope hotfix --project-dir /tmp/scope-smoke` should succeed and produce a state file with `Scope: hotfix`.
 
@@ -396,7 +396,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 - Error messages list the new scope in alphabetical order without any code changes.
 - `/aidlc --doctor` treats `AWS_AIDLC_DEFAULT_SCOPE=hotfix` as valid.
 - `aidlc-utility scope-change --scope hotfix` on an in-flight workflow accepts the new scope.
-- The transpose drift guard: `aidlc-graph compile --check` fails the build if a stage's `scopes:` tag was edited without recompiling `scope-grid.json`. SKILL.md's compiled scope-table has its own `--check` drift guard (t67).
+- The transpose drift guard: `aidlc-graph compile --check` fails the build if a stage's `scopes:` tag was edited without recompiling `scope-grid.json`. The compiled scope table in `tables.md` has its own `--check` drift guard (t67).
 - The plan proposal step for freeform `/aidlc <text>` lists each scope with the `keywords` hints from its `.claude/scopes/*.md` frontmatter; the agent reads them and proposes a plan. Custom scopes appear in that list as soon as they are installed (no SKILL.md change needed). Users can still pass `--scope hotfix` explicitly to skip the proposal.
 
 ### What does NOT validate automatically
@@ -412,7 +412,7 @@ A stage is authored as a Markdown file with YAML frontmatter under `core/aidlc-c
 
 1. **Write the stage file** - create `core/aidlc-common/stages/<phase>/<slug>.md`. Frontmatter declares `slug`, `phase`, `execution`/`condition`, `lead_agent` and any `support_agents` (by agent slug), `mode` (`inline`, `subagent`, `pipeline`, or `mob`; `agent-team` is reserved and not yet implemented), `consumes` / `produces` (artifact vocabulary names), `optional_produces` for artifacts the stage writes only conditionally per unit (exempt from per-unit coverage), `requires_stage` (ordering edges), the `scopes:` membership list, any `sensors:` to bind, `for_each` if it iterates per Unit, and (on a per-unit stage) an optional `produces_kinds` map to prune produces artifacts to each Unit's kind. The body carries the stage's three compartments. See [Stage Definition](15-stage-definition.md) for the full field contract.
 
-2. **Recompile the graph** — `aidlc engine graph compile` reads the new frontmatter into `tools/data/stage-graph.json` and transposes the `scopes:` tags into `tools/data/scope-grid.json`. Run `aidlc engine graph compile --check` to confirm exit 0 (no drift). Then refresh the generated SKILL.md mirrors with `aidlc engine gen stage-table` and `aidlc engine gen scope-table`, and confirm `aidlc engine gen stage-table --check` plus `scope-table --check` both exit 0. The stage is runnable immediately via `aidlc engine orchestrate next --stage <slug> --single`.
+2. **Recompile the graph** — `aidlc engine graph compile` reads the new frontmatter into `tools/data/stage-graph.json` and transposes the `scopes:` tags into `tools/data/scope-grid.json`. Run `aidlc engine graph compile --check` to confirm exit 0 (no drift). Then refresh the generated table mirrors in `skills/aidlc/tables.md` with `aidlc engine gen stage-table` and `aidlc engine gen scope-table`, and confirm `aidlc engine gen stage-table --check` plus `scope-table --check` both exit 0. The stage is runnable immediately via `aidlc engine orchestrate next --stage <slug> --single`.
 
 3. **Regenerate the runners** — `aidlc engine gen runners` emits a `/aidlc-<slug>` runner skill per runnable compiled stage, so your new stage gets its typeable command with no hand-authoring. Run `aidlc engine gen runners --check` to confirm the on-disk runner set matches the compiled stage set (the drift guard; the bootstrap initialization stages are excluded by design).
 
@@ -425,7 +425,7 @@ A stage is authored as a Markdown file with YAML frontmatter under `core/aidlc-c
 ### What validates automatically
 
 - **Graph placement.** Once you `compile`, the stage's edges (`requires_stage`, `consumes`, `produces`) are resolved and ordered; `compile --check` fails the build if the on-disk `stage-graph.json` drifts from the frontmatter.
-- **Generated stage table.** SKILL.md's Stage Graph table is rendered from compiled `stage-graph.json`; `aidlc-utility stage-table --check` fails if the generated region drifts (t32).
+- **Generated stage table.** The Stage Graph table in `tables.md`, beside the orchestrator skill, is rendered from compiled `stage-graph.json`; `aidlc-utility stage-table --check` fails if the generated region drifts (t32).
 - **Schema + references.** `aidlc-graph.ts compile` validates every stage's frontmatter via `aidlc-stage-schema.ts`, and `/aidlc --doctor` re-runs `validateStageFrontmatter` plus a "Graph references" check that every `lead_agent` / `support_agents` / `consumes` slug resolves.
 - **Runner parity.** `aidlc-runner-gen.ts check` (and `t129`) fail if a compiled stage has no runner, or a runner exists for a stage that is gone.
 
