@@ -5,7 +5,7 @@
 // settings only (its scope is "application"), so the switch covers every
 // project on the computer: AI-DLC turns it off only when the person says yes,
 // and keeps their answer once per machine so no project asks again.
-import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { insertJsoncSetting, jsoncRootMembers, jsoncSettingValue, replaceJsoncSetting } from "./aidlc-distribution.ts";
@@ -22,6 +22,8 @@ export const KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID = "kiro-workflows-unreadable";
 export type KiroWorkflowsAnswer = "off" | "on" | "asked";
 const ANSWERS: readonly KiroWorkflowsAnswer[] = ["off", "on", "asked"];
 export const KIRO_WORKFLOWS_ANSWER_FILE = "kiro-ide-workflows";
+/** Kept while a chat has told the person their settings file has an error. */
+const KIRO_SETTINGS_ERROR_TOLD_FILE = "kiro-ide-settings-error-told";
 
 export type KiroIdeWorkflows = {
   /** "" when no Kiro IDE settings are in reach (under the test runner). */
@@ -180,15 +182,42 @@ export function kiroWorkflowsFix(invoke: string): string {
 // A settings file AI-DLC cannot read as JSONC may still be one Kiro reads
 // (measured: Kiro IDE 1.2.37 turned Workflows on from a file missing a comma),
 // so it is named as unknown, never as off, until the file reads again. AI-DLC
-// cannot edit it either, so the step is the person's, in the file or in Kiro;
-// the step names the file, since setup's list shows it alone.
+// cannot edit it, and Kiro's own settings commands write the same file, so the
+// step is fixing the error; it names the file, since setup's list shows it alone.
 export function kiroWorkflowsUnreadableMessage(): string {
-  return "Kiro Workflows: Kiro's settings file could not be read as JSONC, so AI-DLC cannot tell whether Workflows is on";
+  return "Kiro Workflows: Kiro's settings file has an error, so AI-DLC cannot tell whether Workflows is on";
 }
 
 export function kiroWorkflowsUnreadableFix(settingsPath: string): string {
-  return `correct ${settingsPath}, or in Kiro run Disable Workflows from the Command Palette ` +
-    "(Ctrl+Shift+P, or Cmd+Shift+P on macOS)";
+  return `fix the error in ${settingsPath}, so AI-DLC can tell whether Kiro's Workflows feature is on`;
+}
+
+// The chat line for that file, once until it reads again: a later error is
+// told again. null while the file reads.
+function kiroSettingsErrorNotice(env: NodeJS.ProcessEnv): string | null {
+  const state = readKiroIdeWorkflows(env);
+  if (!state.settingsPath) return null;
+  const told = join(installRoot(), KIRO_SETTINGS_ERROR_TOLD_FILE);
+  if (state.readable) {
+    try {
+      rmSync(told, { force: true });
+    } catch {
+      // A later error is not told; trust, setup and doctor still name it.
+    }
+    return null;
+  }
+  if (existsSync(told)) return "";
+  try {
+    mkdirSync(dirname(told), { recursive: true });
+    writeFileAtomic(told, "told\n");
+  } catch {
+    // Not told rather than told in every chat.
+    return "";
+  }
+  return "TELL ONCE: after you answer the person's message, tell them this in their language: " +
+    `"Kiro's settings file (${state.settingsPath}) has an error, so AI-DLC cannot tell whether Kiro's Workflows ` +
+    "feature is on. While it is on, AI-DLC's reviews and helpers do not run in your chats. Fix the error in that " +
+    "file and AI-DLC can tell again.\" Do not say it again.";
 }
 
 /**
@@ -197,7 +226,12 @@ export function kiroWorkflowsUnreadableFix(settingsPath: string): string {
  * a "no" is simply not acting, and no chat asks again.
  */
 export function kiroIdeWorkflowsAsk(invoke: string, env: NodeJS.ProcessEnv = process.env): string {
-  if (!insideKiroIde(env) || !kiroWorkflowsQuestionDue(env)) return "";
+  if (!insideKiroIde(env)) return "";
+  // A settings file with an error is told instead, since a yes could not turn
+  // Workflows off in it.
+  const notice = kiroSettingsErrorNotice(env);
+  if (notice !== null) return notice;
+  if (!kiroWorkflowsQuestionDue(env)) return "";
   try {
     recordKiroWorkflowsAnswer("asked");
   } catch {

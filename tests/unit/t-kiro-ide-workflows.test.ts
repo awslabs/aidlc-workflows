@@ -272,6 +272,25 @@ describe("the chat asks once", () => {
     });
   });
 
+  test("a settings file with an error is told once, whatever was answered, and told again after it read fine", () => {
+    const m = machine(MISSING_COMMA);
+    withEnv(inKiro(m), () => {
+      recordKiroWorkflowsAnswer("on");
+      const line = kiroIdeWorkflowsAsk("aidlc", process.env);
+      expect(line).toStartWith("TELL ONCE:");
+      expect(line).toContain(`Kiro's settings file (${m.settingsPath}) has an error, so AI-DLC cannot tell whether Kiro's Workflows feature is on.`);
+      expect(line).toContain("Fix the error in that file");
+      expect(line).not.toContain("--kiro-workflows");
+      expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toBe("");
+      expect(readKiroWorkflowsAnswer()).toBe("on");
+      // Fixed, then broken again: told again.
+      writeFileSync(m.settingsPath, `{ "${KEY}": true }\n`);
+      expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toBe("");
+      writeFileSync(m.settingsPath, MISSING_COMMA);
+      expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toStartWith("TELL ONCE:");
+    });
+  });
+
   test("no line with Workflows off, outside Kiro IDE (Kiro CLI), or once the person answered at setup", () => {
     const off = machine(`{ "${KEY}": false }`);
     withEnv(inKiro(off), () => expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toBe(""));
@@ -304,8 +323,8 @@ describe("config trust and doctor", () => {
   // AI-DLC cannot read: unknown, never off, and the step is the person's.
   test("a settings file AI-DLC cannot read is named as unknown, never as off, with the person's own step", () => {
     const m = machine(MISSING_COMMA);
-    const unknown = "Kiro Workflows: Kiro's settings file could not be read as JSONC, so AI-DLC cannot tell whether Workflows is on";
-    const step = `correct ${m.settingsPath}, or in Kiro run Disable Workflows from the Command Palette`;
+    const unknown = "Kiro Workflows: Kiro's settings file has an error, so AI-DLC cannot tell whether Workflows is on";
+    const step = `fix the error in ${m.settingsPath}, so AI-DLC can tell whether Kiro's Workflows feature is on`;
     const setup = installKiroIde(m.env);
     expect(readFileSync(m.settingsPath, "utf-8")).toBe(MISSING_COMMA);
     expect(setup.out).toContain(unknown);
