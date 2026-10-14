@@ -4,9 +4,10 @@
 // covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount, audit:SUBAGENT_PROMPT_UNMATCHED, function:appendSubagentPromptUnmatched, audit:COORDINATION_STOOD_ASIDE, function:appendCoordinationStoodAside, function:clearSessionIntentSwitch, function:recordIntentKey, function:parseRecordIntentKey, function:RECORD_INTENT_PREFIX
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
-// (field-verbatim captures off Copilot CLI 1.0.74, sanitized for publication) into
-// the generated Copilot adapter inside a scratch project carrying an active
-// workflow state, then asserts the observable core-hook effect:
+// (field-verbatim captures off Copilot CLI 1.0.74, plus a task launch off 1.0.74
+// and 1.0.96, sanitized for publication) into the generated Copilot adapter
+// inside a scratch project carrying an active workflow state, then asserts the
+// observable core-hook effect:
 //   continue-workflow → block fields at top level for CLI and under
 //                    hookSpecificOutput for VS Code; silent with no state.
 //   session-start  → additionalContext at top level for CLI and under
@@ -4223,6 +4224,53 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     });
     typedPrompt(dir, session, "Approve");
     expect(humanTurnCount(dir)).toBe(1);
+  });
+
+  // The Copilot CLI hands a task launch's brief to the hooks as the first prompt
+  // of the subagent's own session: under its own id on 1.0.95 and later, under
+  // the task call's id on 1.0.74 (live-captured, both in the fixture). Nothing
+  // else in the payload marks it. The launch's record is spent there, and the
+  // person's chat keeps every line they type.
+  test("35g: a brief the Copilot CLI delivers under the subagent's own session is not the person's turn", () => {
+    const dir = rulesProject();
+    appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
+    const chat = String(FIXTURES.preToolUse_task.session_id);
+    const agent = "aidlc-architecture-reviewer-agent";
+    const messageTexts = (): string[] => {
+      const messages = join(dir, "aidlc", ".aidlc-sessions", "messages");
+      return existsSync(messages)
+        ? readdirSync(messages).map((name) => String((JSON.parse(readFileSync(join(messages, name), "utf-8")) as { text?: unknown }).text))
+        : [];
+    };
+    for (const arrival of [FIXTURES.userPromptSubmit_subagentBrief, FIXTURES.userPromptSubmit_subagentBrief_1_0_74]) {
+      const pre = runAdapter(dir, "guard-tool-call", withCwd({
+        ...FIXTURES.preToolUse_task,
+        tool_input: { ...(FIXTURES.preToolUse_task.tool_input as Record<string, unknown>), agent_type: agent, prompt: SUBAGENT_BRIEFING },
+      }, dir));
+      expect(pre.code, pre.stderr).toBe(0);
+      const delivered = String(hostRewrite(pre.stdout)?.prompt ?? "");
+      expect(delivered).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+      const start = runAdapter(dir, "subagent-start", withCwd({ ...FIXTURES.subagentStart_task, agentName: agent }, dir));
+      expect(start.code, start.stderr).toBe(0);
+      const brief = runAdapter(dir, "record-human-turn", withCwd({ ...arrival, prompt: delivered }, dir));
+      expect(brief.code, brief.stderr).toBe(0);
+      expect(humanTurnCount(dir), String(arrival.session_id)).toBe(0);
+      runAdapter(dir, "log-subagent", withCwd({ ...FIXTURES.subagentStop_task, agent_type: agent, agent_name: agent }, dir));
+    }
+    expect(messageTexts()).toEqual([]);
+    expect(keptWords(dir)).toBe("");
+    expect(humanSequence(dir)).toBeUndefined();
+    expect(JSON.parse(readFileSync(briefingsPath(dir), "utf-8"))).toHaveLength(0);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(0);
+
+    // The person's own line in the chat counts, and so do the brief's words
+    // when they type them after the subagent started.
+    settleSubagentStarts(dir);
+    expect(typedPrompt(dir, chat, "Approve").code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(typedPrompt(dir, chat, SUBAGENT_BRIEFING).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(2);
+    expect(messageTexts().sort()).toEqual(["Approve", SUBAGENT_BRIEFING].sort());
   });
 
   // #1411: VS Code asks "Run command? Allow / Skip" before every shell call no
