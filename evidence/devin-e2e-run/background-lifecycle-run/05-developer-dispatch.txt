@@ -1,0 +1,102 @@
+05-developer-dispatch.txt — L5 foreground dispatch + rule-bundle delivery
+=========================================================================
+Session cosmic-minnow, intent 260919-hello-script. Same DB snapshot and method
+as 04-l3-repeated-read.txt (read-only /tmp copy of sessions.db, bun:sqlite).
+
+SQL used:
+  SELECT node_id, parent_node_id, created_at, chat_message, metadata
+    FROM message_nodes WHERE session_id = 'cosmic-minnow'
+    AND node_id IN (238,239,240,241,242,243,244,245,310,311);
+  SELECT session_id, node_id FROM message_nodes
+    WHERE chat_message LIKE '%AIDLC_DISPATCH_RULES_BEGIN%';
+
+Row summary:
+  node 238: parent_node_id=237 len=16646 — assistant run_subagent dispatch
+            (aidlc-developer-agent, FOREGROUND — no is_background field)
+  node 310: parent_node_id=237 len=24996 — re-render of 238 (see below)
+  node 311: parent_node_id=310 len=3415  — tool result for the dispatch call
+  nodes 239/241/243/245: child-received prompt copies (see below)
+
+238 vs 310 analysis (same pattern as native-dispatch 266 vs 367):
+  message_id:        238=8117217c-9813-429d-81a3-ca98ce28f3b3
+                     310=8117217c-9813-429d-81a3-ca98ce28f3b3  IDENTICAL
+  tool_call id:      238=call_1f6e72f23db74cadb2ee4a30#1c76d24e70df4cc1ab93b962dd9a4c68
+                     310=same                                          IDENTICAL
+  minus metadata:    byte-identical (arguments, thinking, content all equal)
+  => 310 is a re-render/duplicate of 238, not a second dispatch.
+
+=== node 238 — parent run_subagent call, pre-merge arguments ===
+{
+  "id": "call_1f6e72f23db74cadb2ee4a30#1c76d24e70df4cc1ab93b962dd9a4c68",
+  "name": "run_subagent",
+  "arguments": {
+    "title": "Code Generation — hello.py",
+    "profile": "aidlc-developer-agent",
+    "task": "<7766 chars — full dispatch brief; see note below>"
+  }
+}
+Note: argument keys are exactly [title, profile, task] — NO is_background
+field (field ABSENT, matching the C04 foreground capture). The parent's
+recorded task contains ZERO 'AIDLC_DISPATCH_RULES_BEGIN' occurrences —
+the pre-merge (emitted) arguments, before the deliver-stage-rules
+updatedInput.task rewrite lands.
+
+task head: "You are the lead developer for the Code Generation stage of an
+AI-DLC workflow (intent `260919-hello-script`, express scope, zero-Unit run).
+Conversation language: English.\n\nThe following block is the verbatim,
+unedited output of `bun .devin/tools/aidlc-testing-posture.ts brief
+--stage-level` — the approved plan and unit-test instructions exactly as
+Plan Approval bound them. Its first two marker lines identify the approval
+authority for this dispatch:\n\n```\nAIDLC-STAGE: code-generation\n
+AIDLC-TESTING-CONTRACT: sha256:87961b10de39c82b940231619501569dab05fb4d0
+ab228bedefaade334d20743\n..."
+
+task tail: "...When done, return the standard subagent summary:
+`## Subagent Summary: Code Generation` with `### Produced` (file paths +
+one-line descriptions), `### Key Decisions`, `### Issues / Concerns`,
+`### Next Steps`. Include the captured test-run output result. Do not
+repeat file bodies that are on disk."
+
+=== node 311 — tool result for the developer dispatch ===
+{
+  "message_id": "f513d98b-ff05-427c-92d0-2d57a38aeabf",
+  "role": "tool",
+  "content": "Subagent agent_id=c1804c13 completed successfully:\n\n## Subagent Summary: Code Generation\n\n### Produced\n- `<home>/devin-e2e-background-lifecycle/hello.py` — single-file script containing exactly one top-level statement, `print(\"ok\")` (no `main()`, no `if __name__` guard, no shebang). Satisfies FR1, FR1.1, C1, C2.\n- `<home>/devin-e2e-background-lifecycle/test_hello.py` — stdlib `unittest` suite (zero third-party deps, satisfying NFR1) with the four approved tests...",
+  "tool_call_id": "call_1f6e72f23db74cadb2ee4a30#1c76d24e70df4cc1ab93b962dd9a4c68"
+}
+This foreground completion is what produced SUBAGENT_COMPLETED row #2
+(17:45:15Z, Agent Type aidlc-developer-agent, Agent ID c1804c13).
+
+=== Child-received prompt nodes (the post-merge surface) ===
+The child's first user-prompt nodes live in the SAME session forest
+(session_id='cosmic-minnow') as branch roots / re-render copies:
+  node 239: parent_node_id=null  len=27082  role=user
+  node 241: parent_node_id=240   len=27082  role=user  (re-render of 239)
+  node 243: parent_node_id=242   len=27082  role=user  (re-render)
+  node 245: parent_node_id=244   len=27082  role=user  (re-render)
+All four share message_id 712f9a67-d9df-4898-b918-79077b335036 and are
+content-identical (26365-char content string). Nodes 240/242/244 are the
+system "delegated knowledge preflight" nodes interleaved between the copies.
+
+Bundle check — each child prompt node contains exactly ONE
+AIDLC_DISPATCH_RULES_BEGIN marker:
+  node 239: 1 occurrence — sha256:bc1bfb4c4f05465771a1bff3d5ab179089167c44720add944028b12005ea33f9 stage:code-generation
+  node 241: 1 occurrence — same marker
+  node 243: 1 occurrence — same marker
+  node 245: 1 occurrence — same marker
+
+The child prompt starts with the parent's emitted task verbatim
+(content.startsWith(parentTask) === true; task 7766 chars -> child prompt
+26365 chars), then carries the appended rule bundle:
+
+  ...Do not repeat file bodies that are on disk.
+
+  <!-- AIDLC_DISPATCH_RULES_BEGIN sha256:bc1bfb4c... stage:code-generation -->
+  ## Active AI-DLC Rule Bundle
+  These are the required rules for this stage. A...
+  [...]
+  <!-- AIDLC_DISPATCH_RULES_END sha256:bc1bfb4c... -->
+
+=> Deliver-stage-rules rewrote task via updatedInput.task; Devin applied the
+   merge; the child received exactly one bundle for stage code-generation.
+   Foreground dispatch never touched the in-flight ledger (no is_background).

@@ -1,0 +1,3 @@
+$ bun .devin/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --session "awake-radon" --questions-file "aidlc/spaces/default/intents/260917-hello-script/construction/code-generation/code-generation-questions.md" --details "Approve Plan" --stage-level
+{"error":"Refusing to record Plan Approval: Plan Approval requires the actual offered choice from this prompt and session"}
+exit=1

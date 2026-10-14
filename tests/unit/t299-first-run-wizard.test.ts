@@ -897,7 +897,7 @@ describe("t299 first-run setup wizard", () => {
   test("Kiro IDE's row elsewhere asks for Kiro CLI's model with Enter keeping Kiro auto, and saves no effort", () => {
     const kept = kiroSeam({});
     // Kiro IDE from the harness list, recommended defaults, Enter at the model list.
-    const keep = runWizard("6\n\n\n", {
+    const keep = runWizard("7\n\n\n", {
       harnesses: { claude: { found: false } },
       env: kept.env,
       probed: ["kiro", "kiro-ide"],
@@ -912,7 +912,7 @@ describe("t299 first-run setup wizard", () => {
     expect(kiroWrites(kept.writes)).toEqual([]);
 
     const chosen = kiroSeam({});
-    const choose = runWizard("6\n\n2\n", {
+    const choose = runWizard("7\n\n2\n", {
       harnesses: { claude: { found: false } },
       env: chosen.env,
       probed: ["kiro", "kiro-ide"],
@@ -924,7 +924,7 @@ describe("t299 first-run setup wizard", () => {
 
     // A write Kiro refuses names the command that saves the chosen model again.
     const refused = kiroSeam({}, { failWrite: "chat.defaultModel" });
-    const failed = runWizard("6\n\n2\n", {
+    const failed = runWizard("7\n\n2\n", {
       harnesses: { claude: { found: false } },
       env: refused.env,
       probed: ["kiro", "kiro-ide"],
@@ -1171,7 +1171,7 @@ describe("t299 first-run setup wizard", () => {
 
     // Below the kiro row's own 2.6 floor neither Kiro row is detected, so
     // setup asks instead of taking one; the person still can choose Kiro CLI.
-    const unsupported = runWizard("5\n\n", {
+    const unsupported = runWizard("6\n\n", {
       harnesses: { claude: { found: false }, kiro: { found: true, version: "kiro-cli 2.5.9" } },
       probed: ["kiro", "kiro-ide"],
     });
@@ -1193,8 +1193,8 @@ describe("t299 first-run setup wizard", () => {
     });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Choose the harness for this project first.");
-    expect(result.stdout).toContain(`    5. Kiro CLI${" ".repeat(8)}(detected)\n`);
-    expect(result.stdout).toContain(`    6. Kiro IDE${" ".repeat(8)}(detected, default)\n`);
+    expect(result.stdout).toContain(`    6. Kiro CLI${" ".repeat(8)}(detected)\n`);
+    expect(result.stdout).toContain(`    7. Kiro IDE${" ".repeat(8)}(detected, default)\n`);
     expect(result.stdout).toContain("Using Kiro IDE.");
     const kiroDir = join(result.project, ".kiro");
     expect(existsSync(join(kiroDir, "agents", "aidlc-aidlc.md"))).toBe(true);
@@ -1213,7 +1213,7 @@ describe("t299 first-run setup wizard", () => {
     const auto = kiroSeam({});
     const onAuto = runWizard("\n\n\n", { harnesses: bothKiro, env: auto.env });
     expect(onAuto.status, onAuto.stdout + onAuto.stderr).toBe(0);
-    expect(onAuto.stdout).toContain(`    6. Kiro IDE${" ".repeat(8)}(detected, default)\n`);
+    expect(onAuto.stdout).toContain(`    7. Kiro IDE${" ".repeat(8)}(detected, default)\n`);
     expect(onAuto.stdout).toContain("Choose the Kiro CLI session model (Enter keeps Kiro auto):");
     expect(onAuto.stdout).toContain("Model [4]:");
     expect(kiroWrites(auto.writes)).toEqual([]);
@@ -1239,14 +1239,14 @@ describe("t299 first-run setup wizard", () => {
     });
     expect(withClaude.status, withClaude.stdout + withClaude.stderr).toBe(0);
     expect(withClaude.stdout).toContain(`    1. Claude Code     (detected, default)\n`);
-    expect(withClaude.stdout).toContain(`    5. Kiro CLI${" ".repeat(8)}(detected)\n`);
-    expect(withClaude.stdout).toContain(`    6. Kiro IDE${" ".repeat(8)}(detected)\n`);
+    expect(withClaude.stdout).toContain(`    6. Kiro CLI${" ".repeat(8)}(detected)\n`);
+    expect(withClaude.stdout).toContain(`    7. Kiro IDE${" ".repeat(8)}(detected)\n`);
     expect(withClaude.stdout).toContain("Using Claude Code.");
     expect(existsSync(join(withClaude.project, ".kiro"))).toBe(false);
 
-    const legacy = runWizard("5\n\n", { harnesses: { claude: { found: false }, ...bothKiro } });
+    const legacy = runWizard("6\n\n", { harnesses: { claude: { found: false }, ...bothKiro } });
     expect(legacy.status, legacy.stdout + legacy.stderr).toBe(0);
-    expect(legacy.stdout).toContain(`    6. Kiro IDE${" ".repeat(8)}(detected, default)\n`);
+    expect(legacy.stdout).toContain(`    7. Kiro IDE${" ".repeat(8)}(detected, default)\n`);
     expect(legacy.stdout).toContain("Using Kiro CLI.");
     expect(existsSync(join(legacy.project, ".kiro", "agents", "aidlc.json"))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

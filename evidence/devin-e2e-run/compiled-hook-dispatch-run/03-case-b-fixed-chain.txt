@@ -1,0 +1,59 @@
+== Case B — fixed full chain (positive control) ==
+Fixture: /tmp/aidlc-inv/p-b (git init + cp -r <home>/sources/aidlc-workflows/dist-release/devin/. — release tree)
+cwd for all runs: /tmp/aidlc-inv/p-b
+BIN=/tmp/aidlc-inv/binaries/native/aidlc
+Every run: echo '<payload>' | env -u CLAUDE_PROJECT_DIR -u AIDLC_PROJECT_DIR -u AIDLC_HARNESS_DIR -u AIDLC_HARNESS_NAME DEVIN_PROJECT_DIR=/tmp/aidlc-inv/p-b $BIN engine adapter devin <target>
+
+== B: validate-state / VS ==
+payload: {"hook_event_name":"PostCompaction","cwd":"/tmp/aidlc-inv/p-b","session_id":"inv-1"}
+exit: 0
+stdout: (empty)
+stderr: (empty)
+
+== B: session-start / SS ==
+payload: {"hook_event_name":"SessionStart","source":"startup","cwd":"/tmp/aidlc-inv/p-b","session_id":"inv-1"}
+exit: 0
+stdout:
+  {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"AIDLC Runtime Session: inv-1\nUse this exact value for any Plan Approval --session argument in this conversation."}}
+stderr: (empty)
+
+== B: state-transition-guard / EXEC_OK ==
+payload: {"hook_event_name":"PreToolUse","cwd":"/tmp/aidlc-inv/p-b","session_id":"inv-1","tool_name":"exec","tool_input":{"command":"ls"}}
+exit: 0
+stdout: (empty)
+stderr: (empty)
+
+== B: state-transition-guard / EXEC_BAD ==
+payload: {"hook_event_name":"PreToolUse","cwd":"/tmp/aidlc-inv/p-b","session_id":"inv-1","tool_name":"exec","tool_input":{"command":"bun .devin/tools/aidlc-state.ts reject feasibility"}}
+exit: 2
+stdout: (empty)
+stderr:
+  Stage status cannot be changed with aidlc-state.ts reject because that bypasses the workflow's completion and approval checks. Use aidlc-orchestrate.ts report --stage <slug> --result <awaiting-approval|approved|rejected|revised|completed|skipped>; use aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow. If you meant to do this now, turn the check off for this piece of work with /aidlc config set guard.state-transition off. It is recorded, and it comes back on for the next piece of work.
+
+== B: plan-approval-guard / EDIT ==
+payload: {"hook_event_name":"PreToolUse","cwd":"/tmp/aidlc-inv/p-b","session_id":"inv-1","tool_name":"edit","tool_input":{"file_path":"/tmp/aidlc-inv/p-b/README.md","old_string":"a","new_string":"b"}}
+exit: 0
+stdout: (empty)
+stderr: (empty)
+
+== B: review-freeze / EDIT ==
+payload: {"hook_event_name":"PreToolUse","cwd":"/tmp/aidlc-inv/p-b","session_id":"inv-1","tool_name":"edit","tool_input":{"file_path":"/tmp/aidlc-inv/p-b/README.md","old_string":"a","new_string":"b"}}
+exit: 0
+stdout: (empty)
+stderr: (empty)
+
+== B: continue-workflow / STOP ==
+payload: {"hook_event_name":"Stop","cwd":"/tmp/aidlc-inv/p-b","session_id":"inv-1","stop_hook_active":false}
+exit: 0
+stdout: (empty)
+stderr: (empty)
+
+== evidence after the chain ==
+/tmp/aidlc-inv/p-b/aidlc/spaces/default/intents/.aidlc-engine/hooks-health/:
+  continue-workflow.last:    2026-10-08T21:18:22Z
+  plan-approval-guard.last:  2026-10-08T21:18:21Z
+  review-freeze.last:        2026-10-08T21:18:22Z
+  validate-state.last:       2026-10-08T21:18:20Z
+  (session-start and state-transition-guard write no .last files)
+/tmp/aidlc-inv/p-b/.devin/.aidlc-session-start.local.json:
+  {"lastRun":"2026-10-08T21:18:20.422Z"}

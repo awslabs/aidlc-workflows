@@ -1,0 +1,33 @@
+total 12
+drwxr-xr-x 2 wiley wiley 4096 2026-09-17 17:08:32.819327396 -0300 .
+drwxr-xr-x 4 wiley wiley 4096 2026-09-17 17:24:19.279106962 -0300 ..
+-rw-r--r-- 1 wiley wiley 1022 2026-09-17 17:08:32.819327396 -0300 challenge-purple-wool.json
+
+total 44
+drwxr-xr-x 4 wiley wiley 4096 2026-09-17 17:24:19.279106962 -0300 .
+drwxr-xr-x 4 wiley wiley 4096 2026-09-17 17:24:19.259106965 -0300 ..
+-rw-r--r-- 1 wiley wiley   12 2026-09-17 17:24:19.259106965 -0300 .current-session
+-rw-r--r-- 1 wiley wiley   37 2026-09-17 17:24:19.279106962 -0300 awake-radon
+-rw-r--r-- 1 wiley wiley   84 2026-09-17 17:24:19.259106965 -0300 awake-radon.binding.json
+-rw-r--r-- 1 wiley wiley   67 2026-09-17 16:19:54.889931594 -0300 carpal-sphynx.binding.json
+-rw-r--r-- 1 wiley wiley   84 2026-09-17 16:53:48.299494469 -0300 jasper-psychology.binding.json
+drwxr-xr-x 2 wiley wiley 4096 2026-09-17 17:24:19.259106965 -0300 pids
+drwxr-xr-x 2 wiley wiley 4096 2026-09-17 17:08:32.819327396 -0300 plan-approval
+-rw-r--r-- 1 wiley wiley   37 2026-09-17 16:53:48.589494349 -0300 purple-wool
+-rw-r--r-- 1 wiley wiley   84 2026-09-17 16:53:48.589494349 -0300 purple-wool.binding.json
+.current-session: awake-radon
+
+## Session Start
+**Timestamp**: 2026-09-17T20:24:19Z
+**Event**: SESSION_STARTED
+**Source**: startup
+**Session**: awake-radon
+
+---
+
+## Human Turn
+**Timestamp**: 2026-09-17T20:24:29Z
+**Event**: HUMAN_TURN
+**Session**: awake-radon
+
+---

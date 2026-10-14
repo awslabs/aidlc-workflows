@@ -52,7 +52,7 @@ packages. The upstream Bun tracking includes `oven-sh/bun#15829` and
 `oven-sh/bun#29681`.
 
 The installer includes every harness runtime (`claude`, `codex`, `copilot`,
-`cursor`, `kiro`, `kiro-ide`, and `opencode`) together:
+`cursor`, `devin`, `kiro`, `kiro-ide`, and `opencode`) together:
 
 ```bash
 tmp="$(mktemp -d)"

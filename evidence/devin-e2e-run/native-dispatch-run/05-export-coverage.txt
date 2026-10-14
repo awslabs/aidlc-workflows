@@ -1,0 +1,43 @@
+Export coverage — devin-session-a.json
+=======================================
+
+COVERAGE LIMITATION: this ATIF export captures only the post-context-compaction
+tail of session nettle-vicuna. Steps 1-5 are system records timestamped
+~2026-09-18T01:18Z; step 6 (2026-09-18T11:07:55Z) is the "You are continuing
+work from a previous conversation thread" summary injected after compaction;
+steps 7-81 run from 11:06Z/11:07Z through 11:34Z. Everything the conductor did
+BEFORE the compaction — including the run_subagent dispatch of the developer
+stage — is absent from this export. The parent/child dispatch evidence lives in
+the sessions.db message_nodes instead (see 06-sessions-db-dispatch.txt).
+
+Header facts
+------------
+schema_version : ATIF-v1.7
+session_id     : nettle-vicuna
+agent.name     : devin
+agent.version  : 3000.10.31
+agent.model_name: SWE-2 Max   (extra.generation_model: swe-2-max)
+
+Step facts
+----------
+steps.length   : 81  (source counts: system=7, agent=74)
+first timestamp: 2026-09-18T01:18:03.969300941+00:00 (step_id 1)
+last timestamp : 2026-09-18T11:34:34.956800805+00:00 (step_id 81)
+final_metrics.total_steps: 81
+final_metrics.total_prompt_tokens: 6801260
+final_metrics.total_completion_tokens: 19140
+final_metrics.total_cached_tokens: 6595072
+
+tool_call name counts (top-level tool_calls[].function_name)
+-------------------------------------------------------------
+exec               : 23
+read               : 42
+write              : 4
+edit               : 2
+ask_user_question  : 2
+TOTAL              : 73
+
+run_subagent tool_calls in export: 0
+(expected — the dispatch predates the context compaction this export tails;
+confirmed by the sessions.db parent run_subagent nodes in
+06-sessions-db-dispatch.txt)

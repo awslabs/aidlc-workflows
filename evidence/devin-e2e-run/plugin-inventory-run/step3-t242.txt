@@ -1,0 +1,36 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t242-plugin-state.test.ts:
+(pass) t242 plugin manifest and hash contract > normalizes one host manifest and strips exactly the aidlc- namespace [1.75ms]
+(pass) t242 plugin manifest and hash contract > rejects invalid namespace, key, version, and host-version mismatch [0.68ms]
+(pass) t242 plugin manifest and hash contract > hashes sorted relative paths and LF-normalized source before token substitution [1.45ms]
+(pass) t242 fixture-proved host inventories > Claude reads registry v2, exact installPath, and enabledPlugins [2.33ms]
+(pass) t242 fixture-proved host inventories > Claude uses settings for disablement and the registry for uninstall state [1.10ms]
+(pass) t242 fixture-proved host inventories > Claude downgrades malformed enablement settings to unavailable inventory [1.18ms]
+(pass) t242 fixture-proved host inventories > Codex enumerates declared IDs and their fixed semver cache path [2.51ms]
+(pass) t242 fixture-proved host inventories > Codex accepts the documented local marketplace cache leaf [3.11ms]
+(pass) t242 fixture-proved host inventories > Codex rejects traversal marketplace IDs before reading outside its cache [0.45ms]
+(pass) t242 fixture-proved host inventories > Codex collapses stale semver cache directories to the newest version [3.87ms]
+(pass) t242 fixture-proved host inventories > Codex uses config disablement and ignores a cache retained after removal [3.18ms]
+(pass) t242 fixture-proved host inventories > Kiro and a disappeared full registry remain current-root-only [2.24ms]
+(pass) t242 fixture-proved host inventories > Devin reads its native .devin-plugin manifest as current-root-only [150.40ms]
+(pass) t242 fixture-proved host inventories > duplicate installed identities are invalid and name every manifest [1.98ms]
+(pass) t242 pure status comparator > covers every full-inventory state and keeps version/hash independent [0.44ms]
+(pass) t242 pure status comparator > default rendering exposes only the three actions and verbose keeps taxonomy [0.51ms]
+(pass) t242 pure status comparator > current-root-only never infers disabled or missing aggregate state [0.12ms]
+(pass) t242 transactional sync and ownership-safe prune > aggregate sync writes a deterministic stamp and is idempotent [787.22ms]
+(pass) t242 transactional sync and ownership-safe prune > concurrent syncs converge and the loser replans as an idempotent no-op [1251.94ms]
+(pass) t242 transactional sync and ownership-safe prune > public JSON and doctor expose the shared exact comparator state [409.05ms]
+(pass) t242 transactional sync and ownership-safe prune > one transaction rolls back all plugin bytes on an injected commit fault [1139.88ms]
+(pass) t242 transactional sync and ownership-safe prune > sync rejects content whose plugin owner differs from the host manifest key [531.73ms]
+(pass) t242 transactional sync and ownership-safe prune > a version upgrade replaces prior hash-proven primitive files [1255.13ms]
+(pass) t242 transactional sync and ownership-safe prune > same-version source drift replaces prior hash-proven primitive files [1452.30ms]
+(pass) t242 transactional sync and ownership-safe prune > sync refuses to replace a locally modified owned primitive [731.46ms]
+(pass) t242 transactional sync and ownership-safe prune > plain sync retains missing content; explicit prune removes only hash-proven ownership [1283.95ms]
+(pass) t242 transactional sync and ownership-safe prune > prune refuses a locally modified owned file without deleting it [759.28ms]
+(pass) t242 transactional sync and ownership-safe prune > interactive prune confirmation resolves on a line without waiting for EOF [2.96ms]
+
+ 28 pass
+ 0 fail
+ 82 expect() calls
+Ran 28 tests across 1 file. [9.98s]

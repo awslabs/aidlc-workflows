@@ -1,0 +1,44 @@
+== config --help investigation ==
+$BIN config --help
+exit: 0
+Set up, refresh, or change AI-DLC project configuration
+
+USAGE
+  aidlc config
+  aidlc config <section> [flags]
+
+SECTIONS
+  models      Which model and effort each agent uses (presets: thorough, balanced, minimal)
+  runtime     Whether hooks can find bun, aidlc, and the selected harness
+  providers   Provider, AWS region/profile, and manual provider actions
+  trust       Host trust and command allowlist acknowledgement
+  flags       Default scope, swarm, hook debug, sensor timeout, and bypasses
+  project     Plugins, MCP servers, and shell completions
+
+COMMON FLAGS
+  --pin <version>   Pin this project to an installed release
+  --download        Fetch and verify the release this project needs, if it is missing
+  --channel [name]  Show or set the machine release channel (stable, preview)
+  --show            Show the selected section without changing it
+  --dry-run         Print the transaction plan without writing
+  --yes             Confirm explicit choices; it never chooses values
+
+EXAMPLES
+  aidlc config
+  aidlc config models --show
+  aidlc config models --preset thorough --project --yes
+
+Every interactive question has an equivalent flag for non-interactive use.
+Full flag reference: aidlc config <section> --help
+
+== $BIN config --harness   (no value) ==
+aidlc: --harness requires a value
+exit: 2
+
+Conclusion: 'aidlc config --harness <name>' exists as a top-level flag
+(e.g. aidlc config --harness devin). It is not listed under COMMON FLAGS in
+the top-level help, but appears in the full flag reference
+('aidlc config <section> --help') and in shell completions. The build gate
+final-layout-config-dry-run exercised: aidlc config --project-dir <dir>
+--harness claude --mcp none --quiet --dry-run (status 0).
+Not run against anything outside /tmp/aidlc-inv.

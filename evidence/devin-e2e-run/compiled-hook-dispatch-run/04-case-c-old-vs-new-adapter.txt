@@ -1,0 +1,130 @@
+== Case C — old adapter vs unmodified adapter ==
+Fixture: /tmp/aidlc-inv/s-c (git init + cp -r <home>/sources/aidlc-workflows/dist/devin/. — source tree)
+cwd for all runs: /tmp/aidlc-inv/s-c
+BIN=/tmp/aidlc-inv/binaries/native/aidlc
+
+== old-adapter derivation ==
+$ cp s-c/.devin/hooks/aidlc-devin-adapter.ts s-c/.devin/hooks/aidlc-devin-adapter-old.ts
+$ sed -i 's/\[executable, "engine", "hook", hook\]/[executable, "hook", hook]/g' aidlc-devin-adapter-old.ts
+$ diff aidlc-devin-adapter.ts aidlc-devin-adapter-old.ts
+  414c414
+  <       : [executable, "engine", "hook", hook]
+  ---
+  >       : [executable, "hook", hook]
+  449c449
+  <       : [executable, "engine", "hook", hook]
+  ---
+  >       : [executable, "hook", hook]
+(exactly 2 lines changed — see old-adapter-argv.diff)
+
+Run env (both variants): env -u CLAUDE_PROJECT_DIR -u AIDLC_PROJECT_DIR -u AIDLC_HARNESS_DIR -u AIDLC_HARNESS_NAME DEVIN_PROJECT_DIR=/tmp/aidlc-inv/s-c AIDLC_COMPILED_EXECUTABLE=$BIN AIDLC_HARNESS_NAME=devin AIDLC_HARNESS_DIR=.devin bun /tmp/aidlc-inv/s-c/.devin/hooks/<adapter-file> <target>
+
+=== OLD ADAPTER (aidlc-devin-adapter-old.ts — pre-248500a8 argv) ===
+
+== C-old: validate-state / VS ==
+payload: {"hook_event_name":"PostCompaction","cwd":"/tmp/aidlc-inv/s-c","session_id":"inv-1"}
+exit: 0
+stdout: (empty)
+stderr: (empty)
+
+== C-old: session-start / SS ==
+payload: {"hook_event_name":"SessionStart","source":"startup","cwd":"/tmp/aidlc-inv/s-c","session_id":"inv-1"}
+exit: 0
+stdout: (empty)
+stderr: (empty)
+
+== C-old: state-transition-guard / EXEC_OK ==
+payload: {"hook_event_name":"PreToolUse","cwd":"/tmp/aidlc-inv/s-c","session_id":"inv-1","tool_name":"exec","tool_input":{"command":"ls"}}
+exit: 2
+stdout: (empty)
+stderr:
+  error: unknown command 'hook'
+
+  usage: aidlc <command> [flags]
+  For the full list, run 'aidlc --help'.
+
+== C-old: state-transition-guard / EXEC_BAD ==
+payload: {"hook_event_name":"PreToolUse","cwd":"/tmp/aidlc-inv/s-c","session_id":"inv-1","tool_name":"exec","tool_input":{"command":"bun .devin/tools/aidlc-state.ts reject feasibility"}}
+exit: 2
+stdout: (empty)
+stderr:
+  error: unknown command 'hook'
+
+  usage: aidlc <command> [flags]
+  For the full list, run 'aidlc --help'.
+  (NOTE: the real guard verdict "Stage status cannot be changed..." is masked.)
+
+== C-old: plan-approval-guard / EDIT ==
+payload: {"hook_event_name":"PreToolUse","cwd":"/tmp/aidlc-inv/s-c","session_id":"inv-1","tool_name":"edit","tool_input":{"file_path":"/tmp/aidlc-inv/s-c/README.md","old_string":"a","new_string":"b"}}
+exit: 2
+stdout: (empty)
+stderr:
+  error: unknown command 'hook'
+
+  usage: aidlc <command> [flags]
+  For the full list, run 'aidlc --help'.
+
+== C-old: review-freeze / EDIT ==
+payload: {"hook_event_name":"PreToolUse","cwd":"/tmp/aidlc-inv/s-c","session_id":"inv-1","tool_name":"edit","tool_input":{"file_path":"/tmp/aidlc-inv/s-c/README.md","old_string":"a","new_string":"b"}}
+exit: 2
+stdout: (empty)
+stderr:
+  error: unknown command 'hook'
+
+  usage: aidlc <command> [flags]
+  For the full list, run 'aidlc --help'.
+
+== C-old: continue-workflow / STOP ==
+payload: {"hook_event_name":"Stop","cwd":"/tmp/aidlc-inv/s-c","session_id":"inv-1","stop_hook_active":false}
+exit: 2
+stdout: (empty)
+stderr: (empty)
+
+== evidence after the OLD-adapter batch ==
+hooks-health dir: does NOT exist — no heartbeats written by any run.
+marker .devin/.aidlc-session-start.local.json: does NOT exist.
+
+=== NEW ADAPTER (aidlc-devin-adapter.ts — control, same 7 pairs after) ===
+
+== C-new: validate-state / VS ==
+exit: 0  stdout: (empty)  stderr: (empty)
+
+== C-new: session-start / SS ==
+exit: 0
+stdout:
+  {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"AIDLC Runtime Session: inv-1\nUse this exact value for any Plan Approval --session argument in this conversation."}}
+stderr: (empty)
+
+== C-new: state-transition-guard / EXEC_OK ==
+exit: 0  stdout: (empty)  stderr: (empty)
+
+== C-new: state-transition-guard / EXEC_BAD ==
+exit: 2
+stdout: (empty)
+stderr:
+  Stage status cannot be changed with aidlc-state.ts reject because that bypasses the workflow's completion and approval checks. Use aidlc-orchestrate.ts report --stage <slug> --result <awaiting-approval|approved|rejected|revised|completed|skipped>; use aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow. If you meant to do this now, turn the check off for this piece of work with /aidlc config set guard.state-transition off. It is recorded, and it comes back on for the next piece of work.
+
+== C-new: plan-approval-guard / EDIT ==
+exit: 0  stdout: (empty)  stderr: (empty)
+
+== C-new: review-freeze / EDIT ==
+exit: 0  stdout: (empty)  stderr: (empty)
+
+== C-new: continue-workflow / STOP ==
+exit: 0  stdout: (empty)  stderr: (empty)
+
+== evidence after the NEW-adapter batch ==
+/tmp/aidlc-inv/s-c/aidlc/spaces/default/intents/.aidlc-engine/hooks-health/:
+  continue-workflow.last:    2026-10-08T21:19:04Z
+  plan-approval-guard.last:  2026-10-08T21:19:04Z
+  review-freeze.last:        2026-10-08T21:19:04Z
+  validate-state.last:       2026-10-08T21:19:02Z
+marker .devin/.aidlc-session-start.local.json:
+  {"lastRun":"2026-10-08T21:19:03.142Z"}
+
+== why the per-target asymmetry (shipped adapter source, same file) ==
+- runCore (lines ~402-433) spawns the child with stderr:"ignore", returns {stdout, code}.
+- validate-state (line ~1674) + session-end (~954): advisory `runCore(...); return 0` — failure fully silent.
+- session-start (~916-946): runCore; marker write gated on r.code===0 → no marker; empty stdout re-wraps to nothing; return 0. Silent.
+- continue-workflow (~1681-1687): `return r.code` — forwards the child's exit 2, stderr ignored → silent exit 2 on Stop.
+- The four PreToolUse guards + deliver-stage-rules go through runCoreWithStderr (stderr piped): adapter exits 2 and the child's "unknown command 'hook'" lands on stderr → every guarded tool call is hard-blocked with a misleading dispatcher error.

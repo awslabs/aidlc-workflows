@@ -1,0 +1,91 @@
+# 08-malformed-record-episodes — F3: two malformed dispatch records, enforcement skipped
+# After a compaction the conductor wrote the aidlc-log REVIEW REQUEST JSON (stage/unit/iteration/
+# reviewer/requestId/reviewFile — no exempt[]) into reviewer-dispatch.json. parseDispatchRecord
+# rejected the shape, no reviewer window opened, and every forwarded call dropped a
+# "record is malformed; enforcement skipped" line instead of being scope-checked.
+# During both episodes the reviewer read construction/<sibling>/ paths unrefused.
+
+## Episode @ 2026-09-20T14:39:33.789499672Z — nfr-requirements scoring-engine re-review (~14:39Z)
+
+Dispatch record written by the conductor (write call args, verbatim):
+file_path: <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json
+content:
+{
+  "stage": "nfr-requirements",
+  "unit": "scoring-engine",
+  "iteration": 1,
+  "reviewer": "aidlc-architecture-reviewer-agent",
+  "requestId": "review:7f61ff27043bf8a6f2c523745aa897e8",
+  "reviewFile": "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/nfr-requirements/units/scoring-engine/63fa1caa21019aa9/1.review.md"
+}
+
+
+Reviewer dispatch: Review scoring-engine NFR (re-review) @ 2026-09-20T14:39:45.120191994Z (agent 385497ef)
+
+Child tool calls touching construction/packaging-config during this episode (all ALLOWED — enforcement skipped):
+   14:39:48.461  ALLOWED  exec               ls aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/nfr-requirements/ aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-requirement…[truncated]
+   14:40:02.256  ALLOWED  exec               cat "aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-requirements/security-requirements.md" 2>&1 | head -50; echo ---; cat "aidlc/spaces/default/intents/260919-c…[truncated]
+
+Child report (excerpt):
+Subagent agent_id=385497ef completed successfully:
+
+**Reviewer:** aidlc-architecture-reviewer-agent
+
+**Verdict: READY** — written to `construction/scoring-engine/nfr-requirements/reviews/review-02.md`.
+
+**Cross-unit check result:** The read of `construction/packaging-config/nfr-requirements/` was **not refused** — `ls` listed six files and `cat` returned the full contents of `security-requirements.md` and `traceability.json`. Shared interface names match across both units (`SubmissionRunner`, `SubmissionInput`, `Scoreboard`, typed errors, import direction, Ruff `S` enforcement).
+
+## Episode @ 2026-09-20T15:03:41.287297664Z — nfr-design scoring-engine first review (~15:03Z)
+
+Dispatch record written by the conductor (write call args, verbatim):
+file_path: <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json
+content:
+{
+  "stage": "nfr-design",
+  "unit": "scoring-engine",
+  "iteration": 1,
+  "reviewer": "aidlc-architecture-reviewer-agent",
+  "requestId": "review:4d5ad21d8cc34d240c54fa7a37b4dded",
+  "reviewFile": "aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/nfr-design/units/scoring-engine/31df841cae1b1c72/1.review.md"
+}
+
+
+Reviewer dispatch: Review scoring-engine NFR design @ 2026-09-20T15:03:51.049980661Z (agent 29602287)
+
+Child tool calls touching construction/packaging-config during this episode (all ALLOWED — enforcement skipped):
+   15:04:22.077  ALLOWED  find_file_by_name  {"pattern":"aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/**/*"}
+   15:04:25.865  ALLOWED  read               {"file_path":"<home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/functional-design/functional-spec.md"}
+
+Child report (excerpt):
+Subagent agent_id=29602287 completed successfully:
+
+**Reviewer:** aidlc-architecture-reviewer-agent
+
+**Verdict: READY** — written to `construction/scoring-engine/nfr-design/reviews/review-01.md` (1 Major, 2 Minor; READY permits ≤2 Major).
+
+**Findings:**
+
+
+# All 22 malformed-drop lines (reviewer-scope.drops, verbatim)
+2026-09-20T14:39:48Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T14:39:52Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T14:39:54Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T14:39:58Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T14:40:02Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T14:40:25Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T14:41:17Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T14:41:31Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:03:54Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:00Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:03Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:06Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:11Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:13Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:16Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:22Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:26Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:40Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:50Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:05:39Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:05:46Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:06:11Z	reviewer dispatch record is malformed; enforcement skipped

@@ -1,0 +1,122 @@
+# 06-window-lifecycle — reviewer-window + reviewer-dispatch.json across snapshots (R4, R6)
+# Snapshot dir names carry the capture timestamp in UTC (snapshot.sh used `date -u +%Y%m%d-%H%M%S`).
+
+================ snapshot 02-20260920-151731-nfr-u2-mid — taken 2026-09-20T15:17:31Z ================
+
+--- reviewer-window/ ---
+file: stylish-jester.json
+{"sessionId":"stylish-jester","toolUseId":"call_a7a25d13d9ebf317#71aeb7cfb8b845bf96bee885dd22a5db","profile":"aidlc-architecture-reviewer-agent","promptId":"f526dfdf-1003-4f8a-a26b-8ba880cc2613","version":1,"openedAtMs":1789917450993}
+
+
+--- reviewer-dispatch.json ---
+{"reviewer":"aidlc-architecture-reviewer-agent","stage":"nfr-design","unit":"packaging-config","exempt":[".devin/aidlc-common/stages/construction/nfr-design.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-design/nfr-design-questions.md","aidlc/spaces/default/intents/260919-challenge-scorer/inception/requirements-analysis/requirements.md","aidlc/spaces/default/intents/260919-challenge-scorer/inception/contract-design/contract-summary.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/functional-spec.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/rules.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/entities.md"]}
+
+
+================ snapshot 03-20260920-153705-nfrd-fix-mid — taken ~2026-09-20T15:37:05Z ================
+
+--- reviewer-window/ ---
+file: stylish-jester.json
+{"sessionId":"stylish-jester","toolUseId":"call_b68725b6a23abdfb#ec9b3540165f42acb73e81461dfd9ca1","profile":"aidlc-architecture-reviewer-agent","promptId":"ee70551b-3b4a-4738-916e-bf5224300e4e","version":1,"openedAtMs":1789918624326}
+
+
+--- reviewer-dispatch.json ---
+{"reviewer":"aidlc-architecture-reviewer-agent","stage":"nfr-design","unit":"scoring-engine","exempt":[".devin/aidlc-common/stages/construction/nfr-design.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/nfr-design/nfr-design-questions.md","aidlc/spaces/default/intents/260919-challenge-scorer/inception/requirements-analysis/requirements.md","aidlc/spaces/default/intents/260919-challenge-scorer/inception/contract-design/contract-summary.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/functional-design/functional-spec.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/functional-design/rules.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/functional-design/entities.md"]}
+
+
+================ snapshot 04-20260920-160154-final — taken ~2026-09-20T16:01:54Z ================
+
+--- reviewer-window/ ---
+file: stylish-jester.json
+{"sessionId":"stylish-jester","toolUseId":"call_a6a85aac1557db1a#657a9d5719c346f4b27fa866aab719ae","profile":"aidlc-architecture-reviewer-agent","promptId":"ee70551b-3b4a-4738-916e-bf5224300e4e","version":1,"openedAtMs":1789920065878}
+
+
+--- reviewer-dispatch.json ---
+{"reviewer":"aidlc-architecture-reviewer-agent","stage":"infrastructure-design","unit":"scoring-engine","exempt":[".devin/aidlc-common/stages/construction/infrastructure-design.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/infrastructure-design/infrastructure-design-questions.md","aidlc/spaces/default/intents/260919-challenge-scorer/inception/requirements-analysis/requirements.md","aidlc/spaces/default/intents/260919-challenge-scorer/inception/contract-design/contract-summary.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/functional-design/functional-spec.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/functional-design/rules.md","aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/functional-design/entities.md"]}
+
+
+================ run project as it stands now (post-SessionEnd) ================
+-rw-r--r-- 1 wiley wiley  876 2026-09-20 13:00:52.084498369 -0300 <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-dispatch.json
+
+<home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviewer-window/:
+total 8
+drwxr-xr-x 2 wiley wiley 4096 2026-09-20 13:02:01.884500835 -0300 .
+drwxr-xr-x 9 wiley wiley 4096 2026-09-20 13:00:52.084498369 -0300 ..
+
+(The reviewer-window/ directory is now empty: SessionEnd removed stylish-jester.json after
+snapshot 04. The orphaned reviewer-dispatch.json — for the interrupted infrastructure-design
+review — remains for TTL cleanup, per design.)
+
+================ SESSION_* audit rows (verbatim) ================
+
+## Session Compacted
+**Timestamp**: 2026-09-20T03:46:13Z
+**Event**: SESSION_COMPACTED
+**Current Stage**: domain-design
+**State Validity**: valid
+
+## Session Compacted
+**Timestamp**: 2026-09-20T14:13:38Z
+**Event**: SESSION_COMPACTED
+**Current Stage**: nfr-requirements
+**State Validity**: valid
+
+## Session Compacted
+**Timestamp**: 2026-09-20T14:39:29Z
+**Event**: SESSION_COMPACTED
+**Current Stage**: nfr-requirements
+**State Validity**: valid
+
+## Session End
+**Timestamp**: 2026-09-20T14:56:07Z
+**Event**: SESSION_ENDED
+**Reason**: clear
+
+## Session Start
+**Timestamp**: 2026-09-20T14:56:08Z
+**Event**: SESSION_STARTED
+**Source**: startup
+**Session**: sudden-summer
+
+## Session End
+**Timestamp**: 2026-09-20T14:56:12Z
+**Event**: SESSION_ENDED
+**Reason**: prompt_input_exit
+
+## Session Start
+**Timestamp**: 2026-09-20T14:56:22Z
+**Event**: SESSION_STARTED
+**Source**: startup
+**Session**: unexpected-swordfish
+
+## Session End
+**Timestamp**: 2026-09-20T14:56:40Z
+**Event**: SESSION_ENDED
+**Reason**: prompt_input_exit
+
+## Session Start
+**Timestamp**: 2026-09-20T14:56:51Z
+**Event**: SESSION_STARTED
+**Source**: startup
+**Session**: hail-device
+
+## Session End
+**Timestamp**: 2026-09-20T14:57:01Z
+**Event**: SESSION_ENDED
+**Reason**: resume
+
+## Session Start
+**Timestamp**: 2026-09-20T14:57:11Z
+**Event**: SESSION_STARTED
+**Source**: startup
+**Session**: snapdragon-giraffe
+
+## Session End
+**Timestamp**: 2026-09-20T14:57:13Z
+**Event**: SESSION_ENDED
+**Reason**: prompt_input_exit
+
+## Session Resume
+**Timestamp**: 2026-09-20T14:58:30Z
+**Event**: SESSION_RESUMED
+**Source**: resume
+**Session**: stylish-jester

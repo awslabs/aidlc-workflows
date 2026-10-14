@@ -426,6 +426,15 @@ function authority(p: Project, target: { unit: string | null }): {
   ) as unknown as { directiveEpoch: string; runFloor: string };
 }
 
+function receiptBody(p: Project): string {
+  const names = p.receipts();
+  expect(names).toHaveLength(1);
+  return readFileSync(
+    join(sessionsDir(p.dir), "plan-approval", names[0]),
+    "utf-8",
+  );
+}
+
 async function approvedProject(scope: "express" | "feature" = "express"): Promise<{
   p: Project;
   target: { unit: string | null };
@@ -469,6 +478,7 @@ describe("t328 (1) the reported sequence: approve a plan and have it stick", () 
     const moved = bytesMoved(before, snapshot(p.dir));
     expect(probe.code).toBe(0);
     expect(moved).toEqual({ created: [], modified: [], deleted: [] });
+    expect(snapshot(p.dir)).toEqual(before);
     expect(p.runtimeFiles().some((name) => name.startsWith("challenge-"))).toBe(true);
 
     // And the hook itself, which does that spawn plus its own bookkeeping.
@@ -485,6 +495,49 @@ describe("t328 (1) the reported sequence: approve a plan and have it stick", () 
     expect(recorded.code, recorded.stderr).toBe(0);
     expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
   });
+
+  test("a Stop probe preparing fresh steering preserves the live challenge and every project byte", async () => {
+    const p = await project("express");
+    const { directive } = deliver(p);
+    expect(directive.kind).toBe("run-stage");
+    expect(directive.stage).toBe("code-generation");
+    presentPlan(p, { unit: null });
+    const challenge = p.lib.readPlanApprovalChallenge(p.dir as never, SESSION as never);
+    expect(challenge).not.toBeNull();
+    const markerBefore = readFileSync(p.markerPath, "utf-8");
+    expect(p.marker()?.kind).toBe("run-stage");
+    appendFileSync(
+      join(p.dir, "aidlc", "spaces", "default", "memory", "project.md"),
+      "\n\n## Probe regression\n\nKeep the project verification commands unchanged.\n",
+      "utf-8",
+    );
+    const before = snapshot(p.dir);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const probe = p.next(p.probeEnv);
+      expect(probe.code, probe.stderr).toBe(0);
+      const prepared = JSON.parse(probe.stdout.trim()) as Record<string, unknown>;
+      // While the engine-owned plan-approval challenge is open it IS the
+      // active directive, so the probe is answered with that ask, not a fresh
+      // run-stage steering delivery (the re-issued rules wait for the answer).
+      expect(prepared.kind).toBe("ask");
+      expect(prepared.ask_type).toBe("plan-approval");
+      expect(p.lib.readPlanApprovalChallenge(p.dir as never, SESSION as never)).toEqual(challenge);
+      expect(readFileSync(p.markerPath, "utf-8")).toBe(markerBefore);
+      expect(snapshot(p.dir)).toEqual(before);
+    }
+    const advancing = p.next();
+    expect(advancing.code, advancing.stderr).toBe(0);
+    const advancingDirective = JSON.parse(advancing.stdout.trim()) as Record<
+      string,
+      unknown
+    >;
+    // A real (non-probe) `next` publishes the open plan-approval ask as the
+    // active directive, replacing the run-stage marker.
+    expect(advancingDirective.kind).toBe("ask");
+    expect(advancingDirective.ask_type).toBe("plan-approval");
+    expect(p.marker()?.kind).toBe("ask");
+    expect(readFileSync(p.markerPath, "utf-8")).not.toBe(markerBefore);
+  }, 120000);
 
   test("the consultation returns the directive already issued, not a restart", async () => {
     const p = await project("express");
@@ -622,11 +675,16 @@ describe("t328 (2) every legitimate action preserves the recorded decision", () 
       const beforeRevision = p.marker()?.revision;
       const beforeEpoch = authority(p, target).directiveEpoch;
       expect(p.receipts().length).toBe(1);
+      const receiptBefore = receiptBody(p);
+      expect((JSON.parse(receiptBefore) as { session: string }).session).toBe(
+        SESSION,
+      );
 
       act(p);
 
       expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
       expect(p.receipts().length).toBe(1);
+      expect(receiptBody(p)).toBe(receiptBefore);
       if (shape?.carriesReply) {
         // The park row kept the person's words, so the resumed step was issued
         // again with them: one new issuance, the decision untouched.
@@ -1094,6 +1152,7 @@ describe("t328 (5) the per-Unit walk", () => {
       modified: [],
       deleted: [],
     });
+    expect(snapshot(p.dir)).toEqual(beforeProbe);
 
     const beforeRouteCheck = snapshot(p.dir);
     const beforeAll = snapshot(p.dir);

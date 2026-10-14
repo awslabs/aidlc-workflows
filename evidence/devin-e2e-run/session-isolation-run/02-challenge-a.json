@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "targetId": "stage:code-generation",
+  "intentId": "01a0b0ee-b1fd-7778-b59b-1fb5423c590f",
+  "runFloor": "STAGE_STARTED:2026-09-17T20:06:13Z#1",
+  "fingerprint": "sha256:v3:34c53b0c1052004f08cef8e9ada78f4fbec8ec2d9a5c970c3534b43085170ed5",
+  "questionsFile": "aidlc/spaces/default/intents/260917-hello-script/construction/code-generation/code-generation-questions.md",
+  "promptSha256": "1862e04007f8a0496d856daf970fc5ab233d9e518eb0343e9ce440e89df7c8c3",
+  "directiveEpoch": "sha256:768bfe19c9017eceec817b3894ba2cac315006a4d0bb24ab2d98f5847fd5b875",
+  "sourceFloor": "4c4b28f925ad652832e94f5ae0cc8e2f365f996493f354afdf769098ec87de02",
+  "markerRevision": 4,
+  "plannedSourceSha256": "4c4b28f925ad652832e94f5ae0cc8e2f365f996493f354afdf769098ec87de02",
+  "session": "purple-wool",
+  "challengeId": "sha256:60826fdce29576c5da3d2001490635ac841ca39eb8fb468be4d905ee2e4a5251",
+  "options": [
+    "Approve Plan",
+    "Request Changes"
+  ],
+  "requireExactOptionLabels": false,
+  "hashedOptionLabels": false
+}

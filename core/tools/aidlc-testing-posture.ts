@@ -35,6 +35,7 @@ import {
   guardStandAsideSpeaks,
   guardStoodAsideLine,
   gitCommitSourceListing,
+  isReadOnlyEngineProbe,
   latestLedgerSession,
   latestMainWorkflowStageRunFloorForProject,
   legacyBoltName,
@@ -1311,6 +1312,48 @@ function rawMarkdownSection(content: string, heading: string): string {
   return found ? body.join("\n") : "";
 }
 
+// Repair JSON that has actual newlines/tabs inside string values. Some
+// harness write tools (Devin 3000.6.14) interpret \n escape sequences in
+// tool content as actual newlines, corrupting JSON strings. This function
+// walks the JSON text and replaces raw control characters inside string
+// values with their JSON escape sequences, making the JSON parseable again.
+// The parsed object is identical to what JSON.parse would have produced
+// from the original (uncorrupted) JSON, so the contract hash still matches.
+// TODO: Remove this fallback after the Devin write-tool escape bug's fixed
+// version is vendor-confirmed (UNCONFIRMED as of 2026-09-12), a captured
+// write/read regression verifies it, the supported baseline includes that
+// version, and affected stored plans are regenerated through normal approval.
+function repairJsonControlChars(json: string): string {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < json.length; i++) {
+    const ch = json[i];
+    if (escaped) {
+      result += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      result += ch;
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      result += ch;
+      continue;
+    }
+    if (inString) {
+      if (ch === "\n") { result += "\\n"; continue; }
+      if (ch === "\r") { result += "\\r"; continue; }
+      if (ch === "\t") { result += "\\t"; continue; }
+    }
+    result += ch;
+  }
+  return result;
+}
+
 export type TestingContractDefect = "missing" | "invalid-json" | "mismatch";
 
 /**
@@ -1320,15 +1363,34 @@ export type TestingContractDefect = "missing" | "invalid-json" | "mismatch";
  */
 export function readTestingContract(
   plan: string,
+  source?: { projectDir: string; planPath: string },
 ): { contract: TestingPostureContract } | { defect: TestingContractDefect; detail?: string } {
   const section = rawMarkdownSection(plan, CONTRACT_HEADING);
   const match = section.match(/```json[ \t]*\r?\n([\s\S]*?)\r?\n```/i);
   if (!match) return { defect: "missing" };
+  // Try strict JSON.parse first; only a syntax failure attempts to repair
+  // control characters that a harness write tool may have introduced into
+  // string values (Devin 3000.6.14 converts \n escape sequences to
+  // newlines). A repaired parse that survives the same version/hash
+  // validation is recorded as a repair-read event so the fallback stays
+  // visible; read-only engine probes keep the same result but write nothing.
   let parsed: TestingPostureContract;
+  let repaired = false;
   try {
     parsed = JSON.parse(match[1]) as TestingPostureContract;
   } catch (error) {
-    return { defect: "invalid-json", detail: errorMessage(error) };
+    const candidate = repairJsonControlChars(match[1]);
+    let repairedParse: TestingPostureContract | null = null;
+    if (candidate !== match[1]) {
+      try {
+        repairedParse = JSON.parse(candidate) as TestingPostureContract;
+      } catch {}
+    }
+    if (repairedParse === null) {
+      return { defect: "invalid-json", detail: errorMessage(error) };
+    }
+    parsed = repairedParse;
+    repaired = true;
   }
   if (
     parsed === null ||
@@ -1339,11 +1401,25 @@ export function readTestingContract(
     return { defect: "mismatch" };
   }
   const { contract_sha256: recorded, ...body } = parsed;
-  return hashObject(body) === recorded ? { contract: parsed } : { defect: "mismatch" };
+  if (hashObject(body) !== recorded) return { defect: "mismatch" };
+  if (repaired && source && !isReadOnlyEngineProbe()) {
+    const file = JSON.stringify(
+      toPosix(relative(source.projectDir, source.planPath)),
+    ).replaceAll("[", "\\u005b");
+    recordHookDrop(
+      source.projectDir,
+      "testing-contract-repair",
+      `[advisory] Testing Contract read via repair: ${file}`,
+    );
+  }
+  return { contract: parsed };
 }
 
-export function parseTestingContract(plan: string): TestingPostureContract | null {
-  const read = readTestingContract(plan);
+export function parseTestingContract(
+  plan: string,
+  source?: { projectDir: string; planPath: string },
+): TestingPostureContract | null {
+  const read = readTestingContract(plan, source);
   return "contract" in read ? read.contract : null;
 }
 
@@ -2791,7 +2867,9 @@ function codeGenerationApprovalArtifacts(
   const planExists = plan.trim().length > 0;
   const instructionsExist = instructions.trim().length > 0;
   const approvedAnswer = questionsFileApproved(questions);
-  const embedded = planExists ? parseTestingContract(plan) : null;
+  const embedded = planExists
+    ? parseTestingContract(plan, { projectDir, planPath })
+    : null;
   const current = planExists ? resolveTestingPosture(contractProjectDir) : null;
   const contractHash = embedded?.contract_sha256 ?? null;
   const contractValid =
@@ -5373,7 +5451,8 @@ export function main(argv: string[]): void {
         const authority = resolveCodeGenerationAuthority(projectDir, target);
         const approval = evaluateCodeGenerationApproval(projectDir, target);
         const stageDir = authority.stageDir;
-        const plan = readFileSync(join(stageDir, "code-generation-plan.md"), "utf-8");
+        const planPath = join(stageDir, "code-generation-plan.md");
+        const plan = readFileSync(planPath, "utf-8");
         const instructions = readFileSync(
           join(stageDir, "unit-test-instructions.md"),
           "utf-8",
@@ -5391,7 +5470,7 @@ export function main(argv: string[]): void {
             "reset the Plan Approval [Answer]: to blank before regenerating its fingerprint",
           );
         }
-        const embedded = parseTestingContract(plan);
+        const embedded = parseTestingContract(plan, { projectDir, planPath });
         const current = resolveTestingPosture(projectDir);
         if (
           !embedded ||

@@ -1,0 +1,22 @@
+AI-DLC Test Run Summary
+======================
+Timestamp: 2026-09-23T00:03:08Z
+Tiers: e2e
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+Mode: debug (streaming + driver traces)
+
+Per-file results:
+  File                                     Status Assertions     Failed   Duration
+  ----                                     ------ ----------     ------   --------
+  t-exec-devin-mcp-headers.serial          PASS            1          0 7.590326369s
+
+Totals:
+  Test files: 1
+  Failed files: 0
+  Total assertions: 1
+  Failed assertions: 0
+  Coverage: COMPLETE
+  Executed test cases: 1
+  Skipped test cases: 0
+  Skipped files: 0
+  Result: PASS

@@ -1,0 +1,52 @@
+Runtime-graph gap — pre-existing classifier defect evidence
+============================================================
+
+1) KNOWN_HARNESS_DIRS in the source checkout (core/tools/aidlc-lib.ts):
+
+$ rg -n 'KNOWN_HARNESS_DIRS = ' core/tools/aidlc-lib.ts
+217:export const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc", ".cursor"] as const;
+
+`.devin` is absent from the list, so classifyRuntimeCompileCommand does not
+recognize Devin-harness tool invocations as engine commands.
+
+2) Live classification in ~/devin-e2e-native-dispatch (dist copy of the same lib):
+
+$ bun -e "const { classifyRuntimeCompileCommand } = await import('./.devin/tools/aidlc-lib.ts'); for (const c of ['bun .claude/tools/aidlc-orchestrate.ts report --result approved','bun .devin/tools/aidlc-orchestrate.ts report --result approved','bun .devin/tools/aidlc-orchestrate.ts next','bun .devin/tools/aidlc.ts engine log decision --stage code-generation','bun .devin/tools/aidlc-state.ts approve']) console.log(JSON.stringify(c), '=>', classifyRuntimeCompileCommand(c));"
+
+"bun .claude/tools/aidlc-orchestrate.ts report --result approved" => fire
+"bun .devin/tools/aidlc-orchestrate.ts report --result approved" => pass
+"bun .devin/tools/aidlc-orchestrate.ts next" => pass
+"bun .devin/tools/aidlc.ts engine log decision --stage code-generation" => pass
+"bun .devin/tools/aidlc-state.ts approve" => pass
+
+The identical engine command classifies "fire" under .claude and "pass" under
+.devin — every Devin tool invocation misses the runtime-graph recompile path.
+
+3) runtime-graph.json absent from the live project's aidlc tree:
+
+$ find ~/devin-e2e-native-dispatch/aidlc -name runtime-graph.json
+(no output — exit 0, zero matches)
+
+4) hooks-health state (proves hooks DID fire throughout the run — the gap is
+   graph compilation, not hook delivery):
+
+Record-scoped: aidlc/spaces/default/intents/260918-hello-ok-script/.aidlc-engine/hooks-health/
+
+  .first-fired                2026-09-18T01:21:55Z
+  continue-workflow.drops     2026-09-18T01:45:49Z	current stage code-generation has an unanswered logged decision; allowing the stop (pending-decision carve-out)
+  continue-workflow.last      2026-09-18T11:43:08Z
+  log-subagent.last           2026-09-18T01:45:49Z
+  plan-approval-guard.last    2026-09-18T11:43:03Z
+  review-freeze.last          2026-09-18T11:43:03Z
+  reviewer-scope.last         2026-09-18T11:43:03Z
+  run-sensors.last            2026-09-18T11:30:38Z
+  session-end.last            2026-09-18T11:44:42Z
+  session-start.last          2026-09-18T11:03:15Z
+  validate-state.last         2026-09-18T11:07:55Z
+  write-audit-log.last        2026-09-18T11:30:38Z
+
+Pre-intent scratch: aidlc/spaces/default/intents/.aidlc-engine/hooks-health/
+
+  plan-approval-guard.last    2026-09-18T01:18:54Z
+  review-freeze.last          2026-09-18T01:18:54Z
+  reviewer-scope.last         2026-09-18T01:18:53Z

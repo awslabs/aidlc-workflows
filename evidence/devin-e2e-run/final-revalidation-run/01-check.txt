@@ -1,0 +1,467 @@
+$ bun scripts/package.ts && bun scripts/package.ts --check && bun run typecheck && bun run lint
+[claude] regenerated dist/claude/.claude
+[claude] regenerated dist-release/claude/.claude
+[codex] regenerated dist/codex/.codex
+[codex] regenerated dist-release/codex/.codex
+[copilot] regenerated dist/copilot/.aidlc
+[copilot] regenerated dist-release/copilot/.aidlc
+[cursor] regenerated dist/cursor/.cursor
+[cursor] regenerated dist-release/cursor/.cursor
+[devin] regenerated dist/devin/.devin
+[devin] regenerated dist-release/devin/.devin
+[kiro] regenerated dist/kiro/.kiro
+[kiro] regenerated dist-release/kiro/.kiro
+[kiro-ide] regenerated dist/kiro-ide/.kiro
+[kiro-ide] regenerated dist-release/kiro-ide/.kiro
+[opencode] regenerated dist/opencode/.aidlc
+[opencode] regenerated dist-release/opencode/.aidlc
+[plugin:test-pro] emitted dist/plugins/test-pro/claude/
+[plugin:test-pro] emitted dist/plugins/test-pro/codex/
+[plugin:test-pro] emitted dist/plugins/test-pro/copilot/
+[plugin:test-pro] emitted dist/plugins/test-pro/cursor/
+[plugin:test-pro] emitted dist/plugins/test-pro/devin/
+[plugin:test-pro] emitted dist/plugins/test-pro/kiro/
+[plugin:test-pro] emitted dist/plugins/test-pro/kiro-ide/
+[plugin:test-pro] emitted dist/plugins/test-pro/opencode/
+package --check: deterministic across two independent build(s) for claude, codex, copilot, cursor, devin, kiro, kiro-ide, opencode.
+$ tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.adapters.json
+$ biome check --error-on-warnings core harness scripts plugins tests
+core/tools/aidlc-distribution.ts:100:53 lint/complexity/noUselessEscapeInRegex  FIXABLE  ━━━━━━━━━━━
+
+  i The character doesn't need to be escaped.
+  
+     99 │ export function isSafeOnboardingPath(value: unknown, harnessDir: string): value is string {
+  > 100 │   return typeof value === "string" && /^[A-Za-z0-9._\/-]+$/.test(value) &&
+        │                                                     ^^
+    101 │     !value.split("/").some((segment) => segment === "" || segment === "." || segment === "..") &&
+    102 │     value.startsWith(`${harnessDir}/`);
+  
+  i The character should only be escaped if it is outside a character class or under the `v` flag.
+  
+  i Safe fix: Unescape the character.
+  
+    100 │ ··return·typeof·value·===·"string"·&&·/^[A-Za-z0-9._\/-]+$/.test(value)·&&
+        │                                                     -                     
+
+tests/harness/kiro-acp-drive.ts:241:16 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    239 │       turn: this.diagnosticTurn, sessionId: this.sessionId, event, ...data,
+    240 │     };
+  > 241 │     let line = JSON.stringify(envelope) + "\n";
+        │                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    242 │     const bytes = Buffer.byteLength(line);
+    243 │     if (bytes > ACP_DIAGNOSTIC_MAX_EVENT || state.bytes + bytes > ACP_DIAGNOSTIC_MAX_FILE) {
+  
+  i Unsafe fix: Use a template literal.
+  
+    239 239 │         turn: this.diagnosticTurn, sessionId: this.sessionId, event, ...data,
+    240 240 │       };
+    241     │ - ····let·line·=·JSON.stringify(envelope)·+·"\n";
+        241 │ + ····let·line·=·`${JSON.stringify(envelope)}\n`;
+    242 242 │       const bytes = Buffer.byteLength(line);
+    243 243 │       if (bytes > ACP_DIAGNOSTIC_MAX_EVENT || state.bytes + bytes > ACP_DIAGNOSTIC_MAX_FILE) {
+  
+
+tests/harness/kiro-acp-drive.ts:244:14 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    242 │     const bytes = Buffer.byteLength(line);
+    243 │     if (bytes > ACP_DIAGNOSTIC_MAX_EVENT || state.bytes + bytes > ACP_DIAGNOSTIC_MAX_FILE) {
+  > 244 │       line = JSON.stringify({
+        │              ^^^^^^^^^^^^^^^^
+  > 245 │         ts: envelope.ts, sequence: envelope.sequence, instance: this.diagnosticInstance,
+  > 246 │         event: "diagnostic_incomplete", reason: "capture budget exceeded",
+  > 247 │         omittedBytes: bytes, omittedSha256: createHash("sha256").update(line).digest("hex"),
+  > 248 │       }) + "\n";
+        │       ^^^^^^^^^
+    249 │       state.capped = true; // The diagnostic is inconclusive; never silently truncate.
+    250 │     }
+  
+  i Unsafe fix: Use a template literal.
+  
+    242 242 │       const bytes = Buffer.byteLength(line);
+    243 243 │       if (bytes > ACP_DIAGNOSTIC_MAX_EVENT || state.bytes + bytes > ACP_DIAGNOSTIC_MAX_FILE) {
+    244     │ - ······line·=·JSON.stringify({
+        244 │ + ······line·=·`${JSON.stringify({
+    245 245 │           ts: envelope.ts, sequence: envelope.sequence, instance: this.diagnosticInstance,
+    246 246 │           event: "diagnostic_incomplete", reason: "capture budget exceeded",
+    247 247 │           omittedBytes: bytes, omittedSha256: createHash("sha256").update(line).digest("hex"),
+    248     │ - ······})·+·"\n";
+        248 │ + ······})}\n`;
+    249 249 │         state.capped = true; // The diagnostic is inconclusive; never silently truncate.
+    250 250 │       }
+  
+
+tests/unit/t151-onboarding-skeleton.test.ts:71:39 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    69 │       },
+    70 │     };
+  > 71 │     const rendered = renderOnboarding(HARNESS + "\n" + NEUTRAL, fills)
+       │                                       ^^^^^^^^^^^^^^^^^^^^^^^^
+    72 │       .replaceAll("{{HARNESS_DIR}}", ".foo")
+    73 │       .replaceAll("{{INVOKE}}", "aidlc");
+  
+  i Unsafe fix: Use a template literal.
+  
+     69  69 │         },
+     70  70 │       };
+     71     │ - ····const·rendered·=·renderOnboarding(HARNESS·+·"\n"·+·NEUTRAL,·fills)
+         71 │ + ····const·rendered·=·renderOnboarding(`${HARNESS}\n${NEUTRAL}`,·fills)
+     72  72 │         .replaceAll("{{HARNESS_DIR}}", ".foo")
+     73  73 │         .replaceAll("{{INVOKE}}", "aidlc");
+  
+
+tests/unit/t151-onboarding-skeleton.test.ts:118:33 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    116 │         } else {
+    117 │           expect(setup.match(/^#+ .+$/gm)?.[0], harness.name).toBe("# Project Name <!-- Replace with your project name -->");
+  > 118 │           expect(setup.endsWith("\n## Shared AI-DLC onboarding\n\n" + NEUTRAL), harness.name).toBe(true);
+        │                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    119 │         }
+    120 │       }
+  
+  i Unsafe fix: Use a template literal.
+  
+    116 116 │           } else {
+    117 117 │             expect(setup.match(/^#+ .+$/gm)?.[0], harness.name).toBe("# Project Name <!-- Replace with your project name -->");
+    118     │ - ··········expect(setup.endsWith("\n##·Shared·AI-DLC·onboarding\n\n"·+·NEUTRAL),·harness.name).toBe(true);
+        118 │ + ··········expect(setup.endsWith(`\n##·Shared·AI-DLC·onboarding\n\n${NEUTRAL}`),·harness.name).toBe(true);
+    119 119 │           }
+    120 120 │         }
+  
+
+tests/unit/t243-install-mechanism.test.ts:1342:35 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    1340 │       if (integration.path === "AGENTS.md") delete integration.shared;
+    1341 │     }
+  > 1342 │     writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+         │                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    1343 │ 
+    1344 │     for (const extra of [[], ["--force"]]) {
+  
+  i Unsafe fix: Use a template literal.
+  
+    1340 1340 │         if (integration.path === "AGENTS.md") delete integration.shared;
+    1341 1341 │       }
+    1342      │ - ····writeFileSync(descriptorPath,·JSON.stringify(descriptor,·null,·2)·+·"\n");
+         1342 │ + ····writeFileSync(descriptorPath,·`${JSON.stringify(descriptor,·null,·2)}\n`);
+    1343 1343 │   
+    1344 1344 │       for (const extra of [[], ["--force"]]) {
+  
+
+tests/unit/t243-install-mechanism.test.ts:1393:35 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    1391 │       if (integration.path === "AGENTS.md") delete integration.shared;
+    1392 │     }
+  > 1393 │     writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+         │                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    1394 │     const sourceAgentsPath = join(source, "AGENTS.md");
+    1395 │     writeFileSync(sourceAgentsPath, readFileSync(sourceAgentsPath, "utf-8") + "\nChanged release guidance.\n");
+  
+  i Unsafe fix: Use a template literal.
+  
+    1391 1391 │         if (integration.path === "AGENTS.md") delete integration.shared;
+    1392 1392 │       }
+    1393      │ - ····writeFileSync(descriptorPath,·JSON.stringify(descriptor,·null,·2)·+·"\n");
+         1393 │ + ····writeFileSync(descriptorPath,·`${JSON.stringify(descriptor,·null,·2)}\n`);
+    1394 1394 │       const sourceAgentsPath = join(source, "AGENTS.md");
+    1395 1395 │       writeFileSync(sourceAgentsPath, readFileSync(sourceAgentsPath, "utf-8") + "\nChanged release guidance.\n");
+  
+
+tests/unit/t243-install-mechanism.test.ts:1395:37 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    1393 │     writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+    1394 │     const sourceAgentsPath = join(source, "AGENTS.md");
+  > 1395 │     writeFileSync(sourceAgentsPath, readFileSync(sourceAgentsPath, "utf-8") + "\nChanged release guidance.\n");
+         │                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    1396 │ 
+    1397 │     for (const extra of [[], ["--force"]]) {
+  
+  i Unsafe fix: Use a template literal.
+  
+    1393 1393 │       writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+    1394 1394 │       const sourceAgentsPath = join(source, "AGENTS.md");
+    1395      │ - ····writeFileSync(sourceAgentsPath,·readFileSync(sourceAgentsPath,·"utf-8")·+·"\nChanged·release·guidance.\n");
+         1395 │ + ····writeFileSync(sourceAgentsPath,·`${readFileSync(sourceAgentsPath,·"utf-8")}\nChanged·release·guidance.\n`);
+    1396 1396 │   
+    1397 1397 │       for (const extra of [[], ["--force"]]) {
+  
+
+tests/unit/t243-install-mechanism.test.ts:1559:37 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    1557 │       agents.slice(agents.indexOf(begin), agents.indexOf(end) + end.length),
+    1558 │     );
+  > 1559 │     writeFileSync(kiroBaselinePath, JSON.stringify(kiroBaseline, null, 2) + "\n");
+         │                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    1560 │     const codexBaselinePath = join(project, ".codex", "tools", "data", "aidlc-manifest.json");
+    1561 │     const codexContribution = JSON.parse(readFileSync(codexBaselinePath, "utf-8"))
+  
+  i Unsafe fix: Use a template literal.
+  
+    1557 1557 │         agents.slice(agents.indexOf(begin), agents.indexOf(end) + end.length),
+    1558 1558 │       );
+    1559      │ - ····writeFileSync(kiroBaselinePath,·JSON.stringify(kiroBaseline,·null,·2)·+·"\n");
+         1559 │ + ····writeFileSync(kiroBaselinePath,·`${JSON.stringify(kiroBaseline,·null,·2)}\n`);
+    1560 1560 │       const codexBaselinePath = join(project, ".codex", "tools", "data", "aidlc-manifest.json");
+    1561 1561 │       const codexContribution = JSON.parse(readFileSync(codexBaselinePath, "utf-8"))
+  
+
+tests/unit/t243-install-mechanism.test.ts:1598:35 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    1596 │       if (integration.path === "AGENTS.md") delete integration.shared;
+    1597 │     }
+  > 1598 │     writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+         │                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    1599 │     const stampPath = join(project, ".kiro", "tools", "data", "aidlc-stamp.json");
+    1600 │     const stamp = JSON.parse(readFileSync(stampPath, "utf-8"));
+  
+  i Unsafe fix: Use a template literal.
+  
+    1596 1596 │         if (integration.path === "AGENTS.md") delete integration.shared;
+    1597 1597 │       }
+    1598      │ - ····writeFileSync(descriptorPath,·JSON.stringify(descriptor,·null,·2)·+·"\n");
+         1598 │ + ····writeFileSync(descriptorPath,·`${JSON.stringify(descriptor,·null,·2)}\n`);
+    1599 1599 │       const stampPath = join(project, ".kiro", "tools", "data", "aidlc-stamp.json");
+    1600 1600 │       const stamp = JSON.parse(readFileSync(stampPath, "utf-8"));
+  
+
+tests/unit/t243-install-mechanism.test.ts:1602:30 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    1600 │     const stamp = JSON.parse(readFileSync(stampPath, "utf-8"));
+    1601 │     stamp.frameworkVersion = "0.0.0";
+  > 1602 │     writeFileSync(stampPath, JSON.stringify(stamp, null, 2) + "\n");
+         │                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    1603 │ 
+    1604 │     const addCodex = run(INIT, [
+  
+  i Unsafe fix: Use a template literal.
+  
+    1600 1600 │       const stamp = JSON.parse(readFileSync(stampPath, "utf-8"));
+    1601 1601 │       stamp.frameworkVersion = "0.0.0";
+    1602      │ - ····writeFileSync(stampPath,·JSON.stringify(stamp,·null,·2)·+·"\n");
+         1602 │ + ····writeFileSync(stampPath,·`${JSON.stringify(stamp,·null,·2)}\n`);
+    1603 1603 │   
+    1604 1604 │       const addCodex = run(INIT, [
+  
+
+tests/unit/t243-install-mechanism.test.ts:1719:32 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    1717 │     ]) {
+    1718 │       stamp.frameworkVersion = version;
+  > 1719 │       writeFileSync(stampPath, JSON.stringify(stamp, null, 2) + "\n");
+         │                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    1720 │       const addKiro = run(INIT, [
+    1721 │         "config", "--project-dir", project, "--from", KIRO_RELEASES[0],
+  
+  i Unsafe fix: Use a template literal.
+  
+    1717 1717 │       ]) {
+    1718 1718 │         stamp.frameworkVersion = version;
+    1719      │ - ······writeFileSync(stampPath,·JSON.stringify(stamp,·null,·2)·+·"\n");
+         1719 │ + ······writeFileSync(stampPath,·`${JSON.stringify(stamp,·null,·2)}\n`);
+    1720 1720 │         const addKiro = run(INIT, [
+    1721 1721 │           "config", "--project-dir", project, "--from", KIRO_RELEASES[0],
+  
+
+tests/unit/t243-install-mechanism.test.ts:1758:35 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    1756 │       if (integration.path === "AGENTS.md") delete integration.shared;
+    1757 │     }
+  > 1758 │     writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+         │                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    1759 │ 
+    1760 │     for (const extra of [[], ["--force"]]) {
+  
+  i Unsafe fix: Use a template literal.
+  
+    1756 1756 │         if (integration.path === "AGENTS.md") delete integration.shared;
+    1757 1757 │       }
+    1758      │ - ····writeFileSync(descriptorPath,·JSON.stringify(descriptor,·null,·2)·+·"\n");
+         1758 │ + ····writeFileSync(descriptorPath,·`${JSON.stringify(descriptor,·null,·2)}\n`);
+    1759 1759 │   
+    1760 1760 │       for (const extra of [[], ["--force"]]) {
+  
+
+tests/unit/t260-unit-lifecycle-receipts.test.ts:725:7 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    723 │     writeFileSync(
+    724 │       seededAuditShard(proj),
+  > 725 │       "# AI-DLC Audit Log\n" + block(
+        │       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  > 726 │         "UNIT_COMPLETED",
+  > 727 │         `**Stage**: ${SLUG}\n**Unit**: unit-b\n**Run floor**: ${floor}\n`,
+  > 728 │       ),
+        │       ^
+    729 │       "utf-8",
+    730 │     );
+  
+  i Unsafe fix: Use a template literal.
+  
+    723 723 │       writeFileSync(
+    724 724 │         seededAuditShard(proj),
+    725     │ - ······"#·AI-DLC·Audit·Log\n"·+·block(
+        725 │ + ······`#·AI-DLC·Audit·Log\n${block(
+    726 726 │           "UNIT_COMPLETED",
+    727 727 │           `**Stage**: ${SLUG}\n**Unit**: unit-b\n**Run floor**: ${floor}\n`,
+    728     │ - ······),
+        728 │ + ······)}`,
+    729 729 │         "utf-8",
+    730 730 │       );
+  
+
+tests/unit/t341-construction-checkpoints.test.ts:326:24 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    324 │     expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
+    325 │     const marker = `FAILURE_MARKER_${randomUUID()}`;
+  > 326 │     const diagnostic = "discarded output prefix\n" + "x".repeat(10 * 1024) + `\x1b[31m${marker}\n`;
+        │                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    327 │     recordCommand(dir, writeCheck(dir,
+    328 │       `process.stdout.write(${JSON.stringify(diagnostic)});\n` +
+  
+  i Unsafe fix: Use a template literal.
+  
+     324  324 │       expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
+     325  325 │       const marker = `FAILURE_MARKER_${randomUUID()}`;
+     326      │ - ····const·diagnostic·=·"discarded·output·prefix\n"·+·"x".repeat(10·*·1024)·+·`\x1b[31m${marker}\n`;
+          326 │ + ····const·diagnostic·=·`discarded·output·prefix\n${"x".repeat(10·*·1024)}\x1b[31m${marker}\n`;
+     327  327 │       recordCommand(dir, writeCheck(dir,
+     328  328 │         `process.stdout.write(${JSON.stringify(diagnostic)});\n` +
+  
+
+tests/unit/t341-construction-checkpoints.test.ts:340:25 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    338 │     for (const tail of [failed.verification!.stdout_tail, failed.verification!.stderr_tail]) {
+    339 │       expect(tail.length).toBeLessThanOrEqual(2048);
+  > 340 │       expect(tail).toBe("x".repeat(2048 - marker.length - 6) + `\ufffd[31m${marker}\n`);
+        │                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    341 │       expect(tail).not.toContain("\x1b");
+    342 │     }
+  
+  i Unsafe fix: Use a template literal.
+  
+     338  338 │       for (const tail of [failed.verification!.stdout_tail, failed.verification!.stderr_tail]) {
+     339  339 │         expect(tail.length).toBeLessThanOrEqual(2048);
+     340      │ - ······expect(tail).toBe("x".repeat(2048·-·marker.length·-·6)·+·`\ufffd[31m${marker}\n`);
+          340 │ + ······expect(tail).toBe(`${"x".repeat(2048·-·marker.length·-·6)}\ufffd[31m${marker}\n`);
+     341  341 │         expect(tail).not.toContain("\x1b");
+     342  342 │       }
+  
+
+tests/unit/t341-construction-checkpoints.test.ts:400:26 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    398 │   test("tails truncate bytes at UTF-8 boundaries while preserving complete multibyte output", () => {
+    399 │     const dir = project();
+  > 400 │     const stdoutSuffix = "é".repeat(1022) + "\n";
+        │                          ^^^^^^^^^^^^^^^^^^^^^^^
+    401 │     const stdout = "\u{1f642}" + stdoutSuffix;
+    402 │     const stderr = "€" + "x".repeat(2045);
+  
+  i Unsafe fix: Use a template literal.
+  
+     398  398 │     test("tails truncate bytes at UTF-8 boundaries while preserving complete multibyte output", () => {
+     399  399 │       const dir = project();
+     400      │ - ····const·stdoutSuffix·=·"é".repeat(1022)·+·"\n";
+          400 │ + ····const·stdoutSuffix·=·`${"é".repeat(1022)}\n`;
+     401  401 │       const stdout = "\u{1f642}" + stdoutSuffix;
+     402  402 │       const stderr = "€" + "x".repeat(2045);
+  
+
+tests/unit/t341-construction-checkpoints.test.ts:401:20 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    399 │     const dir = project();
+    400 │     const stdoutSuffix = "é".repeat(1022) + "\n";
+  > 401 │     const stdout = "\u{1f642}" + stdoutSuffix;
+        │                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    402 │     const stderr = "€" + "x".repeat(2045);
+    403 │     recordCommand(dir, writeCheck(dir,
+  
+  i Unsafe fix: Use a template literal.
+  
+     399  399 │       const dir = project();
+     400  400 │       const stdoutSuffix = "é".repeat(1022) + "\n";
+     401      │ - ····const·stdout·=·"\u{1f642}"·+·stdoutSuffix;
+          401 │ + ····const·stdout·=·`\u{1f642}${stdoutSuffix}`;
+     402  402 │       const stderr = "€" + "x".repeat(2045);
+     403  403 │       recordCommand(dir, writeCheck(dir,
+  
+
+tests/unit/t341-construction-checkpoints.test.ts:402:20 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    400 │     const stdoutSuffix = "é".repeat(1022) + "\n";
+    401 │     const stdout = "\u{1f642}" + stdoutSuffix;
+  > 402 │     const stderr = "€" + "x".repeat(2045);
+        │                    ^^^^^^^^^^^^^^^^^^^^^^
+    403 │     recordCommand(dir, writeCheck(dir,
+    404 │       `process.stdout.write(${JSON.stringify(stdout)});\n` +
+  
+  i Unsafe fix: Use a template literal.
+  
+     400  400 │       const stdoutSuffix = "é".repeat(1022) + "\n";
+     401  401 │       const stdout = "\u{1f642}" + stdoutSuffix;
+     402      │ - ····const·stderr·=·"€"·+·"x".repeat(2045);
+          402 │ + ····const·stderr·=·`€${"x".repeat(2045)}`;
+     403  403 │       recordCommand(dir, writeCheck(dir,
+     404  404 │         `process.stdout.write(${JSON.stringify(stdout)});\n` +
+  
+
+tests/unit/t341-construction-checkpoints.test.ts:956:21 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    954 │     const dir = project();
+    955 │     recordCommand(dir, "exit 0");
+  > 956 │     const command = 'printf "%s" \'$& $` $1 $$\'; exit 0 # ' + "x".repeat(150);
+        │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    957 │     recordCommand(dir, `  ${command}  `);
+    958 │     const authorization = authorizedVerificationCommand(dir, readFileSync(seededStateFile(dir), "utf-8"))!;
+  
+  i Unsafe fix: Use a template literal.
+  
+     954  954 │       const dir = project();
+     955  955 │       recordCommand(dir, "exit 0");
+     956      │ - ····const·command·=·'printf·"%s"·\'$&·$`·$1·$$\';·exit·0·#·'·+·"x".repeat(150);
+          956 │ + ····const·command·=·`printf·"%s"·\'$&·$\`·$1·$$\';·exit·0·#·${"x".repeat(150)}`;
+     957  957 │       recordCommand(dir, `  ${command}  `);
+     958  958 │       const authorization = authorizedVerificationCommand(dir, readFileSync(seededStateFile(dir), "utf-8"))!;
+  
+
+The number of diagnostics exceeds the limit allowed. Use --max-diagnostics to increase it.
+Diagnostics not shown: 4.
+Checked 882 files in 1999ms. No fixes applied.
+Found 24 infos.
+EXIT=0

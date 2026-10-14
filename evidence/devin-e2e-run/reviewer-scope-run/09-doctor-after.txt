@@ -1,0 +1,24 @@
+AI-DLC doctor
+
+Machine
+  warn  Runtime hook PATH: bun is interactive-only at /home/wiley/.bun/bin/bun
+        fix: This project is a copy-channel projection, so its hooks run through Bun; a native install runs them through the aidlc command instead. Install Bun, then add ~/.bun/bin to the login-independent environment used by the harness, not only .zshrc or .bash_profile.
+  warn  Update: update cache is absent
+        fix: run `bun .devin/tools/aidlc.ts update --check`
+  ok    4 checks passed
+
+Project (.devin, devin)
+  warn  Devin subagent model: shipped AI-DLC custom profiles omit model: and use the default subagent model, not automatic parent-model inheritance (documented router default: SWE-1.6; effective organization setting/model not inspected)
+        fix: Ask an organization/enterprise admin to review "Default subagent model" and select the desired model (select your primary model there to align unpinned profiles); None disables subagents. Custom profile model: overrides follow Devin configuration, not the parent model picker.
+  warn  Workspace records: 112 uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; commit & push so teammates get them: `git add aidlc/ && git commit && git push`)
+        fix: run `bun .devin/tools/aidlc.ts doctor --verbose`, correct the named condition, then rerun `bun .devin/tools/aidlc.ts doctor`
+  warn  Plugins: 1 need attention
+        fix: host inventory unavailable; run sync through the host SessionStart adapter
+  ok    41 checks passed
+
+Framework integrity
+  ok    all 12 checks passed
+
+0 problems, 5 warnings.
+Warnings are advisory - if everything works, ignore them.
+Run 'bun .devin/tools/aidlc.ts doctor --verbose' to see every check.

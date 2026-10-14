@@ -46,7 +46,8 @@ export type ModelHarness =
   | "cursor"
   | "kiro"
   | "kiro-ide"
-  | "opencode";
+  | "opencode"
+  | "devin";
 export type ModelPolicyLayer =
   | "agent-exception"
   | "group-dial"
@@ -163,6 +164,13 @@ export const HARNESS_HONESTY = Object.freeze({
     message:
       "GitHub Copilot runs every agent on the model you choose in its model picker (/model in the Copilot CLI), so a model or effort set here is kept for other tools and changes nothing in GitHub Copilot.",
   }),
+  devin: Object.freeze({
+    model: false,
+    effort: false,
+    groupEffort: false,
+    message:
+      "AI-DLC does not project Devin model or effort overrides; shipped custom profiles use the default subagent model, not automatic parent-model inheritance. Ask an admin to review the organization's Default subagent model setting.",
+  }),
 });
 
 type HarnessHonesty = (typeof HARNESS_HONESTY)[ModelHarness];
@@ -193,6 +201,7 @@ export const HARNESS_PRODUCT_NAMES: Readonly<Record<ModelHarness, string>> = Obj
   codex: "Codex CLI",
   copilot: "GitHub Copilot",
   cursor: "Cursor",
+  devin: "Devin CLI",
   kiro: "Kiro CLI",
   "kiro-ide": "Kiro IDE",
   opencode: "opencode",

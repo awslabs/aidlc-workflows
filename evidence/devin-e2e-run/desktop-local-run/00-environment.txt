@@ -1,0 +1,33 @@
+desktop-local-run — environment and provenance
+===============================================
+
+Date (UTC):           2026-09-23 (session ~12:14Z–13:30Z; captures ~14:54Z)
+Host:                 Windows 11, native (not WSL)
+Surface under test:   Devin Desktop editor -> Devin Local agent session
+                      (the CLI-derived harness inside Desktop; NOT Cascade)
+Source repo:          aidlc-workflows @ 1dfeb0ccd4e89b249dcf670a1323b0bc02a0434b
+                      (branch feat/devin-harness, pushed to origin)
+                      — includes the Desktop-editor doctor checks under test
+Fixture repo:         D:\sources\aidlc-devin-desktop-e2e (local, disposable;
+                      will be deleted by owner)
+Fixture baseline:     e7904d90d9490a318a9f1f6219a3f040aabdd1de (pre-run HEAD,
+                      clean tree, no application sources)
+Fixture post-run:     0632119 (workflow records + deliverables committed)
+devin --version:      devin 3000.11.1 (cc4e349ca55e)
+bun --version:        1.3.14
+python --version:     Python 3.13.14
+Permission mode:      Bypass Permissions (host mode for the session;
+                      AI-DLC question/gate cards still fired independently)
+
+Test intent (verbatim, pasted into the Desktop session):
+
+  /aidlc express "Create a dependency-free Python 3 program named hello.py
+  that prints exactly ok followed by a newline. Add unittest coverage in
+  test_hello.py. Use only the Python standard library. The verification
+  command is python -m unittest -v."
+
+Intent record:        aidlc/spaces/default/intents/260923-hello-ok/
+Audit shard:          <host>-<clone>.md convention; committed here renamed to
+                      08-audit-shard.md (shard filename carries a per-clone
+                      identifier; content already uses <project-dir>
+                      placeholders — verified no absolute paths or usernames)

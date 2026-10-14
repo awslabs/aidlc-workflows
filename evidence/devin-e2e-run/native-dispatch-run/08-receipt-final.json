@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "targetId": "stage:code-generation",
+  "intentId": "01a0b218-56a1-718b-a879-b67afde8d360",
+  "runFloor": "STAGE_STARTED:2026-09-18T01:31:03Z#1",
+  "fingerprint": "sha256:v3:90cbd31fa689c7bcdb5fdec72699d8c335f2e51deb6771f8a07119fa81370e8d",
+  "questionsFile": "aidlc/spaces/default/intents/260918-hello-ok-script/construction/code-generation/code-generation-questions.md",
+  "promptSha256": "9d670197da507919bf55db453e38e3f202e1a88846d22e360bb6cdce61e2b804",
+  "directiveEpoch": "sha256:244f5a46bd12e3c96e0f8e391c64df243de5a60cdb7cb2d0c688d62cbaa93dbb",
+  "sourceFloor": "4c4b28f925ad652832e94f5ae0cc8e2f365f996493f354afdf769098ec87de02",
+  "markerRevision": 4,
+  "plannedSourceSha256": "4c4b28f925ad652832e94f5ae0cc8e2f365f996493f354afdf769098ec87de02",
+  "session": "nettle-vicuna",
+  "challengeId": "sha256:d787894e84204693f5954bdb86ed2b03e8b9d9c2437227750980bf963996d330",
+  "choice": "Approve Plan",
+  "questionsSha256": "0b597b2f981dc82edac9b7f6302f0c80f8ee9d40a0168421334cf4a2c56ddb49",
+  "certifiedSourceSha256": "4c4b28f925ad652832e94f5ae0cc8e2f365f996493f354afdf769098ec87de02",
+  "status": "generation"
+}

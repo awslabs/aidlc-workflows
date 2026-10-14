@@ -1,0 +1,60 @@
+09-hooks-health.txt — hooks-health evidence (session cosmic-minnow)
+===================================================================
+Path: <home>/devin-e2e-background-lifecycle/aidlc/spaces/default/intents/
+      260919-hello-script/.aidlc-engine/hooks-health/
+
+$ find .aidlc-engine/hooks-health -type f | sort
+.first-fired
+continue-workflow.drops
+continue-workflow.last
+log-subagent.last
+plan-approval-guard.last
+review-freeze.last
+reviewer-scope.last
+run-sensors.last
+session-end.last
+validate-state.last
+write-audit-log.last
+
+=== continue-workflow.drops (verbatim) ===
+2026-09-19T17:11:21Z	a background subagent is still in flight for this session; allowing the stop (pending-subagent carve-out)
+2026-09-19T17:45:14Z	current stage code-generation has an unanswered logged decision; allowing the stop (pending-decision carve-out)
+
+The first line is the L1/L4 evidence: a Stop fired at 17:11:21Z — eight
+seconds after the background launch ack (17:11:13Z) and fourteen seconds
+BEFORE the child's terminal read (17:11:35Z) — while the subagent_explore
+worker was still in flight. The pending-subagent carve-out allowed the turn
+to end instead of injecting a forwarding-loop nudge, matching the C11
+capture prediction.
+
+The second line is unrelated to the ledger: the conductor ended a turn while
+the code-generation Plan Approval decision awaited an answer.
+
+=== continue-workflow.last ===
+2026-09-19T18:07:52Z
+
+=== log-subagent.last ===
+2026-09-19T17:45:15Z
+(matches the second SUBAGENT_COMPLETED row — the developer completion; the
+explore completion at 17:11:35Z also flowed through this hook)
+
+=== plan-approval-guard.last ===
+2026-09-19T18:03:52Z
+
+=== review-freeze.last ===
+2026-09-19T18:03:52Z
+
+=== reviewer-scope.last ===
+2026-09-19T18:03:52Z
+
+=== run-sensors.last ===
+2026-09-19T17:52:04Z
+
+=== session-end.last ===
+2026-09-19T18:08:07Z
+
+=== validate-state.last ===
+2026-09-19T18:02:49Z
+
+=== write-audit-log.last ===
+2026-09-19T17:52:03Z

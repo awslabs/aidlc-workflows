@@ -1,0 +1,84 @@
+# 12-hooks-health — hooks-health/ contents at final snapshot (04-20260920-160154-final)
+
+$ ls -la
+total 64
+drwxr-xr-x 2 wiley wiley 4096 Sep 20 13:01 .
+drwxr-xr-x 4 wiley wiley 4096 Sep 20 13:01 ..
+-rw-r--r-- 1 wiley wiley   20 Sep 20 13:01 .first-fired
+-rw-r--r-- 1 wiley wiley 3224 Sep 20 13:01 continue-workflow.drops
+-rw-r--r-- 1 wiley wiley   20 Sep 20 13:01 continue-workflow.last
+-rw-r--r-- 1 wiley wiley  220 Sep 20 13:01 log-subagent.drops
+-rw-r--r-- 1 wiley wiley   20 Sep 20 13:01 log-subagent.last
+-rw-r--r-- 1 wiley wiley   20 Sep 20 13:01 plan-approval-guard.last
+-rw-r--r-- 1 wiley wiley   20 Sep 20 13:01 review-freeze.last
+-rw-r--r-- 1 wiley wiley 1848 Sep 20 13:01 reviewer-scope.drops
+-rw-r--r-- 1 wiley wiley   20 Sep 20 13:01 reviewer-scope.last
+-rw-r--r-- 1 wiley wiley   20 Sep 20 13:01 run-sensors.last
+-rw-r--r-- 1 wiley wiley   20 Sep 20 13:01 session-end.last
+-rw-r--r-- 1 wiley wiley   20 Sep 20 13:01 session-start.last
+-rw-r--r-- 1 wiley wiley   20 Sep 20 13:01 validate-state.last
+-rw-r--r-- 1 wiley wiley   20 Sep 20 13:01 write-audit-log.last
+
+
+===== reviewer-scope.drops =====
+2026-09-19T21:34:11Z	refused a reviewer dispatch while background subagents are pending
+2026-09-20T14:39:48Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T14:39:52Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T14:39:54Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T14:39:58Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T14:40:02Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T14:40:25Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T14:41:17Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T14:41:31Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:03:54Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:00Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:03Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:06Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:11Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:13Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:16Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:22Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:26Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:40Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:04:50Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:05:39Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:05:46Z	reviewer dispatch record is malformed; enforcement skipped
+2026-09-20T15:06:11Z	reviewer dispatch record is malformed; enforcement skipped
+
+
+===== reviewer-scope.last =====
+2026-09-20T16:01:26Z
+
+===== log-subagent.drops =====
+2026-09-20T13:51:09Z	unclassified read_subagent output
+2026-09-20T13:56:12Z	unclassified read_subagent output
+2026-09-20T14:02:25Z	unclassified read_subagent output
+2026-09-20T14:12:32Z	unclassified read_subagent output
+
+
+===== continue-workflow.drops =====
+2026-09-19T21:00:13Z	recursion guard released the stop (no-progress block cap 2 reached; stop_hook_active=true)
+2026-09-19T21:01:00Z	a background subagent is still in flight for this session; allowing the stop (pending-subagent carve-out)
+2026-09-19T21:01:08Z	a background subagent is still in flight for this session; allowing the stop (pending-subagent carve-out)
+2026-09-19T21:01:09Z	a background subagent is still in flight for this session; allowing the stop (pending-subagent carve-out)
+2026-09-19T21:03:50Z	current stage practices-discovery has an unanswered logged decision; allowing the stop (pending-decision carve-out)
+2026-09-19T21:07:07Z	current stage practices-discovery has an unanswered logged decision; allowing the stop (pending-decision carve-out)
+2026-09-19T21:15:18Z	current stage requirements-analysis has an unanswered logged decision; allowing the stop (pending-decision carve-out)
+2026-09-19T21:32:49Z	current stage user-stories has an unanswered logged decision; allowing the stop (pending-decision carve-out)
+2026-09-19T21:32:54Z	current stage user-stories has an unanswered logged decision; allowing the stop (pending-decision carve-out)
+2026-09-19T21:32:55Z	current stage user-stories has an unanswered logged decision; allowing the stop (pending-decision carve-out)
+2026-09-19T21:35:05Z	current stage user-stories has an unanswered logged decision; allowing the stop (pending-decision carve-out)
+2026-09-19T21:39:16Z	current stage refined-mockups has an unanswered logged decision; allowing the stop (pending-decision carve-out)
+2026-09-20T03:45:21Z	current stage refined-mockups is awaiting approval or being revised; allowing the stop (human-wait carve-out)
+2026-09-20T03:50:50Z	active stage domain-design has an unanswered question; allowing the stop (pending-question carve-out)
+2026-09-20T13:02:03Z	the ending turn was conversational (human's last prompt answered with no workflow-engine call); allowing the stop (conversational carve-out)
+2026-09-20T13:13:03Z	recursion guard released the stop (no-progress block cap 2 reached; stop_hook_active=true)
+2026-09-20T13:30:48Z	recursion guard released the stop (no-progress block cap 2 reached; stop_hook_active=true)
+2026-09-20T13:43:33Z	recursion guard released the stop (no-progress block cap 2 reached; stop_hook_active=true)
+2026-09-20T14:14:07Z	a background subagent is still in flight for this session; allowing the stop (pending-subagent carve-out)
+2026-09-20T14:31:43Z	recursion guard released the stop (no-progress block cap 2 reached; stop_hook_active=true)
+2026-09-20T14:41:26Z	current stage nfr-requirements is awaiting approval or being revised; allowing the stop (human-wait carve-out)
+2026-09-20T15:06:00Z	the ending turn was conversational (human's last prompt answered with no workflow-engine call); allowing the stop (conversational carve-out)
+2026-09-20T15:19:09Z	current stage nfr-design has an unanswered logged decision; allowing the stop (pending-decision carve-out)
+2026-09-20T15:38:21Z	current stage nfr-design is awaiting approval or being revised; allowing the stop (human-wait carve-out)
+2026-09-20T15:40:37Z	current stage nfr-design is awaiting approval or being revised; allowing the stop (human-wait carve-out)

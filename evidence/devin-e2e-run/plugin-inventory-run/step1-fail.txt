@@ -1,0 +1,69 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t242-plugin-state.test.ts:
+(pass) t242 plugin manifest and hash contract > normalizes one host manifest and strips exactly the aidlc- namespace [28.01ms]
+(pass) t242 plugin manifest and hash contract > rejects invalid namespace, key, version, and host-version mismatch [1.95ms]
+(pass) t242 plugin manifest and hash contract > hashes sorted relative paths and LF-normalized source before token substitution [8.54ms]
+(pass) t242 fixture-proved host inventories > Claude reads registry v2, exact installPath, and enabledPlugins [2.66ms]
+(pass) t242 fixture-proved host inventories > Claude uses settings for disablement and the registry for uninstall state [0.92ms]
+(pass) t242 fixture-proved host inventories > Claude downgrades malformed enablement settings to unavailable inventory [1.14ms]
+(pass) t242 fixture-proved host inventories > Codex enumerates declared IDs and their fixed semver cache path [25.01ms]
+(pass) t242 fixture-proved host inventories > Codex accepts the documented local marketplace cache leaf [1.67ms]
+(pass) t242 fixture-proved host inventories > Codex rejects traversal marketplace IDs before reading outside its cache [0.39ms]
+(pass) t242 fixture-proved host inventories > Codex collapses stale semver cache directories to the newest version [3.05ms]
+(pass) t242 fixture-proved host inventories > Codex uses config disablement and ignores a cache retained after removal [2.11ms]
+(pass) t242 fixture-proved host inventories > Kiro and a disappeared full registry remain current-root-only [0.98ms]
+413 |   test("Devin reads its native .devin-plugin manifest as current-root-only", () => {
+414 |     const root = pluginRoot("devin");
+415 |     process.env.AIDLC_PLUGIN_ROOT = root;
+416 |     delete process.env.AIDLC_HARNESS_NAME;
+417 |     const discovered = discoverPluginInventory(".devin");
+418 |     expect(discovered).toEqual(expect.objectContaining({
+                             ^
+error: expect(received).toEqual(expected)
+
+- ObjectContaining 
+  {
+    "capability": "current-root-only",
+-   "harness": "devin",
+-   "invalid": [],
++   "harness": "claude",
++   "installed": [],
++   "invalid": [
++     {
++       "message": "/tmp/aidlc-plugin-fixture-uSYBys/.claude-plugin/plugin.json: installed plugin manifest is missing",
++       "paths": [
++         "/tmp/aidlc-plugin-fixture-uSYBys",
++       ],
++     },
++   ],
+  }
+
+- Expected  - 3
++ Received  + 10
+
+      at <anonymous> (/tmp/aidlc-devin-patch/tests/unit/t242-plugin-state.test.ts:418:24)
+(fail) t242 fixture-proved host inventories > Devin reads its native .devin-plugin manifest as current-root-only [22.86ms]
+(pass) t242 fixture-proved host inventories > duplicate installed identities are invalid and name every manifest [1.88ms]
+(pass) t242 pure status comparator > covers every full-inventory state and keeps version/hash independent [0.37ms]
+(pass) t242 pure status comparator > default rendering exposes only the three actions and verbose keeps taxonomy [0.25ms]
+(pass) t242 pure status comparator > current-root-only never infers disabled or missing aggregate state [0.06ms]
+(pass) t242 transactional sync and ownership-safe prune > aggregate sync writes a deterministic stamp and is idempotent [797.16ms]
+(pass) t242 transactional sync and ownership-safe prune > concurrent syncs converge and the loser replans as an idempotent no-op [1373.10ms]
+(pass) t242 transactional sync and ownership-safe prune > public JSON and doctor expose the shared exact comparator state [569.14ms]
+(pass) t242 transactional sync and ownership-safe prune > one transaction rolls back all plugin bytes on an injected commit fault [678.61ms]
+(pass) t242 transactional sync and ownership-safe prune > sync rejects content whose plugin owner differs from the host manifest key [565.11ms]
+(pass) t242 transactional sync and ownership-safe prune > a version upgrade replaces prior hash-proven primitive files [1259.47ms]
+(pass) t242 transactional sync and ownership-safe prune > same-version source drift replaces prior hash-proven primitive files [1400.55ms]
+(pass) t242 transactional sync and ownership-safe prune > sync refuses to replace a locally modified owned primitive [696.04ms]
+(pass) t242 transactional sync and ownership-safe prune > plain sync retains missing content; explicit prune removes only hash-proven ownership [1214.50ms]
+(pass) t242 transactional sync and ownership-safe prune > prune refuses a locally modified owned file without deleting it [797.92ms]
+(pass) t242 transactional sync and ownership-safe prune > interactive prune confirmation resolves on a line without waiting for EOF [4.83ms]
+
+1 tests failed:
+(fail) t242 fixture-proved host inventories > Devin reads its native .devin-plugin manifest as current-root-only [22.86ms]
+
+ 27 pass
+ 1 fail
+ 78 expect() calls
+Ran 28 tests across 1 file. [9.70s]

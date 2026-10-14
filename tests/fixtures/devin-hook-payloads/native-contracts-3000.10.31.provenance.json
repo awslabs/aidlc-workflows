@@ -1,0 +1,27 @@
+{
+  "$schema": "devin-native-hook-contract-provenance/v1",
+  "cliVersion": "devin 3000.10.31 (b98cc431)",
+  "captureDate": "2026-09-19",
+  "platformClass": "linux-wsl2",
+  "captureMethod": "Capture-only scratch project; SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, Stop, and PostCompaction wired with blank matchers to a logger that wrote one JSON stdin event per file and emitted no stdout.",
+  "sanitization": [
+    "Replace project paths and host identity with semantic placeholders.",
+    "Replace session, prompt, tool-use, agent, and shell identifiers with stable semantic placeholders while preserving correlation.",
+    "Remove timestamps and non-load-bearing task, report, prompt, tool-schema, reasoning, and generated-workflow content.",
+    "Preserve native field names, nesting, booleans, missing-versus-null distinctions, response status, and classifier strings used by deterministic tests."
+  ],
+  "events": {
+    "backgroundLaunchPost": "C05_backgroundLaunch events[1]",
+    "backgroundTerminalReadPost": "C05_backgroundCompletion events[6]",
+    "repeatedTerminalReadPost": "C06_repeatedRead events[1]",
+    "foregroundCompletionPost": "C14_resumeForeground events[10]",
+    "resumedCompletionPost": "C14_resumeForeground events[17]",
+    "reviewerForegroundCompletionPost": "C17_reviewerForegroundShapes events[16]"
+  },
+  "limits": [
+    "Interactive panel cancellation and Ctrl+B were not captured.",
+    "A session export is conversation evidence, not independent hook stdin.",
+    "The still-running and exited-with-error read strings used by tests are binary-pinned, not present in these captured events."
+  ],
+  "sourceCommits": ["75ce0ebf", "9d38c245"]
+}

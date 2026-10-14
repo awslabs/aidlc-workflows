@@ -124,6 +124,7 @@ const RETIRED_FRESH_SESSION_TEXT: readonly string[] = [
   "open a new Kiro IDE chat or start a new Kiro CLI session",
   "exit or restart OpenCode and start a new session",
   "start a new Copilot CLI session or open a new VS Code agent chat",
+  "exit or restart Devin CLI and start a new session",
 ];
 const CURSOR_SHORTCUT_SKILLS = ["aidlc-jump", "aidlc-scope", "aidlc-status"];
 

@@ -438,7 +438,7 @@ anchor.
 
 The compile hook is a core hook, not a Claude Code one. Claude Code
 registers it as a PostToolUse Bash hook in `settings.json`; the Codex,
-Copilot, Cursor, Kiro CLI, Kiro IDE and opencode adapters forward their
+Copilot, Cursor, Devin, Kiro CLI, Kiro IDE and opencode adapters forward their
 shell post-tool event to the same `aidlc-rebuild-stage-graph.ts`. Kiro
 IDE does not surface the shell command, so its adapter sends
 `source: "ide-audit-sync"` and the hook skips the command filter, gates
