@@ -5926,7 +5926,11 @@ function planCodexEntries(
       ? pristine
       : record !== undefined &&
         (perValue ? record === sha256Bytes(codexValueText(now.value)) : legacyCurrent[legacyKey] === record);
-    if (unedited) {
+    // The space pointer an earlier release shipped, at whichever space a switch
+    // left it, is AI-DLC's: it takes the empty value this release ships.
+    const earlierPointer = key === CODEX_SPACE_POINTER && target === "" &&
+      typeof now.value === "string" && CODEX_SPACE_MEMORY.test(now.value);
+    if (unedited || earlierPointer) {
       sets.push(leaf);
       expected.set(key, target);
       continue;

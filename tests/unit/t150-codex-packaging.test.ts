@@ -269,8 +269,8 @@ describe("t150 dist/codex packaging determinism + trust", () => {
   test("4: method relocated to workspace-root aidlc/spaces/default/memory/; native rules/ is Starlark-only", () => {
     // The AIDLC method ("memory") lives at the workspace root - one hand-editable
     // copy, neutral filenames, identical across harnesses. Reached through the
-    // engine's rules delivery (Codex has no ambient include and config.toml ships no
-    // AIDLC_RULES_DIR seam).
+    // engine's rules delivery (Codex has no ambient include and config.toml ships its
+    // AIDLC_RULES_DIR empty).
     const memoryDir = join(REPO_ROOT, "dist", "codex", "aidlc", "spaces", "default", "memory");
     const memoryTop = readdirSync(memoryDir);
     expect(memoryTop).toContain("org.md");
@@ -287,10 +287,10 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     );
     expect(defaultRules).not.toContain('pattern = ["bun", ".codex/tools/"]');
     expect(defaultRules).not.toContain('prefix_rule(pattern = ["aidlc"]');
-    // No resolver seam: the engine reads the active space directly.
+    // No resolver seam: the engine reads the active space directly. The member
+    // 2.11.0 shipped stays, empty, since 2.11.0's own refresh cannot take it out.
     const config = readFileSync(join(CODEX_DST, "config.toml"), "utf-8");
-    expect(config).not.toContain("AIDLC_RULES_DIR");
-    expect(config).not.toContain("[shell_environment_policy]");
+    expect((Bun.TOML.parse(config) as { shell_environment_policy?: unknown }).shell_environment_policy).toEqual({ set: { AIDLC_RULES_DIR: "" } });
     expect(config).toContain("[agents]\nmax_depth = 1");
     const graph = readFileSync(join(CODEX_DST, "tools", "data", "stage-graph.json"), "utf-8");
     expect(graph).toContain('"aidlc/spaces/default/memory/org.md"');
@@ -328,8 +328,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       expect(config.developer_instructions).toContain("Plan Approval's choice labels stay exactly as AI-DLC gives\nthem.");
       expect(config.developer_instructions).not.toContain("say it in your own words");
       expect(config.developer_instructions).toContain(".agents/skills/");
-      expect(config.shell_environment_policy).toBeUndefined();
-      expect(raw).not.toContain("AIDLC_RULES_DIR");
+      expect(config.shell_environment_policy).toEqual({ set: { AIDLC_RULES_DIR: "" } });
       if (channel === "dist-release") {
         expect(config.developer_instructions).toContain("- **Runtime**:");
         expect(config.developer_instructions).not.toMatch(/\bbun\b/);
@@ -680,7 +679,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       // A text match also accepts sandbox_mode inside shell_environment_policy,
       // where it does not select the sandbox. Check the generated TOML structure.
       expect(config.sandbox_mode, configPath).toBe("workspace-write");
-      expect(config.shell_environment_policy, configPath).toBeUndefined();
+      expect(config.shell_environment_policy, configPath).toEqual({ set: { AIDLC_RULES_DIR: "" } });
       // Keep the existing network policy and absence of extra grants/approval
       // overrides while correcting only the sandbox setting's table placement.
       expect(config.sandbox_workspace_write, configPath).toEqual({
