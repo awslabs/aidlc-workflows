@@ -924,14 +924,16 @@ length and PID are validated; process handles are closed on every path.
 Creation times stay lossless in PID receipts. Each parent must predate its child,
 so a recycled parent PID cannot join the walk to a newer process. Receipts
 without a verified Windows creation time do not establish session ownership.
-Lookup failure, an ambiguous parent edge, or exhaustion of the existing
-50 ms / 64-ancestor budget yields no ancestry session; null barriers and the
+Lookup failure, an ambiguous parent edge, or exhaustion of the
+2-second / 64-ancestor limit yields no ancestry session; null barriers and the
 negative cache retain their existing behavior. Linux reads `/proc` for each hop; macOS
 reads the whole process table (pid, parent, `lstart`) with one `ps` call per walk and
-every hop from it, inside a 250 ms budget because that one call is slower than a
-`/proc` read and slower again on a busy Mac, and the recorded start times
+every hop from it, and the recorded start times
 are the strings a per-pid lookup prints. One process reuses that table for up to a
-second (the negative cache's window); a SessionStart write clears it.
+second (the negative cache's window); a SessionStart write clears it. The limit
+is the same on every OS and only bounds a walk that cannot finish (a `ps` that
+never answers): a walk ends as soon as it has its answer, a few milliseconds on
+an idle machine, and on a busy one it finishes instead of losing the chat.
 
 Multiple Kiro IDE chats
 and opencode sessions can still share one process; process ancestry cannot
