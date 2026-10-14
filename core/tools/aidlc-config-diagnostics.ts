@@ -38,6 +38,7 @@ import {
   jsonFileText,
   jsoncRootMembers,
   jsoncSettingValue,
+  kiroUpgradedAgentFile,
   managedBlockIsSafe,
   managedBlockMarkers,
   mergeBlock,
@@ -3863,8 +3864,18 @@ export function frameworkFilesDoctorCheck(
     // The instruction row reports a missing or unreadable record.
     return { pass: true, label: "AI-DLC files: not checked, no record of what AI-DLC wrote" };
   }
-  const changed = changedFrameworkFiles(projectDir, selected.harnessDir, selected.harness, baseline);
-  if (changed.length === 0) return { pass: true, label: "AI-DLC files: unchanged since AI-DLC wrote them" };
+  const differ = changedFrameworkFiles(projectDir, selected.harnessDir, selected.harness, baseline);
+  // Config keeps an agent file Kiro upgraded for its 3.0 engine: not the person's change.
+  const upgraded = differ.filter((rel) => kiroUpgradedAgentFile(projectDir, rel));
+  const changed = differ.filter((rel) => !upgraded.includes(rel));
+  if (changed.length === 0) {
+    const kept = upgraded.length === 0
+      ? ""
+      : `, apart from ${upgraded.length} agent ${
+        upgraded.length === 1 ? "file" : "files"
+      } Kiro upgraded for its 3.0 engine, which config keeps`;
+    return { pass: true, label: `AI-DLC files: unchanged since AI-DLC wrote them${kept}` };
+  }
   const invoke = invocationForHarness(selected.harnessDir);
   const one = changed.length === 1;
   const shown = changed.slice(0, 10).join(", ");

@@ -849,6 +849,25 @@ export function sha256FileMatching(path: string, known: readonly (string | undef
   return sha256Matching(readFileSync(path), known);
 }
 
+// Kiro CLI's upgrade for its 3.0 engine rewrites each agent JSON in
+// .kiro/agents into Kiro's own format, which has a `permissions` block no
+// agent file AI-DLC ships has, and keeps the file it replaced beside it as
+// `<name>.json.bak`. Kiro writes the backup once, at its first upgrade, so the
+// shape is the sign, not the backup's hash. Config keeps such a file as it is,
+// and doctor does not count it as the person's change.
+export function kiroUpgradedAgentFile(projectDir: string, rel: string): boolean {
+  if (!/^\.kiro\/agents\/[^/]+\.json$/.test(rel)) return false;
+  const file = join(projectDir, rel);
+  const regular = (path: string): boolean => existsSync(path) && lstatSync(path).isFile();
+  if (!regular(file) || !regular(`${file}.bak`)) return false;
+  try {
+    const agent: unknown = JSON.parse(readFileSync(file, "utf-8"));
+    return typeof agent === "object" && agent !== null && !Array.isArray(agent) && "permissions" in agent;
+  } catch {
+    return false;
+  }
+}
+
 // Earlier releases' space switch pointed the tool's include files at that
 // space's memory, and every release shipped them at the default space (the
 // includes now read the engine's copy, aidlc-includes.ts ACTIVE_MEMORY_DIR, so
