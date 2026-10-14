@@ -346,7 +346,7 @@ import {
   type ResolvedAidlcSettings,
   type SettingsTarget,
 } from "./aidlc-settings.ts";
-import { recordSwitchChange, switchesOffLines, unrecordedSwitchLine } from "./aidlc-recorded-switches.ts";
+import { alreadyOffLines, recordSwitchChange, switchesOffLines, unrecordedSwitchLine } from "./aidlc-recorded-switches.ts";
 
 type RootContribution =
   | { policy: "managed-block"; hash: string; marker?: string }
@@ -4044,7 +4044,10 @@ function prepareChoiceSection(
       next as ProjectFlagsRecord | null,
     );
     if (canonical(targetCurrentSettings) === canonical(nextSettings)) {
-      emitResult(success("flags configuration unchanged"), options);
+      // A check the person asked to turn off that is already off there: they
+      // hear that, with the one wider place, instead of a note about the file.
+      const already = alreadyOffLines(projectDir, target, valuesAfter(argv, "--bypass"));
+      emitResult(success(already.length > 0 ? already.join("\n") : "flags configuration unchanged"), options);
       return null;
     }
     const nextResolved = resolveAidlcSettingsWithOverride(
