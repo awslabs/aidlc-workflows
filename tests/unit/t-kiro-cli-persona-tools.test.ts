@@ -42,6 +42,12 @@ describe("Kiro CLI's persona agents carry their tools on the 3.0 engine", () => 
     }
   });
 
+  // The Kiro IDE row's own lead (Kiro IDE, and Kiro CLI on the v3 engine it
+  // pins) opts in the same way, so the chat the person types into has them too.
+  test("the kiro-ide row's lead opts into the person's MCP servers", () => {
+    expect(frontmatter(join(KIRO_IDE, "aidlc-aidlc.md"))).toMatch(/^includeMcpJson: true$/m);
+  });
+
   test("the kiro row's persona .md takes the tools line without the Kiro IDE row's permissions", () => {
     for (const file of personas) {
       expect(frontmatter(join(KIRO_IDE, file)), `kiro-ide ${file}`).toMatch(/^permissions:/m);
