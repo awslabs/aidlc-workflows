@@ -165,6 +165,12 @@ const gateItem = (row: AuditShardEvent) =>
  * turn after the last gate resolution, as the engine requires. The rows an
  * approval backfills before it (a Recovered rejection and re-opening) leave
  * the gate's first opening in place, and the rejection is checked as usual.
+ *
+ * Shards are read one at a time, and a turn sent before a shard existed sits
+ * at its start. So a row in a shard that began during the drive (a fresh
+ * clone's, a second machine's) is backed only by the turn sent just before
+ * the shard began or a later one: every reply leaves its own row in the shard
+ * its chat writes, so no older turn can back a row there.
  */
 export function unbackedDecisions(projectDir: string, start: AuditCursor, turns: readonly PersonTurn[]): string[] {
   const { decisionAnsweredBy, nextOpenDecision, DECISION_CLOSING_EVENTS } = audit();
@@ -173,6 +179,9 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
   const used = turns.map(() => 0);
   for (const [key, events] of readTrail(projectDir)) {
     const first = start.get(key) ?? 0;
+    // The earliest turn that can back a row here: the one sent just before the shard began.
+    const began = turns.findIndex((turn) => turn.cursor.has(key));
+    const born = start.has(key) ? 0 : began === -1 ? turns.length - 1 : Math.max(0, began - 1);
     const open = new Map<string, { block: string; index: number }>();
     const answered = new Map<string, number>();
     const gates = new Map<string, number>();
@@ -254,7 +263,7 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
         const quoted = instruction;
         const backs = (from: number, menuOnly: boolean) => turns.findIndex((turn, which) => {
           const at = turn.cursor.get(key) ?? 0;
-          return at >= from && at <= index && !(needsReply && isCommand(turn.words)) &&
+          return which >= born && at >= from && at <= index && !(needsReply && isCommand(turn.words)) &&
             (!menuOnly || turn.selections !== undefined) &&
             (!answer || used[which] < (turn.selections ?? openQuestions(events, at))) &&
             (quoted === undefined || holdsQuote(turn.words, quoted));

@@ -227,10 +227,10 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 const args = parseArgs(process.argv.slice(2));
-// The scope runs and the guard matrix take minutes per file, so a run with no
-// --filter leaves them out, except the full --release/--all acceptance; CI
-// runs them as jobs of their own with a filter.
-const SELECTED_ONLY = /^t-(scope-run|guard-matrix)-/;
+// The scope runs, the scope-host runs and the guard matrix take minutes per
+// file, so a run with no --filter leaves them out, except the full
+// --release/--all acceptance; CI runs them as jobs of their own with a filter.
+const SELECTED_ONLY = /^t-(scope-run|scope-host|guard-matrix)-/;
 let selectedOnlyNoted = false;
 
 // --exclude drops the files it matches from every tier, as if they were not
@@ -1273,7 +1273,7 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
     selectedOnlyNoted = true;
     // stderr, so a machine-read stdout (a plan, a file list) stays clean.
     process.stderr.write("Scope runs and the guard matrix are left out of a run with no --filter (minutes per file); " +
-      "select them with --filter '^t-(scope-run|guard-matrix)-'.\n");
+      "select them with --filter '^t-(scope-run|scope-host|guard-matrix)-'.\n");
   }
   // Fold plugin content tests into the integration tier. Exclusion is keyed by
   // the plugin-dir-qualified name (`plugin-<plugin>-<stem>`), NOT the bare

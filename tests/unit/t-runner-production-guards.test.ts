@@ -437,6 +437,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
   test("a run with no --filter leaves the scope runs and the guard matrix out; a filter or --all selects them", () => {
     const fixture = runnerFixture({
       "integration/t-scope-run-fixture.test.ts": PASSING_CASE,
+      "integration/t-scope-host-fixture.test.ts": PASSING_CASE,
       "integration/t-guard-matrix-fixture.test.ts": PASSING_CASE,
       "integration/t-plain.test.ts": PASSING_CASE,
     });
@@ -444,11 +445,13 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(plain.status).toBe(0);
     expect(plain.out).toContain("=== DONE t-plain.test.ts (PASS) ===");
     expect(plain.out).not.toContain("t-scope-run-fixture.test.ts");
+    expect(plain.out).not.toContain("t-scope-host-fixture.test.ts");
     expect(plain.out).not.toContain("t-guard-matrix-fixture.test.ts");
-    expect(plain.out).toContain("select them with --filter '^t-(scope-run|guard-matrix)-'");
-    const selected = fixture.run(["--integration", "--no-llm", "--filter", "^t-(scope-run|guard-matrix)-"]);
+    expect(plain.out).toContain("select them with --filter '^t-(scope-run|scope-host|guard-matrix)-'");
+    const selected = fixture.run(["--integration", "--no-llm", "--filter", "^t-(scope-run|scope-host|guard-matrix)-"]);
     expect(selected.status).toBe(0);
     expect(selected.out).toContain("=== DONE t-scope-run-fixture.test.ts (PASS) ===");
+    expect(selected.out).toContain("=== DONE t-scope-host-fixture.test.ts (PASS) ===");
     expect(selected.out).toContain("=== DONE t-guard-matrix-fixture.test.ts (PASS) ===");
     expect(selected.out).not.toContain("t-plain.test.ts");
     // The full acceptance profile keeps them.

@@ -36,8 +36,7 @@ function ledgerFolder(): string {
 }
 
 let clock = 0;
-function row(project: string, event: string, fields: Record<string, string> = {}): void {
-  const shard = seededAuditShard(project);
+function row(project: string, event: string, fields: Record<string, string> = {}, shard = seededAuditShard(project)): void {
   mkdirSync(dirname(shard), { recursive: true });
   const at = new Date(Date.UTC(2026, 9, 4, 12, 0, clock++)).toISOString().replace(/\.\d{3}Z$/, "Z");
   const lines = Object.entries(fields).map(([name, value]) => `**${name}**: ${value}`);
@@ -190,6 +189,23 @@ describe("person-turn check", () => {
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain("QUESTION_ANSWERED user-stories");
     expect(problems[0]).toContain('recorded words "picked by the agent"');
+  });
+
+  test("a row in a shard that began during the drive is backed only by the turn sent just before it began, or a later one", () => {
+    // A fresh clone writes a shard of its own; this one's name sorts first, so it is read first.
+    const dir = project();
+    const clone = join(dirname(seededAuditShard(dir)), "aaaa-000000000000.md");
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("/aidlc --scope classic build it");
+    row(dir, "DECISION_RECORDED", { Stage: "requirements-analysis" });
+    drive.sent("Guide me", 1);
+    row(dir, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "Guide me" });
+    drive.sent("Approve Plan");
+    row(dir, "PLAN_APPROVAL_RECORDED", { Stage: "code-generation", Details: "Approve Plan" }, clone);
+    expect(drive.unbacked()).toEqual([]);
+    // A second one with no turn since has nothing behind it.
+    row(dir, "PLAN_APPROVAL_RECORDED", { Stage: "code-generation", Details: "Approve Plan" }, clone);
+    expect(drive.unbacked()).toHaveLength(1);
   });
 
   test("a project type the agent changed with no turn after the work started is flagged", () => {

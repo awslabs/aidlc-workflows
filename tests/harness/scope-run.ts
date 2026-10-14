@@ -220,6 +220,12 @@ export class ScopeHost {
   readonly trace: string[] = [];
   readonly env: NodeJS.ProcessEnv;
   session = "scope-run-session-1";
+  /** The tree's own folder: the agent's commands are `bun <dir>/tools/...`. */
+  readonly dir: string = ".claude";
+  /** A question is a picker whose answer comes back in the same turn; otherwise the person types the reply. */
+  readonly picker: boolean = true;
+  /** The stand-in deletes a per-Unit reviewer's dispatch record after the review; the protocol leaves that to the engine. */
+  readonly removesDispatch: boolean = true;
 
   constructor(readonly proj: string) {
     const env = testGuardEnvironment({ ...process.env, CLAUDE_PROJECT_DIR: proj }, "production");
@@ -232,11 +238,11 @@ export class ScopeHost {
     this.env = env;
   }
 
-  private spawn(what: string, argv: string[], stdin?: string): RunResult {
+  protected spawn(what: string, argv: string[], stdin?: string, env: NodeJS.ProcessEnv = this.env): RunResult {
     const started = Date.now();
     const res = spawnSync(argv[0], argv.slice(1), {
       cwd: this.proj,
-      env: this.env,
+      env,
       encoding: "utf-8",
       input: stdin ?? "",
       timeout: remainingOperationTimeoutMs(SCOPE_RUN_COMMAND_TIMEOUT_MS, { phase: "scope run" }),
@@ -264,7 +270,7 @@ export class ScopeHost {
    * command the engine directed is a finding. The others guard reads and
    * direct state edits the stand-in never makes, and have their own owners.
    */
-  private preTool(tool: string, input: Record<string, unknown>): void {
+  protected preTool(tool: string, input: Record<string, unknown>): void {
     const res = this.hook("plan-approval-guard", { hook_event_name: "PreToolUse", tool_name: tool, tool_input: input });
     if (res.status !== 2) return;
     this.refusals.push(`${tool} ${clip(JSON.stringify(input), 200)}: ${clip(res.stderr, 600)}`);
@@ -302,9 +308,9 @@ export class ScopeHost {
     rmSync(abs, { force: true });
   }
 
-  /** `bun .claude/tools/aidlc.ts engine <args>`, the skill's dispatcher form. */
+  /** `bun <dir>/tools/aidlc.ts engine <args>`, the skill's dispatcher form. */
   engine(...args: string[]): RunResult {
-    return this.bash(["bun", ".claude/tools/aidlc.ts", "engine", ...args].map(shellQuote).join(" "));
+    return this.bash(["bun", `${this.dir}/tools/aidlc.ts`, "engine", ...args].map(shellQuote).join(" "));
   }
 
   /** Write a file as the agent's Write tool would, then the host's Write hook. */
@@ -335,13 +341,44 @@ export class ScopeHost {
 
   sessionStart(source: "startup" | "resume"): void {
     this.sessions.add(this.session);
+    this.startChat(source);
+  }
+
+  /** The host's own hooks for a chat that starts. */
+  protected startChat(source: "startup" | "resume"): void {
     this.hook("session-start", { hook_event_name: "SessionStart", source });
+  }
+
+  /** The id the host gives its nth chat. */
+  protected sessionName(n: number): string {
+    return `scope-run-session-${n}`;
   }
 
   /** A new chat: a fresh session id, started the way Claude Code starts one. */
   newSession(): void {
-    this.session = `scope-run-session-${this.sessions.size + 1}`;
+    this.session = this.sessionName(this.sessions.size + 1);
     this.sessionStart("startup");
+  }
+
+  /** The person's typed line, through the host's human-turn hook. */
+  typed(words: string): void {
+    this.hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt: words });
+  }
+
+  /** The person's pick in an AskUserQuestion picker, through the host's human-turn hook. */
+  picked(question: string, options: string[], label: string): void {
+    const questions = [{
+      question,
+      header: "Choice",
+      multiSelect: false,
+      options: options.map((o) => ({ label: o, description: o })),
+    }];
+    this.hook("record-human-turn", {
+      hook_event_name: "PostToolUse",
+      tool_name: "AskUserQuestion",
+      tool_input: { questions },
+      tool_response: { questions, answers: { [question]: label } },
+    });
   }
 
   sessionStartIfNew(): void {
@@ -350,24 +387,7 @@ export class ScopeHost {
 
   /** The agent ends its turn. The Stop hook must let it end when a person is asked. */
   stop(): { blocked: boolean; reason: string } {
-    const res = this.hook("continue-workflow", { hook_event_name: "Stop", stop_hook_active: false });
-    const out = res.stdout.trim();
-    if (!out) return { blocked: false, reason: "" };
-    try {
-      // The block, or the carrying-on line as Stop feedback on Claude Code 2.1.163 or later.
-      const parsed = JSON.parse(out) as {
-        decision?: string;
-        reason?: string;
-        hookSpecificOutput?: { additionalContext?: string };
-      };
-      const feedback = parsed.hookSpecificOutput?.additionalContext;
-      return {
-        blocked: parsed.decision === "block" || typeof feedback === "string",
-        reason: parsed.reason ?? feedback ?? "",
-      };
-    } catch {
-      return { blocked: false, reason: out };
-    }
+    return stopVerdict(this.hook("continue-workflow", { hook_event_name: "Stop", stop_hook_active: false }).stdout);
   }
 
   /** The agent dispatches a subagent with the Task tool: the host's Task hooks. */
@@ -397,7 +417,27 @@ export class ScopeHost {
   }
 }
 
-const clip = (s: string, n = 400) => {
+/** What a Stop hook answered: the block, or the carrying-on line as Stop feedback on Claude Code 2.1.163 or later. */
+export function stopVerdict(stdout: string): { blocked: boolean; reason: string } {
+  const out = stdout.trim();
+  if (!out) return { blocked: false, reason: "" };
+  try {
+    const parsed = JSON.parse(out) as {
+      decision?: string;
+      reason?: string;
+      hookSpecificOutput?: { additionalContext?: string };
+    };
+    const feedback = parsed.hookSpecificOutput?.additionalContext;
+    return {
+      blocked: parsed.decision === "block" || typeof feedback === "string",
+      reason: parsed.reason ?? feedback ?? "",
+    };
+  } catch {
+    return { blocked: false, reason: out };
+  }
+}
+
+export const clip = (s: string, n = 400) => {
   const flat = s.replace(/\s+/g, " ").trim();
   return flat.length > n ? `${flat.slice(0, n)}...` : flat;
 };
@@ -440,26 +480,19 @@ export class PersonScript {
   say(words: string): void {
     this.ledger.sent(words);
     this.said.push(words);
-    this.host.hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt: words });
+    this.host.typed(words);
   }
 
-  /** The person picks an option in an AskUserQuestion picker. */
+  /** The person picks an option in the host's picker; where the host has none, they type it. */
   pick(question: string, options: string[], label: string): void {
+    if (!this.host.picker) {
+      this.say(label);
+      return;
+    }
     // A picker submission carries exactly one pick.
     this.ledger.sent(label, 1);
     this.said.push(label);
-    const questions = [{
-      question,
-      header: "Choice",
-      multiSelect: false,
-      options: options.map((o) => ({ label: o, description: o })),
-    }];
-    this.host.hook("record-human-turn", {
-      hook_event_name: "PostToolUse",
-      tool_name: "AskUserQuestion",
-      tool_input: { questions },
-      tool_response: { questions, answers: { [question]: label } },
-    });
+    this.host.picked(question, options, label);
   }
 }
 
@@ -562,6 +595,9 @@ export const PLAIN_ANSWERS: PersonAnswers = {
 
 const RECORD_PREFIX = /^aidlc\/spaces\/[^/]+\/intents\/[^/]+\//;
 
+/** The detour when picked-up work answers that it is paused: the person has to ask to resume again. */
+export const RESUME_AGAIN = "the person picked their parked work and was told to resume it again";
+
 export interface StandInOptions {
   answers?: Partial<PersonAnswers>;
   /** The Units Units Generation writes, in dependency order. */
@@ -629,6 +665,8 @@ export class AgentStandIn {
   /** A directive a person move produced, acted on before the next `next`. */
   private pending: Directive | undefined;
   private stopped = new Set<string>();
+  /** The person just picked their work from the work question. */
+  private pickedWork = false;
   /** What `park` answered each time the person stopped for the day. */
   readonly parks: Directive[] = [];
 
@@ -648,6 +686,16 @@ export class AgentStandIn {
     this.followRefusals = options.followRefusals ?? false;
   }
 
+  /** How the engine names its own commands on the host's tree. */
+  private get tools(): string {
+    return `bun ${this.host.dir}/tools/`;
+  }
+
+  /** A backquoted command of the host's tree, `bun <dir>/tools/<rest>`, captured. */
+  private named(rest: string): RegExp {
+    return new RegExp(`\`(${this.tools.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}${rest})\``);
+  }
+
   /**
    * Act on a print the engine answered a person's line with: run the command it
    * names exactly as given. Returns true when the print says to stop, so the
@@ -655,7 +703,7 @@ export class AgentStandIn {
    */
   actOnPrint(d: Directive): boolean {
     const message = String(d.message ?? "");
-    const command = /`(bun \.claude\/tools\/[^`]+)`/.exec(message);
+    const command = this.named("[^`]+").exec(message);
     if (command) {
       const res = this.host.bash(command[1]);
       const out = parseJson(res.stdout);
@@ -760,7 +808,12 @@ export class AgentStandIn {
 
   /** `next`, following load-steering continuations as the skill does. */
   next(...args: string[]): Directive {
-    let res = this.host.engine("orchestrate", "next", ...args);
+    return this.follow(this.host.engine("orchestrate", "next", ...args));
+  }
+
+  /** The directive a `next` printed, after its load-steering continuations. */
+  private follow(first: RunResult): Directive {
+    let res = first;
     for (let i = 0; i < 50; i++) {
       const d = parseJson(res.stdout) as Directive | null;
       if (!d) this.fail(`next printed no directive (${res.status}): ${clip(res.stdout + res.stderr, 1200)}`);
@@ -788,7 +841,7 @@ export class AgentStandIn {
     let d = first;
     for (let i = 0; i < 5 && d.kind === "print"; i++) {
       const message = String(d.message ?? "");
-      const create = /`(bun \.claude\/tools\/aidlc\.ts engine intent create [^`]+)`/.exec(message);
+      const create = this.named("aidlc\\.ts engine intent create [^`]+").exec(message);
       if (!create) break;
       const line = create[1].replace(/--label "[^"]*"/, '--label "scope run"');
       let res = this.host.bash(line);
@@ -796,7 +849,7 @@ export class AgentStandIn {
       // Plan approval off is the person's own call: create refuses the flag and
       // names the setting command, which takes a reply from the person after
       // the work exists. So they say it again, and the agent runs it.
-      const setting = /`(bun \.claude\/tools\/aidlc-utility\.ts config-change --guard\.plan-approval off)`/.exec(said)?.[1];
+      const setting = this.named("aidlc-utility\\.ts config-change --guard\\.plan-approval off").exec(said)?.[1];
       if (res.status !== 0 && setting && /\s--plan-approval off\b/.test(line)) {
         this.detours.push("plan approval off typed with the request: the person had to say it again");
         res = this.host.bash(line.replace(/\s--plan-approval off\b/, ""));
@@ -891,7 +944,7 @@ export class AgentStandIn {
       }
       return;
     }
-    const named = /`(bun \.claude\/tools\/[^`<>]+)`/.exec(said)?.[1];
+    const named = this.named("[^`<>]+").exec(said)?.[1];
     if (named && !/\borchestrate(?:\.ts)? next\b/.test(named)) {
       const ran = this.host.bash(named);
       this.refusalsMet.push({ said, signature, took: named });
@@ -928,16 +981,25 @@ export class AgentStandIn {
             this.pending = this.createFromPrint(d);
             break;
           }
-          if (!/`bun \.claude\/tools\/[^`]+`/.test(message)) this.fail("a print mid-run named no step to take", d);
+          if (!this.named("[^`]+").test(message)) this.fail("a print mid-run named no step to take", d);
           // The agent's own work the step names: the units block, from the Units it wrote.
           const repaired = this.repairUnitsBlockIfNamed(message, "next");
           if (!repaired || !/orchestrate\.ts next`\.$/.test(message)) this.actOnPrint(d);
           this.pending = /next --resume/.test(message) ? this.next("--resume") : this.next();
           break;
         }
+        case "parked":
+          // Work picked up from the work question that answers it is paused:
+          // the agent says so, and the person asks to resume again.
+          if (!this.pickedWork) this.fail("the work was parked with no one asking", d);
+          this.pickedWork = false;
+          this.detours.push(RESUME_AGAIN);
+          this.pending = this.personTypes("/aidlc --resume");
+          break;
         default:
           this.fail(`no stand-in step for directive kind ${String(d.kind)}`, d);
       }
+      if (d.kind !== "print" && d.kind !== "ask") this.pickedWork = false;
   }
 
   // --- stages -------------------------------------------------------------
@@ -983,13 +1045,12 @@ export class AgentStandIn {
     }
     const produces = (d.produces as string[] | undefined) ?? [];
     const lead = String(d.lead_agent ?? "aidlc-developer-agent");
+    // A stage interviews the person through its questions file; a stage that
+    // requires summary confirmation has one even when produces does not list it.
+    const listed = produces.find((p) => p.endsWith(`${stage}-questions.md`));
+    const summaryStage = sourceStage(stage)?.summaryConfirmation === true;
+    const questions = listed ?? (summaryStage && produces[0] ? `${dirname(produces[0])}/${stage}-questions.md` : undefined);
     const work = () => {
-      // A stage interviews the person through its questions file; a stage that
-      // requires summary confirmation has one even when produces does not list it.
-      const listed = produces.find((p) => p.endsWith(`${stage}-questions.md`));
-      const summaryStage = sourceStage(stage)?.summaryConfirmation === true;
-      const questions = listed ?? (summaryStage && produces[0] ? `${dirname(produces[0])}/${stage}-questions.md` : undefined);
-      if (questions && stage !== "code-generation") this.askQuestions(d, questions);
       if (stage === "code-generation") this.writeCode(d);
       for (const p of produces) {
         if (p === questions || existsSync(join(this.host.proj, p))) continue;
@@ -1010,8 +1071,12 @@ export class AgentStandIn {
     this.worked.push(d);
     if (unit) this.must("state", "unit", "start", "--stage", stage, "--unit", unit);
     if (stage === "reverse-engineering") this.reverseEngineering(d);
-    else if (d.mode === "subagent") this.host.task(lead, this.handoffPrompt(d), work);
-    else work();
+    else {
+      // The conductor asks the person; a dispatched lead only writes (stage-protocol.md, "For subagent stages").
+      if (questions && stage !== "code-generation") this.askQuestions(d, questions);
+      if (d.mode === "subagent") this.host.task(lead, this.handoffPrompt(d), work);
+      else work();
+    }
     this.contributions(d);
     if (typeof d.reviewer === "string") this.review(d);
     if (unit) {
@@ -1132,7 +1197,7 @@ export class AgentStandIn {
     const { intent, space } = activeRecord(this.host.proj);
     const record = `aidlc/spaces/${space}/intents/${intent}`;
     this.host.engine("workspace", "codekb-scope-diff", "--repo", repo);
-    const snap = parseJson(this.host.bash(`bun .claude/tools/aidlc-utility.ts codekb-snapshot --repo ${repo} --paths ./ --json`).stdout);
+    const snap = parseJson(this.host.bash(`${this.tools}aidlc-utility.ts codekb-snapshot --repo ${repo} --paths ./ --json`).stdout);
     if (!snap?.source_fingerprint) this.fail("codekb snapshot printed no source fingerprint", d);
     const scan = `${record}/inception/reverse-engineering/developer-scan.md`;
     const synthesise = () => {
@@ -1146,7 +1211,7 @@ export class AgentStandIn {
       if (!/VALID/.test(check.stdout)) this.fail(`staged timestamp is not VALID: ${clip(check.stdout + check.stderr)}`, d);
       this.host.engine("workspace", "codekb", "--repo", repo);
       const published = this.host.bash(
-        `bun .claude/tools/aidlc-utility.ts codekb-publish --repo ${repo} --staged ${staged}/ --paths ./ ` +
+        `${this.tools}aidlc-utility.ts codekb-publish --repo ${repo} --staged ${staged}/ --paths ./ ` +
           `--expect-store ${String(snap.store_generation)} --expect-source ${String(snap.source_fingerprint)} --json`,
       );
       if (published.status !== 0) this.fail(`codekb publish refused: ${clip(published.stdout + published.stderr, 1200)}`, d);
@@ -1156,10 +1221,10 @@ export class AgentStandIn {
       this.host.write(scan, DEVELOPER_SCAN);
       if (rest.length === 0) synthesise();
     });
-    this.host.bash(`bun .claude/tools/aidlc-log.ts link --stage reverse-engineering --link ${first} --artifact "${scan}"`);
+    this.host.bash(`${this.tools}aidlc-log.ts link --stage reverse-engineering --link ${first} --artifact "${scan}"`);
     for (const link of rest) {
       this.host.task(link, "Write the code knowledge base", synthesise);
-      this.host.bash(`bun .claude/tools/aidlc-log.ts link --stage reverse-engineering --link ${link}`);
+      this.host.bash(`${this.tools}aidlc-log.ts link --stage reverse-engineering --link ${link}`);
     }
   }
 
@@ -1271,7 +1336,7 @@ export class AgentStandIn {
     const dispatch = this.host.fullHost && unit !== null ? `${activeRecord(this.host.proj).dir.slice(this.host.proj.length + 1)}/.aidlc-engine/reviewer-dispatch.json` : null;
     if (dispatch) this.host.write(dispatch, `${JSON.stringify({ reviewer, stage, unit, exempt: [] })}\n`);
     this.host.task(reviewer, `Review ${stage}`, () => this.host.write(file, reviewText(reviewer, iteration)));
-    if (dispatch) this.host.remove(dispatch);
+    if (dispatch && this.host.removesDispatch) this.host.remove(dispatch);
     this.must("log", "review", "--stage", stage, "--reviewer", reviewer, "--iteration", pass, "--verdict", "READY", ...forUnit);
     this.reviews.set(`${stage} ${unit ?? ""}`, { reviewer, iteration });
   }
@@ -1335,7 +1400,7 @@ export class AgentStandIn {
     const planPath = produces.find((p) => p.endsWith("code-generation-plan.md"));
     const tests = produces.find((p) => p.endsWith("unit-test-instructions.md"));
     if (!planPath || !tests) this.fail("code-generation names no plan or test instructions", d);
-    const contract = this.host.bash("bun .claude/tools/aidlc-testing-posture.ts render");
+    const contract = this.host.bash(`${this.tools}aidlc-testing-posture.ts render`);
     if (contract.status !== 0) this.fail(`testing posture render failed: ${clip(contract.stderr)}`, d);
     // A revision puts the requested change in the plan as its own step
     // (Code Generation Step 3), so the plan asked about is the revised one.
@@ -1352,8 +1417,8 @@ export class AgentStandIn {
     if (d.stage !== "code-generation") return `Run ${String(d.stage)}`;
     const unit = typeof d.unit === "string" ? d.unit : null;
     const brief = this.host.bash(unit
-      ? `bun .claude/tools/aidlc-testing-posture.ts brief --unit ${unit}`
-      : "bun .claude/tools/aidlc-testing-posture.ts brief --stage-level");
+      ? `${this.tools}aidlc-testing-posture.ts brief --unit ${unit}`
+      : `${this.tools}aidlc-testing-posture.ts brief --stage-level`);
     if (brief.status !== 0) this.fail(`testing posture brief failed: ${clip(brief.stdout + brief.stderr)}`, d);
     return brief.stdout;
   }
@@ -1411,6 +1476,17 @@ export class AgentStandIn {
       if (!command) this.fail(`the staffing question offered no command for ${choice}`, d);
       const res = this.host.bash(command);
       if (res.status !== 0) this.fail(`${command} was refused: ${clip(res.stdout + res.stderr, 1200)}`, d);
+      return;
+    }
+    if (type === "intent-pick") {
+      // A clone has no cursor of its own, so it asks which work to carry on with.
+      const picks = (d.select_commands as { selector: string; command: string }[] | undefined) ?? [];
+      const choice = this.askPerson("work to carry on", "", String(d.question ?? ""), picks.map((p) => p.selector),
+        picks[0]?.selector ?? "");
+      const command = picks.find((p) => p.selector === choice)?.command;
+      if (!command) this.fail(`the work question offered no command for ${choice}`, d);
+      this.pickedWork = true;
+      this.pending = this.follow(this.host.bash(command));
       return;
     }
     if (type === "new-work-routing" && this.answers.newWork) {
@@ -1586,6 +1662,8 @@ export interface ScopeRunOptions extends StandInOptions {
   /** Run the host as Claude Code does in full (see ScopeHost.fullHost). */
   fullHost?: boolean;
   prepare?: (proj: string) => void;
+  /** The project and the host that drives it; the Claude tree by default (createScopeProject). */
+  project?: (shape: "code" | "empty") => { proj: string; host: ScopeHost };
 }
 
 export interface ScopeRun {
@@ -1604,8 +1682,8 @@ export interface ScopeRun {
 export function runScope(scope: string, options: ScopeRunOptions = {}): ScopeRun {
   const declared = declaredScope(scope, options.scopeFile);
   const shape = options.shape ?? (declared.existingCode ? "code" : "empty");
-  const { proj, host } = createScopeProject(shape);
-  host.fullHost = options.fullHost ?? false;
+  const { proj, host } = (options.project ?? createScopeProject)(shape);
+  if (options.fullHost !== undefined) host.fullHost = options.fullHost;
   options.prepare?.(proj);
   const person = new PersonScript(host);
   const agent = new AgentStandIn(host, person, options);
