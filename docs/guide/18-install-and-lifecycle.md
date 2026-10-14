@@ -32,7 +32,8 @@ becomes system-wide. A release from before `--allow-root` cannot uninstall
 itself as root; installing it, or activating it as root with `aidlc use`,
 `update` or `rollback`, proceeds with a warning that names the way to remove it
 later: its own `aidlc update`, then `aidlc uninstall --allow-root`.
-`aidlc uninstall` takes the same `--allow-root` opt-in with the same limits. Windows installation targets the account running PowerShell. Run it
+`aidlc uninstall` takes the same `--allow-root` opt-in with the same limits.
+Windows installation targets the account running PowerShell. Run it
 from a normal PowerShell window. A window opened with "Run as administrator"
 under UAC is warned that installing as administrator is less safe, because
 another program running as the same account could interfere with files the
@@ -1523,7 +1524,9 @@ aidlc doctor --project-dir "$PWD" --quiet
 ```
 
 A CI container job or agent sandbox that runs as root, with root as its only
-user, adds `--allow-root` to the installer line:
+user, adds `--allow-root` to the installer line. The pinned version must be a
+release that ships `--allow-root`: the recipe runs that tag's own `install.sh`,
+and an older one rejects the flag as an unknown argument.
 
 ```bash
 sh "$tmp/install.sh" --version "$version" --quiet --yes --allow-root
