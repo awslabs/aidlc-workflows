@@ -540,7 +540,7 @@ describe("t271 review iteration ceiling", () => {
       expect(revised).not.toContain("learnings");
     });
 
-    test("when the person wrote while the review ran, the step is next, with no approval question", () => {
+    test("when the person wrote while the review ran, the step is next, and an approval in their words is recorded, not asked again", () => {
       const { step } = verdictNote("-", "READY", NO_LEARNINGS, (proj) => {
         const replied = spawnSync(process.execPath, [join(dirname(LOG_TOOL), "aidlc.ts"), "engine", "hook", "record-human-turn"], {
           cwd: proj, encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_UNATTENDED: "" },
@@ -549,7 +549,8 @@ describe("t271 review iteration ceiling", () => {
         expect(replied.status, `${replied.stdout}${replied.stderr}`).toBe(0);
       });
       expect(step).toContain("orchestrate next");
-      expect(step).toContain("Do not ask the approval question now");
+      expect(step).toContain("record it with their words rather than asking again");
+      expect(step).not.toContain("Do not ask the approval question");
       expect(step).not.toContain("--result");
     });
 

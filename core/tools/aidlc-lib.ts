@@ -28167,7 +28167,7 @@ export function markEngineTouch(projectDir: string, intent?: string, space?: str
 // one owner of that call: after a row it recorded it leaves the engine mark
 // (markStageWorkLogged), or the turn-end mark when the person answers next
 // (a summary's Request changes with nothing said, which asks "What should
-// change?"), or no mark for a review of a stage no longer in flight. Both
+// change?", and the learnings question's Add a note), or no mark for a review of a stage no longer in flight. Both
 // evidence paths read that mark, kept here rather than in
 // isEngineEngagementSegment, which also feeds the forwarding-loop and
 // runtime-compile detectors:
@@ -40895,6 +40895,8 @@ export type AnswerModeChoice = "guide" | "file" | "chat";
 export const ANSWER_MODE_FIELD = "Answer Mode";
 /** The DECISION_RECORDED field naming which of the engine's own questions a row is. */
 export const QUESTION_KIND_FIELD = "Question Kind";
+/** The learnings ritual's "Anything to add?" options (stage-protocol-learnings.md section 13). */
+export const LEARNINGS_NOTE_CHOICES = ["Nothing to add", "Add a note"] as const;
 /** Its value for the mode question, written by the command the step note hands the agent. */
 export const ANSWER_MODE_QUESTION_KIND = "answer-mode";
 export const ANSWER_MODE_LABELS: Record<AnswerModeChoice, string> = {

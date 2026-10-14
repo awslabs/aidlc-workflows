@@ -625,4 +625,39 @@ describe("t259 the stage's work recorded through log leaves the engine mark", ()
     expect(answered.stdout).toContain('"emitted":"QUESTION_ANSWERED"');
     expect(turnMarkersShowConversational(proj)).toBe(false);
   }, 120_000);
+
+  // The learnings question's Add a note is answered by the person next (the
+  // note itself), so the turn ends at the ask; Nothing to add goes on to the
+  // gate, and the same words on another question are an ordinary answer.
+  test("Add a note on the learnings question ends the turn; Nothing to add and other questions do not", async () => {
+    for (const [options, picked, ends] of [
+      ["Nothing to add,Add a note", "Add a note", true],
+      ["Nothing to add,Add a note", "Nothing to add", false],
+      ["Add a note,Skip it", "Add a note", false],
+    ] as const) {
+      const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+      tempDirs.push(proj);
+      const env: Record<string, string | undefined> = Object.fromEntries(
+        Object.entries(process.env).filter(([key]) =>
+          !/^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_|AIDLC_)/i.test(key) && key !== "TERM_PROGRAM"),
+      );
+      env.CLAUDE_PROJECT_DIR = proj;
+      const run = (args: string[], input?: string) =>
+        spawnSync(process.execPath, [".claude/tools/aidlc.ts", "engine", ...args], { cwd: proj, encoding: "utf-8", env, input });
+      markEngineTouch(proj);
+      const asked = run(["log", "decision", "--stage", "feasibility", "--decision", "Anything to add for next time?", "--options", options]);
+      expect(asked.status, asked.stderr).toBe(0);
+      await Bun.sleep(20);
+      const replied = run(["hook", "record-human-turn"],
+        JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t259-note", prompt: picked }));
+      expect(replied.status, `${replied.stdout}${replied.stderr}`).toBe(0);
+      await Bun.sleep(20);
+      const answered = run(["log", "answer", "--stage", "feasibility", "--details", picked]);
+      const label = `${options} -> ${picked}`;
+      expect(answered.status, `${label}: ${answered.stderr}`).toBe(0);
+      expect(turnEndIsOpen(proj), label).toBe(ends);
+      expect(answered.stdout.includes("Ask what the note should say and end the turn"), label).toBe(ends);
+      expect(turnMarkersShowConversational(proj), label).toBe(ends);
+    }
+  }, 180_000);
 });

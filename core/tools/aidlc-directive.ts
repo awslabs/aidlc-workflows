@@ -1222,8 +1222,9 @@ export type ReviewVerdictStep =
 export function reviewVerdictNote(step: ReviewVerdictStep): string {
   switch (step.kind) {
     case "person-wrote":
-      return `The person wrote while the review ran: run \`${step.next}\` and act on what they said together with ` +
-        "the step it prints. Do not ask the approval question now.";
+      return `The person wrote since the review was requested: run \`${step.next}\` and follow its step together ` +
+        "with what they said; if what they said answers the approval, record it with their words rather than " +
+        "asking again.";
     case "next-pass":
       return "Another review pass follows: fix what its findings name (a review that did not finish names nothing " +
         `to fix), then request the next pass with \`${step.request}\` in this turn.`;

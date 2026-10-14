@@ -32,6 +32,7 @@ import {
   stageGateReportCommand,
   markStageWorkLogged,
   markTurnEnd,
+  LEARNINGS_NOTE_CHOICES,
   learningsRitualRuns,
   ceremonyPolicyValues,
   terminalReviewVerdict,
@@ -2579,8 +2580,20 @@ function handleAnswer(args: string[]): void {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
 
+    // The learnings question's Add a note (its exact option, on the question
+    // logged with exactly its options): the person writes the note next, so
+    // the turn ends at the ask (stage-protocol-learnings.md section 13).
+    const question = decisionRowsInScope(readAuditShardEvents(pd), flags.stage, flags.unit).at(-1);
+    const asksForNote = flags.details === LEARNINGS_NOTE_CHOICES[1] && question !== undefined &&
+      (auditBlockField(question.block, "Options") ?? "").split(",").map((option) => option.trim()).join(",") ===
+        LEARNINGS_NOTE_CHOICES.join(",");
+    if (asksForNote) rowEndsTurn = true;
     console.log(
-      JSON.stringify({ emitted: "QUESTION_ANSWERED", stage: flags.stage })
+      JSON.stringify({
+        emitted: "QUESTION_ANSWERED",
+        stage: flags.stage,
+        ...(asksForNote ? { agent_note: "Ask what the note should say and end the turn; their next reply is the note." } : {}),
+      })
     );
   });
 }
