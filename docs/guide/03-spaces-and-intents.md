@@ -412,10 +412,11 @@ harness, `/aidlc space` and `/aidlc intent` list where you are, marked with `*`.
 
 ## Where `aidlc/` lives
 
-**`aidlc/` goes in the folder where you run `aidlc config`, and that folder is
-your workspace.** AI-DLC does not look upward for a git root. Run `aidlc config`
-in a subfolder and that subfolder gets its own harness folder and its own
-`aidlc/`, with its own spaces and intents. Open your harness in the same folder.
+**`aidlc/` goes in the folder `aidlc config` installs into, and that folder is
+your workspace.** That is the folder you run it in, or the one you name with
+`--project-dir`. AI-DLC does not look upward for a git root. Install into a
+subfolder and that subfolder gets its own harness folder and its own `aidlc/`,
+with its own spaces and intents. Open your harness in the same folder.
 
 Two layouts cover most teams.
 
@@ -433,8 +434,10 @@ Everything travels with the code, in the same repo and the same pull requests.
 A monorepo is the same layout: run `aidlc config` at the repo root and every
 package shares one `aidlc/`. Work in this layout records no repos, so generated
 code and git operations stay in the folder itself. Put the install in one
-package's subfolder instead and that package gets a separate `aidlc/`; do that
-only when the packages have separate teams that want separate records.
+package's subfolder instead and that package gets a separate `aidlc/`, with its
+own records. Git is not separated: branches and worktrees still belong to the
+whole repo, because git resolves the repo from the subfolder. Do that only when
+the packages have separate teams that want separate records.
 
 ### Several repos beside one `aidlc/`
 
@@ -476,7 +479,7 @@ make it one. What that means for `aidlc/`:
 | The code is in one repo | One repo: install in it |
 | One piece of work changes several repos | Several repos beside one `aidlc/` |
 | Several teams share the same repos | One workspace, with a space per team (see Spaces, above) |
-| Unrelated projects | A separate folder and `aidlc/` for each. They share nothing automatically ([what carries over](#what-carries-over-and-what-doesnt)) |
+| Unrelated projects | A separate folder and `aidlc/` for each. They share no records, rules, or knowledge; only machine-wide settings reach both ([what carries over](#what-carries-over-and-what-doesnt)) |
 
 What to commit in each layout is in [What's committed and what's not](#whats-committed-and-whats-not).
 
@@ -552,15 +555,16 @@ and machines.
 |---|---|---|---|
 | Rules: `org.md`, `team.md`, `project.md`, `phases/` | Shared. Each stage reads the current files | A new space gets a one-time copy of the default space's `org.md` and the framework's phase rules; its `team.md` and `project.md` start empty. After that, nothing flows | Copy the files, or start from a template repo (below) |
 | Learnings you keep | Land in the active space's `project.md`, or `team.md` when you promote them | Not shared. Each space has its own | Copy the lines you want |
-| Your documents (`knowledge/`) | Shared. `associate` ties one to a single intent | Not shared. Each space has its own folder | `onboard` copies a file in and refuses a path outside the project, so copy the file into the other project |
+| Your documents (`knowledge/`) | Shared. `associate` adds an intent to a document's list and can be repeated; a document with no intent is space-wide | Not shared. Each space has its own folder | `onboard` copies a file in and refuses a path outside the project, so copy the file into the other project |
 | Code knowledge (`codekb/`) | Shared, per repo. A current scan can be reused by your choice | Not shared. Another space scans again | Each project scans its own. A teammate's clone of the same repo can reuse a scan |
 | Saved scopes (`aidlc/scopes/`) | Shared | Shared by every space in the workspace | Copy the file |
 | Output-format overrides (`memory/templates/`) | Shared | Per space. Not copied into a new space | Copy the files |
 | Agents you add (in the harness folder) | Shared | Shared by every space | Copy the files |
 | Repo list (`repos.json`) | One per workspace | One per workspace | Per project |
+| Model and flag policy, update and offline settings | Shared | Shared | Applies to every project on the machine through the machine settings file. A project's own `aidlc.settings.json` overrides it ([the hierarchy](18-install-and-lifecycle.md)) |
 
-Nothing in AI-DLC links two projects. Teammates get the shared files by
-pulling the repo, and the per-user files in
+Apart from those machine-wide settings, nothing in AI-DLC links two projects.
+Teammates get the shared files by pulling the repo, and the per-user files in
 [What's committed and what's not](#whats-committed-and-whats-not) never travel.
 
 ### Standards for many projects
