@@ -106,6 +106,30 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     expect(rows[0].label).toContain("git add aidlc/");
   });
 
+  // A request committed before the folder was ignored stays tracked: W1 leaves
+  // it out of the records to commit, and doctor names the step that takes it
+  // out of git without running it.
+  test("a committed request file is left out of W1 and named with the step that untracks it", () => {
+    const ws = freshGitWorkspace();
+    const g = (...args: string[]) => spawnSync("git", ["-C", ws, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    mkdirSync(join(ws, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(ws, "aidlc", ".aidlc-request-text", "request.txt"), "my first words\n", "utf-8");
+    g("add", "aidlc");
+    g("commit", "-q", "-m", "earlier commit");
+    // The folder is ignored now and a later request changes the tracked file.
+    writeFileSync(join(ws, ".gitignore"), "aidlc/.aidlc-request-text/\n", "utf-8");
+    writeFileSync(join(ws, "aidlc", ".aidlc-request-text", "request.txt"), "my later words\n", "utf-8");
+    const rows = workspaceManifestChecks(ws);
+    expect(rows[0].label).toContain("no uncommitted changes under aidlc/");
+    const request = rows.find((r) => r.label.startsWith("Request folder:"));
+    expect(request).toMatchObject({ pass: false, severity: "warn" });
+    expect(request?.label).toContain("1 file(s) in aidlc/.aidlc-request-text/ are committed");
+    expect(request?.label).toContain("`git rm --cached -r -- aidlc/.aidlc-request-text/`");
+    // Doctor only names the step: the file is still tracked and unchanged.
+    expect(g("ls-files", "--", "aidlc/.aidlc-request-text").stdout.trim()).toBe("aidlc/.aidlc-request-text/request.txt");
+    expect(readFileSync(join(ws, "aidlc", ".aidlc-request-text", "request.txt"), "utf-8")).toBe("my later words\n");
+  });
+
   test("doctor warns when a later user rule hides committed records, without changing its exit code", () => {
     const ws = freshGitWorkspace();
     const env = {

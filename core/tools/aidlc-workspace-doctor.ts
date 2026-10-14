@@ -17,7 +17,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { discoverSiblingRepos, errorMessage } from "./aidlc-lib.ts";
+import { discoverSiblingRepos, errorMessage, REQUEST_TEXT_DIR } from "./aidlc-lib.ts";
 import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import {
@@ -66,6 +66,9 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
         "--untracked-files=all",
         "--",
         "aidlc",
+        // A request left for the engine is the person's words, never a
+        // shared record, even where an earlier commit tracks it (W1c).
+        `:(exclude)${REQUEST_TEXT_DIR}`,
       ],
       stdout: "pipe",
       stderr: "pipe",
@@ -91,6 +94,31 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
     }
   } catch (e) {
     results.push({ pass: true, label: `Workspace records: check skipped (advisory) - ${errorMessage(e)}` });
+  }
+
+  // W1c - A request file committed before the folder was ignored stays
+  // tracked, so each later request would change it in git. Doctor names the
+  // step that takes it out of git and keeps the file; it never runs it.
+  try {
+    const proc = Bun.spawnSync({
+      cmd: ["git", "-C", projectDir, "ls-files", "-z", "--", REQUEST_TEXT_DIR],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const tracked = proc.exitCode === 0
+      ? new TextDecoder().decode(proc.stdout).split("\0").filter(Boolean).length
+      : 0;
+    if (tracked > 0) {
+      results.push({
+        pass: false,
+        severity: "warn",
+        label:
+          `Request folder: ${tracked} file(s) in ${REQUEST_TEXT_DIR}/ are committed, and they hold your own requests; ` +
+          `take them out of git (the files stay here): \`git rm --cached -r -- ${REQUEST_TEXT_DIR}/\`, then commit`,
+      });
+    }
+  } catch {
+    // Named at a later doctor run.
   }
 
   // W1b - A later user ignore rule can hide records even after config succeeded.
