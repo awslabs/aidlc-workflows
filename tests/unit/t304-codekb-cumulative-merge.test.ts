@@ -325,40 +325,10 @@ describe("t304 source and store generation interleavings", () => {
       }
       const baseline = snapshot(project, snapshotPaths);
       const candidate = join(project, "candidate");
-      writeCandidate(
-        candidate,
-        "FIRST SCAN",
-        "slash",
-        candidatePaths,
-        ["a", "b"],
-        currentFingerprint(project, candidatePaths),
-      );
+      writeCandidate(candidate, "FIRST SCAN", "slash", candidatePaths, ["a", "b"], currentFingerprint(project, candidatePaths));
       const published = publish(project, candidate, snapshotPaths, baseline);
       expect(published.status, `${published.stdout}${published.stderr}`).toBe(0);
     }
-  });
-
-  test("publish accepts a path under a snapshotted directory written without its slash (#2578)", () => {
-    const project = freshProject();
-    mkdirSync(join(project, "src", "payments"), { recursive: true });
-    writeFileSync(join(project, "src", "payments", "charge.ts"), "export const charge = 1;\n");
-    const baseline = snapshot(project, ["src/payments"]);
-    const candidate = join(project, "candidate");
-    writeCandidate(candidate, "UNDER", "slash", ["src/payments/charge.ts"], ["payments"], currentFingerprint(project, ["src/payments/charge.ts"]));
-    const published = publish(project, candidate, ["src/payments"], baseline);
-    expect(published.status, `${published.stdout}${published.stderr}`).toBe(0);
-  });
-
-  test("publish refuses a directory spelling of a path that is a file (#2578)", () => {
-    const project = freshProject();
-    mkdirSync(join(project, "src"), { recursive: true });
-    writeFileSync(join(project, "src", "gateway.ts"), "export const gateway = 1;\n");
-    const baseline = snapshot(project, ["src/gateway.ts"]);
-    const candidate = join(project, "candidate");
-    writeCandidate(candidate, "FILE AS DIR", "slash", ["src/gateway.ts/"], ["gateway"], currentFingerprint(project, ["src/gateway.ts"]));
-    const refused = publish(project, candidate, ["src/gateway.ts"], baseline);
-    expect(refused.status).not.toBe(0);
-    expect(`${refused.stdout}${refused.stderr}`).toContain("do not cover candidate analyzed path");
   });
 
   test("publish still refuses a candidate path outside the snapshot", () => {

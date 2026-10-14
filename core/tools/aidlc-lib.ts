@@ -3681,9 +3681,14 @@ export function codekbScopeFingerprint(
   excludedPaths: string[] = [],
 ): string | null {
   if (paths.length === 0) return null;
-  const normalizedExclusions = excludedPaths.map(normalizeScopePath);
+  const normalizePath = (path: string): string => {
+    let normalized = path.replaceAll("\\", "/");
+    normalized = normalized.replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
+    return normalized === "." ? "" : normalized;
+  };
+  const normalizedExclusions = excludedPaths.map(normalizePath);
   const survivingPaths = paths
-    .map((original) => ({ original, normalized: normalizeScopePath(original) }))
+    .map((original) => ({ original, normalized: normalizePath(original) }))
     .filter(
       ({ normalized: positive }) =>
         !normalizedExclusions.some(
@@ -4119,64 +4124,31 @@ export function codekbStoreIsCurrent(
   return current !== null && current === parsed.scope.fingerprint;
 }
 
-// One spelling of a scope path for every comparison: backslashes become "/",
-// leading "./" and trailing "/" go, and the repo root ("." or "./") becomes "".
-// The fingerprint, the publish coverage check and the compare mode all use it,
-// so `a`, `a/` and `./a/` name the same directory everywhere.
+// One spelling of a scope path for comparing: backslashes become "/", leading "./"
+// and trailing "/" go, and the repo root ("." or "./") becomes "". `a`, `a/` and
+// `./a/` name the same entry. (codekbScopeFingerprint keeps its own copy of this.)
 export function normalizeScopePath(path: string): string {
   const normalized = path.replaceAll("\\", "/").replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
   return normalized === "." ? "" : normalized;
 }
 
 // Coverage test for publish and the compare mode: does the incoming run's
-// analyzed set cover a store entry? An incoming path covers it when both name
-// the same path (a leading "./" or a backslash does not change that, see
-// normalizeScopePath), or when the incoming path is a directory and the entry sits
-// under it. A trailing slash is the one spelling that is not free: `a` and `a/`
-// name the same entry only when `a` is a directory. A caller that can look at the
-// repo passes `kindOf`: a bare `a` that is a directory then covers what is under
-// it, a file replacing a directory of the same name hides nothing, and a symlink
-// covers only itself, because the source fingerprint records a symlink as its link
-// text, not its target's files. A path written with a slash is taken as a directory
-// unless it is a symlink, so a directory that moved while it was scanned still
-// publishes as scanned. Without `kindOf` only the slash marks a directory, and the
-// two spellings are taken as equal. The repo root is not a case here: a full scan is
-// `kind: full` (compare mode) or the literal `./` snapshot (publish), each handled by
-// its caller. Deliberately prefix-only - scope paths are authored as repo-relative
-// dirs/files, not globs - and a prefix ends at a "/", so `a/` never covers `a.txt`.
-export type ScopePathKind = "directory" | "symlink" | "other" | "missing";
-
-export function scopePathCovered(
-  incoming: string[],
-  storePath: string,
-  kindOf?: (normalizedPath: string) => ScopePathKind,
-): boolean {
+// analyzed set cover a store entry? The same path in any spelling (a trailing
+// slash, a leading "./" or a backslash does not change what it names), or an
+// incoming DIRECTORY (entry ending "/") subsuming the store path. A path written
+// without the slash covers only itself. Whether a path exists, or is a file or a
+// directory, is the source fingerprint's to say, not this test's. Deliberately
+// prefix-only - scope paths are authored as repo-relative dirs/files, not globs -
+// and a prefix ends at a "/", so `a/` never covers `a.txt`.
+export function scopePathCovered(incoming: string[], storePath: string): boolean {
   const store = normalizeScopePath(storePath);
-  const storeSlash = storePath.replaceAll("\\", "/").endsWith("/");
   return incoming.some((p) => {
     const covering = normalizeScopePath(p);
-    const coveringSlash = p.replaceAll("\\", "/").endsWith("/");
-    if (covering === store) {
-      return coveringSlash === storeSlash || kindOf === undefined || kindOf(store) === "directory";
-    }
-    if (covering === "" || !store.startsWith(`${covering}/`)) return false;
-    if (kindOf === undefined) return coveringSlash;
-    const kind = kindOf(covering);
-    return coveringSlash ? kind !== "symlink" : kind === "directory";
+    return (
+      covering === store ||
+      (covering !== "" && p.replaceAll("\\", "/").endsWith("/") && store.startsWith(`${covering}/`))
+    );
   });
-}
-
-// `kindOf` for scopePathCovered, answering from the repo on disk without following
-// symlinks.
-export function scopePathKinds(repoDir: string): (normalizedPath: string) => ScopePathKind {
-  return (normalizedPath) => {
-    try {
-      const stat = lstatSync(join(repoDir, normalizedPath));
-      return stat.isDirectory() ? "directory" : stat.isSymbolicLink() ? "symlink" : "other";
-    } catch {
-      return "missing";
-    }
-  };
 }
 
 // The bare SPACE record root: `aidlc/spaces/<space>/intents/`. The absolute path

@@ -8,8 +8,7 @@
 //      reverse-engineering-timestamp.md), codekbScopeFingerprint (temp-index
 //      `git write-tree` over the analyzed paths — content-addressed, so an
 //      edit flips it and a revert restores it), and scopePathCovered (the
-//      coverage test publish and compare mode share: same path
-//      in any spelling, or an entry under a directory written with a trailing slash).
+//      compare mode's literal/dir-prefix coverage test).
 //   2. The `codekb-scope-diff` UTILITY VERB (spawned as the real CLI surface):
 //      status verdicts NO_STORE / CURRENT / STALE / UNVERIFIED / UNKNOWN_SCOPE,
 //      compare verdicts COVERS / NARROWER (+ the exact discard list), and the
@@ -31,7 +30,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, delimiter, dirname, join } from "node:path";
 import {
   cleanupTestProject,
@@ -49,7 +48,6 @@ import {
   gitAlternateEntry,
   parseReScope,
   scopePathCovered,
-  scopePathKinds,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -444,59 +442,17 @@ describe("t248 scopePathCovered", () => {
     expect(scopePathCovered(["src/"], "./src/")).toBe(true);
     expect(scopePathCovered(["./src/"], "src/x.ts")).toBe(true);
     expect(scopePathCovered(["src\\a"], "src/a/")).toBe(true);
-    // a directory (trailing slash) covers what sits under it, and only at a "/"
-    expect(scopePathCovered(["./src/"], "src/x/")).toBe(true);
     expect(scopePathCovered(["src\\"], "src/x/")).toBe(true);
+    // only a directory written with its slash covers what is under it; a prefix ends at a "/"
+    expect(scopePathCovered(["src"], "src/x/")).toBe(false);
     expect(scopePathCovered(["src/"], "src2/")).toBe(false);
     expect(scopePathCovered(["a/"], "a.txt")).toBe(false);
-    // a path written without the slash covers only itself, so a file never covers
-    // what was once a directory of the same name
-    expect(scopePathCovered(["src/config"], "src/config/db.ts")).toBe(false);
-    expect(scopePathCovered(["src/config"], "src/config/")).toBe(true);
-    // with the repo to ask, a bare directory covers what sits under it, and a bare file does not
-    const kinds: Record<string, "directory" | "symlink" | "other" | "missing"> = {
-      "src/config": "directory", "src/other": "other", "src/link": "symlink",
-    };
-    const kindOf = (p: string) => kinds[p] ?? "missing";
-    expect(scopePathCovered(["src/config"], "src/config/db.ts", kindOf)).toBe(true);
-    expect(scopePathCovered(["src/other"], "src/other/x.ts", kindOf)).toBe(false);
-    // the two spellings are one entry only for a directory
-    expect(scopePathCovered(["src/config"], "src/config/", kindOf)).toBe(true);
-    expect(scopePathCovered(["src/config/"], "src/config", kindOf)).toBe(true);
-    expect(scopePathCovered(["src/other"], "src/other/", kindOf)).toBe(false);
-    expect(scopePathCovered(["src/gone"], "src/gone/", kindOf)).toBe(false);
-    // a path written with a slash is a directory unless it is a symlink, so one that
-    // moved while it was scanned still publishes as scanned
-    expect(scopePathCovered(["src/gone/"], "src/gone/x.ts", kindOf)).toBe(true);
-    expect(scopePathCovered(["src/link/"], "src/link/x.ts", kindOf)).toBe(false);
-    expect(scopePathCovered(["src\\link\\"], "src/link/x.ts", kindOf)).toBe(false);
-    expect(scopePathCovered(["src/link"], "src/link/x.ts", kindOf)).toBe(false);
-  });
-
-  test.skipIf(process.platform === "win32")("a symlink to a directory is not a directory: it covers only itself (#2578)", () => {
-    // the source fingerprint records a symlink as its link text, not its target's
-    // files, so coverage under it would not be bound by the snapshot
-    const proj = freshProject();
-    mkdirSync(join(proj, "real", "sub"), { recursive: true });
-    writeFileSync(join(proj, "real", "sub", "f.ts"), "export const f = 1;\n");
-    symlinkSync(join(proj, "real"), join(proj, "link"));
-    const kindOf = scopePathKinds(proj);
-    expect(kindOf("real")).toBe("directory");
-    expect(kindOf("link")).toBe("symlink");
-    expect(kindOf("nothing")).toBe("missing");
-    expect(scopePathCovered(["real"], "real/sub/f.ts", kindOf)).toBe(true);
-    expect(scopePathCovered(["link"], "link/sub/f.ts", kindOf)).toBe(false);
-    expect(scopePathCovered(["link/"], "link/sub/f.ts", kindOf)).toBe(false);
-    expect(scopePathCovered(["link"], "link/", kindOf)).toBe(false);
-  });
-
-  test("the repo root is not a coverage case: full scans are decided by the caller", () => {
-    // `.` and `./` name the root and equal each other, but neither stands in for a
-    // full scan here (compare mode reads `kind: full`; publish reads the literal `./`)
-    expect(scopePathCovered(["."], "x/")).toBe(false);
+    // a narrower path still does not cover a wider one, however it is spelled
+    expect(scopePathCovered(["src/payments"], "src/")).toBe(false);
+    expect(scopePathCovered(["src/"], "./")).toBe(false);
+    // the repo root is the callers' case (kind: full, the literal ./ snapshot), not this test's
     expect(scopePathCovered(["./"], "src/payments/")).toBe(false);
     expect(scopePathCovered(["."], "./")).toBe(true);
-    expect(scopePathCovered(["src/"], "./")).toBe(false);
   });
 });
 
@@ -710,36 +666,6 @@ describe("t248 codekb-scope-diff verb — compare mode", () => {
     expect(human.stdout).toContain(
       "NARROWER: the incoming scope no longer claims verified deep coverage for:",
     );
-  });
-
-  test("compare treats `src/payments` and `src/payments/` as one entry when it is a directory (#2578)", () => {
-    const proj = freshProject();
-    seedStore(proj, timestampBody({ fingerprint: "abc" }));
-    mkdirSync(join(proj, "src", "payments"), { recursive: true });
-    writeFileSync(join(proj, "src", "payments", "charge.ts"), "export const charge = 1;\n");
-    const incoming = join(proj, "incoming-noslash.md");
-    writeFileSync(
-      incoming,
-      timestampBody({ intent: "same", analyzedPaths: ["src/payments"], components: ["payment-gateway"] }),
-    );
-    const parsed = JSON.parse(runVerb(proj, "--compare", incoming, "--json").stdout);
-    expect(parsed.verdict).toBe("COVERS");
-    expect(parsed.discarded_paths).toEqual([]);
-  });
-
-  test("compare still reports NARROWER when a file now stands where a stored directory was (#2578)", () => {
-    const proj = freshProject();
-    seedStore(proj, timestampBody({ fingerprint: "abc" }));
-    mkdirSync(join(proj, "src"), { recursive: true });
-    writeFileSync(join(proj, "src", "payments"), "now a file\n");
-    const incoming = join(proj, "incoming-file.md");
-    writeFileSync(
-      incoming,
-      timestampBody({ intent: "same", analyzedPaths: ["src/payments"], components: ["payment-gateway"] }),
-    );
-    const parsed = JSON.parse(runVerb(proj, "--compare", incoming, "--json").stdout);
-    expect(parsed.verdict).toBe("NARROWER");
-    expect(parsed.discarded_paths).toEqual(["src/payments/"]);
   });
 
   test("valid incoming full root covers a partial store", () => {
