@@ -275,17 +275,17 @@ describe("t-claude-guard-group one process", () => {
 });
 
 describe("t-claude-guard-group the real checks still refuse", () => {
-  test("a direct state transition is refused through the group, with the guard's own words", () => {
+  test("a tool call that invokes a hook is refused through the group, with the check's own words", () => {
     const project = scratchProject();
     try {
       const r = runGroup(project, {
         hook_event_name: "PreToolUse",
         tool_name: "Bash",
-        tool_input: { command: "bun .claude/tools/aidlc-state.ts reject feasibility" },
+        tool_input: { command: "bun .claude/tools/aidlc.ts engine hook record-human-turn" },
       });
       expect(r.code).toBe(2);
-      expect(r.stderr).toContain("Stage status cannot be changed with aidlc-state.ts reject");
-      expect(r.stderr).toContain("aidlc-orchestrate.ts report");
+      expect(r.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+      expect(r.stderr).toContain("Use the engine commands for workflow work");
     } finally {
       rmSync(project, { recursive: true, force: true });
     }

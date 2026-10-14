@@ -1450,15 +1450,12 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         tool_name: "execute_bash",
         tool_input: {
           command:
-            "bun .kiro/tools/aidlc-state.ts approve feasibility",
+            "bun .kiro/tools/aidlc.ts engine hook record-human-turn",
         },
       });
       expect(r.code).toBe(2);
       expect(r.stdout).toBe("");
-      expect(r.stderr).toContain(
-        "Stage status cannot be changed with aidlc-state.ts approve",
-      );
-      expect(r.stderr).toContain("aidlc-orchestrate.ts report");
+      expect(r.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

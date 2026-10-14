@@ -41268,6 +41268,28 @@ export const GUARD_FENCE_LABELS: Record<GuardFence, string> = {
   "human-presence": "Human presence (a real human turn behind approvals and answers)",
 };
 
+/**
+ * The stage-status verbs only the engine runs. The state tool refuses each one
+ * from any other caller, whatever spelling ran it; the hooks and adapters that
+ * name these verbs read this set.
+ */
+export const ENGINE_OWNED_STATE_TRANSITIONS: ReadonlySet<string> = new Set([
+  "set",
+  "checkbox",
+  "advance",
+  "finalize",
+  "complete-workflow",
+  "gate-start",
+  "approve",
+  "reject",
+  "revise",
+  "skip",
+  "park",
+  "refresh-unit-progress",
+  "sync-unit-scope-stage",
+  "fold-unit-merge",
+]);
+
 /** The fences the policy word lowers by itself. */
 export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[] {
   if (policy === "off") return ["plan-approval", "review-freeze", "state-transition", "reviewer-scope"];

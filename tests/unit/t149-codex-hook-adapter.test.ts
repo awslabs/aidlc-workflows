@@ -1103,15 +1103,12 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         tool_name: "Bash",
         tool_input: {
           command:
-            "bun .codex/tools/aidlc-state.ts reject feasibility",
+            "bun .codex/tools/aidlc.ts engine hook record-human-turn",
         },
       });
       expect(r.code).toBe(2);
       expect(r.stdout).toBe("");
-      expect(r.stderr).toContain(
-        "Stage status cannot be changed with aidlc-state.ts reject",
-      );
-      expect(r.stderr).toContain("aidlc-orchestrate.ts report");
+      expect(r.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1986,14 +1983,13 @@ describe("t149 Codex guard-tool-call runs the four PreToolUse checks in one proc
     }
   });
 
-  test("2: a direct state transition is refused with the state-transition guard's own words", () => {
+  test("2: a tool call that invokes a hook is refused with the state-transition guard's own words", () => {
     const dir = scratchProject(false);
     try {
-      const r = runAdapter(dir, "guard-tool-call", shellCall(dir, "bun .codex/tools/aidlc-state.ts reject feasibility"));
+      const r = runAdapter(dir, "guard-tool-call", shellCall(dir, "bun .codex/tools/aidlc.ts engine hook record-human-turn"));
       expect(r.code).toBe(2);
       expect(r.stdout).toBe("");
-      expect(r.stderr).toContain("Stage status cannot be changed with aidlc-state.ts reject");
-      expect(r.stderr).toContain("aidlc-orchestrate.ts report");
+      expect(r.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

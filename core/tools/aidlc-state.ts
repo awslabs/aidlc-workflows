@@ -126,6 +126,7 @@ import {
   personSpokeSinceGate,
   fenceSwitchSentence,
   decideFence,
+  ENGINE_OWNED_STATE_TRANSITIONS,
   guardStandAsideSpeaks,
   guardStoodAsideLine,
   recordGuardStoodAside,
@@ -842,29 +843,15 @@ export function main(argv: string[]): void {
 
   const subcommand = args[0];
 
-  // Lifecycle transitions and generic state writes are engine-owned. The
-  // orchestrator binds its child marker to its own PID; this process accepts it
-  // only when it names the actual parent. A copied static token cannot bypass
-  // report's stage pinning, evidence checks, and idempotency.
-  const engineOwnedTransitions = new Set([
-    "set",
-    "checkbox",
-    "advance",
-    "finalize",
-    "complete-workflow",
-    "gate-start",
-    "approve",
-    "reject",
-    "revise",
-    "skip",
-    "park",
-    "refresh-unit-progress",
-    "sync-unit-scope-stage",
-    "fold-unit-merge",
-  ]);
+  // Lifecycle transitions and generic state writes are engine-owned, and this
+  // is the one place that rule is enforced: whatever spelling ran the verb, it
+  // arrives here, so no hook reads the command for it. The orchestrator binds
+  // its child marker to its own PID; this process accepts it only when it names
+  // the actual parent. A copied static token cannot bypass report's stage
+  // pinning, evidence checks, and idempotency.
   if (
     subcommand &&
-    engineOwnedTransitions.has(subcommand) &&
+    ENGINE_OWNED_STATE_TRANSITIONS.has(subcommand) &&
     process.env.AIDLC_STATE_TRANSITION_OWNER !== `orchestrate:${process.ppid}` &&
     !(
       subcommand === "fold-unit-merge" &&
@@ -904,8 +891,7 @@ export function main(argv: string[]): void {
           "--stage <slug> --result " +
           "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
           "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow. " +
-          // The tool-side twin of the state-transition fence: same invariant, same
-          // way out, so the human is not told to go and find it.
+          // The way out is named here, so the human is not told to go and find it.
           fenceSwitchSentence(pd, "state-transition"),
       );
     }
