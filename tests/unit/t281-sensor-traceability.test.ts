@@ -345,13 +345,25 @@ describe("t281 upstream and target verification", () => {
     expect(out.result.invalid_targets).toEqual([]);
     expect(out.result.pass).toBe(true);
 
+    // u2-profile owns US1.2 and shares US1.1, which reaches it only through the
+    // inline-code, several-Units cell: its Functional Design traces both.
+    write(proj, "construction/u2-profile/functional-design/rules.md", "# Rules\n\n- BR1.1 Profile rules\n");
+    const scoped = ["AC1.1.1", "AC1.1.2", "AC1.2.1"];
     const scopedFile = trace(proj, "construction/u2-profile/functional-design/traceability.json", {
-      upstream_ids: [],
-      coverage: [],
+      upstream_ids: scoped,
+      coverage: scoped.map((id) => ({ id, status: "OK", target: "BR1.1" })),
     });
-    const scoped = run(proj, "functional-design", scopedFile);
-    expect(scoped.result.reason ?? "").not.toContain("contains no story-to-unit mappings");
-    expect(scoped.result.reason ?? "").not.toContain("no stories in unit-of-work-story-map.md map to unit");
+    const traced = run(proj, "functional-design", scopedFile);
+    expect(traced.result.reason).toBeUndefined();
+    expect(traced.result.pass).toBe(true);
+
+    trace(proj, "construction/u2-profile/functional-design/traceability.json", {
+      upstream_ids: ["AC1.1.2", "AC1.2.1"],
+      coverage: ["AC1.1.2", "AC1.2.1"].map((id) => ({ id, status: "OK", target: "BR1.1" })),
+    });
+    const short = run(proj, "functional-design", scopedFile);
+    expect(short.result.pass).toBe(false);
+    expect(short.result.missing_from_upstream_ids).toEqual(["AC1.1.1"]);
   });
 
   // The stage guidance names each Unit's construction directory `u{n}-{description}`,
