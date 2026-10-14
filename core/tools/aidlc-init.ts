@@ -54,6 +54,7 @@ import {
   isCustomClaudeStatusLine,
   jsoncRootMembers,
   jsoncSettingValue,
+  kiroUpgradedAgentFile,
   legacyAidlcHookTarget,
   mergeBlock,
   mergeJsonEntries,
@@ -134,11 +135,16 @@ import {
   activeWorkflowDescriptions,
   DEFAULT_SPACE,
   escapeRegex,
+  fenceKeyBypassed,
   fileIdentity,
+  guardSwitchRefusal,
+  type GuardSwitch,
   normalizeProjectFlagsRecord,
+  personAskedForThisLowering,
   RECORDABLE_PROJECT_BYPASSES,
   type ProjectFlagsRecord,
   normalizeDriveLetter,
+  resolveInvokingSessionId,
   sameFileIdentity,
   withAuditLock,
   writeFileAtomic,
@@ -170,6 +176,7 @@ import {
   KIRO_AUTO_DEFINITION,
   KIRO_EFFORT_LABEL,
   KIRO_PRESET_EFFORT,
+  KIRO_SAVED_MODEL_NOTE,
   kiroAutoRecommendation,
   kiroCliPath,
   type KiroModel,
@@ -188,6 +195,7 @@ import {
 import {
   KIRO_WORKFLOWS_ISSUE_ID,
   KIRO_WORKFLOWS_QUESTION,
+  KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID,
   kiroWorkflowsKeptLine,
   kiroWorkflowsOffLine,
   kiroWorkflowsOnLine,
@@ -302,6 +310,7 @@ import {
   readPluginSelection,
   readConfigDiagnosticRecords,
   reconcileProviderActions,
+  runtimeFixesNeeded,
   runtimeIssues,
   stripLegacyClaudeModelAliases,
   trustStatus,
@@ -321,6 +330,8 @@ import {
   LOCAL_SETTINGS_FILE,
   invalidateSettingsCache,
   modelPolicyForHarness,
+  PERSON_CHECK_SWITCH_LABELS,
+  PERSON_CHECK_SWITCHES,
   readSettingsTarget,
   resolveAidlcSettings,
   resolveAidlcSettingsWithOverride,
@@ -1147,7 +1158,11 @@ function modelStateData(
     harness,
     policy,
     effective,
-    notes: harnessHonestyNotes(policy, tiers, harness, cap),
+    notes: [
+      ...harnessHonestyNotes(policy, tiers, harness, cap),
+      // On Kiro CLI the session model agents inherit is the saved one.
+      ...(harness === "kiro" ? [KIRO_SAVED_MODEL_NOTE] : []),
+    ],
   };
 }
 
@@ -1870,7 +1885,12 @@ function showDiagnosticSection(
     };
     output += `  Allowlist reviewed: ${status.record?.reviewed === true ? "yes" : "not recorded"}\n`;
     if (status.kiroWorkflows?.settingsPath) {
-      output += `  Kiro Workflows: ${status.kiroWorkflows.enabled ? "on" : "off"} (${status.kiroWorkflows.settingsPath})\n`;
+      const workflows = status.kiroWorkflows.readable === false
+        ? "could not be read"
+        : status.kiroWorkflows.enabled
+        ? "on"
+        : "off";
+      output += `  Kiro Workflows: ${workflows} (${status.kiroWorkflows.settingsPath})\n`;
     }
     if (status.kiroTerminal?.commandPrompt) {
       output += `  Kiro terminal: Command Prompt (${status.kiroTerminal.settingsPath})\n`;
@@ -2253,13 +2273,19 @@ function diagnosticWizard(
   if (selected.harness === "kiro-ide") askKiroTerminal(projectDir);
   // Codex's own hook trust comes first, so the review question below never
   // reads as that step.
-  const codexStep = selected.harness === "codex"
+  const issues = selected.harness === "codex" || selected.harness === "kiro-ide"
     ? trustStatus(projectDir, selected.harnessDir, selected.harness).issues
-      .map((issue) => codexHookTrustStep(issue.id)).find((step) => step !== null)
+    : [];
+  const codexStep = selected.harness === "codex"
+    ? issues.map((issue) => codexHookTrustStep(issue.id)).find((step) => step !== null)
     : undefined;
   if (codexStep) writeMenuRow("  ", `${CODEX_HOOK_TRUST_UNMET}: ${codexStep}.`);
+  // A Kiro settings file with an error is the person's to fix; the review
+  // question below does not clear it.
+  const kiroUnreadable = issues.find((issue) => issue.id === KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID);
+  if (kiroUnreadable) writeMenuRow("  ", `${kiroUnreadable.message}: ${kiroUnreadable.remediation}.`);
   const answer = promptYesDefault(
-    codexStep
+    codexStep || kiroUnreadable
       ? "  Separately, record that you reviewed AI-DLC's trust and allowlist files?"
       : "  Record that you reviewed the trust and allowlist files?",
     false,
@@ -2342,7 +2368,7 @@ function kiroWorkflowsSwitch(
   if (!state.settingsPath) return failure("Kiro IDE's settings are not in reach here", EXIT.failure);
   const enabled = value === "on";
   const data = (answer: KiroWorkflowsAnswer | null) => ({
-    kiroWorkflows: { enabled, settingsPath: state.settingsPath, answer },
+    kiroWorkflows: { enabled, readable: state.readable, settingsPath: state.settingsPath, answer },
   });
   if (argv.includes("--dry-run")) {
     return success(`would turn Kiro's Workflows feature ${value} in ${state.settingsPath}`, data(readKiroWorkflowsAnswer()));
@@ -2616,23 +2642,23 @@ let configTargetHarnessDir: string | null = null;
 // tool (a runtime unpacked elsewhere, which may be adding a harness the project
 // does not have yet) is named by its own path, unless it is the one under the
 // working directory. In the source tree the project's own tool of the harness
-// being set up stands in.
+// being set up stands in. A newer release's config that an older copied tool
+// handed its refresh to names the tool the person ran.
 function configInvocationFor(projectDir = process.cwd()): string {
   const invocation = aidlcInvocation();
   if (invocation === "aidlc") return invocation;
-  const ran = projectedDispatcher();
-  // A projection's relative invocation names the harness directory it was
-  // built for, whatever the environment says the harness is.
+  const ran = process.env.AIDLC_CONFIG_HANDOFF || projectedDispatcher();
+  // A tool's relative invocation names the harness directory it lives in,
+  // whatever the environment says the harness is.
   const harnessDir = ran === null
     ? configTargetHarnessDir ?? runtimeHarnessDir()
     : basename(dirname(dirname(ran)));
+  const own = `bun ${harnessDir}/tools/aidlc.ts`;
   const toolIn = (root: string) => join(root, harnessDir, "tools", "aidlc.ts");
   if (ran === null || sameFile(ran, toolIn(projectDir))) {
-    return ranFromProject(projectDir)
-      ? ran === null ? `bun ${harnessDir}/tools/aidlc.ts` : invocation
-      : `bun ${quoteCommandArgument(toolIn(projectDir))}`;
+    return ranFromProject(projectDir) ? own : `bun ${quoteCommandArgument(toolIn(projectDir))}`;
   }
-  return sameFile(ran, toolIn(process.cwd())) ? invocation : `bun ${quoteCommandArgument(ran)}`;
+  return sameFile(ran, toolIn(process.cwd())) ? own : `bun ${quoteCommandArgument(ran)}`;
 }
 
 // The command the user ran, printed again with the flags that resolve it, so
@@ -2804,7 +2830,7 @@ function setupMapRows(
       detail: runtime.length > 0
         ? runtime[0].message
         : shellOnly.length > 0
-        ? `${shellOnly.join(" and ")} on this shell's PATH only: start ${projectionProductName(root, distribution)} from a terminal`
+        ? shellOnlyRuntimeDetail(shellOnly, projectionProductName(root, distribution))
         : "hook PATH ready",
       section: "runtime",
       needs: runtime.length > 0,
@@ -3230,6 +3256,14 @@ function prepareDiagnosticSection(
   };
 }
 
+// What a refusal calls a recorded switch: plan approval and summary confirmation
+// by their own words, every other check by its label.
+function bypassedCheck(name: RecordableProjectBypass): GuardSwitch | { check: string } {
+  if (name === "AIDLC_DISABLE_PLAN_APPROVAL_GUARD") return { key: "plan-approval", value: "off" };
+  if (name === "AIDLC_DISABLE_SUMMARY_CONFIRMATION") return { key: "summary-confirmation", value: "off" };
+  return { check: (PERSON_CHECK_SWITCH_LABELS[name] ?? name).replace(/ check$/, "") };
+}
+
 function validateChoiceArgs(
   section: ChoiceSection,
   argv: readonly string[],
@@ -3277,6 +3311,27 @@ function validateChoiceArgs(
   // back on is always done.
   if (section === "flags" && process.env.AIDLC_UNATTENDED === "1" && valuesAfter(argv, "--bypass").length > 0) {
     return "An unattended run does not turn a check off (AIDLC_UNATTENDED=1 is set): run it from an attended session.";
+  }
+  // A check the person relies on is switched off for the project only when they
+  // asked, by the rule every lowering follows (personAskedForThisLowering): from
+  // a chat, a turn of theirs since the last decision, or before any work their
+  // message there. A command no chat is named for (a script, a test) records as
+  // before.
+  const lowered = section === "flags"
+    ? valuesAfter(argv, "--bypass").find((name): name is RecordableProjectBypass =>
+      (PERSON_CHECK_SWITCHES as readonly string[]).includes(name))
+    : undefined;
+  if (lowered !== undefined) {
+    const projectDir = projectDirFrom(argv);
+    let chat: string | null = null;
+    try {
+      chat = resolveInvokingSessionId(projectDir);
+    } catch {
+      chat = null;
+    }
+    if (chat !== null && !personAskedForThisLowering(projectDir, chat) && !fenceKeyBypassed(projectDir, chat)) {
+      return guardSwitchRefusal(bypassedCheck(lowered), projectDir);
+    }
   }
   const mutationFlags = section === "flags"
     ? [
@@ -6320,16 +6375,15 @@ function personalKiroMcpPath(env: NodeJS.ProcessEnv = process.env): string | nul
 // Kiro CLI offers an agent only the MCP servers its tools name, one
 // `@<server>` each; it has no grant for every server (measured on Kiro CLI
 // 2.29.0: `@*`, `@mcp` and `@*/*` grant nothing, and `*` adds built-in tools).
-// So the AI-DLC agent's staged copy names every server config finds in the
-// project's mcp.json and in the person's own, and allowedTools stays as
-// shipped, so each call still asks first. A server added later is named at
-// the next config run. True when the project's copy is the release's own
-// bytes (a copy install puts them there before config runs), so the named copy
-// replaces it; any other copy meets the ownership check.
-function grantKiroMcpServers(projectDir: string, sourceRoot: string, stagedRoot: string, harnessDir: string): boolean {
-  const rel = `${harnessDir}/agents/aidlc.json`;
-  const agentPath = join(stagedRoot, rel);
-  const names = new Set<string>();
+// So the staged copy of every agent that opts into the MCP files (the AI-DLC
+// agent and its specialists) names every server config finds in the project's
+// mcp.json and in the person's own, and allowedTools stays as shipped, so each
+// call still asks first. A server added later is named at the next config run.
+// Returns the agent files whose project copy is the release's own bytes (a
+// copy install puts them there before config runs), so the named copy replaces
+// it; any other copy meets the ownership check.
+function grantKiroMcpServers(projectDir: string, sourceRoot: string, stagedRoot: string, harnessDir: string): string[] {
+  const found = new Set<string>();
   const personal = personalKiroMcpPath();
   for (const path of [join(stagedRoot, harnessDir, "settings", "mcp.json"), personal]) {
     // The person's own file may be a link (a dotfiles folder): follow it.
@@ -6339,44 +6393,52 @@ function grantKiroMcpServers(projectDir: string, sourceRoot: string, stagedRoot:
     if (path === null || !file) continue;
     try {
       const servers = (readJsonFile(path) as Record<string, unknown>).mcpServers;
-      if (isRecord(servers)) for (const name of Object.keys(servers)) names.add(name);
+      if (isRecord(servers)) for (const name of Object.keys(servers)) found.add(name);
     } catch {
       // A file Kiro cannot read names no server.
     }
   }
-  // The agent file travels with the project (a team's clone), so a server it
-  // already names stays named: a teammate's run adds theirs and keeps yours.
-  // Kiro ignores a grant for a server it does not have.
-  const current = join(projectDir, rel);
-  if (regularFile(current)) {
+  const agentsDir = join(stagedRoot, harnessDir, "agents");
+  const replaced: string[] = [];
+  for (const file of pathPresent(agentsDir) ? readdirSync(agentsDir).filter((name) => name.endsWith(".json")).sort() : []) {
+    const rel = `${harnessDir}/agents/${file}`;
+    const agentPath = join(stagedRoot, rel);
+    if (!regularFile(agentPath)) continue;
+    const agentText = readFileSync(agentPath, "utf-8");
+    let agent: unknown;
     try {
-      const tools = (JSON.parse(withoutBom(readFileSync(current, "utf-8"))) as Record<string, unknown>).tools;
-      if (Array.isArray(tools)) {
-        for (const tool of tools) if (typeof tool === "string" && tool.startsWith("@")) names.add(tool.slice(1));
-      }
+      agent = JSON.parse(withoutBom(agentText));
     } catch {
-      // A copy config cannot read keeps no grant; the ownership check reports it.
+      continue;
     }
+    if (!isRecord(agent) || agent.includeMcpJson !== true || !Array.isArray(agent.tools)) continue;
+    // The agent file travels with the project (a team's clone), so a server it
+    // already names stays named: a teammate's run adds theirs and keeps yours.
+    // Kiro ignores a grant for a server it does not have.
+    const names = new Set(found);
+    const current = join(projectDir, rel);
+    if (regularFile(current)) {
+      try {
+        const tools = (JSON.parse(withoutBom(readFileSync(current, "utf-8"))) as Record<string, unknown>).tools;
+        if (Array.isArray(tools)) {
+          for (const tool of tools) if (typeof tool === "string" && tool.startsWith("@")) names.add(tool.slice(1));
+        }
+      } catch {
+        // A copy config cannot read keeps no grant; the ownership check reports it.
+      }
+    }
+    const tools = [
+      ...agent.tools.filter((tool) => typeof tool !== "string" || !tool.startsWith("@")),
+      ...[...names].map((name) => `@${name}`),
+    ];
+    if (canonical(tools) === canonical(agent.tools)) continue;
+    writeFileSync(agentPath, jsonFileText({ ...agent, tools }, agentText));
+    const release = join(sourceRoot, rel);
+    if (!regularFile(current) || !regularFile(release)) continue;
+    const releaseHash = sha256File(release);
+    if (sha256Matching(readFileSync(current), [releaseHash]) === releaseHash) replaced.push(rel);
   }
-  if (!regularFile(agentPath)) return false;
-  const agentText = readFileSync(agentPath, "utf-8");
-  let agent: unknown;
-  try {
-    agent = JSON.parse(withoutBom(agentText));
-  } catch {
-    return false;
-  }
-  if (!isRecord(agent) || !Array.isArray(agent.tools)) return false;
-  const tools = [
-    ...agent.tools.filter((tool) => typeof tool !== "string" || !tool.startsWith("@")),
-    ...[...names].map((name) => `@${name}`),
-  ];
-  if (canonical(tools) === canonical(agent.tools)) return false;
-  writeFileSync(agentPath, jsonFileText({ ...agent, tools }, agentText));
-  const release = join(sourceRoot, rel);
-  if (!regularFile(current) || !regularFile(release)) return false;
-  const releaseHash = sha256File(release);
-  return sha256Matching(readFileSync(current), [releaseHash]) === releaseHash;
+  return replaced;
 }
 
 function preserveUserProviderFields(
@@ -6751,8 +6813,8 @@ function prepareRefreshSource(
       regenerated.add(rel);
       if (entries) entries[rel] = owned;
     }
-    if (!projectProjection && grantKiroMcpServers(projectDir, sourceRoot, root, descriptor.harnessDir)) {
-      regenerated.add(`${descriptor.harnessDir}/agents/aidlc.json`);
+    if (!projectProjection) {
+      for (const rel of grantKiroMcpServers(projectDir, sourceRoot, root, descriptor.harnessDir)) regenerated.add(rel);
     }
   }
 
@@ -7051,6 +7113,18 @@ const KEPT_GITIGNORE_LINES_DETAIL = "kept your own ignore lines";
 const KEPT_TITLE_LINE_DETAIL = "kept your title line";
 const KEPT_GITIGNORE_LINES_NOTE =
   "Kept your .gitignore entries for node_modules, dist and editor files; AI-DLC now adds only its own lines.";
+// An agent file Kiro upgraded for its 3.0 engine (kiroUpgradedAgentFile) is
+// kept as Kiro left it, so it misses what this release changed in it; the
+// note names the way to take the release's files.
+const KIRO_UPGRADED_DETAIL = "upgraded by Kiro for its 3.0 engine";
+
+function kiroUpgradedNote(count: number, harnessDir: string, force: string): string {
+  const one = count === 1;
+  return `Kiro upgraded ${count} agent ${one ? "file" : "files"} in ${harnessDir}/agents for its 3.0 engine and ` +
+    `${one ? "it was kept as it is" : "they were kept as they are"}; to take this release's ` +
+    `${one ? "version" : "versions"} run \`${force}\`, and Kiro upgrades ${one ? "it" : "them"} again the next ` +
+    "time it starts on its 3.0 engine.";
+}
 
 function unchangedManagedBlockHash(
   projectDir: string,
@@ -7594,6 +7668,8 @@ type FirstRunDetection = {
   }>;
   aws: ReturnType<typeof detectAwsCredentials>;
   runtimeIssues: ReturnType<typeof runtimeIssues>;
+  // With no fix needed, the runtimes this shell finds that the hook PATH does not.
+  shellOnlyRuntimes: string[];
   bedrockReachable?: boolean;
 };
 
@@ -7863,17 +7939,21 @@ function detectFirstRun(
   }
   const first = candidates[0];
   const runtime = first
-    ? runtimeIssues(probeRuntime(
+    ? runtimeFixesNeeded(probeRuntime(
         first.root,
         first.descriptor.harnessDir,
         modelHarness(first.stamp.distribution),
         { includeHarnessCli: false },
       ))
     : [];
+  const shellOnly = first && runtime.length === 0
+    ? shellOnlyRuntimes(first.root, first.descriptor.harnessDir, modelHarness(first.stamp.distribution))
+    : [];
   return {
     harnesses,
     aws: injected?.aws ?? detectAwsCredentials(),
     runtimeIssues: injected?.runtimeIssues ?? runtime,
+    shellOnlyRuntimes: injected?.runtimeIssues !== undefined ? injected.shellOnlyRuntimes ?? [] : shellOnly,
     ...(injected?.bedrockReachable !== undefined
       ? { bedrockReachable: injected.bedrockReachable }
       : {}),
@@ -8096,6 +8176,12 @@ function firstRunNextCommands(distribution: string): [string, string] {
     return ["copilot                        open Copilot CLI in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
   return ["claude                         open Claude Code in this repo", '/aidlc "what you want built"  describe your first intent'];
+}
+
+// A runtime this shell finds that the hook PATH does not needs no fix when the
+// harness starts from a terminal; first-run setup and the status say so alike.
+function shellOnlyRuntimeDetail(names: readonly string[], product: string): string {
+  return `${names.join(" and ")} on this shell's PATH only: start ${product} from a terminal`;
 }
 
 function firstRunSettingsTargetLabel(target: SettingsTarget): string {
@@ -9091,7 +9177,9 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   writeMenuRow(
     "    Runtime    ",
     runtimeCount === 0
-      ? "ready"
+      ? detection.shellOnlyRuntimes.length > 0
+        ? shellOnlyRuntimeDetail(detection.shellOnlyRuntimes, candidate.descriptor.productName)
+        : "ready"
       : `${runtimeCount === 1 ? "one" : runtimeCount} PATH fix${
           runtimeCount === 1 ? "" : "es"
         } needed - shown at the end`,
@@ -9436,6 +9524,12 @@ function planManagedFiles(
           actions.push({ path: rel, action: "update", detail: KEPT_TITLE_LINE_DETAIL });
           continue;
         }
+      }
+      // The person ran Kiro's upgrade for its 3.0 engine: the agent file stays
+      // as Kiro left it, and the rest of the release lands around it.
+      if (!force && kiroUpgradedAgentFile(projectDir, rel)) {
+        actions.push({ path: rel, action: "preserve", detail: KIRO_UPGRADED_DETAIL });
+        continue;
       }
       if (
         targetExists &&
@@ -12482,6 +12576,37 @@ export async function main(
       recordOnly = false;
     }
     if (!selected) throw new Error("no configuration source was selected");
+    // A copied project's tool refreshing from a newer release's files hands the
+    // run to that release's own config, since an older tool may not read them:
+    // the person's command as typed, in the same project, with the download they
+    // agreed to. Sections may have asked their own questions already, so they
+    // stay here; a handed run never hands on.
+    const ranTool = projectedDispatcher();
+    const newerTool = join(selected.root, selected.descriptor.harnessDir, "tools", "aidlc.ts");
+    if (
+      copyChannel && ranTool && !section && (from || downloadCleanup) &&
+      process.env.AIDLC_CONFIG_HANDOFF === undefined &&
+      (requiredVersion === undefined || requiredVersion === selected.stamp.frameworkVersion) &&
+      VERSION_ID.test(selected.stamp.frameworkVersion) &&
+      compareVersions(AIDLC_VERSION, selected.stamp.frameworkVersion) < 0 &&
+      regularFile(newerTool)
+    ) {
+      if (options.mode === "human") {
+        process.stdout.write(
+          `  Note: ${selected.stamp.frameworkVersion}'s own config runs this refresh; the tool you ran is ${AIDLC_VERSION}.\n`,
+        );
+      }
+      const args = stripVerb([...input]);
+      if (downloadCleanup && !args.includes("--download")) args.push("--download");
+      const handed = spawnSync(process.execPath, [newerTool, "config", ...args], {
+        cwd: process.cwd(),
+        env: { ...process.env, AIDLC_CONFIG_HANDOFF: ranTool, AIDLC_PROJECT_DIR: projectDir },
+        stdio: "inherit",
+      });
+      if (handed.error) throw handed.error;
+      process.exitCode = handed.status ?? EXIT.failure;
+      return;
+    }
     if (selected.note) sourceNotes.push(selected.note);
     if (pendingConfirm && !askedConfirm) {
       const first = [
@@ -12893,6 +13018,14 @@ export async function main(
     prepared.notes.push(...hiddenRecords, ...switchWarnings);
     if (actions.some((action) => action.detail === KEPT_GITIGNORE_LINES_DETAIL)) {
       prepared.notes.push(KEPT_GITIGNORE_LINES_NOTE);
+    }
+    const kiroUpgraded = actions.filter((action) => action.detail === KIRO_UPGRADED_DETAIL).length;
+    if (kiroUpgraded > 0) {
+      prepared.notes.push(kiroUpgradedNote(
+        kiroUpgraded,
+        descriptor.harnessDir,
+        configCommandForHarness(descriptor.harnessDir, `--harness ${stamp.distribution} --force`),
+      ));
     }
     // Older releases shipped an effort map in the project's Kiro settings; a
     // refresh that removes it says where the session's effort lives now.

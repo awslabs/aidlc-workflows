@@ -103,7 +103,6 @@ describe("t334 (1) relaxed accepts source drift at the checkpoint record and re-
     expect(auditBlockField(rows[0].block, "Recorded")).toBe(planned);
     expect(auditBlockField(rows[0].block, "Current")).toBe(rebaselined);
 
-    // The approval then completes against the re-baselined source and generation begins.
     humanTurn(project, "relaxed-decision");
     const answered = answer(project, questions, "relaxed-decision");
     expect(answered.code, answered.stderr).toBe(0);

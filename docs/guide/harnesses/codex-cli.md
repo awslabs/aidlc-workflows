@@ -243,7 +243,9 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
 - **Swarm floor = developer subagents**: one `aidlc-developer-agent`
   subagent per emitted Construction Unit, side by side, each working in the
   isolated worktree for that Unit's Bolt, with the same deterministic
-  referee. They run inside your sandbox with your approval setting. `AIDLC_USE_SWARM=1` has no Workflow tool here
+  referee. They run inside your sandbox with your approval setting. The test
+  command you approved they run through AI-DLC's own `swarm check`, which the
+  shipped rules allow, so it runs without asking and outside the sandbox. `AIDLC_USE_SWARM=1` has no Workflow tool here
   and loud-degrades (`SWARM_DEGRADED` is audited).
 - **Only what you type in the main chat counts as your reply.** Codex sends a
   subagent's brief, and every follow-up the agent sends it, through the same

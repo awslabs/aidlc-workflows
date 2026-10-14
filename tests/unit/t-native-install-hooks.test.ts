@@ -161,7 +161,6 @@ beforeAll(() => {
     : found.stdout.trim() === launcher;
   expect(same, `${shell} runs ${found.stdout.trim()} for aidlc, not ${launcher}`).toBe(true);
 
-  // As a person does after installing: configure the project with `aidlc`.
   const configured = sh('aidlc config --project-dir "$NATIVE_HOOKS_PROJECT" --harness claude --mcp none --quiet', "", {
     NATIVE_HOOKS_PROJECT: project,
   });

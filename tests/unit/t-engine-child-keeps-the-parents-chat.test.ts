@@ -3,16 +3,16 @@
 // An engine tool that spawns another engine tool (state's unit route check runs
 // `orchestrate next`; orchestrate runs `state` for a report) must hand the child
 // the chat it already resolved, as a hook hands its own children the payload
-// session. Today the child gets a bare AIDLC_SESSION_OVERRIDE with no provenance
-// marker, so it re-resolves: a set override suppresses the host's own variable,
+// session. A child given a bare AIDLC_SESSION_OVERRIDE with no provenance
+// marker re-resolves: a set override suppresses the host's own variable,
 // the marker is missing, and when process ancestry names another chat (a second
 // chat started later in the same host process) the child refuses with "Session
 // override ... conflicts with the owning conversation". On Codex that is issue
 // #2266: `state unit start` for a routed, approved unit refuses while the same
 // command from a plain terminal succeeds.
 //
-// The fixture gives the parent a chat the host names (CODEX_THREAD_ID, the one
-// shell variable the resolver reads today) and a PID-map entry on this test
+// The fixture gives the parent a chat the host names (CODEX_THREAD_ID, the
+// shell variable the resolver reads on Codex) and a PID-map entry on this test
 // process naming another chat, which is what the child's ancestry walk finds.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";

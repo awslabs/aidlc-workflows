@@ -118,6 +118,23 @@ tool's recovery message. If source cannot be reconciled with the approved
 starting point, explain the refusal and preserve the remaining work while the
 human resolves it; never infer approval of a different source tree.
 
+### A Unit that voids its one recovery receipt
+
+If an autonomous Unit invalidates its one recovery receipt, halt before
+`finalize`: do not put the Unit in `--claimed`, do not merge it, and present a
+human Retry/Abort decision through the halt-and-ask seam. On Retry, return to
+the main workspace, abort and park/discard the old Bolt, then rerun the current
+`aidlc-swarm.ts prepare` step for that Unit with the original batch/base/repo
+arguments. The fresh worktree and `BOLT_STARTED` boundary reset review
+accounting without claiming convergence. Never synthesize `GATE_REJECTED`.
+The discard parks tracked files and non-ignored untracked files (or the
+remaining branch tip when the checkout is gone) plus reviewed source refs
+before removing the live checkout and branch. When present, the returned
+`restore_operation` recovers the parked work in a separate checkout without
+reinstating the old review authority. If only review evidence remained, there
+are no saved working files to restore, so neither `restore_operation` nor
+`restore_hint` is returned.
+
 ### Retry after a native worker discard
 
 When the reviewer-exhaustion procedure calls for Retry, use the native

@@ -159,16 +159,13 @@ describe("t297 persistence is a UUID; a slug is only ever INPUT", () => {
     const resolved = resolveIntentFlag(p, SPACE, "auth")!;
     onboard(p, SPACE, undefined, NOW, resolved.uuid);
 
-    // Rename the slug in the registry, leaving the uuid alone.
     const registry = readIntentRegistry(p, SPACE);
     registry[0].slug = "authentication";
     writeFileSync(intentsRegistryPath(p, SPACE), `${JSON.stringify(registry, null, 2)}\n`);
 
-    // The association still resolves to the same intent by uuid.
     const row = readIndex(p, SPACE).documents[0];
     expect(row.related_intent_ids).toEqual([resolved.uuid]);
     expect(readIntentRegistry(p, SPACE)[0].uuid).toBe(resolved.uuid);
-    // And the NEW slug now resolves to that same uuid.
     expect(resolveIntentFlag(p, SPACE, "authentication")!.uuid).toBe(resolved.uuid);
   });
 
@@ -181,13 +178,11 @@ describe("t297 persistence is a UUID; a slug is only ever INPUT", () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
 // The finding this closes: the unchanged-document shortcut in `onboard`
 // returned `already` BEFORE `intentUuid` was applied, so re-onboarding an
 // already-indexed, UNCHANGED document with `--intent` succeeded (status
 // `already`, exit 0) while leaving `related_intent_ids` untouched -- silently
 // discarding the scope the caller asked for.
-// ─────────────────────────────────────────────────────────────────────────────
 describe("t297 an unchanged re-onboard with --intent applies the scope, not just reports `already`", () => {
   test("onboard WITHOUT --intent, then again WITH --intent on the unchanged file: the scope lands", () => {
     const p = projectWithIntents("auth");
@@ -306,7 +301,6 @@ describe("t297 associate/dissociate are idempotent and SAY which happened", () =
     const second = setIntentAssociation(p, SPACE, indexed[0].id, intent.uuid, "associate");
 
     expect(second.status).toBe("already");
-    // Byte-identical ledger: the no-op wrote nothing at all.
     expect(auditBody(p)).toBe(afterFirst);
     expect(readIndex(p, SPACE).documents[0].related_intent_ids).toEqual([intent.uuid]);
   });
@@ -352,7 +346,6 @@ describe("t297 associate/dissociate are idempotent and SAY which happened", () =
     setIntentAssociation(p, SPACE, indexed[0].id, b.uuid, "associate");
     expect(readIndex(p, SPACE).documents[0].related_intent_ids).toEqual([a.uuid, b.uuid]);
 
-    // Removing one leaves the other.
     setIntentAssociation(p, SPACE, indexed[0].id, a.uuid, "dissociate");
     expect(readIndex(p, SPACE).documents[0].related_intent_ids).toEqual([b.uuid]);
   });
@@ -402,7 +395,6 @@ describe("t297 the event lands in the SPACE shard, with the intent as a FIELD", 
     expect(body).toContain("**Event**: DOCUMENT_UPDATED");
     expect(body).toContain(`**Intent**: ${intent.uuid}`);
     expect(body).toContain("**Change**: associate");
-    // The shard is the space one, not the intent's.
     expect(spaceAuditShardPath(p, SPACE)).toContain(join("intents", "audit"));
   });
 
@@ -423,9 +415,9 @@ describe("t297 the event lands in the SPACE shard, with the intent as a FIELD", 
 
 describe("t297 I09: a space-wide document survives intent creation", () => {
   test("indexing space-wide, then creating an intent, leaves the row findable", () => {
-    // The row this story inherited: the failure mode is a row that becomes
-    // unreachable once the space gains its first intent, because something
-    // re-targeted by the active-intent cursor. Count totals must not move.
+    // The failure mode is a row that becomes unreachable once the space gains its
+    // first intent, because something re-targeted by the active-intent cursor.
+    // Count totals must not move.
     proj = mkdtempSync(join(tmpdir(), "t297-"));
     const p = proj;
     mkdirSync(documentsDir(p, SPACE), { recursive: true });
@@ -446,12 +438,10 @@ describe("t297 I09: a space-wide document survives intent creation", () => {
     );
     expect(r.status, r.stderr).toBe(0);
 
-    // The row is still there, still space-wide, still the same id.
     const rows = readIndex(p, SPACE).documents;
     expect(rows.length, "creating an intent must not lose a row").toBe(1);
     expect(rows[0].id).toBe(id);
     expect("related_intent_ids" in rows[0]).toBe(false);
-    // And it is still findable through the read path.
     expect(listDocuments(p, SPACE).map((d) => d.id)).toEqual([id]);
 
     // Re-onboarding is idempotent across the boundary: still ONE row, reported
@@ -462,7 +452,6 @@ describe("t297 I09: a space-wide document survives intent creation", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
 // An ORPHAN intent record: a dir under `intents/` holding a real
 // `aidlc-state.md` but NO row in `intents.json` -- a hand-created record, or
 // one whose registry row was lost/never written. `listIntents()`
@@ -475,9 +464,7 @@ describe("t297 I09: a space-wide document survives intent creation", () => {
 // `intentUuid !== undefined` back in `onboard` is TRUE for `""`, so `onboard`
 // staged and RENAMED a completed document tree into place with
 // `related_intent_ids: [""]` before the schema's write-side UUID check ever
-// ran. Reproduced on a FRESH space, zero hand-editing of anything this tool
-// itself would not create in the ordinary course of a hand-authored orphan.
-// ─────────────────────────────────────────────────────────────────────────────
+// ran.
 describe("t297 an ORPHAN intent record (no registry row) refuses to scope a document", () => {
   /** A project with one real, hand-authored orphan record: a dir under
    *  intents/ holding aidlc-state.md, with NO row in intents.json, made the
@@ -518,14 +505,14 @@ describe("t297 an ORPHAN intent record (no registry row) refuses to scope a docu
 
     // NOTHING landed: no index.json, no documentkb/<id>/ dir at all -- the
     // refusal fires before staging, not after a rename already committed a
-    // bad row (which is what the shipped tool did before this fix).
+    // bad row.
     expect(existsSync(indexPath(p, SPACE))).toBe(false);
 
     // The space is immediately usable: a plain onboard (no --intent) succeeds,
     // and so does a subsequent sync. Self-heal is a PROPERTY, not a one-off --
-    // asserted here for the specific failure this finding measured; the
-    // general property (any injected failure -> a later plain sync succeeds)
-    // is pinned separately in t278's self-heal suite.
+    // asserted here for this specific failure; the general property (any injected
+    // failure -> a later plain sync succeeds) is pinned separately in t287's
+    // self-heal suite.
     const plain = onboard(p, SPACE, undefined, NOW);
     expect(plain.refused).toBeUndefined();
     expect(plain.indexed.length).toBe(1);
@@ -533,8 +520,8 @@ describe("t297 an ORPHAN intent record (no registry row) refuses to scope a docu
   });
 
   test("resolveIntentFlag by SLUG through an orphan also refuses (both resolution paths)", () => {
-    // The bare-flag path is what the finding measured, but the named-slug path
-    // shares the same `match.uuid` return and must not have a second hole.
+    // The bare-flag path and the named-slug path share the same `match.uuid`
+    // return and must not have a second hole.
     const p = projectWithOrphanIntent();
     const err = (() => {
       try {

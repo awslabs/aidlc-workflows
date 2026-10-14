@@ -46,7 +46,7 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 
 const created: string[] = [];
@@ -71,7 +71,6 @@ function seedMarker(proj: string, ageSec?: number): void {
   }
 }
 
-/** Write one background-subagent ledger entry, optionally backdating it. */
 function seedSubagentLedger(proj: string, ageSec?: number): string {
   const path = subagentInflightMarkerPath(proj);
   expect(markSubagentInflight(proj, "doctor-session")).toBe(true);
@@ -114,7 +113,7 @@ describe("t204 doctor transient-marker probes", () => {
 
   test("a FRESH marker renders as an advisory PASS row (normal at a live gate)", () => {
     const proj = freshProject();
-    seedMarker(proj); // written now
+    seedMarker(proj);
     const { out } = runDoctor(proj);
     expect(out).toContain("Compose marker present");
     expect(out).toContain("aidlc/.aidlc-compose-pending");
@@ -131,7 +130,6 @@ describe("t204 doctor transient-marker probes", () => {
     seedMarker(proj, COMPOSE_MARKER_TTL_MS / 1000 + 60 * 60);
     const { out, status } = runDoctor(proj);
     expect(out).toMatch(/fail\s+Compose marker present \(.*stale\)/);
-    // The remediation names the delete path (or resolving the gate).
     expect(out).toContain("rm aidlc/.aidlc-compose-pending");
     // A fail row implies the non-zero exit CI keys off.
     expect(status).toBe(1);

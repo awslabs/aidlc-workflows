@@ -95,15 +95,15 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOLS_DIR = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const ORCH = join(TOOLS_DIR, "aidlc-orchestrate.ts");
 const JUMP = join(TOOLS_DIR, "aidlc-jump.ts");
 const FIXTURES_DIR = join(REPO_ROOT, "tests", "fixtures");
 
-// reset_aidlc_env (t117:29): clear AWS_AIDLC_DEFAULT_SCOPE so the env-scope
-// precedence rung is empty by default; the env-scope case overrides per-spawn.
+// Clear AWS_AIDLC_DEFAULT_SCOPE so the env-scope precedence rung is empty by
+// default; the env-scope case overrides per-spawn.
 resetAidlcEnv();
 
 const tempDirs: string[] = [];
@@ -112,7 +112,6 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-/** Fresh temp project, optionally seeded with a state fixture. */
 function proj(stateFixture?: string): string {
   const p = createTestProject();
   tempDirs.push(p);
@@ -125,7 +124,7 @@ function proj(stateFixture?: string): string {
 
 /**
  * Fresh temp project with the seeded record REMOVED — a genuinely empty
- * workspace (zero intents). P9: createTestProject seeds one default record, so a
+ * workspace (zero intents). createTestProject seeds one default record, so a
  * "clean workspace → creation" / "no workflow → confirm scope" case must strip it
  * (otherwise the engine asks the user to SELECT the existing intent instead of
  * creating / confirming). Mirrors t160's beforeEach removeWorkspaceRecord.
@@ -139,12 +138,13 @@ function cleanProj(): string {
 
 interface CliResult {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string; // combined stdout+stderr
   stdout: string;
 }
 
 /**
- * Spawn `bun <tool> <args...> --project-dir <p>`. Mirrors `bun "$TOOL" ... 2>&1`.
+ * Spawn `bun <tool> <args...> --project-dir <p>`; on a `next` line the
+ * `--project-dir` rides right after `next`, ahead of the rest of the args.
  * `env` overrides ride on top of the cleaned process env (AWS_AIDLC_DEFAULT_SCOPE
  * already deleted by resetAidlcEnv) so the env-scope case can set just that var.
  */
@@ -178,12 +178,10 @@ function run(
   };
 }
 
-/** `bun aidlc-orchestrate.ts next <args...> --project-dir <p>`. */
 function next(args: string[], p: string, env: Record<string, string> = {}): CliResult {
   return run(ORCH, ["next", ...args], p, env);
 }
 
-/** `bun aidlc-jump.ts resolve <args...> --project-dir <p>`. */
 function jumpResolve(
   args: string[],
   p: string,
@@ -192,7 +190,6 @@ function jumpResolve(
   return run(JUMP, ["resolve", ...args], p, env);
 }
 
-/** Parse the single JSON directive the engine emits to stdout. */
 // biome-ignore lint/suspicious/noExplicitAny: directive shape varies by kind
 function directive(out: string): any {
   return JSON.parse(out.trim());
@@ -205,22 +202,19 @@ function directive(out: string): any {
 
 describe("t117 jump-direction delegation (migrated from t117-orchestrate-branches.sh, plan 24)", () => {
   // A WITH-STATE jump is a MUTATION (mark intervening [S], emit STAGE_JUMPED,
-  // pivot Current Stage) and `next` is read-only, so — like scope-change /
-  // config-change — the engine emits a `print` naming `aidlc-jump.ts execute`
-  // carrying the tool-resolved target + direction, NOT a run-stage. (Re-anchored
-  // at the v0.6.0 engine cutover: pre-cutover this emitted run-stage directly,
-  // producing ZERO state change — the regression t24/t25/t26/t56/t57 caught.)
-  // --- Test 1: forward jump → print naming execute; direction matches resolve ---
+  // pivot Current Stage) and ordinary `next` routing is read-only, so, like
+  // scope-change / config-change, the engine emits a `print` naming
+  // `aidlc-jump.ts execute` carrying the tool-resolved target + direction, NOT a
+  // run-stage. (A run-stage emitted directly would produce ZERO state change.)
   test("1: forward jump → print naming execute code-generation; resolve direction forward", () => {
     const p = proj("state-mid-ideation.md");
     const r = next(["--stage", "code-generation"], p);
     const dir = jumpResolve(["--stage", "code-generation", "--scope", "feature"], p);
-    // engine print naming execute for the resolved target (forward)
     expect(r.out).toContain("execute --target code-generation --direction forward");
     // resolve direction is forward (code-generation is later than feasibility)
     expect(dir.out).toContain('"direction":"forward"');
-    // S1/S2: the engine's directive is a valid print whose message names the
-    // execute delegate for resolve's target_slug — the delegation contract.
+    // The engine's directive is a valid print whose message names the execute
+    // delegate for resolve's target_slug - the delegation contract.
     const d = directive(r.stdout);
     expect(d.kind).toBe("print");
     expect(d.message).toContain("execute --target code-generation --direction forward");
@@ -229,7 +223,6 @@ describe("t117 jump-direction delegation (migrated from t117-orchestrate-branche
     expect(resolved.direction).toBe("forward");
   });
 
-  // --- Test 2: backward jump → print naming execute; direction matches resolve ---
   test("2: backward jump → print naming execute feasibility; resolve direction backward", () => {
     const p = proj("state-jumped.md");
     const r = next(["--stage", "feasibility"], p);
@@ -244,7 +237,6 @@ describe("t117 jump-direction delegation (migrated from t117-orchestrate-branche
     expect(resolved.direction).toBe("backward");
   });
 
-  // --- Test 3: redo jump → print naming execute; direction matches resolve ---
   test("3: redo jump → print naming execute code-generation; resolve direction redo", () => {
     const p = proj("state-jumped.md");
     const r = next(["--stage", "code-generation"], p);
@@ -259,7 +251,6 @@ describe("t117 jump-direction delegation (migrated from t117-orchestrate-branche
     expect(resolved.direction).toBe("redo");
   });
 
-  // --- Test 4: jump BEHIND the cursor to a stage the plan skips ---
   // state-mid-inception is bugfix scope at requirements-analysis; intent-capture
   // is SKIP and behind it. Going back would run every stage after it again, so
   // the engine names the isolated run instead of "change scope". resolve marks
@@ -268,7 +259,6 @@ describe("t117 jump-direction delegation (migrated from t117-orchestrate-branche
   test("4: jump behind the cursor to a skipped stage -> a question offering the isolated run", () => {
     const p = proj("state-mid-inception.md");
     const r = next(["--stage", "intent-capture"], p);
-    // S1: the directive is a well-formed step that ends the turn on the question.
     const d = directive(r.stdout);
     expect(d.kind).toBe("print");
     expect(d.message).toContain("comes before the current stage, Requirements Analysis");
@@ -286,11 +276,10 @@ describe("t117 jump-direction delegation (migrated from t117-orchestrate-branche
 
 // ============================================================
 // Explicit resume — existing state continues through normal routing without
-// surfacing the session re-entry menu. (.sh Tests 5-6)
+// surfacing the session re-entry menu.
 // ============================================================
 
 describe("t117 explicit resume routing", () => {
-  // --- Test 5: resume with existing state → current stage ---
   test("5: resume with existing state (jumped) → code-generation continuation", () => {
     const p = proj("state-jumped.md");
     const r = runOrchestrateNext(ORCH, p, ["--resume"]);
@@ -305,7 +294,6 @@ describe("t117 explicit resume routing", () => {
     expect(inlineRulePaths(r.directive).length).toBeGreaterThan(0);
   });
 
-  // --- Test 6: resume over a mid-phase fixture → current stage ---
   test("6: resume over a mid-phase workflow → feasibility continuation", () => {
     const p = proj("state-mid-ideation.md");
     const r = runOrchestrateNext(ORCH, p, ["--resume"]);
@@ -319,23 +307,19 @@ describe("t117 explicit resume routing", () => {
   });
 });
 
-// The deduplicated rule paths a run-stage delivers inline through rules_content.
 function inlineRulePaths(directive: Record<string, unknown> | null): string[] {
   const entries = (directive?.rules_content ?? []) as Array<{ path: string }>;
   return [...new Set(entries.map((entry) => entry.path))];
 }
 
 // ============================================================
-// Init branch — guard rejection (state exists) and clean-workspace print.
-// (.sh Tests 7-8)
+// Creation branch - existing-work routing and clean-workspace print.
 // ============================================================
 
 describe("t117 creation branch (P4: --init retired, engine names intent-create)", () => {
-  // --- Test 7: a named scope over EXISTING state is NOT a creation ---
-  // P4 removed the `--init` flag. A scope named over an existing workflow is a
-  // resume/happy-path or a scope-change, never a creation - the engine must NOT
-  // emit a creation print (the old "Use --force" re-init guard no longer exists
-  // because there is no re-init move).
+  // A scope named over an existing workflow is a resume/happy-path or a
+  // scope-change, never a creation - the engine must NOT emit a creation print,
+  // and with no re-init move there is no "Use --force" re-init guard either.
   test("7: named scope over existing state → not a creation (no intent-create print)", () => {
     const p = proj("state-mid-ideation.md"); // feature scope state
     // Same scope as state → happy path (run the current stage), no creation.
@@ -344,11 +328,10 @@ describe("t117 creation branch (P4: --init retired, engine names intent-create)"
     expect(r.out).not.toContain("Use --force to reinitialize");
   });
 
-  // --- Test 8: a named scope on a clean workspace → creation print (no mutation) ---
-  // The engine NAMES the `intent-create` move (read-only) and the conductor runs
-  // it; `next` itself must create NO state (mutation stays conductor-side).
+  // With a description, the engine NAMES the `intent-create` move and the
+  // conductor runs it; `next` itself must create NO state for this request.
   test("8: named scope on a clean workspace → print naming intent-create AND no state created", () => {
-    const p = cleanProj(); // genuinely empty workspace (seeded record stripped)
+    const p = cleanProj();
     // Named alone, the scope is the person's pick with nothing described yet:
     // the step asks what the work is for and names no creation (#2355).
     const alone = directive(next(["--scope", "poc"], p).stdout);
@@ -359,7 +342,6 @@ describe("t117 creation branch (P4: --init retired, engine names intent-create)"
     expect(r.out).toContain('"kind":"print"');
     const d = directive(r.stdout);
     expect(d.kind).toBe("print");
-    // The named move is the deterministic intent-create handler.
     expect(d.message).toContain("intent create");
     // File effect: `next` must NOT create state (mutation stays conductor-side).
     expect(existsSync(seededStateFile(p))).toBe(false);
@@ -368,11 +350,9 @@ describe("t117 creation branch (P4: --init retired, engine names intent-create)"
 
 // ============================================================
 // Flag-validation + env-scope + scope/config change + phase jump + freeform.
-// (.sh Tests 9-14)
 // ============================================================
 
 describe("t117 flag-validation, env-scope, scope/config change, phase jump, freeform", () => {
-  // --- Test 9: mutually-exclusive --stage + --phase → error (verbatim SKILL.md) ---
   test("9: --stage + --phase together → error (verbatim)", () => {
     const p = proj(); // no state needed — the guard fires before state inspection
     const r = next(["--stage", "feasibility", "--phase", "ideation"], p);
@@ -380,11 +360,10 @@ describe("t117 flag-validation, env-scope, scope/config change, phase jump, free
     expect(directive(r.stdout).kind).toBe("error");
   });
 
-  // --- Test 10: env-scope-invalid → error carrying the verbatim substring ---
   // AWS_AIDLC_DEFAULT_SCOPE=bogus, no state, no flag → scope source is env; the
   // engine shells out to resolve-env-scope and relays its verbatim message.
   test("10: env-scope-invalid → error carrying verbatim Invalid AWS_AIDLC_DEFAULT_SCOPE", () => {
-    const p = proj(); // no state seeded
+    const p = proj();
     const r = next([], p, { AWS_AIDLC_DEFAULT_SCOPE: "bogus" });
     expect(r.out).toContain('"kind":"error"');
     expect(r.out).toContain("Invalid AWS_AIDLC_DEFAULT_SCOPE");
@@ -393,7 +372,6 @@ describe("t117 flag-validation, env-scope, scope/config change, phase jump, free
     expect(d.message).toContain("Invalid AWS_AIDLC_DEFAULT_SCOPE");
   });
 
-  // --- Test 11: scope-change against existing state → print (names the move) ---
   // state-mid-ideation is feature scope; --scope mvp is a scope change → print
   // names the scope-change command rather than performing it.
   test("11: scope-change against existing state → print naming scope change --scope mvp", () => {
@@ -403,7 +381,6 @@ describe("t117 flag-validation, env-scope, scope/config change, phase jump, free
     expect(directive(r.stdout).kind).toBe("print");
   });
 
-  // --- Test 12: config-change (depth) against existing state → print ---
   test("12: config-change (depth) against existing state → print naming config set depth", () => {
     const p = proj("state-mid-ideation.md");
     const r = next(["--depth", "comprehensive"], p);
@@ -411,12 +388,11 @@ describe("t117 flag-validation, env-scope, scope/config change, phase jump, free
     expect(directive(r.stdout).kind).toBe("print");
   });
 
-  // --- Test 13: phase jump → print naming execute for the first in-scope stage ---
   // state-mid-ideation is feature scope, Current Stage=feasibility; --phase
   // construction resolves (via resolve) to the first EXECUTE stage of
   // construction (functional-design), forward of feasibility. A WITH-STATE phase
   // jump is a MUTATION, so the engine emits a `print` naming execute, not a
-  // run-stage (the v0.6.0 cutover — see the jump-direction delegation block).
+  // run-stage (see the jump-direction delegation block).
   test("13: phase jump (construction, feature) → print naming execute functional-design", () => {
     const p = proj("state-mid-ideation.md");
     const r = next(["--phase", "construction"], p);
@@ -426,9 +402,8 @@ describe("t117 flag-validation, env-scope, scope/config change, phase jump, free
     expect(d.message).toContain("execute --target functional-design --direction forward");
   });
 
-  // --- Test 14: freeform intent with no workflow → ask (scope confirmation) ---
   test("14: freeform intent with no workflow → ask directive (scope confirmation)", () => {
-    const p = cleanProj(); // genuinely no workflow (seeded record stripped)
+    const p = cleanProj();
     // The words first reach the agent as the plan proposal step; its plan
     // (the test's stand-in reading) returns the plan question.
     const first = next(["add a login form to the app"], p);
@@ -440,12 +415,11 @@ describe("t117 flag-validation, env-scope, scope/config change, phase jump, free
 });
 
 // ============================================================
-// Init-stage jump guard (SKILL.md step 5) — rejected with/without state, and
-// for --phase initialization. (.sh Tests 15-17)
+// Init-stage jump guard - rejected with/without state, and for --phase
+// initialization.
 // ============================================================
 
 describe("t117 init-stage jump guard", () => {
-  // --- Test 15: init-stage jump guard — --stage <init>, state present ---
   // With work under way the refusal is a plain question the agent acts on.
   test("15: jump to init stage (state present) → refused with the rescan offered, not run-stage", () => {
     const p = proj("state-jumped.md");
@@ -455,7 +429,6 @@ describe("t117 init-stage jump guard", () => {
     expect(directive(r.stdout).kind).toBe("print");
   });
 
-  // --- Test 16: init-stage jump guard — --phase initialization ---
   test("16: --phase initialization → error (init guard)", () => {
     const p = proj("state-jumped.md");
     const r = next(["--phase", "initialization"], p);
@@ -463,7 +436,6 @@ describe("t117 init-stage jump guard", () => {
     expect(directive(r.stdout).kind).toBe("print");
   });
 
-  // --- Test 16b: with work under way, the refusal names the rescan, and it runs ---
   test("16b: an init-stage jump on running work names the rescan, which the engine accepts", () => {
     const p = proj("state-jumped.md");
     for (const args of [["--stage", "workspace-detection"], ["--phase", "initialization"], ["--stage", "workspace-detection", "--single"]]) {
@@ -471,15 +443,13 @@ describe("t117 init-stage jump guard", () => {
       expect(directive(r.stdout).kind, args.join(" ")).toBe("print");
       expect(r.out, args.join(" ")).toContain("--project-type brownfield");
     }
-    // The named step is accepted: it routes to the rescan, not an error.
     const rescan = next(["--project-type", "brownfield"], p);
     expect(directive(rescan.stdout).kind).not.toBe("error");
     expect(rescan.out).toContain("workspace reclassify");
   });
 
-  // --- Test 17: init-stage jump guard holds on the no-state path too ---
   test("17: jump to init stage (no state) → error (guard holds)", () => {
-    const p = proj(); // no state seeded
+    const p = proj();
     const r = next(["--stage", "workspace-scaffold"], p);
     expect(r.out).toContain("Cannot jump to initialization stages");
     expect(directive(r.stdout).kind).toBe("error");

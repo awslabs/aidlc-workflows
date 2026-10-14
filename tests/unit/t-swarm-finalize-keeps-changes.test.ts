@@ -30,7 +30,6 @@ function setPolicy(pd: string, line: string): void {
 
 type Edit = (pd: string) => void;
 
-// The sweep's repro: the Unit is checked and reviewed, then changed, then finalized.
 function reviewedThenChanged(policy: string, edit: Edit) {
   const pd = fixture(["alpha"]);
   if (policy !== "strict") setPolicy(pd, policy);

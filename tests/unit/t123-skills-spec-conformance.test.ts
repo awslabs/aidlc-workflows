@@ -29,21 +29,6 @@
 // block-scalar-aware non-empty contract is what this twin preserves verbatim
 // from the .sh's inline `bun -e` parser (t123-skills-spec-conformance.sh:94-124).
 //
-// Subject under test (each shipped skill set + each SKILL.md's frontmatter):
-//   dist/<harness>/<skill-root>/<skill>/SKILL.md, for the DERIVED expected set:
-//     - 4 base skills (orchestrator + 3 read-only session skills)
-//     - 3 Cursor-only utility shortcuts on the Cursor harness
-//     - the generator's default-batch scope-runners (imported here, not
-//       hardcoded)
-//     - one aidlc-<slug> per RUNNABLE compiled stage (every stage whose
-//       phase !== "initialization", read from tools/data/stage-graph.json
-//       exactly as the .sh's `bun -e` did — the array of stage records)
-//     - the single /aidlc-init phase wrapper
-//   Each conformant SKILL.md must: carry frontmatter `name:` equal to the dir
-//   name; carry a `description:` that is BOTH present AND non-empty (inline or
-//   folded `>`/`|` block-scalar form); keep its body within the Agent-Skills
-//   500-line ceiling.
-//
 // DERIVED, never hardcoded (the .sh's central design promise): the expected set
 // is computed from the same two sources the .sh used — stage-graph.json
 // (filtered to non-initialization phases) + defaultScopeBatch() - so a stage
@@ -51,29 +36,6 @@
 // ship a non-conformant runner. The dir-count guard (test 1) then proves the on-disk
 // shipped set EQUALS that derived set.
 //
-// Old TAP -> new test parity (1:1, no guarantee dropped; several STRONGER):
-//   .sh test 1 (dir-count: discovered shipped dirs == the common
-//       generated/base set plus any harness-native skills, sorted assert_eq)
-//         -> "shipped skill set == derived expected set (sorted, exact)"
-//            STRONGER: element-by-element toEqual on the sorted arrays, not just
-//            the joined string the .sh compared — proves count AND membership.
-//   .sh per-skill assertion 1 (assert_eq got_name == skill; the .sh's
-//       not_ok-on-missing-file branch is folded in: a missing SKILL.md yields
-//       an empty parsed name, so name!==dir fails loudly)
-//         -> per-skill "frontmatter name == dir" (same `^name:` extraction,
-//            quote-stripped, BLOCK-SCOPED to the ---\n…\n--- fence)
-//   .sh per-skill assertion 2 (descPresent==1 AND descNonEmpty==1, the
-//       block-scalar-aware parser)
-//         -> per-skill "description present AND non-empty (block-scalar aware)"
-//            — the SAME parser logic ported verbatim; the failure event IS
-//            reachable (an empty `description: >` with no continuation, or a
-//            blank inline value, fails this row, mirroring the .sh's not_ok).
-//   .sh per-skill assertion 3 (wc -l <= 500, ok/not_ok)
-//         -> per-skill "SKILL.md body <= 500 lines" (wc -l counts newlines —
-//            mirrored as the count of "\n", not the split-array length).
-//
-// The original assertion set is preserved independently for every discovered
-// distribution, including Codex's emitted .agents/skills layout.
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -97,13 +59,9 @@ const BASE_SKILLS = [
 ];
 
 // --- The default-batch generated scope-runner dirs. IMPORTED from the generator
-// by calling defaultScopeBatch(), not hardcoded - the .sh hardcoded the same
-// four in SCOPE_RUNNER_SKILLS; tracking the function is the stronger contract.
+// by calling defaultScopeBatch(), not hardcoded.
 const SCOPE_RUNNER_SKILLS = defaultScopeBatch().map((s) => `aidlc-${s}`);
 
-// --- One aidlc-<slug> per RUNNABLE compiled stage, derived from the graph the
-// same way the .sh's `bun -e` did: read tools/data/stage-graph.json (the array
-// of stage records), keep every stage whose phase !== "initialization".
 interface StageRecord {
   slug: string;
   phase: string;
@@ -113,7 +71,6 @@ const RUNNER_SKILLS = graph
   .filter((s) => s.phase !== "initialization")
   .map((s) => `aidlc-${s.slug}`);
 
-// --- The init-phase runner: a single /aidlc-init wrapper over `/aidlc --init`.
 const INIT_RUNNER_SKILL = "aidlc-init";
 
 // --- The composer shortcut: a single /aidlc-compose wrapper over
@@ -137,11 +94,6 @@ function expectedSkills(harnessName: string): string[] {
   ].sort();
 }
 
-/**
- * Discover the shipped skill set: every directory under the skills dir that
- * contains a SKILL.md (mirrors the .sh's for-loop over the skills dir that
- * keeps directories carrying a SKILL.md file).
- */
 function discoveredSkills(skillsDir: string): string[] {
   return readdirSync(skillsDir)
     .filter((name) => {
@@ -158,18 +110,15 @@ interface FrontmatterParse {
 }
 
 /**
- * Parse the leading YAML frontmatter block and return the spec fields the .sh's
- * inline `bun -e` parser emitted (t123-skills-spec-conformance.sh:94-124),
- * PORTED VERBATIM so the non-empty contract is byte-identical:
+ * Parse the leading YAML frontmatter block and return the spec fields:
  *   - name: the `^name:` scalar, trimmed + quote-stripped.
  *   - descPresent: a `^description:` line exists.
  *   - descNonEmpty: the description value carries visible text — for an inline
  *     value, the trimmed quote-stripped value is non-empty; for a folded/literal
  *     block scalar (`>` `|` `>-` `|-`), at least one indented continuation line
  *     before the next top-level key has visible text.
- * A SKILL.md with no frontmatter fence yields ("", false, false) — same as the
- * .sh's `if (!m) { ... ["", "0", "0"] }` early-out, so a malformed file fails
- * both the name and description rows loudly.
+ * A SKILL.md with no frontmatter fence yields ("", false, false), so a malformed
+ * file fails both the name and description rows loudly.
  */
 function parseFrontmatter(text: string): FrontmatterParse {
   const m = text.match(/^---\n([\s\S]*?)\n---/);
@@ -213,10 +162,8 @@ describe("t123 (unit) skills-spec conformance — every shipped skill set", () =
   }
 });
 
-// --- Per-skill spec conformance (3 expect()s each). One describe block per
-// skill keeps the failure report skill-scoped, mirroring the .sh's per-skill
-// TAP lines. The set iterated is the DERIVED expected set (sorted), exactly the
-// .sh's `for skill in $(echo "$EXPECTED_SKILLS" | tr ' ' '\n' | sort)`.
+// --- Per-skill spec conformance. One test per assertion keeps the failure
+// report skill-scoped. The set iterated is the DERIVED expected set (sorted).
 describe("t123 (unit) skills-spec conformance — per-skill SKILL.md invariants", () => {
   for (const harness of HARNESS_MATRIX) {
     for (const skill of expectedSkills(harness.name)) {

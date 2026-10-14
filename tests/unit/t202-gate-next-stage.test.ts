@@ -18,10 +18,10 @@
 //     sets directive.next_stage = next ? next.name : null.
 //   - aidlc-directive.ts, the optional-nullable `next_stage` field on
 //     RunStageDirective + its checkOptionalNullableString validation.
-// The engine has zero exports, so the behaviour is observable only on the JSON
-// directive the spawned engine emits to stdout - mechanism = cli: SPAWN
-// `bun aidlc-orchestrate.ts next` and assert on the parsed directive, the SAME
-// process boundary t116 (emit/parse) and t186 (per-unit iteration) drive.
+// The routing behaviour is observed on the JSON directive the spawned engine
+// emits to stdout - mechanism = cli: SPAWN `bun aidlc-orchestrate.ts next` and
+// assert on the parsed directive, the SAME process boundary t116 (emit/parse)
+// and t186 (per-unit iteration) drive.
 //
 // FIXTURE DISCIPLINE (mirrors t186's seedProject): each case uses a FRESH temp
 // project (createTestProject) with a CLEAN single-row-per-slug state covering
@@ -31,7 +31,7 @@
 // marked in-flight ([-]). The `Skeleton Stance` field is recorded so
 // functional-design (the feature-scope skeleton-gate stage) resolves its gate to
 // a boolean and iterates rather than emitting the unresolved sentinel, isolating
-// the next_stage behaviour. For feature scope every stage is EXECUTE, so the next
+// the next_stage behaviour. In this fixture every stage is EXECUTE, so the next
 // in-scope stage after functional-design is nfr-requirements ("NFR Requirements")
 // - exactly the label the issue expects. All temp dirs are cleaned in afterEach.
 
@@ -178,7 +178,6 @@ ${rows}
 `;
 }
 
-/** Seed a fresh project pivoted to `current`. Returns the proj dir. */
 function seedProject(
   current: string,
   opts: StateOptions = {},
@@ -190,7 +189,6 @@ function seedProject(
   return proj;
 }
 
-/** Run `aidlc-orchestrate.ts next` and parse the emitted directive. */
 function runNext(proj: string): Directive {
   const env = { ...process.env };
   delete env.AWS_AIDLC_DEFAULT_SCOPE;
@@ -316,7 +314,6 @@ describe("t202 gate next-stage name (issue: approval option always said Code Gen
     expect(d.kind).toBe("error");
     expect(d.stage).toBeUndefined();
     expect(d.message).toContain("Refusing to emit run-stage");
-    // It names the one step that tells the person the fix.
     expect(d.message).toContain("doctor` for the exact fix");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

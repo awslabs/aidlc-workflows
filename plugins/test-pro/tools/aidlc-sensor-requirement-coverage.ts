@@ -3,9 +3,9 @@
 //
 // Reads test-pro-test-results.json (emitted by the build-and-test contribution)
 // and reports whether every functional requirement has at least one covering
-// test. ADVISORY (no blocking severity in the framework yet). Needs only the
-// --output-path the dispatcher always passes. Shipped to .claude/tools/ via the
-// plugin's contributes.tools.
+// test. ADVISORY (its sensor manifest declares it advisory). Needs only
+// the --output-path the dispatcher always passes. Shipped to the harness's tools/
+// via the plugin's contributes.tools.
 import { existsSync, readFileSync } from "node:fs";
 
 // Self-contained — no import of the framework's aidlc-lib (a plugin tool ships

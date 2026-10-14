@@ -143,7 +143,6 @@ class Walk {
     );
   }
 
-  /** The person types a message. */
   say(prompt: string): void {
     this.hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt });
   }
@@ -194,7 +193,6 @@ class Walk {
     return r;
   }
 
-  /** Every engine command a print names, run as printed and in order. */
   // The commands the message names for now, not the ones for a later yes or undo.
   runNamed(message: string): Ran[] {
     const now = message.split(/ If they (?:say yes|later ask)/)[0];
@@ -242,13 +240,11 @@ async function parkedProject(at: "stage" | "plan question" = "stage"): Promise<W
 
   const walk = new Walk(proj);
   walk.hook("session-start", { hook_event_name: "SessionStart", source: "startup" });
-  // The work is at Code Generation.
   walk.say("/aidlc");
   const first = walk.next([]);
   expect(first.json?.kind, first.out).toBe("run-stage");
   expect(first.json?.stage).toBe("code-generation");
   if (at === "plan question") {
-    // The developer writes the code plan, and the engine asks the person to approve it.
     const produces = (first.json?.produces as string[] | undefined) ?? [];
     const plan = produces.find((path) => path.endsWith("code-generation-plan.md"));
     const instructions = produces.find((path) => path.endsWith("unit-test-instructions.md"));
@@ -263,7 +259,6 @@ async function parkedProject(at: "stage" | "plan question" = "stage"): Promise<W
     const ask = walk.next([]);
     expect(ask.json?.ask_type, ask.out).toBe("plan-approval");
   }
-  // The person stops for the day, and the agent parks the work.
   walk.say("let's stop here for today");
   const park = walk.bash("bun .claude/tools/aidlc.ts engine orchestrate park");
   expect(park.json?.kind, park.out).toBe("parked");
@@ -273,12 +268,10 @@ async function parkedProject(at: "stage" | "plan question" = "stage"): Promise<W
   return walk;
 }
 
-/** The person types the change; the agent runs `next` and the commands it names. */
 function typeChange(walk: Walk, flags: string[]): Json {
   walk.say(`/aidlc ${flags.join(" ")}`);
   const said = walk.next(flags);
   expect(said.json, said.out).not.toBeNull();
-  // Before: the request was answered with the park, and nothing was made.
   expect(said.json?.kind, said.out).toBe("print");
   for (const ran of walk.runNamed(String(said.json?.message ?? ""))) {
     expect(ran.code, ran.out).toBe(0);
@@ -287,7 +280,6 @@ function typeChange(walk: Walk, flags: string[]): Json {
   return said.json!;
 }
 
-/** The person resumes: the agent unparks as `next --resume` names, then runs `next --resume`. */
 function resume(walk: Walk): Json {
   walk.say("/aidlc --resume");
   let r = walk.next(["--resume"]);

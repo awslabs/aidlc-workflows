@@ -80,6 +80,11 @@ const KIRO_TOOLS: Record<string, KiroTool> = {
   // cannot mutate the workspace during a Plan Approval window, while denying it
   // stopped a Windows customer mid-workflow (#1039).
   disclose_context: { role: "read" },
+  // `tool_load` loads the definition of a deferred MCP tool (`tool_ids`, such
+  // as `probe-ws::ws_echo`) before Kiro calls it, measured on Kiro CLI 2.31.0
+  // and Kiro IDE 1.3.0. It runs nothing and writes nothing; the call it
+  // prepares is checked on its own.
+  tool_load: { role: "read" },
   thinking: { role: "read" },
   todo_list: { role: "read" },
   // A helper agent's word to the chat that sent it about where it is; it has
@@ -164,12 +169,19 @@ export function isKiroAppendTool(name: string): boolean {
   return (tool?.role === "write" || tool?.role === "edit") && tool.append === true;
 }
 
+// A call to one of the person's MCP servers: Kiro names it `mcp_<server>_<tool>`
+// (a `-` in either name becomes `_`), measured on Kiro CLI 2.31.0 and Kiro IDE
+// 1.3.0. A name in the table is never one.
+export function isKiroMcpTool(name: string): boolean {
+  return name.startsWith("mcp_") && name.length > "mcp_".length && kiroTool(name) === undefined;
+}
+
 export function isPlanApprovalSafeReadTool(name: string): boolean {
   return kiroTool(name)?.role === "read";
 }
 
-// Any name the table does not call a read may change the workspace, including
-// one it does not know.
+// Any nonempty name the table does not call a read may change the workspace,
+// including one it does not know.
 export function mutationCapableTool(name: string): boolean {
   return name.length > 0 && !isPlanApprovalSafeReadTool(name);
 }
@@ -179,8 +191,8 @@ const readNames = namesWhere((tool) => tool.role === "read").join("|");
 
 // The matcher each registration must carry, built from the table (read by
 // t245; the registrations themselves are hand-written JSON). PostToolUse
-// matchers stay unanchored and PreToolUse ones anchored, as each was written;
-// the delegate-completion matcher leaves out only `subagent_response`, which
+// matchers stay unanchored and PreToolUse ones anchored; the
+// delegate-completion matcher leaves out only `subagent_response`, which
 // the adapter drops on every entry point too.
 export const KIRO_HOOK_MATCHERS = {
   auditedWrite: namesWhere((tool) =>

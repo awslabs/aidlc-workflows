@@ -1,6 +1,6 @@
 // covers: function:activeIntentUuid function:createIntent function:findIntentByUuid function:readSessionIntentUuid function:writeSessionIntentUuid function:clearSessionIntentUuid
 //
-// t167 — the P8 session→intent helper layer behind the resume rebind (the
+// t167 - the session->intent helper layer behind the resume rebind (the
 // session-start hook composes these). Mechanism: none (pure in-process reads/
 // writes against a seeded workspace) — they take a projectDir and touch only the
 // per-user session record + the intent registry, so they're directly callable.

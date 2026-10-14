@@ -8,43 +8,43 @@
 //     compiled graph so the set of runners can never drift from the set of
 //     stages by hand. The bootstrap INITIALIZATION stages are excluded (they
 //     have no standalone --single meaning); the whole init phase is packaged as
-//     ONE `/aidlc-init` runner over `/aidlc --init` instead.
+//     ONE `/aidlc-init` runner over intent creation instead.
 //     Plugin-owned stages use their bare plugin-prefixed slug as the runner
-//     name; core stages keep the historical `aidlc-<stage>` name.
+//     name; core stages keep the `aidlc-<stage>` name.
 //
 // (2) SCOPE-RUNNERS: one thin runner per shipped scope file whose frontmatter
-//     declares `runner: true`. A scope-runner is packaging,
-//     not definition (decision D-A): each is a ~6-line shell that drives the
-//     engine (`aidlc-orchestrate next --scope <scope>`) to `done` with a fixed
-//     scope and no scope detection. The full set of scopes is always reachable
-//     via `/aidlc --scope <name>`; runners are typeable sugar over the
-//     high-traffic ones marked in scope metadata.
+//     declares `runner: true`. A scope-runner is packaging, not definition:
+//     each is a shell that drives the engine (`aidlc-orchestrate next --scope
+//     <scope>`) to `done` with a fixed scope and no scope detection. The full
+//     set of scopes is always reachable via `/aidlc --scope <name>`; runners
+//     are typeable sugar over the high-traffic ones marked in scope metadata.
 //
 // COMPOSE, don't reimplement. The stage-slug list comes from loadGraph() — the
 // one compiled source of truth (data/stage-graph.json); the scope list comes
-// from the shipped `.claude/scopes/*.md` files. A stage added to the graph (or a
-// scope file dropped in) flows into a runner with no edit here, and the drift
-// guards (`check` for stages — t129; `scopes --check` for scopes — t130) fail CI
-// if the on-disk set ever diverges from the source-of-truth set.
+// from the harness's shipped `scopes/*.md` files. A stage added to the graph
+// (or a scope file dropped in) flows into a runner with no edit here, and the
+// drift guards (`check` for stages - t129; `scopes --check` for scopes - t130)
+// fail CI if the stage set or the selected scope-runners' contents diverge
+// from their sources.
 //
-// NO HOOKS in any runner (Fork 2→B, settled): the six skill-scoped hooks live
-// project-wide in settings.json, so a runner carries no `hooks:` block to
-// replicate or drift-guard — the deterministic spine is inherited, not copied.
+// NO HOOKS in any runner: the spine hooks are wired by the harness install,
+// so a runner carries no `hooks:` block to replicate or drift-guard - the
+// deterministic spine is inherited, not copied.
 //
-// The conductor persona is delivered by the ENGINE on the first `next` (decision
-// D-E, SPIKE 6) — baked into the run-stage directive — so the runner body does
-// NOT load conductor.md by hand.
+// The conductor persona is delivered by the ENGINE on the first `next` - baked
+// into the run-stage directive, or the first rules part sent ahead of it - so
+// the runner body does NOT load conductor.md by hand.
 //
 // Subcommands:
 //   write            — (re)generate every STAGE-runner dir from the compiled
-//                      stage list.
+//                      stage list, plus the init and compose shortcuts.
 //   check            — STAGE-runner drift guard: exit 0 iff the on-disk runner
 //                      set == the compiled stage-slug set (no missing, no
 //                      orphan); exit 1 with a diff on stdout otherwise.
 //   list             — print the stage slugs one per line (debugging aid).
 //   scopes [--all] [--check] [--out <skills-dir>]
 //                    — generate/validate SCOPE-runner skills over
-//                      `.claude/scopes/*.md` (`runner: true`, or `--all`).
+//                      the harness's `scopes/*.md` (`runner: true`, or `--all`).
 //
 // Env seams (mirror aidlc-lib.ts): AIDLC_SCOPES_DIR points the scope-file reader
 // at an isolated tree; --out points the scope writer at an isolated skills dir.
@@ -84,9 +84,6 @@ import {
   runtimeProjectDir,
 } from "./aidlc-runtime-paths.ts";
 
-// Resolve the skills/ dir off THIS module's location (tools/ → ../skills/) so the
-// generator writes into the shipped tree regardless of the caller's cwd, mirroring
-// how the engine resolves aidlc-common/ and the stage files.
 // =========================================================================
 // STAGE-RUNNER HALF
 // =========================================================================
@@ -101,11 +98,11 @@ function runnerDirName(node: Pick<GraphStage, "slug" | "plugin">): string {
 // Initialization-phase stages are bootstrap: they have no standalone meaning
 // (`produces: []`, and the engine's --single mode REFUSES them — you cannot
 // scaffold half a workspace). The whole initialization phase is run as ONE
-// atomic operation by `/aidlc --init` (aidlc-utility.ts: scaffold + scan +
-// state-init in one call). So a per-init-stage `--single` runner would be a
-// typeable command that always errors. We exclude them from stage-runner
-// generation and ship ONE `/aidlc-init` runner that wraps `/aidlc --init`
-// instead — initialization is a PHASE, not standalone stages, so the
+// atomic operation by `intent-create` (aidlc-utility.ts: mint intent + detect
+// the workspace + state-init in one call). So a per-init-stage `--single`
+// runner would be a typeable command that always errors. We exclude them from
+// stage-runner generation and ship ONE `/aidlc-init` runner that starts intent
+// creation instead - initialization is a PHASE, not standalone stages, so the
 // stage-runner set is the runnable (non-init) stages.
 function isRunnableStage(node: GraphStage): boolean {
   return node.phase !== "initialization";
@@ -126,7 +123,7 @@ function stageSlugs(): string[] {
 }
 
 // The dir name for the init-phase runner: `/aidlc-init`. It wraps the whole
-// initialization phase via `/aidlc --init`, NOT a single stage.
+// initialization phase via intent creation, NOT a single stage.
 const INIT_RUNNER_DIR = "aidlc-init";
 
 function nativeRunnerFrontmatter(): string {
@@ -134,10 +131,10 @@ function nativeRunnerFrontmatter(): string {
   return lines.length > 0 ? `${lines.join("\n")}\n` : "";
 }
 
-// Render the ~6-line runner shell for one stage. The body is intentionally thin:
+// Render the runner shell for one stage. The body is intentionally thin:
 // it states what the runner does and the one command it drives. It does NOT
 // load the conductor persona (the engine bakes it into the first `next`), and it
-// carries NO `hooks:` block (the spine is project-wide in settings.json).
+// carries NO `hooks:` block (the spine is wired by the harness install).
 //
 // `name` == dir (spec invariant). `description` is present and non-empty (spec
 // invariant). The `--single` invariant is named in prose so a reader of the
@@ -218,15 +215,15 @@ that flag without this skill.
 // `intent-create` move (which runs the whole initialization phase — mint the
 // intent + detect the workspace + build state — in one call). This is the
 // init-phase analogue of the per-stage runners: opt-in packaging over a path
-// the engine already names at creation. With a named scope it drives
-// `intent-create`; a description without one goes to `next --new-intent`, so the
-// person sees the same plan offer `/aidlc` makes instead of a default scope they
-// never saw.
-// It never drives `--stage <slug> --single` or a scoped `next`, so neither the
-// stage-runner drift guard nor the scope-runner prune ever counts it. There is
-// no user-facing `/aidlc --init` (P4): the workspace shell ships in dist/ and
-// the engine auto-creates the first intent - this runner just makes that
-// explicit.
+// the engine already names at creation. With a named scope and a description
+// it drives `intent-create`; a description without a scope goes to
+// `next --new-intent`, so the person sees the same plan offer `/aidlc` makes
+// instead of a default scope they never saw.
+// It never carries the `--stage <slug> --single` or `next --scope <name>` body
+// marker, so neither the stage-runner drift guard nor the scope-runner prune
+// ever counts it. There is no user-facing `/aidlc --init`: the workspace shell
+// ships in dist/ and the engine auto-creates the first intent - this runner
+// just makes that explicit.
 export function renderInitRunner(): string {
   const entrySkill = entrySkillInvocation();
   return `---
@@ -311,9 +308,9 @@ const COMPOSE_RUNNER_DIR = "aidlc-compose";
 // Drift-guard note: this runner drives `next compose`, so NEITHER existing
 // guard counts it - the stage guard keys on the `--stage`+`--single` body
 // marker and the scope guard byte-compares the frontmatter-selected scope set. Like
-// `/aidlc-init`, its parity is held by the packager's dist-level `--check`
-// (handleWrite is idempotent, so a stale or hand-edited copy fails the
-// byte-compare there).
+// `/aidlc-init`, its generation is covered by the packager's `--check`,
+// which compares two fresh builds for determinism; it does not inspect an
+// existing stale or hand-edited copy.
 export function renderComposeRunner(): string {
   return `---
 name: ${COMPOSE_RUNNER_DIR}
@@ -355,10 +352,9 @@ conductor runs the same forwarding loop as \`/aidlc\`.
 // Write (or refresh) every stage-runner dir from the RUNNABLE stage list (init
 // stages excluded — see isRunnableStage), plus the single `/aidlc-init` phase
 // wrapper and the `/aidlc-compose` composer shortcut. Idempotent: re-running
-// emits byte-identical SKILL.md files. Also PRUNES any stale init-phase
-// stage-runner dir (aidlc-state-init, aidlc-workspace-detection,
-// aidlc-workspace-scaffold) left by an earlier generation that emitted runners
-// for all 33 stages. Returns the slugs written.
+// emits byte-identical SKILL.md files. Also PRUNES any generated stage-runner
+// dir whose slug is no longer a runnable compiled stage (old per-init runners,
+// stages of a disabled plugin). Returns the slugs written.
 function handleWrite(): string[] {
   const skillsDir = defaultSkillsDir(true);
   const slugs = stageSlugs();
@@ -366,9 +362,7 @@ function handleWrite(): string[] {
   for (const node of runnableStages()) {
     writeRunner(join(skillsDir, runnerDirName(node), "SKILL.md"), renderStageRunner(node));
   }
-  // Emit the init-phase wrapper.
   writeRunner(join(skillsDir, INIT_RUNNER_DIR, "SKILL.md"), renderInitRunner());
-  // Emit the composer shortcut.
   writeRunner(join(skillsDir, COMPOSE_RUNNER_DIR, "SKILL.md"), renderComposeRunner());
   // Prune stale stage-runner dirs: old per-init runners and runners for stages
   // now absent from the filtered graph because their plugin is disabled.
@@ -522,7 +516,7 @@ function defaultSkillsDir(mutable = false): string {
 // Codex has no frontmatter key for an explicit-only skill; its guard is an
 // `agents/openai.yaml` beside SKILL.md (the same bytes harness/codex/emit.ts
 // ships with every core runner), so a runner generated here is explicit-only
-// too, as `disable-model-invocation: true` makes it on the other harnesses.
+// too, as `disable-model-invocation: true` makes it on Claude, Cursor, and Copilot.
 const CODEX_IMPLICIT_GUARD = "policy:\n  allow_implicit_invocation: false\n";
 
 // A runner folder (or its SKILL.md) that is a link is left alone, like the
@@ -550,7 +544,8 @@ function scopeNamesInWrittenGrid(): ReadonlySet<string> {
 }
 
 // Extract a simple scalar frontmatter field (inline or single-quoted/double-
-// quoted). Mirrors aidlc-lib.ts scalarField for the fields the generator reads.
+// quoted). Unlike aidlc-lib.ts scalarField, this retains folded/block markers
+// for readScopeFront to handle.
 function scalarField(frontmatter: string, key: string): string {
   const re = new RegExp(`^${key}:\\s*(.*)$`, "m");
   const m = frontmatter.match(re);
@@ -601,9 +596,10 @@ function readScopeFront(path: string): ScopeFront {
   return front;
 }
 
-// Discover the shipped scope names (sorted, platform-independent). Each scope
-// file is `.claude/scopes/aidlc-<name>.md`; the canonical name is its `name`
-// frontmatter field (not the filename, which carries the aidlc- prefix).
+// Discover the shipped scope names (files sorted, platform-independent). Each
+// scope file is read from scopesDir(); the canonical name is its `name`
+// frontmatter field (not the filename, which carries the aidlc- prefix only
+// for core scopes).
 export function discoverScopes(): Record<string, ScopeFront> {
   const dir = scopesDir();
   const out: Record<string, ScopeFront> = {};
@@ -634,9 +630,9 @@ function scopeRunnerDirName(scope: string, front: Pick<ScopeFront, "plugin">): s
 }
 
 // Render the SKILL.md body for one scope-runner. Spec-conformant frontmatter
-// (`name` == dir name), NO `hooks:` block (the six spine
-// hooks live in settings.json project-wide, inherited by every runner), and
-// a ~6-line shell that runs the engine forwarding loop with the scope baked in.
+// (`name` == dir name), NO `hooks:` block (the spine hooks are wired by the
+// harness install, inherited by every runner), and a shell that runs the
+// engine forwarding loop with the scope baked in.
 export function renderRunner(scope: string, description: string): string {
   const front = discoverScopes()[scope];
   const dir = scopeRunnerDirName(scope, front ?? {});
@@ -769,7 +765,6 @@ preserving any \`--request\` id rather than rebuilding the request.
 `;
 }
 
-// The target SKILL.md path for one scope-runner under a skills dir.
 function scopeRunnerPath(skillsDir: string, scope: string): string {
   const front = discoverScopes()[scope];
   return join(skillsDir, scopeRunnerDirName(scope, front ?? {}), "SKILL.md");

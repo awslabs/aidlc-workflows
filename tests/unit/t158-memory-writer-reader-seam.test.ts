@@ -1,21 +1,18 @@
 // covers: subcommand:aidlc-learnings:persist
 //
-// t158 — memory writer/reader ROUND-TRIP (P6 closed the P5 seam).
+// t158 - memory writer/reader ROUND-TRIP.
 //
-// P5 relocated the METHOD reader: loadRules()/rulesDir() now read the workspace
-// tree aidlc/spaces/default/memory/ (neutral names org/team/project.md). In
-// Stage A the learnings WRITER (aidlc-learnings.ts learningsFilePath() →
-// persist) still targeted the OLD harness rule dir, so a confirmed learning
-// landed where the relocated reader could no longer see it — a SILENT LOSS.
-// This file was a `test.failing` tripwire guarding that window.
+// The METHOD reader loadRules()/rulesDir() reads the workspace tree
+// aidlc/spaces/default/memory/ (neutral names org/team/project.md). A learnings
+// WRITER aimed at a harness rule dir would land a confirmed learning where that
+// reader cannot see it - a SILENT LOSS.
 //
-// P6 closed the seam: a confirmed learning IS a practice (vision §6) — persist
-// now appends a practice line under the routed heading in the relocated
-// {project,team}.md (via memoryDirFor(), the SAME MEMORY_SEGMENTS loadRules()
-// reads from), and the `*-learnings.md` slots + fractional tiers are gone. The
-// tripwire is therefore CONVERTED to a normal passing write→read round-trip:
-// persist a team-scoped learning → the resolver (loadRules, pointed at the
-// relocated memory dir) sees the practice line under its heading.
+// A confirmed learning IS a practice (vision section 6): persist appends a
+// practice line under the routed heading in {project,team}.md (via
+// memoryDirFor(), the SAME MEMORY_SEGMENTS loadRules() reads from). The
+// write->read round-trip: persist a team-scoped learning -> the resolver
+// (loadRules, pointed at the memory dir) sees the practice line under its
+// heading.
 //
 // Mechanism: cli (spawnSync of the shipped aidlc-learnings.ts persist) +
 // in-process import of memoryDirFor (the reader-root oracle) + loadRules (the
@@ -59,7 +56,7 @@ afterEach(() => {
 function seedProject(root: string): void {
   mkdirSync(join(root, "aidlc-docs", "inception", "user-stories"), { recursive: true });
   mkdirSync(join(root, ".claude", "aidlc-common", "stages", "inception"), { recursive: true });
-  const memDir = memoryDirFor(root); // the relocated reader root
+  const memDir = memoryDirFor(root);
   mkdirSync(memDir, { recursive: true });
 
   // The team.md the resolver reads. Ships the `## Corrections` heading the
@@ -173,9 +170,9 @@ function mdFilesUnder(dir: string): string[] {
 }
 
 describe("t158 memory writer/reader round-trip (P6 closed the P5 seam)", () => {
-  // The seam is CLOSED: persist writes the learning UNDER the relocated reader
-  // root, so the resolver sees it. No `*-learnings.md` file, no old harness
-  // rule dir — the practice lands in the method file the resolver reads.
+  // persist writes the learning UNDER the reader root, so the resolver sees it.
+  // No `*-learnings.md` file, no harness rule dir - the practice lands in the
+  // method file the resolver reads.
   test("learnings writer lands under the relocated reader root", () => {
     savedRulesDir = process.env.AIDLC_RULES_DIR;
     const root = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t158-")));
@@ -183,7 +180,6 @@ describe("t158 memory writer/reader round-trip (P6 closed the P5 seam)", () => {
     seedProject(root);
 
     const r = runPersist(root);
-    // persist must succeed (exit 0).
     expect(r.status).toBe(0);
 
     const readerRoot = memoryDirFor(root);
@@ -194,12 +190,9 @@ describe("t158 memory writer/reader round-trip (P6 closed the P5 seam)", () => {
     );
     expect(writtenUnderReader.length).toBeGreaterThan(0);
     expect(mdFilesUnder(readerRoot).some((p) => p.includes("learnings"))).toBe(false);
-    // The OLD harness rules dir was never written (it isn't even created).
     expect(existsSync(join(root, ".claude", "rules", "aidlc-team-learnings.md"))).toBe(false);
   });
 
-  // The full round-trip: persist → loadRules (the resolver) reads the practice
-  // line back out of the relocated team.md under its heading.
   test("round-trip: persisted learning is visible to the resolver (loadRules)", () => {
     savedRulesDir = process.env.AIDLC_RULES_DIR;
     const root = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t158b-")));
@@ -208,22 +201,19 @@ describe("t158 memory writer/reader round-trip (P6 closed the P5 seam)", () => {
 
     expect(runPersist(root).status).toBe(0);
 
-    // Point the resolver at the relocated method dir and read it back.
     process.env.AIDLC_RULES_DIR = memoryDirFor(root);
     const rules = loadRules();
     const team = rules.find((rf) => rf.scope === "team");
     expect(team).toBeDefined();
-    // The resolver surfaced the practice under `## Corrections`.
     const corrections = team?.headings.get("Corrections") ?? "";
     expect(corrections).toContain("Used Given/When/Then for AC; team standardised");
     expect(corrections).toContain("(learned ");
 
     // Belt-and-braces: the raw team.md carries the cid idempotency marker.
     // "unscoped" is the correct intent-slug component here: this fixture has
-    // no aidlc/spaces/.../intents/ active-intent cursor at all (the flat,
-    // pre-workspace-layout seeding t112 also uses), so activeIntent() cannot
-    // resolve a real intent and cidMarker falls back to its documented
-    // "unscoped" sentinel (#735's fix).
+    // no aidlc/spaces/.../intents/ active-intent cursor at all, so activeIntent()
+    // cannot resolve a real intent and cidMarker falls back to its documented
+    // "unscoped" sentinel (#735).
     const teamMd = readFileSync(join(memoryDirFor(root), "team.md"), "utf-8");
     expect(teamMd).toMatch(/cid:unscoped:user-stories:[0-9a-f]{8}/);
   });

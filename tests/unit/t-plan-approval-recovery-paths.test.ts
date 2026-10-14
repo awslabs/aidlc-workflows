@@ -215,7 +215,6 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
 
     const refused = fingerprint(project);
     expect(refused.code).not.toBe(0);
-    // The refusal names what is wrong with the plan, before any human is asked.
     expect(refusal(refused)).toContain("Testing Contract");
 
     writePlan(project, rendered.out);
@@ -426,7 +425,6 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
     human(project, session, crewEnvelope("what does step 3 do?", history));
     expect(recordedChoice(project, session)).toBeNull();
     expect(readPlanApprovalResponse(project, session)?.words).toBe("what does step 3 do?");
-    // The question stays open, and the person's next turn answers it.
     human(project, session, crewEnvelope("1", history));
     expect(recordedChoice(project, session)).toBe("Approve Plan");
     expect(readPlanApprovalResponse(project, session)?.words).toBe("what does step 3 do?\n1");

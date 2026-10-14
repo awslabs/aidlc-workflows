@@ -28,10 +28,19 @@ afterAll(() => {
 
 // The project's OWN tools with no fixture seams, so scopes resolve the way they
 // do for a person.
-function runTool(proj: string, tool: string, args: string[]): { status: number; out: string } {
+function runTool(proj: string, tool: string, args: string[], atTerminal = false): { status: number; out: string } {
   const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
   for (const key of ["AIDLC_SCOPE_MAPPING", "AIDLC_SCOPE_GRID", "AIDLC_SCOPES_DIR", "AIDLC_COMPOSED_SCOPES_DIR", "AIDLC_STAGE_GRAPH"]) {
     delete env[key];
+  }
+  // Typed at the person's own terminal: no chat, and no agent host's mark.
+  if (atTerminal) {
+    for (const key of Object.keys(env)) {
+      if (/^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_)/i.test(key)) delete env[key];
+    }
+    delete env.AIDLC_SESSION_OVERRIDE;
+    delete env.TERM_PROGRAM;
+    env.AIDLC_TEST_CONFIG_TTY = "1";
   }
   const res = spawnSync(BUN, [join(proj, ".claude", "tools", tool), ...args, "--project-dir", proj], {
     encoding: "utf-8",
@@ -40,10 +49,10 @@ function runTool(proj: string, tool: string, args: string[]): { status: number; 
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 
-function create(proj: string, scope: string, extra: string[] = []): void {
+function create(proj: string, scope: string, extra: string[] = [], atTerminal = false): void {
   const made = runTool(proj, "aidlc-utility.ts", [
     "intent-create", "--scope", scope, "--arguments=fix the flaky date parser", "--label", `work on ${scope}`, ...extra,
-  ]);
+  ], atTerminal);
   expect(made.status, made.out).toBe(0);
 }
 
@@ -157,7 +166,7 @@ describe("a team's memory layer", () => {
 
   test("a value the person set for this work keeps it", () => {
     const proj = plainProject();
-    create(proj, "classic", ["--guard-policy", "strict"]);
+    create(proj, "classic", ["--guard-policy", "strict"], true);
     expect(policyLine(proj)).toBe("strict (set by you)");
     declareMemory(proj, "team", "off");
     expect(guardPolicyAcceptsChanges(proj)).toBe(false);

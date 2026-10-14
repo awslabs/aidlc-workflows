@@ -16,9 +16,10 @@
 //     fields the newer one added.
 //   - `source` is discriminated on `kind`, never a bag of optional fields, so
 //     "managed with an alias" and "linked with no alias" are both unspellable.
-//   - `extraction` is a six-state union, not a status string plus optionals:
-//     each state carries different fields and implies a DIFFERENT remedy, and
-//     collapsing them into one "unsupported" sends the user down the wrong path.
+//   - `extraction` has six states with companions enforced by
+//     STATE_REQUIREMENTS: each state carries different fields and implies a
+//     DIFFERENT remedy, and collapsing them into one "unsupported" sends the
+//     user down the wrong path.
 //   - `path` is NEVER absolute in either source kind. An absolute path in
 //     committed metadata leaks one developer's directory layout to every clone,
 //     and is the traversal primitive besides.
@@ -87,9 +88,9 @@ export type DocumentSource =
   | { kind: "managed"; path: string }
   | { kind: "linked"; alias: string; path: string };
 
-// A summary is a STATE, not a path. S1 writes {state:"absent"}; S3 adds
-// {state:"generated", path, source_revision}. The original schema made
-// summary.md mandatory while S1 shipped no summaries — a contradiction.
+// A summary is a STATE, not a path. Onboarding writes {state:"absent"};
+// summary generation adds {state:"generated", path, source_revision}. Making
+// summary.md mandatory while onboarding writes no summaries is a contradiction.
 export type SummaryRecord =
   | { state: "absent" }
   | { state: "generated"; path: string; source_revision: string };
@@ -108,8 +109,8 @@ export interface DocumentRow {
   // OMITTED when the document has no tags. Present means LLM-authored tags
   // exist. An EMPTY ARRAY IS INVALID, the same reasoning as
   // `related_intent_ids` above: it is ambiguous between "not yet tagged" (the
-  // S1/pre-S3 state, spelled by omitting the key) and "tagged with nothing",
-  // and a reader cannot tell which without asking the writer.
+  // state spelled by omitting the key) and "tagged with nothing", and a reader
+  // cannot tell which without asking the writer.
   tags?: string[];
   content?: string;
   /** Digest of the exact bytes stored at `content`. Readers verify this before
@@ -117,16 +118,17 @@ export interface DocumentRow {
    * derivative under a newer source revision. */
   content_sha256?: string;
   summary: SummaryRecord;
-  /** Digest of the exact bytes stored at `summary.path`, present iff
+  /**
+   * Digest of the exact bytes stored at `summary.path`, allowed only when
    * `summary.state === "generated"` -- the same corroboration pattern as
    * `content_sha256`, sibling to `summary` rather than a field inside
-   * `SummaryRecord` (S3a's shipped-and-reviewed type), so this is additive,
-   * not a rewrite of that contract. Readers verify this before serving a
-   * summary so a failed publish cannot expose stale bytes under a fresh
-   * `source_revision`. */
+   * `SummaryRecord`, so this is additive, not a rewrite of that contract.
+   * Readers verify this before serving a summary so a failed publish cannot
+   * expose stale bytes under a fresh `source_revision`.
+   */
   summary_sha256?: string;
   // A tombstone: the original is gone. Metadata-only by design, because a rule
-  // promoted in S3 cites this id and the citation must not dangle.
+  // promoted later cites this id and the citation must not dangle.
   removed_at?: string;
 }
 
@@ -137,8 +139,9 @@ export interface DocumentIndex {
 
 export interface DocumentMetadata extends DocumentRow {
   schema_version: number;
-  // Written at S1's WRITE time, never deferred to a reader. Whoever consumes
-  // content.md later inherits whatever S1 recorded; there is no second writer.
+  // Written at writeMetadataTo's WRITE time, never deferred to a reader.
+  // Whoever consumes content.md later inherits whatever that writer recorded;
+  // there is no second writer.
   content_trust: "untrusted";
   content_handling: "data-not-instructions";
 }
@@ -152,10 +155,12 @@ export type SchemaResult<T> =
 // `"not-a-date"` was measured to pass it outright. The regex fixes the SHAPE
 // (date, `T`, time, and a `Z`/offset -- `Date.parse` alone accepts far looser
 // strings, e.g. bare "2026-08-07", than this schema's own writer ever emits),
-// and `Date.parse` after it fixes the VALUE (a shape-valid but impossible
-// calendar date, e.g. "2026-13-45T00:00:00Z", still fails to parse). Both
-// checks are required: the regex alone would accept a shape it cannot parse,
-// and `Date.parse` alone would accept a shape this schema does not emit.
+// and `Date.parse` plus the range checks after it fix the VALUE (a
+// shape-valid but impossible calendar date, e.g. "2026-13-45T00:00:00Z", or
+// "2026-02-30T00:00:00Z" that `Date.parse` rolls over to March, still fails).
+// Both checks are required: the regex alone would accept a shape it cannot
+// parse, and `Date.parse` alone would accept a shape this schema does not
+// emit.
 const ISO_TIMESTAMP_REGEX =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-](\d{2}):(\d{2}))$/;
 
@@ -177,22 +182,22 @@ export function isValidIsoTimestamp(raw: unknown): boolean {
   return day >= 1 && day <= maxDay;
 }
 
-// Bounds for the LLM-authored `tags` field (S3a). S1's precedent everywhere it
-// stores anything free-form (`EXTRACT_OUTPUT_CHAR_CAP`, `BOLT_SLUG_MAX_LENGTH`,
-// `UNIT_NAME_MAX_LENGTH` in aidlc-lib.ts) is: cap it, don't trust the producer
-// to self-limit. A tag is a short label, not prose, so the per-tag cap is the
-// same order of magnitude as those slug/name caps; the count cap keeps a
-// runaway generation from turning `tags` into an unbounded second body.
+// Bounds for the LLM-authored `tags` field. The precedent where the engine
+// stores anything free-form (`EXTRACT_OUTPUT_CHAR_CAP` in aidlc-knowledge.ts,
+// `BOLT_SLUG_MAX_LENGTH`, `UNIT_NAME_MAX_LENGTH` in aidlc-lib.ts) is: cap it,
+// don't trust the producer to self-limit. A tag is a short label, not prose,
+// so the per-tag cap is the same order of magnitude as those slug/name caps;
+// the count cap keeps a runaway generation from turning `tags` into an
+// unbounded second body.
 export const MAX_TAGS_PER_DOCUMENT = 32;
 export const MAX_TAG_LENGTH = 64;
 
-// A tag is a short label, not prose and not a record separator. Measured
-// against the shipped S3a validator: `"\t"`, `"a\nb"`, and `"a\0b"` all
-// satisfied "non-empty string" literally while carrying no usable label —
-// the same defect class §8.13 names for `removed_at`. C0 controls (incl.
-// NUL/tab/newline) and DEL are refused outright. Charcode scan, not a regex
-// character class, because the lint config forbids a literal control
-// character range inside a regex.
+// A tag is a short label, not prose and not a record separator. `"\t"`,
+// `"a\nb"`, and `"a\0b"` all satisfy "non-empty string" literally while
+// carrying no usable label - the same defect class section 8.13 names for
+// `removed_at`. C0 controls (incl. NUL/tab/newline) and DEL are refused
+// outright. Charcode scan, not a regex character class, because the lint
+// config forbids a literal control character range inside a regex.
 function hasTagControlChar(value: string): boolean {
   for (let i = 0; i < value.length; i++) {
     const code = value.charCodeAt(i);
@@ -202,9 +207,9 @@ function hasTagControlChar(value: string): boolean {
 }
 
 const SHA256_REGEX = /^[0-9a-f]{64}$/;
-// The shipped uuidv7() output shape. Deliberately not a general UUID matcher:
-// persistence is always a canonical UUID, and accepting a slug here is what
-// would let a renameable display name become an identity.
+// The canonical UUID output shape used by uuidv7(). Deliberately not a slug
+// matcher: persistence is always a canonical UUID, and accepting a slug here
+// is what would let a renameable display name become an identity.
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // EXPORTED so every caller that is about to persist a UUID into a committed
@@ -216,7 +221,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 // `undefined` -- so `intentUuid !== undefined` at the call site was true, and
 // `""` got written into `related_intent_ids`. The schema refused it on write,
 // but only AFTER onboard's earlier passes had already renamed a completed
-// document tree into place (see aidlc-knowledge.ts's stagePublish/onboard).
+// document tree into place (see aidlc-knowledge.ts's onboard).
 export function isCanonicalUuid(raw: string): boolean {
   return UUID_REGEX.test(raw);
 }
@@ -310,11 +315,10 @@ const STATE_REQUIREMENTS: Readonly<Record<ExtractionState, StateRequirements>> =
   // `detectedType` IS required here (unlike its sibling failure states): a
   // retry (`shouldRetryExtraction`) needs to know WHICH mime this row was
   // routed for, to re-probe for an extractor now that one might be
-  // configured/installed. Finding 5(c): without it, `detectMimeFromRow`
-  // guessed from the file EXTENSION alone (".pdf" or bust, else
-  // "text/plain") -- so installing a DOCX extractor never made a `.docx` row
-  // retryable, because its guessed mime was never "application/docx" to
-  // begin with.
+  // configured/installed. Without it, `detectMimeFromRow` guessed from the
+  // file EXTENSION alone (".pdf" or bust, else "text/plain") -- so installing
+  // a DOCX extractor never made a `.docx` row retryable, because its guessed
+  // mime was never "application/docx" to begin with.
   extractor_unavailable: {
     extractor: "name-only",
     sourceRevision: false,
@@ -592,16 +596,15 @@ function validateRow(raw: unknown, where: string, errors: string[]): void {
   } else if (raw.content_sha256 !== undefined) {
     errors.push(`${where}.content_sha256 must be absent when content is absent`);
   }
-  // A SIBLING of `summary` (S3a's shipped, reviewed, two-state union), not a
-  // field inside it -- this is additive, not a rewrite of that contract. Kept
-  // OPTIONAL even when summary.state is "generated": S3a's own pinned tests
-  // (t325) construct a valid `generated` summary carrying only path +
-  // source_revision, with no digest field at all, and that shape must keep
-  // validating. So this is corroboration when a writer supplies it (every
-  // write this release makes does), not a NEW requirement layered onto an
-  // already-shipped state -- the same asymmetry `related_intent_ids` has
-  // relative to `tags`: two similar-shaped fields, added at different times,
-  // are not obligated to share a strictness level.
+  // A SIBLING of `summary` (a two-state union), not a field inside it -- this
+  // is additive, not a rewrite of that contract. Kept OPTIONAL even when
+  // summary.state is "generated": pinned tests (t325) construct a valid
+  // `generated` summary carrying only path + source_revision, with no digest
+  // field at all, and that shape must keep validating. So this is
+  // corroboration when a writer supplies it (every write this release makes
+  // does), not a NEW requirement layered onto an existing state -- the same
+  // asymmetry `related_intent_ids` has relative to `tags`: two similar-shaped
+  // fields are not obligated to share a strictness level.
   const summaryState = isObject(raw.summary) ? raw.summary.state : undefined;
   if (raw.summary_sha256 !== undefined) {
     if (summaryState !== "generated") {
@@ -732,7 +735,7 @@ export function isTombstoned(row: DocumentRow): boolean {
 }
 
 // Is the SUMMARY still valid for the row's CURRENT digest? Mirrors
-// `derivativeIsCurrent` exactly (S3 design §3.1c: "Extraction/summary
+// `derivativeIsCurrent` (S3 design section 3.1c: "Extraction/summary
 // derivatives are revision-bound") -- a summary is an LLM-authored derivative
 // of the same source bytes extraction is, so it fails the same way: a summary
 // produced from a since-edited original describes a revision that no longer
@@ -748,10 +751,10 @@ export function summaryIsCurrent(row: DocumentRow): boolean {
 // from `row.extraction.state`: storage records what was generated, this
 // reports whether it is still true of the current bytes. A `generated`
 // summary whose source_revision no longer matches is reported as
-// `invalidated` here even though `SummaryRecord`'s own two-state union (S3a,
-// shipped and reviewed) has no literal `"invalidated"` member -- this is a
-// DERIVED reader-facing state, exactly as `effectiveExtractionState` derives
-// `"invalidated"` from a `state: "extracted"` union member that also lacks it.
+// `invalidated` here even though `SummaryRecord`'s own two-state union has no
+// literal `"invalidated"` member -- this is a DERIVED reader-facing state,
+// exactly as `effectiveExtractionState` derives `"invalidated"` from a stored
+// `state: "extracted"`.
 export function effectiveSummaryState(row: DocumentRow): "absent" | "generated" | "invalidated" {
   if (isTombstoned(row)) return "absent";
   if (row.summary.state === "generated" && !summaryIsCurrent(row)) return "invalidated";

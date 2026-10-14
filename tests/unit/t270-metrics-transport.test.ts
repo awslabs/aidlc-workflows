@@ -1,6 +1,6 @@
 // covers: function:writeFileAtomic, function:appendAuditEntries, function:emitMetricForAuditEvent
 //
-// t270 - concurrency and metrics transport regressions from PR review:
+// t270 - concurrency and metrics transport regressions:
 //   - an atomic writer never reuses another writer's sibling temp path;
 //   - endpoint, body, and secret custom-header values travel through stdin,
 //     never worker argv or environment;

@@ -60,7 +60,7 @@ import { AIDLC_SRC } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const SENSOR = join(AIDLC_SRC, "tools", "aidlc-sensor-upstream-coverage.ts");
 
 const tempDirs: string[] = [];
@@ -77,7 +77,6 @@ interface SensorResult {
 	findings_count: number;
 }
 
-/** Fresh stage dir seeded with the given files (name -> body). */
 function makeStageDir(files: Record<string, string>): string {
 	const dir = mkdtempSync(join(tmpdir(), "aidlc-t233-"));
 	tempDirs.push(dir);
@@ -87,7 +86,6 @@ function makeStageDir(files: Record<string, string>): string {
 	return dir;
 }
 
-/** Spawn the real sensor script; parse its stdout JSON. */
 function run(
 	dir: string,
 	outputName: string,
@@ -198,7 +196,6 @@ describe("t233 sibling-union evaluation (fix B)", () => {
 			"business-rules,tech-stack-decisions",
 		);
 		expect(r.pass).toBe(true);
-		// Both deliverables were scanned.
 		expect(r.scanned_files.length).toBe(2);
 	});
 
@@ -251,7 +248,6 @@ describe("t233 scaffolding exclusion", () => {
 		);
 		expect(r.pass).toBe(false);
 		expect(r.unreferenced).toEqual(["business-logic-model"]);
-		// The fired scaffolding file itself was not part of the union.
 		expect(r.scanned_files.length).toBe(1);
 		expect(r.scanned_files[0].endsWith("tech-stack-decisions.md")).toBe(true);
 	});

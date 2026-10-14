@@ -166,7 +166,6 @@ function composeNewWork(proj: string): string {
   const offer = next(proj, ["--new-intent", NEW_WORK]);
   const request = /--request (\S+)/.exec(offer.compose_command ?? "")?.[1];
   expect(request, JSON.stringify(offer)).toBeDefined();
-  // The conductor runs the compose step it was given.
   const compose = shell(proj, offer.compose_command as string);
   expect(compose.code, compose.stderr).toBe(0);
   reply(proj, "compose");
@@ -210,7 +209,6 @@ function composerRuns(proj: string): void {
   expect(guard(proj, "Write", { file_path: join(proj, "src", "slugify.ts"), content: "x\n" }, {}, true).code).toBe(2);
 }
 
-// The waiting plan's build: the file it names, a shell write to it, and the developer.
 function buildWaits(proj: string): void {
   expect(write(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
   expect(shell(proj, "echo 'export const s = 1;' > src/slugify.ts").code).toBe(2);
@@ -233,8 +231,6 @@ describe("while a code plan waits, new work the person asks for is composed", ()
       const request = composeNewWork(proj);
       composerRuns(proj);
       buildWaits(proj);
-      // The person approves the composed plan: the conductor creates the new
-      // work with the commands the engine names for it.
       reply(proj, "yes, use that plan for the json work");
       const creation = next(proj, ["--scope", "poc", "--request", request]);
       const commands = [...(creation.message ?? "").matchAll(/`((?:bun|aidlc) [^`]*)`/g)]

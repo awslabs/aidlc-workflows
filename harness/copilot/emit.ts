@@ -37,11 +37,12 @@ import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-b
 
 // ---------------------------------------------------------------------------
 // Hook wiring. PascalCase events; register ONLY events with a real core-hook
-// consumer (kiro-normative). One PreToolUse registration serves both guards
-// (state-transition + reviewer-scope) — the adapter runs them in order.
-// SessionEnd is omitted because VS Code does not document or accept that
-// event. The shared manifest must be valid on both hosts, so both use the
-// adapter's next-SessionStart reconciliation path for SESSION_ENDED.
+// consumer (kiro-normative). One PreToolUse registration serves the guards
+// (state-transition, reviewer-scope, review-freeze, plan-approval) - the
+// adapter runs them in that order. SessionEnd is omitted because VS Code does
+// not document or accept that event. The shared manifest must be valid on
+// both hosts, so both use the adapter's next-SessionStart reconciliation path
+// for SESSION_ENDED.
 // ---------------------------------------------------------------------------
 const HOOK_TIMEOUT_SECONDS = EXTENDED_SUBPROCESS_TIMEOUT_MS / 1000;
 const COMPOUND_HOOK_TIMEOUT_SECONDS = HOOK_TIMEOUT_SECONDS * 2;

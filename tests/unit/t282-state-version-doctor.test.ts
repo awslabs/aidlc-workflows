@@ -1,13 +1,13 @@
 // covers: subcommand:aidlc-utility:doctor, function:classifyStateVersion
 //
-// PR #711 finding (apackeer, round 2): the v8 state-version gate must actually
-// REJECT a pre-v8 state. v8 renamed the Inception `application-design` stage to
-// `domain-design` and inserted `contract-design`, so a v7 state file's stage
-// rows no longer match the graph and cannot be advanced safely. `/aidlc
-// --doctor` must surface a failing "state version current" row (not the
-// happy-path "State Version: 8" row) and exit non-zero, and its remediation
-// must point at the CURRENT `aidlc/` workspace layout — never the retired flat
-// `aidlc-docs/` root. This pins both the failing and passing paths.
+// The v8 state-version gate must actually REJECT a pre-v8 state. v8 renamed the
+// Inception `application-design` stage to `domain-design` and inserted
+// `contract-design`, so a v7 state file's stage rows no longer match the graph
+// and cannot be advanced safely. `/aidlc --doctor` must surface a failing
+// "state version current" row (not the happy-path "State Version: 8" row) and
+// exit non-zero, and its remediation must point at the CURRENT `aidlc/`
+// workspace layout - never the retired flat `aidlc-docs/` root. This pins both
+// the failing and passing paths.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -76,7 +76,6 @@ function runDoctor(version: string): { status: number; out: string } {
 describe("t282 state-version doctor gate", () => {
   test("a pre-v8 (v7) state fails the state-version row and exits non-zero", () => {
     const { status, out } = runDoctor("7");
-    // Failing row, not the happy-path pass row.
     expect(out).toMatch(/state version current/);
     expect(out).not.toMatch(/State Version: 8/);
     // Remediation names the CURRENT workspace layout, not the retired aidlc-docs/.
@@ -90,18 +89,17 @@ describe("t282 state-version doctor gate", () => {
   test("a current v8 state passes the state-version row", () => {
     const { out } = runDoctor("8");
     expect(out).toMatch(/State Version: 8/);
-    expect(out).not.toMatch(/state version current/); // the fail-row label is absent
+    expect(out).not.toMatch(/state version current/);
   });
 
-  // leandro round-3 follow-up (P2): doctor must classify malformed and future
-  // numeric versions the SAME way the runtime guard does (both call the shared
-  // classifyStateVersion in aidlc-lib). Malformed values must NOT receive
-  // stale-version wording, and future values must receive upgrade guidance
-  // (not archive-and-reinit).
+  // Doctor must classify malformed and future numeric versions the SAME way the
+  // runtime guard does (both call the shared classifyStateVersion in aidlc-lib).
+  // Malformed values must NOT receive stale-version wording, and future values
+  // must receive upgrade guidance (not archive-and-reinit).
   test("a MALFORMED (non-numeric) state fails the readable row, not the past-version row", () => {
     const { status, out } = runDoctor("not-a-number");
     expect(out).toMatch(/state version readable/);
-    expect(out).not.toMatch(/state version current/); // past-version label absent
+    expect(out).not.toMatch(/state version current/);
     expect(out).toMatch(/missing, empty, or unparseable/);
     expect(status).not.toBe(0);
   });
@@ -109,7 +107,7 @@ describe("t282 state-version doctor gate", () => {
   test("a FUTURE (v9) state fails the compatible row with upgrade guidance, not archive-and-reinit", () => {
     const { status, out } = runDoctor("9");
     expect(out).toMatch(/state version compatible/);
-    expect(out).not.toMatch(/state version current/); // past-version label absent
+    expect(out).not.toMatch(/state version current/);
     expect(out).toMatch(/is newer than the current/);
     expect(out).toMatch(/Upgrade the framework/);
     // The past-version's archive path template ('mv aidlc aidlc.v9-archive')
@@ -122,16 +120,16 @@ describe("t282 state-version doctor gate", () => {
     const { status, out } = runDoctor("8 garbage");
     expect(out).toMatch(/state version readable/);
     expect(out).toMatch(/missing, empty, or unparseable/);
-    expect(out).not.toMatch(/State Version: 8/); // did NOT slip through as the happy row
+    expect(out).not.toMatch(/State Version: 8/);
     expect(status).not.toBe(0);
   });
 });
 
-// PR #711 finding (leandro, re-review): the v8 gate must ALSO fire on
-// runtime/mutating commands, not only `doctor`. Before the fix, `next` against a
-// v7 state exited 0 with a normal load-steering directive and advanced until it
-// hit the removed `application-design` row. `next` and `report` must refuse a
-// stale state up front with an error directive.
+// The v8 gate must ALSO fire on runtime/mutating commands, not only `doctor`.
+// Before the fix, `next` against a v7 state exited 0 with a normal
+// load-steering directive and advanced until it hit the removed
+// `application-design` row. `next` and `report` must refuse a stale state up
+// front with an error directive.
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 
 function runOrchestrate(sub: string, version: string): { status: number; kind: string; out: string } {
@@ -178,14 +176,13 @@ describe("t282 runtime state-version guard (next / report)", () => {
 
   test("a current v8 state is NOT blocked by the runtime guard", () => {
     const r = runOrchestrate("next", "8");
-    // v8 is accepted — the guard is silent; next proceeds to its normal directive.
     expect(r.kind).not.toBe("error");
   });
 
-  // leandro follow-up (P2): runtime must align with `--doctor`, which rejects a
-  // state whose version is missing, empty, or unparseable — not only an explicit
-  // stale one. Assertions pin the EXACT remediation branch, not generic wording,
-  // so a future regression that trips the wrong branch is caught.
+  // Runtime must align with `--doctor`, which rejects a state whose version is
+  // missing, empty, or unparseable - not only an explicit stale one. Assertions
+  // pin the EXACT remediation branch, not generic wording, so a future regression
+  // that trips the wrong branch is caught.
   const UNPARSEABLE = /State Version field is missing, empty, or unparseable/;
 
   test("`next` refuses a state whose State Version field is MISSING (exact unparseable remediation)", () => {
@@ -239,11 +236,10 @@ describe("t282 runtime state-version guard (next / report)", () => {
     expect(r.out).not.toMatch(/predates the current/);
   });
 
-  // leandro round-3 follow-up (P2): the previous parser captured only the first
-  // non-whitespace token and accepted anything on the rest of the line, so
-  // "State Version: 8 garbage" passed as v8. The anchored parser rejects any
-  // trailing content on the schema-token line and routes it through the
-  // unparseable branch.
+  // A parser that captures only the first non-whitespace token accepts anything
+  // on the rest of the line, so "State Version: 8 garbage" passed as v8. The
+  // anchored parser rejects any trailing content on the schema-token line and
+  // routes it through the unparseable branch.
   test("`next` refuses trailing content on the State Version line as unparseable, not as v8", () => {
     const r = runOrchestrate("next", "8 garbage");
     expect(r.kind).toBe("error");

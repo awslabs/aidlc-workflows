@@ -30,7 +30,6 @@ afterEach(() => {
   for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-/** Lay out <root>/docs/page.md plus a real out-of-tree target, run the script. */
 function run(pageBody: string): { exitCode: number; stderr: string; page: string } {
   const root = mkdtempSync(join(tmpdir(), "t246-"));
   scratch.push(root);

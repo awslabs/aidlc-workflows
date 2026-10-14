@@ -2,9 +2,9 @@
 
 > Audience: Tier 2/3 (team adopter, framework contributor).
 
-This chapter documents the per-workflow `runtime-graph.json` artefact
-introduced in v0.5.0 milestone 8 — the data-plane mirror of `stage-graph.json`,
-materialised from the audit log on every approval gate. Cross-link to
+This chapter documents the per-workflow `runtime-graph.json` artefact:
+the data-plane mirror of `stage-graph.json`, materialised from the audit
+log on every approval gate by `aidlc-runtime.ts compile`. Cross-link to
 [Plane Architecture](02-plane-architecture.md) (the control/data plane
 separation that motivates this artefact) and
 [State Machine](12-state-machine.md) (the lifecycle whose transitions
@@ -22,11 +22,16 @@ workflow runs.
 which stages have started, which have approved, what each stage's
 memory.md looks like, what sensors fired. One file per workflow, lives
 at `<record>/runtime-graph.json` — `<record>/` = the intent's record dir,
-`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`. Same node shape as
-`stage-graph.json`, populated with telemetry instead of structure.
+`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`. Its rows are
+`RuntimeStage` records (`aidlc-runtime.ts`), a separate shape from
+`stage-graph.json`'s `GraphStage` (`aidlc-graph.ts`); the two are joined
+by stage slug.
 
-It exists so consumers (milestone 11's Bolt fork/merge, milestone 12's gate ritual,
-milestone 14's doctor, v0.10.0's cross-workflow observer) read one
+It exists so consumers (the engine's Unit batches, read through
+`resolveBoltDag` in `aidlc-lib.ts`; the status line and `/aidlc --status`
+when the Unit plan file is not there; the `learnings surface` `memory_path`
+lookup in `aidlc-learnings.ts`; doctor's graph diagnostics in
+`aidlc-doctor-bundle.ts`; and `runtime summary`) read one
 materialised view rather than re-walking the audit log on every query.
 
 ---
@@ -39,7 +44,7 @@ bumping every consumer in the same PR.
 ```ts
 interface RuntimeGraph {
   workflow_id: string;            // ISO timestamp from LATEST WORKFLOW_STARTED audit row (so a re-created intent identifies the live workflow, not a dead one)
-  scope: string;                  // from state.md "Scope" field
+  scope: string;                  // from aidlc-state.md "Scope" field (or the latest WORKFLOW_STARTED row's Scope when the state has none)
   started_at: string;             // ISO 8601, same row as workflow_id
   stages: RuntimeStage[];         // chronological order by started_at
   bolt_dag?: BoltDag;             // present only when units-generation's unit-of-work-dependency.md carries a valid (well-formed, acyclic) fenced edge block; absent/malformed/cyclic blocks omit the node
@@ -63,13 +68,13 @@ interface RuntimeStage {
     tradeoffs: number;
     open_questions: number;
   } | null;
-  sensor_firings: SensorFiring[]; // empty array in milestone 8 (sensors fire in milestone 9 + milestone 10)
+  sensor_firings: SensorFiring[]; // SENSOR_FIRED rows in the stage window, paired to their terminal row by Fire id
   outcome: "approved" | "failed" | "pending";
-  learnings_captured: {           // null on pending rows; populated on transition to approved
-    from_orchestrator: number;    // zero in milestone 8 (gate ritual is milestone 12)
+  learnings_captured: {           // null on pending rows; on approved single-instance rows, RULE_LEARNED + SENSOR_PROPOSED rows in the window counted by Source
+    from_orchestrator: number;
     from_user_addition: number;
   } | null;
-  instances?: BoltInstance[];     // present only when stage runs per-Bolt; milestone 11 populates
+  instances?: BoltInstance[];     // present only when a Construction stage's window holds STATE_FORKED rows for at least two distinct Bolt slugs
 }
 
 interface BoltInstance {
@@ -86,17 +91,19 @@ interface BoltInstance {
 
 interface SensorFiring {
   id: string;
-  fire_id: string;                // 8-hex correlator emitted by the milestone 9 dispatcher on every row
-  result: "passed" | "failed" | "budget-override" | "incomplete"; // 4-state (milestone 12 Q10)
+  fire_id: string;                // 8-hex correlator (four random bytes) the sensor dispatcher stamps on every row of one fire
+  result: "passed" | "failed" | "budget-override" | "incomplete"; // the dispatcher's three terminal rows, plus incomplete for a FIRED row with no terminal (in a still-open window, only once the newest stage-start or sensor row is 60 s past it)
   ts: string;                     // FIRED row's timestamp
   detail_path?: string;
 }
 ```
 
 When `instances` is present, the stage-row's single-instance fields
-(`started_at`, `completed_at`, `memory_entries`, `memory_breakdown`)
-are NULL — those values sit on each instance instead. Stage-row
-fields and instance-array fields never coexist.
+(`started_at`, `completed_at`, `agent`, `memory_entries`,
+`memory_breakdown`) are NULL. `started_at` and `completed_at` sit on each
+instance instead; `memory_entries` and `memory_breakdown` stay null on
+the instances too (compile does not read a per-Bolt memory.md).
+Stage-row fields and instance-array fields never coexist.
 
 ### The Bolt/unit dependency DAG (`bolt_dag`)
 
@@ -138,11 +145,12 @@ dependency and can run in parallel. Level entries are sorted
 lexicographically before emission, so the node is deterministic
 regardless of authored order.
 
-The node is **omitted entirely** when the artifact is absent, or when
-its edge block is absent, malformed (duplicate name, dangling or
-self-dependency, unparseable), or cyclic — `compile` writes a stderr
-diagnostic naming the reason and leaves `bolt_dag` off the envelope
-rather than emit a wrong-but-valid DAG. Those failures are surfaced
+The node is **omitted entirely** when the artifact is absent (silently),
+or when the artifact exists but its edge block is absent, malformed
+(duplicate name, dangling or self-dependency, unparseable), or cyclic:
+then `compile` writes a stderr diagnostic naming the reason and leaves
+`bolt_dag` off the envelope rather than emit a wrong-but-valid DAG.
+Those failures are surfaced
 upstream at the 2.7 gate by the `required-sections` sensor, which
 validates the same block and reports `edge_block: ok | absent |
 malformed | cyclic`. The engine reads the same block before the 2.7 review request and before the 2.7 gate opens, and while it cannot, it hands the agent the defect and the block's shape instead; a block that breaks after the approval stops Construction's `next` on the same repair step for the agent, never on an error for the person. Authoring the edges as structured data (knowledge
@@ -161,25 +169,27 @@ directive's message to the human and binds a new intent to its session (see
 [Hooks and Tools](06-hooks-and-tools.md#posttooluse-rebuild-stage-graphts));
 neither affects the compile. It then filters cheaply:
 
-1. **Command filter** — only transition-capable `aidlc` state, jump, Bolt, and
-   utility routes plus `orchestrate report` get past the early exit. The
-   runtime route is excluded
+1. **Command filter** (`classifyRuntimeCompileCommand` in `aidlc-lib.ts`):
+   only the `state`, `jump`, `bolt`, `unit`, and `utility` tools,
+   `orchestrate report`, and the semantic one-shot routes (`aidlc status`,
+   `doctor`, `version`, `help`, `scope change`, `config set`, `recompose`,
+   `report`) get past the early exit. The runtime route is rejected
    (recursion guard); `aidlc-log.ts` emits only chatty in-stage events;
    `aidlc-worktree.ts` emits only WORKTREE_* events.
 2. **Audit-existence guard** — exit if the intent's `audit/` shard doesn't exist yet.
 3. **Heartbeat** - write `<record>/.aidlc-engine/hooks-health/rebuild-stage-graph.last`
    for doctor's silent-hook detection.
-4. **Last-3-block tail-read** — split `audit.md` on `\n---\n`, take the
-   last 3 entries.
-5. **Event-class filter** — match
-   `**Event**: (GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|WORKFLOW_COMPLETED)`
+4. **Last-3-block tail-read**: merge every `audit/` shard of the active
+   intent into one buffer, split it on `\n---\n`, take the last 3 entries.
+5. **Event-class filter**: match
+   `**Event**: (GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|UNIT_MERGED|WORKFLOW_COMPLETED)`
    against any of the 3 blocks. Exit on no match.
 6. **Dispatch** — `aidlc engine runtime compile ...`.
 
 `WORKFLOW_COMPLETED` is in the transition set so the final-stage
-approve fires the compile. `handleCompleteWorkflow` at
-`aidlc-state.ts:575-593` emits 4 audit rows — STAGE_COMPLETED +
-PHASE_COMPLETED + PHASE_VERIFIED + WORKFLOW_COMPLETED — and the last 3
+approve fires the compile. `handleCompleteWorkflow` in `aidlc-state.ts`
+emits 4 audit rows (STAGE_COMPLETED +
+PHASE_COMPLETED + PHASE_VERIFIED + WORKFLOW_COMPLETED) and the last 3
 of those are `PHASE_COMPLETED + PHASE_VERIFIED + WORKFLOW_COMPLETED`.
 (On the approve path the STAGE_COMPLETED is suppressed because approve
 already emitted it, and a `GATE_APPROVED` precedes the run — so a
@@ -206,9 +216,9 @@ first gate: consumers cannot assume it exists. A fresh clone,
 a `git clean`, or a single dropped hook compile leaves the same hole
 mid-workflow, because the file is gitignored and machine-local.
 Consumers must therefore treat an absent file as ordinary state and
-recompute or degrade, never fail: `learnings surface` recomputes the one
-field it reads (`memory_path`, derived exactly as the compile derives
-it) and warns on stderr naming the rebuild command, so the §13 ritual
+recompute or degrade, never fail: `learnings surface` silently recomputes
+the one field it reads (`memory_path`, derived exactly as the compile
+derives it), so the stage-protocol section 13 ritual
 still runs on the first gate. A MALFORMED file, or a row that exists
 without a `memory_path`, is different — that is corruption, and it fails.
 
@@ -257,19 +267,19 @@ completion emission for the same slug.
 ## 5. MEMORY_EMPTY semantics
 
 `MEMORY_EMPTY` audit rows are emitted by the compile (the only
-emitter — `audit-format.md:171` registers
-`tools/aidlc-runtime.ts compile`) when a stage row meets ALL of:
+emitter: the Learning Loop section of `audit-format.md`'s event registry
+lists `tools/aidlc-runtime.ts compile`) when a stage row meets ALL of:
 
-- `outcome === "approved"` (pending rows do not emit — see §6 below)
+- `outcome === "approved"` (pending rows do not emit; see below)
 - `memory_entries === 0` (file exists, zero entries under the four
   canonical §13 headings)
 
 Pending rows with zero entries do NOT emit. A stage still in flight
 may legitimately have zero entries because the conductor hasn't
 written to memory.md yet — emitting MEMORY_EMPTY mid-flight would
-generate noise that doesn't represent a real diary skip. The signal
-milestone 14's doctor wants is "stage approved with zero entries" — that
-requires the stage to have approved.
+generate noise that doesn't represent a real diary skip. The signal is
+"stage approved with zero entries", which requires the stage to have
+approved.
 
 ### Idempotency — exactly once per (slug, gate-completion)
 
@@ -277,8 +287,8 @@ requires the stage to have approved.
 against the same audit log. MEMORY_EMPTY emits are stronger:
 **at most one MEMORY_EMPTY row per `(stage_slug, completed_at)` tuple**.
 
-Inside the locked section the compile re-reads `audit.md`, scans for
-existing MEMORY_EMPTY rows for each zero-entry-approved slug, and
+Inside the locked section the compile re-reads the intent's `audit/`
+shards, scans for existing MEMORY_EMPTY rows for each zero-entry-approved slug, and
 suppresses the emit if any prior row's Timestamp is at or after this
 slug's `completed_at`. This means:
 
@@ -291,9 +301,6 @@ slug's `completed_at`. This means:
   empty on re-approval, a fresh MEMORY_EMPTY row emits because the
   prior row's Timestamp is now < the new completed_at.
 
-Doctor's MEMORY_EMPTY-rate metric reads these rows directly without
-de-duplication; one row per gate-completion-with-empty-diary.
-
 If the artefact write fails after MEMORY_EMPTY emits inside the locked
 section, the audit log carries N MEMORY_EMPTY rows for stages whose
 runtime-graph.json never landed. The next compile sees those rows in
@@ -302,29 +309,25 @@ duplicate emits, no phantom artefacts.
 
 ---
 
-## 6. v0.4.0 backfill rule
+## 6. Missing memory.md rule
 
-Stages that completed before milestone 13's memory.md lifecycle ships have
-no memory.md history. The backfill rule:
+A stage whose memory.md does not exist (a diary that was never created)
+gets null counts and no MEMORY_EMPTY row:
 
-- `memory_entries: null` ↔ `memory_breakdown: null` ↔ no MEMORY_EMPTY emit.
+- `memory_entries: null`, `memory_breakdown: null`, no MEMORY_EMPTY emit.
 - Both fields move together. The discriminator is "did
-  `parseMemoryHeadings` execute?" — if memory.md exists (even
+  `parseMemoryHeadings` execute?": if memory.md exists (even
   zero-byte), it executed and the keys are numbers; if memory.md is
   absent, both are `null`.
 
-Without this rule, every v0.4.x user upgrading to v0.5.0 would see a
-storm of MEMORY_EMPTY rows on the first post-upgrade workflow.
-
 ---
 
-## 7. Recovery model — snapshot + suffix replay
+## 7. Recovery sources
 
-`runtime-graph.json` + `audit.md` form an event-sourced pair.
-`audit.md` is the append-only event log; `runtime-graph.json` is a
-materialised snapshot taken at the last gate transition. A reader with
-both reconstructs the current state by reading the snapshot, then
-replaying audit rows after the snapshot's last `completed_at`.
+`runtime-graph.json` and the intent's `audit/` shards form an
+event-sourced pair. The shards are the append-only event log;
+`runtime-graph.json` is a materialised snapshot taken at the last
+transition-class emit, and every compile re-derives it from the whole log.
 
 Five recovery sources, in human read order:
 
@@ -332,7 +335,7 @@ Five recovery sources, in human read order:
 2. **memory.md** (`<record>/<phase>/<stage>/memory.md`) — what the
    conductor chose to capture.
 3. **audit/ shards** — the canonical event log; what actually happened.
-4. **state.md** — the active-stage cursor.
+4. **aidlc-state.md**: the active-stage cursor.
 5. **runtime-graph.json** — the materialised view; faster to query
    than re-walking audit, but always re-derivable from it.
 
@@ -344,25 +347,26 @@ has written more entries since the last compile fired, the snapshot
 lags. Recovery consumers must re-parse memory.md at recovery time;
 they must NOT trust snapshotted counts for pending rows.
 
-v0.5.0 has no consumer that reads pending counts live. Documented for
-v0.6.0 `--resume`, which will need this carve-out.
+`aidlc-state.ts resume` (`handleResume`) does not read
+`runtime-graph.json`: it reports the cursor fields of `aidlc-state.md`
+(current stage, phase, status, scope, agent, next stage, gate state, the
+unit checkpoint when one is set) and scans the audit tail for a
+`SESSION_COMPACTED` row with no stage activity after it.
 
-### Parallel-Bolt mid-flight recovery (closed in v0.5.0)
+### Parallel-Bolt mid-flight recovery
 
-A workflow with parallel Bolts crashing mid-batch had no per-Bolt
-recovery seam in milestone 8 — the schema reserved `instances?` but compile
-only wrote single-instance rows on main, and worktrees never received
-a runtime-graph fragment. Closed in v0.5.0 by `aidlc-runtime.ts
-fragment-fork` (Bolt start) and `fragment-merge` (Bolt complete
---merge), and by the compile populator extension that emits
-`BoltInstance[]` when audit shows ≥ 2 distinct slugs in a
-Construction-phase stage's window.
+`aidlc-runtime.ts fragment-fork` (called by `aidlc-bolt start
+--worktree`) byte-copies main's `runtime-graph.json` into the Bolt's
+worktree (or writes an empty graph there when main has none), and `fragment-merge` (called by `aidlc-bolt complete --merge`)
+removes it; neither emits an audit row. The compile populates
+`BoltInstance[]` when a Construction-phase stage's window holds
+`STATE_FORKED` rows for at least two distinct Bolt slugs. The full
+lifecycle is in section 11.
 
-The per-Bolt fragment is dead-on-arrival in v0.5.0 (no v0.5.0 reader
-of the worktree's record-dir `runtime-graph.json`). v0.6.0 `--resume`
-should treat the fragment as a hint, with main's post-merge
-runtime-graph as canonical, and additionally check for orphaned
-worktrees per `aidlc-bolt.ts` to surface a recovery prompt for those.
+No consumer reads the worktree fragment's content: `fragment-merge`
+hashes and removes it, a swarm recovery moves it into its resume archive,
+`resume` reports from `aidlc-state.md` and the audit tail (above), and
+main's post-merge `runtime-graph.json` is rebuilt from main's audit shards.
 
 ---
 
@@ -430,23 +434,16 @@ anchor.
 
 ---
 
-## 10. Known gaps closed by future PRs
+## 10. Harness dispatch
 
-- **MEMORY_EMPTY-rate metric** — milestone 14 doctor surfaces the rate using
-  the `(Stage, ISO-second)` de-dup tuple frozen in §5.
-- **`learnings_captured` provenance counts** — milestone 12 gate ritual
-  populates `from_orchestrator` and `from_user_addition`.
-- **`sensor_firings` array** — milestone 9 + milestone 10 dispatch sensors and
-  populate this slot.
-- **Bolt fork/merge of runtime-graph.json** — closed in v0.5.0 by
-  `fragment-fork` (no new audit event; rides on STATE_FORKED +
-  AUDIT_FORKED) and `fragment-merge` (no new audit event; rides on
-  STATE_MERGED + AUDIT_MERGED). Compile populates `instances[]` from
-  audit's BOLT_*-tagged events when ≥ 2 distinct slugs sit inside a
-  Construction stage's window.
-- **CLI-mode dispatch for headless workflows** — v0.6.0+ may ship a
-  non-Claude-Code execution path; the hook only fires inside a Claude
-  Code session.
+The compile hook is a core hook, not a Claude Code one. Claude Code
+registers it as a PostToolUse Bash hook in `settings.json`; the Codex,
+Copilot, Cursor, Kiro CLI, Kiro IDE and opencode adapters forward their
+shell post-tool event to the same `aidlc-rebuild-stage-graph.ts`. Kiro
+IDE does not surface the shell command, so its adapter sends
+`source: "ide-audit-sync"` and the hook skips the command filter, gates
+on the audit tail, and skips the compile when `runtime-graph.json` is
+already at least as new as every audit shard.
 
 ---
 

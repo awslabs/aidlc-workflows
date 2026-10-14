@@ -222,15 +222,16 @@ Verifies the orchestrator's structural correctness without invoking the LLM. If 
 - Scope-stage mapping, graph consistency, stage I/O contract chains, protocol compliance (integration)
 - Stage output-to-step validation: all declared outputs referenced in instruction steps (integration, deterministic via the `aidlc-validate.ts` CLI tool)
 - Scope runs: every shipped scope driven from the person's first request to done (integration, `tests/integration/t-scope-run-*`; see below)
+- Scope-host runs: one classic journey on the Claude, Codex, Copilot CLI, Kiro CLI and Kiro IDE trees, through each tree's own hooks (integration, `tests/integration/t-scope-host-*`; see below)
 - Guard matrix: what the person meets when files change under approved work, per Guard Policy, review cap and plan approval (integration, `tests/integration/t-guard-matrix-*`; see below)
 
 **Run:** `bun tests/run-tests.ts --no-llm`. The default profile includes the
 integration level, so the run needs the LLM and opens the live-model gate
 whenever the `claude` CLI is on PATH. `--no-llm` closes that gate and keeps this
 layer LLM-free; the deterministic tests still run. `bash tests/run-tests.sh` is a
-compatibility wrapper for existing POSIX commands. The scope runs and the guard
-matrix run only when a `--filter` selects them, or with `--release`/`--all` (see
-the CLI reference).
+compatibility wrapper for existing POSIX commands. The scope runs, the
+scope-host runs and the guard matrix run only when a `--filter` selects them, or
+with `--release`/`--all` (see the CLI reference).
 
 ### Scope runs
 
@@ -260,6 +261,41 @@ the stand-in learns that step. A known engine block the runs exempt is listed in
 their own integration job: Linux on pull requests and in the merge queue, and
 Linux, macOS and Windows in the nightly Full Suite (its `scope_runs` job) and in
 a `full_verification` Full Suite.
+
+### Scope runs on every harness tree
+
+`tests/harness/scope-hosts.ts` runs the same stand-in and person script on
+another tool's tree, through that tool's own hooks. Each host installs the tree
+as it ships, gives the agent's shell what that tool gives it (Codex's
+`CODEX_THREAD_ID`, Kiro's `KIRO_SESSION_ID`), and at every moment (a chat
+starts, the person types or picks, a shell or file tool runs, a helper is sent,
+the turn ends) runs each command the tree's wiring registers, fed that tool's
+payload: `.codex/hooks.json`, `.github/hooks/aidlc.json`, Kiro CLI's agent JSON
+(`.kiro/agents/<agent>.json`, glob matchers over a tool's name and its alias; a
+helper runs its own agent's hooks under a session of its own) and Kiro IDE's
+hook cards (`.kiro/hooks/*.json`, regex matchers in file-name order; no card runs
+after a write or a command, so the next card does that work, as in Kiro).
+`tests/unit/t-scope-hosts.test.ts` pins those payloads against the ones recorded
+from each tool (`tests/fixtures/<tool>-hook-payloads`). Each tool's answer is
+read in its own form: Codex and Kiro refuse with exit 2, Copilot with a deny
+decision, Copilot runs the command its hook rewrote, and Kiro's person-turn hook
+may run the turn's first `next` itself, so the agent acts on that reply. Every
+tool call fires the hooks, so a refusal stops the run, and a hook command that
+fails is a problem.
+
+Each `t-scope-host-<harness>.test.ts` (`claude`, `codex`, `copilot`, `kiro`,
+`kiro-ide`) drives one
+journey: classic with its design stages skipped and two Units built one at a
+time, a checkpoint each. After the first Unit's checkpoint the person stops for
+the day, picks the work up from a fresh clone (the folder left with only what a
+clone holds, the first clone's audit shard sorting last), and carries on in a
+second chat with `/aidlc --resume`. The journey checks what the scope runs
+check, plus two audit shards, two chats, each Unit's checkpoint asked once, and
+no detour the person should not meet; a known one is listed in
+`KNOWN_JOURNEY_DETOURS` with a `test.todo` named after it. CI runs them as their
+own integration job (`scope-hosts`): Linux on pull requests and in the merge
+queue, and Linux, macOS and Windows in the nightly Full Suite (its `scope_runs`
+job) and in a `full_verification` Full Suite.
 
 ### Guard matrix
 
@@ -675,11 +711,11 @@ so a broken enumerator reds the gate.
 | Trigger | Layer | Command | Where |
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
-| Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, twelve unit shards and deterministic integration (the scope runs and the guard matrix in jobs of their own), using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
-| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows (the scope runs and the guard matrix on Linux only; on macOS the unit tier runs only the unit files that name macOS and the ones the change touches, in two jobs instead of twelve shards), adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
+| Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, twelve unit shards and deterministic integration (the scope runs, the scope-host runs and the guard matrix in jobs of their own), using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
+| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows (the scope runs, the scope-host runs and the guard matrix on Linux only; on macOS the unit tier runs only the unit files that name macOS and the ones the change touches, in two jobs instead of twelve shards), adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
 | Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, required N/M shard for unit and optional manual-only `diagnostic_filter`; non-unit tiers omit the shard; one runner executes with model gates closed | GitHub Actions |
-| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, twelve unit shards, integration and isolated E2E as separate jobs in the shared workflow, with the scope runs and the guard matrix on Linux | GitHub Actions |
-| Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running native obligations, release contracts, bounded hosted live shards, and the scope runs and the guard matrix on Linux, macOS and Windows | GitHub Actions |
+| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, twelve unit shards, integration and isolated E2E as separate jobs in the shared workflow, with the scope runs, the scope-host runs and the guard matrix on Linux | GitHub Actions |
+| Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running native obligations, release contracts, bounded hosted live shards, and the scope runs, the scope-host runs and the guard matrix on Linux, macOS and Windows | GitHub Actions |
 | Explicit manual Full Suite with `full_verification=true` | Credential-free candidate verification | Runs every job that receives no OIDC or AWS credentials for the selected workflow head, including an unmerged PR; live lanes need `live_verification`; separate evidence is not consumed by stable publication | GitHub Actions |
 | Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is not consumed by stable publication | GitHub Actions |
 | Stable tag | Exact-source release validation | `release.yml` validates the tag and source, reuses a passing release-purpose `full-suite-result` for the exact tagged commit or calls `full-suite.yml` for it, and runs contract checks, builds, and native/installer/lifecycle validation alongside; `publish` and `release` require the passing Full Suite | GitHub Actions |
@@ -718,7 +754,12 @@ Windows runner timing out cases) may have run up to 45 minutes and
 still gets its one retry; `retries.json` marks it `caseTimeoutsOnly`. The rule lives in
 `tests/lib/file-retry.ts`, shared with the isolated live retry. A crash or
 nonzero exit without failed cases, a file that executed no cases, a file that
-ran past its deadline, and a second failure are never retried. Only a retry that passes every case the
+ran past its deadline, and a second failure are never retried. Neither is a
+person-turn failure: a case that fails with the drives' `PersonTurnError`
+(`tests/harness/person-turns.ts`: a decision recorded as the person's with no
+reply of theirs behind it, or work started before they answered) keeps its file
+red with a `NO RETRY` line, because a pass on a second attempt would hide the
+break a person would meet. Only a retry that passes every case the
 first attempt ran replaces the first failure: a second failure, or a retry that
 skips one of those cases or executes none, stays a failure.
 The retry starts only after the first attempt's evidence is moved aside whole;
@@ -779,13 +820,14 @@ called by the preview are never cancelled this way.
 `.github/workflows/deterministic-tests.yml`. Callers select the immutable `ref`,
 runner, tier, unit shard, an optional file `filter` and `exclude` (both empty
 by default, so the whole tier runs) and artifact label. Both split integration
-in three jobs: the scope runs (`filter`, `t-scope-run-*`), the guard matrix
-(`filter`, `t-guard-matrix-*`) and everything else (`exclude` of both). PR CI
-selects Linux smoke, twelve weighted unit shards, and the three integration
-jobs; a `full_verification` Full Suite selects smoke, the same twelve shards,
-the three integration jobs, and isolated E2E on Linux/macOS/Windows. The
-nightly Full Suite runs no deterministic tier; its `scope_runs` job calls the
-shared workflow for the scope runs and the guard matrix on all three. Integration and
+in four jobs: the scope runs (`filter`, `t-scope-run-*`), the scope-host runs
+(`filter`, `t-scope-host-*`), the guard matrix (`filter`, `t-guard-matrix-*`)
+and everything else (`exclude` of all three). PR CI selects Linux smoke, twelve
+weighted unit shards, and the four integration jobs; a `full_verification` Full
+Suite selects smoke, the same twelve shards, the four integration jobs, and
+isolated E2E on Linux/macOS/Windows. The nightly Full Suite runs no
+deterministic tier; its `scope_runs` job calls the shared workflow for the scope
+runs, the scope-host runs and the guard matrix on all three. Integration and
 E2E run as independent jobs per OS, each with a fresh Bun runner process.
 Every call owns a fresh checkout, installs frozen dependencies under Bun 1.4.2,
 regenerates projections, and invokes the Bash wrapper with `--debug -P 8
@@ -1057,11 +1099,12 @@ are left out of the tier, and the rest keep their ordinary, unfiltered rules
 below. With `--shard`, the shard is chosen first and then the files it matches
 are left out of it.
 
-The scope runs and the guard matrix (`t-scope-run-*`, `t-guard-matrix-*`) take
-minutes per file, so a run with no `--filter` leaves them out and says so; the
-full `--release` and `--all` acceptance keeps them. Run them alone with
-`--integration -P 8 --filter '^t-(scope-run|guard-matrix)-'`, as their CI jobs
-do.
+The scope runs, the scope-host runs and the guard matrix (`t-scope-run-*`,
+`t-scope-host-*`, `t-guard-matrix-*`) take minutes per file, so a run with no
+`--filter` leaves them out and says so; the full `--release` and `--all`
+acceptance keeps them. Run them alone with
+`--integration -P 8 --filter '^t-(scope-run|scope-host|guard-matrix)-'`, as
+their CI jobs do.
 
 An explicit **`--filter` requires execution in each selected file**. A file
 whose cases are all skipped (or which declares no cases) fails the run even
@@ -1692,11 +1735,36 @@ Installed tools and dependencies are reused. The existing process/transport
 retirement checks must succeed before a slot is reused. Cleanup uncertainty
 stops dispatch and marks remaining files incomplete.
 
+Stock permission settings: the two golden journeys drive Claude Code in its
+default permission mode with the project's shipped settings (setting sources
+user, project and local; user is the drive's scratch config folder) and answer
+every prompt yes. A prompt for AI-DLC's own command or record (one that names
+`aidlc/` or `.claude/`), or a write outside the project, fails the journey;
+every other prompt is listed in its log (`tests/harness/stock-permissions.ts`).
+The other Claude SDK drives keep `bypassPermissions`. The Codex `--json`
+journeys run the shipped `workspace-write` sandbox, and a command naming
+`.codex/` or `aidlc/` that the sandbox refused fails the turn. Copilot CLI runs
+with `--allow-all-tools` (AI-DLC ships no Copilot CLI allow rules, so the
+person's own `--allow-tool` rules decide), the Claude terminal journeys skip
+permission prompts, and opencode already runs without `--auto`.
+
 `--file-retries 1` retries only a short failed file after confirmed cleanup, in
 fresh state, while retaining both attempts under `e2e-artifacts/<file>/attempt-N`.
 (Without `--isolated-files`, the same flag retries smoke, unit and integration
 files in a fresh process; the merge queue uses that, as described above.)
-Timeouts, incomplete evidence and cleanup failures are not retried. Passing
+Timeouts, incomplete evidence, cleanup failures and person-turn failures are
+not retried; a person-turn failure also prints a `Person-turn failure` error
+line. A pass on the retry prints a `Flaky live test` warning. A file that
+failed because the model service did (the SDK drive's `ModelApiError`: Claude
+Code ended the run on a 429, a 5xx or a dropped connection, never a 4xx the
+request caused) keeps its one retry and prints a `Model service failure`
+warning; when every failed case is the service's, its line in `failures.txt` and
+the preview report reads "the model service failed, not AI-DLC: infrastructure,
+not a test result", and a real failure beside one keeps the file's ordinary
+reason. The Windows live
+job keeps the isolated child's output out of its log, so it says these lines
+from the collected `e2e-results.json` (`bun scripts/ci-retry-report.ts --live
+tests/logs`), in fixed words and the test file's name only. Passing
 files are not rerun. Each shard retains its authenticated isolation and required
 capability preflights. Manual `--family FAMILY --test <repository-path>` selects
 only that file on its declared platforms while preserving its shard identity.
@@ -1760,8 +1828,9 @@ Artifacts are `full-suite-native-plan`, `full-suite-native-<job>` (complete log
 stamp directories and JUnit), `full-suite-native-result`,
 `full-suite-production-guards`,
 `full-suite-deterministic-<suite>-<OS>` (suite is `smoke`, `unit-1` through
-`unit-12`, `integration`, `scope-runs`, `guard-matrix`, or `e2e`),
-`full-suite-scope-runs-<OS>` and `full-suite-guard-matrix-<OS>` (the release
+`unit-12`, `integration`, `scope-runs`, `scope-hosts`, `guard-matrix`, or `e2e`),
+`full-suite-scope-runs-<OS>`, `full-suite-scope-hosts-<OS>` and
+`full-suite-guard-matrix-<OS>` (the release
 `scope_runs` job), `full-suite-live-<family>-<slice-number>-<OS>`,
 `full-suite-live-release-contract-Windows`, and the purpose-specific result
 (90-day retention): `full-suite-result` for `purpose: "release"`,
@@ -1930,7 +1999,9 @@ The broker stays under the runner identity; only nonsecret routes and model pins
 cross into the live user's environment. Failed isolation proofs block execution.
 
 Windows Codex also provisions its two native sandbox identities and verifies
-both using fresh test homes. The readiness command runs through PowerShell and
+both using fresh test homes. A provisioning run that exits non-zero runs once
+more on the same fresh host, its logs kept beside the first run's; a timeout
+or an unfinished output drain still fails closed at once. The readiness command runs through PowerShell and
 Bun under the actual sandbox: the shell must start in the project, Bun must
 canonicalize its path, and credential reads and writes outside the workspace
 must remain denied. The sandbox identities receive directory metadata and

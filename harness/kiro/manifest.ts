@@ -20,6 +20,26 @@
 import type { HarnessManifest } from "../../scripts/manifest-types.ts";
 import onboardingFills from "./onboarding.fills.ts";
 
+// The personas with an agent JSON below. Kiro CLI's 3.0 engine also loads each
+// one's prompt .md as an agent of the same name, and a dispatch runs that one
+// (#1394): its frontmatter carries the tools the JSON grants on v2.
+const PERSONA_AGENTS = [
+  "aidlc-architect-agent",
+  "aidlc-developer-agent",
+  "aidlc-product-lead-agent",
+  "aidlc-architecture-reviewer-agent",
+  "aidlc-composer-agent",
+  "aidlc-product-agent",
+  "aidlc-design-agent",
+  "aidlc-delivery-agent",
+  "aidlc-aws-platform-agent",
+  "aidlc-compliance-agent",
+  "aidlc-devsecops-agent",
+  "aidlc-quality-agent",
+  "aidlc-pipeline-deploy-agent",
+  "aidlc-operations-agent",
+] as const;
+
 const manifest: HarnessManifest = {
   name: "kiro",
   productName: "Kiro CLI",
@@ -102,6 +122,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/active-memory/ (the
           // engine's copy of the active space's method).
           "sha256:28a69800dcac189aa2a976820db237b45bcf6dd7d7e6d4fae5c1603225b9957a",
+          // The variant shipped before the block ignored aidlc/.aidlc-request-text/
+          // (a request the engine has not read yet).
+          "sha256:99b4560aa1bd95f26077eb69a0c6c2a40f81146a212e70d876c27bb84f2b1789",
         ],
       },
     },
@@ -191,6 +214,13 @@ const manifest: HarnessManifest = {
     // determinism guard.
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
+
+  // The Kiro IDE row's tools and MCP lines, without its permissions: on v2 the
+  // JSON still decides, and the .md is only its prompt.
+  frontmatterAdditions: PERSONA_AGENTS.map((agent) => ({
+    file: `agents/${agent}.md`,
+    lines: [`tools: ["read", "write", "shell"]`, "includeMcpJson: true"],
+  })),
 
   // Neutral root guidance is shared; native setup is loaded through agent resources.
   onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "steering/aidlc-onboarding.md", fills: onboardingFills },

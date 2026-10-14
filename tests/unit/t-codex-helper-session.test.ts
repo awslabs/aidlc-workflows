@@ -111,13 +111,12 @@ describe("a Codex helper's engine command stays on the chat that spawned it", ()
   test("the resolver maps a recorded helper thread id to the root session; unknown ids and bad records fall through", () => {
     const dir = project();
     expect(resolveAs(dir, ROOT)).toBe(BOUND_RECORD);
-    // No record yet: the helper's thread is unbound and the cursor decides (main's behaviour).
+    // No record yet: the helper's thread is unbound and the cursor decides.
     expect(resolveAs(dir, HELPER)).toBe(CURSOR_RECORD);
     const note = (lib as unknown as { noteHelperSession?: (dir: string, root: string, agent: string) => void }).noteHelperSession;
     expect(typeof note).toBe("function");
     note!(dir, ROOT, HELPER);
     expect(resolveAs(dir, HELPER)).toBe(BOUND_RECORD);
-    // A helper id equal to the root, an unsafe id, and an unsafe root write nothing.
     note!(dir, ROOT, ROOT);
     note!(dir, ROOT, "../escape");
     note!(dir, "../escape", "01a12051-0000-7000-8000-000000000003");

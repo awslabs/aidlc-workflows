@@ -129,7 +129,7 @@ describe("t311 committed reviewed-source evidence", () => {
     writeFileSync(committedPath, "tampered committed evidence\n");
     expect(rewrite).toThrow(/address collision or corruption/);
 
-    writeFileSync(committedPath, original); // restore; now tamper only the local copy
+    writeFileSync(committedPath, original);
     writeFileSync(localPath, "tampered local snapshot\n");
     expect(rewrite).toThrow(/address collision or corruption/);
 
@@ -150,7 +150,6 @@ describe("t311 committed reviewed-source evidence", () => {
     // current path still binds its manifest bytes.
     expect(parseUnitSourceListing(`manifest\t${sha}\t-\n`)?.listing.size).toBe(0);
 
-    // Escaped paths (tab in the filename) survive the TSV round-trip.
     const weird = serializeSourceListing(new Map([[sourcePathKey("", "has\ttab.ts"), `100644 ${oid}`]]));
     const reparsed = parseUnitSourceListing(`manifest\t${sha}\t-\n${weird}`);
     expect(reparsed?.listing.get("\0has\ttab.ts")).toBe(`100644 ${oid}`);

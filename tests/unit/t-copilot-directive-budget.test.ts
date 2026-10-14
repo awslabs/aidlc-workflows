@@ -157,7 +157,6 @@ function addKnowledge(proj: string, harnessDir: string, agent: string, count: nu
   }
 }
 
-// The same project with the Claude harness installed beside Copilot's.
 function withClaude(proj: string, root: string): void {
   cpSync(join(root, "claude", ".claude"), join(proj, ".claude"), { recursive: true });
 }
@@ -180,12 +179,10 @@ function projectEngine(proj: string, harnessDir: string): Engine {
   return (args) => [process.execPath, join(proj, harnessDir, "tools", "aidlc-orchestrate.ts"), ...args];
 }
 
-// A native install's `aidlc` command.
 function nativeEngine(executable: string): Engine {
   return (args) => [executable, "engine", "orchestrate", ...args];
 }
 
-// Another tree's Bun tools pointed at the project.
 function treeEngine(root: string, harnessDir: string, proj: string): Engine {
   return (args) => [
     process.execPath, join(root, harnessDir, "tools", "aidlc-orchestrate.ts"), ...args, "--project-dir", proj,
@@ -452,7 +449,6 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
     const path = join(proj, ".aidlc", "tools", "data", "harness.json");
     writeFileSync(path, `${JSON.stringify({ ...shippedHarnessData(join(proj, ".aidlc")), directiveMaxBytes: own }, null, 2)}\n`);
     const { results, final } = await deliverIn(proj, ".aidlc", "functional-design");
-    // Refused at once, before any rules part is sent.
     expect(results.map(({ directive }) => directive.kind)).toEqual(["error"]);
     for (const { stdout } of results) expect(Buffer.byteLength(stdout, "utf-8")).toBeLessThanOrEqual(own);
     expect(final.kind).toBe("error");
@@ -557,7 +553,6 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
       const delivery = await deliverIn(proj, ".aidlc", "functional-design", projectEngine(proj, ".aidlc"), first);
       expect(delivery.results.map(({ directive }) => directive.kind), skill).toEqual(["load-steering", "run-stage"]);
       expectWholeDeliveries([delivery]);
-      // A single-stage run stays single across its rules parts.
       const single = (delivery.final as Printed & { single?: boolean }).single === true;
       expect(single, skill).toBe(first.includes("--single"));
     }
@@ -741,7 +736,6 @@ function copilotTool(proj: string, path: string[], args: string[], input?: strin
   return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
-// The person's reply in chat, read by the human-turn hook.
 function reply(proj: string, prompt: string): void {
   const { status, out } = copilotTool(proj, ["tools", "aidlc.ts"], ["engine", "hook", "record-human-turn"], JSON.stringify({
     hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt,

@@ -10,6 +10,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -6561,8 +6562,9 @@ process.exit(0);
 
   // Kiro CLI offers an agent only the servers its tools name: config names
   // every server in the project's file and in the person's own Kiro settings
-  // for the AI-DLC agent, and reads the person's file without writing it.
-  test("Kiro CLI config grants the AI-DLC agent every MCP server it finds", () => {
+  // for the AI-DLC agent and its 14 specialists, and reads the person's file
+  // without writing it.
+  test("Kiro CLI config grants the AI-DLC agent and its specialists every MCP server it finds", () => {
     type Agent = { includeMcpJson?: unknown; tools: string[]; allowedTools: string[] };
     const kiroHome = temp("aidlc-t294-kiro-home-");
     mkdirSync(join(kiroHome, "settings"), { recursive: true });
@@ -6578,6 +6580,21 @@ process.exit(0);
       readFileSync(join(DIST_RELEASE, "kiro", ".kiro", "settings", "mcp.json"), "utf-8"),
     ) as { mcpServers: Record<string, unknown> }).mcpServers);
     const agentPath = join(project, ".kiro", "agents", "aidlc.json");
+    // Each specialist keeps its own tools and allowedTools, with the grants given.
+    const specialists = readdirSync(join(DIST_RELEASE, "kiro", ".kiro", "agents"))
+      .filter((file) => /^aidlc-.+-agent\.json$/.test(file));
+    expect(specialists).toHaveLength(14);
+    const specialistGrants = (root: string, grants: string[], file?: string) => {
+      for (const name of file ? [file] : specialists) {
+        const shipped = JSON.parse(readFileSync(join(DIST_RELEASE, "kiro", ".kiro", "agents", name), "utf-8")) as Agent;
+        const current = JSON.parse(readFileSync(join(root, ".kiro", "agents", name), "utf-8")) as Agent;
+        expect(current.includeMcpJson, name).toBe(true);
+        expect(current.tools, name).toEqual([...shipped.tools.filter((tool) => !tool.startsWith("@")), ...grants]);
+        expect(current.allowedTools, name).toEqual(shipped.allowedTools);
+      }
+    };
+    const grantsOf = (path: string) =>
+      (JSON.parse(readFileSync(path, "utf-8")) as Agent).tools.filter((tool) => tool.startsWith("@"));
 
     const setup = run(args, project, env);
     expect(setup.status, setup.stdout + setup.stderr).toBe(0);
@@ -6585,6 +6602,7 @@ process.exit(0);
     expect(agent.includeMcpJson).toBe(true);
     expect(agent.tools).toEqual([...shippedAgent.tools, ...shippedServers.map((name) => `@${name}`), "@my-docs"]);
     expect(agent.allowedTools).toEqual(shippedAgent.allowedTools);
+    specialistGrants(project, grantsOf(agentPath));
 
     // A server the person adds to the project's file reaches the agent the
     // next time config runs.
@@ -6601,6 +6619,7 @@ process.exit(0);
       "@my-docs",
     ]);
     expect(agent.allowedTools).toEqual(shippedAgent.allowedTools);
+    specialistGrants(project, grantsOf(agentPath));
     expect(readFileSync(personalMcp)).toEqual(personalBefore);
 
     // The agent file travels with the project, so a teammate's config run
@@ -6618,6 +6637,7 @@ process.exit(0);
       ...shippedAgent.tools,
       ...[...shippedServers, "team-docs", "their-docs", "my-docs"].map((name) => `@${name}`),
     ]);
+    specialistGrants(project, grantsOf(agentPath));
 
     // A personal file kept as a link (a dotfiles folder) is read through it.
     const linkedHome = temp("aidlc-t294-kiro-home-linked-");
@@ -6631,6 +6651,7 @@ process.exit(0);
     const linked = run(args, project, { KIRO_HOME: linkedHome });
     expect(linked.status, linked.stdout + linked.stderr).toBe(0);
     expect((JSON.parse(readFileSync(agentPath, "utf-8")) as Agent).tools).toContain("@linked-docs");
+    specialistGrants(project, grantsOf(agentPath));
 
     // A copy install puts the runtime's files in the project before config
     // runs: the agent file as shipped is AI-DLC's, so setup names the servers
@@ -6643,6 +6664,17 @@ process.exit(0);
     const copiedAgentPath = join(copied, ".kiro", "agents", "aidlc.json");
     expect((JSON.parse(readFileSync(copiedAgentPath, "utf-8")) as Agent).tools)
       .toEqual([...shippedAgent.tools, ...shippedServers.map((name) => `@${name}`), "@my-docs"]);
+    specialistGrants(copied, grantsOf(copiedAgentPath));
+    // A grant added by hand to one specialist stays on that one, not the others.
+    const developerPath = join(copied, ".kiro", "agents", "aidlc-developer-agent.json");
+    const developer = JSON.parse(readFileSync(developerPath, "utf-8")) as Agent;
+    developer.tools.push("@hand-docs");
+    writeFileSync(developerPath, `${JSON.stringify(developer, null, 2)}\n`);
+    const handRun = run([...args.slice(0, 2), copied, ...args.slice(3)], copied, env);
+    expect(handRun.status, handRun.stdout + handRun.stderr).toBe(0);
+    specialistGrants(copied, [...grantsOf(copiedAgentPath), "@hand-docs"], "aidlc-developer-agent.json");
+    specialistGrants(copied, grantsOf(copiedAgentPath), "aidlc-architect-agent.json");
+    expect(grantsOf(copiedAgentPath)).not.toContain("@hand-docs");
     // A grant added by hand stays named like any other; another hand edit, such
     // as a built-in tool, stops config and keeps the person's bytes.
     const edited = JSON.parse(readFileSync(copiedAgentPath, "utf-8")) as Agent;

@@ -37,7 +37,7 @@ import {
  * What a setup that asks no question does about the status line when the person
  * never chose: "nothing" adds nothing (AI-DLC's status line appears only when
  * someone says yes or turns it on); "when-they-have-none" adds AI-DLC's when
- * no status line of their own is in reach. Arden's call (2026-10-12): nothing.
+ * no status line of their own is in reach.
  */
 export type StatusLineUnaskedDefault = "nothing" | "when-they-have-none";
 export const STATUSLINE_UNASKED_DEFAULT: StatusLineUnaskedDefault = "nothing";
@@ -660,7 +660,8 @@ export type CodexStatusLineWrite = {
 /**
  * Put AI-DLC's `status_line` into, or take it out of, the project's shared
  * .codex/config.toml. Only that line (and the `[tui]` header when nothing else
- * is in the table) is written; every other byte, comments and spelling stay,
+ * is in the table, with AI-DLC's own comment and the blank lines framing it) is
+ * written; every other setting keeps its comments and spelling,
  * and the result is parsed back and compared before it is written.
  */
 export function setCodexStatusLine(projectDir: string, on: boolean, items: readonly string[]): CodexStatusLineWrite {
@@ -817,7 +818,7 @@ export function codexStatusLineReplacesYoursLine(): string {
  * What a refresh or first chat that asks no question does on Codex, once per
  * person: a project whose shared config already carries AI-DLC's status line
  * keeps it (C1), and the person whose own Codex status line it covers hears so.
- * Nothing is written to the project; the shared file is the state.
+ * Nothing is written to the project's shared config; the shared file is the state.
  */
 export function applyCodexStatusLineDefault(
   projectDir: string,
@@ -915,7 +916,6 @@ export function hasOwnStatusLine(
     : codexOwnStatusLine(options.env);
 }
 
-/** The one line for a host with no status line for AI-DLC's progress. */
 export function noStatusLineLine(productName: string, entry: string): string {
   return `${productName} has no status line for AI-DLC's progress; ${entry} --status shows where the work stands.`;
 }

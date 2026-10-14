@@ -47,16 +47,13 @@ function project(): string {
   return proj;
 }
 
-/** The one line the engine writes for this `next`, with the step it parses to. */
 function next(proj: string, args: string[] = []): { line: string; step: Step } {
-  // The agent's proposal step follows the plan proposal print, as it does live.
   const result = followProposal(runOrchestrateNext(ORCH, proj, args, { env: ENV }), ORCH, proj, { env: ENV });
   expect(result.status, result.out).toBe(0);
   expect(result.directive, result.out).not.toBeNull();
   return { line: result.stdout.trim(), step: result.directive as Step };
 }
 
-/** The keys a step's line names, in the order its bytes carry them. */
 const keysOf = (line: string): string[] => Object.keys(JSON.parse(line) as Step);
 
 const PERSON_TEXT = ["question", "narration", "message", "change_notices", "stage_validity"];
@@ -74,7 +71,6 @@ function opensWithThePersonsWords(line: string): string[] {
   return lead;
 }
 
-/** Every key from the first note on is a note: the notes to the agent close the line. */
 function notesClose(line: string): void {
   const keys = keysOf(line);
   const first = keys.findIndex((key) => key.endsWith("_note"));
@@ -144,7 +140,6 @@ describe("the step's first bytes are the person's words, the notes to the agent 
     expect(stage.step.kind).toBe("run-stage");
     expect(opensWithThePersonsWords(stage.line)).toEqual(["narration"]);
     notesClose(stage.line);
-    // A setting typed as a flag: the step is a print whose line is the person's first, then the agent's.
     const setting = next(proj, ["--depth", "standard"]);
     expect(setting.step.kind).toBe("print");
     expect(opensWithThePersonsWords(setting.line)).toContain("message");

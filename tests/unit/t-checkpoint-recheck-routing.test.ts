@@ -212,10 +212,8 @@ describe("t-checkpoint-recheck-routing: re-checks of an approved Unit's changed 
     editAlphaDocument(p);
     const beat = next(p);
     expect(beat.construction_checkpoint?.rereview?.stage, JSON.stringify(beat)).toBe(DOCUMENT_STAGE);
-    // The checkpoint keeps its identity.
     expect(beat).toMatchObject({ stage: "code-generation", unit: "alpha", gate: true });
     expect(beat.construction_checkpoint?.unit).toBe("alpha");
-    // The reviewer gets the document stage's own work.
     const own = findStageBySlug(DOCUMENT_STAGE)!;
     expect(beat.reviewer).toBe(own.reviewer);
     expect(beat.review_artifact).toBe(own.review_artifact);
@@ -223,7 +221,7 @@ describe("t-checkpoint-recheck-routing: re-checks of an approved Unit's changed 
     expect(beat.produces?.length).toBeGreaterThan(0);
     for (const path of beat.produces ?? []) expect(path).toContain(`/alpha/${DOCUMENT_STAGE}/`);
     for (const path of beat.consumes ?? []) expect(path).not.toContain("/alpha/nfr-design/");
-    expect(beat.protocol_modules).toEqual(["reviewer", "construction", "checkpoint"]);
+    expect(beat.protocol_modules).toEqual(["reviewer", "reviewer-unit", "reviewer-repair", "construction", "checkpoint", "sensors"]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Guard Policy strict: code and a document both changed are re-checked one at a time, then asked about once", () => {

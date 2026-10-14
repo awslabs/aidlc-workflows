@@ -5,7 +5,7 @@
 //
 // t314 - reviewer receipts bound to workspace source state (#629).
 //
-// PR #569's freshness guard invalidates receipts via ARTIFACT_CREATED/UPDATED
+// The freshness guard invalidates receipts via ARTIFACT_CREATED/UPDATED
 // events for declared record artifacts - but code-generation produces
 // application source OUTSIDE the record, and workspace writes deliberately
 // emit no audit events. A source file could therefore change after the
@@ -132,7 +132,6 @@ function singleGitMetadataLineForTest(raw: string): string {
   return line;
 }
 
-// Turn a dir into a committed git repo with one source file.
 function seedGitRepo(dir: string): string {
   git(dir, ["init", "-q"]);
   git(dir, ["config", "user.email", "t@test"]);
@@ -357,7 +356,6 @@ function seedInTreeCache(root: string, dir = join("apps", "web", ".jest-cache"))
   return cache;
 }
 
-// One test run: an entry rewritten, two deleted, two added.
 function churnInTreeCache(cache: string): void {
   writeFileSync(join(cache, "haste-map-abc"), "\u0000haste-v2", "utf-8");
   rmSync(join(cache, "jest-transform-cache-abc", "00", "mod_1"));
@@ -464,16 +462,16 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     const src = seedGitRepo(dir);
     const fp1 = workspaceSourceFingerprint(dir);
     expect(fp1).toMatch(/^[0-9a-f]{64}$/);
-    expect(workspaceSourceFingerprint(dir)).toBe(fp1); // deterministic
+    expect(workspaceSourceFingerprint(dir)).toBe(fp1);
 
-    writeFileSync(src, "export const answer = 43;\n", "utf-8"); // tracked edit
+    writeFileSync(src, "export const answer = 43;\n", "utf-8");
     const fp2 = workspaceSourceFingerprint(dir);
     expect(fp2).not.toBe(fp1);
 
-    writeFileSync(src, "export const answer = 42;\n", "utf-8"); // revert
-    expect(workspaceSourceFingerprint(dir)).toBe(fp1); // content-addressed
+    writeFileSync(src, "export const answer = 42;\n", "utf-8");
+    expect(workspaceSourceFingerprint(dir)).toBe(fp1);
 
-    writeFileSync(join(dir, "untracked.ts"), "// new\n", "utf-8"); // untracked add
+    writeFileSync(join(dir, "untracked.ts"), "// new\n", "utf-8");
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
     rmSync(join(dir, "untracked.ts"));
     expect(workspaceSourceFingerprint(dir)).toBe(fp1);
@@ -481,7 +479,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
 
   test("never mutates the real index, and fingerprints non-Git workspaces", () => {
     const src = seedGitRepo(dir);
-    writeFileSync(src, "export const answer = 99;\n", "utf-8"); // dirty worktree
+    writeFileSync(src, "export const answer = 99;\n", "utf-8");
     workspaceSourceFingerprint(dir);
     const status = spawnSync("git", ["-C", dir, "status", "--porcelain"], {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -908,11 +906,11 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     }
   });
 
-  // #646 review P2 - a bare `git add -A` records an initialized submodule as a
-  // gitlink (its checked-out commit sha) only, so a tracked edit made INSIDE
-  // the submodule without committing there leaves the gitlink - and the
-  // parent's own write-tree sha - unchanged, shipping a reviewed-then-edited
-  // submodule as if nothing had changed.
+  // #646 - a bare `git add -A` records an initialized submodule as a gitlink (its
+  // checkout commit sha) only, so a tracked edit made INSIDE the submodule
+  // without committing there leaves the gitlink - and the parent's own write-tree
+  // sha - unchanged, shipping a reviewed-then-edited submodule as if nothing had
+  // changed.
   test("recurses into an initialized submodule: an uncommitted edit inside it changes the fingerprint", () => {
     const subDir = mkdtempSync(join(tmpdir(), "t314-fp-sub-"));
     try {
@@ -929,7 +927,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
 
       const fp1 = workspaceSourceFingerprint(dir);
       expect(fp1).not.toBeNull();
-      expect(workspaceSourceFingerprint(dir)).toBe(fp1); // deterministic
+      expect(workspaceSourceFingerprint(dir)).toBe(fp1);
 
       // Edit the submodule's tracked file WITHOUT committing inside it - the
       // gitlink git add -A records for the submodule stays identical.
@@ -937,7 +935,6 @@ describe("t314 workspace source fingerprint (in-process)", () => {
       const fp2 = workspaceSourceFingerprint(dir);
       expect(fp2).not.toBe(fp1);
 
-      // Content-addressed: reverting the submodule edit restores fp1.
       writeFileSync(join(dir, "vendor", "sub", "lib.ts"), "export const v = 1;\n", "utf-8");
       expect(workspaceSourceFingerprint(dir)).toBe(fp1);
     } finally {
@@ -971,7 +968,6 @@ describe("t314 workspace source fingerprint (in-process)", () => {
       expect(committed?.get("\0vendor/sub")).toMatch(/^160000 [0-9a-f]{40,64}$/);
       expect(entries(committed)).toEqual(entries(workspaceSourceListing(dir)));
 
-      // An uncommitted edit inside the submodule is still a difference.
       writeFileSync(join(dir, "vendor", "sub", "lib.ts"), "export const v = 2;\n", "utf-8");
       expect(workspaceSourceListing(dir)?.get("\0vendor/sub/lib.ts"))
         .not.toBe(committed?.get("\0vendor/sub/lib.ts"));
@@ -1167,13 +1163,12 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  // #646 review - reproduction. Without `-z`, git's
-  // default core.quotePath wraps a path containing a non-ASCII byte (or other
-  // "unusual" character) in double quotes and C-escapes it in `ls-files -s`
-  // output (e.g. `"vendor/caf\303\251"`); parsed as a literal string, that
-  // quoted-and-escaped text never resolves to the real on-disk directory, so
-  // the submodule is silently skipped and a reviewed-then-edited submodule at
-  // such a path ships unreviewed.
+  // #646 - reproduction. Without `-z`, git's default core.quotePath wraps a path
+  // containing a non-ASCII byte (or other "unusual" character) in double quotes
+  // and C-escapes it in `ls-files -s` output (e.g. `"vendor/caf\303\251"`);
+  // parsed as a literal string, that quoted-and-escaped text never resolves to
+  // the real on-disk directory, so the submodule is silently skipped and a
+  // reviewed-then-edited submodule at such a path ships unreviewed.
   test("detects a submodule at a non-ASCII path (git core.quotePath) via -z, not the default quoted form", () => {
     const subDir = mkdtempSync(join(tmpdir(), "t314-fp-sub-"));
     try {
@@ -1194,7 +1189,6 @@ describe("t314 workspace source fingerprint (in-process)", () => {
       const fp1 = workspaceSourceFingerprint(dir);
       expect(fp1).not.toBeNull();
 
-      // Edit the submodule's tracked file WITHOUT committing inside it.
       writeFileSync(
         join(dir, "vendor", "café-módulo", "lib.ts"),
         "export const v = 2;\n",
@@ -1215,8 +1209,8 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     const fp1 = workspaceSourceFingerprint(dir);
 
     // Legacy engine-written sensor cache, nested under a monorepo subpackage -
-    // not at the workspace root. Before 2.6.94 the `services/backend` tsconfig
-    // anchor gave the cache its own `aidlc/spaces/<space>/intents/` root.
+    // not at the workspace root. The `services/backend` tsconfig anchor gave the
+    // cache its own `aidlc/spaces/<space>/intents/` root.
     const cache = join(
       dir, "services", "backend", "aidlc", "spaces", "default", "intents", sensorPath,
     );
@@ -1268,11 +1262,11 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp2);
   });
 
-  // #646 review P2 - a configured `clean` filter runs as content enters the
-  // index, so a tree sha hashes the FILTERED bytes. A lossy filter mapped two
-  // different worktrees onto one fingerprint, and the stage executes against
-  // the bytes the reviewer read - so a reviewed-then-edited file shipped with a
-  // matching receipt.
+  // #646 - a configured `clean` filter runs as content enters the index, so a
+  // tree sha hashes the FILTERED bytes. A lossy filter mapped two different
+  // worktrees onto one fingerprint, and the stage executes against the bytes the
+  // reviewer read - so a reviewed-then-edited file shipped with a matching
+  // receipt.
   test("a lossy clean filter cannot collapse two worktrees onto one fingerprint", () => {
     const src = seedGitRepo(dir);
     // Lossy by construction: it drops trailing whitespace on the way in. The
@@ -1287,8 +1281,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     const fp1 = workspaceSourceFingerprint(dir);
     expect(fp1).not.toBeNull();
 
-    // Same content to the filter, DIFFERENT bytes on disk. This is the case
-    // that collapsed.
+    // Same content to the filter, DIFFERENT bytes on disk.
     writeFileSync(src, "export const answer = 42;   \n", "utf-8");
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
 
@@ -1517,7 +1510,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     }
   });
 
-  // #646 review - the gate deciding whether to run the precise `check-attr`
+  // #646 - the gate deciding whether to run the precise `check-attr`
   // scan read only TRACKED `.gitattributes` plus `<dir>/.git/info/attributes`,
   // and asked for `core.attributesFile` without `-C <repo>`. Every missed
   // source is a false pass in the direction that matters: the filter really
@@ -1615,13 +1608,10 @@ process.stdin.on("data", (chunk) => {
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
   });
 
-  // #646 review - `git ls-files -s -z` ran on the default spawn buffer. A large
+  // #646 - `git ls-files -s -z` ran on the default spawn buffer. A large
   // index overran it, the call failed with ENOBUFS, the submodule and
   // clean-filter scans were skipped, and the bare tree sha came back as if the
   // repository had neither.
-  //
-  // This uses real worktree files so both the `ls-files` and `check-attr`
-  // subprocesses actually cross the default buffer boundary.
   test("a large index does not silently drop the clean-filter binding", () => {
     const src = seedGitRepo(dir);
     git(dir, ["config", "core.autocrlf", "false"]);
@@ -1630,10 +1620,8 @@ process.stdin.on("data", (chunk) => {
     git(dir, ["add", "-A"]);
     git(dir, ["commit", "-qm", "filter"]);
 
-    // Real worktree paths are required: the temp index's `git add -A` removes
-    // synthetic index-only entries before `check-attr` runs. Repeating a long
-    // flat filename makes the two-attribute NUL stream exceed Node's default
-    // spawn buffer while staying below Windows MAX_PATH.
+    // The filenames repeat a long flat stem (150 characters) to make the tree
+    // large while each path stays below Windows MAX_PATH.
     for (let i = 0; i < 4500; i++) {
       const name = `module-${String(i).padStart(5, "0")}-${"x".repeat(150)}.ts`;
       writeFileSync(join(dir, name), "export const v = 1;\n", "utf-8");
@@ -1648,33 +1636,29 @@ process.stdin.on("data", (chunk) => {
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  // The raw-content binding is scoped to paths a clean driver actually touches,
-  // so a repo that filters nothing must keep the bare tree sha it had before -
-  // otherwise every receipt stamped by the shipped build would stop comparing.
   test("no configured clean filter leaves the fingerprint untouched", () => {
     seedGitRepo(dir);
     const fp1 = workspaceSourceFingerprint(dir);
     // A .gitattributes naming a driver that is NOT configured is inert: git
-    // warns and stores the content verbatim, so nothing needs raw binding.
+    // stores the content verbatim.
     writeFileSync(join(dir, ".gitattributes"), "app.ts filter=absent\n", "utf-8");
     git(dir, ["add", "-A"]);
     const fp2 = workspaceSourceFingerprint(dir);
     expect(fp2).not.toBeNull();
-    expect(fp2).not.toBe(fp1); // the new tracked file itself moved it
-    expect(workspaceSourceFingerprint(dir)).toBe(fp2); // and it is stable
+    expect(fp2).not.toBe(fp1);
+    expect(workspaceSourceFingerprint(dir)).toBe(fp2);
   });
 
-  // #646 review - reproduction. Unlike .aidlc-engine/sensors, `aidlc`/`.aidlc` are
+  // #646 - reproduction. Unlike .aidlc-engine/sensors, `aidlc`/`.aidlc` are
   // anchored at the top level of the dir that CARRIES the workspace shell:
-  // they never legitimately nest inside application source. An earlier fix
-  // applied the any-depth glob to all four names alike, which silently
-  // dropped REAL application source that happens to live under a directory
-  // coincidentally named `aidlc` (e.g. a feature module named after the
-  // methodology itself) - a source-freshness bypass, since an edit under that
-  // path would never invalidate a stale receipt. Occurrences at the
-  // shell-carrying dir's own top level still exclude correctly (they ARE the
-  // framework's own shell there); only the nested, coincidentally-named case
-  // is no longer swallowed.
+  // they never legitimately nest inside application source. Applying the
+  // any-depth glob to them as well silently drops REAL application source that
+  // happens to live under a directory coincidentally named `aidlc` (e.g. a
+  // feature module named after the methodology itself) - a source-freshness
+  // bypass, since an edit under that path would never invalidate a stale
+  // receipt. Occurrences at the shell-carrying dir's own top level still exclude
+  // correctly (they ARE the framework's own shell there); the nested,
+  // coincidentally-named case is not swallowed.
   test("excludes aidlc/.aidlc only where the workspace shell lives, never nested application source", () => {
     seedGitRepo(dir);
     const fp1 = workspaceSourceFingerprint(dir);
@@ -1705,14 +1689,13 @@ process.stdin.on("data", (chunk) => {
     }
 
     // REAL application source nested under a directory coincidentally named
-    // `aidlc` (not the shell's own top level) DOES change the fingerprint -
-    // the bug this test guards was: it did not.
+    // `aidlc` (not the shell's own top level) DOES change the fingerprint.
     mkdirSync(join(dir, "src", "aidlc"), { recursive: true });
     writeFileSync(join(dir, "src", "aidlc", "parser.ts"), "export function parse() {}\n", "utf-8");
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
   });
 
-  // #646 review - the pathspecs are directory-anchored (trailing slash). A
+  // #646 - the pathspecs are directory-anchored (trailing slash). A
   // plain pathspec also matches a FILE of that name, so a root file named
   // `aidlc` - a plausible CLI wrapper - was being dropped from the walk with
   // no framework reason at all.
@@ -1774,7 +1757,7 @@ process.stdin.on("data", (chunk) => {
     }
   });
 
-  // #646 review - the exclusion was applied relative to EVERY fingerprinted
+  // #646 - the exclusion was applied relative to EVERY fingerprinted
   // repo dir, so for a recorded sibling repo it stripped `repo-a/aidlc/**`.
   // But the record tree is the SIBLING `<workspace>/aidlc/` (repoDir /
   // resolveConstructionRepo) and Bolt worktrees are `<workspace>/.aidlc/
@@ -1856,8 +1839,8 @@ process.stdin.on("data", (chunk) => {
     }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  // The nested-source regression from the same review round must hold in the
-  // multi-repo layout too, not just the legacy single-repo one.
+  // The nested-source regression must hold in the multi-repo layout too, not
+  // just the legacy single-repo one.
   test("nested source under a coincidentally-named dir holds in the multi-repo layout", () => {
     const repoA = join(dir, "repo-a");
     mkdirSync(repoA, { recursive: true });
@@ -1986,14 +1969,12 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       "- **Guard Policy**: relaxed (set by you)",
     ));
     recordReview(proj);
-    // The review request kept the listing behind its Source Fingerprint.
     const fingerprint = /\*\*Source Fingerprint\*\*: ([0-9a-f]{64})/.exec(readAllAuditShards(proj))?.[1];
     expect(fingerprint).toBeDefined();
     expect(readWorkspaceSourceSnapshot(proj, "code-generation", fingerprint as string)).not.toBeNull();
     writeFileSync(src, "export const answer = 1337; // edited after review\n", "utf-8");
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc, r.out).toBe(0);
-    // The person's line and the record both name the file, not "(paths unavailable)".
     expect(r.out).toContain("app.ts changed after the Code Generation review; carrying on.");
     const row = readAllAuditShards(proj).split(/\n---\n/).find((block) => block.includes("**Event**: CHANGE_ACCEPTED"));
     expect(row).toContain("**Checkpoint**: review-receipt");
@@ -2060,7 +2041,6 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(refused.rc).not.toBe(0);
     expect(refused.out).toContain("project source changed after");
-    // Undoing their own edit is enough: the update stays.
     writeFileSync(src, original, "utf-8");
     const retry = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(retry.out).not.toContain("project source changed after");
@@ -2490,7 +2470,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     expect(refused.rc).not.toBe(0);
     expect(refused.out).toContain("project source changed after");
 
-    recordReview(proj); // iteration 3: bounded stale-receipt recovery
+    recordReview(proj);
     const audit = readAllAuditShards(proj);
     expect(audit).toContain("**Recovery**: stale-receipt");
     expect(audit).toContain("**Iteration**: 3");
@@ -2899,13 +2879,13 @@ describe("t314 multi-unit source attribution", () => {
     }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  // #646 review - the protocol's own rework loop. stage-protocol.md §12a
+  // #646 - the protocol's own rework loop. stage-protocol-reviewer.md section 12a
   // requires recording a NOT-READY receipt, re-invoking the lead to fix the
   // artifact IN PLACE, then re-reviewing. Fixing in place is an `M` transition
-  // between the two receipts, which the removed additions-only rule refused -
-  // even though the newest fingerprint EQUALS the current tree, i.e. the
-  // reviewer inspected exactly the source being completed. Nothing here is
-  // tampered; refusing this refuses the documented repair loop.
+  // between the two receipts, which an additions-only rule refuses - even though
+  // the newest fingerprint EQUALS the current tree, i.e. the reviewer inspected
+  // exactly the source being completed. Nothing here is tampered; refusing this
+  // refuses the documented repair loop.
   test("the stage-protocol §12a rework loop (NOT-READY, fix in place, re-review) must not refuse", () => {
     writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
     git(proj, ["add", "-A"]);
@@ -2928,7 +2908,7 @@ describe("t314 multi-unit source attribution", () => {
     expect(r.rc).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  // #646 review - the second `M`-shaped legitimate transition: a unit that
+  // #646 - the second `M`-shaped legitimate transition: a unit that
   // wires itself into a file an earlier unit already created. Ordinary
   // integration, not tampering - beta's own reviewer saw the wiring.
   test("a second unit modifying a pre-existing shared file must not refuse", () => {
@@ -2960,7 +2940,6 @@ describe("t314 multi-unit source attribution", () => {
       { path: "alpha.ts" },
     ]);
 
-    // Edited with NO new review recorded for alpha.
     writeFileSync(join(proj, "alpha.ts"), "export const alpha = 999; // no re-review\n", "utf-8");
     git(proj, ["add", "-A"]);
     git(proj, ["commit", "-qm", "alpha edited, no re-review"]);
@@ -3000,7 +2979,6 @@ describe("t314 multi-unit source attribution", () => {
     git(proj, ["commit", "-qm", "beta code"]);
     recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
 
-    // alpha claims one more file after its review.
     writeFileSync(join(proj, "alpha-extra.ts"), "export const extra = 1;\n", "utf-8");
     git(proj, ["add", "-A"]);
     git(proj, ["commit", "-qm", "alpha claims another file"]);
@@ -3064,7 +3042,6 @@ describe("t314 multi-unit source attribution", () => {
       { path: "beta.ts" },
     ]);
 
-    // Edit beta, no new review for beta.
     writeFileSync(join(proj, "beta.ts"), "export const beta = 999; // no re-review\n", "utf-8");
     git(proj, ["add", "-A"]);
     git(proj, ["commit", "-qm", "beta edited"]);
@@ -3244,8 +3221,8 @@ describe("t314 multi-unit source attribution", () => {
 
   // #2244: a tool cache the project does not ignore is rewritten by the test
   // run during the stage. No Unit can sensibly claim it, and the refusal says the
-  // way: name the folder under "exclude" in .aidlc-source-paths.json. Before this
-  // change that way was a dead end mid-stage: the baseline still listed the cache
+  // way: name the folder under "exclude" in .aidlc-source-paths.json. That
+  // way was a dead end mid-stage: the baseline still listed the cache
   // (read as deleted) and the registry file was itself an unclaimed addition, so
   // the next approve spent a recovery review and the one after was refused again.
   test.each([
@@ -3265,7 +3242,6 @@ describe("t314 multi-unit source attribution", () => {
     expect(gate.rc, gate.out).toBe(0);
     const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(refused.rc).toBe(1);
-    // The line says what changed and the way for a path that is not source, with no engine command in it.
     expect(refused.out).toContain("5 changes made during Code Generation that no Unit's review covers");
     expect(refused.out).toContain("apps/web/.jest-cache/haste-map-abc");
     expect(refused.out).toContain('under \\"exclude\\" in .aidlc-source-paths.json');
@@ -3275,7 +3251,6 @@ describe("t314 multi-unit source attribution", () => {
     sourceRegistry(proj, { exclude: [exclude] });
     const done = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(done.rc, done.out).toBe(0);
-    // Strict: nothing was kept over the policy, and no recovery review was spent.
     expect(readAllAuditShards(proj)).not.toContain("**Event**: CHANGE_ACCEPTED");
     expect(reviewRequestCount(proj)).toBe(requests);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -3405,7 +3380,6 @@ describe("t314 multi-unit source attribution", () => {
     const boundarySecond = Math.floor(Date.now() / 1000);
     while (Math.floor(Date.now() / 1000) === boundarySecond) {}
     writeFileSync(join(repoA, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
-    // A real change alpha made and did not list.
     writeFileSync(join(repoA, "gamma.ts"), "export const gamma = 3;\n", "utf-8");
     writeFileSync(join(repoA, "beta.ts"), "export const beta = 2;\n", "utf-8");
     churnInTreeCache(cache);
@@ -3423,8 +3397,6 @@ describe("t314 multi-unit source attribution", () => {
     // The line names the registry file of the path's own repo folder: the
     // top-level file does not reach a recorded repo's paths.
     expect(refused.out).toContain('under \\"exclude\\" in the .aidlc-source-paths.json of the path\'s own folder (repo-a/.aidlc-source-paths.json)');
-    // alpha lists the path in its manifest ({repo, path}) and is reviewed once
-    // more: the first approve after it no longer names gamma.ts.
     recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [
       { repo: "repo-a", path: "alpha.ts" },
       { repo: "repo-a", path: "gamma.ts" },
@@ -3447,11 +3419,11 @@ describe("t314 multi-unit source attribution", () => {
     expect(reviewRequestCount(proj)).toBe(requests);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  // #646 review - the recorded-repo layout is the DEFAULT (sibling
+  // #646 - the recorded-repo layout is the DEFAULT (sibling
   // auto-discovery populates `repos` at intent creation via resolveIntentRepoSet
   // -> discoverSiblingRepos), and its fingerprint is a sha256 composite over
-  // the roof's child repos rather than a single tree object. The removed rule
-  // could never consume that shape at all. What must hold: a clean two-unit
+  // the roof's child repos rather than a single tree object. A tree-object rule
+  // cannot consume that shape at all. What must hold: a clean two-unit
   // run passes, and an edit after the last review still refuses.
   test("a recorded-repo two-unit run passes clean and refuses after a post-review edit", () => {
     const repoA = join(proj, "repo-a");
@@ -3507,14 +3479,13 @@ describe("t314 multi-unit source attribution", () => {
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
-// Reproduction of the maintainer review on #646 (a1e4d67), P1 finding 2: the
-// swarm path stamps receipts inside per-unit Bolt worktrees, but the MAIN
+// The swarm path stamps receipts inside per-unit Bolt worktrees, but the MAIN
 // checkout never receives the merged-back code until finalize runs - so
 // recomputing the fingerprint over the main checkout at a settle approve
 // always mismatches every worktree-stamped receipt, deadlocking a run that
-// never edited anything. isSettledSwarmForArtifactGuard's exemption (already
-// proven for the produces-existence guard, t185) is reused here to skip the
-// fingerprint reconciliation entirely once every DAG unit has converged.
+// never edited anything. isSettledSwarmForArtifactGuard's exemption (also
+// used for the produces-existence guard, t185) skips the fingerprint
+// reconciliation once every DAG unit has converged.
 describe("t314 settled-swarm exemption from fingerprint reconciliation (#646 review P1#2)", () => {
   let proj: string;
   const UNITS = ["alpha", "beta"];
@@ -3579,7 +3550,6 @@ describe("t314 settled-swarm exemption from fingerprint reconciliation (#646 rev
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
-// Reproduction of the maintainer review on #646 (a1e4d67), P1 finding 3:
 // `reviewerReceiptError` (aidlc-swarm.ts) accepted any terminal READY/NOT-READY
 // verdict and never read the receipt's own Source Fingerprint, so finalize
 // could merge a unit whose worktree source was edited after its review.
@@ -3607,8 +3577,8 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     git(proj, ["config", "user.email", "t@test"]);
     git(proj, ["config", "user.name", "t"]);
     // The fixture ships with a pre-populated `Bolt Refs: [foo]` for its own
-    // (unrelated) milestone-11 worktree-lifecycle purpose - clear it so a
-    // fresh `prepare` for any unit name here doesn't collide with a stale ref.
+    // (unrelated) worktree-lifecycle purpose - clear it so a fresh `prepare` for
+    // any unit name here doesn't collide with a stale ref.
     const seeded = readFileSync(join(FIXTURES_DIR, "state-construction-with-worktree.md"), "utf-8")
       .replace(/^(- \*\*Bolt Refs\*\*: ).*$/m, "$1");
     writeFileSync(seededStateFile(proj), seeded);
@@ -3739,7 +3709,6 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     recordReview(wt, "code-generation", REVIEWER, "foo");
     expect(readAllAuditShards(wt)).toContain("**Source Fingerprint**: ");
 
-    // Edited AFTER the review was stamped, before finalize.
     writeFileSync(join(wt, "foo.ts"), "export const foo = 2; // edited after review\n", "utf-8");
     const f = runSwarm(proj, [
       "finalize",
@@ -6195,7 +6164,6 @@ process.stdin.on("end", () => server.stop(true));
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain("the main checkout source changed since the stage-entry baseline (notes.ts)");
     expect(refused.out).toContain("Undo those changes and run the merge again");
-    // The step it names: undo the edit, then run the merge again.
     rmSync(join(proj, "notes.ts"));
     const retry = mergeKept(proj);
     expect(retry.status, retry.out).toBe(0);
@@ -6279,7 +6247,6 @@ process.stdin.on("end", () => server.stop(true));
     const refused = mergeUnit(proj, "kept");
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain("the main checkout source changed since the stage-entry baseline (notes.ts).");
-    // Undoing their own edit is enough: the update stays.
     rmSync(join(proj, "notes.ts"));
     const retry = mergeUnit(proj, "kept");
     expect(retry.status, retry.out).toBe(0);
@@ -6365,7 +6332,6 @@ process.stdin.on("end", () => server.stop(true));
     const refused = mergeUnit(proj, "kept");
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain("the main checkout source does not match the prior attempt's final reviewed aggregate (notes.ts).");
-    // Undoing their own edit is enough: the update stays.
     rmSync(join(proj, "notes.ts"));
     const retry = mergeUnit(proj, "kept");
     expect(retry.status, retry.out).toBe(0);

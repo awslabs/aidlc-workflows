@@ -1,12 +1,12 @@
 // covers: file:skills/aidlc/SKILL.md
 //
-// The orchestrator skills and the generated scope runners told the agent to
-// default to carrying on the open work ("Default to CONTINUATION ... when in
-// doubt, continue"). The engine's reading step already says what to do when
-// the agent cannot tell (ask the person where the work belongs), so the two
-// sentences were cut from every copy. Neither may come back: not in an
-// authored skill, not in the runner generator, not in any skill the packager
-// ships (the scope runners are generated into dist).
+// The orchestrator skills and the generated scope runners must not tell the
+// agent to default to carrying on the open work ("Default to CONTINUATION ...
+// when in doubt, continue"). The engine's reading step already says what to do
+// when the agent cannot tell (ask the person where the work belongs). Neither
+// sentence may appear: not in an authored skill, not in the runner
+// generator, not in any skill the packager ships (the scope runners are
+// generated into dist).
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";

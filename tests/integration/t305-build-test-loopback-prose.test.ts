@@ -354,9 +354,9 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
   });
 
   test("Artifact Re-use tail: deterministic auto-decision, Redo forbidden, still audited", () => {
-    const tailIdx = MAIN_PROTOCOL.indexOf("### Artifact Re-use (backward jump / redo)");
+    const tailIdx = LOOPBACK_PROTOCOL.indexOf("### Artifact Re-use on a failure loop-back replay");
     expect(tailIdx).toBeGreaterThan(-1);
-    const tail = MAIN_PROTOCOL.slice(tailIdx);
+    const tail = LOOPBACK_PROTOCOL.slice(tailIdx);
     expect(tail).toContain("**Autonomous failure loop-back**");
     expect(tail).toContain("the 3-option question is NOT presented");
     expect(tail).toContain("**Modify** for the unit(s) the fix targets");
@@ -371,8 +371,8 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
   });
 
   test("Finding 1 (must-fix): Gated failure loop-back mirrors the autonomous override", () => {
-    const tailIdx = MAIN_PROTOCOL.indexOf("### Artifact Re-use (backward jump / redo)");
-    const tail = MAIN_PROTOCOL.slice(tailIdx);
+    const tailIdx = LOOPBACK_PROTOCOL.indexOf("### Artifact Re-use on a failure loop-back replay");
+    const tail = LOOPBACK_PROTOCOL.slice(tailIdx);
     const gatedIdx = tail.indexOf("**Gated failure loop-back**");
     expect(gatedIdx).toBeGreaterThan(-1);
     const gated = tail.slice(gatedIdx);

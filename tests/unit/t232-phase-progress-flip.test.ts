@@ -236,7 +236,6 @@ describe("t232 Phase Progress - advance", () => {
     expect(res.combined).toContain('"phase_boundary":true');
     expect(rowStatus(proj, "Ideation")).toBe("Verified");
     expect(rowStatus(proj, "Inception")).toBe("Active");
-    // Untouched rows keep their seed.
     expect(rowStatus(proj, "Construction")).toBe("Pending");
   });
 });
@@ -258,8 +257,8 @@ describe("t232 Phase Progress - finalize", () => {
     const proj = createTestProject();
     tempDirs.push(proj);
     seedStateFile(proj, "state-final-stage.md");
-    // The fixture pre-dates the flip in spirit: force the Operation row back
-    // to Active so the transition under test is observable.
+    // Force the Operation row back to Active so the transition under test is
+    // observable.
     sedReplaceInFile(
       statePath(proj),
       "- **Operation**: Verified",

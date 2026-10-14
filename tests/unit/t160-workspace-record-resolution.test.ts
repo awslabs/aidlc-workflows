@@ -1,12 +1,11 @@
 // covers: function:activeSpace, function:ensureActiveSpaceCursor, function:activeIntent, function:recordDir, function:relativeRecordDir, function:stateFilePath, function:auditFilePath, function:uuidv7, function:slugify, function:migrateFlatLayout, function:knowledgeDir
 //
-// t160 — P1 Step B re-root: the per-intent record-dir resolution + the flat
-// legacy fallback + the one-time crash-safe migration. Mechanism: in-process
-// (the resolvers + migration are pure-ish lib functions; no LLM, no process
-// boundary needed). The path helpers re-root the whole record tree per intent —
-// aidlc/spaces/<space>/intents/<slug>-<id8>/ — when a new-layout intent resolves,
-// and fall back to the flat aidlc-docs/ root otherwise (so a pre-workspace
-// project keeps working until migrated).
+// t160 - the per-intent record-dir resolution + the bare-space fallback + the
+// one-time crash-safe migration. Mechanism: in-process (the resolvers +
+// migration are pure-ish lib functions; no LLM, no process boundary needed). The
+// path helpers re-root the whole record tree per intent -
+// aidlc/spaces/<space>/intents/<YYMMDD>-<label>/ - when an intent resolves, and
+// fall back to the bare space record root otherwise.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/tools/aidlc-lib.ts):
 //   activeSpace/activeIntent/recordDir/relativeRecordDir — the selectors.
@@ -49,15 +48,12 @@ function seedShell(p: string, space = "default"): void {
   writeFileSync(join(p, "aidlc", "active-space"), `${space}\n`, "utf-8");
 }
 
-/** Seed a per-intent record (aidlc/spaces/<space>/intents/<dir>/aidlc-state.md). */
 function seedIntent(p: string, dir: string, space = "default"): void {
   const recDir = join(p, "aidlc", "spaces", space, "intents", dir);
   mkdirSync(recDir, { recursive: true });
   writeFileSync(join(recDir, "aidlc-state.md"), "- **Current Stage**: requirements-analysis\n", "utf-8");
 }
 
-/** Seed a flat legacy project (aidlc-docs/aidlc-state.md). createTestProject
- *  already makes aidlc-docs/; this writes the state file. */
 function seedFlat(p: string): void {
   mkdirSync(join(p, "aidlc-docs"), { recursive: true });
   writeFileSync(join(p, "aidlc-docs", "aidlc-state.md"), "- **Current Stage**: requirements-analysis\n- **Workflow**: Build Auth Service\n", "utf-8");
@@ -66,7 +62,7 @@ function seedFlat(p: string): void {
 beforeEach(() => {
   proj = createTestProject();
   // t160 drives resolution from a controlled blank slate via seedShell/seedIntent
-  // below, so strip the default record createTestProject now seeds (P9) — these
+  // below, so strip the default record createTestProject seeds - these
   // tests assert the resolver's behaviour with NO intent, a lone intent, etc.
   removeWorkspaceRecord(proj);
 });
@@ -83,7 +79,7 @@ describe("t160 intent identity — uuidv7 + slugify", () => {
     // UUIDv7 only guarantees ordering across distinct ms, so sleep past a ms.)
     await new Promise((r) => setTimeout(r, 3));
     const b = uuidv7();
-    expect(b > a).toBe(true); // strictly later ms → strictly greater
+    expect(b > a).toBe(true);
   });
 
   test("uuidv7s are unique across a tight loop", () => {
@@ -103,9 +99,9 @@ describe("t160 intent identity — uuidv7 + slugify", () => {
     for (const input of ["Build the Auth Service!", "  EXPORT bug #42 ", "123 start", "...", "café münchen"]) {
       const s = slugify(input);
       expect(s).toMatch(SLUG_RE);
-      expect(slugify(s)).toBe(s); // idempotent
+      expect(slugify(s)).toBe(s);
     }
-    expect(slugify("Build the Auth Service!")).toBe(slugify("Build the Auth Service!")); // deterministic
+    expect(slugify("Build the Auth Service!")).toBe(slugify("Build the Auth Service!"));
     expect(slugify("...")).toBe("intent"); // empty reduction → fallback
     expect(slugify("123 start")).toMatch(/^intent-/); // leading non-letter → prefixed
   });
@@ -147,7 +143,6 @@ describe("t160 selectors — space + intent resolution", () => {
     // Space domain knowledge is a sibling of intents under spaces/<space>/, NOT
     // per-intent. Default with no cursor:
     expect(knowledgeDir(proj)).toBe(join(proj, "aidlc", "spaces", "default", "knowledge"));
-    // Explicit space arg overrides:
     expect(knowledgeDir(proj, "team-b")).toBe(join(proj, "aidlc", "spaces", "team-b", "knowledge"));
     // And it follows the active-space cursor (must NOT hardcode default):
     seedShell(proj, "team-b");
@@ -156,18 +151,15 @@ describe("t160 selectors — space + intent resolution", () => {
 
   test("activeIntent: explicit > cursor > lone-intent > null", () => {
     seedShell(proj);
-    // 0 records → null (flat fallback)
+    // 0 records -> null (bare space-root fallback)
     expect(activeIntent(proj, "default")).toBeNull();
-    // lone intent → that record
     seedIntent(proj, "auth-aaaaaaaa");
     expect(activeIntent(proj, "default")).toBe("auth-aaaaaaaa");
     // a second record with no cursor → ambiguous → null (handler layer prompts)
     seedIntent(proj, "export-bbbbbbbb");
     expect(activeIntent(proj, "default")).toBeNull();
-    // cursor names one → that one
     writeFileSync(join(intentsDir(proj, "default"), "active-intent"), "export-bbbbbbbb\n", "utf-8");
     expect(activeIntent(proj, "default")).toBe("export-bbbbbbbb");
-    // explicit arg overrides the cursor
     expect(activeIntent(proj, "default", "auth-aaaaaaaa")).toBe("auth-aaaaaaaa");
   });
 
@@ -186,7 +178,7 @@ describe("t160 path re-root — per-intent layout vs bare space root (P9 end sta
     seedShell(proj); // a SEED shell, no intent created yet
     expect(recordDir(proj)).toBeNull();
     expect(relativeRecordDir(proj)).toBeNull();
-    // End state: resolves under the bare space record root, NEVER the flat root.
+    // Resolves under the bare space record root, NEVER the flat root.
     const intentsRoot = join(proj, "aidlc", "spaces", "default", "intents");
     expect(stateFilePath(proj)).toBe(join(intentsRoot, "aidlc-state.md"));
     expect(stateFilePath(proj)).not.toBe(join(proj, "aidlc-docs", "aidlc-state.md"));
@@ -224,11 +216,10 @@ describe("t160 two-intent isolation", () => {
     const authAuditDir = join(recordDir(proj, "auth-aaaaaaaa") as string, "audit");
     const exportAuditDir = join(recordDir(proj, "export-bbbbbbbb") as string, "audit");
     expect(authAuditDir).not.toBe(exportAuditDir);
-    // Writing into one intent's record leaves the other's tree untouched.
     mkdirSync(authAuditDir, { recursive: true });
     writeFileSync(join(authAuditDir, auditShardName(proj)), "## X\n**Timestamp**: 2026-01-01T00:00:00Z\n**Event**: STAGE_STARTED\n\n---\n", "utf-8");
     expect(readAllAuditShards(proj, "auth-aaaaaaaa")).toContain("STAGE_STARTED");
-    expect(readAllAuditShards(proj, "export-bbbbbbbb")).toBe(""); // untouched
+    expect(readAllAuditShards(proj, "export-bbbbbbbb")).toBe("");
   });
 });
 
@@ -262,7 +253,6 @@ describe("t160 flat-layout migration — crash-safe, idempotent", () => {
     // `<YYMMDD>-<label>`; the label is the slugified flat-state Workflow field
     // ("build auth service" → "build-auth-service", ≤24 chars so it survives whole).
     expect(r.intentDirName).toMatch(/^\d{6}-build-auth-service$/);
-    // The state moved into the per-intent record.
     const newState = join(intentsDir(proj, "default"), r.intentDirName, "aidlc-state.md");
     expect(existsSync(newState)).toBe(true);
     expect(readFileSync(newState, "utf-8")).toContain("Current Stage");
@@ -273,7 +263,6 @@ describe("t160 flat-layout migration — crash-safe, idempotent", () => {
     expect(registry[0].uuid).toBe(r.uuid);
     expect(registry[0].dirName).toBe(r.intentDirName);
     expect(registry[0].status).toBe("in-flight");
-    // The marker is written.
     expect(existsSync(migratedMarkerPath(proj))).toBe(true);
     // The source flat tree is NOT deleted (the caller git-rm's it; lib never rmSync's it).
     expect(existsSync(join(proj, "aidlc-docs", "aidlc-state.md"))).toBe(true);
@@ -294,11 +283,9 @@ describe("t160 flat-layout migration — crash-safe, idempotent", () => {
     expect(res).not.toBeNull();
     const r = res as NonNullable<typeof res>;
 
-    // Knowledge landed at the SPACE level (a sibling of intents), with content intact.
     const spaceKnowledge = join(proj, "aidlc", "spaces", "default", "knowledge");
     expect(existsSync(join(spaceKnowledge, "aidlc-shared", "company-standards.md"))).toBe(true);
     expect(existsSync(join(spaceKnowledge, "aidlc-architect-agent", "patterns.md"))).toBe(true);
-    // It is NOT trapped inside the per-intent record.
     const record = join(intentsDir(proj, "default"), r.intentDirName);
     expect(existsSync(join(record, "knowledge"))).toBe(false);
   });
@@ -317,11 +304,8 @@ describe("t160 flat-layout migration — crash-safe, idempotent", () => {
     writeFileSync(join(proj, "aidlc-docs", "knowledge", "aidlc-developer-agent", "conv.md"), "# Conv\n", "utf-8");
 
     expect(migrateFlatLayout(proj)).not.toBeNull();
-    // Pre-existing content survives (merge, not clobber)...
     expect(existsSync(join(spaceKnowledge, "aidlc-shared", "existing.md"))).toBe(true);
-    // ...AND the incoming content merged into the same aidlc-shared/ dir...
     expect(existsSync(join(spaceKnowledge, "aidlc-shared", "incoming.md"))).toBe(true);
-    // ...AND the new per-agent dir landed.
     expect(existsSync(join(spaceKnowledge, "aidlc-developer-agent", "conv.md"))).toBe(true);
   });
 
@@ -370,7 +354,6 @@ describe("t160 flat-layout migration — crash-safe, idempotent", () => {
     expect(needsFlatMigration(proj)).toBe(true);
     const res = migrateFlatLayout(proj);
     expect(res).not.toBeNull();
-    // The source survived the crashed-then-completed run.
     expect(existsSync(join(proj, "aidlc-docs", "aidlc-state.md"))).toBe(true);
     expect(existsSync(migratedMarkerPath(proj))).toBe(true);
   });
@@ -378,7 +361,7 @@ describe("t160 flat-layout migration — crash-safe, idempotent", () => {
   test("a SEED-shipped aidlc/spaces/default/ does NOT defeat detection", () => {
     // The blocker: detecting "no aidlc/spaces/ dir" would never fire because SEED
     // ships it. Detection keys on flat-state-present + no-record + no-marker.
-    seedShell(proj); // ships aidlc/spaces/default/
+    seedShell(proj);
     seedFlat(proj);
     expect(needsFlatMigration(proj)).toBe(true);
   });
@@ -393,7 +376,7 @@ describe("t160 flat-layout migration — crash-safe, idempotent", () => {
   test("an already-created intent (record present) blocks re-migration even without a marker", () => {
     seedShell(proj);
     seedFlat(proj);
-    seedIntent(proj, "created-cccccccc"); // a record already exists
+    seedIntent(proj, "created-cccccccc");
     expect(needsFlatMigration(proj)).toBe(false);
   });
 });

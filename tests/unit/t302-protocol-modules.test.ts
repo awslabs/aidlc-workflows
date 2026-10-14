@@ -37,6 +37,10 @@ const MODULES = [
   "loopback",
   "wave",
   "collaborators",
+  "reviewer-unit",
+  "reviewer-repair",
+  "summary",
+  "sensors",
 ] as const;
 
 let project = "";
@@ -78,6 +82,9 @@ function directiveFor(
   return result.directive as Record<string, unknown>;
 }
 
+// An isolated run with no workflow state of its own resolves Guard Policy
+// strict, so its review can take the one stale-receipt recovery and lists
+// reviewer-repair beside the reviewer.
 function moduleList(directive: Record<string, unknown>): string[] {
   const value = directive.protocol_modules;
   return Array.isArray(value) ? value.map(String) : [];
@@ -204,7 +211,7 @@ describe("t302 conditional protocol modules", () => {
 
   test("classic requirements-analysis keeps the advisory reviewer, learnings, and sensors", () => {
     const directive = directiveFor("requirements-analysis", "classic");
-    expect(moduleList(directive)).toEqual(["reviewer", "learnings"]);
+    expect(moduleList(directive)).toEqual(["reviewer", "reviewer-repair", "learnings", "sensors"]);
     expect(directive.reviewer).toBe("aidlc-product-lead-agent");
     expect(directive.review_class).toBe("advisory");
     expect(directive.sensors_applicable).toEqual(["required-sections", "upstream-coverage"]);
@@ -222,7 +229,7 @@ describe("t302 conditional protocol modules", () => {
   // confirm, while sensors, the advisory reviewer, and plan approval stay.
   test("bugfix requirements-analysis keeps the advisory reviewer and sensors, without learnings", () => {
     const directive = directiveFor("requirements-analysis", "bugfix");
-    expect(moduleList(directive)).toEqual(["reviewer"]);
+    expect(moduleList(directive)).toEqual(["reviewer", "reviewer-repair", "sensors"]);
     expect(directive.review_class).toBe("advisory");
     expect(directive.sensors_applicable).toEqual(["required-sections", "upstream-coverage"]);
     expect(directive.ceremony).toEqual({
@@ -235,7 +242,7 @@ describe("t302 conditional protocol modules", () => {
       AIDLC_DISABLE_SENSORS: "1",
       AIDLC_DISABLE_LEARNINGS: "1",
     });
-    expect(moduleList(directive)).toEqual(["reviewer"]);
+    expect(moduleList(directive)).toEqual(["reviewer", "reviewer-repair"]);
     expect(directive.reviewer).toBe("aidlc-product-lead-agent");
     expect(directive.review_class).toBe("advisory");
     expect(directive.sensors_applicable).toEqual([]);
@@ -251,6 +258,18 @@ describe("t302 conditional protocol modules", () => {
       "upstream-coverage",
     ]);
     expect(moduleList(directive)).toContain("learnings");
+    expect(moduleList(directive)).toContain("summary");
+    expect(moduleList(directive)).toContain("sensors");
+  });
+
+  // The summary confirmation and the sensor rules come with their ceremony.
+  test("summary and sensors are named only when their ceremony is on", () => {
+    const express = moduleList(directiveFor("requirements-analysis", "express"));
+    expect(express).not.toContain("summary");
+    expect(express).not.toContain("sensors");
+    const classic = moduleList(directiveFor("requirements-analysis", "classic"));
+    expect(classic).not.toContain("summary");
+    expect(classic).toContain("sensors");
   });
 
   test.each([
@@ -346,19 +365,19 @@ describe("t302 conditional protocol modules", () => {
 
   test("user-stories mob lists the reviewer, ensemble, and learnings", () => {
     const directive = directiveFor("user-stories", "classic");
-    expect(moduleList(directive)).toEqual(["reviewer", "ensemble", "learnings"]);
+    expect(moduleList(directive)).toEqual(["reviewer", "reviewer-repair", "ensemble", "learnings", "sensors"]);
     expect(directive.review_class).toBe("advisory");
   });
 
   test("classic code-generation lists the reviewer, ensemble, construction, loopback, and learnings", () => {
     const directive = directiveFor("code-generation", "classic");
-    expect(moduleList(directive)).toEqual(["reviewer", "ensemble", "construction", "loopback", "learnings"]);
+    expect(moduleList(directive)).toEqual(["reviewer", "reviewer-repair", "ensemble", "construction", "loopback", "learnings", "sensors"]);
     expect(directive.review_class).toBe("advisory");
   });
 
   test("feature inline stage includes learnings without an ordinary reviewer", () => {
     const directive = directiveFor("market-research", "feature");
-    expect(moduleList(directive)).toEqual(["learnings"]);
+    expect(moduleList(directive)).toEqual(["learnings", "summary", "sensors"]);
     expect(directive.reviewer).toBeUndefined();
     expect(directive.ceremony).toEqual({
       sensors: "on",
@@ -369,13 +388,16 @@ describe("t302 conditional protocol modules", () => {
     });
   });
 
-  test("invoke-swarm lists reviewer, construction, checkpoint, loopback, and swarm modules", () => {
+  test("invoke-swarm lists the reviewer with its Unit and repair parts, construction, checkpoint, loopback, and swarm", () => {
     expect(moduleList(swarmDirective())).toEqual([
       "reviewer",
+      "reviewer-unit",
+      "reviewer-repair",
       "construction",
       "checkpoint",
       "loopback",
       "swarm",
+      "sensors",
     ]);
   });
 
@@ -383,14 +405,52 @@ describe("t302 conditional protocol modules", () => {
   // module comes with a checkpoint, the loop-back with Code Generation and
   // Build and Test, the contribution rules with dispatched support agents.
   test("build-and-test lists loopback; an inline design stage lists no branch module", () => {
-    expect(moduleList(directiveFor("build-and-test", "classic"))).toEqual(["construction", "loopback", "learnings"]);
+    expect(moduleList(directiveFor("build-and-test", "classic"))).toEqual(["construction", "loopback", "learnings", "sensors"]);
     const design = moduleList(directiveFor("functional-design", "classic"));
     expect(design).toContain("construction");
     for (const module of ["checkpoint", "loopback", "wave", "collaborators"]) expect(design).not.toContain(module);
   });
 
+  // The repair loop, re-dispatch context and stale-receipt recovery come with a
+  // review that can repair: an adversarial one or Guard Policy strict. A
+  // first advisory pass or its revision under relaxed or off reads none of them.
+  test("an adversarial review names reviewer-repair", () => {
+    const adversarial = directiveFor("functional-design", "feature");
+    expect(adversarial.review_class).toBe("adversarial");
+    expect(moduleList(adversarial)).toContain("reviewer-repair");
+  });
+
+  test("an advisory review names reviewer-repair under Guard Policy strict only", () => {
+    const reviewStep = (mark: string, policy: string): Record<string, unknown> => {
+      if (project) cleanupTestProject(project);
+      project = createOrchestrationTestProject();
+      seedStateFile(project, "state-mid-inception.md");
+      writeFileSync(
+        seededStateFile(project),
+        readFileSync(seededStateFile(project), "utf-8")
+          .replace("- **Scope**: bugfix", "- **Scope**: feature")
+          .replace(/^- \*\*Change Control\*\*:.*$/m, `- **Guard Policy**: ${policy}`)
+          .replace("- [-] requirements-analysis", `- ${mark} requirements-analysis`),
+      );
+      const result = runOrchestrateNext(ORCHESTRATE, project, [], {
+        cwd: project,
+        env: { ...process.env, AWS_AIDLC_DEFAULT_SCOPE: undefined },
+      });
+      expect(result.directive?.kind, JSON.stringify(result.directive)).toBe("run-stage");
+      expect(result.directive?.stage).toBe("requirements-analysis");
+      expect(result.directive?.review_class).toBe("advisory");
+      return result.directive as Record<string, unknown>;
+    };
+    const first = moduleList(reviewStep("[-]", "off (from scope feature)"));
+    expect(first).toContain("reviewer");
+    expect(first).not.toContain("reviewer-repair");
+    expect(first).not.toContain("reviewer-unit");
+    expect(moduleList(reviewStep("[R]", "off (from scope feature)"))).not.toContain("reviewer-repair");
+    expect(moduleList(reviewStep("[-]", "strict (set by you)"))).toContain("reviewer-repair");
+  });
+
   test("collaborators comes only with support agents a stage dispatches", () => {
-    expect(moduleList(directiveFor("practices-discovery", "classic"))).toEqual(["ensemble", "learnings"]);
+    expect(moduleList(directiveFor("practices-discovery", "classic"))).toEqual(["ensemble", "learnings", "sensors"]);
     expect(moduleList(directiveFor("practices-discovery", "enterprise"))).toContain("collaborators");
     expect(moduleList(directiveFor("user-stories", "enterprise"))).toContain("collaborators");
     expect(moduleList(directiveFor("reverse-engineering", "enterprise"))).toContain("collaborators");
@@ -427,6 +487,19 @@ describe("t302 construction branches live in their own modules", () => {
     ["wave", "**Per-unit batch waves (optional, stage-major only).**"],
     ["swarm", "### 12b. Autonomous Code Generation Plan Contract"],
     ["collaborators", "### Collaborator contribution files (ensemble topologies)"],
+    ["reviewer-unit", "**Reviewer read scope.**"],
+    ["reviewer-repair", "**On an `adversarial` review**, branch on the verdict:"],
+    ["swarm", "If an autonomous Unit invalidates its one recovery receipt"],
+    // A re-review runs on the step already held (Request Changes, a review the
+    // person asks for), so its context stays with the reviewer module.
+    ["reviewer", "aidlc-review-brief.ts context --stage"],
+    ["reviewer", "`Prior findings:` followed by the review-context output verbatim"],
+    ["reviewer", "The reviewer also re-runs on the Part 0 revision path"],
+    ["summary", "Before presenting it, append or update a dedicated **Consolidated Summary Confirmation**"],
+    ["sensors", "A stage's `sensors:` frontmatter list is its complete set of imported checks."],
+    ["sensors", "--decision \"Blocking gate sensor failure\""],
+    ["loopback", "**Autonomous failure loop-back**"],
+    ["loopback", "**Gated failure loop-back**"],
   ];
   const roots = [join(REPO_ROOT, "core"), ...HARNESS_MATRIX.map((harness) => harness.engineRoot)];
   test.each(roots)("each moved section is in exactly one protocol file under %s", (root) => {
@@ -438,5 +511,35 @@ describe("t302 construction branches live in their own modules", () => {
     }
     const construction = readFileSync(join(dir, "stage-protocol-construction.md"), "utf-8");
     expect(construction).not.toContain("Non-executable future-state");
+    // The swarm module's bindings carry the retry-discard line; the reviewer
+    // module does not repeat it.
+    const reviewer = readFileSync(join(dir, "stage-protocol-reviewer.md"), "utf-8");
+    expect(reviewer).not.toContain("because the work changed again after its re-check");
+    // Text the engine already does or says, and pointers protocol_note carries.
+    const main = readFileSync(join(dir, "stage-protocol.md"), "utf-8");
+    for (const cut of [
+      "### Conditional construction protocol",
+      "### Conditional Construction question protocol",
+      "### Conditional ensemble protocol",
+      "## Conditional ensemble return protocol",
+      "### Conditional reviewer protocol",
+      "### Plan and question file location",
+      "Example (reduced-scope)",
+      "### Knowledge loading order",
+      "**Stage advancement** is engine-internal",
+      "Stop-hook error delivery retains 32",
+      "**Enforcement:** State file updates happen automatically",
+    ]) expect(main, cut).not.toContain(cut);
+  });
+});
+
+// A tool line that sends the agent to a moved part names the file it is in.
+describe("t302 tool lines name the module a moved part lives in", () => {
+  test("the swarm retry line and the reviewer dispatch-record warning name their modules", () => {
+    const log = readFileSync(join(REPO_ROOT, "core", "tools", "aidlc-log.ts"), "utf-8");
+    expect(log).toContain("use the retry-discard SAY line in stage-protocol-swarm.md.");
+    expect(log).not.toContain("retry-discard SAY line in stage-protocol-reviewer.md");
+    const hook = readFileSync(join(REPO_ROOT, "core", "hooks", "aidlc-reviewer-scope.ts"), "utf-8");
+    expect(hook).toContain("write the stage-protocol-reviewer-unit.md dispatch record before invoking a per-unit reviewer");
   });
 });

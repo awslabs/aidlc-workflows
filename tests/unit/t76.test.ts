@@ -1,100 +1,32 @@
 // covers: subcommand:aidlc-state:fork, subcommand:aidlc-state:merge
 //
-// CLI-contract port of tests/unit/t76-state-fork-merge.sh (TAP plan 16),
-// mechanism = cli. Equal-or-stronger migration: every .sh assertion that
-// shelled out to `bun aidlc-state.ts --project-dir <p> fork|merge --slug <s>`
-// is preserved by SPAWNING the real CLI via node:child_process spawnSync
-// (BUN + the tool .ts path), asserting on res.status / res.stdout+stderr and
-// the file effects the tool writes — the worktree state file, main's Bolt
-// Refs field, and the STATE_FORKED / STATE_MERGED / ERROR_LOGGED rows it
-// appends to audit.md. The contract under test is the PROCESS boundary plus
-// those side effects (incl. exit codes, slug-tagged error strings, the
-// withAuditLock-held critical section's lock-release behaviour), so it stays
-// a spawn — an in-process handleFork/handleMerge twin would lose the
-// process.exit shell the .sh's `$?` arm relies on for every failure case AND
-// the errorWithSlug → emitError → process.exit lock-release path test 15
-// pins.
+// Mechanism = cli. Every assertion SPAWNS the real CLI via node:child_process
+// spawnSync (BUN + the tool .ts path), asserting on res.status /
+// res.stdout+stderr and the file effects the tool writes - the worktree state
+// file, main's Bolt Refs field, and the STATE_FORKED / STATE_MERGED /
+// ERROR_LOGGED rows it appends to the audit shards. The contract under test is
+// the PROCESS boundary plus those side effects (incl. exit codes, slug-tagged
+// error strings, the withAuditLock-held critical section's lock-release
+// behaviour), so it stays a spawn - an in-process handleFork/handleMerge twin
+// would lose the process.exit shell every failure case relies on AND the
+// errorWithSlug -> emitError -> process.exit lock-release path test 15 pins.
 //
-// SUBCOMMAND UNITS: this .cli file credits BOTH subcommand units the .sh
+// SUBCOMMAND UNITS: this file credits BOTH subcommand units it
 // exercises — `aidlc-state fork` (covers KEY subcommand:aidlc-state:fork)
 // and `aidlc-state merge` (covers KEY subcommand:aidlc-state:merge). Both
 // are fired here, the colon form per the dead-id trap.
 //
-// PARITY NOTES (every .sh `ok`/`skip` line maps to a test() case here; many
-// are STRONGER than the original grep):
-//   - .sh  1 fork happy path: norm-strip cmp + Bolt Refs=[demo] + STATE_FORKED
-//       -> Test 1: worktree state byte-identical to main modulo Worktree
-//       Path + Bolt Refs (same line-filter+join cmp), Bolt Refs === "[demo]"
-//       (exact field), STATE_FORKED count === 1 (STRONGER: exact count over a
-//       seeded baseline, not bare presence), + JSON ack status "forked" and
-//       source_state_hash present (STRONGER additions on the stdout boundary).
-//   - .sh  2 invalid slug '../etc/passwd' rc!=0 + 'Invalid --slug'
-//       -> Test 2: status !== 0 (the .sh checked rc -ne 0) + out contains
-//       'Invalid --slug' (same observable). NOTE: '..' fails the SLUG_RE
-//       (must start [a-z]) so validateSlug → errorWithSlug → exit 1.
-//   - .sh  3 missing worktree dir rc!=0 + 'worktree directory does not exist'
-//       + '[slug=noworktree]' -> Test 3: status !== 0 + both substrings
-//       (same observables, slug-tag included).
-//   - .sh  4 v6 state (Worktree Path field deleted) rc!=0 + 'Worktree Path'
-//       -> Test 4: status !== 0 + out contains 'Worktree Path' (setFieldStrict
-//       throws on the missing v7 field). STRONGER: also assert no STATE_FORKED
-//       row landed (the throw happens after the audit-first emit? — verified
-//       below: setFieldStrict on Worktree Path runs AFTER the STATE_FORKED
-//       emit, so a row CAN land; we mirror the .sh exactly and DON'T over-
-//       constrain that — see Test 4 comment).
-//   - .sh  5 audit-first Part A: pre-create lock dir, fork → rc!=0 AND no
-//       worktree state file written -> Test 5: status !== 0 + worktree state
-//       file absent (same two observables). The pre-created lock dir forces
-//       acquireAuditLock to exhaust an explicit short allowance → withAuditLock
-//       throws → errorWithSlug → exit 1 before any worktree write.
-//   - .sh  6 audit-first Part B (POSIX-gated): chmod 0555 worktree aidlc-docs,
-//       fork → rc!=0 AND STATE_FORKED row AND ERROR_LOGGED row AND
-//       '[slug=part-b]' -> Test 6: same four observables, gated on a
-//       runtime read-only-dir probe (skips on platforms that ignore dir mode,
-//       mirroring readonly_dirs_enforced; keeps the 16-assert intent intact).
-//   - .sh  7 merge happy round-trip: post-merge main byte-identical to a
-//       hand-built EXPECTED (cmp -s) -> Test 7: post-merge main === EXPECTED
-//       string (same byte-for-byte observable, expressed as a string compare).
-//   - .sh  8 merge workflow-level Active Agent untouched (main wins)
-//       -> Test 8: post-merge Active Agent field === aidlc-developer-agent
-//       (same observable; STRONGER: exact field value, not a substring grep).
-//   - .sh  9 alphabetical-slug tiebreak: merge beta then alpha; code-generation
-//       stays [-] after beta (deferred), becomes [S] after alpha (lower slug
-//       wins) -> Test 9: same two intermediate observables.
-//   - .sh 10 Bolt Refs reverts to [empty list] after last merge -> Test 10:
-//       reuses the test-9 project; Bolt Refs field === '[empty list]'.
-//   - .sh 11 merge idempotency: 2nd merge rc!=0 + 'already merged' + no 2nd
-//       STATE_MERGED row -> Test 11: same three observables (count stays 1).
-//   - .sh 12 merge audit-lock timeout: pre-create lock dir, merge → rc!=0 +
-//       '[slug=timeout]' + (lock|retries) -> Test 12: same observables.
-//   - .sh 13 concurrent forks distinct slugs: both land, Bolt Refs sorted
-//       [bolt-x, bolt-y] -> Test 13: spawn both, await both, Bolt Refs field
-//       === '[bolt-x, bolt-y]' (emitRefsList alphabetical sort observable).
-//   - .sh 14 (B2) duplicate-slug fork: 2nd fork rc!=0 + 'slug already in
-//       Bolt Refs' + STATE_FORKED count stays 1 -> Test 14: same observables.
-//   - .sh 15 (B1) errorWithSlug-in-lock releases lock: trigger dup-slug error,
-//       lock dir released, follow-up fork sub-3s -> Test 15: lock dir absent
-//       after the failing fork + follow-up fork succeeds (status 0) and the
-//       follow-up success, audit count, and absent lock prove release directly.
-//   - .sh 16 (M1) audit Target state hash === actual main SHA after merge
-//       -> Test 16: parse target_state_hash off the merge JSON ack, sha256 the
-//       post-merge main file, assert equal (same observable).
+// Test 4 does not assert that no STATE_FORKED row landed: setFieldStrict on
+// Worktree Path runs AFTER the STATE_FORKED emit, so a row CAN land.
 //
-// 16 .sh assertions -> 16 test() cases here (Test 10 reuses Test 9's project,
-// matching the .sh's "Reuse proj from test 9"). STRONGER additions are noted
-// inline; nothing is dropped.
-//
-// FIXTURE DISCIPLINE (mirrors the .sh's make_fixture = create_test_project +
-// inline v7 state + empty audit header): each case builds a FRESH temp project
-// via createTestProject (toPortablePath-converts on Windows so the audit.md /
-// state.md the tool writes via toPosix round-trip when read back), writes the
-// SAME inline v7 state + bare audit header the .sh's make_fixture used, and —
-// for the cases that read audit row COUNTS — starts from the bare
-// "# AI-DLC Audit Log\n" header so post-fire counts are unambiguous (the .sh
-// did NOT seed audit-sample.md here; it used a bare header). Worktree dirs are
-// created through the intent-scoped worktreePath helper. All temp dirs are
-// cleaned in afterAll, plus a best-effort chmod-restore +
-// lock-dir rmdir to mirror the .sh's cleanup_all trap.
+// FIXTURE DISCIPLINE: each case builds a FRESH temp project via
+// createTestProject (toPortablePath-converts on Windows so the audit shards /
+// state file the tool writes via toPosix round-trip when read back), writes the
+// inline v7 state + bare audit header, and - for the cases that read audit row
+// COUNTS - starts from the bare "# AI-DLC Audit Log\n" header so post-fire
+// counts are unambiguous. Worktree dirs are created through the intent-scoped
+// worktreePath helper. All temp dirs are cleaned in afterAll, plus a
+// best-effort chmod-restore + lock-dir rmdir.
 
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
@@ -126,7 +58,7 @@ import {
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const STATE_TS = join(
   REPO_ROOT,
@@ -141,8 +73,6 @@ const tempDirs: string[] = [];
 
 afterAll(() => {
   for (const d of tempDirs) {
-    // Mirror cleanup_all: restore perms on any chmod'd worktree dir, drop a
-    // leftover lock dir, then remove the project tree.
     try {
       const wt = join(d, ".aidlc", "worktrees");
       if (existsSync(wt)) chmodSync(wt, 0o755);
@@ -167,11 +97,10 @@ afterAll(() => {
 
 interface CliResult {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string; // combined stdout+stderr
   stdout: string;
 }
 
-/** Spawn `bun aidlc-state.ts --project-dir <p> <args...>`. Mirrors `bun "$STATE_TS" --project-dir "$proj" ...`. */
 function state(proj: string, ...args: string[]): CliResult {
   return stateWithEnv(proj, {}, ...args);
 }
@@ -196,8 +125,8 @@ function stateWithEnv(proj: string, env: NodeJS.ProcessEnv, ...args: string[]): 
 // per-clone SHARD DIR (readers glob audit/*.md).
 const statePath = (p: string): string => seededStateFile(p);
 const auditDir = (p: string): string => seededAuditDir(p);
-// The bare-header "audit.md" the .sh seeded is now a single fixture SHARD under
-// the audit/ dir (the readers glob *.md, so one shard reads back as the trail).
+// The bare-header audit is a single fixture SHARD under the audit/ dir (the
+// readers glob *.md, so one shard reads back as the trail).
 const auditPath = (p: string): string => join(seededAuditDir(p), "fixture.md");
 // The worktree mirror carries the SAME relative record dir as the main checkout
 // (relativeRecordDir → aidlc/spaces/default/intents/<record>), so the forked
@@ -214,8 +143,6 @@ const wtStatePath = (p: string, slug: string): string =>
 const sha256File = (file: string): string =>
   createHash("sha256").update(readFileSync(file)).digest("hex");
 
-// The clean v7 state fixture — byte-for-byte the .sh's make_fixture heredoc
-// (t76-state-fork-merge.sh:75-94).
 const V7_STATE = `# AI-DLC State Tracking
 
 ## Project Information
@@ -236,15 +163,14 @@ const V7_STATE = `# AI-DLC State Tracking
 - [-] build-and-test — EXECUTE
 `;
 
-/** make_fixture: fresh temp project with the v7 state + bare audit header. */
 function makeFixture(): string {
   const proj = createTestProject();
   tempDirs.push(proj);
   writeFileSync(statePath(proj), V7_STATE, "utf-8");
-  // The .sh seeds a BARE header here (not audit-sample.md), so audit-row
-  // counts post-fire are unambiguous. Audit is now a per-clone shard DIR; the
-  // bare header lands in a single fixture shard (readers glob audit/*.md, so
-  // the tool's own <host>-<clone>.md shard and this one are merged on read).
+  // Seed a BARE header here (not audit-sample.md), so audit-row counts
+  // post-fire are unambiguous. Audit is a per-clone shard DIR; the bare header
+  // lands in a single fixture shard (readers glob audit/*.md, so the tool's own
+  // <host>-<clone>.md shard and this one are merged on read).
   mkdirSync(auditDir(proj), { recursive: true });
   writeFileSync(auditPath(proj), "# AI-DLC Audit Log\n", "utf-8");
   return proj;
@@ -281,7 +207,6 @@ function readAllShards(dir: string): string {
   return names.map((n) => readFileSync(join(dir, n), "utf-8")).join("\n");
 }
 
-/** Count audit blocks with `**Event**: <ev>` (mirrors `grep -c STATE_FORKED`). */
 function auditEventCount(proj: string, ev: string): number {
   return readAllShards(auditDir(proj))
     .split("\n")
@@ -293,8 +218,7 @@ const auditContains = (proj: string, needle: string): boolean =>
 
 /**
  * Strip the two intentionally-divergent fields (Worktree Path + Bolt Refs)
- * from a state file and return the remaining lines joined — mirrors the .sh's
- * `grep -vE '^- \*\*(Worktree Path|Bolt Refs)\*\*:'` normalisation for the
+ * from a state file and return the remaining lines joined for the
  * byte-identical comparison.
  */
 function normStripped(file: string): string {
@@ -305,10 +229,10 @@ function normStripped(file: string): string {
 }
 
 /**
- * Probe whether this platform enforces read-only directory permissions —
- * mirrors readonly_dirs_enforced (t76:143-152). Test 6's chmod-0555 mechanism
- * is a no-op on platforms that ignore dir mode (native Windows), so we skip it
- * there rather than asserting an unobservable sequence.
+ * Probe whether this platform enforces read-only directory permissions.
+ * Test 6's chmod-0555 mechanism is a no-op on platforms that ignore dir mode
+ * (native Windows), so we skip it there rather than asserting an unobservable
+ * sequence.
  */
 function readonlyDirsEnforced(): boolean {
   if (process.platform === "win32") return false;
@@ -351,15 +275,11 @@ describe("t76 aidlc-state fork (migrated from t76-state-fork-merge.sh, plan 16)"
     mkWorktreeDir(proj, "demo");
     const r = state(proj, "fork", "--slug", "demo");
     expect(r.status).toBe(0);
-    // Worktree state equals main modulo Worktree Path + Bolt Refs.
     expect(normStripped(wtStatePath(proj, "demo"))).toBe(
       normStripped(statePath(proj)),
     );
-    // Main's Bolt Refs registers the fork.
     expect(stateField(proj, "Bolt Refs")).toBe("[demo]");
-    // Exactly one STATE_FORKED row (STRONGER than the .sh's bare presence grep).
     expect(auditEventCount(proj, "STATE_FORKED")).toBe(1);
-    // STRONGER: JSON ack on the stdout boundary.
     expect(r.stdout).toContain('"status":"forked"');
     expect(r.stdout).toContain('"source_state_hash":');
   });
@@ -433,7 +353,7 @@ describe("t76 aidlc-state fork (migrated from t76-state-fork-merge.sh, plan 16)"
       // Platform ignores read-only dir mode (e.g. native Windows): the write
       // failure this case provokes cannot occur, so the STATE_FORKED-then-
       // ERROR_LOGGED sequence is unobservable via chmod 0555. Skip rather than
-      // assert an impossible observable (mirrors the .sh's SKIP).
+      // assert an impossible observable.
       return;
     }
     const proj = makeFixture();
@@ -460,7 +380,6 @@ describe("t76 aidlc-state fork (migrated from t76-state-fork-merge.sh, plan 16)"
     const proj = makeFixture();
     mkWorktreeDir(proj, "bolt-x");
     mkWorktreeDir(proj, "bolt-y");
-    // Launch both forks concurrently (bash `&` + wait), then check both landed.
     const spawnAsync = (slug: string): Promise<number> =>
       new Promise((resolve) => {
         const { spawn } = require("node:child_process");
@@ -486,7 +405,6 @@ describe("t76 aidlc-state fork (migrated from t76-state-fork-merge.sh, plan 16)"
     const r = state(proj, "fork", "--slug", "dup");
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("slug already in Bolt Refs");
-    // No phantom row — count stays at 1.
     expect(auditEventCount(proj, "STATE_FORKED")).toBe(1);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -524,7 +442,6 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
     const proj = makeFixture();
     mkWorktreeDir(proj, "demo");
     expect(state(proj, "fork", "--slug", "demo").status).toBe(0);
-    // Worktree advances code-generation [-] -> [x].
     const wt = wtStatePath(proj, "demo");
     writeFileSync(
       wt,
@@ -536,7 +453,7 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
     );
     expect(state(proj, "merge", "--slug", "demo").status).toBe(0);
     // Expected: original main with code-generation flipped + Bolt Refs reverted
-    // to [empty list] (byte-for-byte the .sh's EXPECTED heredoc, t76:284-303).
+    // to [empty list].
     const EXPECTED = `# AI-DLC State Tracking
 
 ## Project Information
@@ -564,7 +481,6 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
     mkWorktreeDir(proj, "wftest");
     expect(state(proj, "fork", "--slug", "wftest").status).toBe(0);
     const wt = wtStatePath(proj, "wftest");
-    // Mutate Active Agent in the worktree to a rogue value.
     writeFileSync(
       wt,
       readFileSync(wt, "utf-8").replace(
@@ -574,18 +490,15 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
       "utf-8",
     );
     expect(state(proj, "merge", "--slug", "wftest").status).toBe(0);
-    // STRONGER than the .sh substring grep: exact field value.
     expect(stateField(proj, "Active Agent")).toBe("aidlc-developer-agent");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("9+10: merge — alphabetical-slug tiebreak (beta defers, alpha wins) + Bolt Refs reverts to [empty list]", () => {
-    // Test 10 in the .sh reuses test 9's project, so they're one case here.
     const proj = makeFixture();
     mkWorktreeDir(proj, "alpha");
     mkWorktreeDir(proj, "beta");
     expect(state(proj, "fork", "--slug", "alpha").status).toBe(0);
     expect(state(proj, "fork", "--slug", "beta").status).toBe(0);
-    // alpha → [S], beta → [x] on the same Construction cell.
     const wa = wtStatePath(proj, "alpha");
     writeFileSync(
       wa,
@@ -610,7 +523,6 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
     const cgAfterBeta = readFileSync(statePath(proj), "utf-8")
       .split("\n")
       .find((l) => l.includes("code-generation"));
-    // code-generation NOT changed yet (deferred to alpha).
     expect(cgAfterBeta).toContain("[-]");
     // Now merge alpha — Bolt Refs = [alpha], alpha wins, applies [S].
     expect(state(proj, "merge", "--slug", "alpha").status).toBe(0);
@@ -618,7 +530,6 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
       .split("\n")
       .find((l) => l.includes("code-generation"));
     expect(cgAfterAlpha).toContain("[S]");
-    // Test 10: Bolt Refs reverts to [empty list] after the last merge.
     expect(stateField(proj, "Bolt Refs")).toBe("[empty list]");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -632,7 +543,6 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
     const r = state(proj, "merge", "--slug", "idem");
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("already merged");
-    // No second row.
     expect(auditEventCount(proj, "STATE_MERGED")).toBe(mergedBefore);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -688,7 +598,6 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
     );
     const r = state(proj, "merge", "--slug", "hashtest");
     expect(r.status).toBe(0);
-    // Parse target_state_hash off the JSON ack, re-hash the post-merge main.
     const m = r.stdout.match(/"target_state_hash":"([0-9a-f]+)"/);
     expect(m).not.toBeNull();
     const targetHash = m?.[1];

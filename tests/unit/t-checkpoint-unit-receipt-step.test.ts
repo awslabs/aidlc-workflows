@@ -170,7 +170,6 @@ function bodyWithoutReceipts(reviews: boolean): void {
   if (reviews) reviewThroughLog(proj, FIRST);
 }
 
-// Run the commands `next` named and expect the Unit's next stage.
 function followStep(step: Record<string, unknown>, expected: string[]): void {
   expect(step.kind, nexts.join("\n")).toBe("print");
   const message = String(step.message);
@@ -215,7 +214,6 @@ describe("t-checkpoint-unit-receipt-step: a checkpoint-enabled Unit done without
     expect(message).toContain("then record the verdict.");
     // Every later `next` names the same step: no loop back to the stage body.
     expect(next(proj)).toEqual(step);
-    // With the review recorded, the receipt step follows and the Unit moves on.
     reviewThroughLog(proj, FIRST);
     followStep(next(proj), [START, COMPLETE]);
   });

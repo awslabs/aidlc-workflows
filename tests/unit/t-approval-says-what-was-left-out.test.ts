@@ -172,7 +172,6 @@ describe("t-approval-says-what-was-left-out", () => {
     const { verified, asked } = checkpointQuestion(p);
     expect(asked.left_out, JSON.stringify(asked)).toBe(LEFT_OUT);
     expect(JSON.stringify(verified)).not.toContain("Left out");
-    // Approve stays exactly as it is.
     humanTurn(p, "left-out", "Approve");
     const approved = tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "approve", "--session", "left-out", "--user-input", "Approve"]);
     expect(approved.approved, JSON.stringify(approved)).toBe(true);

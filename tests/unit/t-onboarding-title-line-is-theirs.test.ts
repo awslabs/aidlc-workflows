@@ -84,7 +84,6 @@ function release(tool: Tool): string {
   return join(REPO_ROOT, "dist-release", tool.harness);
 }
 
-// Every line equal to `from` becomes `to`.
 function swapLine(text: string, from: string, to: string): string {
   return text.split("\n").map((line) => (line === from ? to : line)).join("\n");
 }
@@ -202,7 +201,6 @@ describe("the onboarding's title line", () => {
       expect(aidlcText(tool, readFileSync(file, "utf-8"))).toBe(aidlcText(tool, kept));
       expect(instructionFileDoctorCheck(project, tool.harnessDir).pass).toBe(true);
 
-      // Later refreshes keep it, and so does a second rename.
       const again = config(project, release(tool), tool.harness, "--yes");
       expect(again.status, again.out).toBe(0);
       expect(aidlcText(tool, readFileSync(file, "utf-8"))).toBe(aidlcText(tool, kept));

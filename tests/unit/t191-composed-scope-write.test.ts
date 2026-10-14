@@ -1,12 +1,11 @@
 // covers: function:validScopes, subcommand:aidlc-utility:intent-create
 //
-// t191 - the P2 composed-scope write contract (adaptive workflows).
+// t191 - the composed-scope write contract (adaptive workflows).
 //
 // The front composer authors TWO files after approval - scopes/aidlc-<name>.md
 // + a scope-grid.json entry - and the runtime honors them at the next
-// invocation with zero recompile (spike A). This test pins the deterministic
-// half of that contract plus the KEYWORD-HYGIENE rule the review made a
-// landing requirement:
+// invocation with zero recompile. This test pins the deterministic half of
+// that contract plus the KEYWORD-HYGIENE rule:
 //
 //   - A composed scope written with `keywords: []` RESOLVES by --scope (creation
 //     succeeds, the created state carries the scope, the authored grid drives

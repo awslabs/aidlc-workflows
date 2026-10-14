@@ -18,8 +18,8 @@
 //                effort, and a pinned one would override it in both
 //                directions, so ABSENCE is the contract)
 //   balanced  -> model: sonnet,  effort: medium (the reviewer tier; pinned
-//                in 2.5.40 after live A/B showed medium reviews at ~half the
-//                xhigh wall-clock with no finding-quality loss)
+//                after live A/B showed medium reviews at ~half the xhigh
+//                wall-clock with no finding-quality loss)
 //   templated -> model: inherit, NO effort: line (the tier remains a
 //                models-dial group, but the shipped baseline inherits)
 //

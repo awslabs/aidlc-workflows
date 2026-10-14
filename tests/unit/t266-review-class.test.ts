@@ -3,12 +3,13 @@
 // Pins the four seams the feature spans:
 //   1. Schema: review_class accepts adversarial/advisory, rejects other values,
 //      and requires a reviewer (same coupling as reviewer_max_iterations).
-//   2. Graph compile: review_class rides into stage-graph.json — the 7
+//   2. Graph compile: review_class rides into stage-graph.json - the 8
 //      human-gated ideation/inception prose stages ship advisory, the 5
 //      construction stages default adversarial; absent without a reviewer.
-//   3. Resolution: resolveReviewClass is low-wins across stage declaration,
-//      scope review_cap, and the per-run Review Override state field — an
-//      override can lower but never raise, and no input conjures a reviewer.
+//   3. Resolution: resolveReviewClass is low-wins between the stage declaration
+//      and one ceiling (the per-run Review Override state field when set, else
+//      the scope review_cap): an override can lift a scope cap but never pass
+//      the declaration, and no input conjures a reviewer.
 //   4. CLI: creation/config routes preserve review choices and audit changes;
 //      routes unable to apply the override reject it instead of discarding it.
 //
@@ -214,7 +215,6 @@ describe("t266 review class", () => {
         expect(bySlug.get(slug)?.review_class).toBe("adversarial");
         expect(bySlug.get(slug)?.review_artifact).toBeTruthy();
       }
-      // No reviewer -> no class key at all.
       const noReviewer = graph.filter((s) => !s.reviewer);
       expect(noReviewer.length).toBeGreaterThan(0);
       for (const s of noReviewer) {
@@ -227,7 +227,6 @@ describe("t266 review class", () => {
 
   // --- 3. resolution --------------------------------------------------------
   test("resolveReviewClass lowers by one ceiling and cannot conjure a reviewer", () => {
-    // No stage reviewer -> none, regardless of scope/override.
     expect(resolveReviewClass(undefined, "feature")).toBe("none");
     expect(
       resolveReviewClass(undefined, "feature", "- **Review Override**: adversarial\n")

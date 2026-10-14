@@ -12,7 +12,6 @@
 // tool, or a run naming one twice is a build error, so a new harness or a
 // renamed heading is caught at package time instead of shipping a gap.
 
-/** The binding subsection heading each manifest name reads. */
 export const BINDING_HEADINGS: Readonly<Record<string, string>> = {
   claude: "Claude Code",
   kiro: "Kiro CLI",
@@ -66,7 +65,6 @@ export function keepOwnHarnessBindings(content: string, harness: string, file: s
       i++;
       continue;
     }
-    // Collect the run: tool headings at this level, deeper headings inside them.
     const sections: Array<{ text: string; from: number; to: number }> = [];
     let j = i;
     while (j < headings.length) {

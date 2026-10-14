@@ -213,7 +213,6 @@ describe("t-unit-receipt-only-step: a Unit done but not recorded gets its receip
     const completed = unitVerb(proj, "complete", "unit-b");
     expect(completed.rc, completed.out).toBe(0);
     expect(unitCompletedReceipts(proj, SLUG).has("unit-b")).toBe(true);
-    // Every Unit is settled now, so next presents the stage's own gate.
     const after = next(proj);
     expect(JSON.stringify(after)).not.toContain(START_B);
     expect(after.kind, JSON.stringify(after)).toBe("run-stage");

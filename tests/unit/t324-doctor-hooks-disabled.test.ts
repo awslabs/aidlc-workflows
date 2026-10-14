@@ -4,7 +4,7 @@
 // disabled by IT policy (`"disableAllHooks": true`). `/aidlc --doctor` reported
 // every check green, yet the workflow was blocked at runtime because no hook
 // could fire. Doctor only verified the hook FILES were present and wired — it
-// never checked that Claude Code was allowed to RUN them. This pins the new
+// never checked that Claude Code was allowed to RUN them. This pins the
 // "Hooks enabled" row: it must FAIL loudly (exit non-zero) when a resolved
 // `disableAllHooks: true` is present, follow Claude Code's layer precedence so
 // a higher-precedence `false` suppresses a lower `true`, and pass otherwise.
@@ -106,7 +106,6 @@ describe("t324 doctor disableAllHooks gate", () => {
     const { status, out } = runDoctor(proj);
     expect(out).toMatch(/Hooks DISABLED/);
     expect(out).toMatch(/\.claude\/settings\.json/);
-    // The remedy is the person's one step, which works in the same chat.
     expect(out).toContain(
       'Set "disableAllHooks": false in this project\'s .claude/settings.local.json; it works in the same chat.',
     );
@@ -138,7 +137,6 @@ describe("t324 doctor disableAllHooks gate", () => {
     patchProjectSettings(proj, { disableAllHooks: true });
     writeFile(proj, ".claude/settings.local.json", JSON.stringify({ disableAllHooks: false }, null, 2));
     const { out } = runDoctor(proj);
-    // The local layer wins → hooks are enabled → no disabled warning.
     expect(out).toMatch(/Hooks enabled/);
     expect(out).not.toMatch(/Hooks DISABLED/);
   });

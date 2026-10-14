@@ -169,7 +169,6 @@ describe("a team's opencode.json keeps what the team set", () => {
     expect(record.entries[JSON.stringify({ path: ["permission", "bash", PUSH_ASK] })]).toBeUndefined();
     expect(record.entries[JSON.stringify({ path: ["permission", "bash", "*"] })]).toBeUndefined();
     expect(record.entries[JSON.stringify({ path: ["model"] })]).toBeUndefined();
-    // A second run changes nothing.
     expect(configured(dir)).toBe(after);
   });
 
@@ -232,7 +231,6 @@ describe("a refresh follows only AI-DLC's unchanged entries", () => {
   test("a release change reaches AI-DLC's entries; the team's edits and own entries stay", () => {
     const dir = project(TEAM_FILE);
     const first = configured(dir);
-    // The team tightens one of AI-DLC's rules.
     writeFileSync(join(dir, "opencode.json"), first.replace('".aidlc/hooks/**": "ask"', '".aidlc/hooks/**": "deny"'));
     const source = releaseCopy((shipped) => {
       delete shipped.$schema;
@@ -263,7 +261,6 @@ describe("a refresh follows only AI-DLC's unchanged entries", () => {
     const dir = project();
     const first = parse(configured(dir, earlier));
     expect(first.permission.bash["*"]).toBe("ask");
-    // The team adds its model and nothing else; the refresh from this release follows.
     writeFileSync(join(dir, "opencode.json"), `${JSON.stringify({ model: "team/model", ...first }, null, 2)}\n`);
     const value = parse(configured(dir));
     expect(value.model).toBe("team/model");
@@ -273,7 +270,6 @@ describe("a refresh follows only AI-DLC's unchanged entries", () => {
     expect(value.permission.bash[PUSH_ASK]).toBe("ask");
     expect(value.permission.bash[AIDLC_RULE]).toBe("allow");
     expect(value.permission.edit).toEqual({ ".aidlc/tools/**": "ask", ".aidlc/hooks/**": "ask" });
-    // The same install where the team had tightened AI-DLC's shell rule to deny.
     const tightened = project();
     const text = configured(tightened, earlier);
     writeFileSync(join(tightened, "opencode.json"), text.replace('"*": "ask"', '"*": "deny"'));
@@ -356,7 +352,6 @@ describe("a copy keeps the team's opencode.json", () => {
     expect(value.model).toBe("amazon-bedrock/team-model");
     expect(value.instructions).toContain(".aidlc/onboarding.md");
     expect(value.permission.bash["*"]).toBe("allow");
-    // Once is enough.
     expect(addRootBlocks(dir)).not.toContain("opencode.json");
   });
 
@@ -488,7 +483,6 @@ describe("an explicit provider choice reaches the team's opencode.json", () => {
     expect(changed.stdout.match(/now uses Bedrock/g)).toHaveLength(1);
     const check = run(["config", "providers", "--project-dir", dir, "--check"], dir);
     expect(check.stdout + check.stderr).not.toContain("provider-opencode");
-    // Rerunning with the same choice changes nothing and says nothing new.
     const again = run([
       "config", "providers", "--project-dir", dir,
       "--provider", "amazon-bedrock", "--region", "us-east-1", "--opencode-default", "yes", "--yes",
@@ -594,10 +588,8 @@ describe("a team that keeps opencode.jsonc", () => {
     const { instructionFileDoctorCheck } = await import("../../core/tools/aidlc-config-diagnostics.ts");
     const doctor = instructionFileDoctorCheck(dir, ".aidlc");
     expect(doctor.pass, doctor.label).toBe(true);
-    // A refresh keeps it that way.
     expect(configure(dir).status).toBe(0);
     expect(existsSync(join(dir, "opencode.json"))).toBe(false);
-    // An explicit Bedrock region reaches the jsonc, named as the file it is.
     const changed = run([
       "config", "providers", "--project-dir", dir,
       "--provider", "amazon-bedrock", "--region", "us-east-1", "--opencode-default", "yes", "--yes",
@@ -644,7 +636,6 @@ describe("a team that keeps opencode.jsonc", () => {
     expect(value.model).toBe("amazon-bedrock/team-model");
     expect(value.instructions).toContain(".aidlc/onboarding.md");
     expect(value.permission.bash["*"]).toBe("allow");
-    // Once is enough.
     expect(addRootBlocks(dir)).not.toContain("opencode.jsonc");
   });
 });

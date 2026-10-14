@@ -1,19 +1,11 @@
 // covers: hook:aidlc-write-audit-log, hook:aidlc-validate-state, hook:aidlc-session-start, hook:aidlc-statusline, hook:aidlc-log-subagent, hook:aidlc-run-sensors, hook:aidlc-rebuild-stage-graph
 //
 // t13 — adversarial-input robustness for the framework's stdin-driven hooks.
-// Migrated from tests/unit/t13-hook-input-robustness.sh (TAP plan 20).
 // Mechanism: cli.
 //
-// WHY CLI (process-boundary, not in-process): the SUBJECT is the set of
-// shipped hooks, not pure functions. Each hook reads its payload from STDIN
-// (`await Bun.stdin.text()`) or from the state file, resolves projectDir from
-// CLAUDE_PROJECT_DIR / the workspace JSON / its own script path, and
-// terminates the process via `process.exit(...)` (or by falling off the end
-// after a `process.stdout.write`). The module's top level RUNS on import and
-// exits the process — none of the stdin seam, the env/script-path projectDir
-// derivation, or the exit codes is reachable by importing a function. So this
-// twin SPAWNS each real shipped hook exactly the way Claude Code drives it
-// from settings.json, feeding adversarial bytes on stdin / into the state
+// WHY CLI (process-boundary, not in-process): the SUBJECT is the set of shipped
+// hooks as Claude Code drives them from settings.json, so this twin SPAWNS each
+// real shipped hook, feeding adversarial bytes on stdin / into the state
 // file: `Bun.spawnSync({ cmd: [BUN, HOOK], stdin: <bytes>, env: {…CLAUDE_PROJECT_DIR} })`.
 //
 // §6-E NON-GOLDEN CLASS (adversarial input): the .sh's contract is the
@@ -48,46 +40,6 @@
 //                                   :90 no-audit exit0
 //   hooks/aidlc-rebuild-stage-graph.ts:40 TTY exit0; :45-51 bad-JSON exit0;
 //                                   :52 command ?? ""; :64 no-command-match exit0
-//
-// FIXTURE DISCIPLINE (mirrors the .sh's create_test_project / seed_audit_file /
-// per-case state heredocs + cleanup_test_project, one fresh project per case):
-//   - createTestProject() -> a fresh temp dir with aidlc-docs/.
-//   - seedAuditFile() -> copies tests/fixtures/audit-sample.md to
-//     aidlc-docs/audit.md (the precondition for the audit-emitting hooks).
-//   - state-file cases write the SAME state bytes the .sh heredoc'd, including
-//     the injection tokens embedded in field values (Phase/Stage).
-//   - tests 7-10 used a project dir whose NAME contains spaces ("aidlc test
-//     space"); reproduced via mkdtemp with a spaced prefix.
-//   - cleanupTestProject() rm -rf's each temp project. Nothing written under
-//     tests/fixtures/**.
-//
-// Old TAP -> new test parity (1:1, every .sh assertion -> a named test();
-// injection cases STRONGER via verbatim-survival assertions):
-//   .sh test 1  audit-logger shell injection exits 0          -> "audit-logger: survives shell injection (exit 0, token verbatim)"
-//   .sh test 2  validate-state shell injection exits 0        -> "validate-state: survives shell injection in state file (exit 0, token verbatim)"
-//   .sh test 3  session-start shell injection exits 0         -> "session-start: survives shell injection in state file (exit 0, token verbatim)"
-//   .sh test 4  statusline shell injection exits 0            -> "statusline: survives shell injection (exit 0, token verbatim)"
-//   .sh test 5  log-subagent shell injection exits 0          -> "log-subagent: survives shell injection (exit 0, token verbatim)"
-//   .sh test 6  audit-logger paths with spaces exits 0        -> "audit-logger: handles a file path with spaces (exit 0)"
-//   .sh test 7  validate-state project dir with spaces exits 0-> "validate-state: handles a project dir with spaces (exit 0)"
-//   .sh test 8  session-start project dir with spaces exits 0 -> "session-start: handles a project dir with spaces (exit 0)"
-//   .sh test 9  statusline project dir with spaces exits 0    -> "statusline: handles a project dir with spaces (exit 0)"
-//   .sh test 10 log-subagent project dir with spaces exits 0  -> "log-subagent: handles a project dir with spaces (exit 0)"
-//   .sh test 11 audit-logger empty JSON exits 0               -> "audit-logger: handles empty JSON {} (exit 0)"
-//   .sh test 12 log-subagent empty JSON exits 0               -> "log-subagent: handles empty JSON {} (exit 0)"
-//   .sh test 13 statusline empty JSON exits 0                 -> "statusline: handles empty JSON {} (exit 0)"
-//   .sh test 14 audit-logger null JSON values exits 0         -> "audit-logger: handles null JSON values (exit 0)"
-//   .sh test 15 audit-logger backtick injection exits 0       -> "audit-logger: survives backtick injection (exit 0, token verbatim)"
-//   .sh test 16 audit-logger unicode in path exits 0          -> "audit-logger: handles unicode in the path (exit 0)"
-//   .sh test 17 validate-state ignores stdin gracefully exit 0-> "validate-state: ignores empty JSON on stdin (exit 0)"
-//   .sh test 18 session-start ignores stdin gracefully exit 0 -> "session-start: ignores empty JSON on stdin (exit 0)"
-//   .sh test 19 sensor-fire shell injection exits 0           -> "sensor-fire: survives shell injection (exit 0)"
-//   .sh test 20 runtime-compile empty JSON exits 0            -> "runtime-compile: handles empty JSON {} (exit 0)"
-//
-// 20 .sh asserts -> 20 expect()-bearing test() cases (8 STRONGER: the five
-// shell-injection rows + the backtick row + statusline injection + the two
-// state-file injection rows additionally pin VERBATIM survival of the
-// injection token in the written artifact, proving non-execution).
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -111,7 +63,7 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 
 const HOOK_AUDIT = join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts");
 const HOOK_VALIDATE = join(AIDLC_SRC, "hooks", "aidlc-validate-state.ts");
@@ -121,15 +73,12 @@ const HOOK_SUBAGENT = join(AIDLC_SRC, "hooks", "aidlc-log-subagent.ts");
 const HOOK_SENSOR = join(AIDLC_SRC, "hooks", "aidlc-run-sensors.ts");
 const HOOK_RUNTIME = join(AIDLC_SRC, "hooks", "aidlc-rebuild-stage-graph.ts");
 
-// P9 per-intent layout: the audit-logger now gates on the file_path being UNDER
-// the active intent's record root (docsRoot()), not on a bare "aidlc-docs/"
-// substring; and the audit-emitting hooks self-gate on workflow state and/or
-// their resolved shard existing. So injection/space/unicode artifacts are
+// The audit-logger gates on the file_path being UNDER the active intent's record
+// root (docsRoot()), and the audit-emitting hooks self-gate on workflow state
+// and/or their resolved shard existing. So injection/space/unicode artifacts are
 // written UNDER the seeded record (keeping the adversarial token as an INNER
 // path segment), and the audit-emitting cases pin a clone-id + create the
-// resolved shard. The adversarial CONTRACT (always exit 0, token never executed)
-// is unchanged — only the path the artifact lives under moved from aidlc-docs/
-// to the record dir.
+// resolved shard. The adversarial CONTRACT: always exit 0, token never executed.
 const PINNED_CLONE_ID = "testcloneid13";
 function pinnedShardName(): string {
   const host =
@@ -172,7 +121,6 @@ function seedAuditShard(proj: string): string {
   return auditDir;
 }
 
-/** Concatenate every shard (sorted) — the settled per-intent audit read. */
 function readShards(proj: string): string {
   const auditDir = seededAuditDir(proj);
   let names: string[];
@@ -195,9 +143,8 @@ interface FireResult {
 
 /**
  * Fire a stdin-driven hook once with `json` on stdin under the given project
- * dir — the .sh's `echo '<json>' | CLAUDE_PROJECT_DIR=$PROJ bun $HOOK`. stderr
- * is discarded (the .sh ran `2>/dev/null`); stdout is captured so injection
- * cases can assert the written output carries the token verbatim.
+ * dir. stderr is discarded; stdout is captured so injection cases can assert
+ * the written output carries the token verbatim.
  */
 function fireStdin(hook: string, json: string, proj: string): FireResult {
   const r = Bun.spawnSync({
@@ -212,9 +159,8 @@ function fireStdin(hook: string, json: string, proj: string): FireResult {
 }
 
 /**
- * Fire a state-file-driven hook (validate-state / session-start) that reads no
- * meaningful stdin — the .sh ran `CLAUDE_PROJECT_DIR=$PROJ bun $HOOK` with no
- * pipe. We attach an empty stdin so neither blocks on a terminal read.
+ * Fire a state-file-driven hook (validate-state / session-start) with an empty
+ * stdin so neither blocks on a terminal read.
  */
 function fireState(hook: string, proj: string): FireResult {
   return fireStdin(hook, "", proj);
@@ -235,9 +181,6 @@ function writeJson(filePath: string): string {
   return JSON.stringify({ tool_name: "Write", tool_input: { file_path: filePath } });
 }
 
-// A project dir whose NAME contains spaces (the .sh's
-// `mktemp -d "/tmp/aidlc test space XXXXXX"`), seeded with the per-intent
-// workspace shell. Returned dirs are tracked and torn down in afterEach.
 const spacedDirs: string[] = [];
 function makeSpacedProject(): string {
   const proj = mkdtempSync(join(tmpdir(), "aidlc test space "));
@@ -267,7 +210,7 @@ describe("t13 hook input robustness (mechanism cli — spawned hooks + adversari
     seedAuditShard(proj);
     const r = fireStdin(HOOK_AUDIT, writeJson(join(seededRecordDir(proj), "$(whoami)", "test.md")), proj);
     expect(r.exitCode).toBe(0);
-    // STRONGER: the injected path lands verbatim in the **File**: field — the
+    // The injected path lands verbatim in the **File**: field - the
     // shell never interpolated `$(whoami)` (would otherwise have been expanded
     // to the username and the literal token would be gone).
     expect(readShards(proj)).toContain("$(whoami)/test.md");
@@ -280,7 +223,7 @@ describe("t13 hook input robustness (mechanism cli — spawned hooks + adversari
     );
     const r = fireState(HOOK_VALIDATE, proj);
     expect(r.exitCode).toBe(0);
-    // STRONGER: validate-state writes the **Current stage** verbatim into the
+    // validate-state writes the **Current stage** verbatim into the
     // recovery breadcrumb; the backtick `whoami` survives, never executed.
     const recovery = recoveryPath(proj);
     expect(existsSync(recovery)).toBe(true);
@@ -294,7 +237,7 @@ describe("t13 hook input robustness (mechanism cli — spawned hooks + adversari
     );
     const r = fireState(HOOK_SESSION, proj);
     expect(r.exitCode).toBe(0);
-    // STRONGER: session-start injects the field values into its additionalContext
+    // session-start injects the field values into its additionalContext
     // JSON on stdout; the injection tokens survive verbatim, never executed.
     expect(r.stdout).toContain("$(whoami)");
     expect(r.stdout).toContain("`whoami`");
@@ -307,7 +250,7 @@ describe("t13 hook input robustness (mechanism cli — spawned hooks + adversari
     );
     const r = fireStdin(HOOK_STATUS, JSON.stringify({ workspace: { project_dir: proj } }), proj);
     expect(r.exitCode).toBe(0);
-    // STRONGER: the unmapped stage value renders verbatim into the statusline
+    // The unmapped stage value renders verbatim into the statusline
     // (STAGE_DISPLAY has no entry for the injected token, so it falls through);
     // the shell never expanded it.
     expect(r.stdout).toContain("$(whoami)");
@@ -325,7 +268,7 @@ describe("t13 hook input robustness (mechanism cli — spawned hooks + adversari
       proj,
     );
     expect(r.exitCode).toBe(0);
-    // STRONGER: both injection tokens land verbatim in the SUBAGENT_COMPLETED
+    // Both injection tokens land verbatim in the SUBAGENT_COMPLETED
     // audit block's Agent Type / Agent ID fields — neither was executed.
     const audit = readShards(proj);
     expect(audit).toContain("$(whoami)");
@@ -352,7 +295,6 @@ describe("t13 hook input robustness (mechanism cli — spawned hooks + adversari
       "# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: IDEATION\n- **Current Stage**: feasibility\n## Stage Progress\n### IDEATION PHASE\n- [ ] feasibility — EXECUTE\n",
     );
     expect(fireState(HOOK_VALIDATE, spaced).exitCode).toBe(0);
-    // The recovery breadcrumb landed under the spaced project dir's record.
     expect(existsSync(recoveryPath(spaced))).toBe(true);
   });
 
@@ -397,7 +339,6 @@ describe("t13 hook input robustness (mechanism cli — spawned hooks + adversari
         spaced,
       ).exitCode,
     ).toBe(0);
-    // The emit landed in the audit trail under the spaced dir's record.
     expect(readShards(spaced)).toContain("SUBAGENT_COMPLETED");
   });
 
@@ -452,13 +393,10 @@ describe("t13 hook input robustness (mechanism cli — spawned hooks + adversari
   test("audit-logger: survives backtick injection (exit 0, token verbatim) [.sh test 15]", () => {
     writeState(proj, "# AI-DLC State Tracking\n## Current Status\n## Stage Progress\n");
     seedAuditShard(proj);
-    // The .sh's path put the backtick group as a leading segment with an
-    // aidlc-docs/ segment so the OLD substring gate passed. The P9 gate keys on
-    // the record root, so the artifact moves UNDER the record — the backtick token
-    // stays an inner segment, preserving the non-execution assertion.
+    // The gate keys on the record root, so the artifact lives UNDER the record - the
+    // backtick token stays an inner segment, preserving the non-execution assertion.
     const r = fireStdin(HOOK_AUDIT, writeJson(join(seededRecordDir(proj), "`whoami`", "test.md")), proj);
     expect(r.exitCode).toBe(0);
-    // STRONGER: the backtick token survives verbatim in the **File**: field.
     expect(readShards(proj)).toContain("`whoami`/test.md");
   });
 
@@ -467,7 +405,6 @@ describe("t13 hook input robustness (mechanism cli — spawned hooks + adversari
     seedAuditShard(proj);
     const r = fireStdin(HOOK_AUDIT, writeJson(join(seededRecordDir(proj), "éèê", "tëst.md")), proj);
     expect(r.exitCode).toBe(0);
-    // The non-ASCII path round-trips into the audit log without mangling.
     expect(readShards(proj)).toContain("éèê/tëst.md");
   });
 
@@ -476,7 +413,8 @@ describe("t13 hook input robustness (mechanism cli — spawned hooks + adversari
       proj,
       "# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: IDEATION\n- **Current Stage**: feasibility\n## Stage Progress\n### IDEATION PHASE\n- [ ] feasibility — EXECUTE\n",
     );
-    // validate-state reads the STATE file, not stdin; piping {} must be ignored.
+    // validate-state reads workflow content from the STATE file; an empty stdin
+    // object supplies no session metadata.
     const r = fireStdin(HOOK_VALIDATE, "{}", proj);
     expect(r.exitCode).toBe(0);
     expect(existsSync(recoveryPath(proj))).toBe(true);
@@ -495,8 +433,8 @@ describe("t13 hook input robustness (mechanism cli — spawned hooks + adversari
   });
 
   // ===========================================================================
-  // Test D — v0.5.0 PostToolUse hooks (sensor-fire, runtime-compile): same
-  // always-exit-0 contract under adversarial input.
+  // Test D - PostToolUse hooks (sensor-fire, runtime-compile): same always-exit-0
+  // contract under adversarial input.
   // ===========================================================================
 
   test("sensor-fire: survives shell injection (exit 0) [.sh test 19]", () => {

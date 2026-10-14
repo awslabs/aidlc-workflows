@@ -3,16 +3,13 @@
 // t109 — escapeRegex(str) round-trip property test (P0 deterministic floor).
 //
 // Unit under test: escapeRegex in dist/claude/.claude/tools/aidlc-lib.ts:1540
-//   export function escapeRegex(str: string): string {
-//     return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-//   }
 //
-// This fn is security-relevant: the CLI arg parser builds RegExp patterns
+// This fn is security-relevant: the CLI tools build RegExp patterns
 // from caller-supplied tokens, and any metacharacter that survives unescaped
 // becomes an injection vector (a "." matching any char, a "(" opening a
 // capture group, a "\" forming an escape that breaks the pattern, etc.).
 //
-// Test design note (house style — see tests/unit/t69-worktree-path.sh):
+// Test design note (house style):
 // these assertions do NOT reimplement the escaping (no parity against our own
 // String.replace). A parity test only catches deletion of the function. We
 // assert the OBSERVABLE CONTRACT instead — the two properties any correct
@@ -29,7 +26,7 @@
 //       match a string that only a metacharacter interpretation would match.
 //       escapeRegex("a.b") must match "a.b" and must NOT match "axb"; if the
 //       "." leaks through unescaped it matches "axb" and this fails. This is
-//       the property that actually defends the arg parser.
+//       the property that actually defends those callers.
 //
 // The generated corpus deliberately includes every metacharacter the source
 // class lists ( . * + ? ^ $ { } ( ) | [ ] \ ) individually, in adjacency, and
@@ -176,10 +173,6 @@ describe("escapeRegex — escaped form is a literal, never a metachar (P2)", () 
   });
 
   test('every metachar, when escaped and embedded, matches only its own literal', () => {
-    // For each metacharacter, build a haystack "X<m>Y" and a needle pattern
-    // from escapeRegex of that exact string. It must match the literal and
-    // must reject a string where <m> is replaced by a different char "Z" —
-    // proving the metachar was treated as a literal, not a wildcard/operator.
     for (const m of METACHARS) {
       const literal = `X${m}Y`;
       const re = new RegExp(`^${escapeRegex(literal)}$`);
@@ -199,12 +192,12 @@ describe("escapeRegex — embedded substring search (the arg-parser threat surfa
     // where it literally appears and nowhere a metachar reading would invent.
     const cases: Array<{ token: string; haystack: string; expect: boolean }> = [
       { token: "v1.2.3", haystack: "version v1.2.3 released", expect: true },
-      { token: "v1.2.3", haystack: "version v1X2Y3 released", expect: false }, // dots are literal
+      { token: "v1.2.3", haystack: "version v1X2Y3 released", expect: false },
       { token: "a*", haystack: "found a* here", expect: true },
-      { token: "a*", haystack: "found aaaa here", expect: false }, // * is literal
+      { token: "a*", haystack: "found aaaa here", expect: false },
       { token: "$HOME", haystack: "echo $HOME now", expect: true },
       { token: "(x)", haystack: "call (x) once", expect: true },
-      { token: "(x)", haystack: "call x once", expect: false }, // parens are literal
+      { token: "(x)", haystack: "call x once", expect: false },
     ];
     for (const c of cases) {
       const re = new RegExp(escapeRegex(c.token));

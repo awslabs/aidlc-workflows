@@ -1,15 +1,15 @@
 // covers: function:stateFilePath, function:auditFilePath
 //
 // t106 — path builders stateFilePath() / auditFilePath() in aidlc-lib.ts.
-// Mechanism: none (pure functions, zero I/O, zero LLM, zero tokens).
+// Mechanism: none (in-process calls, zero LLM, zero tokens).
 // Technique: example-based.
 //
-// Source (dist/claude/.claude/tools/aidlc-lib.ts), P9 end state — NO flat
-// aidlc-docs/ fallback. With no intent record on disk, both builders resolve
-// under the BARE SPACE record root (aidlc/spaces/<space>/intents/):
+// Source (dist/claude/.claude/tools/aidlc-lib.ts). NO flat aidlc-docs/
+// fallback: with no intent record on disk, both builders resolve under the
+// BARE SPACE record root (aidlc/spaces/<space>/intents/):
 //   stateFilePath(d) => join(d, "aidlc/spaces/default/intents", "aidlc-state.md")
 //   auditFilePath(d) => join(d, "aidlc/spaces/default/intents", "audit", "<host>-<clone>.md")
-// (audit is now a per-clone SHARD under audit/, not a single audit.md.)
+// (audit is a per-clone SHARD under audit/, not a single audit.md.)
 //
 // Why this file exists: both builders are one-character-typo-fragile. A silent
 // edit of "intents"->"intent", or "aidlc-state.md"->"state.md", or a dropped
@@ -45,9 +45,6 @@ const EXPECTED_DATA_SENTINEL = `${SEP}intents${SEP}`;
 
 describe("stateFilePath()", () => {
   test("returns the exact full path for a known absolute projectDir", () => {
-    // Pins the literal. Catches "intents"->"intent", "aidlc-state.md"->
-    // "state.md", a dropped/extra path component, or a stray separator. The
-    // load-bearing assertion.
     expect(stateFilePath(PROJ)).toBe(EXPECTED_STATE);
   });
 
@@ -62,8 +59,6 @@ describe("stateFilePath()", () => {
   });
 
   test("preserves the projectDir prefix verbatim", () => {
-    // The whole projectDir must survive at the head. Catches a builder that
-    // re-rooted the path or trimmed the prefix.
     expect(stateFilePath(PROJ).startsWith(PROJ)).toBe(true);
   });
 
@@ -110,7 +105,6 @@ describe("stateFilePath() / auditFilePath() relationship", () => {
 
     const stateLeaf = state.slice(state.lastIndexOf(SEP) + 1);
     expect(stateLeaf).toBe("aidlc-state.md");
-    // The audit shard lives one level deeper, under audit/.
     expect(audit.includes(`${SEP}audit${SEP}`)).toBe(true);
     expect(state.includes(`${SEP}audit${SEP}`)).toBe(false);
   });

@@ -47,7 +47,6 @@ function rows(pd: string, event: string, unit?: string) {
     (unit === undefined || auditBlockField(row.block, "Unit name") === unit || auditBlockField(row.block, "Bolt slug") === boltSlugForUnit(unit)));
 }
 
-// Build, check, review and finalize the Units of one batch; the batch converges.
 function converge(pd: string, units: string[], extraWrites: string[] = []): void {
   const prepared = prepare(pd, units);
   expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
@@ -96,7 +95,6 @@ describe("Retry after a failed landing keeps the approved plan", () => {
     expect(rows(pd, "SWARM_UNIT_CONVERGED", "alpha")).toHaveLength(1);
     expect(rows(pd, "STATE_MERGED", "alpha")).toHaveLength(1);
 
-    // What the hook named is fixed; the same landing finishes and the stage settles.
     rmSync(join(pd, ".git", "hooks", "pre-commit"));
     const landed = land(pd, "alpha");
     expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
@@ -166,7 +164,6 @@ describe("a Retry that changed what was verified or approved", () => {
     converge(pd, ["alpha"]);
     hook(pd, ["exit 1"]);
     expect((JSON.parse(land(pd, "alpha").out) as { status: string }).status).toBe("commit-refused");
-    // Retry: the worker re-runs inside the existing worktree and changes the source.
     writeUnitSource(pd, "alpha", 3);
     expect(swarm(pd, ["check", "alpha"]).code).toBe(0);
     reviewAgain(pd, "alpha", 2);

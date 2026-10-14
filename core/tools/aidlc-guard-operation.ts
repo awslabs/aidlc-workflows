@@ -276,7 +276,6 @@ export function parseGuardRestartContinuationCommand(
 // here would strand that offered recovery after human approval.
 // Conductor-prose-obtained abort consent remains the trust boundary; a mistaken
 // abort --discard parks work for aidlc engine worktree restore --slug <slug>.
-// A mechanical selection receipt remains a future candidate, not a check here.
 // Source installs already trust the equivalent aidlc-utility.ts config-change
 // invocation, so admitting the exact native `config set guard.<fence> off` is
 // native parity, not a new capability; `on`, extra arguments and other keys are

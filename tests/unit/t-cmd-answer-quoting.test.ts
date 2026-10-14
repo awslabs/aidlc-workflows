@@ -31,7 +31,6 @@ function project(): string {
   return p;
 }
 
-// `log answer` run the way an agent types it into cmd.exe.
 function answerThroughCmd(p: string, details: string): { status: number; out: string } {
   const command = `"${BUN}" "${LOG}" answer --stage feasibility --details ${details} --project-dir "${p}"`;
   const r = spawnSync("cmd.exe", ["/d", "/s", "/c", `"${command}"`], {

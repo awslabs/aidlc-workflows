@@ -121,8 +121,13 @@ have configured**; if you prefer your own default, remove that setting and use
 `kiro-cli chat --agent aidlc` instead.
 
 No shipped agent pins a model: a pinned ID resolves only when that
-model is enabled on the user's Kiro install, so the conductor and all 14
-personas inherit your session model (`/model`).
+model is enabled on the user's Kiro install. A chat, and each of the 14
+personas the conductor dispatches, starts on your session model: the one
+saved in your Kiro settings (Kiro auto when you have saved none). `/model`
+changes only the chat you are in, so the conductor follows it and the
+personas still start on the saved model. To move them too, save the switch
+with `/model set-current-as-default`, or choose the model with
+`aidlc config models --session-model <id>`.
 
 ### Session model and effort
 
@@ -231,7 +236,8 @@ does not start with a dot. Their writes into `.kiro/` (apart from the `aidlc` ag
 top-level dot entry, and anything outside the project, still ask. Your
 project's own test and build commands (`bun test`, `npm test`, `pytest`, and so
 on), a `git push` and a recursive delete still ask, so you see each one before
-it runs.
+it runs. In a side-by-side build the workers and reviewers run the test command
+you approved through AI-DLC's own `swarm check`, which does not ask.
 
 **Sessions with no approver stall rather than prompt.** Anything outside the
 pre-approved set needs an interactive answer. Under `kiro-cli chat
@@ -282,7 +288,7 @@ CLI on its v3 engine, use the
 | Forwarding-loop enforcement (Stop hook) | Interactive + headless | Interactive sessions only — `--no-interactive` runs do not honor the stop-hook block |
 | Permissions | `settings.json` allowlist | Source-generated projection: AI-DLC's own project-relative workflow commands (engine, read-only dispatcher commands, AI-DLC tool scripts); native and versioned release runtimes: `aidlc engine *`. Other shell commands prompt. |
 | Welcome message | Rendered at session start from `settings.json` `companyAnnouncements` | None — Kiro has no welcome-render equivalent; the session-start hook injects resume context only |
-| MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | Ships the same 5 in `.kiro/settings/mcp.json`, all disabled by default; flip `"disabled": false` per server to enable it. Context7 is keyless on Kiro because Kiro sends configured HTTP header values verbatim instead of expanding environment placeholders. All 14 delegated personas opt in through `includeMcpJson: true` plus `@<server>` tool grants for these five. AI-DLC's own chat gets every server in this file and in your `~/.kiro/settings/mcp.json` as of the last time config ran, and each call asks you first; a server you add later reaches it after you run config again. |
+| MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | Ships the same 5 in `.kiro/settings/mcp.json`, all disabled by default; flip `"disabled": false` per server to enable it. Context7 is keyless on Kiro because Kiro sends configured HTTP header values verbatim instead of expanding environment placeholders. AI-DLC's own chat and its 14 delegated personas get every server in this file and in your `~/.kiro/settings/mcp.json` as of the last time config ran, and each call asks you first; a server you add later reaches them after you run config again. On Kiro CLI's v3 engine a persona gets every server in those files without a config run, from its second step. |
 
 Everything else — state machine, audit trail, artifacts under the intent
 record dirs (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`), the learnings

@@ -106,7 +106,6 @@ describe("t341 orchestrate wait", () => {
       "aidlc-developer-agent (no contribution file)",
       "aidlc-devsecops-agent (no contribution file)",
     ]);
-    // The bound is honoured: a one-second wait really waits about one second.
     expect(Number(waiting.json?.waited_ms)).toBeGreaterThanOrEqual(900);
     expect(String(waiting.json?.next)).toContain("Never replace it with a shell loop");
 

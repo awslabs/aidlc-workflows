@@ -56,7 +56,6 @@ afterEach(() => {
   while (created.length > 0) cleanupTestProject(created.pop());
 });
 
-/** A poc workflow at Code Generation with plan approval on, as a scope default. */
 function project(policy: "strict" | "relaxed" | "off", guardsOn = false, planApproval: "on" | "off" = "on"): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
@@ -253,7 +252,6 @@ function auditText(proj: string): string {
     .map((name) => readFileSync(join(dir, name), "utf-8")).join("\n");
 }
 
-/** Approve the plan the way the person does: the engine asks, they pick the first choice. */
 function approved(proj: string, unit: string | null = null): void {
   writePlan(proj, "", unit);
   const ask = next(proj);
@@ -269,7 +267,6 @@ describe("a plan revised only for the person's own change request", () => {
     test(`Guard Policy ${policy}: their change is built, with no second plan question`, () => {
       const proj = project(policy);
       approved(proj);
-      // At the gate: "rename the test file to price.spec.js please".
       reply(proj, "Before I approve: rename the test file to price.spec.js please.");
       rejectedAtGate(proj, "Before I approve: rename the test file to price.spec.js please.");
       const revise = next(proj);
@@ -278,13 +275,11 @@ describe("a plan revised only for the person's own change request", () => {
         status: "revise",
         feedback: "Before I approve: rename the test file to price.spec.js please.",
       });
-      // The agent revises the plan for exactly what they asked.
       writePlan(proj, "- [ ] Step 2: rename the test file to price.spec.js\n");
       const build = next(proj);
       expect(build.kind, JSON.stringify(build)).toBe("run-stage");
       expect(build.plan_approval?.status, JSON.stringify(build)).toBe("approved");
       expect(build.ask_type).toBeUndefined();
-      // The build runs: the guard admits the developer, and generation starts.
       const handed = guardAdmitsBuild(proj);
       expect(handed.code, handed.stderr).toBe(0);
       const verify = posture(proj, "verify");
@@ -337,7 +332,6 @@ describe("a plan revised only for the person's own change request", () => {
       ),
       "utf-8",
     );
-    // At the gate they ask for a change.
     reply(proj, "rename the test file please");
     rejectedAtGate(proj, "rename the test file please");
     expect(next(proj).plan_approval?.status).toBe("revise");
@@ -345,7 +339,6 @@ describe("a plan revised only for the person's own change request", () => {
     const asked = next(proj);
     expect(asked.kind, JSON.stringify(asked)).toBe("ask");
     expect(asked.ask_type).toBe("plan-approval");
-    // Nobody ever approved a plan here, and nothing says they did.
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
   });
 

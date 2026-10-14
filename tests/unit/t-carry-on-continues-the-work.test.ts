@@ -147,13 +147,11 @@ function follow(
     } else if (reading === "pick") {
       const picked = PICK_STEP.exec(message)?.[1];
       if (picked === undefined) {
-        // The reading print: the piece the words name, from the print's own list.
         expect(message, "the print names next --pick <name>").toContain("next --pick <name>");
         const name = piecesNamed(message).find((piece) => piece.includes(args[args.length - 1]));
         expect(name, `no piece named ${args[args.length - 1]} in: ${message.slice(0, 160)}`).toBeDefined();
         d = next(tools, proj, ["--pick", name!], env);
       } else {
-        // The one-step answer: the switch, then the bare next, in the same turn.
         expect(message).toMatch(/then run `[^`]* next` and follow what it returns/);
         switchTool(tools, proj, picked);
         d = next(tools, proj, [], env);
@@ -209,7 +207,6 @@ function cloneWithWork(tools: string, labels?: readonly string[]): string {
   return proj;
 }
 
-// The person parked ("stop for now") and came back.
 function parkThenComeBack(p: string): void {
   appendAuditEntry("HUMAN_TURN", {}, p);
   stateTool(p, "park");
@@ -249,10 +246,8 @@ describe("t-carry-on-continues-the-work: work in progress", () => {
         expect(String(d.message), note).toMatch(BARE_NEXT);
         expect(String(d.message), note).toContain(REENTRY);
         expect(String(d.message), note).toMatch(REQUEST);
-        // One reading for every words-only line: no word is treated apart.
         expect(upToIds(d), note).toBe(upToIds(proceed));
       }
-      // The bare next the agent then runs is the step a bare next always gets.
       const after = next(tools, proj, []);
       expect(after.kind).toBe("run-stage");
       expect(after.stage).toBe(bare.stage);
@@ -372,13 +367,11 @@ describe("t-carry-on-continues-the-work: work here but none selected in this cha
         expect(questionTexts(proj), note).toContain(words.join(" "));
       }
       // Without a chat identity nothing re-reads the line: the bare next asks
-      // which piece to pick up, as it always did.
+      // which piece to pick up.
       const goOn = follow(tools, proj, ["carry", "on"], "go-on");
       expect(goOn.last.ask_type, JSON.stringify(goOn.last).slice(0, 300)).toBe("intent-pick");
       expect(goOn.last.question).toBe(bare.question);
       expect(goOn.calls).toBe(2);
-      // The kept words come back as the request they may be: the same ask the
-      // words got at once before, one agent read later.
       const request = follow(tools, proj, ["fix the login"], "request");
       expect(request.last.kind, JSON.stringify(request.last).slice(0, 300)).toBe("ask");
       expect(request.last.ask_type).toBe(harness === "kiro" ? ROUTING_QUESTION : "scope-confirm");
@@ -412,7 +405,6 @@ describe("t-carry-on-continues-the-work: work here but none selected in this cha
         expect(after.kind, JSON.stringify(after).slice(0, 300)).toBe("ask");
         expect(after.ask_type).toBe("intent-pick");
         expect(after.question).toBe(pick.question);
-        // Said again later, the same words are read again, not skipped.
         await Bun.sleep(1100);
         const again = await say(proj, `/aidlc ${words}`, host);
         expect(again.status, `${again.stdout}${again.stderr}`).toBe(0);

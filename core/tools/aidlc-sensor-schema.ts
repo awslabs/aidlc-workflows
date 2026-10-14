@@ -191,8 +191,6 @@ function requireNonEmptyString(
   }
 }
 
-// Helper: throw if obj[field] !== expected. Optional `hint` appends a trailing
-// clause to the thrown message (e.g., "; other kinds reserved for future releases").
 function requireExactValue<K extends "kind">(
   obj: SensorManifest,
   field: K,
@@ -227,8 +225,8 @@ function requireEnumValue<K extends "default_severity" | "fire_on">(
 // compileStageGraph's error pattern. Cross-checks `id:` against the
 // filename stem (passed by the caller, who knows the path).
 //
-// Per-field validation delegates to requireNonEmptyString and
-// requireExactValue helpers above; the function itself only branches
+// Per-field validation delegates to requireNonEmptyString, requireExactValue
+// and requireEnumValue helpers above; the function itself only branches
 // on (a) the required-fields presence loop, (b) the id-vs-filename
 // cross-check that needs both inputs, and (c) the optional-matches
 // gate. Cyclomatic complexity stays under the linter's complexity cap.
@@ -241,8 +239,8 @@ export function validateSensorManifest(
   // over REQUIRED_FIELDS without per-field overhead. obj is already typed
   // as SensorManifest by the parse step's trust boundary; the iteration
   // here cross-checks that the fields the type promises actually exist
-  // at runtime (catches edge cases where parseSensorManifest emits empty
-  // string for a field rather than the typed shape).
+  // at runtime (catches edge cases where parseSensorManifest omits a
+  // field rather than emitting the typed shape).
   // type-coverage:ignore-next-line — typed-to-record widening for runtime field iteration
   const objAsRecord: Record<string, unknown> = obj as unknown as Record<string, unknown>;
   for (const field of REQUIRED_FIELDS) {

@@ -1,7 +1,7 @@
-// AI-DLC's status line is the person's choice (#1407). Until this change it
-// shipped in the team's .claude/settings.json and .codex/config.toml, which
-// outrank the status line each person set up for themselves, so setup replaced
-// theirs in every AI-DLC project. Now first-run setup asks once, a switch
+// AI-DLC's status line is the person's choice (#1407). The team's
+// .claude/settings.json and .codex/config.toml outrank the status line each
+// person set up for themselves, so a status line shipped there would replace
+// theirs in every AI-DLC project. First-run setup asks once, a switch
 // (`aidlc config --statusline on|off`, `/aidlc --statusline on|off`) changes it
 // any time, and a setup that asks nothing adds nothing. A project that already
 // had AI-DLC's status line keeps it, and the person whose own it covers hears
@@ -339,7 +339,6 @@ describe("Claude Code: setup, the switch, a refresh and a teammate", () => {
     expect(personalRecord(dir)).toBe("off");
     expect(json(join(dir, ".claude", "settings.json")).statusLine).toBeUndefined();
     expect(sha(m.claudeUser)).toBe(before);
-    // A refresh after "off" adds nothing back.
     setUp(m, "claude", dir);
     expect(existsSync(claudeLocal(dir))).toBe(false);
   });
@@ -366,7 +365,6 @@ describe("Claude Code: setup, the switch, a refresh and a teammate", () => {
     asEarlierRelease(dir);
     expect(run(author, ["config", "--project-dir", dir, "--from", join(RUNTIME, "claude"), "--harness", "claude", "--yes"]).status)
       .toBe(0);
-    // The author turns it off for themselves.
     expect(run(author, ["config", "--statusline", "off", "--project-dir", dir]).status).toBe(0);
     // What the teammate clones: the committed files, none of the author's own.
     const clone = project("aidlc-statusline-clone-");
@@ -390,10 +388,8 @@ describe("Claude Code: setup, the switch, a refresh and a teammate", () => {
     );
     expect(json(claudeLocal(clone)).statusLine).toEqual(NATIVE_STATUS_LINE);
     expect(personalRecord(clone)).toBe("kept");
-    // The author's own choice stays theirs.
     expect(personalRecord(dir)).toBe("off");
     expect(existsSync(claudeLocal(dir))).toBe(false);
-    // The next chat says nothing.
     const next = run(teammate, ["engine", "hook", "session-start"], {
       tool: join(clone, ".claude", "tools", "aidlc.ts"),
       env: { CLAUDE_PROJECT_DIR: clone },
@@ -441,7 +437,6 @@ describe("Claude Code: setup, the switch, a refresh and a teammate", () => {
         );
       }
       expect(sha(m.claudeUser)).toBe(before);
-      // Setting up again asks nothing.
       const again = run(m, ["config", "--project-dir", dir, "--from", join(RUNTIME, "claude"), "--harness", "claude", "--yes"]);
       expect(again.stdout).not.toContain(CLAUDE_STATUS_LINE_QUESTION);
     }
@@ -506,7 +501,6 @@ describe("Codex CLI: the project's shared config", () => {
     expect((Bun.TOML.parse(readFileSync(shared, "utf-8")) as { tui: { status_line: string[] } }).tui.status_line).toEqual(ITEMS);
     const second = run(m, ["config", "--project-dir", dir, "--from", join(RUNTIME, "codex"), "--harness", "codex", "--yes"]);
     expect(second.stdout).not.toContain("status line");
-    // Off takes the table and AI-DLC's comment lines out with it.
     expect(run(m, ["config", "--statusline", "off", "--project-dir", dir]).status).toBe(0);
     const after = readFileSync(shared, "utf-8");
     expect((Bun.TOML.parse(after) as Record<string, unknown>).tui).toBeUndefined();
