@@ -68,6 +68,32 @@ Never invent an environment inventory or deployment path.
 
 ### Step 2: Pre-Deployment Checks
 
+When the deployment targets AWS (the pipeline or the deploy commands use the
+AWS CLI, CDK, SAM, or CloudFormation), first check the AWS identity from your
+own shell, before writing any question: run `aws sts get-caller-identity`
+with the profile and region the deployment will use (the same `AWS_PROFILE`
+and `AWS_REGION`, or the `--profile` and `--region` the pipeline names). A
+person's terminal can be signed in while the shell your harness runs commands
+in cannot see those credentials, and finding that out only when the deploy
+starts costs the time of every answer before it.
+
+- If it succeeds, go on. Never write the account ID or the full ARN into an
+  artifact, a questions file, or the audit: when you note the identity, keep
+  only the last four digits of the account (`********1234`) and the role or
+  user name.
+- If it fails (`NoCredentials`, `ExpiredToken`, `AccessDenied`, a missing
+  profile), do not ask any deployment question yet. Ask one question through
+  the stage-protocol.md question flow that says what failed, in the error's own
+  words, and the fix: the credentials must be visible to the shell this agent
+  runs commands in, so the person signs in again for that profile (for
+  example `aws sso login --profile <profile>`), makes the profile and region
+  available where the harness starts its shell (or restarts the harness from a
+  terminal where they are set), and replies when it is done. Then run the
+  check again; deploy only after it succeeds.
+
+The same failure later in this stage (a token that expires mid-deploy) is
+handled the same way: stop, ask with the fix, check again, then carry on.
+
 Create questions file covering:
 - Are all pre-deployment checks passing?
 - Are database migrations required and tested?
