@@ -4,6 +4,7 @@
  */
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawn } from "node:child_process";
+import type { Writable } from "node:stream";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readSync, rmdirSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -232,12 +233,31 @@ interface VerificationProcessResult {
 async function runVerificationProcess(
   command: string, args: string[], cwd: string, outFd: number, errFd: number, timeoutMs: number,
 ): Promise<VerificationProcessResult> {
-  const child = spawn(command, args, {
-    cwd, detached: process.platform !== "win32", stdio: ["ignore", outFd, errFd],
+  // A watcher in the check's own group reads a private pipe from the verifier.
+  // SIGKILL cannot be caught: EOF on that pipe retires the group even when the
+  // verifier disappears. A normal shell exit disarms it; no PID polling/reuse.
+  let retiring = false;
+  const watched = process.platform !== "win32";
+  // Ignore forwarded stops before forking, so the watcher inherits protection;
+  // restore the shell's defaults before executing the person's command.
+  const watcher = [
+    'aidlc_group=$$; trap "" INT TERM HUP;',
+    '(if ! read -r aidlc_done <&3; then kill -s KILL -- "-$aidlc_group"; fi) >/dev/null 2>&1 &',
+    'trap - INT TERM HUP; exec "$@" 3<&-',
+  ].join(" ");
+  const child = spawn(watched ? "/bin/sh" : command, watched ? ["-c", watcher, "aidlc-check", command, ...args] : args, {
+    cwd, detached: watched, stdio: watched ? ["ignore", outFd, errFd, "pipe"] : ["ignore", outFd, errFd],
     windowsHide: true, windowsVerbatimArguments: process.platform === "win32",
   });
+  const control = watched ? child.stdio[3] as Writable | null : null;
+  if (watched) {
+    // The group can close the pipe while we are retiring it.
+    control?.on("error", () => {});
+    child.on("exit", () => { if (!retiring) control?.end("done\n"); });
+  }
   let error: Error | null = null;
   let timedOut = false;
+  let interrupted: NodeJS.Signals | null = null;
   let closed = false;
   let cleanup: Promise<string | null> = Promise.resolve(null);
   const completed = new Promise<VerificationProcessResult>((resolve) => {
@@ -250,9 +270,9 @@ async function runVerificationProcess(
   let watchdog: ReturnType<typeof setTimeout> | undefined;
   let stalled!: (result: VerificationProcessResult) => void;
   const retirementLimit = new Promise<VerificationProcessResult>((resolve) => { stalled = resolve; });
-  const timer = setTimeout(() => {
-    if (closed || child.pid === undefined) return;
-    timedOut = true;
+  const retire = (signal: NodeJS.Signals) => {
+    if (retiring || closed || child.pid === undefined) return;
+    retiring = true;
     watchdog = setTimeout(() => stalled({ status: null, signal: null,
       error: new Error("verification process did not close") }), 4_000);
     const pid = child.pid;
@@ -266,36 +286,67 @@ async function runVerificationProcess(
           killer.on("close", (code) => { clearTimeout(ceiling); if (code !== 0) child.kill("SIGKILL"); resolve(code === 0 ? null : `taskkill exited ${code}`); });
         });
       }
-      try { process.kill(-pid, "SIGKILL"); }
+      try { process.kill(-pid, signal); }
       catch (failure) {
         if ((failure as NodeJS.ErrnoException).code !== "ESRCH") {
           child.kill("SIGKILL");
           return String(failure);
         }
       }
-      const deadline = Date.now() + 2_000;
+      const started = Date.now();
+      const deadline = started + 2_000;
+      let forced = signal === "SIGKILL";
       do {
         try { process.kill(-pid, 0); }
         catch (failure) {
           return (failure as NodeJS.ErrnoException).code === "ESRCH" ? null : String(failure);
         }
+        // Forward the person's stop first, then retire children that ignore it.
+        if (!forced && Date.now() - started >= 250) {
+          try { process.kill(-pid, "SIGKILL"); }
+          catch (failure) {
+            return (failure as NodeJS.ErrnoException).code === "ESRCH" ? null : String(failure);
+          }
+          forced = true;
+        }
         await new Promise((resolve) => setTimeout(resolve, 25));
       } while (Date.now() < deadline);
       return "the owned process group still exists";
     })().catch((failure: unknown) => String(failure));
-  }, timeoutMs);
-  // The timeout cleanup is bounded even when the OS cannot kill the shell.
-  const result = await Promise.race([completed, retirementLimit]);
-  clearTimeout(timer);
-  if (watchdog !== undefined) clearTimeout(watchdog);
-  if (!closed) child.unref();
-  if (!timedOut) return result;
-  const incomplete = await cleanup;
-  return {
-    ...result,
-    error: new Error(`Verification command timed out after ${timeoutMs} ms.` +
-      (incomplete || !closed ? ` Process cleanup incomplete: ${incomplete ?? "the shell did not close"}.` : " Owned process cleanup completed.")),
   };
+  const stopSignals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  const handlers = stopSignals.map((signal) => ({ signal, listener: () => {
+    interrupted ??= signal;
+    retire(signal);
+  } }));
+  if (process.platform !== "win32") {
+    for (const { signal, listener } of handlers) process.on(signal, listener);
+  }
+  const timer = setTimeout(() => {
+    if (retiring || closed) return;
+    timedOut = true;
+    retire("SIGKILL");
+  }, timeoutMs);
+  // Both a timeout and a person's stop wait for the same bounded retirement.
+  try {
+    const result = await Promise.race([completed, retirementLimit]);
+    if (!closed) child.unref();
+    if (!timedOut && interrupted === null) return result;
+    const incomplete = await cleanup;
+    const reason = interrupted !== null
+      ? `Verification command interrupted by ${interrupted}.`
+      : `Verification command timed out after ${timeoutMs} ms.`;
+    return {
+      ...result,
+      error: new Error(reason +
+        (incomplete || !closed ? ` Process cleanup incomplete: ${incomplete ?? "the shell did not close"}.` : " Owned process cleanup completed.")),
+    };
+  } finally {
+    clearTimeout(timer);
+    if (watchdog !== undefined) clearTimeout(watchdog);
+    for (const { signal, listener } of handlers) process.removeListener(signal, listener);
+    control?.destroy();
+  }
 }
 
 const CHECK_OUTPUT_TAIL_BYTES = 2048;

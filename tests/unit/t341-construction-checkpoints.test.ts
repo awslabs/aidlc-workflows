@@ -277,6 +277,76 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     }
   });
 
+  test.skipIf(process.platform === "win32").each(["SIGINT", "SIGTERM", "SIGHUP", "SIGKILL", "SIGKILL-after-SIGTERM"] as const)(
+    "%s retires the owned group when verification is stopped", async (stop) => {
+      const signal = stop === "SIGKILL-after-SIGTERM" ? "SIGKILL" : stop;
+      const dir = project();
+      const root = seededRecordDir(dir);
+      const heartbeat = join(root, "signal-heartbeat.txt");
+      const received = join(root, "received-signal.txt");
+      const pids = join(root, "signal-pids.txt");
+      const leaf = `const fs = require('node:fs');
+        fs.appendFileSync(${JSON.stringify(pids)}, process.pid + '\\n');
+        for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => {
+          fs.appendFileSync(${JSON.stringify(received)}, sig + '\\n'); if (${stop !== "SIGKILL-after-SIGTERM"}) process.exit(0);
+        });
+        setInterval(() => fs.appendFileSync(${JSON.stringify(heartbeat)}, 'tick\\n'), 20);`;
+      const command = writeCheck(dir, `const fs = require('node:fs');
+        fs.appendFileSync(${JSON.stringify(pids)}, process.pid + '\\n');
+        for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => {});
+        require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(leaf)}], {stdio: 'inherit'});
+        setInterval(() => {}, 1000);`);
+      recordCommand(dir, `${command}; :`);
+      const sentinel = childProcess.spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+      const verifier = childProcess.spawn(process.execPath, [join(AIDLC_SRC, "tools/aidlc-bolt.ts"),
+        "checkpoint", "--unit", "alpha", "--action", "verify", "--timeout-ms", "10000", "--project-dir", dir],
+        { detached: true, stdio: ["ignore", "pipe", "pipe"] });
+      let output = "";
+      verifier.stdout!.on("data", (bytes) => { output += bytes.toString(); });
+      verifier.stderr!.on("data", (bytes) => { output += bytes.toString(); });
+      const finished = new Promise<number | null>((resolve) => verifier.on("close", resolve));
+      let ceiling: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const deadline = Date.now() + 5000;
+        while (!fs.existsSync(heartbeat) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(fs.existsSync(heartbeat)).toBe(true);
+        // TERM/KILL model a harness stopping its group; INT/HUP target the verifier itself.
+        if (stop === "SIGKILL-after-SIGTERM") {
+          process.kill(-verifier.pid!, "SIGTERM");
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        process.kill((signal === "SIGTERM" || signal === "SIGKILL") ? -verifier.pid! : verifier.pid!, signal);
+        const code = await Promise.race([finished, new Promise<never>((_, reject) => {
+          ceiling = setTimeout(() => reject(new Error("interrupted verifier did not return")), 5000);
+        })]);
+        if (signal === "SIGKILL") {
+          expect(code).toBe(null);
+          expect(verifier.signalCode).toBe("SIGKILL");
+        } else {
+          expect(code, output).toBe(1);
+          expect(readFileSync(received, "utf8")).toContain(signal);
+        }
+        const failed = resolveConstructionCheckpoint(dir, "alpha", "unit");
+        expect(failed.verified).toBe(false);
+        if (signal === "SIGKILL") expect(failed.verification!.finished_at).toBe(null);
+        else expect(failed.verification!.error).toContain(`interrupted by ${signal}`);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const before = readFileSync(heartbeat, "utf8");
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        expect(readFileSync(heartbeat, "utf8")).toBe(before);
+        expect(sentinel.exitCode).toBe(null);
+        expect(() => process.kill(sentinel.pid!, 0)).not.toThrow();
+      } finally {
+        if (ceiling !== undefined) clearTimeout(ceiling);
+        sentinel.kill("SIGKILL");
+        try { process.kill(-verifier.pid!, "SIGKILL"); } catch { /* already closed */ }
+        if (fs.existsSync(pids)) for (const pid of readFileSync(pids, "utf8").trim().split("\n")) {
+          try { process.kill(Number(pid), "SIGKILL"); } catch { /* already retired */ }
+        }
+      }
+    },
+  );
+
   test.skipIf(process.platform === "win32")("cleanup failure is explicit and cannot verify the checkpoint", async () => {
     const dir = project();
     recordCommand(dir, "while :; do :; done");
@@ -301,7 +371,10 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     const invalid = cli(dir, "bolt", ["checkpoint", "--unit", "alpha", "--action", "status", "--timeout-ms", "1500"]);
     expect(invalid.code).not.toBe(0);
     expect(invalid.out).toContain("goes with --action verify");
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    const listeners = signals.map((signal) => process.listenerCount(signal));
     const result = await verifyConstructionCheckpoint(dir, "alpha", "unit", { timeoutMs: 1500 });
+    expect(signals.map((signal) => process.listenerCount(signal))).toEqual(listeners);
     expect(result.verified).toBe(true);
     expect(result.verification!.stdout_tail).toContain("finished");
   });
@@ -531,7 +604,7 @@ describe("t341 Construction checkpoint verification and evidence", () => {
       const command = 'test -f src/alpha.ts && printf "%s\\n" "POSIX fallback passed"';
       recordCommand(dir, command);
       const verified = await verifyConstructionCheckpoint(dir, "alpha", "unit");
-      expect(spawn).toHaveBeenCalledWith("/bin/sh", ["-c", command], expect.objectContaining({ cwd: dir }));
+      expect(spawn).toHaveBeenCalledWith("/bin/sh", ["-c", expect.any(String), "aidlc-check", "/bin/sh", "-c", command], expect.objectContaining({ cwd: dir }));
       expect(verified.verified).toBe(true);
       expect(verified.approved).toBe(false);
       expect(verified.verification!.exit_code).toBe(0);
@@ -996,7 +1069,7 @@ describe("t341 verification command consent", () => {
     }, 30_000);
   }
 
-  test("missing receipt, hand-written field, and mismatched command cannot execute or write proof", () => {
+  test("missing receipt, hand-written field, and mismatched command cannot execute or write proof", async () => {
     const dir = project();
     const path = resolveConstructionCheckpoint(dir, "alpha", "unit").proof_path;
     const refused = async () => {
@@ -1004,14 +1077,14 @@ describe("t341 verification command consent", () => {
       expect(resolveConstructionCheckpoint(dir, "alpha", "unit").command_authorized).toBe(false);
       expect(fs.existsSync(path)).toBe(false);
     };
-    refused();
+    await refused();
     writeFileSync(seededStateFile(dir), readFileSync(seededStateFile(dir), "utf-8").replace(
       "## Runtime State", "## Runtime State\n- **Construction Verification Command**: exit 0",
     ));
-    refused();
+    await refused();
     recordCommand(dir, "exit 0");
     writeFileSync(seededStateFile(dir), setField(readFileSync(seededStateFile(dir), "utf-8"), "Construction Verification Command", "exit 1"));
-    refused();
+    await refused();
     const generic = cli(dir, "state", ["set", "Construction Verification Command=exit 0"], {
       ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
     });

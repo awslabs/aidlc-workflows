@@ -661,8 +661,14 @@ On timeout, verification kills its owned process group on POSIX, or its process
 tree using `taskkill /T /F` on Windows, and waits for bounded cleanup before
 reading output and recording the failed proof. It reports completed cleanup or
 explicitly reports incomplete cleanup; neither outcome counts as a passing
-verification. Independently detached processes are outside the POSIX process
-group. Cleanup can add up to four seconds beyond the execution budget.
+verification. A watcher in the owned POSIX group also retires it when the
+verifier is killed with SIGKILL. Its started proof stays unfinished and unverified.
+Independently detached processes are outside the POSIX process
+group. SIGINT, SIGTERM and SIGHUP received by the POSIX verifier are forwarded
+to that group. Children that ignore the stop are forcibly retired after a short
+grace period, and the proof records an interrupted, failed verification. Signal
+handlers are removed after execution and cleanup. Cleanup can add up to four
+seconds beyond the execution budget.
 
 ### Revision loop
 
