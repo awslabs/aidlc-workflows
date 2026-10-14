@@ -1,6 +1,6 @@
 # Structured questions and human-turn recording
 
-**Finding:** DEVIN-08. **Status:** Implemented response compatibility; live batch/cancellation authority coverage remains limited. **Source baseline:** `6e208f7b`. **Fact-checked:** 2026-09-12; upstream-merge 2026-10-13.
+**Finding:** DEVIN-08. **Status:** Implemented response compatibility; live batch/cancellation authority coverage remains limited. **Source baseline:** `6e208f7b`. **Fact-checked:** 2026-09-12; upstream-merge 2026-10-13 and 2026-10-14.
 
 ## Why this was needed
 
@@ -8,7 +8,7 @@ A visible question and a clicked answer did not necessarily produce the evidence
 
 ## Current implementation
 
-The shared stage protocol owns the neutral question spec, never-echo requirement, option coverage, summary checkpoint, and non-matching-reply rules. The Devin annex references that method and supplies only native rendering details. It maps neutral multiSelect to native multi_select; responses are associated with the exact question text, selected labels, and optional custom_text.
+The shared stage protocol owns the neutral question spec, never-echo requirement, option coverage, summary checkpoint, and non-matching-reply rules; since the `0f39a808` merge the summary checkpoint itself lives in the summary module `stage-protocol-summary.md`, which §3 Step 3a names. The Devin annex references that method (§3, the summary module, and the logging checklist) and supplies only native rendering details; t181's Devin branch checks the referenced tokens in core and refuses a copy of them in the annex. It maps neutral multiSelect to native multi_select; responses are associated with the exact question text, selected labels, and optional custom_text.
 
 Native calls allow 1–4 questions with 2–4 explicit options each. Other is supplied by the tool. Larger option sets must avoid a one-option remainder, duplicate question texts must not collide in a batch, and skip/cancellation/Other must not manufacture an approved checkpoint.
 
@@ -46,6 +46,7 @@ Retired: string-only hook responses; Claude-only inner answer shapes; exit 0 mea
 
 - `harness/devin/skills/aidlc/question-rendering.md`
 - `core/aidlc-common/protocols/stage-protocol.md` — Structured questions, Question Format, Approval Gates
+- `core/aidlc-common/protocols/stage-protocol-summary.md` — the consolidated-summary checkpoint (since `0f39a808`)
 - `harness/devin/hooks/aidlc-devin-adapter.ts` — response parsing, record-human-turn
 - `core/hooks/aidlc-record-human-turn.ts`
 - `tests/unit/t332-devin-adapter.test.ts`
