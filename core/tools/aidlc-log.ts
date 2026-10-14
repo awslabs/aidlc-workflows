@@ -240,7 +240,7 @@ import {
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
-import { aidlcDispatcherInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, entrySkillInvocation, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES,
   SUMMARY_CONFIRMATION_CHOICES,
@@ -3874,6 +3874,9 @@ function handleReview(args: string[]): void {
       ...(flags.single === "true" ? { single: true } : {}),
       iteration,
     });
+    // A Unit of a parallel batch, reviewed in its worktree: the reviewer runs the
+    // tests the person approved through AI-DLC's own check, as its worker does.
+    const swarmUnit = flags.stage === "code-generation" && flags.unit ? swarmWorkerWorktreeMeta(pd) : null;
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
@@ -3891,6 +3894,9 @@ function handleReview(args: string[]): void {
       requestId,
       reviewFile,
       recordVerdict,
+      ...(swarmUnit && swarmUnit.swarmUnit === flags.unit
+        ? { test_command: swarmUnitTestCommand(swarmUnit.parent, flags.unit) }
+        : {}),
       ...(requestChangeNotices.length > 0 ? { change_notices: requestChangeNotices } : {}),
     }));
     return;

@@ -72,7 +72,8 @@ const DELEGATED_JUMP_VERBS = ["execute", "reopen"];
 // gate, and landing. merge-status and status are reads.
 const DELEGATED_UNIT_VERBS = ["adopt", "claim", "release", "participate", "publish", "pin", "gate", "land"];
 // Bolt and swarm lifecycle, the Construction autonomy grant, merge holds, and
-// checkpoint decisions; the referee calls belong to the conductor.
+// checkpoint decisions; the referee's prepare and finalize belong to the
+// conductor. Its check records nothing and is admitted (DELEGATE_ADMITTED_VERBS).
 const DELEGATED_BOLT_VERBS = [
   "start",
   "complete",
@@ -85,7 +86,7 @@ const DELEGATED_BOLT_VERBS = [
   "hold-merge",
   "release-merge",
 ];
-const DELEGATED_SWARM_VERBS = ["prepare", "check", "finalize"];
+const DELEGATED_SWARM_VERBS = ["prepare", "finalize"];
 // Question, review and pipeline-link receipts; answers is a read.
 const DELEGATED_LOG_VERBS = ["decision", "answer", "review", "link"];
 const DELEGATED_LEARNINGS_VERBS = ["persist"];
@@ -125,6 +126,7 @@ export const DELEGATED_LIFECYCLE_SCRIPTS: readonly string[] = [
 // What every delegated agent may run, by script and verb: reads, and the work
 // a persona is dispatched to do (CodeKB snapshot and publish for reverse
 // engineering, sensor fire to rerun the author's check, testing-posture brief,
+// swarm check to run the tests the person approved in a Unit's worktree,
 // and document-input with its onboarding forms, which Intent Capture and
 // Requirements Analysis require when a project runs them as a subagent).
 // DELEGATE_ROLE_ADMITTED_VERBS adds what only one persona is dispatched to do.
@@ -148,6 +150,7 @@ export const DELEGATE_ADMITTED_VERBS: Readonly<Record<string, readonly string[]>
   "aidlc-learnings.ts": ["surface"],
   "aidlc-runtime.ts": ["read", "summary"],
   "aidlc-testing-posture.ts": ["resolve", "render", "verify", "reply", "brief"],
+  "aidlc-swarm.ts": ["check"],
   "aidlc-worktree.ts": ["list", "verify", "info"],
   "aidlc-audit.ts": ["history"],
   "aidlc-plugin.ts": ["list"],

@@ -289,6 +289,15 @@ export function aidlcDispatcherInvocation(route: string): string {
   return `${aidlcInvocation()} engine ${route}`;
 }
 
+// The command a parallel batch's worker or reviewer runs for the tests the
+// person approved: AI-DLC's own `swarm check` with the command's output shown,
+// run from the project's main folder for the Unit's worktree.
+export function swarmUnitTestCommand(projectDir: string, unit: string): string {
+  return aidlcDispatcherInvocation(
+    `swarm check ${quoteCommandArgument(unit)} --show-output --project-dir ${quoteCommandArgument(resolve(projectDir))}`,
+  );
+}
+
 export function aidlcToolInvocation(
   route: string,
   sourceTool?: string,
