@@ -1,34 +1,34 @@
 #!/usr/bin/env bun
 // scripts/package.ts — THE build entry for the one-core-N-harnesses layout.
 //
-//   bun scripts/package.ts            regenerate dist/{claude,kiro,kiro-ide,codex}
+//   bun scripts/package.ts            regenerate dist/ and dist-release/ for every harness, plus plugins
 //   bun scripts/package.ts --check     determinism guard (exit 1 on mismatch)
 //   bun scripts/package.ts <name>      regenerate just one harness
 //   bun scripts/package.ts <name> --check
 //
-// PIPELINE PER HARNESS (per the engine design, generalized from the proven S4 prototype and
-// the package-codex.ts engine):
+// PIPELINE PER HARNESS:
 //   1. COPY core/<src> → dist/<name>/<harnessDir>/<dst>, substituting
-//      {{HARNESS_DIR}} → harnessDir in .md prose (the ONE transform class) and
+//      {{HARNESS_DIR}} -> harnessDir in .md prose (see transform()) and
 //      applying the manifest's rules-dir rename.
 //   2. COPY harness/<name>/<src> → dist/<name>/<harnessDir>/<dst> (authored
 //      surfaces: orchestrator skill, settings/config), same token substitution
 //      on .md; render neutral onboarding and native setup from their skeletons.
 //   3. COMPILE the stage graph into the assembled tree (emits harness-correct
 //      stage-graph.json + scope-grid.json — compiled data lives only in dist).
-//   4. GENERATE runners into the assembled tree by composing aidlc-runner-gen's
-//      exported render fns under AIDLC_HARNESS_DIR (the proven codex idiom, now
-//      uniform for all shipped harnesses).
-//   5. EMIT via harness/<name>/emit.ts if the manifest declares one (codex only
-//      today: config.toml, hooks.json, trust-seed, agent TOMLs, .agents/skills).
+//   4. GENERATE runners into the assembled tree by running aidlc-runner-gen's
+//      write and scopes CLIs under AIDLC_HARNESS_DIR (skipped when the manifest
+//      sets skipRunnerGen).
+//   5. EMIT via harness/<name>/emit.ts if the manifest declares one (codex,
+//      copilot and opencode today; for codex: config.toml, hooks.json,
+//      trust-seed, agent TOMLs, .agents/skills).
 //   6. REFRESH generated stage/scope table regions in the assembled orchestrator
 //      skill from the just-compiled graph and scope grid.
 //
-// THE TRANSFORM CLASS (T5 — the only permitted text transform): the harness-dir
-// token. core/ prose carries {{HARNESS_DIR}}; here it becomes `.claude`/`.kiro`/
-// `.codex`. Truthful carve-outs in core (workspace-detection's 3-dir list, the
-// `$CLAUDE_PROJECT_DIR on Claude Code` note) never carried the token, so they
-// pass through untouched.
+// THE TOKENS: core/ prose carries {{HARNESS_DIR}}, {{INVOKE}}, {{TOOL_PREFIX}} and
+// {{TRUSTED_NAMESPACE}}; here they become the harness's own values (the dir is
+// `.claude`/`.kiro`/`.codex`/`.aidlc`/`.cursor`). Truthful carve-outs in core
+// (workspace-detection's 3-dir list, the `$CLAUDE_PROJECT_DIR on Claude Code`
+// note) never carried the token, so they pass through untouched.
 //
 // --check builds the complete copy-channel, native-release, and plugin
 // projections twice in independent temp roots, then compares them byte for
@@ -197,7 +197,7 @@ function discoverHarnessNames(): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Transform: the ONE class. Token substitution on authored prose and the
+// Transform: token substitution on authored prose and the
 // TypeScript invocation seam; compiled JSON is regenerated per tree.
 // ---------------------------------------------------------------------------
 function substituteInvocationTokens(
@@ -223,8 +223,7 @@ function substituteToken(
 // Rewrite in-prose `<harnessDir>/rules/` → `<harnessDir>/<rulesRename>/` for a
 // harness that renames its rules dir (kiro: steering, codex: aidlc-rules).
 // Anchored on the post-substitution harness-dir form so it can't touch an
-// unrelated `rules/` mention — the proven STEERING_RENAME step from the spike
-// packagers. No-op when rulesRename is null (claude).
+// unrelated `rules/` mention. No-op when rulesRename is null (claude).
 function applyRulesRename(s: string, harnessDir: string, rulesRename: string | null): string {
   if (!rulesRename) return s;
   // Codex's native Starlark permission file is not an AIDLC markdown rule.
@@ -516,18 +515,15 @@ const SETTINGS_SCHEMA_DATA = "tools/data/aidlc-settings.schema.json";
 const STAMP_DATA = "tools/data/aidlc-stamp.json";
 const PROJECTION_DATA = "tools/data/aidlc-projection.json";
 
-// The relocated method ("memory") — the single hand-editable source of truth
+// The method ("memory"): the single hand-editable source of truth
 // for the layered practices (org/team/project + phases/). It is HARNESS-NEUTRAL
 // (identical bytes on every harness — neutral filenames, no {{HARNESS_DIR}}
 // token), so the source dir + the dist destination are constants here, not
-// per-manifest. The authored source already carries the renamed/nested layout
-// (core/rules/aidlc-org.md → core/memory/org.md; flat aidlc-phase-<p>.md →
-// core/memory/phases/<p>.md) — the per-file rename map is realized by that move,
-// so the packager copies the tree verbatim. The destination sits at the
-// WORKSPACE ROOT (beside the harness dir), under the always-present `default`
+// per-manifest, and the packager copies the tree verbatim. The destination sits
+// at the WORKSPACE ROOT (beside the harness dir), under the always-present `default`
 // space, so a fresh `dist/<harness>/` copy ships a resolving method tree and the
-// per-harness native include points at it (Claude @-stub, Kiro resources glob,
-// Codex AGENTS.md/@-mention) — one copy, no drift.
+// per-harness native include points at it (see aidlc-includes.ts) - one copy,
+// no drift.
 const MEMORY_SRC = "memory";
 const MEMORY_DST = join("aidlc", "spaces", "default", "memory");
 
@@ -596,7 +592,7 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
       ? { runnerFrontmatterAdditions: m.runnerFrontmatterAdditions }
       : {}),
   };
-  // Emitted only when a manifest sets it, so the three-field output stays
+  // Emitted only when a manifest sets it, so the output stays
   // byte-identical for every harness that does not -- which is all of them today.
   if (m.documentExtractors) data.documentExtractors = m.documentExtractors;
   // Likewise conditional: only a host whose hooks wait on the person (trust, engine) declares it.
@@ -834,7 +830,7 @@ function buildTree(
 ): string[] {
   const harnessDir = m.harnessDir;
   const treeRoot = join(outRoot, harnessDir);
-  // Every harness projects onto ONE of the five flavors the tier module
+  // Every harness projects onto ONE of the six flavors the tier module
   // knows (Kiro CLI and Kiro IDE share the "kiro" flavor - identical model
   // dial). Declared per manifest, never inferred from the harness name.
   const harnessKind = m.tierFlavor;
@@ -1392,8 +1388,7 @@ function rewriteNativeInvocations(
   projectNativeRootIntegrations(outRoot, m);
   applyNativeReplacements(outRoot, m);
   const harnessDir = escapeRegExp(m.harnessDir);
-  // The hand-maintained list had drifted to 23 of 33 tools, omitting review-brief.
-  // Deriving it from TOOLS keeps new delegates' bare bun aidlc-<name>.ts forms
+  // Deriving the delegate list from TOOLS keeps new delegates' bare bun aidlc-<name>.ts forms
   // covered by both the rewrite and bareToolCheck. The leftover checks below
   // still reject a rewrite to a non-route.
   const delegateNames = Object.values(TOOLS)
@@ -1696,9 +1691,9 @@ function refreshGeneratedSkillRegions(
 }
 
 // Defense-in-depth backstop: rewrite any residual "<harnessDir>/rules/" →
-// "<harnessDir>/<rulesRename>/" in the compiled JSON path strings. Since the
-// rulesSubdir() seam landed, compile (run under AIDLC_HARNESS_DIR) emits the
-// renamed segment directly, so this normally matches nothing (guarded by the
+// "<harnessDir>/<rulesRename>/" in the compiled JSON path strings. Compile (run
+// under AIDLC_HARNESS_DIR) emits the renamed segment directly through
+// rulesSubdir(), so this normally matches nothing (guarded by the
 // `out !== s` check). It stays as a safety net in case a future code path emits
 // a literal "rules" segment that bypasses the seam. Slash-anchored, so it can
 // only touch the rules path family.
@@ -2052,7 +2047,7 @@ if (argv[0] === "plugin" && argv[1] === "build") {
     console.error("usage: package.ts plugin build <plugin> <harness> <outDir>");
     process.exit(1);
   }
-  // Proper usage errors, never a raw ENOENT/rmSync stack (round-3).
+  // Proper usage errors, never a raw ENOENT/rmSync stack.
   // Reserved-name check FIRST so the error names the real problem even when
   // the directory doesn't exist yet (same rule discoverPluginNames enforces).
   if (pluginName === "aidlc" || pluginName.startsWith("aidlc-")) {
@@ -2118,7 +2113,6 @@ if (check) {
   }
   assertIdenticalRootIntegrations(join(REPO_ROOT, "dist"), targets);
   assertIdenticalRootIntegrations(join(REPO_ROOT, "dist-release"), targets);
-  // Emit plugin projections (the hybrid: per-harness host plugins from plugins/<name>/)
   emitPlugins(targets);
   // Last, so only a finished build from unchanged sources is recorded as current.
   if (!recordPackagedSources(REPO_ROOT, targets, builtFrom)) {

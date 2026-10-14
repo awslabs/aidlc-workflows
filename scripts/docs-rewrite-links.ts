@@ -55,7 +55,6 @@ for (const file of listMarkdown(docsDir)) {
         fence = null;
         continue;
       }
-      // Incompatible delimiter inside an open fence: plain content.
     }
     if (fence !== null) continue;
     // Inline links/images: `](target)` with an optional `#fragment`. Absolute

@@ -224,7 +224,6 @@ function Confirm-UacElevatedInstall {
     $principal = [Security.Principal.WindowsPrincipal]::new(
       [Security.Principal.WindowsIdentity]::GetCurrent()
     )
-    # A session without administrator rights has no elevated token to check.
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { return }
     try {
       $ElevationType = Get-InstallTokenElevationType
