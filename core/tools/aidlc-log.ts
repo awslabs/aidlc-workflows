@@ -328,7 +328,7 @@ function parseFlags(
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith("--")) {
-      if (a === "--single" || a === "--retry-pending" || a === "--stage-level" || a === "--park") {
+      if (a === "--single" || a === "--retry-pending" || a === "--stage-level" || a === "--park" || a === "--person-asked") {
         flags[a.slice(2)] = "true";
         continue;
       }
@@ -2773,8 +2773,9 @@ function handleLink(args: string[]): void {
 
 // --- Subcommand: review ---
 // Usage:
-//   aidlc-log review --stage <slug> --reviewer <agent> [--unit <u>] --iteration <n>
-//       → REVIEW_REQUESTED (fires when the conductor dispatches the reviewer)
+//   aidlc-log review --stage <slug> --reviewer <agent> [--unit <u>] --iteration <n> [--person-asked]
+//       → REVIEW_REQUESTED (fires when the conductor dispatches the reviewer;
+//         --person-asked: the conductor read the person's words as asking for it)
 //   aidlc-log review --stage <slug> --reviewer <agent> [--unit <u>] --iteration <n> --verdict <READY|NOT-READY>
 //       → REVIEW_COMPLETED (fires when the conductor reads the reviewer's verdict)
 //
@@ -2785,10 +2786,12 @@ function handleLink(args: string[]): void {
 // PER UNIT, so pass --unit; the approve guard requires one review per unit.
 const VALID_VERDICTS = new Set(["READY", "NOT-READY"]);
 
-// The person asked for this review: they spoke since the last decision, after
-// the last request for this review. The pass cap and the one recovery bound
-// only the reviews the agent starts on its own.
-function personAskedForReview(
+// The record's half of "the person asked for this review": they spoke since the
+// last decision, after the last request for this review. Whether their words
+// asked for it is the conductor's reading (--person-asked); the two together
+// lift the pass cap and the one recovery, which bound only the reviews the
+// agent starts on its own.
+function personSpokeSinceReviewRequest(
   pd: string,
   stage: string,
   reviewer: string,
@@ -2809,13 +2812,24 @@ function personAskedForReview(
   return turn !== null && (request === null || attemptEventDefinitelyBefore(request, turn));
 }
 
-function reviewBudgetMessage(stage: string, ordinal: number, budget: number): string {
-  return (
+// A refusal of a review past the cap when the person spoke since it was last
+// requested and the conductor did not say they asked for it: their words decide
+// which way it goes on, so the flag comes first and the usual way on only if
+// they did not ask.
+function unlessPersonAsked(lead: string, rest: string, personMayHaveAsked: boolean): string {
+  if (!personMayHaveAsked) return lead + rest;
+  const asked = `${lead}If the person asked for this review, run the same command again with --person-asked.`;
+  return rest === "" ? asked : `${asked} Otherwise ${rest.charAt(0).toLowerCase()}${rest.slice(1)}`;
+}
+
+function reviewBudgetMessage(stage: string, ordinal: number, budget: number, personMayHaveAsked = false): string {
+  return unlessPersonAsked(
     `Cannot request review pass ${ordinal} for "${stage}" because this stage allows ` +
-    `${budget} review pass${budget === 1 ? "" : "es"}. ` +
-    (budget === 1
+      `${budget} review pass${budget === 1 ? "" : "es"}. `,
+    budget === 1
       ? "Do not ask the reviewer again; include the findings in the approval summary for the human."
-      : "Present the unresolved findings at the approval gate for the human instead of starting another review.")
+      : "Present the unresolved findings at the approval gate for the human instead of starting another review.",
+    personMayHaveAsked,
   );
 }
 
@@ -2828,6 +2842,7 @@ export function reviewRecoverySpentMessage(
     batch: string | null;
   },
   requestChangesResetValid = true,
+  personMayHaveAsked = false,
 ): string {
   const prefix =
     `Cannot start another review for "${stage}": the one recovery review was ` +
@@ -2837,8 +2852,8 @@ export function reviewRecoverySpentMessage(
     const batch = autonomousBolt.batch
       ? ` batch ${autonomousBolt.batch}`
       : " the current batch";
-    return (
-      prefix +
+    return unlessPersonAsked(
+      prefix,
       `Do not put autonomous Unit "${autonomousBolt.unit}" in --claimed and do ` +
       "not run finalize or merge it. Halt and ask the human whether to restart " +
       `the Bolt attempt. On an approved retry, return to the main workspace, run ` +
@@ -2848,16 +2863,18 @@ export function reviewRecoverySpentMessage(
       `current \`aidlc-swarm.ts prepare\` step for Unit "${autonomousBolt.unit}" in` +
       `${batch} with the original base/repo arguments. The fresh Bolt attempt ` +
       "restores one review allowance without claiming convergence. Do not " +
-      "record a Request Changes decision on the human's behalf."
+      "record a Request Changes decision on the human's behalf.",
+      personMayHaveAsked,
     );
   }
-  return (
-    prefix +
+  return unlessPersonAsked(
+    prefix,
     (guidance ?? "") +
-    (requestChangesResetValid
-      ? " Only a human Request Changes decision resets the review attempt; do not " +
-        "record that rejection on the human's behalf."
-      : "")
+      (requestChangesResetValid
+        ? " Only a human Request Changes decision resets the review attempt; do not " +
+          "record that rejection on the human's behalf."
+        : ""),
+    personMayHaveAsked,
   );
 }
 
@@ -2894,15 +2911,18 @@ function reviewRecoveryAlreadyRequestedMessage(
   iteration: number,
   guidance: string,
   requestChangesResetValid: boolean,
+  personMayHaveAsked = false,
 ): string {
-  return (
+  return unlessPersonAsked(
     `Cannot request another recovery review for "${stage}" because one already exists ` +
-    `in this review attempt. If the reviewer has not returned, retry iteration ${iteration} ` +
-    `with --retry-pending. If its verdict was recorded, ${guidance}` +
-    (requestChangesResetValid
-      ? " Only a human Request Changes decision resets the review attempt; do not record " +
-        "that rejection on the human's behalf."
-      : "")
+      "in this review attempt. ",
+    `If the reviewer has not returned, retry iteration ${iteration} ` +
+      `with --retry-pending. If its verdict was recorded, ${guidance}` +
+      (requestChangesResetValid
+        ? " Only a human Request Changes decision resets the review attempt; do not record " +
+          "that rejection on the human's behalf."
+        : ""),
+    personMayHaveAsked,
   );
 }
 
@@ -3436,10 +3456,20 @@ function handleReview(args: string[]): void {
             receipts?.sourceStaleProgress?.recoverySpent === true);
         const recoverySpent = !(checkpointUnit && receipts.unitRecheckReopened.has(flags.unit as string)) &&
           (attempt.recoverySpent || sourceRecoverySpent);
-        // A review the person asked for is never refused for want of passes.
-        let asked: boolean | null = null;
-        const personAsked = (): boolean =>
-          (asked ??= personAskedForReview(pd, flags.stage as string, flags.reviewer as string, flags.unit, intent, space));
+        // A review the person asked for is never refused for want of passes:
+        // the conductor says they asked (--person-asked) and the record shows
+        // they spoke since it was last requested. The lift goes on the row.
+        let spoke: boolean | null = null;
+        const personSpoke = (): boolean =>
+          (spoke ??= personSpokeSinceReviewRequest(pd, flags.stage as string, flags.reviewer as string, flags.unit, intent, space));
+        const saysPersonAsked = flags["person-asked"] === "true";
+        let lifted = false;
+        const boundStands = (): boolean => {
+          if (!saysPersonAsked || !personSpoke()) return true;
+          lifted = true;
+          return false;
+        };
+        const personMayHaveAsked = (): boolean => !saysPersonAsked && personSpoke();
         const refuseAttemptGuard = (
           code: string,
           invariant: string,
@@ -3481,6 +3511,11 @@ function handleReview(args: string[]): void {
             `artifact-stale:${artifactScopeStale}`,
           ]);
         };
+        // The person spoke and the conductor did not say they asked: the refusal
+        // is its step and asks the person nothing, since a guard-recovery ask is
+        // shown to them, never retried, and would refuse a review they asked for.
+        const refuseBound = (code: string, invariant: string, message: string): never =>
+          personMayHaveAsked() ? refuseReview(message) : refuseAttemptGuard(code, invariant, message);
         // The one request that still works when a pending review can never
         // finish (see replaceIteration below): named in every refusal that would
         // otherwise leave the conductor restoring bytes it cannot restore.
@@ -3731,7 +3766,7 @@ function handleReview(args: string[]): void {
           scopeStale &&
           attempt.pendingIterations.size === 0 &&
           !recoverySpent;
-        if (scopeStale && recoverySpent && !personAsked()) {
+        if (scopeStale && recoverySpent && boundStands()) {
           const message = reviewRecoverySpentMessage(
               flags.stage,
               autonomousCandidate && attempt.boltStarted
@@ -3755,14 +3790,15 @@ function handleReview(args: string[]): void {
                 flags.stage,
                 teamGate,
               ),
+              personMayHaveAsked(),
             );
-          refuseAttemptGuard(
+          refuseBound(
             "REVIEW_RECOVERY_SPENT",
             "The stale-receipt recovery slot is single-use within an attempt.",
             message,
           );
         }
-        if (recoverySpent && !personAsked()) {
+        if (recoverySpent && boundStands()) {
           const message = reviewRecoveryAlreadyRequestedMessage(
               flags.stage,
               attempt.recoveryIteration ?? iteration,
@@ -3778,8 +3814,9 @@ function handleReview(args: string[]): void {
                 flags.stage,
                 teamGate,
               ),
+              personMayHaveAsked(),
             );
-          refuseAttemptGuard(
+          refuseBound(
             "REVIEW_RECOVERY_ALREADY_REQUESTED",
             "Only one stale-receipt recovery request exists in an attempt.",
             message,
@@ -3815,11 +3852,11 @@ function handleReview(args: string[]): void {
         // receipt the refusal just forbade. The only remedy left is a redo jump,
         // which discards the attempt the human was mid-revision on.
         const pass = attempt.budgetCount + 1;
-        if (!recoveryEligible && budget !== null && pass > budget && !personAsked()) {
-          refuseAttemptGuard(
+        if (!recoveryEligible && budget !== null && pass > budget && boundStands()) {
+          refuseBound(
             "REVIEW_BUDGET_EXHAUSTED",
             "Review requests do not exceed the configured attempt budget.",
-            reviewBudgetMessage(flags.stage, pass, budget),
+            reviewBudgetMessage(flags.stage, pass, budget, personMayHaveAsked()),
           );
         }
         if (iteration !== expected) {
@@ -3853,6 +3890,11 @@ function handleReview(args: string[]): void {
         fields["Artifact Fingerprint"] = snapshot.fingerprint;
         requestId = mintReviewRequestId();
         fields["Request Id"] = requestId;
+        if (lifted) {
+          fields["Person Asked"] = "true";
+          const words = latestPersonTurn(pd)?.words;
+          if (words && !isNonAnswer(words)) fields["Person Reply"] = words;
+        }
         stampRequestedSourceBinding(node);
         openReviewDraftSlot(attempt.floor);
         emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);

@@ -1362,10 +1362,14 @@ instead of another request. With Construction checkpoints on, a Unit whose
 code or documents changed after their review gets that recovery again each
 time the person approves the Unit, and under `relaxed` and `off`, where such a
 change is accepted, a review of that Unit is the same one recovery. A review
-the person asked for (they spoke since the last decision and since that review
-was last requested) is never refused, under every Guard Policy: the conductor
-records it the first time they ask, and the budget and the recovery bound only
-the passes the conductor starts on its own.
+the person asked for (the conductor passes `--person-asked`, and they spoke
+since the last decision and since that review was last requested) is never
+refused, under every Guard Policy: the conductor records it the first time they
+ask, the request row carries `Person Asked` and their words, and the budget and
+the recovery bound only the passes the conductor starts on its own. When they
+spoke but the flag is missing, the refusal is the conductor's step: it names
+the flag first, then the usual way on if they did not ask, and puts no question
+to the person.
 When Construction runs one Unit at a time and a Unit's finished step loses its
 work, the walk hands the step back and the Unit starts it again (`unit start`
 after its `UNIT_COMPLETED`, a wave completion included). That run of the step

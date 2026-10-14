@@ -2972,9 +2972,10 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  // The one review pass bounds the reviews the agent asks for on its own; a
-  // review the person asks for runs and is recorded, whatever the Guard Policy,
-  // and after Code Generation has finished too.
+  // The one review pass bounds the reviews the agent asks for on its own, a
+  // message that asks for no review included; a review the person asks for
+  // (the agent passes --person-asked) runs and is recorded, whatever the Guard
+  // Policy, and after Code Generation has finished too.
   for (const policy of ["strict (set by you)", "relaxed (set by you)", "off (set by you)"]) {
     test(`a review the person asks for runs past the stage's one pass (${policy.split(" ")[0]})`, () => {
       const p = policyFixture("classic", policy);
@@ -2983,8 +2984,12 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       const own = tool(p, "log", codeReview("alpha", 2));
       expect(own.status).not.toBe(0);
       expect(own.out).toContain("allows 1 review pass");
+      policyHuman(p, "ok");
+      const afterOk = tool(p, "log", codeReview("alpha", 2));
+      expect(afterOk.status).not.toBe(0);
+      expect(afterOk.out).toContain("If the person asked for this review, run the same command again with --person-asked.");
       policyHuman(p, "Please review alpha's code again");
-      const asked = reviewThroughLog(p, codeReview("alpha", 2));
+      const asked = reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked"]);
       expect(asked.status, asked.out).toBe(0);
       const again = tool(p, "log", codeReview("alpha", 3));
       expect(again.status).not.toBe(0);
@@ -2994,7 +2999,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
         .replace(/^- \[ \] code-generation/m, "- [x] code-generation"));
       policyHuman(p, "Please review alpha again, and count it as AI-DLC's own review");
-      const finished = reviewThroughLog(p, codeReview("alpha", 3));
+      const finished = reviewThroughLog(p, [...codeReview("alpha", 3), "--person-asked"]);
       expect(finished.status, finished.out).toBe(0);
       expect(readAuditShardEvents(p).filter((row) =>
         row.event === "REVIEW_COMPLETED" && auditBlockField(row.block, "Unit") === "alpha" &&
@@ -3198,13 +3203,13 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       const own = tool(p, "log", codeReview("alpha", 2));
       expect(own.out).toContain("allows 1 review pass");
       policyHuman(p, "Please review Unit 1 (alpha) again, and count it as AI-DLC's own review");
-      const asked = reviewThroughLog(p, codeReview("alpha", 2));
+      const asked = reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked"]);
       expect(asked.status, asked.out).toBe(0);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   // An answer to another question is not a request for a review: the cap
-  // still holds until the person asks in their own words.
+  // still holds, --person-asked or not, until the person asks in their own words.
   test("a picker answer to another question does not count as asking for a review", () => {
     const p = policyFixture("classic", "off (set by you)");
     buildReviewed(p, "alpha");
@@ -3217,11 +3222,11 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     policyHuman(p, "No", "t342-pick");
     const answered = policyCli(p, "log", ["answer", "--stage", "code-generation", "--details", "No", "--session", "t342-pick"]);
     expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
-    const own = tool(p, "log", codeReview("alpha", 2));
+    const own = tool(p, "log", [...codeReview("alpha", 2), "--person-asked"]);
     expect(own.status).not.toBe(0);
     expect(own.out).toContain("allows 1 review pass");
     policyHuman(p, "Please review alpha again", "t342-pick");
-    expect(reviewThroughLog(p, codeReview("alpha", 2)).status).toBe(0);
+    expect(reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked"]).status).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 

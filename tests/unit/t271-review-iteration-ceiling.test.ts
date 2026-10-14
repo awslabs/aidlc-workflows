@@ -3814,3 +3814,103 @@ describe("t271 review iteration ceiling", () => {
     );
   });
 });
+
+// A message of the person's after the review is not, by itself, a request for
+// another pass: the agent says the person asked (--person-asked), and the
+// record proves they spoke since the review was last requested. Each message
+// goes through the real human-turn hook, as a typed prompt.
+describe("a pass past the cap runs only when the person asked for it", () => {
+  const ENTRY = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools", "aidlc.ts");
+  const REVIEWER = "aidlc-product-lead-agent";
+  const pass = (n: number) => ["--stage", "requirements-analysis", "--reviewer", REVIEWER, "--iteration", String(n)];
+  const FLAG_STEP =
+    "If the person asked for this review, run the same command again with --person-asked. " +
+    "Otherwise do not ask the reviewer again; include the findings in the approval summary for the human.";
+
+  function typed(proj: string, prompt: string): void {
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete env.AIDLC_UNATTENDED;
+    const res = spawnSync(process.execPath, [ENTRY, "engine", "hook", "record-human-turn"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8", cwd: proj, env,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t271-person", prompt }),
+    });
+    expect(res.status, `${res.stdout}${res.stderr}`).toBe(0);
+  }
+
+  // Classic: one advisory pass, NOT-READY.
+  function reviewedOnce(): string {
+    const proj = seedProject("classic");
+    expect(runReview(proj, pass(1)).status).toBe(0);
+    expect(runReview(proj, [...pass(1), "--verdict", "NOT-READY"]).status).toBe(0);
+    return proj;
+  }
+
+  for (const words of ["ok", "what now?", "/aidlc"]) {
+    test(`after the person types ${JSON.stringify(words)}, the agent's own second pass is its step, naming the flag`, () => {
+      const proj = reviewedOnce();
+      try {
+        typed(proj, words);
+        const own = runReview(proj, pass(2));
+        expect(own.status).not.toBe(0);
+        expect(own.stderr).toContain(FLAG_STEP);
+        expect(own.stderr).not.toContain("guard-recovery");
+        expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(1);
+      } finally {
+        cleanupTestProject(proj);
+      }
+    });
+  }
+
+  test("a review the person asks for runs with --person-asked, and its row records that they asked, in their words", () => {
+    const proj = reviewedOnce();
+    try {
+      const words = "Please have the reviewer look at the requirements again";
+      typed(proj, words);
+      const asked = runReview(proj, [...pass(2), "--person-asked"]);
+      expect(asked.status, asked.stderr).toBe(0);
+      const row = auditBlocks(proj, "REVIEW_REQUESTED").at(-1)!;
+      expect(auditBlockField(row, "Iteration")).toBe("2");
+      expect(auditBlockField(row, "Person Asked")).toBe("true");
+      expect(auditBlockField(row, "Person Reply")).toBe(words);
+      // The verdict half takes the same flag and records as usual.
+      const verdict = runReview(proj, [...pass(2), "--person-asked", "--verdict", "NOT-READY"]);
+      expect(verdict.status, verdict.stderr).toBe(0);
+      expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(2);
+      // Nothing said since: the flag lifts nothing, and today's refusal stands.
+      const again = runReview(proj, [...pass(3), "--person-asked"]);
+      expect(again.status).not.toBe(0);
+      expect(again.stderr).toContain("this stage allows 1 review pass");
+      expect(again.stderr).toContain("guard-recovery");
+      expect(again.stderr).not.toContain("--person-asked");
+    } finally {
+      cleanupTestProject(proj);
+    }
+  });
+
+  test("--person-asked with nothing said since the review: the refusal is today's", () => {
+    const proj = reviewedOnce();
+    try {
+      const own = runReview(proj, [...pass(2), "--person-asked"]);
+      expect(own.status).not.toBe(0);
+      expect(own.stderr).toContain("this stage allows 1 review pass");
+      expect(own.stderr).toContain("guard-recovery");
+      expect(own.stderr).not.toContain("--person-asked");
+      expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(1);
+    } finally {
+      cleanupTestProject(proj);
+    }
+  });
+
+  test("within the stage's passes the flag lifts nothing, so the row does not say the person asked", () => {
+    const proj = seedProject("classic");
+    try {
+      typed(proj, "Review the requirements");
+      expect(runReview(proj, [...pass(1), "--person-asked"]).status).toBe(0);
+      expect(auditBlockField(auditBlocks(proj, "REVIEW_REQUESTED").at(-1)!, "Person Asked")).toBeNull();
+    } finally {
+      cleanupTestProject(proj);
+    }
+  });
+});

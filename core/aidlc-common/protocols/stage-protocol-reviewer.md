@@ -249,7 +249,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    stage, or of a Unit they already approved, record it through AI-DLC the
    first time they ask, under every Guard Policy (`strict`, `relaxed`, and
    `off` alike): run step 1's `{{INVOKE}} engine log review` request for that
-   stage (and `--unit`) at the next iteration, dispatch the reviewer, and
+   stage (and `--unit`) at the next iteration with `--person-asked`, dispatch the reviewer, and
    record its verdict as in step 3. The engine never refuses it for want of
    passes, past the cap or a spent recovery; the cap and the one recovery
    bound only the reviews you start on your own. Never write a review file by

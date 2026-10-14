@@ -1175,7 +1175,7 @@ export class AgentStandIn {
       ["Approve", "Request Changes"], words);
     if (/\breview/i.test(words) && !/^approve\b/i.test(words)) {
       // The person asks for another review before they decide.
-      for (const reviewed of (cp.stages as string[] | undefined) ?? [stage]) this.reviewAgain(reviewed, unit);
+      for (const reviewed of (cp.stages as string[] | undefined) ?? [stage]) this.reviewAgain(reviewed, unit, true);
       return;
     }
     this.must("bolt", "checkpoint", "--action", "approve", "--unit", unit, "--kind", kind,
@@ -1307,18 +1307,20 @@ export class AgentStandIn {
 
   /**
    * Another review pass after the last one: the repair a stale receipt asks
-   * for, or a second look the person asked for.
+   * for, or a second look the person asked for (`personAsked`, which the
+   * request says as the skill's row does).
    */
-  reviewAgain(stage: string, unit: string | null): void {
+  reviewAgain(stage: string, unit: string | null, personAsked = false): void {
     const last = this.reviews.get(`${stage} ${unit ?? ""}`);
     if (!last) this.fail(`${stage} needs a fresh review, but it was never reviewed`);
-    this.reviewPass(stage, unit, last.reviewer, last.iteration + 1);
+    this.reviewPass(stage, unit, last.reviewer, last.iteration + 1, personAsked);
   }
 
-  private reviewPass(stage: string, unit: string | null, reviewer: string, iteration: number): void {
+  private reviewPass(stage: string, unit: string | null, reviewer: string, iteration: number, personAsked = false): void {
     const forUnit = unit === null ? [] : ["--unit", unit];
     const pass = String(iteration);
-    const requestArgs = ["log", "review", "--stage", stage, "--reviewer", reviewer, "--iteration", pass, ...forUnit];
+    const requestArgs = ["log", "review", "--stage", stage, "--reviewer", reviewer, "--iteration", pass, ...forUnit,
+      ...(personAsked ? ["--person-asked"] : [])];
     let request = this.must(...requestArgs);
     // A units block the engine cannot read comes back as the agent's step, a
     // print: write the block, then ask again. A failed command over it would

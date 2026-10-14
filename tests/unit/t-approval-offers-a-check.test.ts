@@ -99,9 +99,10 @@ function reviewArgs(slug: string, unit: string, iteration: number): string[] {
 }
 
 // One review through the logger, as a run records it: the request, the
-// reviewer's file, the verdict. A `finding` makes it NOT-READY.
-function review(p: string, slug: string, iteration: number, finding?: string, unit = "alpha") {
-  const args = reviewArgs(slug, unit, iteration);
+// reviewer's file, the verdict. A `finding` makes it NOT-READY; `asked` is a
+// review the person asked for (--person-asked).
+function review(p: string, slug: string, iteration: number, finding?: string, unit = "alpha", asked = false) {
+  const args = [...reviewArgs(slug, unit, iteration), ...(asked ? ["--person-asked"] : [])];
   const request = json(tool(p, "log", args)) as { reviewFile: string };
   const verdict = finding === undefined ? "READY" : "NOT-READY";
   mkdirSync(dirname(join(p, request.reviewFile)), { recursive: true });
@@ -230,11 +231,35 @@ describe("t-approval-offers-a-check", () => {
     build(p, ["src/alpha.ts", "src/alpha.ts"], changedApproach(p));
     expect(toTheQuestion(p).asked.check_offer).toBe(OFFER);
     humanTurn(p, "Yes, have the new approach checked before I decide");
-    review(p, "code-generation", 3);
+    review(p, "code-generation", 3, undefined, "alpha", true);
     const again = toTheQuestion(p, false);
     // The question says the re-check's verdict ("alpha's code changed after its review, so it was re-checked: ready").
     expect(again.asked.rechecked).toEqual({ verdict: "READY", approved_before: false, changed: "code" });
     expect(JSON.stringify(again)).not.toContain(OFFER);
+    expect(approve(p).approved).toBe(true);
+  });
+
+  // The check ran (the one recovery), the work changed again, and the offer
+  // comes back: the person's yes is what runs the next check, and the agent
+  // says so with --person-asked.
+  test("the offer again after its check ran: a yes runs the next check with the flag, and without it the agent is told to pass it", () => {
+    const p = fixture();
+    build(p, ["src/alpha.ts", "src/alpha.ts"], changedApproach(p));
+    expect(toTheQuestion(p).asked.check_offer).toBe(OFFER);
+    humanTurn(p, "yes");
+    review(p, "code-generation", 3, "src/alpha.ts", "alpha", true);
+    writeFileSync(join(p, "src", "alpha.ts"), "export const alpha = 3; // another approach\n");
+    expect(toTheQuestion(p, false).asked.check_offer).toBe(OFFER);
+    humanTurn(p, "yes, check it again");
+    const unflagged = tool(p, "log", reviewArgs("code-generation", "alpha", 4));
+    expect(unflagged.status).not.toBe(0);
+    expect(unflagged.out).toContain("If the person asked for this review, run the same command again with --person-asked.");
+    expect(unflagged.out).not.toContain("guard-recovery");
+    review(p, "code-generation", 4, undefined, "alpha", true);
+    const asked = readAuditShardEvents(p).filter((row) => row.event === "REVIEW_REQUESTED").at(-1)!;
+    expect(auditBlockField(asked.block, "Iteration")).toBe("4");
+    expect(auditBlockField(asked.block, "Person Asked")).toBe("true");
+    expect(JSON.stringify(toTheQuestion(p, false))).not.toContain(OFFER);
     expect(approve(p).approved).toBe(true);
   });
 
