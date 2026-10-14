@@ -472,6 +472,9 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
 
     expect(r.out).toContain('"kind":"error"');
     expect(r.out).toContain("only a CONDITIONAL stage can report skipped");
+    // A skip the person asked for goes through the step that names it.
+    expect(r.out).toContain("If the person asked to skip it, run `");
+    expect(r.out).toContain(" next --skip scope-definition`: its step skips it the way they asked.");
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
     expect(countEvent(p, "STAGE_SKIPPED")).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);

@@ -561,8 +561,8 @@ describe("t114 orchestrator-verb routing", () => {
     const out = runNext(proj, ["park"]).out;
     expect(out).toContain('"kind":"print"');
     // The engine's own park, which every tool runs without asking the person.
-    expect(out).toMatch(/orchestrate(\.ts)? park`/);
-    expect(out).not.toContain("aidlc.ts park`");
+    expect(out).toMatch(/orchestrate(\.ts)? park --person-asked`/);
+    expect(out).not.toContain("aidlc.ts park");
     expect(out).toContain("parked");
     expect(out).not.toContain('"kind":"ask"');
   });
@@ -573,8 +573,8 @@ describe("t114 orchestrator-verb routing", () => {
     const out = runNext(proj, ["park"]).out;
     expect(out).toContain('"kind":"print"');
     // The engine's own park, which every tool runs without asking the person.
-    expect(out).toMatch(/orchestrate(\.ts)? park`/);
-    expect(out).not.toContain("aidlc.ts park`");
+    expect(out).toMatch(/orchestrate(\.ts)? park --person-asked`/);
+    expect(out).not.toContain("aidlc.ts park");
     expect(out).not.toContain("new-work-routing");
     expect(out).not.toContain('"kind":"run-stage"');
   });

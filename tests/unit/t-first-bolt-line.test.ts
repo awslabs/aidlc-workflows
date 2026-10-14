@@ -68,7 +68,7 @@ describe("the first Construction step names a Bolt only where code is built", ()
   test("stock infra builds no code: its first Construction step gets the ordinary line", () => {
     const line = firstConstructionLine(["--scope", "infra"], "nfr-requirements");
     expect(line).not.toContain("Bolt");
-    expect(line).toBe("Now working on NFR Requirements, wearing the architect hat.");
+    expect(line).toBe("Now working on NFR Requirements (stage 1 of 8), wearing the architect hat.");
   });
 
   test("a plan made for an analysis, with Code Generation skipped, gets the ordinary line", () => {
@@ -78,23 +78,23 @@ describe("the first Construction step names a Bolt only where code is built", ()
       "--label", "analysis plan",
     ], "nfr-requirements");
     expect(line).not.toContain("Bolt");
-    expect(line).toBe("Now working on NFR Requirements, wearing the architect hat.");
+    expect(line).toBe("Now working on NFR Requirements (stage 1 of 1), wearing the architect hat.");
   });
 
   test("a plan that builds code in Units still starts the first Bolt", () => {
     expect(firstConstructionLine(["--scope", "feature"], "functional-design"))
-      .toBe(`${BOLT_LINE} First step is Functional Design.`);
+      .toBe(`${BOLT_LINE} First step is Functional Design (stage 1 of 14).`);
   });
 
   test("a plan that builds code without Units starts no Bolt: security-patch gets the ordinary line", () => {
     const line = firstConstructionLine(["--scope", "security-patch"], "nfr-requirements");
     expect(line).not.toContain("Bolt");
-    expect(line).toBe("Now working on NFR Requirements, wearing the architect hat.");
+    expect(line).toBe("Now working on NFR Requirements (stage 1 of 5), wearing the architect hat.");
   });
 
   test("refactor, Code Generation without Units, gets the ordinary line too", () => {
     const line = firstConstructionLine(["--scope", "refactor"], "functional-design");
     expect(line).not.toContain("Bolt");
-    expect(line).toBe("Now working on Functional Design, wearing the architect hat.");
+    expect(line).toBe("Now working on Functional Design (stage 1 of 5), wearing the architect hat.");
   });
 });

@@ -24,6 +24,7 @@ only while the corresponding new directory is absent. New writes use
 ```
 aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
   aidlc-state.md                    # Workflow state (commit)
+  project-description.json          # Your first request, exactly as given (commit)
   audit/                            # Audit trail — per-clone shards (commit)
     <host>-<clone>.md               # this clone's shard; readers glob + merge by timestamp
   .aidlc-engine/                    # Framework state (gitignore)
@@ -49,16 +50,11 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
   runtime-graph.json                # Execution telemetry view (gitignore)
 
   verification/                     # Phase boundary checks (commit)
-    phase-check-initialization.md
-    phase-check-ideation.md
-    phase-check-inception.md
-    phase-check-construction.md
-    phase-check-operation.md
+    phase-check-ideation.md         # written by Approval and Handoff
+    phase-check-inception.md        # written by Delivery Planning
+    phase-check-construction.md     # written by CI Pipeline
 
-  initialization/                   # Phase 0 artifacts
-    workspace-scaffold/scaffold-report.md
-    workspace-detection/workspace-findings.md
-    state-init/state-init-summary.md
+  initialization/                   # Phase 0: stays empty (state and audit only)
 
   ideation/                         # Phase 1 artifacts
     intent-capture/
@@ -100,6 +96,36 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
 
   archive/                          (created on-demand)
     {ISO-date}-{stage-name}/
+```
+
+Inside a stage folder are the stage's artifacts, its questions file, its
+`memory.md` diary when learnings are on, and `reviews/review-NN.md`: a readable
+copy of each review of the stage, numbered in the order the verdicts came. After
+Intent Capture on the `mvp` plan, with Feasibility started, one record held
+(captured, `.aidlc-engine/` left out):
+
+```text
+aidlc/spaces/default/intents/261013-inventory-api/
+  aidlc-state.md
+  project-description.json
+  runtime-graph.json
+  audit/
+    <host>-<clone>.md
+  construction/
+  ideation/
+    feasibility/
+      feasibility-questions.md
+      memory.md
+    intent-capture/
+      intent-capture-questions.md
+      intent-statement.md
+      memory.md
+      reviews/
+        review-01.md
+      stakeholder-map.md
+  inception/
+  initialization/
+  verification/
 ```
 
 **The 9 reverse-engineering deliverables are not in the record dir.** They
@@ -193,11 +219,13 @@ flowchart LR
 
 ### Initialization (stages 0.1-0.3)
 
-| Stage | Artifacts | Notes |
+| Stage | What it leaves | Notes |
 |-------|-----------|-------|
-| 0.1 Workspace Scaffold | `scaffold-report.md` | Deterministic (runs inside `aidlc-utility intent-create`) |
-| 0.2 Workspace Detection | `workspace-findings.md`, updates `aidlc-state.md` | Deterministic rule-based scanner |
-| 0.3 State Init | `state-init-summary.md` | Deterministic |
+| 0.1 Workspace Scaffold | The record dir: one folder per phase the plan runs, plus `verification/`, and the space's `knowledge/` | Deterministic (runs inside `aidlc-utility intent-create`) |
+| 0.2 Workspace Detection | The scan behind `Project Type` and `Workspace State` in `aidlc-state.md`, and a `WORKSPACE_SCANNED` audit row | Deterministic rule-based scanner |
+| 0.3 State Init | The full `aidlc-state.md` | Deterministic |
+
+None of the three writes a document of its own, so `initialization/` stays empty.
 
 The welcome message is rendered at session start via `companyAnnouncements` in `settings.json` — it is not a stage and produces no artifact.
 
@@ -224,7 +252,7 @@ The welcome message is rendered at session start via `companyAnnouncements` in `
 | 2.5 Refined Mockups | `mockups.md`, `interaction-spec.md`, `accessibility-checklist.md` | UI projects |
 | 2.6 Domain Design | `components.md` (consolidated component catalogue), `decisions.md` (ADR log) | When new components needed |
 | 2.7 Units Generation | `unit-of-work.md`, `unit-of-work-dependency.md`, `unit-of-work-story-map.md` | Always |
-| 2.8 Contract Design | `contract-summary.md` (inter-unit contracts) | Multi-unit systems |
+| 2.8 Contract Design | `contract-summary.md` (inter-unit contracts and public or external APIs) | More than one unit, or a unit with an API used outside the system |
 | 2.9 Delivery Planning | `bolt-plan.md`, `team-allocation.md`, `risk-and-sequencing-rationale.md`, `external-dependency-map.md` | Always |
 
 ### Construction (stages 3.1-3.7)
@@ -267,19 +295,19 @@ You choose how to answer at each stage:
 
 | Mode | How it works |
 |------|-------------|
-| **Guide Me** | Interactive walkthrough, batches of up to 4 questions |
-| **I'll Edit the File** | Edit the question file directly, signal "done" when finished |
+| **Guide me** | The agent asks the questions here, in batches (Claude Code shows up to four at a time) |
+| **I'll edit the file** | Edit the question file directly, then tell the agent you are done |
 | **Chat** | Freeform conversation; decisions are extracted and written to the file |
 
-You can switch modes mid-stage. The question file is always the source of truth.
+Later stages reuse the way you chose, and you can switch mid-stage. The question file is always the source of truth. See [Interaction Modes](07-interaction-modes.md).
 
 ---
 
 ## What to Commit vs. Gitignore
 
-The shipped `.gitignore` encodes this split (vision §5.1): the shared work —
-method, registry, state, audit, artifacts — is committed; per-user session
-cursors and machine-local derived state are ignored.
+The shipped `.gitignore` encodes this split: the shared work (method, registry,
+state, audit, artifacts) is committed; per-user session cursors, your own
+settings, and machine-local derived state are ignored.
 
 | Commit | Gitignore |
 |--------|-----------|
@@ -287,8 +315,9 @@ cursors and machine-local derived state are ignored.
 | `audit/*.md` (per-clone shards) | `.aidlc-engine/` (framework state, including recovery breadcrumbs) |
 | All stage artifacts | `runtime-graph.json` (re-derivable from the audit shards) |
 | `verification/` phase check results | `aidlc/.aidlc-clone-id` (names this clone's shard; must stay machine-local) |
-| Space-level `aidlc/knowledge/` team knowledge files | `aidlc/.aidlc-sessions/` (per-session UUID stamps, workflow bindings, PID ancestry map) |
+| Space-level `aidlc/spaces/<space>/knowledge/` team knowledge files | `aidlc/.aidlc-sessions/` (per-session UUID stamps, workflow bindings, PID ancestry map) |
 | Per-stage `memory.md` diaries; space `memory/` layer | `.aidlc-engine/hooks-health/`, `.aidlc-engine/sensors/` (heartbeats, advisory findings) |
+| Each reviewed stage's `reviews/` copies | `.claude/settings.local.json`, `aidlc.settings.local.json` (your own settings) |
 | | `aidlc/active-memory/` (the engine's copy of the active space's `memory/` that every harness include reads; written at session start and on a space switch, so a switch changes no tracked file; each copied file starts with a comment naming the file to edit, and an edit made in the copy is replaced at the next refresh) |
 
 ---
@@ -303,21 +332,19 @@ Each stage reads artifacts from prior stages as input. Key dependency chains:
 - **All Construction artifacts** flow into Build and Test and CI Pipeline
 - **Infrastructure Design** artifacts flow into Operation stages
 
-For the complete per-stage input table, see the [Orchestration Reference](../reference/00-overview.md).
+Each stage's own inputs are listed on its phase page in the Developer Reference: [Initialization](../reference/04-stages/initialization.md), [Ideation](../reference/04-stages/ideation.md), [Inception](../reference/04-stages/inception.md), [Construction](../reference/04-stages/construction.md), and [Operation](../reference/04-stages/operation.md).
 
 ---
 
 ## Phase Boundary Verification
 
-At each phase transition, a verification check runs to confirm traceability:
+Three stages end their phase with a traceability check and write it to `verification/`. A plan that skips the stage gets no check for that phase (`mvp`, for example, skips Approval and Handoff):
 
-| Check File | Transition | What it validates |
+| Check File | Written by | What it validates |
 |-----------|-----------|-------------------|
-| `phase-check-initialization.md` | Initialization to Ideation | Workspace scaffold, scope plan, agents available |
-| `phase-check-ideation.md` | Ideation to Inception | Intent to scope to intent backlog consistency |
-| `phase-check-inception.md` | Inception to Construction | Requirements to stories to architecture alignment |
-| `phase-check-construction.md` | Construction to Operation | All units built and tested, CI configured |
-| `phase-check-operation.md` | Operation to workflow complete | Deployment, observability, and feedback loops verified |
+| `phase-check-ideation.md` | 1.7 Approval and Handoff | Intent to scope to intent backlog consistency |
+| `phase-check-inception.md` | 2.9 Delivery Planning | Requirements to stories to architecture alignment |
+| `phase-check-construction.md` | 3.7 CI Pipeline | All units built and tested, CI configured |
 
 ---
 

@@ -52,6 +52,7 @@ import {
   CONSTRUCTION_POLICY_RECOVERY,
   latestPersonTurn,
   leftOutLine,
+  PERSON_ASKED_SKIP_REASON,
   auditShardName,
   appendSlug,
   appendUnderHeading,
@@ -130,6 +131,7 @@ import {
   recordGuardStoodAside,
   unattendedHumanPresenceHint,
   intentRepos,
+  teamsAcrossReposLine,
   isGitRepoDir,
   isValidRepoName,
   repoDir,
@@ -189,6 +191,7 @@ import {
   resolveWorkflowSelection,
   sourceClaimCovers,
   aidlcOwnedSourceKey,
+  onlyAidlcFilesChangedSince,
   sourceBaselineAuditFields,
   sourceListingEntriesEqual,
   resolveProjectDir,
@@ -1575,30 +1578,18 @@ function handleSetUnitOwnership(args: string[]): void {
   }
   const pd = resolveProjectDir(projectDir);
   withAuditLock(pd, () => {
-    let content = readStateFile(pd);
+    const before = readStateFile(pd);
+    let content = before;
     const current = getField(content, "Unit Ownership")?.trim() || "solo";
     if (value !== current && hasCurrentTeamUnitActivity(pd, content)) {
       error(
         `Unit ownership is frozen after team Unit activity in the current workflow attempt (current: ${current}).`,
       );
     }
-    if (
-      value === "team" &&
-      getField(content, "Construction Iteration")?.trim() !== "unit-major"
-    ) {
-      error(
-        'Unit ownership "team" requires Construction Iteration: unit-major. ' +
-          "Run aidlc-state.ts set-construction-iteration unit-major first.",
-      );
-    }
     if (value === "team") {
       const repos = intentRepos(pd);
       if (repos.length > 0) {
-        error(
-          `Unit ownership "team" is not supported for intents with recorded workspace repos ` +
-            `(${repos.join(", ")}). Team-owned Unit claims require the workspace root itself ` +
-            "to be the source Git repository.",
-        );
+        error(`${teamsAcrossReposLine(repos.length)} Carry on with \`${entrySkillInvocation()}\`.`);
       }
       const resolution = resolveBoltDag(pd);
       if (resolution.state === "none") {
@@ -1617,6 +1608,32 @@ function handleSetUnitOwnership(args: string[]): void {
         );
       }
     }
+    // Each team builds its own Unit start to finish, so the person's pick of
+    // teams is their request for one Unit at a time: a stage-by-stage plan
+    // switches here by the two setters' own rules and records, after every
+    // refusal and before any write.
+    const switches: Array<{ from: string; to: string; field: string; value: string; words: string | null }> = [];
+    const switchTo = (field: string, next: string, updated: string): void => {
+      const words = requireHumanConstructionPolicyChange(pd, content, field, next);
+      switches.push({ from: content, to: updated, field, value: next, words });
+      content = updated;
+    };
+    if (value === "team" && getField(content, "Construction Iteration")?.trim() !== "unit-major") {
+      if (
+        getField(content, "Construction Checkpoints") === "enabled" &&
+        getField(content, "Construction Execution") === "swarm"
+      ) {
+        switchTo("Construction Execution", "serial", setConstructionPolicyField(content, "Construction Execution", "serial"));
+      }
+      switchTo(
+        "Construction Iteration",
+        "unit-major",
+        setOrInsertField(content, "## Runtime State", "Construction Iteration", "unit-major"),
+      );
+    }
+    for (const change of switches) {
+      emitConstructionPolicySet(pd, change.from, change.to, change.field, change.value, change.words);
+    }
     content = setOrInsertField(
       content,
       "## Runtime State",
@@ -1626,7 +1643,22 @@ function handleSetUnitOwnership(args: string[]): void {
     if (value === "solo") content = removeUnitProgressSection(content);
     emitAudit(pd, "UNIT_OWNERSHIP_SET", { Mode: value });
     writeStateFile(pd, content);
-    console.log(JSON.stringify({ updated: true, unit_ownership: value }));
+    if (switches.length > 0) keepPlanQuestionOver(pd, before, content);
+    // Each switch's own line, as the two setters print it. How team approvals
+    // go is said by the first team step the agent speaks from; the command
+    // that changes it is here for the agent.
+    const notice = switches
+      .map((change) => constructionPolicyNotice(change.from, change.to, change.field).notice)
+      .filter((line): line is string => typeof line === "string")
+      .join(" ");
+    console.log(JSON.stringify({
+      updated: true,
+      unit_ownership: value,
+      ...(notice !== "" ? { notice } : {}),
+      ...(value === "team" && current !== "team"
+        ? { unit_end_gates_command: `${aidlcToolInvocation("state")} set-unit-gate-rhythm unit-end` }
+        : {}),
+    }));
   });
 }
 
@@ -2257,9 +2289,9 @@ function handleSyncUnitScopeStage(args: string[]): void {
 // tool refusal closes a path #365 did not have.)
 //
 // `attended` is the one exception: a person asked to stop, so their stop wins
-// over the autonomous grant (#1411). It is set when a person has typed since the
-// last gate resolution (the conductor read their reply and ran park, or
-// reported their approval with --park after a gate they answered).
+// over the autonomous grant (#1411). It is set when the conductor says they
+// asked (park --person-asked, or --park on their approval or answer) and a reply
+// of theirs is on record since the last gate resolution.
 export interface ParkResult {
   parked: true;
   stage?: string;
@@ -2268,23 +2300,34 @@ export interface ParkResult {
   checkout_local?: true;
 }
 
-// A park the person asked for, in their own words, is theirs: when a person
-// has typed since the last gate resolution, the stop wins over the autonomous
-// grant and is recorded as theirs. On a host whose hooks can miss a reply
-// (its hookActivation says so), an attended session's stop under the
-// autonomous grant is theirs too, with a note that no reply was on record. A
-// park no person stands behind still never stops an unattended autonomous run:
+// A park the person asked for, in their own words, is theirs. Who asked is the
+// conductor's reading of those words (--person-asked); the tool proves only that
+// a reply of theirs is on record since the last gate resolution. Their stop wins
+// over the autonomous grant and is recorded as theirs. On a host whose hooks can
+// miss a reply (its hookActivation says so), a stop they asked for in an
+// attended session under the autonomous grant is theirs too, with a note that no
+// reply was on record. The conductor's own park is never theirs: gated work
+// pauses unmarked, and a run set to go on by itself goes on (the answer is the
+// conductor's next step, not a refusal for the person). A park no person stands
+// behind still never stops an unattended autonomous run:
 // AIDLC_UNATTENDED is never attended, and a reply means a HUMAN_TURN on record
 // (an empty ledger is not one).
-function handlePark(_args: string[]): void {
+function handlePark(args: string[]): void {
   const pd = resolveProjectDir(projectDir);
+  const asked = args.includes("--person-asked");
   const attendedSession = humanTurnMintAllowed();
+  const autonomous = () => getField(readStateFile(pd), "Construction Autonomy Mode")?.trim() === "autonomous";
+  if (!asked && attendedSession && autonomous()) {
+    const message = "Not parked: Construction Autonomy Mode is autonomous, as the person chose, so the work goes on. " +
+      `If the person asked to stop, run \`${aidlcToolInvocation("orchestrate")} park --person-asked\`; if not, run ` +
+      `\`${aidlcToolInvocation("orchestrate")} next\` and carry on.`;
+    exitWithError({ message, auditMessage: message, agentGuidance: "person-decided" });
+  }
   // Their stop outlives the run's own approvals after it (personSpokeSinceGate).
-  const replied = attendedSession && personSpokeSinceGate(pd, { outlivesApproval: true });
+  const replied = asked && attendedSession && personSpokeSinceGate(pd, { outlivesApproval: true });
   const activation = hookActivation();
-  const missedReply = attendedSession && !replied &&
-    (activation?.missedReply !== undefined || activation?.missesReplies === true) &&
-    getField(readStateFile(pd), "Construction Autonomy Mode")?.trim() === "autonomous";
+  const missedReply = asked && attendedSession && !replied &&
+    (activation?.missedReply !== undefined || activation?.missesReplies === true) && autonomous();
   const result = parkWorkflow(pd, { attended: replied || missedReply });
   console.log(JSON.stringify(missedReply
     ? {
@@ -2383,7 +2426,9 @@ export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): Par
       error("State file has no Current Stage - cannot park.");
     }
     const timestamp = isoTimestamp();
-    const words = parkedWords(pd);
+    // The conductor's own park after a reply that asked for something else
+    // keeps none of it: the step that resumes here calls these words their stop.
+    const words = opts.attended === true ? parkedWords(pd) : null;
     emitAudit(pd, "WORKFLOW_PARKED", {
       Stage: currentSlug,
       ...(words ? { [PERSONS_WORDS_FIELD]: words } : {}),
@@ -3362,7 +3407,11 @@ function verifySettledSwarmSourceBinding(
     );
   }
   const current = workspaceSourceState(pd);
-  if (current !== null && !sameWorkspaceSource(chain.fingerprint, current.fingerprint) && guardPolicyAcceptsChanges(pd)) {
+  // An AI-DLC update the person took after the last merge changed only
+  // AI-DLC's own files: nobody's source moved.
+  const moved = current !== null && !sameWorkspaceSource(chain.fingerprint, current.fingerprint) &&
+    !onlyAidlcFilesChangedSince(pd, stage.slug, chain.listing, current);
+  if (moved && current !== null && guardPolicyAcceptsChanges(pd)) {
     // Kept under relaxed or off: edits made after the last merge stay, once recorded.
     if (changeControlPreflight) return;
     const notices = recordAcceptedChanges(pd, [{
@@ -3373,7 +3422,7 @@ function verifySettledSwarmSourceBinding(
     if (notices.length > 0) console.log(JSON.stringify({ change_notices: notices }));
     return;
   }
-  if (current === null || !sameWorkspaceSource(chain.fingerprint, current.fingerprint)) {
+  if (current === null || moved) {
     error(
       `Refusing to complete "${stage.slug}": the main checkout source no longer matches the final reviewed swarm merge (source-fingerprint mismatch). Revert the unreviewed edit or restart and re-review the affected Bolt.`,
     );
@@ -3386,8 +3435,13 @@ function priorAcceptedSourceFields(
 ): Record<string, string> {
   if (stage.workspace_requires !== true) return {};
   const chain = currentSwarmSourceMergeChain(pd, stage.slug);
+  // The listing the last landing kept goes with it, so the next attempt's
+  // first landing can tell an AI-DLC update from a change to source.
   return chain.state === "ready"
-    ? { "Prior Accepted Source Fingerprint": chain.fingerprint }
+    ? {
+        "Prior Accepted Source Fingerprint": chain.fingerprint,
+        ...(chain.listing === undefined ? {} : { "Prior Accepted Source Listing": chain.listing }),
+      }
     : {};
 }
 
@@ -6314,8 +6368,8 @@ function sensorStateAtGate(pd: string, stage: GateStage): string {
 
 // What the person hears when a gate opens, or is shown again, while a check
 // still fails on a declared output (#2201): one line per failing check, in
-// plain words (the agent corrects from the detail file the stage protocol's
-// section 14 names), at most three lines and then a count. The orchestrator carries
+// plain words (the agent corrects from the detail file the sensors protocol
+// module names), at most three lines and then a count. The orchestrator carries
 // them in the gate reply's `narration`, beside what the stage produced, which
 // every harness's agent says to the person with the approval question. Nothing
 // is re-fired; a check that passed later, or never ran, says nothing, and an
@@ -7729,6 +7783,9 @@ function handleSkip(args: string[]): void {
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
+    // A Unit's step the person asked to skip spends what they typed for it:
+    // their words were the skip. The agent's own skip leaves them kept.
+    if (reason === PERSON_ASKED_SKIP_REASON) clearGateWords(pd);
     if (approvedBehind) {
       console.log(JSON.stringify({ slug, unit, new_state: "unit-skipped", stage_state: "completed" }));
       return;
@@ -7788,14 +7845,16 @@ function handleSkip(args: string[]): void {
     error("aidlc-state.ts skip --route requires a nonblank --reason <text>.");
   }
   // A stage waiting at its approval gate may be skipped only once its plan
-  // row says SKIP: the person decided it no longer applies (they said the
-  // work is a new project), so the gate closes as skipped, not approved.
-  const planSkips = parseStateStageSuffixes(content).get(slug) === "SKIP";
+  // row says SKIP (the person decided it no longer applies: they said the
+  // work is a new project) or the person asked to skip it, so the gate
+  // closes as skipped, not approved.
+  const personDecided = parseStateStageSuffixes(content).get(slug) === "SKIP" ||
+    reason === PERSON_ASKED_SKIP_REASON;
   validateSlugInState(content, slug, [
     "in-progress",
     "revising",
     "skipped",
-    ...(planSkips ? ["awaiting-approval" as const] : []),
+    ...(personDecided ? ["awaiting-approval" as const] : []),
   ]);
   const currentStage = getField(content, "Current Stage");
   if (currentStage !== slug) {

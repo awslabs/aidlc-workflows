@@ -1,6 +1,12 @@
 # Your First Workflow
 
-This chapter walks through a complete AI-DLC workflow run, explaining what you see at each step and what decisions you make. The example uses a `feature`-scoped workflow to build a REST API. For a customer-oriented comparison of Classic, Express, Feature, and the other choices, see [Workflow Profiles](workflow-profiles.md).
+This chapter explains what you see at each step of an AI-DLC run and what you
+decide there. It follows the run in
+[Getting Started](01-getting-started.md#5-your-first-run-in-claude-code), a
+REST API for inventory management, whose screens that page shows up to the
+first approval; [Worked Examples](16-worked-examples.md) follows whole runs. For
+a comparison of Classic, Express, Feature, and the other choices, see
+[Workflow Profiles](workflow-profiles.md).
 
 > **Note**: The transcripts in this chapter show **Claude Code**. On Kiro CLI,
 > Kiro IDE, Codex CLI, and opencode the workflow - stages, agents, gates,
@@ -19,22 +25,14 @@ This chapter walks through a complete AI-DLC workflow run, explaining what you s
 /aidlc Build a REST API for inventory management
 ```
 
-At session start, Claude Code renders the AI-DLC welcome message via the `companyAnnouncements` entry in `settings.json`. It explains how AI-DLC works, and shows the stage map and scope options. (`companyAnnouncements` is a Claude Code setting with no equivalent on the other harnesses - there, no banner appears and the workflow begins directly with the initialization below.)
-
-```
-# Welcome to AI-DLC
-
-**AI-DLC** (AI-Driven Development Life Cycle) is an adaptive methodology that
-structures AI-assisted software development into repeatable, traceable phases
-while keeping you in control at every decision point.
-
-## How It Works
-
-- **You decide, AI executes.** Every material decision goes through an approval gate.
-- **Adaptive scope.** Choose a scope or let the agent propose a plan from your words.
-- **Traceable artifacts.** Every stage produces versioned documents in the intent's record dir.
-- **11 domain experts.** Specialized agent personas guide each stage.
-```
+When Claude Code starts in the project, it shows the AI-DLC welcome message,
+the `companyAnnouncements` entry in `.claude/settings.json`. Under its AI-DLC
+heading it says "Run `/aidlc` to start or resume a workflow. Describe what to
+build and AI-DLC proposes a plan for you to confirm." and then lists the
+phases, the stages, and the scopes (the ready-made plans) with the stages each
+one runs. `companyAnnouncements` is a Claude
+Code setting with no equivalent on the other harnesses; there, no welcome
+appears and the run begins with the plan question below.
 
 ### Starting from an existing document
 
@@ -104,24 +102,53 @@ rather than the request.
 
 ---
 
+## Choosing the Plan
+
+The agent reads your request and proposes a plan: a ready-made set of stages
+for this kind of work. The question names the plan, how many stages and
+approval gates it has, how many stages repeat for each unit of work in
+Construction, and whether support agents take part (`lead agent only` when
+they do not). For the inventory API the agent proposed `mvp`, 19 stages; a
+`feature` plan runs all 33. You can:
+
+- go ahead with the proposed plan;
+- use a different plan: the agent lists the other ready-made plans with their
+  length, and you pick one or type its name;
+- tailor a plan to this task, so the agent proposes a set of stages of its own
+  from your words.
+
+[Workflow Profiles](workflow-profiles.md) describes each plan, and
+[Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) how to change depth
+or test strategy later.
+
+---
+
 ## Initialization Phase (Automatic)
 
-The three initialization stages run deterministically inside `aidlc-utility intent-create`, a single tool call that completes in well under a second. You do not interact with initialization; it auto-creates the first intent into the active space and bootstraps its record dir for the workflow.
+Once you have chosen the plan, the three initialization stages run in well
+under a second. You do not interact with them: they create the record for this
+piece of work in the active space and set it up.
 
 ### Stage 0.1: Workspace Scaffold
 
-The framework creates the first intent and its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `<space>` is `default` unless you use a named space). It creates one folder per phase your scope actually runs, so the record shows the plan rather than every phase that exists. A `feature` scope runs all five; a `bugfix` scope skips Ideation but retains its deployment stages, so `ideation/` is absent while `operation/` appears:
+The framework creates the record at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `<space>` is `default` unless you use a named space). It creates one folder per phase your plan actually runs, so the record shows the plan rather than every phase that exists. The inventory API's `mvp` plan has no Operation stages, so its record has no `operation/` folder (its top level, as listed after the first stage):
 
-```
-Intent created, record dir at aidlc/spaces/default/intents/<YYMMDD>-<label>/
+```text
+aidlc/spaces/default/intents/261013-inventory-rest-api/
+  aidlc-state.md
+  audit/
   initialization/
+  ideation/
   inception/
   construction/
-  operation/
   verification/
-Space-level dirs ensured:
-  aidlc/spaces/default/knowledge/    (team knowledge, empty; you add files)
+  project-description.json
 ```
+
+A `feature` plan runs all five phases; a `bugfix` plan skips Ideation but keeps
+its deployment stages, so `ideation/` is absent while `operation/` appears. The
+space's shared folders, such as `aidlc/spaces/default/knowledge/` for team
+knowledge, are created beside `intents/` at the same time.
 
 Per-stage folders are not created up front. A stage's folder (for example
 `inception/requirements-analysis/`) appears the first time that stage writes an
@@ -129,22 +156,13 @@ artifact, so the record only ever lists work that produced something.
 
 ### Stage 0.2: Workspace Detection
 
-A deterministic rule-based scanner walks one level deep into the project plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`). It classifies greenfield vs brownfield based on source files, framework configs, and package manifests. When no top-level signal fires, it also descends one level into each arbitrarily-named subdirectory, so a project whose source lives in a container folder (e.g. `wordbook/`, `backend/`) is still detected as brownfield. AI-DLC's own files, such as the harness directory, `aidlc/`, and Cursor's root `install.ts`, never count as your code, so an empty folder stays greenfield.
+A deterministic rule-based scanner looks at the files at the top of the project and up to six levels into known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`). It classifies greenfield vs brownfield based on source files, framework configs, and package manifests. When no top-level signal fires, it also looks inside other folders, up to three levels down, so a project whose source lives in a container folder (e.g. `wordbook/`, `backend/`) is still detected as brownfield. AI-DLC's own files, such as the harness directory, `aidlc/`, and Cursor's root `install.ts`, never count as your code, so an empty folder stays greenfield.
 
 Your word wins over the scan. Start with `/aidlc --project-type brownfield "<what to build>"` (or `greenfield`) to say which it is, or say it in plain words at any point ("this is existing code, the frontend is in ui-repo"). AI-DLC scans the folder again, records the type as yours, and for existing code runs Reverse Engineering, then returns to the stage you were on; finished stages stay finished, and the reply names any that were done before the code was known so you can redo one. If the work started as a new project in an empty folder and the folder gains code before Construction, AI-DLC asks you once which it is. The choice holds for that piece of work only; the next piece of work scans the folder again.
 
 ### Stage 0.3: State Initialization
 
-The orchestrator writes the intent's `aidlc-state.md` (under its record dir) with the full stage plan based on your scope, depth, test strategy, and the scanner's classification. It also analyzes your input and confirms a scope:
-
-```
-─── Plan ──────────────────────────────────────────────────────────────────────
-Proposed plan: feature (Standard depth, Standard test strategy, all 33 stages)
-▸ Approve scope? [Yes / Change scope / Change depth / Change test strategy]
-> Yes
-```
-
-You can accept the proposed plan, change to a different scope (e.g., `mvp`), or adjust the depth level or test strategy. See [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) for guidance.
+The orchestrator writes the intent's `aidlc-state.md` (under its record dir) with the stage plan from the plan you chose, its depth and test strategy, and the scanner's classification. In an empty folder the scan finds no code, so the plan leaves out Reverse Engineering; if the work is on existing code, say so and AI-DLC runs it.
 
 ---
 
@@ -154,67 +172,61 @@ After Initialization, the workflow enters Ideation. Each stage from here on runs
 
 ### Stage 1.1: Intent Capture (aidlc-product-agent)
 
-On Claude Code, when you chose AI-DLC's status line at setup (or turned it on with `/aidlc --statusline on`), the status line at the bottom of your terminal updates (Kiro and opencode use `/aidlc --status`; Codex uses `$aidlc --status` and its built-in `update_plan` progress display):
+On Claude Code, when you chose AI-DLC's status line at setup (or turned it on with `/aidlc --statusline on`), the status line at the bottom of your terminal follows the work (Kiro and opencode use `/aidlc --status`; Codex uses `$aidlc --status` and its built-in `update_plan` progress display). In the inventory API run, one stage later, it read (the bar's block characters and the separator dot shown as plain text, and the model segment on the right left out):
 
-```
-[AIDLC] IDEATION > Intent Capture [▓▓▓▓▓░░░░░] 4/7 -- product
-```
-
-This shows: current phase, stage display name, phase progress bar, phase progress ratio, and lead agent. The bar and the ratio share the same scope — both count `[x]` stages within the current phase, so the bar advances every time the ratio does. Remaining context (`ctx:N%`) is always shown on the right, color-coded as it drops. On Claude Code, `↑<in> ↓<out> $<usd>` also appears after the first usage fold and covers only the active workflow and current transcript/session, not earlier workspace activity. Set `AIDLC_DISABLE_USAGE_TRACKING=1` to turn usage tracking (and this segment) off.
-
-> The `$<usd>` is a local estimate priced from public list prices, not a bill — when Amazon Bedrock is your recorded provider it may not match what you are actually charged. See [Troubleshooting](15-troubleshooting.md#statusline-shows-a-cost-segment-you-dont-want-or-usage-tracking-concerns) to price it at your own rates or hide it.
-
-The aidlc-product-agent asks you to choose an interaction mode:
-
-```
-▸ Choose interaction mode:
-  (1) Guide Me — agent asks structured questions
-  (2) Edit File — write directly to the artifact
-  (3) Chat — freeform discussion
+```text
+[AIDLC] inventory-rest-api - IDEATION [##--------] 1/4 > Feasibility -- Architect Agent
 ```
 
-- **Guide Me** walks you through questions one at a time
-- **Edit File** opens the artifact for direct editing
-- **Chat** lets you discuss freely; the agent extracts decisions
+From the left: the piece of work (with more than one space, the space's name comes first), the current phase, the phase progress bar and ratio (both count the finished stages of this phase), the current stage, and the agent leading it. In Construction, `Unit N of M` takes the place of the bar. On the right, Claude Code's model, then `ctx:N%`, how much of the context window is used (shown when Claude Code reports it), and, once Claude Code has reported usage, the tokens in and out and a cost estimate for the active workflow and current session. Set `AIDLC_DISABLE_USAGE_TRACKING=1` to turn usage tracking (and that segment) off.
+
+> The cost is a local estimate priced from public list prices, not a bill; when Amazon Bedrock is your recorded provider it may not match what you are actually charged. See [Troubleshooting](15-troubleshooting.md#statusline-shows-a-cost-segment-you-dont-want-or-usage-tracking-concerns) to price it at your own rates or hide it.
+
+The aidlc-product-agent writes the stage's questions to a file in the record and asks how you want to answer them: **Guide me**, **I'll edit the file**, or **Chat** ([the screen](01-getting-started.md#5-your-first-run-in-claude-code)).
+
+- **Guide me** asks the questions in the chat, a few at a time, each with options to pick and room to type your own answer
+- **I'll edit the file** has you fill in the answers in the questions file it names; tell it when you are done
+- **Chat** lets you discuss freely; the agent pulls the decisions out of the conversation
 
 See [Interaction Modes](07-interaction-modes.md) for details on each mode. You can switch modes mid-stage. You choose once: later stages reuse your choice and say so in one line, and you change it by saying so.
 
+When every question is answered, the agent may read your answers back for one confirmation before it writes the stage's documents (the summary confirmation, on in most plans). After writing them, a stage can ask you to settle what it had to assume. A reviewer agent then checks the main document, and the last question before the approval is whether anything from the stage is worth remembering next time (the learnings question, on in most plans).
+
 ### Approval Gate
 
-After the agent completes its work, you see a completion summary and an approval gate:
+Then you see what the stage produced, what the review found, and the approval question. From the inventory API run, shortened:
 
-```
-# Intent Capture & Framing Complete
+```text
+Intent Capture & Framing is ready for your review. It produced intent-statement.md,
+stakeholder-map.md and intent-capture-questions.md (8 questions, all answered), in
+aidlc/spaces/default/intents/261013-inventory-rest-api/ideation/intent-capture/.
 
-| Artifact | Contents |
-|----------|----------|
-| intent-statement.md | Problem statement, target users, success criteria |
-| intent-capture-questions.md | 5 questions, all answered |
+Stage: Intent Capture & Framing
+Review outcome: Concerns remain for your decision.
+Why now: First review completed.
 
-**Stage:** Intent Capture & Framing
-**Review outcome:** One concern remains for your decision.
-**Why now:** First review completed.
+| ID   | Severity | Where                                      | Status |
+|------|----------|--------------------------------------------|--------|
+| R-01 | Minor    | intent-statement.md > Initial Scope Signal | New    |
+| R-02 | Minor    | intent-statement.md > Initiative Trigger   | New    |
+| R-03 | Minor    | intent-statement.md > Success Metrics      | New    |
 
-| ID | Severity | Where | Status |
-|---|---|---|---|
-| R-01 | Minor | intent-statement.md > Success Criteria | New |
+> R-03 Finding: The table carries a single, binary success metric ...
+> R-03 Required action: Human should confirm at the gate that a single integration-adoption
+  metric is sufficient, or ask a follow-up to add a data-accuracy or reliability metric ...
 
-> R-01 Finding: The adoption target has no deadline
+Decision options:
+- Approve - continue with the open findings accepted.
+- Request Changes - return to the listed artifacts so the required actions can be addressed.
 
-> R-01 Required action: Add the date by which the adoption target should be reached
-
-**Decision options:**
-- **Approve** - continue with the open findings accepted.
-- **Request Changes** - return to the listed artifacts so the required actions can be addressed.
-
-**Review:** `<record>/ideation/intent-capture/` (the intent's record dir)
-
-▸ How would you like to proceed?
-  (1) Approve — Continue to Market Research with open findings accepted
-  (2) Request Changes — Return to the listed artifacts
+ Approval
+ Intent Capture & Framing complete. How would you like to proceed?
+ > 1. Approve
+   2. Request Changes
 ```
 
-The engine owns the stable finding list. Later checks report only what changed,
+Each finding has an ID, a severity, where it is, and what would resolve it. The
+engine owns the stable finding list. Later checks report only what changed,
 while your decisions remain exactly as you made them. Choose **Approve** to
 continue with every open finding accepted, or **Request Changes** to return to
 the listed artifacts. When rejecting an open finding as inapplicable, give its
@@ -228,13 +240,15 @@ on the revision process.
 
 After approval, a progress line appears:
 
+```text
+Progress: 1/19 in-scope stages complete (4/33 overall) | 1/4 IDEATION. Next: Feasibility & Constraints
 ```
-Progress: 1/30 in-scope stages complete (4/33 overall) | 1/7 IDEATION. Next: Market Research
-```
+
+The overall count includes the three initialization stages.
 
 ### Remaining Ideation Stages
 
-The workflow continues through Market Research, Feasibility & Constraints, Scope Definition, Team Formation, Rough Mockups, and Approval & Handoff. Each follows the same pattern: agent works, you review, you approve.
+In a `feature` run the workflow continues through Market Research, Feasibility & Constraints, Scope Definition, Team Formation, Rough Mockups, and Approval & Handoff; a smaller plan runs fewer (the inventory API's `mvp` plan went from Intent Capture to Feasibility & Constraints). Each follows the same pattern: agent works, you review, you approve.
 
 Some stages are **conditional** — they may be skipped based on your scope. When a stage is skipped, the orchestrator shows why and advances automatically.
 
@@ -242,19 +256,9 @@ Some stages are **conditional** — they may be skipped based on your scope. Whe
 
 ## Inception Phase
 
-Inception elaborates requirements and designs the solution. Stage 2.1 (Reverse Engineering) is notable because it runs as a **pipeline** (a 2-link chain) — the conductor delegates to the aidlc-developer-agent for a code scan, then the aidlc-architect-agent for synthesis and the artifact writes. This stage runs only for **brownfield** projects (existing codebases).
+Inception elaborates requirements and designs the solution. Stage 2.1 (Reverse Engineering) runs only for **brownfield** projects (existing codebases), so the inventory API's empty folder skipped it. It runs in the background with no questions for you: with collaborators off (the default in every plan but `enterprise`), the aidlc-developer-agent scans the code and writes the nine code knowledge documents itself; with collaborators on, the developer scans and the aidlc-architect-agent then writes them. Either way you review the result at its approval gate.
 
-```
-─── Stage 2.1: Reverse Engineering (pipeline) ─────────────────────────────
-Delegating to aidlc-developer-agent for code scan...
-[Running in background — no interaction needed]
-...
-Developer scan complete. Delegating to aidlc-architect-agent for synthesis...
-...
-✓ 9 reverse engineering artifacts produced
-```
-
-Remaining Inception stages (Requirements Analysis through Delivery Planning) run inline with you.
+The other Inception stages, from Requirements Analysis through Delivery Planning, work with you in the chat the way Intent Capture did. Practices Discovery and User Stories also bring in support agents when collaborators are on (see [Subagent Delegation](#subagent-delegation)).
 
 ---
 
@@ -289,13 +293,7 @@ the build goes on without it and its approval says what was left out, for
 example "Left out of this build: AC2.1.1, AC2.1.2 and AC2.2.1." The Unit's
 `traceability.json` keeps each of those items as `Deferred`, with your words.
 
-If no autonomy choice is already recorded, the workflow then asks:
-
-```
-How should I continue building the remaining work?
-  ▸ Continue automatically
-  ▸ Review each checkpoint
-```
+If no autonomy choice is already recorded, the workflow then asks how to continue building the remaining work: **Continue automatically** or **Review each checkpoint**.
 
 Skeleton-off offers this choice at Construction entry instead. Your answer is
 recorded as `Construction Autonomy Mode` and respected on resume; explicit
@@ -390,13 +388,13 @@ By the end of a `feature`-scoped workflow, the intent's record dir (`aidlc/space
 
 ```
 aidlc/spaces/<space>/intents/<YYMMDD>-<label>/
-├── aidlc-state.md          # Workflow state (all stages marked [x])
-├── audit/                  # Full decision audit trail (per-clone shards, merged by timestamp)
-├── ideation/               # Intent, market research, scope, mockups
-├── inception/              # Requirements, stories, design, units
-├── construction/           # Per-unit code + test artifacts
-├── operation/              # Deployment, observability, incident plans
-└── verification/           # Phase boundary verification reports
+  aidlc-state.md          # Where the work stands, stage by stage
+  audit/                  # Full decision audit trail (per-clone shards, merged by timestamp)
+  ideation/               # Intent, market research, scope, mockups
+  inception/              # Requirements, stories, design, units
+  construction/           # Per-unit code + test artifacts
+  operation/              # Deployment, observability, incident plans
+  verification/           # Phase boundary verification reports
 ```
 
 (Team knowledge lives one level up, at the space level in `aidlc/spaces/<space>/knowledge/` — a sibling of `intents/` — so it accumulates across every intent. Team-affirmed practices and learnings live alongside it in the active space's memory layer at `aidlc/spaces/<active-space>/memory/`, where they likewise persist across intents.)
@@ -405,21 +403,24 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/
 
 ## Status Line
 
-Throughout the workflow on Claude Code, AI-DLC's status line (once you turn it on: setup asks, or `/aidlc --statusline on`) shows your current position (Kiro and opencode use `/aidlc --status` and the progress line at each gate; Codex uses `$aidlc --status` and its built-in `update_plan` progress display):
+Throughout the workflow on Claude Code, AI-DLC's status line (once you turn it on: setup asks, or `/aidlc --statusline on`) shows your current position (Kiro and opencode use `/aidlc --status` and the progress line at each gate; Codex uses `$aidlc --status` and its built-in `update_plan` progress display). From the inventory API run, with the bar and the separator dot shown as plain text and the model segment left out:
 
-```
-[AIDLC] IDEATION > Intent Capture [▓▓▓▓▓░░░░░] 4/7 -- product
+```text
+[AIDLC] inventory-rest-api - IDEATION [##--------] 1/4 > Feasibility -- Architect Agent
 ```
 
 | Segment | Meaning |
 |---------|---------|
+| `inventory-rest-api` | The piece of work; with more than one space, the space's name comes first |
 | `IDEATION` | Current phase |
-| `> Intent Capture` | Current stage display name |
-| `[▓▓▓▓▓░░░░░]` | Phase progress bar (10 chars, same scope as the `n/m` ratio) |
-| `4/7` | Stage progress within the phase |
-| `-- product` | Lead agent for this stage |
-| `ctx:N%` | Remaining context (always shown, color-coded as it drops) |
-| `↑<in> ↓<out> $<usd>` | Token usage and priceable cost for the active workflow and current transcript/session (Claude Code only; omitted before usage is available; disabled by `AIDLC_DISABLE_USAGE_TRACKING=1`). `$` is a list-price estimate, not a bill |
+| `[##--------]` | Phase progress bar (10 characters, the same count as the ratio) |
+| `1/4` | Finished stages within the phase; in Construction, `Unit N of M` takes the place of the bar and the ratio |
+| `> Feasibility` | Current stage |
+| `-- Architect Agent` | The agent leading it |
+| `ctx:N%` | How much of the context window is used (shown when Claude Code reports it) |
+| Tokens and cost | Tokens in and out and an estimated cost for the active workflow and current session (Claude Code only; shown once Claude Code has reported usage; turned off by `AIDLC_DISABLE_USAGE_TRACKING=1`). The cost is a list-price estimate, not a bill |
+
+Before any work is selected, it reads `[AIDLC] ready`.
 
 ---
 

@@ -4,7 +4,7 @@
   "allowed": [
     {
       "file": "docs/reference/14-claude-features.md",
-      "text": "| **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via agent resources) | `aidlc/spaces/<active-space>/memory/` (via always-included steering live references) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) | `aidlc/spaces/<active-space>/memory/` (via `AGENTS.md` @-imports) | `aidlc/spaces/<active-space>/memory/` (always-applied `rules/aidlc.mdc` standing pointer + four agent-decided phase pointers) |",
+      "text": "| **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via agent resources) | `aidlc/spaces/<active-space>/memory/` (via always-included steering that carries the memory text, with live references as the fallback) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) | `aidlc/spaces/<active-space>/memory/` (via `AGENTS.md` @-imports) | `aidlc/spaces/<active-space>/memory/` (always-applied `rules/aidlc.mdc` standing pointer + four agent-decided phase pointers) |",
       "why": "native-include mapping: names the .claude/rules/aidlc.md @-import stub that pulls the relocated memory tree (correct, not stale)"
     },
     {
@@ -29,7 +29,7 @@
     },
     {
       "file": "docs/reference/01-architecture.md",
-      "text": "9. **Minimal rules** -- Only guardrails (~35 lines total) live in the active space memory layer (`aidlc/spaces/<active-space>/memory/`, pulled in via the `.claude/rules/aidlc.md` @-import stub). Everything else (verification, brownfield safeguards, audit format, adaptive patterns) lives in `knowledge/aidlc-shared/` or the static/conditional protocol files. This prevents context bloat in non-AI-DLC conversations since rules are always loaded.",
+      "text": "9. **Rules stay method, not reference** -- The active space memory layer (`aidlc/spaces/<active-space>/memory/`, pulled in via the `.claude/rules/aidlc.md` @-import stub) holds the framework's working defaults and the guardrails. Everything else (verification, brownfield safeguards, audit format, adaptive patterns) lives in `knowledge/aidlc-shared/` or the static/conditional protocol files. This prevents context bloat in non-AI-DLC conversations since rules are always loaded.",
       "why": "names the .claude/rules/aidlc.md @-import stub (the native include, correct)"
     },
     {
@@ -44,7 +44,7 @@
     },
     {
       "file": "docs/reference/07-sensor-system.md",
-      "text": "matches: \"**/{aidlc-docs,intents,codekb}/**\"           # optional capability filter",
+      "text": "matches: \"**/{aidlc-docs,intents,codekb}/**\"",
       "why": "sensor manifest frontmatter example (the shipped glob)"
     },
     {

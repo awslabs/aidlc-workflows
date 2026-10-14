@@ -2645,6 +2645,15 @@ function isTerminalUtilityNext(invocation: { command: string; args: string[] }):
   return isReadOnlyNextArgv(args);
 }
 
+// A setting the person's own line did not carry is theirs only with their
+// words (settingTheirs): the configuration step names --person-words with this
+// slot, and says what fills it, for the agent to put the reply that asked there.
+export const PERSON_WORDS_SLOT = "<their words>";
+export const PERSON_WORDS_FILL = `, with ${PERSON_WORDS_SLOT} the person's reply that asked for it, word for word`;
+const CONFIGURATION_STEP = new RegExp(
+  `^Run \`([^\`]+)\` to update the configuration(${escapeRegex(PERSON_WORDS_FILL)})?, then print its output verbatim and stop\\.$`,
+);
+
 // A modifier-only next, or one naming a scope, can initialize work or dispatch
 // configuration or a scope change depending on state. Its own successful
 // result must prove the terminal branch ran; the
@@ -2727,8 +2736,9 @@ function isTerminalConfigurationDispatch(
     if (!validated.valid || validated.data.kind !== "print") return false;
     const match = (scope !== undefined
       ? /^Run `([^`]+)` to change scope, then print its output verbatim and stop\.$/
-      : /^Run `([^`]+)` to update the configuration, then print its output verbatim and stop\.$/).exec(validated.data.message);
+      : CONFIGURATION_STEP).exec(validated.data.message);
     if (!match) return false;
+    if (match[2] !== undefined) expected.push("--person-words", PERSON_WORDS_SLOT);
     const literal = parseLiteralShellInvocation(match[1]);
     if (!literal || literal.directory !== null) return false;
     const command = engineInvocationFromWords(literal.argv, literal.rawWords);
@@ -3911,6 +3921,51 @@ export function aidlcOwnedSourceKey(projectDir: string): (pathKey: string) => bo
     return parsed.repo === "" &&
       owned.some((entry) => parsed.path === entry || parsed.path.startsWith(`${entry}/`));
   };
+}
+
+// The paths that changed between two source listings, AI-DLC's own files left
+// out: an AI-DLC update the person took moves only those, and it is nobody's
+// change to their source. Rendered `repo/path`, sorted.
+export function sourceChangedOutsideAidlc(
+  projectDir: string,
+  before: ReadonlyMap<string, string>,
+  after: ReadonlyMap<string, string>,
+): string[] {
+  const owned = aidlcOwnedSourceKey(projectDir);
+  const theirs = (listing: ReadonlyMap<string, string>) => new Map([...listing].filter(([key]) => !owned(key)));
+  return sourceListingChangedPaths(theirs(before), theirs(after));
+}
+
+// The paths outside AI-DLC's own files that moved since a kept listing (a
+// landing's or a review's `Source Listing`). Null when no listing was kept or
+// it does not read back exactly: the caller then compares fingerprints.
+export function sourceChangedOutsideAidlcSince(
+  projectDir: string,
+  stageSlug: string,
+  listing: string | undefined,
+  current: WorkspaceSourceState,
+  intent?: string,
+  space?: string,
+): string[] | null {
+  const recorded = listing === undefined ? null : readBaselineSourceSnapshot(projectDir, stageSlug, listing, intent, space);
+  return recorded === null ? null : sourceChangedOutsideAidlc(
+    projectDir,
+    recordedSourceListingUnderCurrentBoundary(recorded, current.listing),
+    current.listing,
+  );
+}
+
+// Whether the main checkout moved from a kept listing only in AI-DLC's own
+// files. False when no listing was kept or it does not read back exactly.
+export function onlyAidlcFilesChangedSince(
+  projectDir: string,
+  stageSlug: string,
+  listing: string | undefined,
+  current: WorkspaceSourceState,
+  intent?: string,
+  space?: string,
+): boolean {
+  return sourceChangedOutsideAidlcSince(projectDir, stageSlug, listing, current, intent, space)?.length === 0;
 }
 
 function generatedRunnerSkill(skillDir: string): boolean {
@@ -6558,6 +6613,12 @@ export function personLineHeard(projectDir: string, sessionId: string, line: str
   return readPendingPersonLines(path, turn, work).said.includes(line);
 }
 
+// The reason the engine's skip step hands the agent for a stage the person
+// asked to skip where it stands (orchestrate's planChangeDirective). report
+// and the state tool read it back: that skip is the person's, so a stage that
+// must run, or one waiting at its own question, is skipped as they asked.
+export const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
+
 // What the person asked to leave out of a build (#1342): the `Deferred` items
 // in these traceability.json files, at most ten by id and then a count, or
 // null when there are none or a file cannot be read.
@@ -6587,6 +6648,52 @@ export function leftOutLine(paths: readonly string[]): string | null {
   return `Left out of this build: ${list}.`;
 }
 
+// The one check the approval offers when a stage's review passes are spent
+// and its reviewed work changed after the last review (#1189): a review the
+// person asks for runs past the passes. From the record only: the attempt's
+// own review count (the one the cap refuses on) against the stage's passes,
+// and a kept change that names files after the Unit's last verdict. The stage
+// gate of a per-Unit stage asks for each Unit reviewed in it. `change` is that
+// change's own line, so a reply that says it can end it with the offer.
+export const REVIEW_CHECK_OFFER = "Do you want me to have the new approach checked before you decide?";
+export function reviewCheckOffer(
+  projectDir: string,
+  stage: StageEntry,
+  unit: string | null,
+): { offer: string; change: string } | null {
+  if (!stage.reviewer) return null;
+  try {
+    const state = readStateFile(projectDir);
+    const reviewClass = resolveReviewClass(stage.review_class ?? "adversarial", getField(state, "Scope") ?? "", state);
+    if (reviewClass === "none") return null;
+    const passes = reviewClass === "advisory" ? 1 : stage.reviewer_max_iterations ?? 2;
+    const rows = readAuditShardEvents(projectDir);
+    const view = reviewInvalidationAttemptView(rows, stage.slug);
+    const attempt = view.events.filter((event) =>
+      attemptEventAfterFrontier(view.floor, event) && auditBlockField(event.block, "Stage") === stage.slug);
+    const units = unit !== null || stage.for_each !== "unit-of-work"
+      ? [unit ?? undefined]
+      : [...new Set(attempt.filter((event) => event.event === "REVIEW_COMPLETED")
+        .map((event) => auditBlockField(event.block, "Unit") ?? undefined))];
+    for (const each of units) {
+      const mine = attempt.filter((event) => (auditBlockField(event.block, "Unit") ?? undefined) === each);
+      const review = mine.filter((event) => event.event === "REVIEW_COMPLETED").at(-1);
+      const change = mine.filter((event) =>
+        event.event === "CHANGE_ACCEPTED" && auditBlockField(event.block, "Checkpoint") === "review-receipt" &&
+        ![null, "", "(paths unavailable)"].includes(auditBlockField(event.block, "Changed"))).at(-1);
+      if (!review || !change || !attemptEventDefinitelyBefore(review, change)) continue;
+      const used = reviewAttemptAccounting(
+        projectDir, reviewAttemptWindow(projectDir, state, stage, rows), state, stage, stage.reviewer, each, undefined,
+        { eventFilter: (row) => reviewAttemptEventMatchesCurrentClaim(projectDir, state, each, row) },
+      ).budgetCount;
+      if (used >= passes) return { offer: REVIEW_CHECK_OFFER, change: auditBlockField(change.block, "Details") ?? "" };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 // What the person hears about a finished stage that is behind something it
 // used: the work carries on, and the redo is offered as a plain question.
 export function staleStageLine(name: string): string {
@@ -6605,7 +6712,12 @@ export interface ProcessIdentity {
   startTime: string | null;
 }
 
-const SESSION_ANCESTRY_BUDGET_MS = 50;
+// The whole time one walk may spend finding its chat. macOS reads the process
+// table with one `ps -A`, about 16 ms on an idle machine and several times that
+// on a busy one, so it gets longer; Linux and Windows read each hop natively.
+export function sessionAncestryBudgetMs(): number {
+  return sessionProcessPlatform() === "darwin" ? 250 : 50;
+}
 const SESSION_ANCESTRY_MAX_DEPTH = 64;
 const SESSION_ANCESTRY_CACHE_MS = 1000;
 const sessionAncestryCache = new Map<
@@ -6730,7 +6842,7 @@ let windowsSessionProcessApi: ReturnType<typeof loadWindowsSessionProcessApi> | 
 // independent of the lock subsystem's process probes.
 export function windowsSessionProcessIdentity(
   pid: number,
-  deadlineMs = Date.now() + SESSION_ANCESTRY_BUDGET_MS,
+  deadlineMs = Date.now() + sessionAncestryBudgetMs(),
 ): ProcessIdentity | null {
   // A test platform override must never load Windows DLLs on another host.
   if (
@@ -6886,7 +6998,7 @@ export function writeSessionPidEntry(
   projectDir: string,
   pid: number,
   sessionId: string,
-  deadlineMs: number = Date.now() + SESSION_ANCESTRY_BUDGET_MS,
+  deadlineMs: number = Date.now() + sessionAncestryBudgetMs(),
   identity: ProcessIdentity | null | undefined = undefined,
 ): void {
   sessionAncestryCache.delete(projectDir);
@@ -6967,7 +7079,7 @@ export function writeSessionPidAncestry(
   sessionAncestryCache.delete(projectDir);
   clearSessionProcessTable();
   if (validSessionId(sessionId) === null) return;
-  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  const deadline = Date.now() + sessionAncestryBudgetMs();
   const windows = sessionProcessPlatform() === "win32";
   const readIdentity = processIdentityReader(deadline);
   let childIdentity: ProcessIdentity | null = null;
@@ -7029,7 +7141,7 @@ export function resolveSessionIdFromAncestry(projectDir: string): string | null 
 // A valid payload always carries the private source marker, so the selection
 // chokepoint lets payload identity win without weakening bare env refusal. It
 // used to be set only when this process's ancestry walk named a different
-// session, but that walk fails closed within its 50 ms budget on a loaded host:
+// session, but that walk fails closed within its budget on a loaded host:
 // the child then saw an unmarked override, its own walk could find the other
 // session, and it refused. enterHookWorkflow and the Codex adapter already mark
 // payload identity without a walk.
@@ -7051,7 +7163,7 @@ export function hookChildEnv(
 
 function resolveSessionIdFromAncestryUncached(projectDir: string): string | null {
   if (!existsSync(sessionPidMapDir(projectDir))) return null;
-  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  const deadline = Date.now() + sessionAncestryBudgetMs();
   const windows = sessionProcessPlatform() === "win32";
   let childIdentity = windows ? windowsSessionProcessIdentity(process.pid, deadline) : null;
   if (windows && (!childIdentity || childIdentity.ppid !== process.ppid)) return null;
@@ -7759,7 +7871,12 @@ export function activeIntentUuid(projectDir: string, space?: string): string | n
   return match?.uuid ? match.uuid : null;
 }
 
-/** A sibling-only swarm worker inherits identity from its attested parent record, not a local registry. */
+/**
+ * A swarm worker without a registry row of its own inherits identity from its
+ * attested parent record: a multi-repo sibling, or a single-repository child
+ * whose checkout carries no row for the intent (the records were not committed
+ * when it was made, or an earlier intent's registry is what the base commit has).
+ */
 export function delegatedWorktreeIntent(projectDir: string): {
   parent: string; space: string; intent: string; intentRecord: string; intentUuid: string;
 } | null {
@@ -7769,11 +7886,11 @@ export function delegatedWorktreeIntent(projectDir: string): {
   assertNoSymlinkInChainOrThrow(projectDir, ".aidlc/worktree-meta.json");
   const meta = JSON.parse(readRegularFileNoFollowOrThrow(metaPath, "worktree intent provenance").toString("utf-8"));
   // Workspace-shell worktrees and non-swarm work retain their existing resolution.
-  if (meta?.repoSelector === null || meta?.swarmUnit === undefined) return null;
+  if (meta?.swarmUnit === undefined) return null;
   const record = typeof meta?.intentRecord === "string"
     ? /^aidlc\/spaces\/([a-z][a-z0-9-]*)\/intents\/([^/]+)$/.exec(meta.intentRecord) : null;
   if (meta?.version !== 1 || !record || record[2] === "." || record[2] === ".." ||
-    typeof meta.repoSelector !== "string" || !meta.repoSelector ||
+    (meta.repoSelector !== null && (typeof meta.repoSelector !== "string" || !meta.repoSelector)) ||
     typeof meta.swarmUnit !== "string" || meta.boltSlug !== boltSlugForUnit(meta.swarmUnit)) {
     throw new Error("Invalid delegated worktree intent provenance");
   }
@@ -7804,7 +7921,7 @@ export function delegatedWorktreeIntent(projectDir: string): {
   if (!intentUuid || unreadable.length || !creation || !path ||
     canonicalPathKey(resolveAuditWorktreePath(parent, path)) !== child ||
     auditBlockField(creation.block, "Intent record") !== meta.intentRecord ||
-    auditBlockField(creation.block, "Repo") !== meta.repoSelector ||
+    auditBlockField(creation.block, "Repo") !== (meta.repoSelector ?? "-") ||
     auditBlockField(creation.block, "Swarm Unit") !== meta.swarmUnit) {
     throw new Error("Delegated worktree intent has no matching immutable creation authority");
   }
@@ -12019,6 +12136,28 @@ export function personSaidProjectType(projectDir: string): boolean {
   }
 }
 
+const CONSTRUCTION_STAFFING_ASK = "construction-staffing-ask.json";
+
+export function noteConstructionStaffingAsked(projectDir: string): void {
+  noteEngineAskMark(projectDir, CONSTRUCTION_STAFFING_ASK);
+}
+
+// Who builds the Units was asked in this clone and the person has spoken since
+// (an answer, their own words, or a command) without a pick being recorded:
+// the default stands and the question is not put again.
+export function constructionStaffingPassedOver(projectDir: string): boolean {
+  const asked = engineAskMark(projectDir, CONSTRUCTION_STAFFING_ASK);
+  if (asked === null) return false;
+  try {
+    const shardPath = auditFilePath(projectDir);
+    if (projectRelativePath(projectDir, shardPath) !== asked.shard) return false;
+    const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(asked.offset).toString("utf-8");
+    return auditShardBlocks(after).some((block) => isRequestTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+  } catch {
+    return false;
+  }
+}
+
 // With `intent` and `space`, the turns read are that work's, not the active work's.
 export function humanTurnState(
   projectDir: string,
@@ -12632,6 +12771,17 @@ export function isConstructionSwarmEnabled(stateContent: string | null): boolean
 
 // An approved skeleton Unit was deliberately built before a stage-major swarm.
 // Its per-Unit source binding survives unrelated Units changing the workspace.
+// A Unit the person skipped every code-writing step for (UNIT_SKIPPED in that
+// step's current attempt) has nothing a checkpoint could verify, so it owes
+// none: the walk goes on to the next Unit and nothing waits on its approval,
+// as when the plan does not run Code Generation at all.
+export function unitSkippedItsCode(projectDir: string, stateContent: string, unit: string): boolean {
+  const code = unitMajorConstructionStageSlugs(getField(stateContent, "Scope") ?? "", stateContent, true)
+    .filter((slug) => findStageBySlug(slug)?.workspace_requires === true);
+  return code.length > 0 &&
+    code.every((slug) => unitSkippedUnits(projectDir, slug, undefined, stateContent).has(unit));
+}
+
 export function approvedConstructionUnits(
   projectDir: string,
   stateContent: string,
@@ -12653,6 +12803,11 @@ export function approvedConstructionUnits(
   if (dag.state !== "ok") return approved;
   const skeleton = constructionSkeletonOn(stateContent) ? dag.batches.flat()[0] : null;
   for (const unit of dag.units) {
+    // It owes no checkpoint, so it stands where an approved one does.
+    if (unitSkippedItsCode(projectDir, stateContent, unit)) {
+      approved.add(unit);
+      continue;
+    }
     const kind = unit === skeleton
       ? "skeleton"
       : "unit";
@@ -20446,6 +20601,9 @@ export function freshReviewReceipts(
   >();
   let stageVerdict: ReviewVerdict | null = null;
   let newestSourceFingerprint: string | null = null;
+  // The listing that receipt kept (`Source Listing`), absent on receipts an
+  // earlier release wrote and when the source moved during the review.
+  let newestSourceListing: string | undefined;
   let newestSourceUnit: string | null = null;
   let newestSourceProgress: StaleReviewProgress | null = null;
   let sourceRecoverySpent = false;
@@ -20768,6 +20926,7 @@ export function freshReviewReceipts(
       const sourceFingerprint = auditBlockField(e.block, "Source Fingerprint");
       if (sourceFingerprint && !eventIsCrossShardTied(i)) {
         newestSourceFingerprint = sourceFingerprint;
+        newestSourceListing = auditBlockField(e.block, "Source Listing") ?? undefined;
         newestSourceUnit = unit ?? null;
         newestSourceProgress = {
           nextIteration: iteration + 1,
@@ -20932,11 +21091,20 @@ export function freshReviewReceipts(
   const currentSourceState = needsCurrentSource ? currentSource() : null;
   const currentSourceFingerprint = currentSourceState?.fingerprint ?? null;
   const currentSourceListing = currentSourceState?.listing ?? null;
-  const sourceMismatch =
+  const fingerprintMoved =
     newestSourceFingerprint !== null &&
     newestSourceFingerprint !== UNBINDABLE_FINGERPRINT &&
     currentSourceFingerprint !== null &&
     !sameWorkspaceSource(newestSourceFingerprint, currentSourceFingerprint);
+  // What moved outside AI-DLC's own files since the listing the newest review
+  // kept: an AI-DLC update the person took after the review moves only those,
+  // and then the reviewed source did not change. Null when no listing reads
+  // back here (an earlier release, a move during the review, another machine):
+  // fingerprints decide. Read for the active record, like the walk above.
+  const movedOutsideAidlc = fingerprintMoved && currentSourceState !== null
+    ? sourceChangedOutsideAidlcSince(projectDir, stage.slug, newestSourceListing, currentSourceState)
+    : null;
+  const sourceMismatch = fingerprintMoved && (movedOutsideAidlc === null || movedOutsideAidlc.length > 0);
   // An unbindable boundary or an unreadable workspace is not a change: strict
   // holds it stale, relaxed and off say once that it could not be checked. A
   // moved fingerprint is the governed drift.
@@ -20964,7 +21132,9 @@ export function freshReviewReceipts(
   ) {
     // The paths that moved since the review, when its listing was kept: the
     // person's line names them, the way a Unit's own change is named below.
-    const paths = workspaceSourceChangedPaths(
+    // The review's own listing leaves AI-DLC's files out; a receipt without
+    // one falls back to the listing its request kept.
+    const paths = movedOutsideAidlc ?? workspaceSourceChangedPaths(
       projectDir,
       stage.slug,
       newestSourceFingerprint,
@@ -26512,7 +26682,7 @@ function writeSourceSnapshot(recordRoot: string, path: string, serialized: strin
   return `sha256:${hash}`;
 }
 
-/** Write a content-addressed stage-entry baseline listing snapshot. */
+/** Write a content-addressed listing snapshot: a stage-entry baseline, or what a swarm landing left. */
 export function writeBaselineSourceSnapshot(
   projectDir: string,
   stageSlug: string,
@@ -26761,21 +26931,23 @@ export function sourceListingChangedPaths(
 /**
  * The changed paths between a recorded workspace fingerprint and the current
  * state, when the recorded listing was kept; null when only the digests can
- * be compared.
+ * be compared. `outsideAidlc` leaves AI-DLC's own files out: an update the
+ * person took is nobody's change.
  */
 export function workspaceSourceChangedPaths(
   projectDir: string,
   stageSlug: string,
   recordedFingerprint: string,
   current: WorkspaceSourceState | null,
+  outsideAidlc = false,
 ): string[] | null {
   if (current === null) return null;
   const recorded = readWorkspaceSourceSnapshot(projectDir, stageSlug, recordedFingerprint);
   if (recorded === null) return null;
-  return sourceListingChangedPaths(
-    recordedSourceListingUnderCurrentBoundary(recorded, current.listing),
-    current.listing,
-  );
+  const before = recordedSourceListingUnderCurrentBoundary(recorded, current.listing);
+  return outsideAidlc
+    ? sourceChangedOutsideAidlc(projectDir, before, current.listing)
+    : sourceListingChangedPaths(before, current.listing);
 }
 
 export function currentStageSourceBaseline(
@@ -27004,6 +27176,16 @@ export function intentRepos(
     return entry.repos ?? [];
   }
   return [];
+}
+
+// Teams each owning a Unit need the code in this project's own repo, so work
+// with recorded repos is built by one session for now. What the person hears,
+// from the engine as Construction starts and from the ownership setter alike.
+export function teamsAcrossReposLine(repoCount: number, unitCount?: number): string {
+  const where = repoCount === 1 ? "This work's code is in a repo of its own" : `This work spans ${repoCount} repos`;
+  const units = unitCount === undefined ? "its Units" : `its ${unitCount} Units`;
+  return `${where}, so this session builds ${units}: teams each owning a Unit is not available yet for ` +
+    "work across repos.";
 }
 
 /** Recovery operates exactly where the framework recorded parking this slug;
@@ -27243,12 +27425,14 @@ export function hookExecutionRecoveryText(projectDir?: string): string {
 // project folder as <entry> and <folder>, and the engine's next step as
 // <next>, so one manifest string reads right on every install channel.
 // `next`'s stop names the command it stopped instead, in fixed words: the
-// command's own arguments never enter the text.
+// command's own arguments never enter the text. Where its step has the person
+// start a new chat, the entry they type there names the stopped command by the
+// id the engine kept it under (`<entry> --request <id>`), never by its words.
 export const HOOKS_OFF_RERUN = "the engine command that returned this message again, exactly as you ran it,";
 
-export function fillHookActivationText(text: string, projectDir?: string, next?: string): string {
+export function fillHookActivationText(text: string, projectDir?: string, next?: string, entry?: string): string {
   return text
-    .replaceAll("<entry>", entrySkillInvocation())
+    .replaceAll("<entry>", entry ?? entrySkillInvocation())
     .replaceAll("<next>", next ?? `\`${aidlcInvocation()} engine orchestrate next\``)
     .replaceAll("<folder>", projectDir ?? "this project's folder");
 }
@@ -27267,9 +27451,11 @@ const HOOKS_OFF_AGENT_RULES =
  * What the agent does, then the one line it shows the person, when this
  * harness's hooks are not running here; null for a harness that declares no
  * such step. `next` stops with it before any work, and a refusal for a reply
- * that was not recorded carries it.
+ * that was not recorded carries it. `keep` is the stop's: asked only when the
+ * step has the person type the entry in a new chat, it keeps the stopped
+ * command and returns its id, or null to leave the entry bare.
  */
-export function hooksOffAgentStep(projectDir?: string, next?: string): string | null {
+export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () => string | null): string | null {
   const activation = hookActivation();
   if (!activation?.agentStep) return null;
   // Through a link the agent would change a file outside the project.
@@ -27281,7 +27467,9 @@ export function hooksOffAgentStep(projectDir?: string, next?: string): string | 
   }
   // An agent given each tool's line showed the wrong one (#2167), so the engine picks it.
   const step = inHostShell(activation.agentStepInHost?.env) ? activation.agentStepInHost!.text : activation.agentStep;
-  return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(step, projectDir, next)}`;
+  const kept = keep && step.includes("<entry>") ? keep() : null;
+  const entry = kept === null ? undefined : `${entrySkillInvocation()} --request ${kept}`;
+  return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(step, projectDir, next, entry)}`;
 }
 
 /**
@@ -27409,6 +27597,87 @@ export interface HookLiveness {
   neverFired: boolean;
 }
 
+// Every readable `<hook>.last` in one hooks-health folder.
+function readHeartbeats(dir: string): { entries: string[]; newest: HookHeartbeatStamp | null; fired: boolean } {
+  const entries: string[] = [];
+  let newest: HookHeartbeatStamp | null = null;
+  let fired = false;
+  if (!existsSync(dir)) return { entries, newest, fired };
+  try {
+    const files = readdirSync(dir).filter((f) => f.endsWith(".last"));
+    if (files.length > 0) fired = true;
+    for (const f of files) {
+      try {
+        const ts = readFileSync(join(dir, f), "utf-8").trim();
+        const entry = `${f.replace(".last", "")} ${ts}`;
+        entries.push(entry);
+        const timestampMs = Date.parse(ts);
+        if (Number.isFinite(timestampMs) && (newest === null || timestampMs > newest.timestampMs)) {
+          newest = { timestampMs, timestampRaw: ts };
+        }
+      } catch {
+        // skip unreadable
+      }
+    }
+  } catch {
+    // skip unreadable dir
+  }
+  return { entries, newest, fired };
+}
+
+// The newest beat of the turn that created a record: in a space's pre-workflow
+// folder or in another record, of any space (a chained `space switch` beats in
+// the space it leaves), from the slack before the record's first event up to
+// that event. Null when the record is the space folder itself, has no event, or
+// no such beat exists.
+function creationHeartbeat(
+  projectDir: string,
+  workflow: { intent?: string; space?: string },
+  events: readonly AuditShardEvent[],
+): { stamp: HookHeartbeatStamp; entry: string } | null {
+  let first: number | null = null;
+  for (const event of events) {
+    const timestampMs = Date.parse(event.timestamp);
+    if (Number.isFinite(timestampMs) && (first === null || timestampMs < first)) first = timestampMs;
+  }
+  if (first === null) return null;
+  try {
+    const record = resolvePath(docsRoot(projectDir, workflow.intent, workflow.space));
+    if (record === resolvePath(intentsDir(projectDir, workflow.space))) return null;
+    const dirs: string[] = [];
+    for (const { name } of listSpaces(projectDir)) {
+      const intents = resolvePath(intentsDir(projectDir, name));
+      try {
+        const entries = readdirSync(intents, { withFileTypes: true });
+        dirs.push(join(engineDirFor(intents), "hooks-health"));
+        for (const entry of entries) {
+          if (!entry.isDirectory() || entry.name === ENGINE_DIR) continue;
+          const root = join(intents, entry.name);
+          if (resolvePath(root) === record) continue;
+          dirs.push(engineReadDirFor(root, join(engineDirFor(root), "hooks-health"), LEGACY_HOOKS_HEALTH_DIR));
+        }
+      } catch {
+        // A space with no intents folder, or an unreadable one, has no beat.
+      }
+    }
+    let found: { stamp: HookHeartbeatStamp; entry: string } | null = null;
+    for (const dir of dirs) {
+      const beats = readHeartbeats(dir);
+      for (const entry of beats.entries) {
+        const raw = entry.slice(entry.indexOf(" ") + 1);
+        const timestampMs = Date.parse(raw);
+        // Audit timestamps are to the second; a beat in that second is before it.
+        if (!Number.isFinite(timestampMs) || timestampMs < first - HOOK_HEARTBEAT_STALE_SLACK_MS || timestampMs >= first + 1000) continue;
+        if (found === null || timestampMs > found.stamp.timestampMs) found = { stamp: { timestampMs, timestampRaw: raw }, entry };
+      }
+    }
+    return found;
+  } catch {
+    // An unreadable space proves nothing either way.
+    return null;
+  }
+}
+
 // The one comparison behind the doctor's "Hooks last fired ... but the workflow
 // last advanced ..." row and the Plan Approval decision's liveness refusal, so
 // the two cannot disagree about what "hooks are not firing" means.
@@ -27421,33 +27690,11 @@ export function hookLiveness(
 ): HookLiveness {
   const healthDir = hooksHealthReadDir(projectDir, workflow.intent, workflow.space);
   const recordEvents = events ?? readAuditShardEvents(projectDir, workflow.intent, workflow.space);
-  const heartbeatEntries: string[] = [];
-  let newestHeartbeat: HookHeartbeatStamp | null = null;
-  let hasHookFiredContent = false;
+  const own = readHeartbeats(healthDir);
+  const heartbeatEntries = own.entries;
+  let newestHeartbeat = own.newest;
+  let hasHookFiredContent = own.fired;
   const healthDirExists = existsSync(healthDir);
-  if (healthDirExists) {
-    try {
-      const files = readdirSync(healthDir).filter((f) => f.endsWith(".last"));
-      if (files.length > 0) hasHookFiredContent = true;
-      for (const f of files) {
-        try {
-          const ts = readFileSync(join(healthDir, f), "utf-8").trim();
-          heartbeatEntries.push(`${f.replace(".last", "")} ${ts}`);
-          const timestampMs = Date.parse(ts);
-          if (
-            Number.isFinite(timestampMs) &&
-            (newestHeartbeat === null || timestampMs > newestHeartbeat.timestampMs)
-          ) {
-            newestHeartbeat = { timestampMs, timestampRaw: ts };
-          }
-        } catch {
-          // skip unreadable
-        }
-      }
-    } catch {
-      // skip unreadable dir
-    }
-  }
   let newestStageOrGateEvent: HookHeartbeatStamp | null = null;
   for (const event of recordEvents) {
     if (!event.event.startsWith("STAGE_") && !event.event.startsWith("GATE_")) continue;
@@ -27457,6 +27704,25 @@ export function hookLiveness(
       (newestStageOrGateEvent === null || timestampMs > newestStageOrGateEvent.timestampMs)
     ) {
       newestStageOrGateEvent = { timestampMs, timestampRaw: event.timestamp };
+    }
+  }
+  // The turn that created this record beat before the record existed: in a
+  // space's pre-workflow folder, or in the record the chat was on (#2263). A
+  // record with no beat of its own counts the newest such beat from the slack
+  // before its first event up to that event, and only while both its newest
+  // stage or gate event and now are within the slack of it, as `stale` reads a
+  // beat: past that, this record's own hooks should have beaten (a record
+  // parked at a gate writes no stage event, so the clock bounds it too).
+  if (!hasHookFiredContent && newestStageOrGateEvent !== null) {
+    const created = creationHeartbeat(projectDir, workflow, recordEvents);
+    if (
+      created !== null &&
+      newestStageOrGateEvent.timestampMs - created.stamp.timestampMs <= HOOK_HEARTBEAT_STALE_SLACK_MS &&
+      Date.now() - created.stamp.timestampMs <= HOOK_HEARTBEAT_STALE_SLACK_MS
+    ) {
+      hasHookFiredContent = true;
+      newestHeartbeat = created.stamp;
+      heartbeatEntries.push(created.entry);
     }
   }
   return {
@@ -31264,13 +31530,16 @@ function guardOperation(operation: GuardRecoveryOperation): Pick<GuardRemedy, "o
  * "Turn this fence off for this piece of work": the in-band offer that makes the
  * switch reachable at the moment it is needed. When the person picks it, the
  * conductor runs the setter; the setter accepts it because their reply is on
- * record, and a memory-held strict Guard Policy withholds the offer.
+ * record, and a memory-held strict Guard Policy withholds the offer. The
+ * command stays the exact setter; the agent adds the reply that picked it, so
+ * the check reads as theirs.
  */
 export function lowerFenceRemedy(fence: SwitchableGuardFence): GuardRemedy {
   return {
     op: "lower-fence",
     action:
-      `Turn the ${fence} check off for this piece of work. After the command succeeds, tell the person in one ` +
+      `Turn the ${fence} check off for this piece of work: run the command with \`--person-words ` +
+      `'${PERSON_WORDS_SLOT}'\` added${PERSON_WORDS_FILL}. After the command succeeds, tell the person in one ` +
       "line that it is off for this piece of work, comes back on for the next one, and that they can ask you " +
       "to turn it back on; then retry what was refused.",
     ...guardOperation({ kind: "lower-fence", fence }),
@@ -31284,8 +31553,9 @@ export function lowerFenceSentence(fence: SwitchableGuardFence): string {
   const setter = renderGuardOperation({ kind: "lower-fence", fence }, { harnessDir: harnessDir() });
   return (
     `If the person meant to do this now, offer to turn the ${fence} check off for this piece of work. When ` +
-    `they say so, run \`${setter}\` yourself and tell them in one line that it is off for this piece of work, ` +
-    "comes back on for the next one, and that they can ask you to turn it back on."
+    `they say so, run \`${setter} --person-words '${PERSON_WORDS_SLOT}'\` yourself${PERSON_WORDS_FILL}, and ` +
+    "tell them in one line that it is off for this piece of work, comes back on for the next one, and that " +
+    "they can ask you to turn it back on."
   );
 }
 
@@ -36484,6 +36754,9 @@ export type SwarmSourceMergeChain =
   | {
       state: "ready";
       fingerprint: string;
+      // The listing that landing kept (`Source Listing`), absent on rows an
+      // earlier release wrote.
+      listing?: string;
       units: Set<string>;
     };
 
@@ -36584,10 +36857,17 @@ export function currentSwarmSourceOpeningFingerprint(
           reason: "current rejection carries malformed prior accepted source authority",
         };
       }
+      // The listing that landing kept, when it reads back exactly; rows an
+      // earlier release wrote have none and are compared by fingerprint.
+      const recorded = auditBlockField(row.block, "Prior Accepted Source Listing");
+      const listing = recorded === null
+        ? null
+        : readBaselineSourceSnapshot(projectDir, slug, recorded, intent, space);
       return {
         state: "ready",
         fingerprint: prior,
         source: "prior-accepted",
+        ...(listing === null ? {} : { listing }),
       };
     }
   }
@@ -36668,6 +36948,7 @@ export function currentSwarmSourceMergeChain(
   const units = new Set<string>();
   const lastMerge = new Map<string, AuditShardEvent>();
   let priorFingerprint: string | null = null;
+  let priorListing: string | undefined;
   let openingPrevious: string | null = null;
   let openingRow: AuditShardEvent | null = null;
   // A link may start from a main checkout the person changed during the build
@@ -36803,6 +37084,7 @@ export function currentSwarmSourceMergeChain(
       if (rejections.some((rejection) => attemptEventDefinitelyBefore(row, rejection))) units.delete(unit);
       else units.add(unit);
       priorFingerprint = fingerprint;
+      priorListing = auditBlockField(row.block, "Source Listing") ?? undefined;
     }
     start = end;
   }
@@ -36827,7 +37109,31 @@ export function currentSwarmSourceMergeChain(
   }
   return priorFingerprint === null
     ? { state: "none" }
-    : { state: "ready", fingerprint: priorFingerprint, units };
+    : { state: "ready", fingerprint: priorFingerprint, listing: priorListing, units };
+}
+
+// Whether the main checkout moved, since the build's last verified source (the
+// last landing's listing, else the stage's opening listing), only in AI-DLC's
+// own files: the comparison a landing makes. False when no listing reads back
+// or the evidence cannot be read; the caller then keeps its fingerprint compare.
+export function onlyAidlcFilesChangedInSwarmStage(
+  projectDir: string,
+  slug: string,
+  current: WorkspaceSourceState,
+): boolean {
+  try {
+    const chain = currentSwarmSourceMergeChain(projectDir, slug);
+    if (chain.state === "ready") return onlyAidlcFilesChangedSince(projectDir, slug, chain.listing, current);
+    if (chain.state !== "none") return false;
+    const opening = currentSwarmSourceOpeningFingerprint(projectDir, slug);
+    return opening.state === "ready" && opening.listing !== undefined && sourceChangedOutsideAidlc(
+      projectDir,
+      recordedSourceListingUnderCurrentBoundary(opening.listing, current.listing),
+      current.listing,
+    ).length === 0;
+  } catch {
+    return false;
+  }
 }
 
 // The set of units the CURRENT attempt of an INLINE per-unit stage has
@@ -40925,19 +41231,32 @@ export function parseGuardsOnLine(raw: string | null | undefined): SwitchableGua
   return parseGuardsOffLine(raw);
 }
 
-/** The `Guards Off` line for a set of lowered fences, in canonical order. */
-export function formatGuardsOffLine(fences: readonly SwitchableGuardFence[]): string {
+/**
+ * The `Guards Off` line for a set of lowered fences, in canonical order, with one
+ * label for the line: `set by you` while every check on it is the person's,
+ * `set by a command` otherwise. One trailing label keeps the line readable by
+ * every version (parseGuardsOffLine drops the whole parenthesis).
+ */
+export function formatGuardsOffLine(fences: readonly SwitchableGuardFence[], source = "you"): string {
   const ordered = SWITCHABLE_GUARD_FENCES.filter((fence) => fences.includes(fence));
-  return ordered.length === 0 ? "none" : `${ordered.join(", ")} (set by you)`;
+  return ordered.length === 0 ? "none" : `${ordered.join(", ")} (${changeControlSourceLabel(source)})`;
 }
 
 /** The `Guards On` line for fences raised above the policy, in canonical order. */
-export function formatGuardsOnLine(fences: readonly SwitchableGuardFence[]): string {
-  return formatGuardsOffLine(fences);
+export function formatGuardsOnLine(fences: readonly SwitchableGuardFence[], source = "you"): string {
+  return formatGuardsOffLine(fences, source);
+}
+
+/** Whose a `Guards Off` / `Guards On` line says its checks are: `you`, `command`, or a line with no label, `you`. */
+export function guardsLineSource(raw: string | null | undefined): string {
+  const label = /\(([^()]*)\)\s*$/.exec(raw ?? "")?.[1]?.trim() ?? "";
+  return changeControlSourceFromLabel(label);
 }
 
 /** Write the `Guards Off` line, inserting it under the policy line when absent. */
-export function setGuardsOffLine(content: string, fences: readonly SwitchableGuardFence[]): string {
+export function setGuardsOffLine(content: string, fences: readonly SwitchableGuardFence[], source?: string): string {
+  // With no source named, the line keeps its own label as checks leave it.
+  const label = source ?? guardsLineSource(getField(content, GUARDS_OFF_FIELD));
   if (getField(content, GUARDS_OFF_FIELD) === null) {
     const beforeInsert = content;
     for (const anchor of [GUARD_POLICY_FIELD, CHANGE_CONTROL_FIELD, "Review Override", "Test Strategy", "Scope"]) {
@@ -40949,11 +41268,12 @@ export function setGuardsOffLine(content: string, fences: readonly SwitchableGua
     }
     if (content === beforeInsert) content = `${content.trimEnd()}\n- **${GUARDS_OFF_FIELD}**:\n`;
   }
-  return setField(content, GUARDS_OFF_FIELD, formatGuardsOffLine(fences));
+  return setField(content, GUARDS_OFF_FIELD, formatGuardsOffLine(fences, label));
 }
 
 /** Write `Guards On`, inserting it under `Guards Off` or the same state anchors. */
-export function setGuardsOnLine(content: string, fences: readonly SwitchableGuardFence[]): string {
+export function setGuardsOnLine(content: string, fences: readonly SwitchableGuardFence[], source?: string): string {
+  const label = source ?? guardsLineSource(getField(content, GUARDS_ON_FIELD));
   if (getField(content, GUARDS_ON_FIELD) === null) {
     const beforeInsert = content;
     for (const anchor of [GUARDS_OFF_FIELD, GUARD_POLICY_FIELD, CHANGE_CONTROL_FIELD, "Review Override", "Test Strategy", "Scope"]) {
@@ -40965,7 +41285,7 @@ export function setGuardsOnLine(content: string, fences: readonly SwitchableGuar
     }
     if (content === beforeInsert) content = `${content.trimEnd()}\n- **${GUARDS_ON_FIELD}**:\n`;
   }
-  return setField(content, GUARDS_ON_FIELD, formatGuardsOnLine(fences));
+  return setField(content, GUARDS_ON_FIELD, formatGuardsOnLine(fences, label));
 }
 
 export interface FenceResolution {
@@ -40986,6 +41306,8 @@ export function resolveFences(
 ): Record<GuardFence, FenceResolution> {
   const perRunOff = parseGuardsOffLine(getField(stateContent ?? "", GUARDS_OFF_FIELD));
   const perRunOn = parseGuardsOnLine(getField(stateContent ?? "", GUARDS_ON_FIELD));
+  const offSource = guardsLineSource(getField(stateContent ?? "", GUARDS_OFF_FIELD));
+  const onSource = guardsLineSource(getField(stateContent ?? "", GUARDS_ON_FIELD));
   const byPolicy = fencesLoweredByPolicy(policy.value);
   const out = {} as Record<GuardFence, FenceResolution>;
   for (const fence of GUARD_FENCES) {
@@ -40993,9 +41315,9 @@ export function resolveFences(
     if (env !== undefined && resolveProjectFlag(env) === "1") {
       out[fence] = { fence, value: "off", source: killSwitchSource(env) };
     } else if (policy.memoryStrict === null && isSwitchableGuardFence(fence) && perRunOff.includes(fence)) {
-      out[fence] = { fence, value: "off", source: "you" };
+      out[fence] = { fence, value: "off", source: offSource };
     } else if (isSwitchableGuardFence(fence) && perRunOn.includes(fence)) {
-      out[fence] = { fence, value: "on", source: "you" };
+      out[fence] = { fence, value: "on", source: onSource };
     } else if (policy.memoryStrict !== null && isSwitchableGuardFence(fence) && perRunOff.includes(fence)) {
       out[fence] = {
         fence,
@@ -41016,7 +41338,9 @@ export function resolveFences(
 }
 
 export function fenceSourceLabel(resolution: FenceResolution): string {
-  return resolution.source === "you" ? "set by you" : resolution.source;
+  return resolution.source === "you" || resolution.source === "command"
+    ? changeControlSourceLabel(resolution.source)
+    : resolution.source;
 }
 
 /** `on (default)`, `on (set by you)`, `off (set by you)`, `off (env ...)`, or `off (guard policy off (from scope express))`. */

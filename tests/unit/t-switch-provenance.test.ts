@@ -376,15 +376,16 @@ describe("a setter the person runs in their own terminal", () => {
     expect(auditBlockField(disabled[0].block, "Person Reply")).toBeNull();
   });
 
-  test("run by the agent for what they asked in the chat, their words stand behind it", () => {
+  test("run by the agent for what they asked in the chat, the reply it names stands behind it", () => {
     const proj = openWork();
-    reply(proj, ASKED);
+    const asked = "turn the state transition check off";
+    reply(proj, asked);
     // The agent's own tool call: pipes, no terminal of theirs behind it.
-    const off = configSet(proj, ["guard.state-transition", "off"], null);
+    const off = configSet(proj, ["guard.state-transition", "off", "--person-words", asked], null);
     expect(off.status, off.out).toBe(0);
-    expect(off.out).toContain(`because you said: "${ASKED}"`);
+    expect(off.out).toContain(`because you said: "${asked}"`);
     const disabled = readAuditShardEvents(proj).filter((row) => row.event === "GUARD_DISABLED");
-    expect(auditBlockField(disabled[0].block, "Person Reply")).toBe(ASKED);
+    expect(auditBlockField(disabled[0].block, "Person Reply")).toBe(asked);
   });
 });
 
@@ -394,7 +395,9 @@ describe("a setter the person runs in their own terminal", () => {
 describe("a terminal that the person's own tool runs", () => {
   const ASKED = "turn the state transition check off";
   /** `engine config set` as the agent runs it in a host's own terminal. */
-  const inHostTerminal = (proj: string, mark: Record<string, string | undefined>): { status: number; out: string } => {
+  const inHostTerminal = (
+    proj: string, mark: Record<string, string | undefined>, words: string[] = [],
+  ): { status: number; out: string } => {
     const env: Record<string, string | undefined> = {
       ...process.env, ...CLEAR, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj,
       // Both ends a terminal, as an integrated terminal is.
@@ -404,7 +407,7 @@ describe("a terminal that the person's own tool runs", () => {
     delete env.AIDLC_SESSION_OVERRIDE;
     delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
     delete env.CODEX_THREAD_ID;
-    const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "guard.state-transition", "off", "--project-dir", proj], {
+    const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "guard.state-transition", "off", ...words, "--project-dir", proj], {
       cwd: proj,
       env: env as NodeJS.ProcessEnv,
       encoding: "utf-8",
@@ -422,7 +425,7 @@ describe("a terminal that the person's own tool runs", () => {
   ])("$host: the switch is the agent's, so their own words stand behind it, never 'set by you'", ({ mark }) => {
     const proj = openWork();
     reply(proj, ASKED);
-    const off = inHostTerminal(proj, mark);
+    const off = inHostTerminal(proj, mark, ["--person-words", ASKED]);
     expect(off.status, off.out).toBe(0);
     expect(off.out).toContain(`because you said: "${ASKED}"`);
     expect(off.out).not.toContain("set by you.");

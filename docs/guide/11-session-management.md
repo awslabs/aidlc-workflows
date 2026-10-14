@@ -100,7 +100,7 @@ starts fresh; a plan you edited before the build picks up like any other.
 
 ## Recovery Breadcrumb
 
-Before Claude Code compacts conversation context, the `validate-state.ts` hook writes a hidden recovery file at `.aidlc-engine/recovery.md` in the active intent's record dir. This file contains:
+Before Claude Code compacts conversation context, the `aidlc-validate-state.ts` hook writes a hidden recovery file at `.aidlc-engine/recovery.md` in the active intent's record dir. This file contains:
 
 - Timestamp of the last validation
 - Current stage name (extracted from `aidlc-state.md`)
@@ -218,8 +218,40 @@ Three read-only skills report on the current workflow without changing it. Each 
 ```
 /aidlc-session-cost      # quick "where are we" snapshot, any time
 /aidlc-replay            # narrate the session for async review
-/aidlc-outcomes-pack     # at workflow close — write the handover doc
+/aidlc-outcomes-pack     # at workflow close - write the handover doc
 ```
+
+For example, `/aidlc-session-cost` in a Claude Code run that had just finished Intent Capture on the `mvp` plan (shortened):
+
+```text
+  Scope:      mvp
+  Duration:   17 min
+  Stages
+    Total:      5
+    Approved:   4
+    Failed:     0
+    Pending:    1
+  By phase
+    initialization    3/3 approved
+    ideation          1/2 approved, 1 pending
+  Memory entries
+    Total:            2
+    Interpretations:  1
+    Deviations:       1
+    Trade-offs:       0
+    Open questions:   0
+  Sensors
+    Fired:            9
+    Passed:           9
+    Failed:           0
+    Budget-override:  0
+    Incomplete:       0
+  Learnings captured
+    From orchestrator:    1
+    From user additions:  1
+```
+
+The agent adds a sentence or two after it, here that all nine checks had passed and that the totals cover only the stages started so far.
 
 Each skill needs a compiled `runtime-graph.json` to read. If you run one before a workflow has started its first stage, it prints a short "no session data yet" note and stops.
 

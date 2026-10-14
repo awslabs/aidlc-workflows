@@ -18,15 +18,17 @@ import { AIDLC_SRC } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 const PROTOCOL = "aidlc-common/protocols/stage-protocol-reviewer.md";
+// The per-Unit review rules, named on a Unit's review.
+const UNIT_PROTOCOL = "aidlc-common/protocols/stage-protocol-reviewer-unit.md";
 const PERSONA = "agents/aidlc-architecture-reviewer-agent.md";
 const KNOWLEDGE = "knowledge/aidlc-architecture-reviewer-agent/reviewing.md";
 const SKILL = "skills/aidlc/SKILL.md";
 
 describe("t217 reviewer read-scope bound is stated on every surface", () => {
-  test("stage-protocol-reviewer.md §12a step 1 names directive.consumes as a per-unit pass-list entry", () => {
-    const body = readFileSync(join(AIDLC_SRC, PROTOCOL), "utf-8");
+  test("§12a step 1's per-Unit module names directive.consumes as a per-unit pass-list entry", () => {
     // §12a section exists.
-    expect(body).toContain("## 12a. Reviewer Invocation");
+    expect(readFileSync(join(AIDLC_SRC, PROTOCOL), "utf-8")).toContain("## 12a. Reviewer Invocation");
+    const body = readFileSync(join(AIDLC_SRC, UNIT_PROTOCOL), "utf-8");
     // Per-unit pass-list carries the consumes paths.
     expect(body).toMatch(/directive\.unit.*directive\.consumes/s);
     // Explicit prohibition on reading sibling units.

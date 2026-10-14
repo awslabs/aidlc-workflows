@@ -13,6 +13,7 @@ nav = [
       "guide/onboarding.md",
       "guide/workflow-profiles.md",
       "guide/02-your-first-workflow.md",
+      "guide/18-install-and-lifecycle.md",
     ] },
     { "Core Concepts" = [
       "guide/03-spaces-and-intents.md",
@@ -32,6 +33,10 @@ nav = [
       "guide/08-knowledge.md",
       "guide/09-rules-and-the-learning-loop.md",
       "guide/13-customization.md",
+    ] },
+    { "Writing Inputs" = [
+      "guide/writing-inputs/vision-document-guide.md",
+      "guide/writing-inputs/technical-environment-guide.md",
     ] },
     { "Agent Deep Dives" = [
       { "Overview" = "guide/agents/README.md" },
@@ -111,6 +116,7 @@ nav = [
       "reference/10-knowledge-system.md",
       "reference/16-artifact-vocabulary.md",
       "reference/18-plugin-mechanism.md",
+      "reference/19-supply-chain-security.md",
       "reference/20-commit-provenance.md",
     ] },
     { "Agent Reference" = [
@@ -157,6 +163,7 @@ nav = [
       { "Example Plugin: test-pro" = "reference/examples/test-pro/README.md" },
       "reference/research/Codex Manifest Shape Report.md",
       "reference/research/Cross-Tool Plugin Comparison.md",
+      "reference/research/kiro-windows-output-encoding/README.md",
     ] },
   ] },
   { "Roadmap" = "roadmap.md" },

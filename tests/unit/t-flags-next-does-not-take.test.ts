@@ -387,6 +387,29 @@ describe("an answer flag misplaced on next never reaches the person", () => {
     expect(next(proj).d.plan_approval?.status).toBe("approved");
   });
 
+  // A setting read from their words beside their reply to the plan question
+  // names those words, so it lands as theirs.
+  test("a setting asked for in plain words beside the plan answer: the setter names their words", () => {
+    const proj = planQuestionProject();
+    expect(next(proj).d.ask_type).toBe("plan-approval");
+    say(proj, "approve it, and turn the sensors off");
+    const { d, out } = next(proj, ["--sensors", "off", "approve", "it"]);
+    expect(d.kind, out).toBe("print");
+    expect(String(d.message)).toContain(
+      "config set sensors off --person-words '<their words>'`, with <their words> the person's reply that asked for it, " +
+        "word for word, first",
+    );
+  });
+
+  test("a setting typed beside the plan answer: the setter names no words", () => {
+    const proj = planQuestionProject();
+    expect(next(proj).d.ask_type).toBe("plan-approval");
+    say(proj, "/aidlc --sensors off approve it");
+    const { d, out } = next(proj, ["--sensors", "off", "approve", "it"]);
+    expect(d.kind, out).toBe("print");
+    expect(String(d.message)).toContain("config set sensors off` first");
+  });
+
   test("with no plan question open, the print says what to do with the token instead", () => {
     const proj = openWork();
     const { d, out } = next(proj, ["--details", "Approve Plan"]);
@@ -488,7 +511,10 @@ describe("creation takes a lowering flag the command passes when the person aske
   test("before any work exists, their message in this chat is the proof", () => {
     const proj = emptyProject();
     say(proj, "I trust these plans, let it build them without me");
-    const made = utility(proj, [...CREATE, "--plan-approval", "off"]);
+    // The agent names the reply that asked.
+    const made = utility(proj, [
+      ...CREATE, "--plan-approval", "off", "--person-words", "I trust these plans, let it build them without me",
+    ]);
     expect(made.status, made.out).toBe(0);
     expect(createdField(proj, "Plan Approval")).toBe("off (set by you)");
   });
@@ -542,7 +568,7 @@ describe("creation takes a lowering flag the command passes when the person aske
     say(proj, "please go on without stopping for the plan");
     const made = utility(proj, [
       "intent-create", "--scope", "enterprise", "--arguments", "second", "--label", "second",
-      "--guard-policy", "relaxed",
+      "--guard-policy", "relaxed", "--person-words", "please go on without stopping for the plan",
     ]);
     expect(made.status, made.out).toBe(0);
     expect(createdField(proj, "Guard Policy")).toBe("relaxed (set by you)");
@@ -626,10 +652,10 @@ describe("the person's own words reach the record from every harness they drive"
       expect(records.length, `${harness}: ${JSON.stringify(records)}`).toBe(1);
       expect(records[0].words, harness).toBe("add the export");
       expect(records[0].settings, harness).toEqual([{ key: "plan-approval", value: "off" }]);
-      // So the creation the agent runs for them carries the flag as theirs.
+      // So the creation the agent runs for them, naming their reply, carries the flag as theirs.
       const made = utility(proj, [
         "intent-create", "--scope", "enterprise", "--arguments", "add the export",
-        "--label", "export", "--plan-approval", "off",
+        "--label", "export", "--plan-approval", "off", "--person-words", prompt,
       ]);
       expect(made.status, `${harness}: ${made.out}`).toBe(0);
       expect(createdField(proj, "Plan Approval"), harness).toBe("off (set by you)");

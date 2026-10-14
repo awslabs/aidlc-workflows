@@ -119,6 +119,8 @@ function stubHookBody(hookName: string, exitCode = 0, stderr = ""): string {
 // runtime-paths import is copied as-is (node builtins only). The
 // record-human-turn reads stateFilePath() + appendAuditEntry(); neither is a security
 // surface here, so the stubs are inert (state file absent → no append).
+// The kept stops the hooks-off step leaves: none in these fixtures.
+const QUESTION_STORE_STUB = `export function keptRestartRun(_p: string, _args: readonly string[]): null { return null; }\n`;
 const AUDIT_TOOL_STUB = `export function appendAuditEntry(_k: string, _d: unknown, _p: string): void {}\nexport function appendSubagentPromptUnmatched(_p: string, _r: unknown): void {}\nexport function appendCoordinationStoodAside(_p: string, _r: unknown): boolean { return false; }\n`;
 const LIB_TOOL_STUB = `import { join } from "node:path";
 export { boundDirectiveMessage } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
@@ -189,6 +191,7 @@ function scratch(): Scratch {
   mkdirSync(captureDir, { recursive: true });
   copyFileSync(ADAPTER_SRC, join(hooksDir, "aidlc-copilot-adapter.ts"));
   writeFileSync(join(toolsDir, "aidlc-audit.ts"), AUDIT_TOOL_STUB, "utf-8");
+  writeFileSync(join(toolsDir, "aidlc-question-store.ts"), QUESTION_STORE_STUB, "utf-8");
   writeFileSync(join(toolsDir, "aidlc-lib.ts"), LIB_TOOL_STUB, "utf-8");
   copyFileSync(RUNTIME_PATHS_SRC, join(toolsDir, "aidlc-runtime-paths.ts"));
   for (const source of DISPATCHER_SRCS) copyFileSync(source, join(toolsDir, basename(source)));
@@ -897,9 +900,9 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         ["bun .aidlc/tools/aidlc-orchestrate.ts park --stage code-generation", "--stage", "bun .aidlc/tools/aidlc-orchestrate.ts park"],
       ]) {
         const text = reason(command);
-        expect(text, command).toContain("`park` takes no options");
+        expect(text, command).toContain("`park` takes no options but `--person-asked`");
         expect(text, command).toContain(`\`${named}\``);
-        expect(text, command).toContain(`Run \`${form}\``);
+        expect(text, command).toContain(`Run \`${form} --person-asked\` when the person asked to stop, or \`${form}\``);
         expect(text, command).not.toContain("chaining");
       }
       // A word that is not plain text is never repeated back.
@@ -920,6 +923,10 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       // The form it names is the next step that works.
       const parked = shellDecision(runAdapter(s, "guard-tool-call", shellCall("aidlc engine orchestrate park")));
       expect(parked.hookSpecificOutput?.updatedInput?.command).toContain(STUB_ATTEMPT);
+      // The person's stop: the one option park takes.
+      const theirs = shellDecision(runAdapter(s, "guard-tool-call", shellCall("aidlc engine orchestrate park --person-asked")));
+      expect(theirs.hookSpecificOutput?.updatedInput?.command).toContain(STUB_ATTEMPT);
+      expect(theirs.hookSpecificOutput?.updatedInput?.command).toContain("park --person-asked");
       const fresh = shellDecision(runAdapter(s, "guard-tool-call", shellCall("aidlc next")));
       expect(fresh.hookSpecificOutput?.updatedInput?.command).toContain(STUB_ATTEMPT);
     } finally {
@@ -933,13 +940,14 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "Run the same command with `aidlc engine orchestrate` in place of `bun .aidlc/tools/aidlc-orchestrate.ts`",
       );
       // A second thing it would not accept is named too, with the command that runs.
-      for (const [command, form] of [
-        ["bun .aidlc/tools/aidlc-orchestrate.ts park --help", "aidlc engine orchestrate park"],
-        ['bun .aidlc/tools/aidlc-orchestrate.ts park --stage code-generation --note "stopping for today"', "aidlc engine orchestrate park"],
-        ["bun .aidlc/tools/aidlc-orchestrate.ts continue ABCD1234 EFGH5678", "aidlc engine orchestrate next"],
+      for (const [command, form, run] of [
+        ["bun .aidlc/tools/aidlc-orchestrate.ts park --help", "aidlc engine orchestrate park", "aidlc engine orchestrate park --person-asked"],
+        ['bun .aidlc/tools/aidlc-orchestrate.ts park --stage code-generation --note "stopping for today"', "aidlc engine orchestrate park", "aidlc engine orchestrate park --person-asked"],
+        ["bun .aidlc/tools/aidlc-orchestrate.ts continue ABCD1234 EFGH5678", "aidlc engine orchestrate next", "aidlc engine orchestrate next"],
       ]) {
         const text = shellDecision(runAdapter(bare, "guard-tool-call", shellCall(command))).hookSpecificOutput?.permissionDecisionReason ?? "";
-        expect(text, command).toContain(`Run \`${form}\``);
+        expect(text, command).toContain(`Run \`${run}\``);
+        expect(text, command).toContain(`\`${form}\``);
         expect(text, command).not.toContain("chaining");
         const named = shellDecision(runAdapter(bare, "guard-tool-call", shellCall(form)));
         expect(named.hookSpecificOutput?.permissionDecision, form).not.toBe("deny");
@@ -2013,7 +2021,12 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         // Not asked for: the host still asks.
         expect(decision(command), command).toBeUndefined();
       }
-      // Another setting, or the switch with anything joined to it, keeps the prompt.
+      // The person's words beside the switch (--person-words) are still that switch.
+      expect(decision("aidlc engine config set guard.review-freeze off --person-words 'turn the review freeze off'",
+        "guard.review-freeze=off")).toBe("allow");
+      expect(decision("aidlc engine config set guard.review-freeze off --person-words-file .aidlc-engine/answer-text/answer.txt",
+        "guard.review-freeze=off")).toBe("allow");
+      // Another setting, or the switch with anything else joined to it, keeps the prompt.
       expect(decision("aidlc engine config set depth Minimal")).toBeUndefined();
       expect(decision("aidlc engine config set guard.review-freeze off --global", "guard.review-freeze=off")).toBeUndefined();
     } finally {

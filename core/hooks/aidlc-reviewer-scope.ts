@@ -1066,7 +1066,7 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
             recordHookDrop(
               projectDir,
               HOOK_NAME,
-              `${agent} touched construction/ paths with no reviewer dispatch record; enforcement skipped (write the stage-protocol-reviewer.md §12a step-1 dispatch record before invoking a per-unit reviewer)`,
+              `${agent} touched construction/ paths with no reviewer dispatch record; enforcement skipped (write the stage-protocol-reviewer-unit.md dispatch record before invoking a per-unit reviewer)`,
             );
           }
         }

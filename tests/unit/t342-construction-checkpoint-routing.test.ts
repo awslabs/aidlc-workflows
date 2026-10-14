@@ -73,6 +73,7 @@ function fixture(options: Options = {}) {
 - **Project Type Source**: you
 - **Scope**: ${options.scope ?? "feature"}
 - **State Version**: 8
+- **Unit Ownership**: solo
 ## Runtime State
 - **Revision Count**: 0
 - **Skeleton Stance**: ${options.stance ?? "off"}
@@ -341,7 +342,7 @@ describe("t342 Construction checkpoint routing", () => {
     cover(p, "alpha", stages.slice(2));
     const directive = next(p);
     expect(directive.construction_checkpoint?.unit, JSON.stringify(directive)).toBe("alpha");
-    expect(directive.protocol_modules).toEqual(["construction", "learnings"]);
+    expect(directive.protocol_modules).toEqual(["construction", "checkpoint", "learnings", "sensors"]);
     for (const slug of stages) {
       const surfaced = surface(slug);
       expect(surfaced.status, `${slug}: ${surfaced.stderr}`).toBe(0);
@@ -389,7 +390,7 @@ describe("t342 Construction checkpoint routing", () => {
     cover(p, "alpha");
     const directive = next(p);
     expect(directive.construction_checkpoint?.kind, JSON.stringify(directive)).toBe("skeleton");
-    expect(directive.protocol_modules).toEqual(["construction", "learnings"]);
+    expect(directive.protocol_modules).toEqual(["construction", "checkpoint", "learnings", "sensors"]);
     for (const slug of stages) expect(surface(slug).status, slug).toBe(0);
     approve(p, "alpha", "skeleton");
     expect(surface("code-generation").stderr).toContain('slug mismatch: requested "code-generation"');
@@ -2274,7 +2275,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     for (const [, name, rest] of message.matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
       // The move's own commands; the park the print names only for a person
       // who also asked to stop there is not run here.
-      if (name === "orchestrate" && rest === "park") continue;
+      if (name === "orchestrate" && rest === "park --person-asked") continue;
       const ran = tool(p, name, rest.split(" "));
       expect(ran.status, ran.out).toBe(0);
     }
@@ -2383,7 +2384,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
         );
         expect(message).not.toContain("unit resume");
         for (const [, name, rest] of message.matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
-          if (name === "orchestrate" && rest === "park") continue;
+          if (name === "orchestrate" && rest === "park --person-asked") continue;
           const ran = tool(p, name, rest.split(" "));
           expect(ran.status, ran.out).toBe(0);
         }
@@ -2517,14 +2518,14 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(beat.construction_checkpoint?.unit, JSON.stringify(beat)).toBe("alpha");
     expect(beat.construction_checkpoint?.rereview?.command).toContain(recheck.join(" "));
     expect(beat.reviewer).toBe(REVIEWER);
-    expect(beat.protocol_modules).toEqual(["reviewer", "construction"]);
+    expect(beat.protocol_modules).toEqual(["reviewer", "reviewer-unit", "reviewer-repair", "construction", "checkpoint", "sensors"]);
 
     const asked = next(p);
     expect(asked.construction_checkpoint).toMatchObject({
       unit: "alpha", ready: true, rechecked: { verdict: "READY", approved_before: true },
     });
     expect(asked.construction_checkpoint?.rereview).toBeUndefined();
-    expect(asked.protocol_modules).toEqual(["construction"]);
+    expect(asked.protocol_modules).toEqual(["construction", "checkpoint", "sensors"]);
     approve(p, "alpha");
     expect(readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED")).toEqual([]);
     expect(jumped(p)).toBe(0);

@@ -186,7 +186,7 @@ const HARNESS_CAPABILITIES = {
     },
     memoryInclude: "kiro-resources",
     kiroAgentJson: true,
-    ideAgentTools: false,
+    ideAgentTools: true,
     reviewerScopeRegistration: "kiro-agent-json",
   },
   opencode: {
@@ -301,8 +301,7 @@ function validateManifest(
     fail(name, "kiroAgentJson does not agree with manifest harnessFiles");
   }
   if (
-    (capabilities.memoryInclude === "kiro-resources") !==
-      (hasKiroAgentJson && !capabilities.ideAgentTools) ||
+    (capabilities.memoryInclude === "kiro-resources") !== hasKiroAgentJson ||
     (capabilities.memoryInclude === "kiro-steering") !==
       manifest.harnessFiles.some(
         (file) => file.dst === "steering/aidlc-active-memory.md",

@@ -79,7 +79,7 @@ import {
   intentsDirOf,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { parseStageFrontmatter, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -669,7 +669,9 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       expect(res1.status).toBe(0);
       expect(JSON.parse(res1.out).sensor_proposed).toBe(1);
       const stageAMd = readFileSync(join(stagesDir, "inception", "user-stories.md"), "utf-8");
-      expect(/^\s*-\s*acceptance-format\s*$/m.test(stageAMd)).toBe(true);
+      // Read the list the way the graph compile does: the stage file's
+      // `sensors: []` now carries the id.
+      expect(parseStageFrontmatter(stageAMd).sensors).toEqual(["acceptance-format"]);
 
       // A SEPARATE, unrelated stage later independently proposes the SAME
       // sensor id. The manifest already exists and the sensor was already
@@ -683,7 +685,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       expect(res2.status).toBe(0);
 
       const stageBMd = readFileSync(join(stagesDir, "construction", "requirements-analysis.md"), "utf-8");
-      expect(/^\s*-\s*acceptance-format\s*$/m.test(stageBMd)).toBe(true);
+      expect(parseStageFrontmatter(stageBMd).sensors).toEqual(["acceptance-format"]);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 

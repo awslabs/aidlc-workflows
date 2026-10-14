@@ -6,7 +6,7 @@
 |-------|-------|
 | Name | aidlc-compliance-agent |
 | Tier | **judgment** |
-| Allowed Claude Code Tools | Read, Edit, Write, Glob, Grep, WebSearch, AskUserQuestion |
+| Claude Code Tools | Inherits the full session toolset, MCP tools included (no `tools:` allowlist); expected to use Read, Edit, Write, Glob, Grep, WebSearch, AskUserQuestion |
 | Disallowed Claude Code Tools | Task |
 
 ---
@@ -66,9 +66,9 @@ Path: `.claude/knowledge/aidlc-compliance-agent/`
 
 ### Team (Tier 2)
 
-Path: `aidlc/knowledge/aidlc-compliance-agent/` (the space-level knowledge dir; user-managed)
+Path: `aidlc/spaces/<active-space>/knowledge/aidlc-compliance-agent/` (the space-level knowledge dir; user-managed)
 
-A space-level directory the team creates when it has content (the engine ships `aidlc/knowledge/` empty). Populated by the team with project-specific
+A space-level directory the team creates when it has content (the engine creates the space's `knowledge/` folder empty). Populated by the team with project-specific
 compliance context such as existing compliance matrices, audit findings, data
 classification schemes, or regulatory interpretations.
 

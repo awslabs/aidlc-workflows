@@ -378,14 +378,25 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
     expect(validated.status, validated.stdout + validated.stderr).toBe(0);
     const echoed = JSON.parse(validated.stdout) as { base_scope: string; plan_changes: { skip: string[]; add: string[] } };
     expect(withEnvAndFreshCaches(POLICY_ENV, () => scopeGuardPolicyDefault(echoed.base_scope))).toBe("off");
-    // What the conductor runs on approval. The presence bypass is off, so a lowering would be refused.
-    const args = ["intent-create", "--scope", echoed.base_scope, "--guard-policy", "relaxed", "--arguments", "x", "--label", "relaxed-plan"];
+    // What the conductor runs on approval, naming the person's approval. The
+    // presence bypass is off, so a lowering would be refused.
+    const session = "01995000-7a11-7000-8000-000000000351";
+    const env = {
+      ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0",
+      AIDLC_SESSION_OVERRIDE: session,
+    };
+    const approved = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      cwd: proj, encoding: "utf-8", env,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, cwd: proj, prompt: "Approve" }),
+    });
+    expect(approved.status, approved.stderr).toBe(0);
+    const args = [
+      "intent-create", "--scope", echoed.base_scope, "--guard-policy", "relaxed", "--arguments", "x", "--label", "relaxed-plan",
+      "--person-words", "Approve",
+    ];
     if (echoed.plan_changes.skip.length > 0) args.push("--skip", echoed.plan_changes.skip.join(","));
     if (echoed.plan_changes.add.length > 0) args.push("--add", echoed.plan_changes.add.join(","));
-    const created = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], {
-      encoding: "utf-8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0" },
-    });
+    const created = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], { encoding: "utf-8", env });
     expect(created.status, created.stdout + created.stderr).toBe(0);
     const intents = join(proj, "aidlc", "spaces", "default", "intents");
     const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
@@ -514,7 +525,7 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(d.kind).toBe("print");
     expect(d.message).not.toContain("next compose");
     const command = /`([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? "";
-    expect(command.endsWith("engine recompose --skip team-formation"), d.message).toBe(true);
+    expect(command.endsWith("engine recompose --skip team-formation --reason 'the person asked to skip it'"), d.message).toBe(true);
     expect(d.message).toContain('"Skipped Team Formation. You can undo that any time."');
     expect(d.message).toContain("If they later ask to undo it, run `");
     expect(d.message.endsWith("recompose --add team-formation`."), d.message).toBe(true);
@@ -522,7 +533,9 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(d.message).toContain("do not show its output");
     expect(d.message).not.toContain("print its output verbatim");
     const words = command.split(" ");
-    const applied = runTool(proj, "aidlc.ts", words.slice(words.indexOf("engine")));
+    const applied = runTool(proj, "aidlc.ts", [
+      ...words.slice(words.indexOf("engine"), words.indexOf("--reason")), "--reason", "the person asked to skip it",
+    ]);
     expect(applied.status, applied.out).toBe(0);
     expect(applied.out).toContain("1 skipped (team-formation)");
     expect(stateOf(proj)).toContain("- [ ] team-formation \u2014 SKIP");
@@ -570,20 +583,26 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(d.kind).toBe("print");
     const commands = [...d.message.matchAll(/`([^`]*\.ts [^`]*)`/g)].map((m) => m[1]);
     const recompose = commands.find((c) => c.includes("engine recompose")) ?? "";
-    expect(recompose.endsWith("engine recompose --skip deployment-execution"), d.message).toBe(true);
+    expect(recompose.endsWith("engine recompose --skip deployment-execution --reason 'the person asked to skip it'"), d.message).toBe(true);
     const report = commands.find((c) => c.includes("report --stage deployment-pipeline --result skipped")) ?? "";
     expect(report, d.message).toContain("--reason 'the person asked to skip it'");
     expect(d.message).toContain('"Skipped Deployment Pipeline and Deployment Execution.');
     // The way back is a plain fact naming the command, never "type this"
     // (tests/unit/t-offers-are-plain-questions.test.ts).
-    expect(d.message).toContain("Either one can still be run on its own with `/aidlc --stage <stage> --single`.");
+    expect(d.message).toContain(
+      "Either one can still be run on its own with `/aidlc --stage deployment-pipeline --single` or " +
+        "`/aidlc --stage deployment-execution --single`.",
+    );
+    expect(d.message).not.toContain("<stage>");
     expect(d.message).not.toMatch(/[Tt]ype `\/aidlc/);
     expect(d.message).toMatch(/re-run `next`/);
     expect(d.message).not.toContain("Then stop.");
     expect(d.message).not.toContain("jump");
     // The two commands it names do the whole thing on this state.
     const words = recompose.split(" ");
-    const applied = runTool(proj, "aidlc.ts", words.slice(words.indexOf("engine")));
+    const applied = runTool(proj, "aidlc.ts", [
+      ...words.slice(words.indexOf("engine"), words.indexOf("--reason")), "--reason", "the person asked to skip it",
+    ]);
     expect(applied.status, applied.out).toBe(0);
     const skipped = runTool(proj, "aidlc-orchestrate.ts", [
       "report", "--stage", "deployment-pipeline", "--result", "skipped", "--reason", "the person asked to skip it",
@@ -614,7 +633,7 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
       .replace("- **Next Stage**: environment-provisioning", "- **Next Stage**: ci-pipeline"));
     const d = nextDirective(proj, ["--skip", "deployment-pipeline,deployment-execution"]);
     expect(d.kind).toBe("print");
-    expect(d.message).toContain("engine recompose --skip deployment-pipeline,deployment-execution`");
+    expect(d.message).toContain("engine recompose --skip deployment-pipeline,deployment-execution --reason 'the person asked to skip it'`");
     expect(d.message).toContain('"Skipped Deployment Pipeline and Deployment Execution. You can undo that any time."');
     expect(d.message).toContain("the open Build and Test question");
     expect(d.message).toContain("report --stage build-and-test --result approved --user-input Approve");
@@ -680,7 +699,7 @@ describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
     expect(stateOf(proj)).not.toContain("- **Plan**:");
   });
 
-  test("a taken or malformed name, a claimed keyword, or an unknown flag writes nothing", () => {
+  test("a taken or malformed name, a hint that is not one word, or an unknown flag writes nothing", () => {
     const proj = installedProject();
     expect(createComposed(proj).status).toBe(0);
     const refused = (args: string[], message: string) => {
@@ -693,16 +712,38 @@ describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
     refused(["--name", "Quick_Fix"], '"Quick_Fix" cannot name a scope');
     refused(["--name", "-quick"], '"-quick" cannot name a scope');
     refused(["--name", `a${"b".repeat(40)}`], "cannot name a scope");
-    refused(["--name", "quick-fix", "--keywords", "fix"], 'Keyword "fix" is already claimed by scope');
     refused(["--name", "quick-fix", "--keywords", "semi;colon"], '"semi;colon" cannot be a keyword');
     refused(["--name", "quick-fix", "--keywords", "two words"], '"two words" cannot be a keyword');
     refused(["--name", "quick-fix", "--scope", "bugfix"], "scope-save does not accept --scope.");
     expect(savedRecords(proj)).toEqual([]);
     expect(runTool(proj, "aidlc-utility.ts", ["scope-save", "--name", "quick-fix", "--keywords", "parser-fix"]).status).toBe(0);
     refused(["--name", "quick-fix"], "A scope named quick-fix already exists.");
-    // A keyword the first save claimed is checked again under the lock.
-    refused(["--name", "other-fix", "--keywords", "parser-fix"], 'Keyword "parser-fix" is already claimed by scope');
     expect(savedRecords(proj)).toEqual(["quick-fix.md"]);
+  });
+
+  // Nothing picks a plan by a hint any more: the plan proposal lists every
+  // plan's hints for the agent to weigh. So a hint another plan has is saved
+  // as asked, and the person is told once that it now names both.
+  test("a hint another plan already has is saved, with one line saying both plans have it", () => {
+    const proj = installedProject();
+    expect(createComposed(proj).status).toBe(0);
+    const saved = runTool(proj, "aidlc-utility.ts", ["scope-save", "--name", "quick-fix", "--keywords", "bug,parser-fix"]);
+    expect(saved.status, saved.out).toBe(0);
+    expect(saved.out).toContain("Saved as scope quick-fix (");
+    expect(saved.out).toContain('The hint "bug" is also bugfix\'s; the plan proposal lists it under both.');
+    expect(saved.out).not.toContain('The hint "parser-fix"');
+    const record = readFileSync(join(proj, "aidlc", "scopes", "quick-fix.md"), "utf-8");
+    expect(record).toContain("  - bug");
+    expect(record).toContain("  - parser-fix");
+    // The next plan saved with the first one's hint names that plan, checked under the lock.
+    const other = runTool(proj, "aidlc-utility.ts", ["scope-save", "--name", "other-fix", "--keywords", "parser-fix"]);
+    expect(other.status, other.out).toBe(0);
+    expect(other.out).toContain('The hint "parser-fix" is also quick-fix\'s; the plan proposal lists it under both.');
+    expect(savedRecords(proj)).toEqual(["other-fix.md", "quick-fix.md"]);
+    // Doctor says it as a note, not a failure.
+    const doctor = runTool(proj, "aidlc-utility.ts", ["doctor", "--verbose"]);
+    expect(doctor.out).toMatch(/warn {2}Keyword overlap: 2 shared hints/);
+    expect(doctor.out).not.toMatch(/fail {2}Keyword overlap/);
   });
 
   test("a failed audit undoes the save, so the same name works on retry", () => {

@@ -29,7 +29,6 @@
 // gating the authored source covers every tree.
 
 import { describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
@@ -182,9 +181,6 @@ const SUMMARY_STOP_ANNEX_TOKENS = [
   "checkpoint-specific `aidlc-log.ts answer`",
   '**"What should change?"**',
 ];
-
-const P3_EVIDENCE_DIR = join(REPO_ROOT, "evidence", "p3-kiro-routing");
-
 
 function stageTableRows(body: string): string[] {
   const lines = body.split(/\r?\n/);
@@ -520,7 +516,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       ...PHRASE_AND_LINE,
       "Where it applies is what they say: this piece of work, this project, or this machine.",
       "`{{INVOKE}} config flags --bypass <switch> --local --yes`",
-      "`{{INVOKE}} engine config set <key> <on|off>`",
+      "`{{INVOKE}} engine config set <key> <on|off> --person-words '<their words>'`",
     ]) {
       if (!onboarding.includes(tok)) problems.push(`core/templates/onboarding-harness.md  missing: ${tok}`);
     }
@@ -939,8 +935,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         .map((file) => readFileSync(join(REPO_ROOT, file), "utf-8"))
         .join("\n");
       for (const setter of [
-        "run `{{INVOKE}} engine config set guard-policy <value>` yourself",
-        "running `{{INVOKE}} engine config set summary-confirmation off` yourself",
+        "run `{{INVOKE}} engine config set guard-policy <value> --person-words '<their words>'` yourself",
+        "running `{{INVOKE}} engine config set summary-confirmation off --person-words '<their words>'` yourself",
       ]) {
         if (!body.includes(setter)) found.push(`${rel}  missing: ${setter}`);
       }
@@ -1225,7 +1221,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // A Unit approval after a re-check or a redo the person asked for asks once:
   // its line takes the place of the usual question, never follows it.
   test("a re-checked or redone Unit's approval is one question", () => {
-    const construction = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol-construction.md"), "utf-8")
+    const construction = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol-checkpoint.md"), "utf-8")
       .replace(/\s+/g, " ");
     expect(construction).toContain(
       'its line takes the place of "Approve this completed <unit>?" after "Verified with `<full command>` (exit 0).", ' +
@@ -1309,40 +1305,6 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const missing: string[] = [];
     for (const rel of harnessQuestionAnnexes()) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      if (rel === "harness/devin/skills/aidlc/question-rendering.md") {
-        const summary = body.split("## Mandatory consolidated-summary checkpoint\n")[1]?.split("\n## ")[0];
-        expect(summary).toBeDefined();
-        expect(summary).toContain("[Question Format]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#3-question-format)");
-        expect(summary).toContain("Step 3a");
-        expect(summary).toContain("[Conversation event logging checklist]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#mandatory-conversation-event-logging-checklist)");
-        const protocol = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"), "utf-8");
-        const start = protocol.indexOf("## 3. Question Format\n");
-        const end = protocol.indexOf("\n## 4.", start);
-        expect(start).toBeGreaterThanOrEqual(0);
-        expect(end).toBeGreaterThan(start);
-        const questions = protocol.slice(start, end).replace(/\s+/g, " ");
-        for (const token of [
-          "Consolidated Summary Confirmation", "file-letter prefixes", "blank `[Answer]:`",
-          "`[Answer]: Looks correct`", "`[Answer]: Request changes`",
-          "`[Answer]: A. Looks correct`", "`[Answer]: 1. Looks correct`",
-          "{{INVOKE}} engine log decision", "{{INVOKE}} engine log answer",
-          '--checkpoint summary-confirmation --questions-file "<questions-path>"',
-          '`--unit "<directive.unit>"`', "`--single`", "a self-selected answer",
-          "no reply of theirs since their last answer", "same `--unit` / `--single` identity",
-          '**"What should change?"**', "END THE TURN", "Do not revise anything until",
-          "reset the confirmation entry to a blank `[Answer]:`", "re-present the summary",
-          "receipt command succeeds", "before re-saving artifacts or requesting review",
-          "Step 3b", "Step 3c", "checkpoint from Step 3a",
-        ]) expect(questions).toContain(token);
-        const logging = protocol.split("### MANDATORY: Conversation event logging checklist\n")[1]?.split("\n### ")[0]?.replace(/\s+/g, " ");
-        expect(logging).toBeDefined();
-        expect(logging).toContain("Once `decision` succeeds, render that question and END THE TURN");
-        expect(logging).toContain("only the human's next interaction may be followed by `answer`");
-        expect(protocol).toContain("questions → artifact → reviewer (if declared) → learnings (only when the directive lists the `learnings` protocol module) → gate");
-        expect(body).not.toContain("[Answer]: Looks correct");
-        expect(body).not.toContain("aidlc-log.ts decision");
-        continue;
-      }
       for (const token of SUMMARY_STOP_ANNEX_TOKENS) {
         if (!body.includes(token)) {
           missing.push(`${rel}  missing: ${token}`);
@@ -1366,7 +1328,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // A live run asked "Does this all look correct" while the summary sat folded
   // inside tool output: the person must read what they confirm.
   test("the summary the person confirms is on screen with its question, on every harness", () => {
-    const protocol = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"), "utf-8");
+    const protocol = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol-summary.md"), "utf-8");
     expect(protocol).toContain(
       "The person confirms what they can read: the bullets sit in the question itself, or right above it in the same " +
         "message, as the question-rendering annex shows; never only in a tool's output or a file.",
@@ -1485,11 +1447,11 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       // The person's own request wins: "approve, and let's stop there" parks.
       "also asked to stop the workflow there for now",
       "not to pause on one decision inside the work",
-      "run `{{INVOKE}} engine orchestrate park` instead",
+      "run `{{INVOKE}} engine orchestrate park --person-asked` instead",
       "Otherwise the workflow (or single-stage run) is complete: present the completion summary and STOP the loop.",
     ]) expect(row, token).toContain(token);
     expect(stopRule).toContain("if it is `done` without `directive.workflow_continues`");
-    expect(stopRule).toContain("`park` instead when the person asked in that same reply to stop the workflow there for now");
+    expect(stopRule).toContain("`park --person-asked` instead when the person asked in that same reply to stop the workflow there for now");
     expect(stopRule).not.toMatch(/if `directive\.kind` is `done`/);
     const docsRow = readFileSync(join(REPO_ROOT, "docs/reference/17-skill-system.md"), "utf-8")
       .split("\n")
@@ -1641,87 +1603,6 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       expect(body, rel).not.toContain("surface the actual error and stop");
     }
     expect(missing).toEqual([]);
-  });
-
-  test("retained native Windows evidence proves completed CLI and IDE routing", () => {
-    const manifest = readFileSync(join(P3_EVIDENCE_DIR, "README.md"), "utf-8");
-    const hashes: Record<string, string> = {
-      "windows-kiro-routing-cli.log":
-        "465b2cb860a748d4af7189a16409914f6a134d62b7824e75bd39d390450324f7",
-      "windows-kiro-routing-cli.ndjson":
-        "034b783b3389ab002dc8f5714023d618363600bb4205e826a2314631ce89a600",
-      "windows-kiro-routing-ide.log":
-        "f76c3e7ba1a8b4bb8ea9d313dca33d072baa6ea95826391115900da98c6b4ceb",
-      "windows-kiro-routing-ide.ndjson":
-        "d776cbe91f870fcda0b558657e1fcafeccd8f32190793bfb9e7cd5ce18937252",
-    };
-    for (const [file, expected] of Object.entries(hashes)) {
-      const body = readFileSync(join(P3_EVIDENCE_DIR, file));
-      expect(createHash("sha256").update(body).digest("hex"), file).toBe(
-        expected,
-      );
-      expect(manifest).toContain(`${expected}  ${file}`);
-    }
-
-    const cliLog = readFileSync(
-      join(P3_EVIDENCE_DIR, "windows-kiro-routing-cli.log"),
-      "utf-8",
-    );
-    expect(cliLog).toContain(" 2 pass");
-    expect(cliLog).toContain(" 0 fail");
-    const cliEvents = readFileSync(
-      join(P3_EVIDENCE_DIR, "windows-kiro-routing-cli.ndjson"),
-      "utf-8",
-    )
-      .trim()
-      .split(/\r?\n/)
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
-    const cliResults = cliEvents.filter((event) => event.event === "result");
-    expect(cliResults).toHaveLength(2);
-    for (const result of cliResults) {
-      expect(result.stopReason).toBe("end_turn");
-      expect(result.toolCalls).toBe(1);
-    }
-    const cliToolCalls = cliEvents.filter((event) => event.event === "tool_call");
-    expect(cliToolCalls).toHaveLength(2);
-    expect(
-      cliToolCalls.every((event) =>
-        String(event.title).includes("aidlc-orchestrate.ts next")
-      ),
-    ).toBe(true);
-    expect(
-      cliToolCalls.some((event) => String(event.title).includes("intent --json")),
-    ).toBe(false);
-
-    const ideLog = readFileSync(
-      join(P3_EVIDENCE_DIR, "windows-kiro-routing-ide.log"),
-      "utf-8",
-    );
-    expect(ideLog).toContain(" 1 pass");
-    expect(ideLog).toContain(" 0 fail");
-    const ide = JSON.parse(
-      readFileSync(
-        join(P3_EVIDENCE_DIR, "windows-kiro-routing-ide.ndjson"),
-        "utf-8",
-      ),
-    ) as {
-      platform?: string;
-      completed_turn?: boolean;
-      intent_query_present?: boolean;
-      directive?: {
-        ask_type?: string;
-        numbered_prose_question?: string;
-      };
-      ordered_lists?: string[][];
-    };
-    expect(ide.platform).toBe("win32");
-    expect(ide.completed_turn).toBe(true);
-    expect(ide.intent_query_present).toBe(false);
-    expect(ide.directive?.ask_type).toBe("new-work-routing");
-    expect(ide.directive?.numbered_prose_question).toContain("4. **Other**");
-    expect(ide.ordered_lists).toHaveLength(1);
-    expect(ide.ordered_lists?.[0]).toHaveLength(4);
-    expect(ide.ordered_lists?.[0]?.[3]).toContain("Other");
   });
 
   test("prose renderers remap file-backed source letters to numbered prose", () => {

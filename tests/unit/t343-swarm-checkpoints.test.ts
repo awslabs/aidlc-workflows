@@ -920,6 +920,93 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     }
   });
 
+  // An AI-DLC update the person takes after approving the plans rewrites only
+  // AI-DLC's own files (Codex's skill under .agents/skills/, Claude Code's
+  // .gitignore lines), and nobody commits it. None of them is a Unit's source,
+  // so the build sets up as approved: no new approval, no commit, no line.
+  function installSkill(pd: string, text: string): void {
+    mkdirSync(join(pd, ".agents", "skills", "aidlc"), { recursive: true });
+    writeFileSync(join(pd, ".agents", "skills", "aidlc", "SKILL.md"), text, "utf-8");
+  }
+
+  function installedFixture(): string {
+    const pd = fixture();
+    installSkill(pd, "AI-DLC 1\n");
+    git(pd, ["add", "-A"]);
+    git(pd, ["commit", "-qm", "install AI-DLC"]);
+    appendAuditEntry("STAGE_STARTED", { Stage: STAGE, "Source Baseline": writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!) }, pd);
+    return pd;
+  }
+
+  const planApprovalChanges = (pd: string) => readAuditShardEvents(pd).filter((row) =>
+    row.event === "CHANGE_ACCEPTED" && auditBlockField(row.block, "Checkpoint") === "plan-approval");
+
+  test.each([true, false])("under strict, an AI-DLC update after the plans are approved never asks for them again (committed: %p)", (committed) => {
+    const pd = installedFixture();
+    const prepared = prepareNative(pd, () => {
+      installSkill(pd, "AI-DLC 2\n");
+      if (committed) {
+        git(pd, ["add", "-A"]);
+        git(pd, ["commit", "-qm", "AI-DLC update"]);
+      }
+    });
+    expect(prepared.code, prepared.out).toBe(0);
+    const result = JSON.parse(prepared.stdout);
+    expect(result.units.map((unit: { ok: boolean }) => unit.ok)).toEqual([true, true]);
+    expect(result.change_notices ?? []).toEqual([]);
+    expect(planApprovalChanges(pd)).toEqual([]);
+  });
+
+  test("with Claude Code installed, the .gitignore lines an update rewrites are AI-DLC's own too", () => {
+    const pd = installedFixture();
+    const data = join(pd, ".claude", "tools", "data");
+    mkdirSync(data, { recursive: true });
+    writeFileSync(join(data, "harness.json"), JSON.stringify({ harnessDir: ".claude" }));
+    writeFileSync(join(data, "aidlc-projection.json"), JSON.stringify({
+      rootIntegrations: [{ path: ".gitignore", policy: "managed-block" }],
+    }));
+    const prepared = prepareNative(pd, () => {
+      writeFileSync(join(pd, ".gitignore"), `${readFileSync(join(pd, ".gitignore"), "utf-8")}aidlc/.aidlc-new/\n`);
+    });
+    expect(prepared.code, prepared.out).toBe(0);
+    expect(JSON.parse(prepared.stdout).change_notices ?? []).toEqual([]);
+  });
+
+  test("under strict, the person's own change beside an AI-DLC update still stops prepare", () => {
+    const pd = installedFixture();
+    const prepared = prepareNative(pd, () => {
+      installSkill(pd, "AI-DLC 2\n");
+      writeFileSync(join(pd, "src", "gamma.ts"), "export const gamma = 2;\n");
+      git(pd, ["add", "src/gamma.ts"]);
+      git(pd, ["commit", "-qm", "the person's own change"]);
+    });
+    expect(prepared.code).not.toBe(0);
+    expect(prepared.out).toContain("Parent source has changed since Plan Approval");
+  });
+
+  test("under Guard Policy off, an AI-DLC update after approval needs no commit and is not named", () => {
+    const pd = installedFixture();
+    setPolicy(pd, "off (set by you)");
+    const prepared = prepareNative(pd, () => installSkill(pd, "AI-DLC 2\n"));
+    expect(prepared.code, prepared.out).toBe(0);
+    expect(JSON.parse(prepared.stdout).change_notices ?? []).toEqual([]);
+    expect(planApprovalChanges(pd)).toEqual([]);
+    // Beside the person's own committed change, the line names only theirs.
+    const beside = installedFixture();
+    setPolicy(beside, "off (set by you)");
+    const kept = prepareNative(beside, () => {
+      installSkill(beside, "AI-DLC 2\n");
+      writeFileSync(join(beside, "src", "gamma.ts"), "export const gamma = 2;\n");
+      git(beside, ["add", "-A"]);
+      git(beside, ["commit", "-qm", "the person's own change and the update"]);
+    });
+    expect(kept.code, kept.out).toBe(0);
+    expect(JSON.parse(kept.stdout).change_notices).toEqual([
+      "1 file changed since this plan was approved: src/gamma.ts. Building alpha now.",
+      "1 file changed since this plan was approved: src/gamma.ts. Building beta now.",
+    ]);
+  });
+
   test("under Guard Policy off or relaxed, a later change to an approved batch's files keeps its approval", () => {
     for (const policy of ["off (set by you)", "relaxed (set by you)", "off (from scope feature)"]) {
       const pd = fixture(true);

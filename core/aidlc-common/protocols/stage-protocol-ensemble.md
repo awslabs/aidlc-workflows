@@ -17,21 +17,10 @@ Some stages use multiple agents (e.g., Feasibility uses aidlc-architect-agent + 
 
 Trades, never agent names, files, or slugs: product manager, product lead, designer, delivery lead, architect, architecture reviewer, platform engineer, compliance specialist, security engineer, developer, quality engineer, release engineer, operations engineer. Nothing is said about handing off as a mechanism, briefs, context paths, rule bundles, contribution files, identity markers, blindness between participants, rounds, or which topology the stage declares. The user is meeting colleagues; that setup is ours, not theirs. A topology that does not apply is never mentioned either.
 
-**Who writes what (mirrors a real working session — everyone writes; the owner collates and edits):**
-
-- Each dispatched support agent WRITES its own **contribution file** at `<record>/<phase>/<stage>/contributions/<agent-slug>.md` (per-unit stages: under the unit's stage dir). Separate files per agent, so parallel dispatch never conflicts. The file's FIRST line is the identity marker verbatim: `**Collaborator:** <agent-slug>`, followed by `## Contribution` (the substantive content, written to be integrable) and `## Positions` (`AGREE:` / `OBJECT:` bullets with one-line rationales; `None` = full agreement).
-- The LEAD integrates contributions into the stage's `produces[]` artifacts and owns their final state. Contribution files are part of the stage's permanent record — dissent stays on disk, not in ephemeral return text.
-- On `pipeline`, the chain collectively authors the artifacts directly (serialized, so no conflict) and the conductor mints a durable link receipt after every return — see the topology bullet.
-
 - **`mode: inline`** — the support agents are perspectives the orchestrator adopts in its own context: load each support agent's file + knowledge the same way you loaded the lead (see "For inline stages" above), produce the lead's output first, then layer in each support perspective, then synthesise. Do NOT dispatch a support agent on an inline stage; dispatch is reserved for the other modes. No contribution files.
 - **`mode: subagent`** - hub-and-spoke. Dispatch the lead for the draft. If the stage declares `support_agents`, dispatch each one against the returned draft (artifacts by path per §11's context budget, rules per `stage-protocol.md` § "For subagent stages" step 2; spokes are mutually blind - no support agent's brief contains another's contribution); each spoke writes its contribution file; then dispatch the lead once more to integrate the contributions into the artifacts.
 - **`mode: pipeline`** — chain. `directive.pipeline.links` is the declared lead-then-support order; `directive.pipeline.completed` is the current-attempt recovery ledger. On entry or resume, skip every completed entry and dispatch the FIRST missing link. After each link returns, mint its receipt before dispatching the next: `bun {{HARNESS_DIR}}/tools/aidlc-log.ts link --stage "<directive.stage>" --link "<agent>"`. Add `--single` when `directive.single === true`. For a multi-repo stage, run one independent chain per registered repo, add `--repo "<repo>"`, and treat repo-qualified `directive.pipeline.completed` entries (`<repo>:<agent>`) as that chain's recovery state. A current-attempt repo-scoped reuse receipt marks that repo's whole chain completed without dispatch. Each link sees everything upstream and advances the work product directly — it may edit the evolving artifacts in place (serialized, no conflict) or hand results down as context for the next link to build on, per the stage body. The FINAL link leaves the `produces[]` artifacts complete. Order is the point. No contribution files required.
-- **`mode: mob`** — mesh, run as bounded rounds. Round 1: dispatch all support agents in parallel against the lead's draft, mutually blind; each writes its contribution file. The lead integrates. Then TRIAGE unresolved objections by kind:
-  - **Judgment calls** (both positions legitimate — scope, risk appetite, priority tradeoffs): surface to the HUMAN mid-stage as a structured question per §3 (write it to the stage's questions file with a blank `[Answer]:` tag BEFORE presenting, as §3 requires), then continue integration with the human's ruling. The human is a mob participant, not a post-hoc approver. Skipped under autonomous Construction — there the objection is recorded and surfaces at the final-batch gate.
-  - **Knowledge disputes** (an expert can settle it): round 2 — re-dispatch each objecting agent with the revised draft and the other participants' recorded positions, to confirm or maintain (the agent updates its contribution file's Positions). Two rounds maximum.
-  - Maintained dissent after triage is quoted verbatim in the completion summary at the gate; under autonomous Construction it is recorded in the artifact and audit and surfaces at the final-batch gate instead of halting.
-
-On a harness that cannot dispatch in parallel, `subagent` spokes and `mob` round-1 dispatches run sequentially with UNCHANGED briefs — each participant still sees only what the topology grants it, never a sibling's contribution. The topology's who-sees-what contract is the invariant; concurrency is not.
+- **`mode: mob`** - mesh, run as bounded rounds with the support agents. With support agents to dispatch, the engine names the collaborators module (`stage-protocol-collaborators.md`), which says how the rounds, contribution files and objections run; with none, the lead runs alone.
 
 On every topology, a reviewer NOT-READY (stage-protocol-reviewer.md §12a step 3) re-invokes the LEAD alone with the findings — the ensemble convenes once; the repair loop is lead-reviewer ping-pong.
 
@@ -72,37 +61,6 @@ If the dispatch returns before that summary exists (a harness that runs agents i
 - The files are the substantive handoff. The return summary names paths,
   decisions, concerns, and the next action only; it does not repeat artifact,
   contribution, scan, source, or test-output bodies that are already on disk.
-
-### Collaborator contribution files (ensemble topologies)
-
-A support agent dispatched on a `subagent` or `mob` stage (§5 "Multi-agent
-stages") WRITES its work as a contribution file at
-`<record>/<phase>/<stage>/contributions/<agent-slug>.md` (per-unit stages:
-under the unit's stage dir) and returns the standard summary above with the
-file listed under "Produced". The file's shape:
-
-```markdown
-**Collaborator:** [agent-slug]
-
-## Contribution
-[The substantive content: findings, additions, corrections — written so the
-lead can integrate it into the artifacts directly]
-
-## Positions
-- AGREE: [aspect of the draft endorsed] — [one-line rationale]
-- OBJECT: [aspect disputed or missing] — [one-line rationale]
-```
-
-The identity-marker first line is verbatim and mandatory — the completion
-evidence check (§5) verifies it. Positions are the raw material for the mob's
-objection triage (§5): judgment calls go to the human mid-stage, knowledge
-disputes to round 2 (the objecting agent updates its own file), and
-maintained dissent is quoted verbatim at the gate. `None` under Positions
-means full agreement. Contribution files never write outside
-`contributions/`; the lead alone edits the stage's `produces[]` artifacts.
-On `pipeline` stages there are no contribution files — chain links advance
-the artifacts directly per the stage body, and the conductor records each
-returned link with `aidlc-log.ts link` before continuing.
 
 ### Context budget for subagent prompts
 To prevent context overflow in subagent calls:
@@ -146,7 +104,7 @@ If a Task tool call fails (timeout, error, or returns truncated/incomplete outpu
 
 **Pipeline receipt rule:** after every pipeline delegation returns, run `bun {{HARNESS_DIR}}/tools/aidlc-log.ts link --stage "<directive.stage>" --link "<agent>"` before the next delegation; add `--repo "<repo>"` for multi-repo chains, add `--single` when `directive.single === true`, and resume from `directive.pipeline.completed`.
 
-`directive.mode` tells you HOW to run the body — it is the stage's communication topology (who talks to whom; this module's §5 "Multi-agent stages" section is the contract). The writing model on every dispatched topology: everyone writes their own work — each dispatched support agent writes a contribution file (`<record>/<phase>/<stage>/contributions/<agent-slug>.md`, §11 shape with the identity-marker first line) — and the lead alone edits the stage's `produces[]` artifacts. `inline` (run it in this session, with the lead agent's persona framing loaded from its `.md` file under `{{HARNESS_DIR}}/agents/`; support agents are voices you adopt, no contribution files), `subagent` (hub-and-spoke: delegate the lead via the `subagent` tool to the named Markdown agent, which loads its own persona — do not inject it in the prompt; if the stage declares `support_agents`, delegate each one against the lead's returned draft — parallel tasks in one delegation where possible, briefs with artifacts by path and rules per `stage-protocol.md` § "For subagent stages" step 2, mutually blind — each writes its contribution file, then a final lead delegation integrates them into the artifacts), `pipeline` (chain: the links collectively author the artifacts — lead delegation first, then one delegation per support agent in declared order, each link seeing everything upstream and advancing the work product directly; the FINAL link leaves the artifacts complete; no contribution files), or `mob` (mesh as bounded rounds: lead drafts, then ALL support agents delegated in parallel against the draft, each writing its contribution file; integrate as the lead, then triage unresolved objections per §5 — judgment calls go to the HUMAN mid-stage as a structured question, knowledge disputes to round 2 with only the objectors; maintained dissent is quoted verbatim at the gate). You are the bus on every topology, and a reviewer NOT-READY re-invokes the LEAD alone. The contribution files are the ensemble's completion evidence — the engine refuses approval on a mob/subagent-with-supports stage while one is missing. The shipped graph is 29 inline / 2 subagent / 1 pipeline / 1 mob: practices-discovery and code-generation carry `subagent`; reverse-engineering carries `pipeline` (developer scans, architect synthesizes and writes); user-stories carries `mob`. Kiro IDE resolves all 14 personas directly from `{{HARNESS_DIR}}/agents/aidlc-*-agent.md`; each file carries a non-empty `tools:` grant and capability-scoped `permissions.rules`, with no agent-v1 JSON or conductor `trustedAgents` entry.
+`directive.mode` tells you HOW to run the body — it is the stage's communication topology (who talks to whom; this module's §5 "Multi-agent stages" section is the contract). The writing model on every dispatched topology: everyone writes their own work — each dispatched support agent writes a contribution file (`<record>/<phase>/<stage>/contributions/<agent-slug>.md`, §11 shape with the identity-marker first line) — and the lead alone edits the stage's `produces[]` artifacts. `inline` (run it in this session, with the lead agent's persona framing loaded from the persona file `directive.inline_context_paths` names; support agents are voices you adopt, no contribution files), `subagent` (hub-and-spoke: delegate the lead via the `subagent` tool to the named Markdown agent, which loads its own persona — do not inject it in the prompt; if the stage declares `support_agents`, delegate each one against the lead's returned draft — parallel tasks in one delegation where possible, briefs with artifacts by path and rules per `stage-protocol.md` § "For subagent stages" step 2, mutually blind — each writes its contribution file, then a final lead delegation integrates them into the artifacts), `pipeline` (chain: the links collectively author the artifacts — lead delegation first, then one delegation per support agent in declared order, each link seeing everything upstream and advancing the work product directly; the FINAL link leaves the artifacts complete; no contribution files), or `mob` (mesh as bounded rounds: lead drafts, then ALL support agents delegated in parallel against the draft, each writing its contribution file; integrate as the lead, then triage unresolved objections per §5 — judgment calls go to the HUMAN mid-stage as a structured question, knowledge disputes to round 2 with only the objectors; maintained dissent is quoted verbatim at the gate). You are the bus on every topology, and a reviewer NOT-READY re-invokes the LEAD alone. The contribution files are the ensemble's completion evidence — the engine refuses approval on a mob/subagent-with-supports stage while one is missing. The shipped graph is 29 inline / 2 subagent / 1 pipeline / 1 mob: practices-discovery and code-generation carry `subagent`; reverse-engineering carries `pipeline` (developer scans, architect synthesizes and writes); user-stories carries `mob`. Kiro IDE resolves all 14 personas directly from `{{HARNESS_DIR}}/agents/aidlc-*-agent.md`; each file carries a non-empty `tools:` grant and capability-scoped `permissions.rules`, with no agent-v1 JSON or conductor `trustedAgents` entry.
 
 ---
 

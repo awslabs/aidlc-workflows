@@ -580,13 +580,18 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
     ), "utf-8");
     appendAuditEntry("QUESTION_ANSWERED", { Stage: field(proj, "Current Stage"), Details: "an earlier answer" }, proj);
-    const claude = guarded(proj, ["park"]);
+    const claude = guarded(proj, ["park", "--person-asked"]);
     expect(claude.rc).not.toBe(0);
     expect(claude.out).toContain("no reply from the person is on record");
     expect(claude.out).not.toContain("unattended autonomous run");
-    expect(guarded(proj, ["park"], true, KIRO_CLI_STATE).rc).not.toBe(0);
+    expect(guarded(proj, ["park", "--person-asked"], true, KIRO_CLI_STATE).rc).not.toBe(0);
     expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
-    const kiro = guarded(proj, ["park"], false, KIRO_CLI_STATE);
+    // The agent's own park there is not theirs either: the run goes on.
+    const own = guarded(proj, ["park"], false, KIRO_CLI_STATE);
+    expect(own.rc).not.toBe(0);
+    expect(own.out).toContain("Construction Autonomy Mode is autonomous, as the person chose");
+    expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+    const kiro = guarded(proj, ["park", "--person-asked"], false, KIRO_CLI_STATE);
     expect(kiro.rc, kiro.out).toBe(0);
     expect(kiro.out).toContain("this host can miss one");
     expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
@@ -600,7 +605,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
     ), "utf-8");
     // Empty ledger: no reply on record, so the run keeps moving.
-    const empty = guarded(proj, ["park"]);
+    const empty = guarded(proj, ["park", "--person-asked"]);
     expect(empty.rc, empty.out).not.toBe(0);
     expect(empty.out).toContain("no reply from the person is on record");
     // It names the step that lets a stop through when the person's word is
@@ -609,11 +614,11 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     // A reply on record, but the driver declared the run unattended.
     recordHumanTurn(proj);
     for (const tool of [STATE, KIRO_CLI_STATE]) {
-      expect(guarded(proj, ["park"], true, tool).rc).not.toBe(0);
+      expect(guarded(proj, ["park", "--person-asked"], true, tool).rc).not.toBe(0);
     }
     expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
     // The same reply in an attended session is the person's stop.
-    const attended = guarded(proj, ["park"]);
+    const attended = guarded(proj, ["park", "--person-asked"]);
     expect(attended.rc, attended.out).toBe(0);
     expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
   });
@@ -623,7 +628,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     writeFileSync(sf, readFileSync(sf, "utf-8").replace(
       "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
     ), "utf-8");
-    expect(guarded(proj, ["park"]).rc).not.toBe(0);
+    expect(guarded(proj, ["park", "--person-asked"]).rc).not.toBe(0);
     const env = { ...process.env };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
     delete env.AIDLC_UNATTENDED;
@@ -633,7 +638,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       env,
     });
     expect(gated.status, `${gated.stdout}${gated.stderr}`).toBe(0);
-    const parked = guarded(proj, ["park"]);
+    const parked = guarded(proj, ["park", "--person-asked"]);
     expect(parked.rc, parked.out).toBe(0);
     expect(readFileSync(sf, "utf-8")).toContain("- **Parked**:");
   });
@@ -648,7 +653,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     ), "utf-8");
     recordHumanTurn(proj);
     // 1. `state park`.
-    const park = guarded(proj, ["park"], true);
+    const park = guarded(proj, ["park", "--person-asked"], true);
     expect(park.rc).not.toBe(0);
     expect(park.out).toContain("AIDLC_UNATTENDED=1 is set");
     // 2. `orchestrate report --park` at a gate the person answered.
@@ -2360,7 +2365,7 @@ describe("t188: what the person's message asks for outlives the approval given i
     const stage = field(proj, "Current Stage");
     appendAuditEntry("GATE_APPROVED", { Stage: stage, Unit: "core", Checkpoint: "Construction Unit Approval", Autonomous: "true" }, proj);
     appendAuditEntry("GATE_APPROVED", { Stage: stage }, proj);
-    const parked = guarded(proj, ["park"]);
+    const parked = guarded(proj, ["park", "--person-asked"]);
     expect(parked.rc, parked.out).toBe(0);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Parked By**: person");
     const next = spawnSync(BUN, [ORCHESTRATE, "next", "--project-dir", proj], {
@@ -2375,16 +2380,65 @@ describe("t188: what the person's message asks for outlives the approval given i
     recordHumanTurn(proj);
     appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, proj);
     appendAuditEntry("GATE_APPROVED", { Stage: field(proj, "Current Stage"), Autonomous: "true" }, proj);
-    const granted = guarded(proj, ["park"]);
+    const granted = guarded(proj, ["park", "--person-asked"]);
     expect(granted.rc).not.toBe(0);
     expect(granted.out).toContain("no reply from the person is on record");
     // The step it names: when the person asks to stop, park then. An answer
     // recorded after their message is the run's own, as its approvals are.
     recordHumanTurn(proj);
     appendAuditEntry("QUESTION_ANSWERED", { Stage: field(proj, "Current Stage"), Details: "chosen by the agent" }, proj);
-    const parked = guarded(proj, ["park"]);
+    const parked = guarded(proj, ["park", "--person-asked"]);
     expect(parked.rc, parked.out).toBe(0);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Parked By**: person");
+  });
+
+  // Who stopped the work is the agent's reading of the person's words; a reply
+  // on record proves only that they spoke. The reply here approved the code
+  // plan, the agent then asked its own question and parked on its own (a live
+  // Kiro CLI run, 2026-10-11): that park is not theirs.
+  test("the agent's own park after a reply that asked for something else is not the person's stop", () => {
+    setAutonomous(proj);
+    const sf = seededStateFile(proj);
+    const stage = field(proj, "Current Stage");
+    recordHumanTurn(proj);
+    appendAuditEntry("PLAN_APPROVAL_RECORDED", { Stage: stage, Details: "Approve Plan", Checkpoint: "plan-approval" }, proj);
+    appendAuditEntry("DECISION_RECORDED", { Stage: stage, Decision: "Commit the tree first?", Options: "Yes,No" }, proj);
+    const own = guarded(proj, ["park"]);
+    expect(own.rc, own.out).not.toBe(0);
+    expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+    // The agent read them asking to stop: the same reply then stands behind it.
+    const theirs = guarded(proj, ["park", "--person-asked"]);
+    expect(theirs.rc, theirs.out).toBe(0);
+    expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+  });
+
+  // The answer goes to the agent, never to the person as a refusal: an agent
+  // that forgot the flag at their real stop sets it right in one call.
+  test("the agent's own park while the run goes on by itself answers the agent with its next step", () => {
+    setAutonomous(proj);
+    recordHumanTurn(proj);
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete env.AIDLC_UNATTENDED;
+    const park = (args: string[]) => spawnSync(BUN, [ORCHESTRATE, "park", ...args, "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env,
+    });
+    const own = JSON.parse(park([]).stdout);
+    expect(own.kind, JSON.stringify(own)).toBe("print");
+    expect(own.message).toContain("park --person-asked");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).not.toContain("- **Parked**:");
+    const theirs = JSON.parse(park(["--person-asked"]).stdout);
+    expect(theirs.kind, JSON.stringify(theirs)).toBe("parked");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Parked By**: person");
+  });
+
+  test("a gated park the agent chose is a pause, not the person's stop", () => {
+    const sf = seededStateFile(proj);
+    recordHumanTurn(proj);
+    const own = guarded(proj, ["park"]);
+    expect(own.rc, own.out).toBe(0);
+    expect(readFileSync(sf, "utf-8")).toContain("- **Parked**:");
+    expect(readFileSync(sf, "utf-8")).not.toContain("Parked By");
   });
 
   // The person picks in the question box the agent showed, as the human-turn

@@ -23,7 +23,7 @@ harness parameter. Add a column when you port to a new harness.
 | **Orchestrator entry** (`/aidlc` + runners) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`$aidlc`) | Command → skill (`/aidlc`; skills from `.aidlc/skills` via `skills.paths`) | Skills (`/aidlc`; `.github/skills/`) | Native skills (`/aidlc` plus `/aidlc-status`, `/aidlc-jump`, `/aidlc-scope`; `.cursor/skills/`) |
 | **Agent personas** (14 total) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | Conductor `agents/aidlc-aidlc.md` + 14 persona `.md` files with `tools:`/`permissions.rules` | `.codex/agents/` TOMLs | `.opencode/agents/*.md` (subagents) + persona `.md` | `.github/agents/*.md` (custom agents) + persona `.md` | `.cursor/agents/*.md` (native subagents) |
 | **Automation** (audit, state, tracking) | Hooks via `settings.json` | Hooks via `agents/aidlc.json` | `.kiro/hooks/aidlc-*.json` (v2 hook files, Kiro IDE 1.x and Kiro CLI v3) | Hooks via `.codex/hooks.json` (one adapter) | Adapter plugin (`.opencode/plugin/`) | Hooks via `.github/hooks/aidlc.json` (one adapter) | Hooks via `.cursor/hooks.json` (one adapter) |
-| **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via agent resources) | `aidlc/spaces/<active-space>/memory/` (via always-included steering live references) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) | `aidlc/spaces/<active-space>/memory/` (via `AGENTS.md` @-imports) | `aidlc/spaces/<active-space>/memory/` (always-applied `rules/aidlc.mdc` standing pointer + four agent-decided phase pointers) |
+| **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via agent resources) | `aidlc/spaces/<active-space>/memory/` (via always-included steering that carries the memory text, with live references as the fallback) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) | `aidlc/spaces/<active-space>/memory/` (via `AGENTS.md` @-imports) | `aidlc/spaces/<active-space>/memory/` (always-applied `rules/aidlc.mdc` standing pointer + four agent-decided phase pointers) |
 | **Harness onboarding doc** | `.claude/CLAUDE.md` (full) | `.kiro/steering/aidlc-onboarding.md` (agent resource) | `.kiro/steering/aidlc-onboarding.md` (always-included) | `.codex/onboarding.md` (`developer_instructions` in trusted project `.codex/config.toml`) | `.aidlc/onboarding.md` (`instructions`) | `AGENTS.md` (full, with `@`-imports) | `.cursor/rules/aidlc-onboarding.mdc` (always-applied) |
 | **Permissions / config** | `.claude/settings.json` | `.kiro/settings/cli.json` + agent config | Agent `.md` `tools:` + `permissions.rules` frontmatter; `.kiro/settings/cli.json` pins the Kiro CLI engine | `.codex/config.toml` (+ Starlark `rules/`) | `opencode.json` (project root) | `trustedFolders` (`~/.copilot/config.json`) + `--allow-tool` flags | `.cursor/cli.json` (permissions) + `.cursor/hooks.json` |
 
@@ -69,7 +69,7 @@ user-invocable: true
 ---
 ```
 
-The orchestrator's frontmatter carries no `hooks:` block. As of v0.6.0 every framework hook is registered project-wide in `settings.json` (the hooks-move, Fork 2→B), so the orchestrator and every packaged or hand-written runner inherit the deterministic spine without copying a per-runner `hooks:` block.
+The orchestrator's frontmatter carries no `hooks:` block. Every framework hook is registered project-wide in `settings.json`, so the orchestrator and every packaged or hand-written runner inherit the deterministic spine without copying a per-runner `hooks:` block.
 
 | Field | Purpose |
 |-------|---------|
@@ -82,7 +82,7 @@ The body of SKILL.md is a thin forwarding loop — the conductor. It calls the o
 
 ### Project-Wide Hooks
 
-All framework hooks are registered project-wide in `settings.json` (the workflow-spine hooks join the session-lifecycle and statusline hooks there). Each hook **self-gates** — it early-exits when no workflow is active — so they no-op during normal Claude Code usage outside of AI-DLC. See [Hooks and Tools](06-hooks-and-tools.md) for full details.
+All framework hooks are registered project-wide in `settings.json` (the workflow-spine hooks join the session-lifecycle and statusline hooks there). Each hook **self-gates**: its workflow actions run only when a workflow is active, so during normal Claude Code use outside AI-DLC they write nothing to a record (the usage-folding hook still keeps its session and usage bookkeeping). See [Hooks and Tools](06-hooks-and-tools.md) for full details.
 
 ### Companion Files
 
@@ -123,7 +123,7 @@ Workspace detection (0.2) used to be a subagent; it now runs deterministically i
 
 ### Agent Tiers (projected model + effort)
 
-The authored dial on every agent is `tier:`; the packager projects it into the `model:`/`effort:` frontmatter keys Claude Code reads. Previous behaviour (v2.2.15 through v2.2.19; before that the key was the inert `modelOverride:`) pinned `model: opus` on the nine judgment-shaped agents, which forcibly downgraded sessions running a bigger model.
+The authored dial on every agent is `tier:`; the packager projects it into the `model:`/`effort:` frontmatter keys Claude Code reads.
 
 | Tier | Agents | Claude Code projection | Rationale |
 |------|--------|------------------------|-----------|
@@ -159,13 +159,13 @@ Each file carries topical `##` headings (Way of Working, Testing Posture, Deploy
 
 ### The Learning Loop
 
-The rule files are not static — the v0.5.0 learning loop turns an in-workflow correction into a standing rule for next time. The division of labor is deliberate: the LLM writes observations to the stage's `memory.md` diary while the stage runs (Interpretations / Deviations / Tradeoffs / Open questions), and the orchestrator later performs the admission comparison. Candidate extraction and persistence are deterministic tools; selections and conflict disposition are human decisions:
+The rule files are not static: the learning loop turns an in-workflow correction into a standing rule for next time. The division of labor is deliberate: the LLM writes observations to the stage's `memory.md` diary while the stage runs (Interpretations / Deviations / Tradeoffs / Open questions), and the orchestrator later performs the admission comparison. Candidate extraction and persistence are deterministic tools; selections and conflict disposition are human decisions:
 
 1. **Diary (LLM).** During the stage, observations accumulate in the intent's record dir at `<record>/<phase>/<stage>/memory.md` (`<record>/` = `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`).
 2. **Surface (tool).** At the approval gate, `aidlc engine learnings surface` reads the diary and emits structured candidates — the LLM does not re-parse or classify.
 3. **Confirm (human).** The conductor renders the candidates; you pick which to keep and, for free-text additions, pick the single heading that derives the destination.
 4. **Admission check (orchestrator LLM).** The orchestrator compares each kept learning against `org.md`'s matching section; a contradiction is surfaced for you to revise, skip, or escalate.
-5. **Persist (tool).** `{{INVOKE}} engine learnings persist` accepts the resulting selections without reading `org.md`, writes each confirmed learning as a practice to `aidlc/spaces/<active-space>/memory/{project,team}.md` as dated entries and, for a sensor-binding learning, installs the manifest plus the stage `sensors:` import inside one locked transaction. It emits `RULE_LEARNED` / `SENSOR_PROPOSED`.
+5. **Persist (tool).** `aidlc engine learnings persist --slug <stage> --selections-json <path>` accepts the resulting selections without reading `org.md`, writes each confirmed learning as a practice to `aidlc/spaces/<active-space>/memory/{project,team}.md` as dated entries and, for a sensor-binding learning, installs the manifest plus the stage `sensors:` import inside one locked transaction. It emits `RULE_LEARNED` / `SENSOR_PROPOSED`.
 
 The user-facing walk-through (with a worked example) is in [Rules and the Learning Loop](../guide/09-rules-and-the-learning-loop.md); the harness-engineer authoring angle is in [Rules and the Learning Loop](../harness-engineering/05-rules-and-the-loop.md).
 
@@ -262,7 +262,7 @@ line, so the value reaches Claude Code only through the person's own
 }
 ```
 
-Registered in `settings.json` (project-wide) — as are all framework hooks since the v0.6.0 hooks-move. Session lifecycle events must be project-wide regardless, because they fire before `/aidlc` activates and after it exits: `session-start.ts` injects resume context, `session-end.ts` emits `SESSION_ENDED` for audit completeness.
+Registered in `settings.json` (project-wide), as are all framework hooks. Session lifecycle events must be project-wide regardless, because they fire before `/aidlc` activates and after it exits: `aidlc-session-start.ts` injects resume context, `aidlc-session-end.ts` emits `SESSION_ENDED` for audit completeness.
 
 ### Personal Settings Override
 
@@ -318,7 +318,7 @@ The five shipped servers cover the integrations the framework's agents reach for
 
 The registry carries only environment-variable placeholders — no committed secrets. Credentials flow through your shell: `context7` reads `CONTEXT7_API_KEY` from the environment, and the four `uvx`-launched AWS servers authenticate against your standard AWS credential chain (install `uv`/`uvx` via `curl -fsSL https://astral.sh/uv/install.sh | sh`). A server you have no credentials for is simply unavailable to the session and never blocks a workflow.
 
-`.mcp.json` lives at the project root because that is the path Claude Code reads for project-scoped MCP servers. This implementation currently ships as a `.claude/` directory copy rather than a Claude Code plugin, but the project-root `.mcp.json` placement is also the canonical plugin location, so the registry is plugin-portable without change.
+`.mcp.json` lives at the project root because that is the path Claude Code reads for project-scoped MCP servers. AI-DLC installs as the native `aidlc` binary with its versioned runtime, and `aidlc config` lays the `.claude/` tree into a project (the copy channel ships the same tree as an archive); it is not a Claude Code plugin, but the project-root `.mcp.json` placement is also the canonical plugin location, so the registry is plugin-portable without change.
 
 ### Provisioning and Inheritance
 
@@ -339,7 +339,7 @@ This is the load-bearing lesson, and it is worth stating plainly so it is not re
 - A bare `mcp__<server>` token is **not** honored — there is no server-level wildcard. Only fully-qualified `mcp__<server>__<tool>` ids match.
 - `disallowedTools` is a real, working field on the denylist side. This implementation uses `disallowedTools: Task` to block nested subagent spawning; that denial does not affect MCP server access.
 
-The spike also surfaced a separate frontmatter footgun: `allowedTools` is **not** a recognized Claude Code subagent field and is silently ignored. An agent declaring `allowedTools: Read` still reached an MCP tool, behaving identically to inherit-all, whereas the same agent with `tools: Read` correctly denied it. The resolution (v0.5.4): the silently-ignored `allowedTools` field has been removed from every shipped agent file (`.claude/agents/*.md`). The agents now intentionally inherit the full session toolset — built-in tools and MCP tools alike — and the only declared restriction is `disallowedTools: Task`. The documented opt-in narrowing is the real `tools:` allowlist, which drops inherited MCP unless the fully-qualified `mcp__<server>__<tool>` ids are also listed. So inherit-all is now the deliberate, documented model rather than an accident of an ignored field: every agent reaches every declared server today.
+The spike also surfaced a separate frontmatter footgun: `allowedTools` is **not** a recognized Claude Code subagent field and is silently ignored. An agent declaring `allowedTools: Read` still reached an MCP tool, behaving identically to inherit-all, whereas the same agent with `tools: Read` correctly denied it. So the silently-ignored `allowedTools` field has been removed from every shipped agent file (`.claude/agents/*.md`). The agents now intentionally inherit the full session toolset - built-in tools and MCP tools alike - and the only declared restriction is `disallowedTools: Task`. The documented opt-in narrowing is the real `tools:` allowlist, which drops inherited MCP unless the fully-qualified `mcp__<server>__<tool>` ids are also listed. So inherit-all is now the deliberate, documented model rather than an accident of an ignored field: every agent reaches every declared server today.
 
 ### Relationship to settings.json Permissions
 
@@ -364,12 +364,12 @@ An MCP server appearing in the session is a function of `.mcp.json` plus availab
 | Workflow-spine hooks | `.claude/settings.json` | Always on; self-gate when no workflow | PostToolUse, PreCompact, SubagentStop, Stop |
 | Agents (inline) | `.claude/agents/*.md` | Persona activation | 29 of 33 stages: conductor adopts agent persona |
 | Agents (dispatched) | `.claude/agents/*.md` | Task tool delegation | 4 stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent): isolated execution |
-| Knowledge (Tier 1) | `.claude/knowledge/` | Persona activation (steps 2-3) | 56 methodology reference files |
+| Knowledge (Tier 1) | `.claude/knowledge/` | Persona activation (steps 2-3) | 60 methodology reference files |
 | Knowledge (Tier 2) | space-level `aidlc/knowledge/` (sibling of `intents/`) | Persona activation (steps 4-5) | Team-managed customization |
 | Stage protocol | `stage-protocol.md` + conditional modules | Static core every stage; modules on trigger | Mandatory behavioral contract |
 | Stage files | `stages/**/*.md` | Engine routing | 33 individual stage definitions |
 | State file | `aidlc-state.md` | Session start + throughout | Persistent workflow state |
-| Audit file | `audit.md` | Throughout execution | Append-only audit trail |
+| Audit shards | `<record>/audit/<host>-<clone>.md` | Throughout execution | Append-only audit trail, one shard per clone |
 
 ### Loading Sequence
 
@@ -391,7 +391,7 @@ When a user runs `/aidlc feature`:
 11. Loop back to step 5          (next directive) until the engine emits the final `done`
 ```
 
-Steps 1-2a happen for every conversation, even non-AI-DLC ones — and because every hook is registered project-wide in `settings.json` (not on skill activation), the deterministic spine is in place before `/aidlc` is ever invoked; each hook self-gates to a no-op when no workflow is active. Step 3 loads the rule layers. Steps 4 onward set up and drive the workflow only when the user invokes `/aidlc`; steps 5-11 repeat once per directive — the engine, not SKILL.md, decides what each iteration does.
+Steps 1-2a happen for every conversation, even non-AI-DLC ones - and because every hook is registered project-wide in `settings.json` (not on skill activation), the deterministic spine is in place before `/aidlc` is ever invoked; each hook self-gates its workflow actions when no workflow is active. Step 3 loads the rule layers. Steps 4 onward set up and drive the workflow only when the user invokes `/aidlc`; steps 5-11 repeat once per directive - the engine, not SKILL.md, decides what each iteration does.
 
 ---
 

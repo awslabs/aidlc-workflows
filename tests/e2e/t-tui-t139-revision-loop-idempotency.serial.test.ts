@@ -348,7 +348,9 @@ function launchBugfix(session: string, sandbox: string, fidelity: NativeFidelity
   // reject/revise proof, so its Claude child must not inherit that bypass. On
   // POSIX the private tmux server can retain the suite environment from an
   // earlier test, hence the explicit `env -u` wrapper at the actual PTY child.
-  // Windows has no `env`; its daemon inherits LIVE_CHILD_ENV directly.
+  // Windows has no `env`; its daemon inherits LIVE_CHILD_ENV directly. Both
+  // take tui-drive's setting sources, which load the fixture's own
+  // .claude/settings.local.json where its status line is (#1407).
   const claudeCommand = IS_WIN
     ? ["claude", "--dangerously-skip-permissions"]
     : [
@@ -356,8 +358,6 @@ function launchBugfix(session: string, sandbox: string, fidelity: NativeFidelity
         "-u",
         "AIDLC_SKIP_REVISION_BACKSTOP",
         "claude",
-        "--setting-sources",
-        "project",
         "--dangerously-skip-permissions",
       ];
   expect(

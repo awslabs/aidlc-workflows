@@ -143,6 +143,7 @@ function constructionFixture(proj: string, current = "functional-design"): void 
 - **Revision Count**: 0
 - **Skeleton Stance**: off
 - **Construction Iteration**: unit-major
+- **Unit Ownership**: solo
 - **Construction Checkpoints**: enabled
 - **Construction Execution**: serial
 - **Construction Autonomy Mode**: gated
@@ -427,6 +428,7 @@ export async function buildQuestion(proj: string, question: Question): Promise<v
 - **State Version**: 8
 - **Skeleton Stance**: on
 - **Construction Iteration**: unit-major
+- **Unit Ownership**: solo
 
 ## Runtime State
 - **Revision Count**: 0

@@ -63,6 +63,7 @@ import type { HarnessManifest } from "./manifest-types.ts";
 import {
   absorbReviewerKnowledge,
   agentNameFromPath,
+  inlineAgentSet,
   injectDelegatedKnowledgePreflight,
   reviewerAgentSet,
 } from "./agent-knowledge.ts";
@@ -101,6 +102,7 @@ import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
 import { copyStartsWithout, sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
 import { kiroIdeSteering } from "../core/tools/aidlc-includes.ts";
+import { SHIPPED_FORMAT_DOCS } from "../core/tools/aidlc-inline-context.ts";
 import { AIDLC_SETTINGS_SCHEMA } from "../core/tools/aidlc-settings.ts";
 import { DEVIN_IMPORT_EXPECTED } from "../core/tools/aidlc-devin-config.ts";
 
@@ -340,6 +342,21 @@ function projectKiroAgentJson(srcPath: string, content: Buffer): Buffer {
     writeKiroAgentSurface(content.toString("utf-8"), effective),
     "utf-8",
   );
+}
+
+// The authored Kiro agent JSONs preload the shared knowledge with a glob; a
+// dispatched agent gets the shared methodology files only, as every other
+// harness's preflight names them (SHIPPED_FORMAT_DOCS is the one list).
+function projectKiroSharedKnowledge(content: Buffer): Buffer {
+  const parsed = JSON.parse(content.toString("utf-8")) as { resources?: unknown };
+  const glob = "file://.kiro/knowledge/aidlc-shared/*.md";
+  if (!Array.isArray(parsed.resources) || !parsed.resources.includes(glob)) return content;
+  const files = readdirSync(join(CORE_ROOT, "knowledge", "aidlc-shared"))
+    .filter((file) => file.endsWith(".md") && !SHIPPED_FORMAT_DOCS.has(file))
+    .sort()
+    .map((file) => `file://.kiro/knowledge/aidlc-shared/${file}`);
+  parsed.resources = parsed.resources.flatMap((entry) => (entry === glob ? files : [entry]));
+  return Buffer.from(`${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
 }
 
 // Merge the tier-derived chat.modelDefaults entries into an authored Kiro
@@ -855,6 +872,19 @@ function buildTree(
       }
       const fmLines = fmAdditions.get(harnessRel);
       if (fmLines) {
+        // The additions are for the harness's dispatch (Kiro IDE: about 32 KB
+        // of tool permissions); the lead reading the persona in its own chat
+        // gets the persona without them, from the copy the roster names. A
+        // tools line alone (Kiro CLI) is no weight to keep out: no copy.
+        if (
+          harnessRel.startsWith("agents/") &&
+          fmLines.some((line) => line.split(":", 1)[0] === "permissions") &&
+          inlineAgentSet(CORE_ROOT).has(basename(outPath, ".md"))
+        ) {
+          const copy = join(treeRoot, "aidlc-common", "personas", basename(outPath));
+          mkdirSync(dirname(copy), { recursive: true });
+          writeFileSync(copy, out);
+        }
         out = Buffer.from(
           applyFrontmatterAdditions(out.toString("utf-8"), fmLines, harnessRel),
           "utf-8",
@@ -893,7 +923,7 @@ function buildTree(
     );
     if (harnessKind === "kiro") {
       if (src.startsWith("agents/") && src.endsWith(".json")) {
-        out = projectKiroAgentJson(srcPath, out);
+        out = projectKiroSharedKnowledge(projectKiroAgentJson(srcPath, out));
       } else if (src === "settings/cli.json") {
         out = projectKiroCliJson(out);
       }

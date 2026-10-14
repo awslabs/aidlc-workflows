@@ -120,6 +120,7 @@ import {
   stateFilePathForSelection,
 } from "../tools/aidlc-lib.ts";
 import { appendCoordinationStoodAside, appendSubagentPromptUnmatched } from "../tools/aidlc-audit.ts";
+import { keptRestartRun } from "../tools/aidlc-question-store.ts";
 import { ROUTES, routePolicyFor, withoutProjectDirFlag } from "../tools/aidlc.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -722,9 +723,14 @@ export async function run(
       case "knowledge": return verb === "onboard" || verb === "sync";
       // One of the person's checks switched as they asked runs click-free when
       // the setter would carry it out (on always, off once they asked since the
-      // last decision); any other setting keeps the prompt.
+      // last decision), with or without their words beside it (--person-words, or
+      // --person-words-file for words in a file);
+      // any other setting keeps the prompt.
       case "config":
-        return verb === "set" && !(rest.length === 2 && personCheckSwitchAllowed(projectDir, rest[0], rest[1]));
+        return verb === "set" && !(
+          (rest.length === 2 || (rest.length === 4 && (rest[2] === "--person-words" || rest[2] === "--person-words-file"))) &&
+          personCheckSwitchAllowed(projectDir, rest[0], rest[1])
+        );
       // Turning Construction checkpoints on or off runs click-free when the
       // setter's own check passes (the person asked for it since the last
       // decision, or chose it); without that it keeps the prompt.
@@ -1087,11 +1093,19 @@ export async function run(
     if (commandKind === "continue" && subArgs.length > 1) {
       return { status: "unsupported", reason: `\`continue\` takes only the receipt from the last step, so this did not run. Run \`${form("next")}\` to get the current step again.` };
     }
-    if (commandKind === "park" && subArgs.length !== 0) {
-      const extra = /^[A-Za-z0-9_.:=+-]+$/.test(subArgs[0]) ? `, and this one has \`${subArgs[0]}\`` : "";
-      return { status: "unsupported", reason: `\`park\` takes no options${extra}, so it did not run. Run \`${form("park")}\`.` };
+    // --person-asked (the person asked to stop) is the one park option.
+    const other = commandKind === "park" ? subArgs.find((arg) => arg !== "--person-asked") : undefined;
+    if (commandKind === "park" && (other !== undefined || subArgs.length > 1)) {
+      const extra = other !== undefined && /^[A-Za-z0-9_.:=+-]+$/.test(other) ? `, and this one has \`${other}\`` : "";
+      return { status: "unsupported", reason: `\`park\` takes no options but \`--person-asked\`${extra}, so it did not run. Run \`${form("park")} --person-asked\` when the person asked to stop, or \`${form("park")}\`.` };
     }
     const digest = createHash("sha256").update(JSON.stringify([commandKind, ...subArgs])).digest("hex");
+    // `next --request <id>` naming a `next` the hooks-off stop kept runs that
+    // command, so whether the prompt stays is judged by it. The claim's resume
+    // and jump hints stay the line's own: the kept command may belong to other
+    // work, which the engine switches to before running anything, and a hint
+    // read from it would retire this work's waiting resume choice.
+    const runs = commandKind === "next" ? keptRestartRun(projectDir, subArgs)?.args ?? subArgs : subArgs;
     const flagValue = (name: string): string => subArgs[subArgs.lastIndexOf(name) + 1] ?? "";
     const reportResult = flagValue("--result");
     const skipRecovery = reportResult === "skipped" && subArgs.length === 6 && subArgs[0] === "--stage" && subArgs[2] === "--result" && subArgs[4] === "--reason" && flagValue("--reason") === "stage is SKIP in the approved workflow plan";
@@ -1101,10 +1115,10 @@ export async function run(
       // `next knowledge onboard|sync` runs the project's extractor, and
       // `next plugin sync|select|build` changes host plugins. A path outside
       // the project is never vouched for.
-      keepsPrompt: (commandKind === "next" && (hasFlag(subArgs, "--skip") || hasFlag(subArgs, "--add") ||
-        (subArgs[0] === "knowledge" && ["onboard", "sync"].includes(subArgs[1] ?? "")) ||
-        (subArgs[0] === "plugin" && ["sync", "select", "build"].includes(subArgs[1] ?? "")))) ||
-        !argumentsStayInProject(subArgs),
+      keepsPrompt: (commandKind === "next" && (hasFlag(runs, "--skip") || hasFlag(runs, "--add") ||
+        (runs[0] === "knowledge" && ["onboard", "sync"].includes(runs[1] ?? "")) ||
+        (runs[0] === "plugin" && ["sync", "select", "build"].includes(runs[1] ?? "")))) ||
+        !argumentsStayInProject(runs),
       rewrite: (selectedAttemptId) => `${lead}${parsed.body} ${ATTEMPT_FLAG} ${selectedAttemptId}${parsed.redirect ? ` ${parsed.redirect}` : ""}`,
       claim: {
         sessionId,

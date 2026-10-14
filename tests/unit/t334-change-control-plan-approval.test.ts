@@ -27,7 +27,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   auditBlockField,
@@ -344,6 +344,31 @@ describe("t334 (4) strict refuses drift before the answer, in the human's words,
     // Said once: a second start reports nothing new.
     expect(changeNotices(begin(project).stdout)).toEqual([]);
     expect(acceptedRows(project)).toHaveLength(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // An AI-DLC update after approval rewrites only AI-DLC's own files (Codex's
+  // skill here): nothing of the person's moved, so the start says nothing.
+  test("an AI-DLC update after approval starts the build with no line; beside the person's file only theirs is named", () => {
+    const skill = (project: string, text: string) => {
+      mkdirSync(join(project, ".agents", "skills", "aidlc"), { recursive: true });
+      writeFileSync(join(project, ".agents", "skills", "aidlc", "SKILL.md"), text);
+    };
+    for (const theirs of [false, true]) {
+      const project = createProject("strict");
+      skill(project, "AI-DLC 1\n");
+      const questions = presentPlan(project);
+      startSession(project, "strict-update");
+      expect(decide(project, questions, "strict-update").code).toBe(0);
+      humanTurn(project, "strict-update");
+      expect(answer(project, questions, "strict-update").code).toBe(0);
+      skill(project, "AI-DLC 2\n");
+      if (theirs) writeFileSync(join(project, "src", "late.ts"), "export const late = 1;\n");
+      const started = begin(project);
+      expect(started.code, started.stderr).toBe(0);
+      expect(changeNotices(started.stdout)).toEqual(theirs ? [movedNotice("1 file", "src/late.ts")] : []);
+      const rows = acceptedRows(project);
+      expect(rows.map((row) => auditBlockField(row.block, "Changed"))).toEqual(theirs ? ["src/late.ts"] : []);
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 

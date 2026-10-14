@@ -300,12 +300,12 @@ After approval:
 or the machine switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` can turn the plan
 stop off for this piece of work; the engine then routes straight to the build
 with the notice above. When the person asks for it, in their own words or with
-`/aidlc --plan-approval off`, run `{{INVOKE}} engine config set guard.plan-approval off`
+`/aidlc --plan-approval off`, run `{{INVOKE}} engine config set guard.plan-approval off --person-words '<their words>'`
 and say in one line that it is off. When they only ask about it ("skip plan
 approval?"), answer in one line, offer to turn it off for this piece of work, and
 show the plan question again; their yes is the ask. Never suggest turning it off
 otherwise.
-Turning it back on (`config set plan-approval on`) is fine whenever they ask.
+Turning it back on (`config set plan-approval on --person-words '<their words>'`) is fine whenever they ask.
 - A new stage attempt (a jump, a rejected gate, a workflow restart) needs its own
   approval: `next` asks again, or, while plan approval is off, builds the plan
   for that attempt with the same one-line notice. After a rejected gate, while the plan is still
@@ -339,8 +339,8 @@ bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoi
 
 Tell the person the `say` line it prints, once, then run `next`.
 
-> **Build-and-Test loop-back:** The construction protocol module
-> (`aidlc-common/protocols/stage-protocol-construction.md`) defines this replay.
+> **Build-and-Test loop-back:** The loop-back protocol module
+> (`aidlc-common/protocols/stage-protocol-loopback.md`) defines this replay.
 > A backward jump opens a new stage attempt, so the prior approval no longer
 > applies. Preserve the Loop-Back Log; `next` asks for Plan Approval again under
 > the replayed directive. The earlier "Retry with fix" choice authorizes the jump,

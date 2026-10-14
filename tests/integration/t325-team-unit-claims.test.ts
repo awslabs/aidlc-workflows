@@ -1323,10 +1323,18 @@ describe("t325 atomic team Unit claims", () => {
         "- **Revision Count**: 0\n- **Construction Autonomy Mode**: autonomous",
       ),
     );
+    // The agent's own park: the run goes on, and the agent is told its step.
     const refused = run(ORCH, ["park"], checkout);
     expect(refused.status, refused.out).toBe(0);
-    expect(JSON.parse(refused.stdout).kind).toBe("error");
+    expect(JSON.parse(refused.stdout).kind).toBe("print");
     expect(refused.stdout).toContain("autonomous");
+    expect(exists(join(checkout, "aidlc", ".aidlc-unit-parked"))).toBe(false);
+    // The person's stop with no reply of theirs on record is still refused.
+    const asked = run(ORCH, ["park", "--person-asked"], checkout);
+    expect(asked.status, asked.out).toBe(0);
+    expect(JSON.parse(asked.stdout).kind).toBe("error");
+    expect(asked.stdout).toContain("autonomous");
+    expect(exists(join(checkout, "aidlc", ".aidlc-unit-parked"))).toBe(false);
   });
 
   test("no-remote sibling worktree claim uses the shared local ref namespace", () => {

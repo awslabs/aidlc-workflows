@@ -22,12 +22,14 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlink
 import { dirname, join } from "node:path";
 import {
   activeDirectiveOutOfDateReason,
+  listIntents,
   readActiveDirectiveMarker,
   recordCopilotHumanSequence,
   stateDigest,
   writeActiveDirectiveMarker,
   writeSessionPidEntry,
 } from "../../dist/copilot/.aidlc/tools/aidlc-lib.ts";
+import { saveRestartRequest } from "../../dist/copilot/.aidlc/tools/aidlc-question-store.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -463,5 +465,28 @@ describe("the record names only what it knows", () => {
     }, null, 2)}\n`);
     writeActiveDirectiveMarker(proj, { kind: "error", stage: "code-generation", state_sha256: stateDigest(state), message: "engine said no" });
     expect(marker(proj).out_of_date).toBeUndefined();
+  });
+});
+
+// A `next` the hooks-off step stopped is kept for the chat the person starts
+// next and named there by its id. On Copilot the adapter claims the command as
+// it is run, `next --request <id>`, so the step it leads to is issued under
+// that claim rather than refused as another command's.
+describe("a stopped next run by its id is issued under the claim of the command that names it", () => {
+  test("Copilot claims next --request <id>, and the step it hands back is the one recorded", () => {
+    const proj = project();
+    const session = "restart-request-claim";
+    const record = listIntents(proj).find((entry) => entry.active) ?? listIntents(proj)[0];
+    expect(record?.uuid, "the fixture's workflow").toBeTruthy();
+    // A kept `--resume` is the shortest kept command that leads to a step the
+    // claim covers (a stop keeps none, but the claim reads only the command run).
+    const id = saveRestartRequest(proj, ["--resume"], "default", { intent: record.dirName ?? "", uuid: record.uuid ?? "" });
+    let handed = engine(proj, session, ["next", "--request", id], `${session}-named`);
+    for (let part = 0; handed.kind === "load-steering"; part++) {
+      if (part > 20) throw new Error("steering did not converge");
+      handed = engine(proj, session, ["continue", String(handed.receipt)], `${session}-continue-${part}`);
+    }
+    expect(handed.kind, JSON.stringify(handed)).toBe("run-stage");
+    expect(marker(proj)).toMatchObject({ kind: "run-stage", stage: "code-generation" });
   });
 });

@@ -21,11 +21,18 @@ depth: Standard
 keywords: []
 description: Full lifecycle for new features, practical depth
 skeleton: on
+runner: true
+guard_policy: off
+sensors: on
+learnings: on
+summary_confirmation: on
+plan_approval: on
+collaborators: off
 ---
 
 # feature scope
 
-Prose intent: why these stages, why skip those.
+The full-lifecycle scope for new feature work at practical depth. ...
 ```
 
 The scope frontmatter fields are:
@@ -105,17 +112,19 @@ work too.
 
 The optional `guard_policy:` field is the value a new intent on this scope
 starts with, written to its state file at creation as
-`- **Guard Policy**: <value> (from scope <name>)`. The human can flip it for
-that one intent by typing `/aidlc --guard-policy <value>` themselves; a
-plain-chat request raises it to `strict` directly, while `relaxed` and `off`
-need that exact typed command. An older intent without this line remains strict
+`- **Guard Policy**: <value> (from scope <name>)`. The human can change it for
+that one intent by typing `/aidlc --guard-policy <value>` or by asking in their
+own words; either way the agent runs the setter, and lowering it to `relaxed`
+or `off` takes a message from the person since the last decision. An older intent without this line remains strict
 until explicitly set, while
 the next new intent starts from the scope default again. To hold a value for
 everyone on the repo, do not edit eleven scope files: declare it once in memory
 (`## Guard Policy` with `Mode: strict` in `aidlc/spaces/<space>/memory/org.md`,
 `team.md`, or `project.md`). A memory `strict` wins over every scope default and
-refuses chat or flag flips by naming the file; a memory `relaxed`, `off`, or an
-absent section has no effect. The validation error for anything other than the
+refuses chat or flag flips by naming the file. A memory `relaxed` or `off`
+(the narrowest layer that declares one) replaces a value that came from the
+scope, while a value the person set for one intent stays; an absent or empty
+section changes nothing. The validation error for anything other than the
 three values names the file and the allowed values; the per-intent command
 repairs an invalid state line.
 
@@ -152,7 +161,7 @@ That transpose is the mechanism for *authored* scopes, which is what this chapte
 
 The one judgment call worth understanding is the relationship between `depth` and `testStrategy`. Depth controls how much detail each stage's artifacts carry; test strategy controls how many tests get generated. They're independent on purpose. Most shipped scopes leave `testStrategy` off so it inherits from `depth` — `classic` is Standard/Standard and `express` is Minimal/Minimal. `workshop` demonstrates the explicit split with Standard depth and Minimal testing. If your scope wants a split, declare both. For what each level means, see [The 3 Depth Levels](../guide/05-scopes-and-depth.md#the-3-depth-levels) and [The 3 Test Strategy Levels](../guide/05-scopes-and-depth.md#the-3-test-strategy-levels) in the User Guide.
 
-The exhaustive field-by-field contract — including how `keywords` are word-boundary matched and how the alphabetical-scope tie-break resolves an ambiguous freeform invocation — lives in [Contributing § Adding a Scope](../reference/11-contributing.md#adding-a-scope) in the Developer Reference. This chapter summarizes the decisions; that section is the normative spec.
+The exhaustive field-by-field contract lives in [Contributing: Adding a Scope](../reference/11-contributing.md#adding-a-scope) in the Developer Reference. `keywords` are only hints the agent reads when it proposes a plan; no tool matches them against the request. This chapter summarizes the decisions; that section is the normative spec.
 
 ---
 
@@ -185,7 +194,7 @@ Suppose your team wants a `hotfix` scope — leaner than `bugfix`, for the urgen
 
 6. **Update the scope-aware docs and add a routing test.** Several docs enumerate scopes by hand — the User Guide's scope reference and routing table, the customization chapter's valid-values list, and the orchestrator reference's scope-to-stage mapping. Update them in the same change. If your scope skips stages in a pattern no existing scope uses, add a workflow test modeled on the existing per-scope tests.
 
-7. **(Optional) Generate a typeable runner.** A scope is fully usable via `/aidlc --scope <name>` the moment its file lands — no runner needed. If you want a one-word command (`/aidlc-hotfix`), add `runner: true` to the scope frontmatter and run `bun .claude/tools/aidlc-runner-gen.ts scopes`; `bun .claude/tools/aidlc-runner-gen.ts scopes --all` emits `skills/aidlc-<scope>/SKILL.md` for every scope file regardless of that flag. Each runner is a thin shell that drives `aidlc-orchestrate next --scope <name>` to `done` with the scope baked in, plus a "Starting unrelated new work?" section carrying the same recognize, offer (`AskUserQuestion`, never auto-create), and `next --new-intent --scope <name>` guidance the `/aidlc` orchestrator has. The runner packages an already-runnable scope, and the scope file is its definition. It carries no `hooks:` block: the deterministic spine (audit, sensors, rebuild-stage-graph, state validation) is registered project-wide in `settings.json`, so every runner inherits it for free. Re-run the generator (or `scopes --check`) whenever you add or rename a scope file.
+7. **(Optional) Generate a typeable runner.** A scope is fully usable via `/aidlc --scope <name>` the moment its file lands; no runner is needed. If you want a one-word command (`/aidlc-hotfix`), add `runner: true` to the scope frontmatter and run `aidlc engine gen runner-scopes`; `aidlc engine gen runner-scopes --all` emits `skills/aidlc-<scope>/SKILL.md` for every scope file regardless of that flag. Each runner is a thin shell that drives `aidlc-orchestrate next --scope <name>` to `done` with the scope baked in, plus a "Starting unrelated new work?" section carrying the same recognize, offer (`AskUserQuestion`, never auto-create), and `next --new-intent --scope <name>` guidance the `/aidlc` orchestrator has. The runner packages an already-runnable scope, and the scope file is its definition. It carries no `hooks:` block: the deterministic spine (audit, sensors, rebuild-stage-graph, state validation) is registered project-wide in `settings.json`, so every runner inherits it for free. Re-run the generator (or `aidlc engine gen runner-scopes --check`) whenever you add or rename a scope file.
 
 ### What validates automatically
 
@@ -201,7 +210,7 @@ This implementation derives the valid-scope list from `.claude/scopes/*.md` pres
 - **A `scopes:` tag with a typo'd scope name still parses.** A stage frontmatter that names `hotfx` instead of `hotfix` compiles cleanly — it just produces a grid column nobody asks for. The catch is that `validScopes()` derives from the `.md` files, so a scope with no file is rejected at invocation; but a mistyped tag on a stage silently drops that stage from the real scope. `/aidlc --doctor` and a per-scope test are the guardrails.
 - **A stale local projection can mislead manual inspection.** If you edit a stage's `scopes:` and keep using an old ignored `dist/` tree, that local runtime still contains the old grid. Regenerate before local runtime checks; CI and release assembly always rebuild from source.
 - **Per-scope phase-sequence coverage.** The shipped phase-sequence test iterates a hardcoded list of the known scope names; a new scope isn't exercised by it until you extend that list. Add your scope to it in the same change.
-- **The hand-maintained docs.** Nothing greps the docs for you. The scope reference, the routing table, and the customization valid-values list are prose; keep them in step with the scope files yourself.
+- **The hand-maintained docs.** The User Guide's stage-by-scope matrix and scope routing table are checked against the compiled grid (`t244-scope-matrix-doc-sync`), so a new scope fails that test until its column and row are there. The rest is prose nothing checks, such as the customization chapter's valid-values list and the scope descriptions; keep it in step with the scope files yourself.
 
 ---
 

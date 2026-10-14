@@ -14,7 +14,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractTarGz } from "./aidlc-archive.ts";
@@ -145,7 +145,7 @@ import {
 } from "./aidlc-lib.ts";
 import { cutPluginFragment, editTomlInstructions, personaTwinRels } from "./aidlc-plugin.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
-import { KIRO_IDE_STEERING, kiroIdeSteering } from "./aidlc-includes.ts";
+import { KIRO_IDE_STEERING, kiroIdeSteering, refreshActiveMemory } from "./aidlc-includes.ts";
 import {
   activeWorkflowPluginDependencies,
   canonicalScopeTableRegion,
@@ -179,6 +179,7 @@ import {
   kiroRateLabel,
   type KiroSessionPlan,
   type KiroSessionResult,
+  kiroEnv,
   listKiroModels,
   readKiroPersonalSession,
   recommendedKiroModel,
@@ -301,6 +302,7 @@ import {
   readPluginSelection,
   readConfigDiagnosticRecords,
   reconcileProviderActions,
+  runtimeFixesNeeded,
   runtimeIssues,
   stripLegacyClaudeModelAliases,
   trustStatus,
@@ -2616,23 +2618,23 @@ let configTargetHarnessDir: string | null = null;
 // tool (a runtime unpacked elsewhere, which may be adding a harness the project
 // does not have yet) is named by its own path, unless it is the one under the
 // working directory. In the source tree the project's own tool of the harness
-// being set up stands in.
+// being set up stands in. A newer release's config that an older copied tool
+// handed its refresh to names the tool the person ran.
 function configInvocationFor(projectDir = process.cwd()): string {
   const invocation = aidlcInvocation();
   if (invocation === "aidlc") return invocation;
-  const ran = projectedDispatcher();
-  // A projection's relative invocation names the harness directory it was
-  // built for, whatever the environment says the harness is.
+  const ran = process.env.AIDLC_CONFIG_HANDOFF || projectedDispatcher();
+  // A tool's relative invocation names the harness directory it lives in,
+  // whatever the environment says the harness is.
   const harnessDir = ran === null
     ? configTargetHarnessDir ?? runtimeHarnessDir()
     : basename(dirname(dirname(ran)));
+  const own = `bun ${harnessDir}/tools/aidlc.ts`;
   const toolIn = (root: string) => join(root, harnessDir, "tools", "aidlc.ts");
   if (ran === null || sameFile(ran, toolIn(projectDir))) {
-    return ranFromProject(projectDir)
-      ? ran === null ? `bun ${harnessDir}/tools/aidlc.ts` : invocation
-      : `bun ${quoteCommandArgument(toolIn(projectDir))}`;
+    return ranFromProject(projectDir) ? own : `bun ${quoteCommandArgument(toolIn(projectDir))}`;
   }
-  return sameFile(ran, toolIn(process.cwd())) ? invocation : `bun ${quoteCommandArgument(ran)}`;
+  return sameFile(ran, toolIn(process.cwd())) ? own : `bun ${quoteCommandArgument(ran)}`;
 }
 
 // The command the user ran, printed again with the flags that resolve it, so
@@ -2804,7 +2806,7 @@ function setupMapRows(
       detail: runtime.length > 0
         ? runtime[0].message
         : shellOnly.length > 0
-        ? `${shellOnly.join(" and ")} on this shell's PATH only: start ${projectionProductName(root, distribution)} from a terminal`
+        ? shellOnlyRuntimeDetail(shellOnly, projectionProductName(root, distribution))
         : "hook PATH ready",
       section: "runtime",
       needs: runtime.length > 0,
@@ -6263,6 +6265,122 @@ function preserveOpenCodeProviderFields(
   writeFileSync(stagedPath, jsonFileText(staged, currentText));
 }
 
+// Kiro CLI reads a project's MCP servers from .kiro/settings/mcp.json, inside
+// the harness folder: AI-DLC's five and any the person adds or turns on. The
+// staged copy merges the project's file per server as Claude Code's .mcp.json
+// merges, so a refresh keeps the person's servers instead of stopping on the
+// file. A file that is not a JSON object with an mcpServers object is left to
+// the ownership check. Returns the servers that are AI-DLC's, or null when
+// nothing was merged.
+function mergeKiroMcpServers(
+  projectDir: string,
+  stagedRoot: string,
+  harnessDir: string,
+  prior: Baseline | null,
+  force: boolean,
+): Record<string, string> | null {
+  const rel = `${harnessDir}/settings/mcp.json`;
+  const currentPath = join(projectDir, rel);
+  const stagedPath = join(stagedRoot, rel);
+  if (!regularFile(currentPath) || !regularFile(stagedPath)) return null;
+  const currentText = readFileSync(currentPath, "utf-8");
+  let current: unknown;
+  let staged: unknown;
+  try {
+    current = JSON.parse(withoutBom(currentText));
+    staged = readJsonFile(stagedPath);
+  } catch {
+    return null;
+  }
+  if (!isRecord(current) || !isRecord(staged)) return null;
+  const currentMap = current.mcpServers ?? {};
+  const stagedMap = staged.mcpServers ?? {};
+  if (!isRecord(currentMap) || !isRecord(stagedMap)) return null;
+  const hashes = (map: Record<string, unknown>) =>
+    Object.fromEntries(Object.entries(map).map(([name, value]) => [name, sha256Bytes(canonical(value))]));
+  // With no record of AI-DLC's servers yet, a file nobody changed since config
+  // wrote it holds only AI-DLC's, and a server equal to the staged one is AI-DLC's.
+  const priorFile = prior?.files[rel];
+  const untouched = priorFile !== undefined && sha256Matching(currentText, [priorFile]) === priorFile;
+  const priorEntries = prior?.entries?.[rel] ?? (untouched ? hashes(currentMap) : {});
+  const shipped = Object.fromEntries(Object.entries(hashes(stagedMap)).map(([name, hash]) => [name, [hash]]));
+  const servers = { ...currentMap };
+  const owned = mergeJsonMapEntries(servers, stagedMap, priorEntries, shipped, force);
+  const merged = { ...current, mcpServers: servers };
+  writeFileSync(stagedPath, canonical(merged) === canonical(current) ? currentText : jsonFileText(merged, currentText));
+  return owned;
+}
+
+// The person's own Kiro MCP settings, read and never written. Under the test
+// runner only a KIRO_HOME the test names is read, never the host's ~/.kiro.
+function personalKiroMcpPath(env: NodeJS.ProcessEnv = process.env): string | null {
+  const home = kiroEnv(env).KIRO_HOME;
+  if (!home && env.AIDLC_TEST_NAME !== undefined) return null;
+  return join(home || join(homedir(), ".kiro"), "settings", "mcp.json");
+}
+
+// Kiro CLI offers an agent only the MCP servers its tools name, one
+// `@<server>` each; it has no grant for every server (measured on Kiro CLI
+// 2.29.0: `@*`, `@mcp` and `@*/*` grant nothing, and `*` adds built-in tools).
+// So the AI-DLC agent's staged copy names every server config finds in the
+// project's mcp.json and in the person's own, and allowedTools stays as
+// shipped, so each call still asks first. A server added later is named at
+// the next config run. True when the project's copy is the release's own
+// bytes (a copy install puts them there before config runs), so the named copy
+// replaces it; any other copy meets the ownership check.
+function grantKiroMcpServers(projectDir: string, sourceRoot: string, stagedRoot: string, harnessDir: string): boolean {
+  const rel = `${harnessDir}/agents/aidlc.json`;
+  const agentPath = join(stagedRoot, rel);
+  const names = new Set<string>();
+  const personal = personalKiroMcpPath();
+  for (const path of [join(stagedRoot, harnessDir, "settings", "mcp.json"), personal]) {
+    // The person's own file may be a link (a dotfiles folder): follow it.
+    const file = path === personal
+      ? path !== null && statSync(path, { throwIfNoEntry: false })?.isFile() === true
+      : path !== null && regularFile(path);
+    if (path === null || !file) continue;
+    try {
+      const servers = (readJsonFile(path) as Record<string, unknown>).mcpServers;
+      if (isRecord(servers)) for (const name of Object.keys(servers)) names.add(name);
+    } catch {
+      // A file Kiro cannot read names no server.
+    }
+  }
+  // The agent file travels with the project (a team's clone), so a server it
+  // already names stays named: a teammate's run adds theirs and keeps yours.
+  // Kiro ignores a grant for a server it does not have.
+  const current = join(projectDir, rel);
+  if (regularFile(current)) {
+    try {
+      const tools = (JSON.parse(withoutBom(readFileSync(current, "utf-8"))) as Record<string, unknown>).tools;
+      if (Array.isArray(tools)) {
+        for (const tool of tools) if (typeof tool === "string" && tool.startsWith("@")) names.add(tool.slice(1));
+      }
+    } catch {
+      // A copy config cannot read keeps no grant; the ownership check reports it.
+    }
+  }
+  if (!regularFile(agentPath)) return false;
+  const agentText = readFileSync(agentPath, "utf-8");
+  let agent: unknown;
+  try {
+    agent = JSON.parse(withoutBom(agentText));
+  } catch {
+    return false;
+  }
+  if (!isRecord(agent) || !Array.isArray(agent.tools)) return false;
+  const tools = [
+    ...agent.tools.filter((tool) => typeof tool !== "string" || !tool.startsWith("@")),
+    ...[...names].map((name) => `@${name}`),
+  ];
+  if (canonical(tools) === canonical(agent.tools)) return false;
+  writeFileSync(agentPath, jsonFileText({ ...agent, tools }, agentText));
+  const release = join(sourceRoot, rel);
+  if (!regularFile(current) || !regularFile(release)) return false;
+  const releaseHash = sha256File(release);
+  return sha256Matching(readFileSync(current), [releaseHash]) === releaseHash;
+}
+
 function preserveUserProviderFields(
   projectDir: string,
   stagedRoot: string,
@@ -6338,6 +6456,7 @@ function prepareRefreshSource(
   recordOnly: boolean,
   projectProjection: boolean,
   diagnosticsOverride?: ConfigDiagnosticOverrides,
+  force = false,
 ): PreparedRefreshSource {
   // A copied project is not a release: never baseline the user's edits as
   // shipped entries during an in-place record mutation.
@@ -6366,6 +6485,19 @@ function prepareRefreshSource(
       )),
       ...Object.fromEntries(codexFrameworkValueEntries(config)),
     };
+  } else if (!projectProjection && entries && descriptor.distribution === "kiro") {
+    // Each MCP server the release ships is AI-DLC's until the person changes it.
+    const rel = `${descriptor.harnessDir}/settings/mcp.json`;
+    try {
+      const servers = (readJsonFile(join(sourceRoot, rel)) as Record<string, unknown>).mcpServers;
+      if (isRecord(servers)) {
+        entries[rel] = Object.fromEntries(
+          Object.entries(servers).map(([name, value]) => [name, sha256Bytes(canonical(value))]),
+        );
+      }
+    } catch {
+      // A release without the file ships no servers to record.
+    }
   }
   const currentHarness = join(projectDir, descriptor.harnessDir);
   const currentHarnessData = join(currentHarness, "tools", "data", "harness.json");
@@ -6374,7 +6506,9 @@ function prepareRefreshSource(
     : descriptor.distribution === "codex"
     ? join(currentHarness, "config.toml")
     : null;
+  // Kiro CLI always stages: its MCP servers are merged and granted per project.
   if (
+    descriptor.distribution !== "kiro" &&
     !prior &&
     !regularFile(currentHarnessData) &&
     !(currentConfiguration && pathPresent(currentConfiguration)) &&
@@ -6605,12 +6739,23 @@ function prepareRefreshSource(
   // Kiro CLI: the aws-mcp region is the project's own MCP setting, not a provider
   // answer, so the staged file takes it from the project rather than the release.
   // This runs after the regenerated scan on purpose: a file in `regenerated` is
-  // copied without the locally-modified check, and this preservation must not
-  // grant that. The staged file equals the project's when the region is its only
-  // difference, so the planner preserves it; any other local edit still meets the
-  // ownership check and is reported as a conflict instead of being overwritten.
+  // copied without the locally-modified check. The region preservation alone
+  // must not grant that; the per-server merge after it does, because the merge
+  // itself keeps every server the person added or changed.
   if (modelHarness(distribution) === "kiro") {
     preserveKiroMcpRegion(projectDir, root, descriptor.harnessDir);
+    // After the region, so a server that differs only there stays AI-DLC's.
+    const owned = projectProjection
+      ? null
+      : mergeKiroMcpServers(projectDir, root, descriptor.harnessDir, prior, force);
+    if (owned !== null) {
+      const rel = `${descriptor.harnessDir}/settings/mcp.json`;
+      regenerated.add(rel);
+      if (entries) entries[rel] = owned;
+    }
+    if (!projectProjection && grantKiroMcpServers(projectDir, sourceRoot, root, descriptor.harnessDir)) {
+      regenerated.add(`${descriptor.harnessDir}/agents/aidlc.json`);
+    }
   }
 
   const currentGrid = join(currentHarness, "tools", "data", "scope-grid.json");
@@ -7451,6 +7596,8 @@ type FirstRunDetection = {
   }>;
   aws: ReturnType<typeof detectAwsCredentials>;
   runtimeIssues: ReturnType<typeof runtimeIssues>;
+  // With no fix needed, the runtimes this shell finds that the hook PATH does not.
+  shellOnlyRuntimes: string[];
   bedrockReachable?: boolean;
 };
 
@@ -7720,17 +7867,21 @@ function detectFirstRun(
   }
   const first = candidates[0];
   const runtime = first
-    ? runtimeIssues(probeRuntime(
+    ? runtimeFixesNeeded(probeRuntime(
         first.root,
         first.descriptor.harnessDir,
         modelHarness(first.stamp.distribution),
         { includeHarnessCli: false },
       ))
     : [];
+  const shellOnly = first && runtime.length === 0
+    ? shellOnlyRuntimes(first.root, first.descriptor.harnessDir, modelHarness(first.stamp.distribution))
+    : [];
   return {
     harnesses,
     aws: injected?.aws ?? detectAwsCredentials(),
     runtimeIssues: injected?.runtimeIssues ?? runtime,
+    shellOnlyRuntimes: injected?.runtimeIssues !== undefined ? injected.shellOnlyRuntimes ?? [] : shellOnly,
     ...(injected?.bedrockReachable !== undefined
       ? { bedrockReachable: injected.bedrockReachable }
       : {}),
@@ -7953,6 +8104,12 @@ function firstRunNextCommands(distribution: string): [string, string] {
     return ["copilot                        open Copilot CLI in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
   return ["claude                         open Claude Code in this repo", '/aidlc "what you want built"  describe your first intent'];
+}
+
+// A runtime this shell finds that the hook PATH does not needs no fix when the
+// harness starts from a terminal; first-run setup and the status say so alike.
+function shellOnlyRuntimeDetail(names: readonly string[], product: string): string {
+  return `${names.join(" and ")} on this shell's PATH only: start ${product} from a terminal`;
 }
 
 function firstRunSettingsTargetLabel(target: SettingsTarget): string {
@@ -8948,7 +9105,9 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   writeMenuRow(
     "    Runtime    ",
     runtimeCount === 0
-      ? "ready"
+      ? detection.shellOnlyRuntimes.length > 0
+        ? shellOnlyRuntimeDetail(detection.shellOnlyRuntimes, candidate.descriptor.productName)
+        : "ready"
       : `${runtimeCount === 1 ? "one" : runtimeCount} PATH fix${
           runtimeCount === 1 ? "" : "es"
         } needed - shown at the end`,
@@ -9488,6 +9647,49 @@ function openCodeProviderClaim(
   return { entries: { "opencode.json": ids }, ...(note ? { note } : {}) };
 }
 
+// One map entry (an MCP server) at a time: an entry AI-DLC wrote and nobody
+// changed since takes the release's value, an entry the person added or
+// changed stays theirs, and one the release no longer ships goes only when
+// nobody changed it. `shippedHashes` names values a release shipped, for an
+// entry with no record yet. Updates `targetMap` and returns the hash of each
+// entry that is AI-DLC's after the merge.
+function mergeJsonMapEntries(
+  targetMap: Record<string, unknown>,
+  sourceMap: Record<string, unknown>,
+  priorEntries: Record<string, string>,
+  shippedHashes: Record<string, readonly string[]>,
+  force: boolean,
+  keepPresent = false,
+): Record<string, string> {
+  const nextEntries: Record<string, string> = {};
+  for (const [entry, value] of Object.entries(sourceMap)) {
+    const desiredHash = sha256Bytes(canonical(value));
+    if (!(entry in targetMap)) {
+      if (keepPresent) continue;
+      targetMap[entry] = value;
+      nextEntries[entry] = desiredHash;
+      continue;
+    }
+    const currentHash = sha256Bytes(canonical(targetMap[entry]));
+    const priorHash = priorEntries[entry];
+    if (priorHash && (currentHash === priorHash || force)) {
+      targetMap[entry] = value;
+      nextEntries[entry] = desiredHash;
+    } else if (priorHash && currentHash === desiredHash) {
+      nextEntries[entry] = desiredHash;
+    } else if (!priorHash && (shippedHashes[entry] ?? []).includes(currentHash)) {
+      targetMap[entry] = value;
+      nextEntries[entry] = desiredHash;
+    }
+  }
+  for (const [entry, priorHash] of Object.entries(priorEntries)) {
+    if (entry in sourceMap || !(entry in targetMap)) continue;
+    const currentHash = sha256Bytes(canonical(targetMap[entry]));
+    if (currentHash === priorHash || force) delete targetMap[entry];
+  }
+  return nextEntries;
+}
+
 function planRootIntegrations(
   projectDir: string,
   sourceRoot: string,
@@ -9781,34 +9983,7 @@ function planRootIntegrations(
           if ((shippedHashes[entry] ?? []).includes(currentHash)) nextEntries[entry] = currentHash;
         }
       } else if (mcpMode === "defaults") {
-        for (const [entry, value] of Object.entries(sourceMap)) {
-          const desiredHash = sha256Bytes(canonical(value));
-          if (!(entry in targetMap)) {
-            if (keepPresent) continue;
-            targetMap[entry] = value;
-            nextEntries[entry] = desiredHash;
-            continue;
-          }
-          const currentHash = sha256Bytes(canonical(targetMap[entry]));
-          const priorHash = priorEntries[entry];
-          if (priorHash && (currentHash === priorHash || force)) {
-            targetMap[entry] = value;
-            nextEntries[entry] = desiredHash;
-          } else if (priorHash && currentHash === desiredHash) {
-            nextEntries[entry] = desiredHash;
-          } else if (
-            !priorHash &&
-            (integration.legacySignatures?.jsonEntryHashes?.[entry] ?? []).includes(currentHash)
-          ) {
-            targetMap[entry] = value;
-            nextEntries[entry] = desiredHash;
-          }
-        }
-        for (const [entry, priorHash] of Object.entries(priorEntries)) {
-          if (entry in sourceMap || !(entry in targetMap)) continue;
-          const currentHash = sha256Bytes(canonical(targetMap[entry]));
-          if (currentHash === priorHash || force) delete targetMap[entry];
-        }
+        Object.assign(nextEntries, mergeJsonMapEntries(targetMap, sourceMap, priorEntries, shippedHashes, force, keepPresent));
       } else {
         for (const [entry, priorHash] of Object.entries(priorEntries)) {
           if (!(entry in targetMap)) continue;
@@ -12323,6 +12498,37 @@ export async function main(
       recordOnly = false;
     }
     if (!selected) throw new Error("no configuration source was selected");
+    // A copied project's tool refreshing from a newer release's files hands the
+    // run to that release's own config, since an older tool may not read them:
+    // the person's command as typed, in the same project, with the download they
+    // agreed to. Sections may have asked their own questions already, so they
+    // stay here; a handed run never hands on.
+    const ranTool = projectedDispatcher();
+    const newerTool = join(selected.root, selected.descriptor.harnessDir, "tools", "aidlc.ts");
+    if (
+      copyChannel && ranTool && !section && (from || downloadCleanup) &&
+      process.env.AIDLC_CONFIG_HANDOFF === undefined &&
+      (requiredVersion === undefined || requiredVersion === selected.stamp.frameworkVersion) &&
+      VERSION_ID.test(selected.stamp.frameworkVersion) &&
+      compareVersions(AIDLC_VERSION, selected.stamp.frameworkVersion) < 0 &&
+      regularFile(newerTool)
+    ) {
+      if (options.mode === "human") {
+        process.stdout.write(
+          `  Note: ${selected.stamp.frameworkVersion}'s own config runs this refresh; the tool you ran is ${AIDLC_VERSION}.\n`,
+        );
+      }
+      const args = stripVerb([...input]);
+      if (downloadCleanup && !args.includes("--download")) args.push("--download");
+      const handed = spawnSync(process.execPath, [newerTool, "config", ...args], {
+        cwd: process.cwd(),
+        env: { ...process.env, AIDLC_CONFIG_HANDOFF: ranTool, AIDLC_PROJECT_DIR: projectDir },
+        stdio: "inherit",
+      });
+      if (handed.error) throw handed.error;
+      process.exitCode = handed.status ?? EXIT.failure;
+      return;
+    }
     if (selected.note) sourceNotes.push(selected.note);
     if (pendingConfirm && !askedConfirm) {
       const first = [
@@ -12458,6 +12664,7 @@ export async function main(
       recordOnly,
       Boolean(selected.projectProjection),
       diagnosticsContext?.overrides ?? choicesContext?.overrides,
+      argv.includes("--force"),
     );
     prepared.notes.unshift(...sourceNotes);
     // A release that no longer ships AI-DLC's status line in the shared Claude
@@ -12980,6 +13187,17 @@ export async function main(
       );
     } else {
       executeSettingsAndProjectMutation(settingsMutation, plan);
+    }
+    // The copy of the active space's memory that the harness includes read is
+    // written now, before a chat loads them, so the first chat holds the rules
+    // it loaded and is not handed them again on every step (#1330). Best-effort,
+    // as at every session start, which writes it otherwise.
+    if (!recordOnly) {
+      try {
+        refreshActiveMemory(projectDir);
+      } catch {
+        // The first session start writes it.
+      }
     }
     // Said as soon as it is done, so no later step can leave it unsaid.
     if (options.mode === "human") {

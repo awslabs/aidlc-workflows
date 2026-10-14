@@ -2125,7 +2125,7 @@ describe("t242 state-transition ownership guard", () => {
     expect(main.stderr).toContain("aidlc-orchestrate.ts report");
     // The agent offers the switch and, when the person says so, runs the setter itself.
     expect(main.stderr).toContain("offer to turn the state-transition check off for this piece of work");
-    expect(main.stderr).toContain("config-change --guard.state-transition off` yourself");
+    expect(main.stderr).toContain("config-change --guard.state-transition off --person-words '<their words>'` yourself");
     expect(main.stderr).not.toContain("/aidlc config set");
     const delegated = spawnSync(process.execPath, [HOOK], {
       input: JSON.stringify({ ...payload, agent_type: "aidlc-developer-agent" }),

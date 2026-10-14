@@ -51,7 +51,7 @@ the `.md` suffix stripped:
 | `aidlc-required-sections.md` | `required-sections` |
 | `aidlc-linter.md` | `linter` |
 
-The filename↔id rule is enforced by `tests/unit/t86-sensor-manifest-schema.sh`.
+The filename-to-id rule is enforced by `tests/unit/t86-sensor-manifest-schema.test.ts`.
 The `aidlc-` prefix is **mandatory for all sensors, including custom
 user-shipped ones**: the compile resolver discovers manifests with
 `SENSOR_FILE_REGEX = /^aidlc-([a-z][a-z0-9-]*)\.md$/` (`loadSensors` in
@@ -69,37 +69,65 @@ and the body is human prose documenting the check. Manifests describe
 on the stage side via the stage's frontmatter `sensors:` field (see
 [How stages import sensors](#how-stages-import-sensors) below).
 
-```yaml
+The shipped `required-sections` manifest, as a native install has it:
+
+```markdown
 ---
-id: required-sections                       # required
-kind: deterministic                          # required
-command: aidlc engine sensor-required-sections   # required
-default_severity: advisory                   # required
-fire_on: gate                               # optional; write (default) | gate
-description: Checks that stage output ...    # required
-category: document-shape                     # optional
-matches: "**/{aidlc-docs,intents,codekb}/**"           # optional capability filter
-input_schema:                                # optional
+id: required-sections
+kind: deterministic
+command: aidlc engine sensor-required-sections
+default_severity: advisory
+fire_on: gate
+description: Checks at the gate that stage output contains the required H2 headings
+category: document-shape
+matches: "**/{aidlc-docs,intents,codekb}/**"
+input_schema:
   output_path: string
   stage_slug: string
-output_schema:                               # optional
+output_schema:
   pass: boolean
-  missing_headings: string[]
-timeout_seconds: 300                         # optional
+  h2_count: integer
+  headings: string[]
+  findings_count: integer
+  edge_block: string
+  template: string
+  template_expected: string[]
+  template_missing: string[]
+  config_warning: string
+timeout_seconds: 300
 ---
 
 # required-sections sensor
 
-<body — prose documenting default mode, override mode, failure mode>
+Default mode: checks the output contains at least 2 H2 headings (generic
+content-shape sanity check).
+```
+
+Keep comments off the field lines: the parser reads a `# ...` after a
+top-level field's value as part of the value, so `id: demo-check   # required` makes the id
+`demo-check   # required` and the manifest fails to load. The engine shows
+how it reads a manifest, here the shipped `linter`:
+
+```text
+$ aidlc engine sensor describe linter
+id: linter
+kind: deterministic
+command: aidlc engine sensor-linter
+default_severity: advisory
+description: Wraps the project's configured linter (eslint by default for v0.5.0); fires on TS/JS code outputs
+category: code-quality
+matches: **/*.{ts,js}
+timeout_seconds: 1200
+path: .claude/sensors/aidlc-linter.md
 ```
 
 | Field | Required | Type | Notes |
 |---|---|---|---|
-| `id` | ✓ | kebab-case string | Equals filename stem minus `aidlc-` prefix; cross-referenced from rule files' `pairing:` field (see [Rule System](08-rule-system.md)). |
-| `kind` | ✓ | enum | Only `deterministic` is accepted today; `llm` reserved for the v0.11.0 LLM-dispatch chapter. See [`kind` enum](#kind-enum) below. |
-| `command` | ✓ | string | Canonical invocation prefix. Shipped sensors use a native delegate such as `aidlc engine sensor-required-sections`; third-party sensors may declare another runtime. The sensor dispatcher appends `--stage <slug>` plus the path flag `input_schema` selects: `--file-path <path>` when it declares `file_path`, otherwise `--output-path <path>`. See [`command:` invocation contract](#command-invocation-contract). |
-| `default_severity` | ✓ | enum | `advisory` or `blocking`. Blocking is enforced for `fire_on: gate`; write-fired blocking declarations remain advisory in this release. |
-| `description` | ✓ | string | One-line human description. |
+| `id` | yes | kebab-case string | Equals filename stem minus `aidlc-` prefix; cross-referenced from rule files' `pairing:` field (see [Rule System](08-rule-system.md)). |
+| `kind` | yes | enum | Only `deterministic` is accepted today; any other value is refused at parse time. See [`kind` enum](#kind-enum) below. |
+| `command` | yes | string | Canonical invocation prefix. Shipped sensors use a native delegate such as `aidlc engine sensor-required-sections`; a custom sensor names its TypeScript worker, such as `bun .claude/tools/aidlc-sensor-<id>.ts`. The dispatcher takes the `.ts` file name (or the `sensor-<id>` delegate) and runs that file from the installed tools folder; on a native install the file must be named `aidlc-sensor-<id>.ts` and `export function main(argv)`. The sensor dispatcher appends `--stage <slug>` plus the path flag `input_schema` selects: `--file-path <path>` when it declares `file_path`, otherwise `--output-path <path>`. See [`command:` invocation contract](#command-invocation-contract). |
+| `default_severity` | yes | enum | `advisory` or `blocking`. Blocking is enforced for `fire_on: gate`; write-fired blocking declarations remain advisory in this release. |
+| `description` | yes | string | One-line human description. |
 | `category` | optional | string | Free-form descriptive label (the shipped manifests use `document-provenance`, `document-shape`, and `code-quality`; not a closed enum). |
 | `fire_on` | optional | enum | `write` or `gate`; defaults to `write`. |
 | `matches` | optional | glob string | Capability filter consumed at dispatch. See [`matches` filter](#matches-filter) below. |
@@ -114,14 +142,18 @@ timeout_seconds: 300                         # optional
 The `kind` field declares the dispatch mechanism. The schema accepts
 exactly one value today:
 
-- `deterministic` — the manifest's `command:` is a self-contained
-  shell invocation that exits 0 (pass) / non-zero (fail) and writes
-  structured detail to a known path.
+- `deterministic` - the dispatcher runs the manifest's worker with the
+  per-fire flags. The worker prints one JSON line on stdout with a boolean
+  `pass` (plus `findings` and `findings_count`, the number the audit row
+  records) and exits 0 whether the check passes or fails; the dispatcher
+  writes the failure detail file. Exit 127 is recorded as a pass noted
+  `tool-unavailable`; any other non-zero exit, or output with no boolean
+  `pass`, is recorded as a pass with a `script-error` note (see
+  [`default_severity`](#default_severity) for what a blocking gate binding
+  does with it).
 
-`llm` is **reserved for the LLM-dispatch chapter** (v0.11.0+). Until that
-chapter ships, consumers MUST reject `kind: llm` at parse time.
-Reservation is enforced at write time: shipping a `kind: llm` manifest
-today is a manifest-author error that the parser rejects.
+Any other `kind`, `llm` included, is refused at parse time ("other kinds
+reserved for future releases").
 
 Unknown values for `kind` (anything other than `deterministic`) are
 rejected at parse time. Forward-compat applies to *unknown keys*
@@ -170,10 +202,14 @@ filename stem minus the `aidlc-` prefix. The compile resolver:
    `data/stage-graph.json` (FIELD_ORDER pinned: after `rules_in_context`).
 
 The runtime PostToolUse hook, `gate-start`, and `revise` read
-`sensors_applicable` off the graph node — none re-opens the manifest. Dispatch fields are
-compile-snapshotted: a manifest edit during the workflow does NOT change what
-fires for the in-flight workflow (BGP-stability property — see
-[Plane Architecture](02-plane-architecture.md)).
+`sensors_applicable` off the graph node to decide what fires; none re-opens
+the manifest for that. The dispatcher re-reads the manifest at every fire only
+for `command`, `input_schema`, `timeout_seconds` and its own `matches` re-check
+against the path. Everything the graph copied (`fire_on`, `default_severity`,
+`category`, the hook's `matches` filter) and a new import wait for the next
+compile. On a native install the six shipped sensors run their bundled worker
+by id, so editing their `command` changes nothing. Recompile after any sensor
+edit.
 
 ### Per-stage sensor matrix (33 framework stages)
 
@@ -223,7 +259,8 @@ approves itself under Construction autonomy dispatches only blocking sensors
 manifests declare a glob. The compile resolver copies it into
 `sensors_applicable[]`.
 
-Empty string (`matches: ""`) is rejected at parse time. Write-fired sensors
+An empty string (`matches: ""`) is dropped at parse time, so it acts as an
+omitted glob. Write-fired sensors
 should declare a glob; gate-fired sensors may omit it to analyze every declared
 deliverable.
 
@@ -332,13 +369,28 @@ So a manifest with:
 command: aidlc engine sensor-required-sections
 ```
 
-invoked against `requirements-analysis` writing the requirements artifact in the
-intent's record dir is dispatched as:
+is dispatched with at least `--stage <slug> --output-path <file>` appended
+(plus the template flags `required-sections` gets by id). Firing it by hand
+against an intent statement with one H2 heading:
 
+```text
+$ aidlc engine sensor fire required-sections --stage intent-capture --output-path aidlc/spaces/default/intents/261013-tagged-notes/ideation/intent-capture/intent-statement.md
+{"fire_id":"f00255f3","sensor_id":"required-sections","stage":"intent-capture","output_path":"aidlc/spaces/default/intents/261013-tagged-notes/ideation/intent-capture/intent-statement.md","result":"failed","detail_path":"aidlc/spaces/default/intents/261013-tagged-notes/.aidlc-engine/sensors/intent-capture/required-sections-f00255f3.md"}
 ```
-aidlc engine sensor-required-sections \
-  --stage requirements-analysis \
-  --output-path aidlc/spaces/default/intents/260624-inventory-api/inception/requirements-analysis/requirements.md
+
+The detail file's findings (its JSON block shown here without the fence):
+
+```text
+## Findings
+
+{
+  "pass": false,
+  "h2_count": 1,
+  "headings": [
+    "## Problem Statement"
+  ],
+  "findings_count": 1
+}
 ```
 
 The manifest does not encode the per-fire flags. The dispatcher
@@ -404,21 +456,16 @@ When a sensor proposal is confirmed at the gate, the gate-ritual tool
 scaffolds a new **project-tier** manifest at
 `<project>/.claude/sensors/aidlc-<id>.md` — never the shipped framework
 distribution (a per-project learning loop must not mutate the framework;
-framework-distribution paths are rejected). Fields default to:
+framework-distribution paths are rejected). The selection supplies the fields
+and the tool writes them as given:
 
-| Field | Default | Note |
+| Field | Written as | Note |
 |---|---|---|
-| `id` | derived from user free-text (kebab-case it) | |
-| `kind` | `deterministic` | sole accepted value today |
-| `command` | `bun ./plugins/acme/aidlc-sensor-<id>.ts` | third-party Bun-backed example; the plugin must declare that runtime requirement |
-| `default_severity` | `advisory` | non-blocking default |
-| `fire_on` | `write` | incremental write dispatch |
-| `description` | from user free-text | |
-| `category` | `""` | user fills if desired |
-| `matches` | write-path glob | scaffold prompts for the glob shape the sensor applies to (an artifact-tree glob or a code glob like `**/*.ts`); a write-fired entry with no `matches` never fires |
-| `input_schema` | `{ output_path: string, stage_slug: string }` | matches the dispatcher-appended flags |
-| `output_schema` | `{ pass: boolean }` | minimum structure dispatcher relies on |
-| `timeout_seconds` | omitted unless supplied | dispatcher fallback is `1200` seconds; an explicit manifest value takes precedence |
+| `id`, `kind`, `command`, `default_severity`, `description`, `matches` | the selection's strings | all six are required; `persist` refuses a selection missing one. The manifest must still pass the schema: `kind: deterministic`, and a `command` naming a worker in the tools folder, on a native install named `bun .claude/tools/aidlc-sensor-<id>.ts` |
+| `category` | written when the selection has one | |
+| `timeout_seconds` | written when supplied | dispatcher fallback is `1200` seconds |
+| `fire_on` | not written | so a scaffolded sensor is write-fired (the default) |
+| `input_schema`, `output_schema` | not written | with no `input_schema` keys a custom sensor gets `--output-path` |
 
 After scaffolding the manifest, the gate-ritual tool — inside the same
 `withAuditLock` transaction — appends the new id to the originating
@@ -472,14 +519,11 @@ other enum-shaped fields (`default_severity`, `fire_on`).
 A few sensor capabilities are reserved in the schema but not yet
 active, so the field shape is stable when they land:
 
-- **`kind: llm` dispatch** — LLM-evaluated sensors (v0.11.0). The
-  schema accepts `kind` today but rejects any value other than
-  `deterministic` at parse time.
-- **Write-time blocking** — `blocking` is accepted on write-fired manifests,
-  but only gate-fired failures are enforced in this release.
-
-Both are enforced at write time: shipping a manifest that uses them now
-is an author error that the parser rejects.
+- **`kind: llm` dispatch** - LLM-evaluated sensors. The schema rejects any
+  `kind` other than `deterministic` at parse time.
+- **Write-time blocking** - `blocking` is accepted on write-fired manifests,
+  but only gate-fired failures are enforced in this release; the parser does
+  not reject the combination.
 
 ## Next Steps
 
@@ -493,5 +537,5 @@ is an author error that the parser rejects.
   at workflow start and read off the graph node at fire time. See
   [Plane Architecture](02-plane-architecture.md).
 
-The schema above plus the five shipped manifests in
+The schema above plus the six shipped manifests in
 `dist/claude/.claude/sensors/` are the working examples.

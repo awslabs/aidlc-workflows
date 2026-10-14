@@ -6,7 +6,7 @@
 |-------|-------|
 | Name | aidlc-pipeline-deploy-agent |
 | Tier | **templated** |
-| Allowed Claude Code Tools | Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion |
+| Claude Code Tools | Inherits the full session toolset, MCP tools included (no `tools:` allowlist); expected to use Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion |
 | Disallowed Claude Code Tools | Task |
 
 ---
@@ -57,14 +57,14 @@ Path: `.claude/knowledge/aidlc-pipeline-deploy-agent/`
 | File | Content |
 |------|---------|
 | cicd-patterns.md | CI/CD pipeline patterns, quality gates, artifact management |
-| deployment-strategies.md | Deployment strategy patterns (blue-green, canary, rolling, recreate) |
+| deployment-strategies.md | Deployment strategy patterns (blue-green, canary, rolling, A/B testing, feature flags) and rollback |
 | branching-strategies.md | Five branching strategies (trunk-based, GitHub Flow, GitFlow, release branches, monorepo) with AI-DLC worktree mappings; surveyed at Bolt-merge dispatch |
 
 ### Team (Tier 2)
 
-Path: `aidlc/knowledge/aidlc-pipeline-deploy-agent/` (the space-level knowledge dir; user-managed)
+Path: `aidlc/spaces/<active-space>/knowledge/aidlc-pipeline-deploy-agent/` (the space-level knowledge dir; user-managed)
 
-A space-level directory the team creates when it has content (the engine ships `aidlc/knowledge/` empty). Populated by the team with project-specific
+A space-level directory the team creates when it has content (the engine creates the space's `knowledge/` folder empty). Populated by the team with project-specific
 deployment context such as existing pipeline configurations, deployment
 runbooks, or release approval workflows.
 

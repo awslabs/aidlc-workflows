@@ -262,7 +262,8 @@ if (sessionId) {
 ensureActiveSpaceCursor(projectDir);
 // A file written here may be one the host already read for this chat. Kiro
 // CLI and opencode read the copy again with every request, so a copy written
-// here reaches their next request as it is; every other host read its include
+// here reaches their next request as it is, and the Kiro IDE tree never reads
+// it (its chats read the steering file); every other host read its include
 // when the chat loaded.
 let includeRepointed = addRootBlocks(projectDir).length > 0;
 // The copied files that were behind before this start wrote them.
@@ -271,8 +272,8 @@ try {
   copyBehind = activeMemoryCopyDrift(projectDir, selection.space);
   const written = refreshActiveMemory(projectDir, selection.space);
   if (!written.includes(ACTIVE_MEMORY_DIR)) copyBehind = [];
-  const rereadsCopy = ["kiro", "opencode"].includes(runtimeHarnessName(projectDir));
-  if (written.some((path) => path !== ACTIVE_MEMORY_DIR || !rereadsCopy)) includeRepointed = true;
+  const noOlderCopyInChat = ["kiro", "opencode", "kiro-ide"].includes(runtimeHarnessName(projectDir));
+  if (written.some((path) => path !== ACTIVE_MEMORY_DIR || !noOlderCopyInChat)) includeRepointed = true;
 } catch {
   // non-fatal: the copy is written again at the next /aidlc, switch or --doctor
 }

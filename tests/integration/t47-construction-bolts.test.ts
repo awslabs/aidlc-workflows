@@ -232,10 +232,9 @@ describe("t47 Construction Bolt vocabulary (migrated from t47-construction-bolts
     );
   });
 
-  test("construction protocol destages Bolt-major ceremony as non-executable", () => {
-    expect(CONSTRUCTION_PROTOCOL).toContain("Non-executable future-state");
-    expect(CONSTRUCTION_PROTOCOL).toContain("Do not collect questions by Bolt");
-    expect(CONSTRUCTION_PROTOCOL).toContain("do not present a Bolt-level answers gate");
+  test("construction protocol carries no planned Bolt-major ceremony", () => {
+    expect(CONSTRUCTION_PROTOCOL).not.toContain("Non-executable future-state");
+    expect(CONSTRUCTION_PROTOCOL).not.toContain("Bolt-level answers gate");
     expect(CONSTRUCTION_PROTOCOL).not.toMatch(
       /That Bolt always presents a Bolt-level\napproval gate/,
     );

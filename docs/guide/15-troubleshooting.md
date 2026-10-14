@@ -283,7 +283,8 @@ started.
    authors; trust it. If your organization has switched Chat: Use Hooks off,
    only your administrator can turn it back on.
 2. In the Copilot CLI, trust the folder when it asks. A headless `copilot -p`
-   run also needs `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1` in its environment.
+   run never asks: start `copilot` in the folder once and choose "Yes, and
+   remember this folder for future sessions".
 
 See [GitHub Copilot](harnesses/copilot.md) for the folder trust details.
 
@@ -299,7 +300,9 @@ can do this for you.
 opencode loads AI-DLC's plugin only when it starts plainly in the project
 folder: not under `--pure`, and not from a subfolder. Quit opencode and start
 it again with just `opencode` in the project folder, then type `/aidlc` to
-carry on.
+carry on. When the agent stopped a request of yours with this step, type the
+`/aidlc --request <id>` line it showed you instead: that request carries on,
+once.
 
 ### Claude managed policy blocks project hooks
 
@@ -313,7 +316,7 @@ If Cursor keeps asking you to approve the same plan, or says your choice did not
 
 ### Reviewer tool calls refused ("This review cannot open ...")
 
-During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the stage-protocol-reviewer.md section 12a read-scope bound); the refusal names the current unit and directs the reviewer to the supplied files and that unit's own path, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), `/aidlc config set guard.reviewer-scope off` lowers just the reviewer read-scope check for the piece of work you are on (recorded as a `GUARD_DISABLED` audit row, back on for the next one), and `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables that read-scope enforcement machine-wide; the prose bound still governs under either. Neither setting permits a claimed team checkout to write another Unit's `construction/` subtree. A general request in chat does not lower the read-scope check: type the switch above and the agent runs the setter for it. Changing scope alone never lowers the running policy. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-engine/reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
+During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the read-scope bound in stage-protocol-reviewer-unit.md); the refusal names the current unit and directs the reviewer to the supplied files and that unit's own path, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), `/aidlc config set guard.reviewer-scope off` lowers just the reviewer read-scope check for the piece of work you are on (recorded as a `GUARD_DISABLED` audit row, back on for the next one), and `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables that read-scope enforcement machine-wide; the prose bound still governs under either. Neither setting permits a claimed team checkout to write another Unit's `construction/` subtree. A general request in chat does not lower the read-scope check: type the switch above and the agent runs the setter for it. Changing scope alone never lowers the running policy. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-engine/reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
 
 Ordinary filters such as `grep latency construction/U03-scoring/nfr.md | grep endpoint` are allowed because the second `grep` searches the piped text. A pipe does not exempt commands that still traverse files: recursive `grep`, `rg --files`, and `rg -f -` still need an in-scope search root or, for `rg`, a glob constrained to the current unit. Pattern files supplied with `-f` must also be in scope. When a pathless command falls back to `.` and is refused, the message identifies that root as implicit.
 
@@ -367,7 +370,7 @@ Claude Code honours `"disableAllHooks": true` in any settings layer: enterprise 
 - If the offending layer is a **project or user file**, set `"disableAllHooks": false` in this project's `.claude/settings.local.json`. That file outranks the project and user files, so it covers a switch-off in any of them without changing your user settings, and it works in the same chat: no restart and no `/hooks`.
 - If it is **enterprise managed settings**, the highest-precedence layer, a project or user file cannot override it: ask your Claude Code administrator to allow project hooks.
 - If you **started Claude Code with a setting that turns hooks off** (for example `--settings '{"disableAllHooks": true}'`), a project file cannot override it either, and doctor cannot see it: start Claude Code again without that setting.
-- If **AI-DLC was set up while Claude Code was already open in this folder**, that session never loaded its hooks (on a native install they call `aidlc`, which the open session cannot find yet): exit Claude Code and start it again in this folder, then type `/aidlc`. Your first request is kept and carries on.
+- If **AI-DLC was set up while Claude Code was already open in this folder**, that session never loaded its hooks (on a native install they call `aidlc`, which the open session cannot find yet): exit Claude Code and start it again in this folder, then type the line the agent showed you: `/aidlc --request <id>` carries on with the request it stopped, once, and `/aidlc` alone carries on where the work stands.
 
 The check reads the on-disk managed-settings **file** (`/etc/claude-code/managed-settings.json` on Linux, `/Library/Application Support/ClaudeCode/managed-settings.json` on macOS, `%ProgramFiles%\ClaudeCode\managed-settings.json` on current Windows — `%PROGRAMDATA%\ClaudeCode\` is a legacy secondary) plus alphabetical JSON files in the sibling `managed-settings.d/` directory. It does **not** inspect other managed channels Claude Code supports (MDM, Windows registry, or a remote/server-managed source), so a passing row means the resolved value is not `true` in any settings file the check could read, not a guarantee those channels are clean. If your managed file lives at a non-standard path, point the check at it with `AIDLC_MANAGED_SETTINGS_PATH=/path/to/managed-settings.json`; fragments beside that file are included.
 
@@ -617,7 +620,12 @@ If you are asked again, check what changed and which rule applies:
 
 The question names what it is about. Other code moving after approval (a `git
 pull`, another Unit landing) never asks again: the build continues and you hear
-one line naming the files. Nor does anything between your answer and the build:
+which files moved. The exception is a build of Units in parallel under
+`strict`: a change after you approved (your edit or commit, a `git pull`) asks
+again before the Units are set up, and stops the next Unit from landing until
+you undo it or set Guard Policy `relaxed` (see
+[Guard Policy](13-customization.md#guard-policy)). Nor does anything between
+your answer and the build:
 a long chat compacting its context, parking the work and resuming it, or another
 question coming up first. Say "review the plan" if you want to look again first,
 including right after any of those: the plan is shown for approval again before
@@ -637,13 +645,19 @@ AI-DLC. Answer the question it shows. If it keeps coming back, run
 reply. A long chat that compacts its context while the question waits keeps
 the question open, so your answer still counts.
 
-If AI-DLC says the workspace source cannot be read, the plan cannot be approved
-yet, because nothing could say what the build starts from. Repair the source
-boundary the message names (add the offending path to the exclude list in
-`.aidlc-source-paths.json`, declare real source under an excluded directory in
-its paths list, or remove a broken symlink), then run `/aidlc` (`$aidlc` on
-Codex). `/aidlc --doctor` has a "Workspace source boundary binds" check that
-names the failing path.
+If AI-DLC says the project's files cannot all be read, or that the workspace
+source cannot be bound (a link that loops, a tree too large to read, or a
+source path outside the project), what happens depends on your settings. Under Guard Policy strict with plan approval on, the
+plan cannot be approved yet, because nothing could say what the build starts
+from. Otherwise the plan question is asked as usual (with plan approval off,
+the plan is built as written) and the build starts without a check of the
+project's files, with one line that says so. To have the files checked, repair
+the source boundary the message names (add the offending path to the exclude
+list in `.aidlc-source-paths.json`, which looks like
+`{"version":1,"exclude":["<path>"]}`, declare real source under an excluded
+directory in its paths list, or remove a broken symlink), then run `/aidlc`
+(`$aidlc` on Codex). `/aidlc --doctor` has a "Workspace source boundary binds"
+check that names the failing path and says which of these applies to you.
 
 If the plan's Testing Contract is refused, the message names one of three
 causes: the block is missing, it is not valid JSON, or it changed after it was

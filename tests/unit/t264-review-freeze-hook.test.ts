@@ -1487,6 +1487,48 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
     ).not.toBe("guard-recovery");
   });
 
+  // The person picks "Turn this check off" by its number. The choice tells the
+  // agent to run its command with that reply as their words, so the check is
+  // recorded as theirs.
+  test("the turn-it-off choice picked by its number: the check is off, set by you", () => {
+    const p = projBeforeGate();
+    recordReview(p, "READY");
+    refusedWrite(p);
+    const person = {
+      AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000000264",
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+      AIDLC_UNATTENDED: "0",
+    };
+    const asked = nextDirective(p, person);
+    const remedies = asked.remedies as { op: string; action: string }[];
+    const at = remedies.findIndex((remedy) => remedy.op === "lower-fence");
+    expect(at, JSON.stringify(asked)).toBeGreaterThan(-1);
+    expect(remedies[at].action).toContain("--person-words '<their words>'");
+    const dispatcher = join(DIST_CLAUDE, "tools", "aidlc.ts");
+    const picked = spawnSync(BUN, [dispatcher, "engine", "hook", "record-human-turn"], {
+      cwd: p,
+      input: JSON.stringify({
+        hook_event_name: "UserPromptSubmit", session_id: person.AIDLC_SESSION_OVERRIDE, prompt: String(at + 1),
+      }),
+      env: { ...process.env, ...person, CLAUDE_PROJECT_DIR: p, AIDLC_PROJECT_DIR: p },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(picked.status, picked.stderr).toBe(0);
+    // The agent runs that choice's command with their reply, as its action says.
+    const off = spawnSync(BUN, [
+      dispatcher, "engine", "config", "set", "guard.review-freeze", "off", "--person-words", String(at + 1), "--project-dir", p,
+    ], {
+      cwd: p,
+      env: { ...process.env, ...person, CLAUDE_PROJECT_DIR: p },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(off.status, `${off.stdout}${off.stderr}`).toBe(0);
+    const state = readFileSync(join(seededRecordDir(p), "aidlc-state.md"), "utf-8");
+    expect(state).toMatch(/^- \*\*Guards Off\*\*: review-freeze \(set by you\)$/m);
+  });
+
   test("every conductor runs the step a hook refusal names", () => {
     const missing: string[] = [];
     for (const harness of ["claude", "kiro", "kiro-ide", "codex", "cursor", "opencode", "copilot"]) {

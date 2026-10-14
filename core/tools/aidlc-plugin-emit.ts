@@ -38,6 +38,7 @@ import {
   TRUSTED_ROUTE_NAMESPACE,
   trustedCommand,
 } from "./aidlc-command.ts";
+import { sharedKnowledgeWithoutFormatDocs } from "./aidlc-inline-context.ts";
 import { runWithOwnerStampedLock } from "./aidlc-lib.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 
@@ -227,7 +228,7 @@ function injectDelegatedKnowledgePreflight(
     `${marker}\n` +
     `**Delegated knowledge preflight (mandatory):** Before substantive work, ` +
     `ensure every readable Markdown file under these directories is loaded, in order: ` +
-    `\`${harnessDir}/knowledge/aidlc-shared/\`, ` +
+    `${sharedKnowledgeWithoutFormatDocs(harnessDir)}, ` +
     `\`${harnessDir}/knowledge/${agentName}/\`, ` +
     `\`aidlc/spaces/<active-space>/knowledge/aidlc-shared/\`, then ` +
     `\`aidlc/spaces/<active-space>/knowledge/${agentName}/\`. ` +

@@ -264,8 +264,11 @@ function guardBash(proj: string, command: string): { code: number; stderr: strin
 // Runs an engine command the way the conductor would, after the guard let it
 // through: the installed tools in the project, as the engine spelled them.
 function runInstalled(proj: string, command: string): string {
-  expect(command).toMatch(/^bun \.claude\/tools\/[\w.-]+\.ts( [\w-]+)+$/);
-  const [, ...args] = command.split(" ");
+  expect(command).toMatch(/^bun \.claude\/tools\/[\w.-]+\.ts( [\w-]+)+( --reason '[^']*')?$/);
+  // The engine's own reason for the person's skip is one quoted argument.
+  const reason = /--reason '([^']*)'$/.exec(command)?.[1];
+  const [, ...args] = command.replace(/ --reason '[^']*'$/, "").split(" ");
+  if (reason !== undefined) args.push("--reason", reason);
   const result = spawnSync(BUN, args, {
     cwd: proj,
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
@@ -364,6 +367,25 @@ describe("the engine asks for Plan Approval", () => {
     writeFileSync(join(proj, "src", "more.ts"), "export const more = 1;\n", "utf-8");
     expect(next(proj).plan_approval.targets?.[0].summary.at(-1))
       .toBe("Already changed before you approved (2 files): src/extra.ts, src/more.ts.");
+  });
+
+  // An AI-DLC update while the plan waits rewrites AI-DLC's own files (Codex's
+  // skill under .agents/skills/): nothing ran ahead of the plan, so the
+  // question names only the person's source.
+  test("the plan question never names AI-DLC's own files an update changed", () => {
+    const proj = project();
+    const skill = join(proj, ".agents", "skills", "aidlc", "SKILL.md");
+    mkdirSync(dirname(skill), { recursive: true });
+    writeFileSync(skill, "AI-DLC 1\n", "utf-8");
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    askFor(proj);
+    writeFileSync(skill, "AI-DLC 2\n", "utf-8");
+    const updated = next(proj);
+    expect(updated.kind, JSON.stringify(updated)).toBe("ask");
+    expect((updated.plan_approval.targets ?? [])[0].summary.some((line) => line.startsWith("Already changed"))).toBe(false);
+    writeFileSync(join(proj, "src", "extra.ts"), "export const extra = 1;\n", "utf-8");
+    expect(next(proj).plan_approval.targets?.[0].summary.at(-1)).toBe("Already changed before you approved: src/extra.ts.");
   });
 
   // The line measures from the stage's start or from the previous plan approval,
@@ -469,7 +491,7 @@ describe("the engine asks for Plan Approval", () => {
     // stage's dispatched mode and handed the plan to the developer, which the
     // guard refused), and the person hears who does what.
     expect(planning.mode).toBe("inline");
-    expect(planning.narration).toBe("Writing the code plan for Code Generation first; the developer builds from it.");
+    expect(planning.narration).toBe("Writing the code plan for Code Generation (stage 21 of 30) first; the developer builds from it.");
 
     const ask = askFor(proj);
     expect(ask.question).toBe("Approve the code plan?");
@@ -863,6 +885,28 @@ describe("the engine asks for Plan Approval", () => {
     expect(recorded.code, recorded.message).toBe(0);
     expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  // "Approve it, and turn the sensors off": the agent records the approval
+  // first, then runs the setter with their words and no chat it can name. The
+  // approval their reply led to leaves the setting it also asked for theirs.
+  test("an approval and a setting in one reply: the approval recorded first, the setting is still theirs", () => {
+    const proj = project();
+    askFor(proj);
+    const words = "approve it, and turn the sensors off";
+    reply(proj, words);
+    // The approval row lands in a later second than their reply.
+    Bun.sleepSync(1100);
+    const approved = answer(proj, "Approve Plan");
+    expect(approved.code, approved.message).toBe(0);
+    const set = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "sensors", "off", "--person-words", words, "--project-dir", proj], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(set.status, `${set.stdout}${set.stderr}`).toBe(0);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Sensors**: off (set by you)");
   });
 
   test("Guard Policy off typed before a plan choice lands on this work through the setter, which then builds", () => {
@@ -2671,6 +2715,43 @@ describe("what the engine names while a plan waits", () => {
     expect(auditText(proj)).toContain("**Person Reply**: approve the plan, but let's stop there for today");
   });
 
+  // Skipping Code Generation itself while its plan waits: the skip the engine
+  // names gets through and runs, the plan question goes with the stage, and the
+  // work goes on to Build and Test without asking about the plan again.
+  test("a skip of Code Generation while its plan waits is carried out, and the plan is not asked about again", () => {
+    const proj = project("strict");
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8").replace("- [ ] code-generation", "- [-] code-generation"), "utf-8");
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    askFor(proj);
+    reply(proj, "/aidlc --skip code-generation");
+    const named = next(proj, ["--skip", "code-generation"]);
+    const commands = namedCommands(named);
+    expect(commands.some((command) => command.includes("engine recompose")), JSON.stringify(named)).toBe(false);
+    const skip = commands.find((command) => command.includes("report --stage code-generation --result skipped"));
+    expect(skip, JSON.stringify(named)).toBeDefined();
+    const verdict = guardBash(proj, skip as string);
+    expect(verdict.code, `${skip}\n${verdict.stderr}`).toBe(0);
+    const reason = /--reason '([^']*)'/.exec(skip as string)?.[1];
+    const skipped = spawnSync(BUN, [
+      join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), "report", "--stage", "code-generation",
+      "--result", "skipped", "--reason", String(reason), "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(skipped.status, `${skipped.stdout}${skipped.stderr}`).toBe(0);
+    expect(readFileSync(file, "utf-8")).toContain("- [S] code-generation");
+    expect(planApprovalAskIsOpen(proj)).toBe(false);
+    for (let turn = 0; turn < 2; turn++) {
+      const after = next(proj);
+      expect(after.kind, JSON.stringify(after)).toBe("run-stage");
+      expect(after.stage).toBe("build-and-test");
+    }
+  });
+
   // A scope or setting change asked for while the plan waits, alone or with a
   // skip: each step the engine names runs, and the plan question is still the
   // open step, answered with the person's words. A new scope tests the plan
@@ -3105,11 +3186,11 @@ describe("stopping for now at Code Generation", () => {
     cpSync(join(AIDLC_SRC, "tools"), join(proj, ".claude", "tools"), { recursive: true });
     askFor(proj);
     const source = workspaceSourceFingerprint(proj);
-    let park = "bun .claude/tools/aidlc.ts engine orchestrate park";
+    let park = "bun .claude/tools/aidlc.ts engine orchestrate park --person-asked";
     if (how === "typed") {
       const named = next(proj, ["park"]);
       expect(named.kind, JSON.stringify(named)).toBe("print");
-      park = /Run `([^`]+ park)`/.exec(named.message ?? "")?.[1] ?? "";
+      park = /Run `([^`]+ park --person-asked)`/.exec(named.message ?? "")?.[1] ?? "";
     }
     const parkAdmitted = guardBash(proj, park);
     expect(parkAdmitted.code, `${park}\n${parkAdmitted.stderr}`).toBe(0);
@@ -3158,11 +3239,12 @@ describe("a question about the switch is no answer to the plan question", () => 
 // and a yes is the ask. A request, plain or phrased as a question, is done at
 // once by the setter the agent runs, with their words. No tool reads the words.
 describe("a question about plan approval turns nothing off; a request does", () => {
-  // The setter as the agent runs it under production guards: no presence bypass.
-  function setter(proj: string): { code: number; out: string } {
+  // The setter as the agent runs it under production guards: no presence bypass,
+  // with the words of the reply that asked for it (the agent read them).
+  function setter(proj: string, words: string): { code: number; out: string } {
     const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
-    const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "guard.plan-approval", "off"], {
+    const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "guard.plan-approval", "off", "--person-words", words], {
       cwd: proj,
       env,
       encoding: "utf-8",
@@ -3179,7 +3261,7 @@ describe("a question about plan approval turns nothing off; a request does", () 
     expect(offRows(proj)).toBe(0);
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     reply(proj, "yes");
-    const lowered = setter(proj);
+    const lowered = setter(proj, "yes");
     expect(lowered.code, lowered.out).toBe(0);
     expect(offRows(proj)).toBeGreaterThan(0);
     expect(auditText(proj)).toContain("**Person Reply**: yes");
@@ -3190,7 +3272,7 @@ describe("a question about plan approval turns nothing off; a request does", () 
       const proj = project(policy);
       askFor(proj);
       reply(proj, words);
-      const lowered = setter(proj);
+      const lowered = setter(proj, words);
       expect(lowered.code, `${words}: ${lowered.out}`).toBe(0);
       expect(auditText(proj)).toContain(`**Person Reply**: ${words}`);
     }
@@ -3201,7 +3283,7 @@ describe("a question about plan approval turns nothing off; a request does", () 
     askFor(proj);
     reply(proj, "skip plan approval for this work");
     expect(offRows(proj)).toBe(0);
-    const lowered = setter(proj);
+    const lowered = setter(proj, "skip plan approval for this work");
     expect(lowered.code, lowered.out).toBe(0);
     expect(offRows(proj)).toBeGreaterThan(0);
     expect(auditText(proj)).toContain("**Person Reply**: skip plan approval for this work");
@@ -3229,7 +3311,7 @@ describe("a question about plan approval turns nothing off; a request does", () 
     reply(proj, "/aidlc");
     askFor(proj);
     reply(proj, "skip plan approval for this work");
-    const lowered = setter(proj);
+    const lowered = setter(proj, "skip plan approval for this work");
     expect(lowered.code, lowered.out).toBe(0);
     expect(offRows(proj)).toBeGreaterThan(0);
   });

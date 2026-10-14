@@ -2,7 +2,7 @@
 //
 // t59-workflow-depth-override.test.ts — SDK-harness port of
 // tests/e2e/t59-workflow-depth-override.sh (plan 6). Drives the real
-// `/aidlc --scope bugfix --depth comprehensive` through the Claude Agent SDK on
+// `/aidlc --scope bugfix --depth comprehensive <description>` through the Claude Agent SDK on
 // a fresh brownfield project and asserts ONLY on deterministic surfaces — the
 // init tool's verbatim stdout, the on-disk state fields, and the parsed audit
 // events — NEVER on assistantText.
@@ -133,8 +133,10 @@ describe("t59 /aidlc --scope bugfix --depth comprehensive depth override (sdk)",
         withBrownfieldStub: true,
       });
       try {
+        // With a description: named alone, the scope first asks what the work is
+        // for (#2355), and this journey is about the creation that follows.
         const r = await driveAidlc(
-          `/aidlc --scope ${SCOPE} --depth comprehensive`,
+          `/aidlc --scope ${SCOPE} --depth comprehensive fix the login: it rejects a correct password`,
           {
             projectDir: proj,
             answerScript: "default",

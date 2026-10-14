@@ -138,7 +138,7 @@ function constructionState(
 - **Construction Iteration**: ${iteration}
 ${reviewOverride ? `- **Review Override**: ${reviewOverride}\n` : ""}
 ${autonomy ? `- **Construction Autonomy Mode**: ${autonomy}\n` : ""}
-${ownership ? `- **Unit Ownership**: ${ownership}\n` : ""}
+- **Unit Ownership**: ${ownership ?? "solo"}
 
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -660,6 +660,8 @@ describe("t278 engine-emitted wave contract", () => {
       "api",
       "web",
     ]);
+    // A wave step names the module that says how a wave runs.
+    expect(directive.protocol_modules).toContain("wave");
 
     const api = directive.wave?.entries[0] as WaveEntry;
     const web = directive.wave?.entries[1] as WaveEntry;
@@ -1762,7 +1764,7 @@ describe("t278 wave protocol parity", () => {
         "core",
         "aidlc-common",
         "protocols",
-        "stage-protocol-construction.md",
+        "stage-protocol-wave.md",
       ),
       "utf-8",
     );

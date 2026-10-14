@@ -347,11 +347,12 @@ describe("documentation parity derives current behavior from authored implementa
 
   test("Kiro IDE documentation names only IDE-native enforcement and configuration surfaces", () => {
     const skill = read("harness", "kiro-ide", "skills", "aidlc", "SKILL.md");
+    // The dispatch-record rule is per Unit, in the per-Unit review module.
     const reviewerProtocol = read(
       "core",
       "aidlc-common",
       "protocols",
-      "stage-protocol-reviewer.md",
+      "stage-protocol-reviewer-unit.md",
     );
     const questionRendering = read(
       "harness",
@@ -600,6 +601,17 @@ describe("documentation parity derives current behavior from authored implementa
     const copies = [...filesBelow(at("docs"), ".md"), ...filesBelow(at("core", "aidlc-common", "protocols"), ".md")]
       .filter((file) => stale.test(readFileSync(file, "utf8").replace(/\s+/g, " ")));
     expect(copies).toEqual([]);
+  });
+
+  test("no copy says headless copilot -p runs need GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS", () => {
+    // Trust alone runs the hooks in `copilot -p` on Copilot CLI 1.0.74 and 1.0.96, and `=1` does nothing.
+    const copies = [...filesBelow(at("docs"), ".md"), at("README.md")]
+      .filter((file) => readFileSync(file, "utf8").includes("GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS"));
+    expect(copies).toEqual([]);
+    expect(normalized(read("docs", "guide", "15-troubleshooting.md"))).toContain(
+      'A headless `copilot -p` run never asks: start `copilot` in the folder once and choose "Yes, and remember ' +
+        'this folder for future sessions".',
+    );
   });
 
   test("a review the person asks for is recorded under every Guard Policy, and no copy reads as needing strict", () => {

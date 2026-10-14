@@ -66,12 +66,14 @@ import {
   resolveProjectDir,
   resolveWorkflowSelection,
   serializeSourceListing,
+  sourceChangedOutsideAidlc,
   sourceListingEntriesEqual,
   sourceListingSha256,
   swarmUnitCheckpointRejections,
   type WorkspaceSourceState,
   type WorkflowSelection,
   UNBINDABLE_FINGERPRINT,
+  onlyAidlcFilesChangedSince,
   validateUnitName,
   workspaceSourceFailureSuffix,
   recordedSourceListingUnderCurrentBoundary,
@@ -82,6 +84,7 @@ import {
   unmergedRootSettingsNotices,
   workspaceSourceState,
   worktreePath,
+  writeBaselineSourceSnapshot,
   worktreesDir,
   worktreeStateFilePath,
   writeFileAtomic,
@@ -1977,46 +1980,6 @@ function assertConvergedSourceUnchanged(
   return record.commit;
 }
 
-function sourceListingsEqual(
-  left: ReadonlyMap<string, string>,
-  right: ReadonlyMap<string, string>,
-): boolean {
-  if (left.size !== right.size) return false;
-  for (const [key, value] of left) {
-    if (!sourceListingEntriesEqual(right.get(key), value)) return false;
-  }
-  return true;
-}
-
-function changedSourceListingKeys(
-  left: ReadonlyMap<string, string>,
-  right: ReadonlyMap<string, string>,
-): Set<string> {
-  const changed = new Set<string>();
-  for (const [key, value] of left) {
-    if (!sourceListingEntriesEqual(right.get(key), value)) changed.add(key);
-  }
-  for (const key of right.keys()) {
-    if (!left.has(key)) changed.add(key);
-  }
-  return changed;
-}
-
-function changedSourceListingPaths(
-  left: ReadonlyMap<string, string>,
-  right: ReadonlyMap<string, string>,
-): string[] {
-  return [...changedSourceListingKeys(left, right)]
-    .sort()
-    .slice(0, 10)
-    .map((key) => {
-      const separator = key.indexOf("\0");
-      const repo = separator === -1 ? "" : key.slice(0, separator);
-      const path = separator === -1 ? key : key.slice(separator + 1);
-      return repo ? `${repo}/${path}` : path;
-    });
-}
-
 function assertAggregateSourceBeforeMerge(
   pd: string,
   slug: string,
@@ -2072,7 +2035,10 @@ function assertAggregateSourceBeforeMerge(
       );
     }
     if (resuming) return { state: current, openingFingerprint: chain.fingerprint };
-    if (!sameWorkspaceSource(chain.fingerprint, current.fingerprint)) {
+    if (
+      !sameWorkspaceSource(chain.fingerprint, current.fingerprint) &&
+      !onlyAidlcFilesChangedSince(pd, record.stage, chain.listing, current, intent, space)
+    ) {
       if (acceptsChanges) return keepChange(chain.fingerprint, null);
       errorWithSlug(
         slug,
@@ -2103,24 +2069,25 @@ function assertAggregateSourceBeforeMerge(
   const openingListing = opening.listing === undefined
     ? undefined
     : recordedSourceListingUnderCurrentBoundary(opening.listing, current.listing);
-  if (
-    opening.source === "stage-baseline" &&
-    openingListing !== undefined &&
-    !sourceListingsEqual(current.listing, openingListing)
-  ) {
-    const changed = changedSourceListingPaths(
-      current.listing,
-      openingListing,
-    );
+  // An AI-DLC update the person took changed only AI-DLC's own files: nobody's source.
+  const changed = openingListing !== undefined
+    ? sourceChangedOutsideAidlc(pd, openingListing, current.listing)
+    : [];
+  if (changed.length > 0) {
     if (acceptsChanges) return keepChange(opening.fingerprint, changed);
     errorWithSlug(
       slug,
-      `refusing to merge: the main checkout source changed since the stage-entry baseline (${renderChangedPaths(changed) || "unknown paths"}). ` +
+      (opening.source === "prior-accepted"
+        ? "refusing to merge: the main checkout source does not match the prior attempt's final reviewed aggregate"
+        : "refusing to merge: the main checkout source changed since the stage-entry baseline") +
+        ` (${renderChangedPaths(changed)}). ` +
         "Undo those changes and run the merge again; or, if the person wants to keep them, set Guard Policy relaxed for this piece of work with their go-ahead, then run the merge again.",
     );
   }
+  // A rejection an earlier release wrote kept no listing: compare fingerprints.
   if (
     opening.source === "prior-accepted" &&
+    openingListing === undefined &&
     !sameWorkspaceSource(opening.fingerprint, current.fingerprint)
   ) {
     if (acceptsChanges) return keepChange(opening.fingerprint, null);
@@ -3021,6 +2988,15 @@ function handleMerge(args: string[]): void {
       );
     }
     const driverMerged = [...landed.drivers.values()].flat().sort();
+    // The listing this landing left, so the next landing and the stage's
+    // completion can tell an AI-DLC update from a change to source. Without it
+    // they compare fingerprints, so a failed write never fails the landing.
+    let listing: string | undefined;
+    try {
+      listing = writeBaselineSourceSnapshot(pd, sourceRecord.stage, aggregateAfter.listing, flags.intent, flags.space);
+    } catch {
+      listing = undefined;
+    }
     try {
       emitAudit(
         pd,
@@ -3032,6 +3008,7 @@ function handleMerge(args: string[]): void {
           "Run floor": sourceRecord.floor,
           "Previous Source Fingerprint": aggregateBefore.openingFingerprint,
           "Source Fingerprint": aggregateAfter.fingerprint,
+          ...(listing === undefined ? {} : { "Source Listing": listing }),
           "Source Commit": sourceRecord.commit,
           "Merge commit": commitSha,
           Repo: repoTarget.repo ?? "-",

@@ -24,6 +24,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
+import { sharedKnowledgeWithoutFormatDocs } from "../core/tools/aidlc-inline-context.ts";
 
 // Walk core and owned-plugin stages and collect every frontmatter `reviewer:`
 // value. Cached per coreRoot - the packager calls this once per projected
@@ -54,6 +55,38 @@ export function reviewerAgentSet(coreRoot: string): Set<string> {
     }
   }
   reviewerSetCache.set(coreRoot, set);
+  return set;
+}
+
+// Every agent a core stage reads in the lead's own chat: the lead of an inline
+// or mob stage and the supports of an inline one, as inlineAgentsFor
+// (core/tools/aidlc-inline-context.ts) picks them at run time. A plugin stage's
+// lead that is missing here reads its full agent file instead.
+const inlineSetCache = new Map<string, Set<string>>();
+
+export function inlineAgentSet(coreRoot: string): Set<string> {
+  const cached = inlineSetCache.get(coreRoot);
+  if (cached) return cached;
+  const set = new Set<string>();
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir).sort()) {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!entry.endsWith(".md")) continue;
+      const fm = readFileSync(full, "utf-8").replace(/\r\n/g, "\n").match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
+      const mode = fm.match(/^mode:\s*(\S+)/m)?.[1];
+      const lead = fm.match(/^lead_agent:\s*(\S+)/m)?.[1];
+      const supports = [...(fm.match(/^support_agents:\n((?:[ \t]+-[ \t]+\S+\n?)*)/m)?.[1] ?? "").matchAll(/-[ \t]+(\S+)/g)]
+        .map((m) => m[1]);
+      const agents = mode === "inline" ? [lead, ...supports] : mode === "mob" ? [lead] : [];
+      for (const agent of agents) if (agent && agent !== "orchestrator") set.add(agent);
+    }
+  };
+  walk(join(coreRoot, "aidlc-common", "stages"));
+  inlineSetCache.set(coreRoot, set);
   return set;
 }
 
@@ -105,7 +138,7 @@ export function injectDelegatedKnowledgePreflight(
     `${DELEGATED_KNOWLEDGE_PREFLIGHT}\n` +
     `**Delegated knowledge preflight (mandatory):** Before substantive work, ` +
     `ensure every readable Markdown file under these directories is loaded, in order: ` +
-    `\`${harnessDir}/knowledge/aidlc-shared/\`, ` +
+    `${sharedKnowledgeWithoutFormatDocs(harnessDir)}, ` +
     `\`${harnessDir}/knowledge/${agentName}/\`, ` +
     `\`aidlc/spaces/<active-space>/knowledge/aidlc-shared/\`, then ` +
     `\`aidlc/spaces/<active-space>/knowledge/${agentName}/\`. ` +

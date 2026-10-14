@@ -264,7 +264,7 @@ describe("t-scope-change-reopens-finished-work: a scope switch on finished work 
     const said = step.narration ?? "";
     expect(said.startsWith("Switched to express"), said).toBe(true);
     expect(said).toContain("Plan Approval changed: on (from scope bugfix) to off (from scope express).");
-    expect(said.endsWith("Now working on Observability Setup, wearing the operations engineer hat."), said).toBe(true);
+    expect(said.endsWith("Now working on Observability Setup (stage 6 of 6), wearing the operations engineer hat."), said).toBe(true);
     // Said once: the next step does not say it again.
     expect(lib.pendingPersonLines(proj, SESSION).lines).toEqual([]);
     expect(next(proj).narration ?? "").not.toContain("Switched to");

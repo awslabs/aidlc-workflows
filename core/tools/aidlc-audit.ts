@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import {
@@ -31,6 +32,7 @@ import {
   cloneIdPath,
   entrySkillInvocation,
   errorMessage,
+  GIT_PLATFORM_ARGS,
   hasUnsafeSingleLineCharacter,
   isoTimestamp,
   mergeReviewRecordsFromDelta,
@@ -1379,6 +1381,44 @@ function forksCorrelate(left: AuditForkRecord, right: AuditForkRecord): boolean 
   );
 }
 
+// The commit a Bolt worktree was created from, as `aidlc-worktree create` recorded
+// it beside the worktree; null when the metadata is absent or does not name one.
+function worktreeCreationCommit(wtPath: string): string | null {
+  const metaPath = join(wtPath, ".aidlc", "worktree-meta.json");
+  if (!existsSync(metaPath)) return null;
+  try {
+    const meta = JSON.parse(
+      readRegularFileNoFollowOrThrow(metaPath, "worktree metadata").toString("utf-8"),
+    ) as { baseCommit?: unknown };
+    return typeof meta.baseCommit === "string" && /^[0-9a-f]{40,64}$/.test(meta.baseCommit)
+      ? meta.baseCommit
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+// A worktree checked out from a commit that carries the parent's audit starts
+// with that file. It is the base's copy, not work the worktree did, exactly when
+// the creation commit tracks the path and the checkout has not changed it (git
+// compares after its own line-ending conversion). Anything else is the worktree's
+// own: a row it wrote, a copy committed on its branch (equal to HEAD, not to the
+// creation commit), an untracked file, or no readable creation commit.
+function worktreeAuditInheritedFromBase(wtPath: string, wtAuditPath: string): boolean {
+  const base = worktreeCreationCommit(wtPath);
+  if (base === null) return false;
+  const path = relative(wtPath, wtAuditPath).replaceAll("\\", "/");
+  // The diff walks the checkout, whose nested audit path can pass Windows
+  // MAX_PATH, so these calls opt in to long paths like the create that wrote it.
+  const git = (args: string[]) =>
+    spawnSync("git", [...GIT_PLATFORM_ARGS, "-C", wtPath, ...args], {
+      encoding: "utf-8",
+      timeout: LONG_SUBPROCESS_TIMEOUT_MS,
+    }).status;
+  return git(["cat-file", "-e", `${base}:${path}`]) === 0 &&
+    git(["diff", "--quiet", base, "--", path]) === 0;
+}
+
 function matchingAuditMerge(
   content: string,
   slug: string,
@@ -1551,33 +1591,41 @@ function handleAuditFork(args: string[], projectDir: string): void {
       const existingContent = existing.bytes.toString("utf-8");
       const existingFork = latestAuditFork(existingContent, slug);
       if (existingFork) {
-        if (existingContent.slice(existingFork.end) !== "") {
-          throw new Error(
-            `worktree audit already exists at ${wtAuditPath} with unmerged work after ` +
-              `AUDIT_FORKED; merge the delta with audit-merge, or discard the worktree`,
-          );
-        }
         const mainContent = before.bytes.toString("utf-8");
         const mainFork = latestAuditFork(mainContent, slug);
-        if (!mainFork || !forksCorrelate(existingFork, mainFork)) {
-          throw new Error(
-            `worktree audit already exists at ${wtAuditPath}, but its AUDIT_FORKED row ` +
-              `does not match the authoritative main row; discard the worktree before re-forking`,
-          );
-        }
-        const expected = scopeStamp
-          ? before.bytes.subarray(mainFork.start, mainFork.end)
-          : before.bytes.subarray(0, mainFork.end);
-        if (!existing.bytes.equals(expected)) {
+        const expected = mainFork === null
+          ? null
+          : scopeStamp
+            ? before.bytes.subarray(mainFork.start, mainFork.end)
+            : before.bytes.subarray(0, mainFork.end);
+        const unmergedWork = existingContent.slice(existingFork.end) !== "";
+        if (!unmergedWork && mainFork && forksCorrelate(existingFork, mainFork) &&
+          expected !== null && existing.bytes.equals(expected)) {
+          boundary = existingFork.boundary;
+          sourceHash = existingFork.sourceHash;
+          auditTs = existingFork.timestamp;
+          alreadyCurrent = true;
+        } else if (!worktreeAuditInheritedFromBase(wtPath, wtAuditPath)) {
+          // The worktree's own fork, with work after it or from another attempt.
+          // A copy the checkout inherited from the base commit (a records commit
+          // that already held fork rows for this Bolt) is forked over below instead.
+          if (unmergedWork) {
+            throw new Error(
+              `worktree audit already exists at ${wtAuditPath} with unmerged work after ` +
+                `AUDIT_FORKED; merge the delta with audit-merge, or discard the worktree`,
+            );
+          }
+          if (!mainFork || !forksCorrelate(existingFork, mainFork)) {
+            throw new Error(
+              `worktree audit already exists at ${wtAuditPath}, but its AUDIT_FORKED row ` +
+                `does not match the authoritative main row; discard the worktree before re-forking`,
+            );
+          }
           throw new Error(
             `worktree audit already exists at ${wtAuditPath}, but its fork prefix differs ` +
               `from main; discard the worktree before re-forking`,
           );
         }
-        boundary = existingFork.boundary;
-        sourceHash = existingFork.sourceHash;
-        auditTs = existingFork.timestamp;
-        alreadyCurrent = true;
       }
     }
     if (!alreadyCurrent) {

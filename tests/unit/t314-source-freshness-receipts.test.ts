@@ -173,6 +173,8 @@ function recordReview(
   verdict = "READY",
   claimPaths?: Array<{ path: string; repo?: string }>,
   openGate = true,
+  // Runs while the reviewer works: after the request, before the verdict.
+  beforeVerdict?: () => void,
 ): void {
   // Review requests require every declared output. Seed the minimal real
   // contract in fixtures that focus on source freshness; never overwrite a
@@ -308,6 +310,7 @@ function recordReview(
     `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** ${reviewer}\n**Iteration:** ${iteration}\n\n### Findings\n\nFixture review.\n`,
     "utf-8",
   );
+  beforeVerdict?.();
   const args = [...baseArgs, "--verdict", verdict];
   const r = spawnSync(BUN, args, {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -1997,6 +2000,142 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     expect(row).toContain("**Changed**: app.ts");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  // An AI-DLC update the person takes after the review rewrites AI-DLC's own
+  // files (Codex's skill under .agents/skills/, Claude Code's .gitignore
+  // block). None of them is the reviewed source, so the review still holds.
+  // The build runs without Units, as the scopes that skip Units Generation do.
+  function installedStageLevelBuild(): string {
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      /^- \[ \] units-generation (.*) EXECUTE$/m,
+      "- [S] units-generation $1 SKIP",
+    ));
+    mkdirSync(join(proj, ".agents", "skills", "aidlc"), { recursive: true });
+    const skill = join(proj, ".agents", "skills", "aidlc", "SKILL.md");
+    writeFileSync(skill, "AI-DLC 1\n", "utf-8");
+    return skill;
+  }
+
+  function setGuardPolicy(line: string): void {
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      /^- \*\*Change Control\*\*: .*$/m,
+      `- **Guard Policy**: ${line}`,
+    ));
+  }
+
+  test("under strict, an AI-DLC update after the review does not make the review stale", () => {
+    const skill = installedStageLevelBuild();
+    recordReview(proj);
+    writeFileSync(skill, "AI-DLC 2\n", "utf-8");
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("project source changed after");
+    expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("with Guard Policy off or relaxed, an AI-DLC update after the review is not said as a change", () => {
+    for (const policy of ["off (set by you)", "relaxed (set by you)"]) {
+      cleanupTestProject(proj);
+      proj = createTestProject();
+      seedStateFile(proj, "state-mid-ideation.md");
+      src = seedGitRepo(proj);
+      guarded(proj, ["checkbox", "code-generation=in-progress"]);
+      setGuardPolicy(policy);
+      const skill = installedStageLevelBuild();
+      recordReview(proj);
+      writeFileSync(skill, "AI-DLC 2\n", "utf-8");
+      const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+      expect(r.rc, r.out).toBe(0);
+      expect(r.out).not.toContain("changed after the Code Generation review");
+      expect(readAllAuditShards(proj)).not.toMatch(/\*\*Event\*\*: CHANGE_ACCEPTED\n(?:\*\*[^\n]*\n)*?\*\*Checkpoint\*\*: review-receipt/);
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, the person's own edit beside an AI-DLC update still asks for a review, and undoing it is enough", () => {
+    const skill = installedStageLevelBuild();
+    const original = readFileSync(src, "utf-8");
+    recordReview(proj);
+    writeFileSync(skill, "AI-DLC 2\n", "utf-8");
+    writeFileSync(src, "export const answer = 1337; // edited after review\n", "utf-8");
+    const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("project source changed after");
+    // Undoing their own edit is enough: the update stays.
+    writeFileSync(src, original, "utf-8");
+    const retry = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(retry.out).not.toContain("project source changed after");
+    expect(retry.rc, retry.out).toBe(0);
+    expect(readFileSync(skill, "utf-8")).toBe("AI-DLC 2\n");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // A review an earlier release recorded kept no listing: the source is
+  // compared by fingerprint as it always was.
+  test("a review recorded without its listing keeps the fingerprint compare", () => {
+    const skill = installedStageLevelBuild();
+    recordReview(proj);
+    expect(readAllAuditShards(proj)).toMatch(/\*\*Event\*\*: REVIEW_COMPLETED\n(?:\*\*[^\n]*\n)*?\*\*Source Listing\*\*: sha256:[0-9a-f]{64}\n/);
+    for (const name of readdirSync(seededAuditDir(proj)).filter((file) => file.endsWith(".md"))) {
+      const shard = join(seededAuditDir(proj), name);
+      writeFileSync(shard, readFileSync(shard, "utf-8").replace(/^\*\*Source Listing\*\*: .*\r?\n/gm, ""), "utf-8");
+    }
+    writeFileSync(skill, "AI-DLC 2\n", "utf-8");
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("project source changed after");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // A team clone or another machine has the receipt but not the listing it
+  // names (it is kept beside the engine's own files): fingerprints decide.
+  test("a review whose listing is not on this machine keeps the fingerprint compare", () => {
+    const skill = installedStageLevelBuild();
+    recordReview(proj);
+    const completion = readAllAuditShards(proj).split(/\n---\n/)
+      .find((block) => block.includes("**Event**: REVIEW_COMPLETED"));
+    const hash = /\*\*Source Listing\*\*: sha256:([0-9a-f]{64})/.exec(completion ?? "")?.[1];
+    expect(hash, completion).toBeDefined();
+    const kept = readdirSync(seededRecordDir(proj), { recursive: true, encoding: "utf-8" })
+      .filter((path) => path.endsWith(`baseline-${(hash as string).slice(0, 12)}.tsv`));
+    expect(kept.length).toBeGreaterThan(0);
+    for (const path of kept) rmSync(join(seededRecordDir(proj), path));
+    writeFileSync(skill, "AI-DLC 2\n", "utf-8");
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("project source changed after");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under relaxed, the person's own edit beside an AI-DLC update is the only file the line and the record name", () => {
+    setGuardPolicy("relaxed (set by you)");
+    const skill = installedStageLevelBuild();
+    recordReview(proj);
+    writeFileSync(skill, "AI-DLC 2\n", "utf-8");
+    writeFileSync(src, "export const answer = 1337; // edited after review\n", "utf-8");
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).toContain("\"app.ts changed after the Code Generation review; carrying on.\"");
+    expect(r.out).not.toContain("SKILL.md");
+    const row = readAllAuditShards(proj).split(/\n---\n/).find((block) =>
+      block.includes("**Event**: CHANGE_ACCEPTED") && block.includes("**Checkpoint**: review-receipt"));
+    expect(row).toContain("**Changed**: app.ts\n");
+    expect(row).not.toContain("SKILL.md");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // Under relaxed a change made while the reviewer worked is accepted with the
+  // verdict, which binds the source the reviewer was asked to review: the
+  // receipt keeps no listing of the changed source, so the gate still says it.
+  test("under relaxed, an edit made while the reviewer worked is still said at the gate", () => {
+    setGuardPolicy("relaxed (set by you)");
+    installedStageLevelBuild();
+    recordReview(proj, "code-generation", REVIEWER, undefined, "READY", undefined, false, () => {
+      writeFileSync(src, "export const answer = 1337; // edited during the review\n", "utf-8");
+    });
+    const completion = readAllAuditShards(proj).split(/\n---\n/)
+      .find((block) => block.includes("**Event**: REVIEW_COMPLETED"));
+    expect(completion).not.toContain("**Source Listing**");
+    const gate = guarded(proj, ["gate-start", "code-generation"]);
+    expect(gate.rc, gate.out).toBe(0);
+    expect(gate.out).toContain("app.ts changed after the Code Generation review; carrying on.");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   // #2244: when the approved plan uses stage-level artifacts the guard returns
   // after the stage review and the unclaimed check never runs, so excluding a
   // cache after the review costs what any source change after a review costs:
@@ -2723,6 +2862,41 @@ describe("t314 multi-unit source attribution", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // Units built one at a time: an AI-DLC update after the last Unit's review
+  // moves only AI-DLC's own files, under every Guard Policy.
+  test("an AI-DLC update after the last Unit's review does not stop the stage completing", () => {
+    for (const policy of ["strict", "off (set by you)"]) {
+      if (policy !== "strict") {
+        const statePath = seededStateFile(proj);
+        writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+          /^- \*\*Change Control\*\*: .*$/m,
+          `- **Guard Policy**: ${policy}`,
+        ));
+      }
+      const skill = join(proj, ".agents", "skills", "aidlc", "SKILL.md");
+      mkdirSync(join(proj, ".agents", "skills", "aidlc"), { recursive: true });
+      writeFileSync(skill, "AI-DLC 1\n", "utf-8");
+      writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+      recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+      writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+      recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+      writeFileSync(skill, "AI-DLC 2\n", "utf-8");
+      const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+      expect(r.out).not.toContain("project source changed after");
+      expect(r.out).not.toContain("SKILL.md changed after");
+      expect(r.rc, r.out).toBe(0);
+      if (policy === "strict") {
+        cleanupTestProject(proj);
+        proj = createTestProject();
+        seedStateFile(proj, "state-mid-ideation.md");
+        seedGitRepo(proj);
+        seedTwoUnitDag(proj);
+        guarded(proj, ["checkbox", "code-generation=in-progress"]);
+        restartBaseline(proj);
+      }
+    }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // #646 review - the protocol's own rework loop. stage-protocol.md §12a
@@ -6026,6 +6200,175 @@ process.stdin.on("end", () => server.stop(true));
     const retry = mergeKept(proj);
     expect(retry.status, retry.out).toBe(0);
     expect(currentSwarmSourceMergeChain(proj, "code-generation").state).toBe("ready");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // An AI-DLC update the person takes during the build rewrites AI-DLC's own
+  // files in the main checkout (Codex's skill under .agents/skills/). None of
+  // them is a Unit's source, so under strict the landing, the next Unit's
+  // landing and the stage's completion carry on as if nothing changed.
+  function installSkill(proj: string, text: string): void {
+    mkdirSync(join(proj, ".agents", "skills", "aidlc"), { recursive: true });
+    writeFileSync(join(proj, ".agents", "skills", "aidlc", "SKILL.md"), text, "utf-8");
+  }
+
+  function installedProject(): string {
+    const proj = makeFixture();
+    installSkill(proj, "AI-DLC 1\n");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "install AI-DLC"]);
+    restartBaseline(proj);
+    return proj;
+  }
+
+  function mergeUnit(proj: string, unit: string) {
+    const merge = spawnSync(BUN, [
+      WORKTREE_TOOL, "merge", "--slug", unit, "--target", "main", "--strategy", "squash", "--project-dir", proj,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
+    return { status: merge.status, out: `${merge.stdout}${merge.stderr}` };
+  }
+
+  test("under strict, an AI-DLC update during the build never stops the merge", () => {
+    const proj = installedProject();
+    finalizeKeptUnit(proj);
+    installSkill(proj, "AI-DLC 2\n");
+    const merged = mergeUnit(proj, "kept");
+    expect(merged.status, merged.out).toBe(0);
+    expect(currentSwarmSourceMergeChain(proj, "code-generation").state).toBe("ready");
+    expect(readFileSync(join(proj, ".agents", "skills", "aidlc", "SKILL.md"), "utf-8")).toBe("AI-DLC 2\n");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, an AI-DLC update between two Units' merges never stops the second", () => {
+    const proj = installedProject();
+    const units = ["alpha", "beta"];
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", units.join(","), "--base", "main"]);
+    for (const unit of units) {
+      writeFileSync(join(wtPath(proj, unit), `${unit}.ts`), `export const ${unit} = 1;\n`, "utf-8");
+      recordReview(wtPath(proj, unit), "code-generation", REVIEWER, unit);
+    }
+    const finalized = runSwarm(proj, [
+      "finalize", "--batch", "1", "--units", units.join(","), "--claimed", units.join(","),
+      "--check-cmd", `"${process.execPath}" -e "0"`,
+    ]);
+    expect(finalized.rc, finalized.diagnostic).toBe(0);
+    const first = mergeUnit(proj, "alpha");
+    expect(first.status, first.out).toBe(0);
+    installSkill(proj, "AI-DLC 2\n");
+    const second = mergeUnit(proj, "beta");
+    expect(second.status, second.out).toBe(0);
+    expect(currentSwarmSourceMergeChain(proj, "code-generation").state).toBe("ready");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, an AI-DLC update after the last merge does not stop the stage completing", () => {
+    const proj = installedProject();
+    finalizeKeptUnit(proj);
+    const merged = mergeUnit(proj, "kept");
+    expect(merged.status, merged.out).toBe(0);
+    const path = seededStateFile(proj);
+    writeFileSync(path, readFileSync(path, "utf-8").replace(
+      /^- \*\*Construction Autonomy Mode\*\*: .*$/m, "- **Construction Autonomy Mode**: autonomous"));
+    installSkill(proj, "AI-DLC 2\n");
+    const r = guarded(proj, ["gate-start", "code-generation"]);
+    expect(r.out).not.toContain("no longer matches the final reviewed swarm merge");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, the person's own edit beside an AI-DLC update is the only file the merge names", () => {
+    const proj = installedProject();
+    finalizeKeptUnit(proj);
+    installSkill(proj, "AI-DLC 2\n");
+    writeFileSync(join(proj, "notes.ts"), "export const notes = 1;\n", "utf-8");
+    const refused = mergeUnit(proj, "kept");
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("the main checkout source changed since the stage-entry baseline (notes.ts).");
+    // Undoing their own edit is enough: the update stays.
+    rmSync(join(proj, "notes.ts"));
+    const retry = mergeUnit(proj, "kept");
+    expect(retry.status, retry.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("with Guard Policy relaxed, an AI-DLC update alone is not kept as the person's change", () => {
+    const proj = installedProject();
+    setPolicy(proj, "relaxed (set by you)");
+    finalizeKeptUnit(proj);
+    installSkill(proj, "AI-DLC 2\n");
+    const merged = mergeUnit(proj, "kept");
+    expect(merged.status, merged.out).toBe(0);
+    expect(merged.out).not.toContain("during the build; kept them");
+    expect(readAllAuditShards(proj)).not.toMatch(/\*\*Event\*\*: CHANGE_ACCEPTED\n(?:\*\*[^\n]*\n)*?\*\*Checkpoint\*\*: swarm-batch/);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // A landing recorded by an earlier release kept no listing: the next one
+  // compares fingerprints as it always did.
+  test("a landing recorded without its listing keeps the fingerprint compare for the next Unit", () => {
+    const proj = installedProject();
+    const units = ["alpha", "beta"];
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", units.join(","), "--base", "main"]);
+    for (const unit of units) {
+      writeFileSync(join(wtPath(proj, unit), `${unit}.ts`), `export const ${unit} = 1;\n`, "utf-8");
+      recordReview(wtPath(proj, unit), "code-generation", REVIEWER, unit);
+    }
+    const finalized = runSwarm(proj, [
+      "finalize", "--batch", "1", "--units", units.join(","), "--claimed", units.join(","),
+      "--check-cmd", `"${process.execPath}" -e "0"`,
+    ]);
+    expect(finalized.rc, finalized.diagnostic).toBe(0);
+    expect(mergeUnit(proj, "alpha").status).toBe(0);
+    expect(readAllAuditShards(proj)).toContain("**Source Listing**: sha256:");
+    for (const name of readdirSync(seededAuditDir(proj)).filter((file) => file.endsWith(".md"))) {
+      const shard = join(seededAuditDir(proj), name);
+      writeFileSync(shard, readFileSync(shard, "utf-8").replace(/^\*\*Source Listing\*\*: .*\r?\n/gm, ""), "utf-8");
+    }
+    installSkill(proj, "AI-DLC 2\n");
+    const second = mergeUnit(proj, "beta");
+    expect(second.status).not.toBe(0);
+    expect(second.out).toContain("the main checkout source changed after the previous reviewed-source merge");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // After Request Changes the revised Unit's landing starts from the prior
+  // attempt's last landing: the person answers at the gate, the Unit is built
+  // again, and it is finalized for the new attempt.
+  function reviseKeptUnitAfterRequestChanges(proj: string): void {
+    finalizeKeptUnit(proj);
+    const merged = mergeUnit(proj, "kept");
+    expect(merged.status, merged.out).toBe(0);
+    const rejected = guarded(proj, ["reject", "code-generation", "--feedback", "Revise the kept unit"]);
+    expect(rejected.rc, rejected.out).toBe(0);
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
+    runSwarm(proj, ["prepare", "--batch", "2", "--units", "kept", "--base", "main"]);
+    const wt = wtPath(proj, "kept");
+    writeFileSync(join(wt, "kept.ts"), "export const kept = 2;\n", "utf-8");
+    recordReview(wt, "code-generation", REVIEWER, "kept");
+    const f = runSwarm(proj, [
+      "finalize", "--batch", "2", "--units", "kept", "--claimed", "kept",
+      "--check-cmd", `"${process.execPath}" -e "require('fs').accessSync('kept.ts')"`,
+    ]);
+    expect(f.rc, f.diagnostic).toBe(0);
+  }
+
+  test("under strict, an AI-DLC update after Request Changes never stops the revised Unit's landing", () => {
+    const proj = installedProject();
+    reviseKeptUnitAfterRequestChanges(proj);
+    installSkill(proj, "AI-DLC 2\n");
+    const merged = mergeUnit(proj, "kept");
+    expect(merged.out).not.toContain("does not match the prior attempt's final reviewed aggregate");
+    expect(merged.status, merged.out).toBe(0);
+    expect(readFileSync(join(proj, "kept.ts"), "utf-8")).toBe("export const kept = 2;\n");
+    expect(readFileSync(join(proj, ".agents", "skills", "aidlc", "SKILL.md"), "utf-8")).toBe("AI-DLC 2\n");
+    expect(readAllAuditShards(proj)).toMatch(/\*\*Event\*\*: GATE_REJECTED\n(?:\*\*[^\n]*\n)*?\*\*Prior Accepted Source Listing\*\*: sha256:/);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, the person's own edit after Request Changes still stops the revised Unit's landing, named", () => {
+    const proj = installedProject();
+    reviseKeptUnitAfterRequestChanges(proj);
+    installSkill(proj, "AI-DLC 2\n");
+    writeFileSync(join(proj, "notes.ts"), "export const notes = 1;\n", "utf-8");
+    const refused = mergeUnit(proj, "kept");
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("the main checkout source does not match the prior attempt's final reviewed aggregate (notes.ts).");
+    // Undoing their own edit is enough: the update stays.
+    rmSync(join(proj, "notes.ts"));
+    const retry = mergeUnit(proj, "kept");
+    expect(retry.status, retry.out).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("with Guard Policy off, a changed protected test file is said, not refused", () => {

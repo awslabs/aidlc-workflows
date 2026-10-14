@@ -211,9 +211,13 @@ state lifecycle verbs before or after reporting.
 
 **Routed skip.** `report --result skipped` is accepted only on the main
 workflow with an explicit nonblank `--stage` and `--reason`, when the named
-stage is declared `execution: CONDITIONAL`, equals `Current Stage`, and is
-Active or Revising, or AwaitingApproval when its plan row now says SKIP (a
-gate the person's own decision made moot). It runs before
+stage is declared `execution: CONDITIONAL` (a stage of any kind when the
+reason is the one the engine's skip step names for a stage the person asked
+to skip, `the person asked to skip it`), equals `Current Stage`, and is
+Active or Revising, or AwaitingApproval when its plan row now says SKIP or
+the reason is that token (a gate the person's own decision made moot; under
+Unit-by-Unit Construction the Units' files for it stay as they are). It runs
+before
 artifact, per-unit, and ensemble-evidence guards because a justified skip owes
 no completion evidence. The engine invokes the internal skip transition with
 its routing marker: the transaction preserves `[S]`, emits exactly one
@@ -227,12 +231,15 @@ Under `Construction Iteration: unit-major` (solo Unit ownership), `Current
 Stage` stays on the first per-unit block stage while the walk directs one
 `(stage, unit)` beat at a time, and a stage's condition is judged for that
 unit. While the walk is on a beat, a skip must name that beat's stage and unit
-(`--unit` is required), under the same CONDITIONAL and reason rules, and it
-covers that unit only. The internal `skip --unit` transition emits one
-`UNIT_SKIPPED` receipt at the unit's `Run floor`, so the unit owes the stage
-nothing in this attempt (outputs, review, summary, and its Construction
-checkpoint alike, as for a kind-vacuous unit), the walk moves on, and every
-other unit still gets the stage. Once a unit has finished work, a forward jump
+(`--unit` is required), under the same CONDITIONAL and reason rules (a stage
+of any kind when the person asked to skip it), and it covers that unit only.
+The internal `skip --unit` transition emits one `UNIT_SKIPPED` receipt at the
+unit's `Run floor`, so the unit owes the stage nothing in this attempt
+(outputs, review, summary, and its Construction checkpoint alike, as for a
+kind-vacuous unit), the walk moves on, and every other unit still gets the
+stage. A unit that skipped every step that writes its code owes no
+Construction checkpoint at all: the walk goes on to the next unit, and no
+stage approval waits on it. Once a unit has finished work, a forward jump
 inside the per-unit steps moves only the unit in flight on the same way: `aidlc-jump.ts execute --units`
 runs this transition for each step the walk would stop that unit at before the
 target, also for a step reopened behind its stage approval, whose checkbox and
@@ -392,7 +399,12 @@ lost.
 **Source freshness and per-unit attribution (#629/#646/#662).** On a
 `workspace_requires` stage, every terminal review still carries the workspace-
 global `Source Fingerprint`; the newest modern binding is normally the outer
-post-review-mutation boundary on all four completion routes. Per-unit receipts
+post-review-mutation boundary on all four completion routes. The receipt also
+names the listing the reviewer saw (`Source Listing`), so when only AI-DLC's own
+files moved since then (an AI-DLC update; the set `aidlcOwnedSourceKey` names)
+the review still holds and nothing is said, and a relaxed or off line names
+only the files outside that set; a receipt without the field, or whose listing
+is not on this machine, is compared by fingerprint as before. Per-unit receipts
 add `Unit Source Fingerprint`, which binds the bytes of the unit's strict
 `source-manifest.json` and the current content of every exact/directory claim
 (CRLF text read as LF, see the stage protocol's line endings rule).
@@ -475,9 +487,13 @@ A rejection resets review and run-floor accounting but never replaces that
 completion baseline: otherwise any unclaimed path present at rejection would be
 grandfathered into the next attempt. When the prior attempt has a validated
 `SWARM_SOURCE_MERGED` chain, `GATE_REJECTED` carries only its final
-`Prior Accepted Source Fingerprint`. The next attempt's first source merge must
+`Prior Accepted Source Fingerprint`, with the `Prior Accepted Source Listing`
+its landing kept when it has one. The next attempt's first source merge must
 start from that aggregate, while completion continues to compare against the
-original stage-entry baseline.
+original stage-entry baseline. With the listing, a change only to AI-DLC's own
+files since then (an AI-DLC update) does not stop that merge, and a change to
+the person's source names their files; a rejection without it is compared by
+fingerprint.
 
 There is one narrowly bounded reconciliation of the global boundary: if an
 unclaimed baseline change — addition, modification, or deletion — is fully
@@ -549,7 +565,13 @@ Policy a Unit's manifest that changed after its review, and files the Unit
 changed outside its manifest, keep the review: finalize records each once as
 `CHANGE_ACCEPTED` and returns its line in the Unit's `change_notices`. Swarm
 prepare likewise keeps parent source that moved after Plan Approval (generation
-start records it and says it), as the single-agent build does.
+start records it and says it), as the single-agent build does. On any Guard
+Policy prepare leaves AI-DLC's own files out (an AI-DLC update the person took):
+they need not be committed before the worktrees fork, and under `strict` they
+are no reason to approve the plan again; it refuses only when the person's own
+files moved since the build's last verified source, compared as a landing
+compares it, or when no listing is on record to tell (a rejection an earlier
+release wrote).
 
 Swarm footprint verification and immutable Source Commit creation apply the
 same boundary. Clean-filter raw-byte replacement is restricted to exact
@@ -580,7 +602,7 @@ the gate can reopen. Bypass with `AIDLC_SKIP_REVISION_BACKSTOP=1`.
 
 **Repo set.** `aidlc-utility intent add-repo <name>` and `intent remove-repo <name>` change which sibling repos a piece of work records, for work that already records at least one (work with none treats the workspace folder itself as its repo; `workspace reclassify` records its first repos). Under the workspace lock, then the intent lock, the command emits `INTENT_REPOS_CHANGED` into that intent's own shard first (fields `Added` or `Removed`, and `Repos`, the set after the change), then rewrites the `intents.json` row. The name must pass the repo-name rule and the folder must carry a real `.git` entry (a committed folder shaped like a repository is refused and its config never read); the last recorded repo cannot be removed. Once Units Generation is approved each Unit names its repo, so the command changes nothing and asks whether to go back to Units Generation with the change. Every reader of the repo set (`intentRepos`) follows the row at once: Reverse Engineering's required artifacts resolve per recorded repo, so a finished run reads as stale for a repo with no CodeKB, and a Unit source manifest naming the repo is accepted.
 
-**Park (issue #365/#367).** `aidlc-orchestrate park` writes a `Parked` / `Parked At Stage` runtime marker (via `aidlc-state.ts park`, which emits `WORKFLOW_PARKED`) without advancing any stage; a subsequent plain `next` re-emits a terminal `parked` directive and the Stop hook lets the turn end, so a long workflow can pause across sessions instead of rubber-stamping the remaining stages to reach `done`. A change the person types over the parked work (another scope, `--skip` or `--add`, a setting, or `compose`) is made while the work stays parked, and the one line they read says it is still paused and that `/aidlc --resume` picks it back up. `/aidlc --resume` clears the marker (`unpark` emits `WORKFLOW_UNPARKED`) before continuing. An unattended autonomous Construction run (`Construction Autonomy Mode: autonomous`) refuses to park: both the tool and the Stop hook's `parked` allow decline under autonomous mode, so the loop keeps moving with no human to resume it. The one exception is a stop the person asks for. With a reply from them on record since the last decision, `park` (and an approval reported with `--park`) parks as attended (`parkWorkflow` in `aidlc-state.ts`) and records `Parked By: person`, which the Stop hook honors under autonomy too; `unpark` clears it. The run's own approvals after their message, and the answer they gave the agent's own question in it, do not use it up; any other decision does. On a host whose hooks can miss a reply (its `hookActivation` names one), an attended session's park is recorded as the person's even with no reply on record, and its result carries a note saying so. `AIDLC_UNATTENDED=1` always refuses.
+**Park (issue #365/#367).** `aidlc-orchestrate park` writes a `Parked` / `Parked At Stage` runtime marker (via `aidlc-state.ts park`, which emits `WORKFLOW_PARKED`) without advancing any stage; a subsequent plain `next` re-emits a terminal `parked` directive and the Stop hook lets the turn end, so a long workflow can pause across sessions instead of rubber-stamping the remaining stages to reach `done`. A change the person types over the parked work (another scope, `--skip` or `--add`, a setting, or `compose`) is made while the work stays parked, and the one line they read says it is still paused and that `/aidlc --resume` picks it back up. `/aidlc --resume` clears the marker (`unpark` emits `WORKFLOW_UNPARKED`) before continuing. An unattended autonomous Construction run (`Construction Autonomy Mode: autonomous`) refuses to park: both the tool and the Stop hook's `parked` allow decline under autonomous mode, so the loop keeps moving with no human to resume it. The one exception is a stop the person asks for. Who asked is the conductor's reading of their words: `park --person-asked` (or `--park` on the approval or answer they gave) says so, and the tool proves only that a reply from them is on record since the last decision. Then the park is attended (`parkWorkflow` in `aidlc-state.ts`): it records `Parked By: person`, which the Stop hook honors under autonomy too, and their words on the park row; `unpark` clears it. The run's own approvals after their message, and the answer they gave the agent's own question in it, do not use it up; any other decision does. On a host whose hooks can miss a reply (its `hookActivation` names one), a park the person asked for in an attended session is recorded as theirs even with no reply on record, and its result carries a note saying so. A park without `--person-asked` is the conductor's own: gated work is paused with no `Parked By` and no words on the row, so `--status` never says the person stopped it, and under autonomous Construction nothing is parked and the conductor gets its next step as a `print` (carry on, or park with the flag when the person did ask). `AIDLC_UNATTENDED=1` always refuses.
 
 A park the person comes back to carries on. Once they have spoken after it (a `HUMAN_TURN` after the latest `WORKFLOW_PARKED`), a bare `next`, such as a bare `/aidlc` in the same chat, names the unpark and carries on instead of re-emitting `parked`, and words passed to `next` are read as on active work; the agent's own loop, whose stop came from the reply before the park, and the Stop hook's probe still get `parked`.
 
@@ -756,7 +778,7 @@ column.
 | `PLUGIN_SELECTION_CHANGED` | `tools/aidlc-utility.ts` | `select-plugins` set-mode; fields: `Previous Selection`, `New Selection` |
 | `DEPTH_CHANGED` | `tools/aidlc-guard-switch.ts` | `config set depth <value>` / `config-change --depth` |
 | `TEST_STRATEGY_CHANGED` | `tools/aidlc-guard-switch.ts` | `config set test-strategy <value>` / `config-change --test-strategy` |
-| `UNIT_OWNERSHIP_SET` | `tools/aidlc-state.ts` | `set-unit-ownership team|solo`; team requires unit-major |
+| `UNIT_OWNERSHIP_SET` | `tools/aidlc-state.ts` | `set-unit-ownership team|solo`; team switches a stage-major plan to unit-major first (`CONSTRUCTION_POLICY_SET`) |
 | `UNIT_GATE_RHYTHM_SET` | `tools/aidlc-state.ts` | `set-unit-gate-rhythm per-stage|unit-end`; team mode only |
 | `CONSTRUCTION_POLICY_SET` | `tools/aidlc-state.ts` | `set-construction-iteration`, `set-construction-checkpoints`, or `set-construction-execution` applied a changed value; fields `Field`, `Value`, `Previous Value`, and the `Construction Iteration` / `Construction Checkpoints` left in force, plus `Person Reply` (the words of the person's turn that asked for it, or the option they picked in a question box) when the change was theirs during Construction. During Construction the setter applies a change only when a person turn since the last decision is on record (or a current `CONSTRUCTION_POLICY_RECORDED` receipt), never on an unattended run. Unit receipt floors read it, so a stage start recorded under stage-major flooring stays a boundary after a switch to unit-major iteration or checkpoints, and one recorded under unit-major flooring stays out of a Unit receipt's floor after a switch back to stage-major with checkpoints off; each Unit's receipt floor keeps that Unit's own reopen (a Unit-tagged `GATE_REJECTED`) in every mode, and a stage's first start recorded after its Units finished in a unit-major walk (the late gate cascade) is not a restart |
 | `REVIEW_CLASS_CHANGED` | `tools/aidlc-guard-switch.ts`, `tools/aidlc-utility.ts` | `config set review <value>` / `config-change --review` / a combined `scope-change --review` set or cleared the per-run review override |
@@ -824,8 +846,13 @@ says so in one line. Ceremony values still
 follow the new scope under memory policy, which controls the effective Guard
 Policy. Changed stored values or sources are audited with scope provenance;
 explicit overrides and absent legacy rows are preserved. Explicit Guard
-Policy flags store `<value> (set by you)`; ceremony flags store it when the
-person typed the switch and `<value> (set by a command)` otherwise.
+Policy and ceremony flags store `<value> (set by you)` when the record shows
+the person asked (`settingTheirs`: their typed line, their own terminal, or
+`--person-words` that equal a reply of theirs in this chat since the last
+decision) and `<value> (set by a command)` otherwise. When the agent sends such
+a setting through `next` and the person's line did not carry it, the `config
+set` step `next` names ends with `--person-words '<their words>'`, for the
+agent to fill with the reply that asked.
 A same-value source change still counts as a change; `review adversarial`
 clears `Review Override` to an empty string.
 
@@ -1368,7 +1395,7 @@ record-directory name and space.
 
 This is a deliberate departure from the strict audit-first invariant for stage transitions, motivated by the kill-9 / OS-crash window where neither the rollback emit nor `ERROR_LOGGED` can be guaranteed. The pattern is bounded to the events listed above. `STATE_FORKED` / `STATE_MERGED` (milestone 9) deliberately do NOT take this exception — see the previous section for the strict-first rationale (state writes are idempotent, so a failed write surfaces as recoverable drift instead of unrecoverable orphan state). `MERGE_DISPATCH_RETURNED` / `MERGE_DISPATCH_FALLBACK` are post-call emits (audit-of-result, not intent — strict-first) and don't take the exception. All other state-mutating commands stay strict-first per the section above.
 
-`SWARM_SOURCE_MERGED` is post-result authority, not an audit-of-intent row. The landing runs with the person's own git: their hooks, filters and merge drivers run, and when the landed source differs from the reviewed worktree the row records the files under `Landed changes` (and `Driver merges` for paths a configured driver merged) while the merge returns one line for the person in `notices`; a hook that refuses the commit returns `status: "commit-refused"` with the hook's own output and leaves the landing staged for the same merge to finish once the named problem is fixed. If the Git merge commit lands but this row cannot be appended, the tool preserves the worktree and returns `[merge-succeeded:<sha>]` with a non-retryable remedy. Rerunning would merge source twice and is forbidden; restart the stage attempt, or use `AIDLC_SKIP_SOURCE_FRESHNESS=1` only after explicit human approval. If the row did land and only later cleanup failed, rerunning the same `aidlc-worktree merge` detects that authority and performs cleanup only; it never reapplies source or emits a second authority row.
+`SWARM_SOURCE_MERGED` is post-result authority, not an audit-of-intent row. The landing runs with the person's own git: their hooks, filters and merge drivers run, and when the landed source differs from the reviewed worktree the row records the files under `Landed changes` (and `Driver merges` for paths a configured driver merged) while the merge returns one line for the person in `notices`; a hook that refuses the commit returns `status: "commit-refused"` with the hook's own output and leaves the landing staged for the same merge to finish once the named problem is fixed. The row also names the listing the landing left (`Source Listing`), so the next landing and the stage's completion can tell an AI-DLC update from a change to source: when only AI-DLC's own files moved since then (the set `aidlcOwnedSourceKey` names, the same one Unit source accounting leaves out), and at the first landing when only those moved since the stage-entry baseline, nothing of the person's changed and nothing stops; a row without the field is compared by fingerprint as before. If the Git merge commit lands but this row cannot be appended, the tool preserves the worktree and returns `[merge-succeeded:<sha>]` with a non-retryable remedy. Rerunning would merge source twice and is forbidden; restart the stage attempt, or use `AIDLC_SKIP_SOURCE_FRESHNESS=1` only after explicit human approval. If the row did land and only later cleanup failed, rerunning the same `aidlc-worktree merge` detects that authority and performs cleanup only; it never reapplies source or emits a second authority row.
 
 ### Authority invariants
 
