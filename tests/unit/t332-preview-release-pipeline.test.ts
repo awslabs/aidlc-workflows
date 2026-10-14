@@ -517,7 +517,7 @@ describe("t332 preview publication pipeline", () => {
     // A failed update from the last release warns and reports, but publishes.
     const updateWarning = "> **Warning:** Updating from the last release to this preview failed in its checks. " +
       "Stay on your release or wait for the next preview.\n\n";
-    const updateLine = "## Update from the last release\n\n`aidlc update` from the last release to this preview " +
+    const updateLine = "## Update from the last release\n\nUpdating from the last release to this preview " +
       "**failed** in [the preview run](https://github.com/owner/repo/actions/runs/77).\n";
     expect(await stageNotes("success", body, small, "failure")).toBe(`${updateWarning}${body}\n${updateLine}`);
     expect(await stageNotes("failure", body, small, "failure"))

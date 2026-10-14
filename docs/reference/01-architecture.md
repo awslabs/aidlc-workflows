@@ -666,8 +666,9 @@ Windows, installs the last stable release with its own installer, sets up a
 project for every harness with the person's work waiting at a gate, runs
 `aidlc update` to the candidate, and checks that each project's hooks,
 `aidlc config --yes` refresh and doctor still work, and that the person picks
-their work up at that gate with nothing asked again. A
-stable release does not publish when it fails; a preview publishes with a
+their work up at that gate with nothing asked again. Its copy leg does the same
+for projects copied from the last release's copy runtime, which refresh with
+their own `config --from`. A stable release does not publish when it fails; a preview publishes with a
 warning in its notes. `publish` downloads the same candidate, re-verifies
 it, attests it, adds the exported `aidlc-release.intoto.jsonl` bundle, validates
 the complete inventory, and uploads one `attested-release` workflow artifact.

@@ -1584,7 +1584,11 @@ check fails when the gate does not come back, the stage runs again, an answer
 is asked for again, the approval is not backed by the person's reply, the next
 stage does not start, or a file they committed changed outside AI-DLC's marked
 part. When the stand-in cannot leave work open on the last release at all, the
-check says so in its own line. When it fails, the
+check says so in its own line. A second leg of the job (`--channel copy`) does
+the same for the copy channel: each project is `runtime/<harness>/` copied from
+the last release's copy runtime, checked against its `.sha256` and set up with
+its own `config --from`, and refreshes with that command from the candidate's
+copy runtime, as the guide's Copy Channel says. When either leg fails, the
 preview still publishes, its notes open with a warning and the report gains a
 line for it; `release.yml` does not publish a stable release that fails it.
 `Release result` requires successful preview publication or an intentional
