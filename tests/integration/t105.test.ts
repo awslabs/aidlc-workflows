@@ -84,9 +84,9 @@ import {
 
 // With no intent cursor seeded, doctor's appendAuditEvent resolves the BARE
 // space record root's per-clone audit SHARD (auditFilePath -> aidlc/spaces/
-// default/intents/audit/<host>-<clone>.md). Seed that shard; read the whole
-// audit/ dir (readAudit -> readAllAuditShards), since the doctor subprocess
-// mints its own clone-id and may write a sibling shard.
+// default/intents/audit/<host>-<clone>.md). Seeding it through auditFilePath
+// persists aidlc/.aidlc-clone-id first, so the doctor subprocess resolves the
+// same shard.
 const RECORD_REL = join("aidlc", "spaces", "default", "intents");
 function recordRoot(proj: string): string {
   return join(proj, RECORD_REL);
@@ -153,9 +153,7 @@ function makeRulesDir(): string {
   return rd;
 }
 
-// The merged per-clone audit trail doctor wrote (its SUBPROCESS mints its own
-// clone-id, distinct from the test process's memoized one, so read the whole
-// audit/ dir rather than a single memoized shard path).
+// The whole audit trail doctor wrote: every shard under the record's audit/.
 function readAudit(proj: string): string {
   return readAllAuditShards(proj);
 }
