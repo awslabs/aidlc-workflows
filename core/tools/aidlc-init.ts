@@ -54,7 +54,10 @@ import {
   isCustomClaudeStatusLine,
   jsoncRootMembers,
   jsoncSettingValue,
+  kiroAllowChanged,
+  kiroUpgradeBackup,
   kiroUpgradedAgentFile,
+  kiroUpgradeKeptFields,
   legacyAidlcHookTarget,
   mergeBlock,
   mergeJsonEntries,
@@ -7131,6 +7134,37 @@ function kiroUpgradedNote(count: number, harnessDir: string, force: string): str
     "time it starts on its 3.0 engine.";
 }
 
+// When the release changes what such a file allows, config puts the release's
+// file back where Kiro upgrades it again by itself (kiroAutoUpgradeOn), the
+// file Kiro upgraded from is provably the one AI-DLC wrote and Kiro's copy
+// keeps its fields; otherwise it keeps Kiro's copy and says what that leaves.
+const KIRO_KEPT_CHANGED_DETAIL = "upgraded by Kiro for its 3.0 engine: kept with an older release's allows";
+
+function kiroKeptChangedNote(count: number, harnessDir: string, force: string): string {
+  const one = count === 1;
+  return `${count} agent ${one ? "file" : "files"} in ${harnessDir}/agents that Kiro upgraded for its 3.0 engine ` +
+    `${one ? "was kept and still allows" : "were kept and still allow"} what an older release allowed; ` +
+    `\`${force}\` takes this release's ${one ? "version" : "versions"}.`;
+}
+
+// Whether Kiro puts an agent file back into its 3.0 format by itself at its
+// next 3.0 start: `chat.enableAutoAgentUpgrade` true in the person's own Kiro
+// settings, read and never written (kiro-cli 2.29.0: without it, Kiro asks
+// first or runs its default agent in the file's place). A project's
+// settings/cli.json would win, but a refresh stops on a change to AI-DLC's
+// copy and leaves one without the setting. Under the test runner only a
+// KIRO_HOME the test names is read, never the host's ~/.kiro.
+function kiroAutoUpgradeOn(env: NodeJS.ProcessEnv = process.env): boolean {
+  const home = kiroEnv(env).KIRO_HOME;
+  if (!home && env.AIDLC_TEST_NAME !== undefined) return false;
+  try {
+    const path = join(home || join(homedir(), ".kiro"), "settings", "cli.json");
+    return JSON.parse(readFileSync(path, "utf-8"))?.["chat.enableAutoAgentUpgrade"] === true;
+  } catch {
+    return false;
+  }
+}
+
 function unchangedManagedBlockHash(
   projectDir: string,
   sourceRoot: string,
@@ -9535,9 +9569,45 @@ function planManagedFiles(
         }
       }
       // The person ran Kiro's upgrade for its 3.0 engine: the agent file stays
-      // as Kiro left it, and the rest of the release lands around it.
+      // as Kiro left it, and the rest of the release lands around it, unless this
+      // release changes what it allows, Kiro upgrades it again by itself and the
+      // file Kiro upgraded from is provably AI-DLC's; then the release's file
+      // goes back. A kept file's record stays what AI-DLC last wrote there, so a
+      // later refresh can still prove that.
       if (!force && kiroUpgradedAgentFile(projectDir, rel)) {
-        actions.push({ path: rel, action: "preserve", detail: KIRO_UPGRADED_DETAIL });
+        const recordedAsCopied = nextHashes[rel];
+        if (recordedAsCopied !== undefined && priorHash !== undefined) nextHashes[rel] = priorHash;
+        const backup = kiroUpgradeBackup(projectDir, rel);
+        const parsed = (path: string): unknown => {
+          try {
+            return JSON.parse(readFileSync(path, "utf-8"));
+          } catch {
+            return undefined;
+          }
+        };
+        const was = backup === null ? undefined : parsed(backup);
+        if (was === undefined || !kiroAllowChanged(was, parsed(source))) {
+          actions.push({ path: rel, action: "preserve", detail: KIRO_UPGRADED_DETAIL });
+          continue;
+        }
+        const known = [priorHash, ...(descriptor.legacyManagedFileHashes?.[rel] ?? [])];
+        const aidlcWroteIt = priorHash !== undefined && known.includes(ownedFileHash(backup!, known).hash);
+        if (
+          !kiroAutoUpgradeOn() || !aidlcWroteIt || !kiroUpgradeKeptFields(parsed(target), was)
+        ) {
+          actions.push({ path: rel, action: "preserve", detail: KIRO_KEPT_CHANGED_DETAIL });
+          continue;
+        }
+        if (recordedAsCopied !== undefined) nextHashes[rel] = recordedAsCopied;
+        operations.push({
+          kind: "copy",
+          path: rel,
+          source,
+          sourceHash: hash,
+          expected: expected(target),
+          mode: statSync(source).mode & 0o777,
+        });
+        actions.push({ path: rel, action: "update" });
         continue;
       }
       if (
@@ -13028,14 +13098,11 @@ export async function main(
     if (actions.some((action) => action.detail === KEPT_GITIGNORE_LINES_DETAIL)) {
       prepared.notes.push(KEPT_GITIGNORE_LINES_NOTE);
     }
+    const kiroForce = configCommandForHarness(descriptor.harnessDir, `--harness ${stamp.distribution} --force`);
     const kiroUpgraded = actions.filter((action) => action.detail === KIRO_UPGRADED_DETAIL).length;
-    if (kiroUpgraded > 0) {
-      prepared.notes.push(kiroUpgradedNote(
-        kiroUpgraded,
-        descriptor.harnessDir,
-        configCommandForHarness(descriptor.harnessDir, `--harness ${stamp.distribution} --force`),
-      ));
-    }
+    if (kiroUpgraded > 0) prepared.notes.push(kiroUpgradedNote(kiroUpgraded, descriptor.harnessDir, kiroForce));
+    const kiroKeptChanged = actions.filter((action) => action.detail === KIRO_KEPT_CHANGED_DETAIL).length;
+    if (kiroKeptChanged > 0) prepared.notes.push(kiroKeptChangedNote(kiroKeptChanged, descriptor.harnessDir, kiroForce));
     // Older releases shipped an effort map in the project's Kiro settings; a
     // refresh that removes it says where the session's effort lives now.
     const legacyKiroMap = stamp.distribution === "kiro" &&

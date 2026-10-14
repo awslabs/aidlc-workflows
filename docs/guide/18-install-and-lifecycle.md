@@ -1093,10 +1093,19 @@ Refresh preserves:
   opencode writes under `.opencode/` at its first start: config never copies,
   owns, or removes these
 - the agent files in `.kiro/agents` that Kiro CLI upgraded for its 3.0 engine
-  (Kiro keeps each file it replaced beside it as `.json.bak`): a refresh keeps
-  them as Kiro left them, says so in one line, and brings in the rest of the
-  release; `aidlc config --harness kiro --force` takes the release's versions,
-  and Kiro upgrades them again the next time it starts on its 3.0 engine
+  (Kiro keeps each file it replaced beside it as `.json.bak`, then
+  `.json.bak.1` and on): a refresh keeps them as Kiro left them, says so in one
+  line, and brings in the rest of the release; `aidlc config --harness kiro
+  --force` takes the release's versions, and Kiro upgrades them again the next
+  time it starts on its 3.0 engine. When the release changes what such a file
+  allows (it drops an allow entry or adds a deny entry the file Kiro upgraded
+  from had), the refresh puts the release's version back by itself, provided
+  Kiro upgrades it again by itself at its next 3.0 start (its auto-upgrade is
+  on: `chat.enableAutoAgentUpgrade` is true in your own Kiro settings, as
+  **Enable auto-upgrade** at Kiro's first 3.0 start saves it), that file is
+  the one AI-DLC wrote there, and Kiro's copy keeps its other fields; otherwise it keeps Kiro's copy and says, in one line,
+  that the file still allows what an older release allowed and that `--force`
+  takes the release's version
 
 Under `aidlc/`, install and refresh copy only those seeds. The clone identity,
 sessions, engine health, and other per-machine state are never copied from the
