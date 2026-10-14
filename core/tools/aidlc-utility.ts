@@ -258,6 +258,7 @@ import {
   parseReScope,
   relativeCodekbDir,
   RESERVED_RECORD_NAMES,
+  scopeDirectoryChecker,
   scopePathCovered,
   gridCostSummary,
   listIntentDirs,
@@ -10697,8 +10698,9 @@ function handleCodekbPublish(
   }
   const sourcePaths = codekbPaths(flags, "codekb-publish");
   const candidate = readCodekbCandidate(projectDir, flags.staged);
+  const isDirectory = scopeDirectoryChecker(repoDir);
   for (const path of candidate.scope.analyzedPaths) {
-    if (!sourcePaths.includes("./") && !scopePathCovered(sourcePaths, path)) {
+    if (!sourcePaths.includes("./") && !scopePathCovered(sourcePaths, path, isDirectory)) {
       die(
         `codekb-publish: snapshot paths do not cover candidate analyzed path "${path}"; ` +
           `take a fresh codekb-snapshot over the complete candidate scope`,
@@ -10980,7 +10982,7 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
         ? []
         : fullScopeDowngrade
           ? [...store.analyzedPaths]
-          : store.analyzedPaths.filter((p) => !scopePathCovered(incoming.analyzedPaths, p));
+          : store.analyzedPaths.filter((p) => !scopePathCovered(incoming.analyzedPaths, p, scopeDirectoryChecker(repoDir)));
     const discardedComponents =
       incoming.kind === "full"
         ? []

@@ -8,7 +8,8 @@
 //      reverse-engineering-timestamp.md), codekbScopeFingerprint (temp-index
 //      `git write-tree` over the analyzed paths — content-addressed, so an
 //      edit flips it and a revert restores it), and scopePathCovered (the
-//      compare mode's literal/dir-prefix coverage test).
+//      coverage test publish and compare mode share: same path
+//      in any spelling, or an entry under a directory written with a trailing slash).
 //   2. The `codekb-scope-diff` UTILITY VERB (spawned as the real CLI surface):
 //      status verdicts NO_STORE / CURRENT / STALE / UNVERIFIED / UNKNOWN_SCOPE,
 //      compare verdicts COVERS / NARROWER (+ the exact discard list), and the
@@ -434,6 +435,44 @@ describe("t248 scopePathCovered", () => {
     expect(scopePathCovered(["src/a.ts"], "src/a.ts")).toBe(true);
     expect(scopePathCovered(["src/a.ts"], "src/a.ts.bak")).toBe(false);
   });
+
+  test("a trailing slash, a leading ./ or a backslash does not change what a path names (#2578)", () => {
+    // the same directory, spelled with and without the slash, either way round
+    expect(scopePathCovered(["platform/control_plane", "applications"], "platform/control_plane/")).toBe(true);
+    expect(scopePathCovered(["platform/control_plane/", "applications/"], "platform/control_plane")).toBe(true);
+    expect(scopePathCovered(["src/"], "./src/")).toBe(true);
+    expect(scopePathCovered(["./src/"], "src/x.ts")).toBe(true);
+    expect(scopePathCovered(["src\\a"], "src/a/")).toBe(true);
+    // a directory (trailing slash) covers what sits under it, and only at a "/"
+    expect(scopePathCovered(["./src/"], "src/x/")).toBe(true);
+    expect(scopePathCovered(["src\\"], "src/x/")).toBe(true);
+    expect(scopePathCovered(["src/"], "src2/")).toBe(false);
+    expect(scopePathCovered(["a/"], "a.txt")).toBe(false);
+    // a path written without the slash covers only itself, so a file never covers
+    // what was once a directory of the same name
+    expect(scopePathCovered(["src/config"], "src/config/db.ts")).toBe(false);
+    expect(scopePathCovered(["src/config"], "src/config/")).toBe(true);
+    // with the repo to ask, a bare directory covers what sits under it, and a bare file does not
+    const asDirs = (p: string) => p === "src/config";
+    expect(scopePathCovered(["src/config"], "src/config/db.ts", asDirs)).toBe(true);
+    expect(scopePathCovered(["src/other"], "src/other/x.ts", asDirs)).toBe(false);
+    // with the repo to ask, the two spellings are one entry only for a directory
+    const dirs = new Set(["src/config"]);
+    expect(scopePathCovered(["src/config"], "src/config/", (p) => dirs.has(p))).toBe(true);
+    expect(scopePathCovered(["src/config/"], "src/config", (p) => dirs.has(p))).toBe(true);
+    expect(scopePathCovered(["src/config"], "src/config/", () => false)).toBe(false);
+    // a narrower path still does not cover a wider one, however it is spelled
+    expect(scopePathCovered(["src/payments"], "src/")).toBe(false);
+  });
+
+  test("the repo root is not a coverage case: full scans are decided by the caller", () => {
+    // `.` and `./` name the root and equal each other, but neither stands in for a
+    // full scan here (compare mode reads `kind: full`; publish reads the literal `./`)
+    expect(scopePathCovered(["."], "x/")).toBe(false);
+    expect(scopePathCovered(["./"], "src/payments/")).toBe(false);
+    expect(scopePathCovered(["."], "./")).toBe(true);
+    expect(scopePathCovered(["src/"], "./")).toBe(false);
+  });
 });
 
 // ============================================================================
@@ -646,6 +685,36 @@ describe("t248 codekb-scope-diff verb — compare mode", () => {
     expect(human.stdout).toContain(
       "NARROWER: the incoming scope no longer claims verified deep coverage for:",
     );
+  });
+
+  test("compare treats `src/payments` and `src/payments/` as one entry when it is a directory (#2578)", () => {
+    const proj = freshProject();
+    seedStore(proj, timestampBody({ fingerprint: "abc" }));
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments", "charge.ts"), "export const charge = 1;\n");
+    const incoming = join(proj, "incoming-noslash.md");
+    writeFileSync(
+      incoming,
+      timestampBody({ intent: "same", analyzedPaths: ["src/payments"], components: ["payment-gateway"] }),
+    );
+    const parsed = JSON.parse(runVerb(proj, "--compare", incoming, "--json").stdout);
+    expect(parsed.verdict).toBe("COVERS");
+    expect(parsed.discarded_paths).toEqual([]);
+  });
+
+  test("compare still reports NARROWER when a file now stands where a stored directory was (#2578)", () => {
+    const proj = freshProject();
+    seedStore(proj, timestampBody({ fingerprint: "abc" }));
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments"), "now a file\n");
+    const incoming = join(proj, "incoming-file.md");
+    writeFileSync(
+      incoming,
+      timestampBody({ intent: "same", analyzedPaths: ["src/payments"], components: ["payment-gateway"] }),
+    );
+    const parsed = JSON.parse(runVerb(proj, "--compare", incoming, "--json").stdout);
+    expect(parsed.verdict).toBe("NARROWER");
+    expect(parsed.discarded_paths).toEqual(["src/payments/"]);
   });
 
   test("valid incoming full root covers a partial store", () => {
