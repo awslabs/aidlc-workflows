@@ -47,7 +47,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BLOCKED_STATE_TRANSITIONS } from "../../core/hooks/aidlc-state-transition-guard.ts";
 import {
@@ -114,69 +114,6 @@ function stubHookBody(hookName: string, exitCode = 0, stderr = ""): string {
     `}`,
   ].filter(Boolean).join("\n");
 }
-
-// Minimal stubs for the adapter's audit and lib tool imports (../tools/*); its
-// runtime-paths import is copied as-is (node builtins only). The
-// record-human-turn reads stateFilePath() + appendAuditEntry(); neither is a security
-// surface here, so the stubs are inert (state file absent → no append).
-// The kept stops the hooks-off step leaves: none in these fixtures.
-const QUESTION_STORE_STUB = `export function keptRestartRun(_p: string, _args: readonly string[]): null { return null; }\n`;
-const AUDIT_TOOL_STUB = `export function appendAuditEntry(_k: string, _d: unknown, _p: string): void {}\nexport function appendSubagentPromptUnmatched(_p: string, _r: unknown): void {}\nexport function appendCoordinationStoodAside(_p: string, _r: unknown): boolean { return false; }\n`;
-const LIB_TOOL_STUB = `import { join } from "node:path";
-export { boundDirectiveMessage } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
-export function stateFilePath(projectDir: string): string {
-  return join(projectDir, ".aidlc-state-absent.json");
-}
-export function humanTurnMintAllowed(): boolean {
-  return process.env.AIDLC_UNATTENDED !== "1";
-}
-export function resolveWorkflowSelection(
-  _projectDir: string,
-  options: { sessionId?: string } = {},
-): { space: string; intent: null; sessionId: string | null; binding: null } {
-  return {
-    space: "default",
-    intent: null,
-    sessionId: options.sessionId ?? null,
-    binding: null,
-  };
-}
-export function stateFilePathForSelection(projectDir: string): string {
-  return stateFilePath(projectDir);
-}
-export function humanActedSinceGate(): boolean { return process.env.T250_HUMAN_ACTED === "1"; }
-export function constructionPolicyChangeAllowed(_projectDir: string, field: string, value: string): boolean { return process.env.T250_POLICY_RECEIPT === field + "=" + value; }
-export function personCheckSwitchAllowed(_projectDir: string, key: string, value: string): boolean { return (process.env.T250_CHECK_SWITCH ?? "").split(",").includes(key + "=" + value); }
-export function isReadOnlyNextArgv(args: readonly string[]): boolean { return args.includes("--status") || (args[0] === "config" && ["set", "get", "list"].includes(args[1] ?? "")); }
-export function normalizeDriveLetter(p: string): string { return p; }
-export function claimCopilotCommand(): { allowed: true; attemptId: string } {
-  return { allowed: true, attemptId: "00000000-0000-4000-8000-000000000001" };
-}
-export function settleCopilotCommand(): string { return "settled"; }
-export function noteHelperSession(): void {}
-export function settleCopilotIntentBoundary(): boolean { return false; }
-export function recordCopilotHumanSequence(): boolean { return true; }
-export function workflowParticipation(): "participant" { return "participant"; }
-export function enterHookWorkflow(projectDir: string, sessionId?: unknown) {
-  return {
-    selection: resolveWorkflowSelection(projectDir, typeof sessionId === "string" ? { sessionId } : {}),
-    participation: "participant" as const,
-    restore: () => {},
-  };
-}
-export function hookStandsOutside(): boolean { return false; }
-export function recordHookDrop(): void {}
-export function recordPreWorkflowHeartbeat(): void {}
-export function runInHookWorkflow(_projectDir: string, _workflow: unknown, fn: () => unknown): unknown { return fn(); }
-export function hookWorkflowIsInactive(): boolean { return false; }
-export function hookChildEnv(_projectDir: string, _sessionId: string | undefined, extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
-  return { ...process.env, ...extra };
-}
-export function currentHookWorkflow(): null { return null; }
-export function captureHookWorkflow(projectDir: string, sessionId?: unknown) { return enterHookWorkflow(projectDir, sessionId); }
-export function isTerminalWorkflow(): boolean { return false; }
-export function withHookWorkflowMutation(_projectDir: string, _workflow: unknown, fn: () => unknown): unknown { return fn(); }
-\n`;
 
 interface Scratch {
   projectRoot: string;
