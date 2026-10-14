@@ -137,6 +137,7 @@ function prepareReader(): void {
 // DERIVED from harness/ -- a hardcoded list cannot fail for a harness it has
 // never heard of, and upstream added `copilot` mid-slice.
 const HARNESS_DATA: Record<string, string> = {
+  antigravity: "dist/antigravity/.agents/tools/data/harness.json",
   claude: "dist/claude/.claude/tools/data/harness.json",
   codex: "dist/codex/.codex/tools/data/harness.json",
   copilot: "dist/copilot/.aidlc/tools/data/harness.json",

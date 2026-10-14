@@ -650,7 +650,7 @@ export const PHASE_NUMBERS: Record<string, Phase> = {
 // dev-repo CWD rung, where more than one harness dir can coexist and the Claude
 // tree is canonical (".claude" must win). A real single-harness install never
 // reaches the probe; it resolves by script path.
-export const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc", ".cursor"] as const;
+export const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc", ".cursor", ".agents"] as const;
 
 // True for a plausible harness dir name: a dot-prefixed segment, e.g. ".claude"
 // / ".kiro" / ".gemini". Guards the script-path derivation so an unexpected
@@ -734,6 +734,7 @@ const KNOWN_RULES_SUBDIR: Record<string, string> = {
   // *.ts as custom tools, so the engine cannot live there); no rename needed.
   ".aidlc": "rules",
   ".cursor": "rules",
+  ".agents": "rules",
 };
 
 /** One MIME type's text extractor, as configured in harness.json. */
@@ -4600,7 +4601,7 @@ export function aidlcRootIntegrations(dir: string): Array<{ path: string; policy
 // installed harness writes into, left out whole because none of them is
 // application code (a .gitignore edit that adds or drops files still moves the
 // fingerprint through those files); and AI-DLC's root settings files.
-const CODEKB_INSTALL_DIRS = ["aidlc", ".aidlc", ".claude", ".codex", ".cursor", ".kiro", ".opencode"];
+const CODEKB_INSTALL_DIRS = ["aidlc", ".aidlc", ".claude", ".codex", ".cursor", ".kiro", ".opencode", ".agents"];
 const CODEKB_INSTALL_ENTRY_DIRS = [".github/agents", ".github/hooks", ".github/skills", ".agents/skills"];
 export function codekbFingerprintExcludes(projectDir: string, sourceDir: string): string[] {
   if (sourceDir !== projectDir) return [];
@@ -31459,8 +31460,13 @@ function hooksNeverRanHere(projectDir?: string): boolean {
 export function promptHookRanRecently(projectDir?: string): boolean {
   try {
     const project = resolveProjectDir(projectDir);
-    const path = join(hooksHealthReadDir(project), "record-human-turn.last");
-    if (!existsSync(path)) return false;
+    const own = join(hooksHealthReadDir(project), "record-human-turn.last");
+    // On Turn 1 (`/aidlc <request>`), the prompt hook ran before `intent create`
+    // created the intent folder, so its heartbeat sits in the space's
+    // pre-workflow folder until the next prompt turn beats in the intent.
+    const pre = join(engineDirFor(intentsDir(project)), "hooks-health", "record-human-turn.last");
+    const path = existsSync(own) ? own : existsSync(pre) ? pre : null;
+    if (path === null) return false;
     const beat = Date.parse(readFileSync(path, "utf-8").trim());
     if (!Number.isFinite(beat)) return false;
     const age = Date.now() - beat;

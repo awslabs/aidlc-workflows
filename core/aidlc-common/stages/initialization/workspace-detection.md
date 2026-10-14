@@ -40,7 +40,7 @@ Runs deterministically inside `aidlc-utility init`. The detection rules in Step 
 
 ### Step 2: Scan Workspace
 
-The scanner checks top-level files plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`), excluding the harness directories (`.claude/`, `.kiro/`, `.codex/`, `.opencode/`, `.aidlc/`, `.cursor/`), `aidlc/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`.
+The scanner checks top-level files plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`), excluding the harness directories (`.claude/`, `.kiro/`, `.codex/`, `.opencode/`, `.aidlc/`, `.cursor/`, `.agents/`), `aidlc/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`.
 
 It also never counts a file AI-DLC wrote whole into the folder, such as Cursor's root `install.ts`: each installed harness lists these as whole-file root integrations in `<harness directory>/tools/data/aidlc-projection.json`, and the scanner reads that list. A root `install.ts` with no installed harness claiming it is the project's own code and still counts.
 
@@ -57,7 +57,7 @@ Scan signals:
 - Documentation (README, docs/, wiki/)
 
 **Exclude from analysis** (framework scaffolding, not application code):
-- The harness directory (`.claude/`, `.kiro/`, `.codex/`, `.opencode/`, `.aidlc/`, or `.cursor/`) — AI-DLC framework files (skills, agents, hooks, tools, knowledge)
+- The harness directory (`.claude/`, `.kiro/`, `.codex/`, `.opencode/`, `.aidlc/`, `.cursor/`, or `.agents/`) — AI-DLC framework files (skills, agents, hooks, tools, knowledge)
 - `aidlc/` — AI-DLC workspace root (the space tree at `aidlc/spaces/<space>/...`)
 - The root files AI-DLC wrote whole (Cursor's `install.ts`), as listed by the installed harness (see above)
 - `node_modules/`, `.git/`

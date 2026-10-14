@@ -252,8 +252,8 @@ sequenceDiagram
 ## Source vs distribution (one core, many harnesses)
 
 The framework is **authored once and generated per harness** — today Claude
-Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, and GitHub Copilot, and
-any capable CLI you port it to. The
+Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, GitHub Copilot, and
+Google Antigravity, and any capable CLI you port it to. The
 hand-authored source is a harness-neutral `core/` plus a thin `harness/<name>/`
 surface per CLI; `bun scripts/package.ts` materializes ignored local
 `dist/<harness>/` trees:
@@ -449,7 +449,7 @@ The resolver applies per-agent exception, group dial, shipped tier default, then
 session inherit. The shipped-default layer calls the shared tier projection
 module and the active tier cap resolver; it does not duplicate model tables.
 The same surface writers are used at package time and config refresh time for
-Claude and Cursor Markdown, Codex TOML, opencode Markdown, and Kiro agent JSON
+Claude, Cursor and Antigravity Markdown, Codex TOML, opencode Markdown, and Kiro agent JSON
 plus `chat.modelDefaults`.
 
 Refresh passes the resolved settings chain into a pristine staged projection
@@ -946,7 +946,7 @@ records through `aidlc-log.ts` other than reading answers, a Unit checkpoint
 decision, or a setting it changes), which rewrites the source as
 `cursor` (`chatTookStep`); a worktree of this checkout or a Unit claimed here holds
 it from the start. Its developer dispatch meets the plan as any chat on the work
-does. On Cursor, Copilot and Kiro IDE (and Kiro CLI v3, which runs that tree) a
+does. On Cursor, Copilot, Google Antigravity and Kiro IDE (and Kiro CLI v3, which runs that tree) a
 command finds its chat only through the process tree, so first contact there
 records `cursor` and the gates hold the chat from the start. When participation
 cannot be decided because a sibling-only

@@ -16,7 +16,7 @@
 // Not played: Codex delivers each event twice and its adapter replays the
 // first answer (tests/unit/t149-codex-hook-adapter.test.ts owns that).
 
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { Worker } from "node:worker_threads";
@@ -46,8 +46,8 @@ import {
   stopVerdict,
 } from "./scope-run.ts";
 
-export type HostName = "codex" | "copilot" | "kiro" | "kiro-ide" | "cursor" | "opencode";
-export const HOSTS: readonly ("claude" | HostName)[] = ["claude", "codex", "copilot", "kiro", "kiro-ide", "cursor", "opencode"];
+export type HostName = "codex" | "copilot" | "kiro" | "kiro-ide" | "cursor" | "opencode" | "antigravity";
+export const HOSTS: readonly ("claude" | HostName)[] = ["claude", "codex", "copilot", "kiro", "kiro-ide", "cursor", "opencode", "antigravity"];
 
 type Payload = Record<string, unknown>;
 
@@ -916,6 +916,195 @@ export function cursorStopVerdict(stdout: string): { blocked: boolean; reason: s
   return typeof followup === "string" ? { blocked: true, reason: followup } : { blocked: false, reason: "" };
 }
 
+/** An Antigravity payload: the camelCase fields its recorded payloads carry, then the moment's own. */
+export function antigravityPayload(at: Moment, fields: Payload): Payload {
+  const conversation = at.helper?.id ?? at.session;
+  return {
+    artifactDirectoryPath: join(dirname(at.proj), "antigravity-brain", conversation),
+    conversationId: conversation,
+    modelName: "gemini-4-argon-high",
+    transcriptPath: at.transcript,
+    workspacePaths: [at.proj],
+    ...fields,
+  };
+}
+
+/** An Antigravity PreToolUse answer: null for an allow, else the refusal (an empty answer is a deny on this host). */
+export function antigravityRefusal(stdout: string): string | null {
+  const line = stdout.trim().split("\n").find((entry) => entry.startsWith("{"));
+  const answer = parseJson(line ?? "") as { decision?: string; reason?: string } | null;
+  if (answer?.decision === "allow") return null;
+  return answer?.decision === "deny"
+    ? String(answer.reason ?? "")
+    : `no allow came back, which Antigravity reads as a deny: ${clip(stdout, 300)}`;
+}
+
+/** An Antigravity Stop answer: `continue` sends the agent back into its loop, so the turn did not end. */
+export function antigravityStopVerdict(stdout: string): { blocked: boolean; reason: string } {
+  const answer = parseJson(stdout) as { decision?: string; reason?: string } | null;
+  return answer?.decision === "continue"
+    ? { blocked: true, reason: String(answer.reason ?? "") }
+    : { blocked: false, reason: "" };
+}
+
+/**
+ * Google Antigravity: `.agents/hooks.json` (the host runs each command from
+ * `.agents/`, and the command steps up to the project root), camelCase
+ * payloads, the host's step-type tool names, and a transcript per
+ * conversation that the adapter reads for the person's turns: a typed line is
+ * a USER_INPUT step the person sent, a pick in the ask_question modal a
+ * completed ASK_QUESTION step. A helper runs in a conversation of its own
+ * whose transcript opens with the dispatch; its stop is its completion.
+ */
+export class AntigravityScopeHost extends NativeScopeHost {
+  override readonly dir = ".agents";
+  override readonly skill = ".agents/skills/aidlc/SKILL.md";
+  override readonly picker = true;
+  private steps = new Map<string, number>();
+
+  protected override sessionName(n: number): string {
+    return `a9c0de00-${hex(this.hostNumber, 4)}-4000-8000-${hex(n, 12)}`;
+  }
+
+  wired(event: string): string[] {
+    const wiring = JSON.parse(readFileSync(join(this.proj, ".agents", "hooks.json"), "utf-8")) as {
+      aidlc: Record<string, Array<{ command?: string; hooks?: { command: string }[] }>>;
+    };
+    // The host runs the command through `sh -c` from .agents/; the `cd ..`
+    // it starts with lands it in the project, where this host already is.
+    return (wiring.aidlc[event] ?? [])
+      .flatMap((entry) => entry.hooks ? entry.hooks.map((hook) => hook.command) : entry.command ? [entry.command] : [])
+      .map((command) => command.replace(/^cd \.\. && /, ""));
+  }
+
+  protected payload(_event: string, fields: Payload): Payload {
+    return antigravityPayload(this.moment(), fields);
+  }
+
+  protected transcript(): string {
+    return this.transcriptOf(this.helper?.id ?? this.session);
+  }
+
+  private transcriptOf(conversation: string): string {
+    return join(dirname(this.proj), "antigravity-brain", conversation, ".system_generated", "logs", "transcript_full.jsonl");
+  }
+
+  /** Append one step to a conversation's transcript, as the host writes it. */
+  private record(conversation: string, step: Payload): void {
+    const path = this.transcriptOf(conversation);
+    mkdirSync(dirname(path), { recursive: true });
+    const index = this.steps.get(conversation) ?? 0;
+    this.steps.set(conversation, index + 1);
+    appendFileSync(path, `${JSON.stringify({ step_index: index, status: "DONE", created_at: new Date().toISOString(), ...step })}\n`);
+  }
+
+  protected refusal(res: RunResult): string | null {
+    return antigravityRefusal(res.stdout);
+  }
+
+  protected override startChat(): void {
+    this.fire("SessionStart", null, {});
+  }
+
+  /** The person's line: a USER_EXPLICIT step, then the model call it starts. */
+  override typed(words: string): string {
+    this.record(this.session, {
+      type: "USER_INPUT",
+      source: "USER_EXPLICIT",
+      content: `<USER_REQUEST>\n${words}\n</USER_REQUEST>`,
+    });
+    this.fire("PreInvocation", null, { initialNumSteps: this.steps.get(this.session) ?? 1, invocationNum: 0 });
+    return "";
+  }
+
+  /** The person's pick: the ask_question call, its answered step, then the model call that reads it. */
+  override picked(question: string, options: string[], label: string): void {
+    this.record(this.session, {
+      type: "PLANNER_RESPONSE",
+      source: "MODEL",
+      content: "",
+      tool_calls: [{ name: "ask_question", args: { questions: JSON.stringify([{ question, options, is_multi_select: false }]) } }],
+    });
+    this.record(this.session, {
+      type: "GENERIC",
+      source: "MODEL",
+      content: `Created At: 2026-10-14T17:00:00Z\nCompleted At: 2026-10-14T17:00:10Z\nA1: ${label}`,
+    });
+    this.fire("PreInvocation", null, { initialNumSteps: this.steps.get(this.session) ?? 1, invocationNum: 1 });
+  }
+
+  private call(name: string, args: Payload): Payload {
+    const conversation = this.helper?.id ?? this.session;
+    const stepIdx = this.steps.get(conversation) ?? 0;
+    this.record(conversation, { type: "PLANNER_RESPONSE", source: "MODEL", content: "", tool_calls: [{ name, args }] });
+    return { stepIdx, toolCall: { name, args } };
+  }
+
+  override bash(line: string): RunResult {
+    const args = { CommandLine: line, Cwd: this.proj, WaitMsBeforeAsync: 5000 };
+    const fields = this.call("run_command", args);
+    this.refuseOn("run_command", args, this.fire("PreToolUse", "run_command", fields));
+    const res = this.run(line);
+    this.fire("PostToolUse", "run_command", { ...fields, error: "" });
+    return res;
+  }
+
+  override write(rel: string, content: string): void {
+    const abs = join(this.proj, rel);
+    const before = existsSync(abs) ? readFileSync(abs, "utf-8") : null;
+    const [tool, args] = before === null
+      ? ["write_to_file", { TargetFile: abs, CodeContent: content, Overwrite: true }] as const
+      : ["replace_file_content", { TargetFile: abs, TargetContent: before, ReplacementContent: content, AllowMultiple: false }] as const;
+    const fields = this.call(tool, args);
+    this.refuseOn(tool, args, this.fire("PreToolUse", tool, fields));
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+    this.fire("PostToolUse", tool, { ...fields, error: "" });
+  }
+
+  override remove(rel: string): void {
+    const args = { CommandLine: `rm ${rel}`, Cwd: this.proj, WaitMsBeforeAsync: 5000 };
+    const fields = this.call("run_command", args);
+    this.refuseOn("run_command", args, this.fire("PreToolUse", "run_command", fields));
+    rmSync(join(this.proj, rel), { force: true });
+    this.fire("PostToolUse", "run_command", { ...fields, error: "" });
+  }
+
+  /** invoke_subagent: the helper's own conversation starts with the dispatch and ends with its own Stop. */
+  override task(agent: string, prompt: string, work: () => void): void {
+    const args = { Subagents: [{ Model: "inherit", Prompt: prompt, Role: "stage work", TypeName: agent }] };
+    const fields = this.call("invoke_subagent", args);
+    this.refuseOn("invoke_subagent", args, this.fire("PreToolUse", "invoke_subagent", fields));
+    this.fire("PostToolUse", "invoke_subagent", { ...fields, error: "" });
+    this.helper = { agent, id: `a9c0de00-${hex(this.hostNumber, 4)}-4000-9000-${hex(++helpers, 12)}` };
+    try {
+      this.record(this.helper.id, {
+        type: "SYSTEM_MESSAGE",
+        source: "SYSTEM",
+        content: `You are a subagent. Your task:\n${prompt}`,
+      });
+      this.fire("SessionStart", null, {});
+      this.fire("PreInvocation", null, { initialNumSteps: 0, invocationNum: 0 });
+      work();
+      this.fire("Stop", null, { error: "", executionNum: 0, fullyIdle: true, terminationReason: "NO_TOOL_CALL" });
+    } finally {
+      this.helper = null;
+    }
+    // The helper's report wakes the conductor: a system message, not a turn.
+    this.record(this.session, { type: "SYSTEM_MESSAGE", source: "SYSTEM", content: `[Message] from ${agent}: done` });
+    this.fire("PreInvocation", null, { initialNumSteps: this.steps.get(this.session) ?? 1, invocationNum: 0 });
+  }
+
+  override stop(): { blocked: boolean; reason: string } {
+    return antigravityStopVerdict(this.fire("Stop", null, this.stopFields()).map((res) => res.stdout).join("\n"));
+  }
+
+  protected stopFields(): Payload {
+    return { error: "", executionNum: 0, fullyIdle: true, terminationReason: "NO_TOOL_CALL" };
+  }
+}
+
+
 /** What the plugin answered for one hook call: a refusal (its thrown message), the output it changed, the nudges it sent. */
 interface PluginAnswer {
   ok: boolean;
@@ -1130,6 +1319,7 @@ export function hostFor(name: "claude" | HostName, proj: string, base?: NodeJS.P
     case "kiro-ide": return new KiroIdeScopeHost(proj, base, opts);
     case "cursor": return new CursorScopeHost(proj, base, opts);
     case "opencode": return new OpencodeScopeHost(proj, base, opts);
+    case "antigravity": return new AntigravityScopeHost(proj, base, opts);
   }
 }
 

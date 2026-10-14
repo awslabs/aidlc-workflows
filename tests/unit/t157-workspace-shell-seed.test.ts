@@ -164,6 +164,14 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         // native include (both Copilot surfaces expand @-imports).
         const agentsMd = readFileSync(harness.onboardingDist, "utf-8");
         expect(agentsMd, harness.name).toContain("@aidlc/active-memory/org.md");
+      } else if (harness.capabilities.memoryInclude === "antigravity-rule") {
+        // Antigravity: the always_on rule lists the method files as plain
+        // paths (no @-import expansion); the SessionStart hook injects the
+        // live workflow context. AGENTS.md is the auto-read rules file.
+        const rule = readFileSync(join(harness.engineRoot, "rules", "aidlc.md"), "utf-8");
+        expect(rule).toMatch(/^---\ntrigger: always_on\n---/);
+        expect(rule).toContain("aidlc/active-memory/org.md");
+        expect(existsSync(harness.onboardingDist)).toBe(true);
       } else if (harness.capabilities.memoryInclude === "cursor-rule") {
         // Cursor: the alwaysApply rule lists the method files as plain paths
         // (no @-import expansion on Cursor); the sessionStart hook injects the

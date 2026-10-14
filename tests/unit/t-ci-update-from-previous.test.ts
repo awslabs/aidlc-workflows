@@ -109,7 +109,7 @@ describe("ci-update-from-previous helpers", () => {
 
   test("a harness the release ships that the check does not set up is named", () => {
     const shipped = (names: string[]) => ({ distributions: names.map((name) => ({ name })) });
-    expect(uncheckedHarnesses(shipped(["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]))).toEqual([]);
+    expect(uncheckedHarnesses(shipped(["antigravity", "claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]))).toEqual([]);
     expect(uncheckedHarnesses(shipped(["claude", "newcli"]))).toEqual(["newcli"]);
     expect(uncheckedHarnesses({})).toEqual([]);
   });
@@ -175,6 +175,7 @@ describe("ci-update-from-previous helpers", () => {
   // and Copilot and Cursor name their adapter file itself (dist/<harness> is the copy runtime's tree).
   test("a copied tree's hook commands are found on every harness that wires them in JSON", () => {
     const found = (harness: string, dir: string) => hookCommands(join(REPO_ROOT, "dist", harness, dir));
+    expect(found("antigravity", ".agents")).toContain("cd .. && bun .agents/hooks/aidlc-antigravity-adapter.ts guards");
     expect(found("claude", ".claude")).toContain('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook session-start');
     expect(found("codex", ".codex")).toContain("bun .codex/tools/aidlc.ts engine adapter codex continue-workflow");
     expect(found("copilot", ".github")).toContain("bun .aidlc/hooks/aidlc-copilot-adapter.ts guard-tool-call");
@@ -185,8 +186,10 @@ describe("ci-update-from-previous helpers", () => {
 
   test("only a command the engine's dispatcher runs is held to the hook phase trace", () => {
     expect(dispatched("aidlc engine hook session-start")).toBe(true);
+    expect(dispatched("cd .. && aidlc engine adapter antigravity guards")).toBe(true);
     expect(dispatched('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook session-start')).toBe(true);
     expect(dispatched("bun .kiro/tools/aidlc.ts engine adapter kiro-ide guard-tool-call")).toBe(true);
+    expect(dispatched("cd .. && bun .agents/hooks/aidlc-antigravity-adapter.ts guards")).toBe(false);
     expect(dispatched("bun .aidlc/hooks/aidlc-copilot-adapter.ts guard-tool-call")).toBe(false);
     expect(dispatched("bun .cursor/hooks/aidlc-cursor-adapter.ts guards")).toBe(false);
     expect(JSON.parse(hookInput("kiro-ide", "bun .kiro/tools/aidlc.ts engine adapter kiro-ide guard-tool-call")).tool_name).toBe("execute_bash");
