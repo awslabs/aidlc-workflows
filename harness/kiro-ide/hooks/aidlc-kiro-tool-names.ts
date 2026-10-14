@@ -168,8 +168,8 @@ export function isPlanApprovalSafeReadTool(name: string): boolean {
   return kiroTool(name)?.role === "read";
 }
 
-// Any name the table does not call a read may change the workspace, including
-// one it does not know.
+// Any nonempty name the table does not call a read may change the workspace,
+// including one it does not know.
 export function mutationCapableTool(name: string): boolean {
   return name.length > 0 && !isPlanApprovalSafeReadTool(name);
 }
@@ -179,8 +179,8 @@ const readNames = namesWhere((tool) => tool.role === "read").join("|");
 
 // The matcher each registration must carry, built from the table (read by
 // t245; the registrations themselves are hand-written JSON). PostToolUse
-// matchers stay unanchored and PreToolUse ones anchored, as each was written;
-// the delegate-completion matcher leaves out only `subagent_response`, which
+// matchers stay unanchored and PreToolUse ones anchored; the
+// delegate-completion matcher leaves out only `subagent_response`, which
 // the adapter drops on every entry point too.
 export const KIRO_HOOK_MATCHERS = {
   auditedWrite: namesWhere((tool) =>

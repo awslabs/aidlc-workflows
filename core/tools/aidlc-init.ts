@@ -6339,16 +6339,15 @@ function personalKiroMcpPath(env: NodeJS.ProcessEnv = process.env): string | nul
 // Kiro CLI offers an agent only the MCP servers its tools name, one
 // `@<server>` each; it has no grant for every server (measured on Kiro CLI
 // 2.29.0: `@*`, `@mcp` and `@*/*` grant nothing, and `*` adds built-in tools).
-// So the AI-DLC agent's staged copy names every server config finds in the
-// project's mcp.json and in the person's own, and allowedTools stays as
-// shipped, so each call still asks first. A server added later is named at
-// the next config run. True when the project's copy is the release's own
-// bytes (a copy install puts them there before config runs), so the named copy
-// replaces it; any other copy meets the ownership check.
-function grantKiroMcpServers(projectDir: string, sourceRoot: string, stagedRoot: string, harnessDir: string): boolean {
-  const rel = `${harnessDir}/agents/aidlc.json`;
-  const agentPath = join(stagedRoot, rel);
-  const names = new Set<string>();
+// So the staged copy of every agent that opts into the MCP files (the AI-DLC
+// agent and its specialists) names every server config finds in the project's
+// mcp.json and in the person's own, and allowedTools stays as shipped, so each
+// call still asks first. A server added later is named at the next config run.
+// Returns the agent files whose project copy is the release's own bytes (a
+// copy install puts them there before config runs), so the named copy replaces
+// it; any other copy meets the ownership check.
+function grantKiroMcpServers(projectDir: string, sourceRoot: string, stagedRoot: string, harnessDir: string): string[] {
+  const found = new Set<string>();
   const personal = personalKiroMcpPath();
   for (const path of [join(stagedRoot, harnessDir, "settings", "mcp.json"), personal]) {
     // The person's own file may be a link (a dotfiles folder): follow it.
@@ -6358,44 +6357,52 @@ function grantKiroMcpServers(projectDir: string, sourceRoot: string, stagedRoot:
     if (path === null || !file) continue;
     try {
       const servers = (readJsonFile(path) as Record<string, unknown>).mcpServers;
-      if (isRecord(servers)) for (const name of Object.keys(servers)) names.add(name);
+      if (isRecord(servers)) for (const name of Object.keys(servers)) found.add(name);
     } catch {
       // A file Kiro cannot read names no server.
     }
   }
-  // The agent file travels with the project (a team's clone), so a server it
-  // already names stays named: a teammate's run adds theirs and keeps yours.
-  // Kiro ignores a grant for a server it does not have.
-  const current = join(projectDir, rel);
-  if (regularFile(current)) {
+  const agentsDir = join(stagedRoot, harnessDir, "agents");
+  const replaced: string[] = [];
+  for (const file of pathPresent(agentsDir) ? readdirSync(agentsDir).filter((name) => name.endsWith(".json")).sort() : []) {
+    const rel = `${harnessDir}/agents/${file}`;
+    const agentPath = join(stagedRoot, rel);
+    if (!regularFile(agentPath)) continue;
+    const agentText = readFileSync(agentPath, "utf-8");
+    let agent: unknown;
     try {
-      const tools = (JSON.parse(withoutBom(readFileSync(current, "utf-8"))) as Record<string, unknown>).tools;
-      if (Array.isArray(tools)) {
-        for (const tool of tools) if (typeof tool === "string" && tool.startsWith("@")) names.add(tool.slice(1));
-      }
+      agent = JSON.parse(withoutBom(agentText));
     } catch {
-      // A copy config cannot read keeps no grant; the ownership check reports it.
+      continue;
     }
+    if (!isRecord(agent) || agent.includeMcpJson !== true || !Array.isArray(agent.tools)) continue;
+    // The agent file travels with the project (a team's clone), so a server it
+    // already names stays named: a teammate's run adds theirs and keeps yours.
+    // Kiro ignores a grant for a server it does not have.
+    const names = new Set(found);
+    const current = join(projectDir, rel);
+    if (regularFile(current)) {
+      try {
+        const tools = (JSON.parse(withoutBom(readFileSync(current, "utf-8"))) as Record<string, unknown>).tools;
+        if (Array.isArray(tools)) {
+          for (const tool of tools) if (typeof tool === "string" && tool.startsWith("@")) names.add(tool.slice(1));
+        }
+      } catch {
+        // A copy config cannot read keeps no grant; the ownership check reports it.
+      }
+    }
+    const tools = [
+      ...agent.tools.filter((tool) => typeof tool !== "string" || !tool.startsWith("@")),
+      ...[...names].map((name) => `@${name}`),
+    ];
+    if (canonical(tools) === canonical(agent.tools)) continue;
+    writeFileSync(agentPath, jsonFileText({ ...agent, tools }, agentText));
+    const release = join(sourceRoot, rel);
+    if (!regularFile(current) || !regularFile(release)) continue;
+    const releaseHash = sha256File(release);
+    if (sha256Matching(readFileSync(current), [releaseHash]) === releaseHash) replaced.push(rel);
   }
-  if (!regularFile(agentPath)) return false;
-  const agentText = readFileSync(agentPath, "utf-8");
-  let agent: unknown;
-  try {
-    agent = JSON.parse(withoutBom(agentText));
-  } catch {
-    return false;
-  }
-  if (!isRecord(agent) || !Array.isArray(agent.tools)) return false;
-  const tools = [
-    ...agent.tools.filter((tool) => typeof tool !== "string" || !tool.startsWith("@")),
-    ...[...names].map((name) => `@${name}`),
-  ];
-  if (canonical(tools) === canonical(agent.tools)) return false;
-  writeFileSync(agentPath, jsonFileText({ ...agent, tools }, agentText));
-  const release = join(sourceRoot, rel);
-  if (!regularFile(current) || !regularFile(release)) return false;
-  const releaseHash = sha256File(release);
-  return sha256Matching(readFileSync(current), [releaseHash]) === releaseHash;
+  return replaced;
 }
 
 function preserveUserProviderFields(
@@ -6770,8 +6777,8 @@ function prepareRefreshSource(
       regenerated.add(rel);
       if (entries) entries[rel] = owned;
     }
-    if (!projectProjection && grantKiroMcpServers(projectDir, sourceRoot, root, descriptor.harnessDir)) {
-      regenerated.add(`${descriptor.harnessDir}/agents/aidlc.json`);
+    if (!projectProjection) {
+      for (const rel of grantKiroMcpServers(projectDir, sourceRoot, root, descriptor.harnessDir)) regenerated.add(rel);
     }
   }
 
