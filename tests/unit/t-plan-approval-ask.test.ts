@@ -84,6 +84,10 @@ import {
   mintProtectedQuestion,
   planApprovalRuntimeFile,
   readActiveDirectiveMarker,
+  findStageBySlug,
+  artifactFilename,
+  reviewArtifactFingerprint,
+  unitCompletedReceipts,
   readProtectedResponse,
   stateDigest,
   workspaceSourceFingerprint,
@@ -3665,5 +3669,140 @@ describe("the phase-boundary verification report is written while the plan is", 
     expect(next(proj).plan_approval).toEqual({ status: "plan" });
     const write = guardWrite(proj, report(proj, "flipped"));
     expect(write.code, write.stderr).toBe(0);
+  });
+});
+
+// #2551: the router's receipt recovery must survive the actual PreToolUse
+// boundary, including a state write that legitimately retires its old marker.
+describe("Code Generation receipt recovery through the Plan Approval hook", () => {
+  function readyUnit(unitMajor = false): string {
+    const proj = unitProject("unit-a", "unit-b");
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    const state = seededStateFile(proj);
+    writeFileSync(state, readFileSync(state, "utf-8").replace(
+      "- **Guard Policy**: relaxed (set by you)", "- **Guard Policy**: strict (set by you)",
+    ).replace(
+      "## Scope Configuration", "## Runtime State\n- **Revision Count**: 0\n\n## Scope Configuration",
+    ).replace(
+      "### CONSTRUCTION PHASE", "### INCEPTION PHASE\n- [x] units-generation — EXECUTE\n\n### CONSTRUCTION PHASE",
+    ));
+    if (unitMajor) {
+      writeFileSync(state, readFileSync(state, "utf-8")
+        .replace("## Runtime State", "## Runtime State\n- **Construction Iteration**: unit-major")
+        .replace(/^- \[x\] (functional-design|nfr-requirements|nfr-design|infrastructure-design)/gm, "- [S] $1"));
+    }
+    writePlan(proj, "", "unit-a");
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    reply(proj, "1");
+    expect(next(proj)).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+    const start = `bun .claude/tools/aidlc-state.ts unit start --stage code-generation --unit unit-a`;
+    expect(guardBash(proj, start).code).toBe(0);
+    runInstalled(proj, start);
+    expect(next(proj)).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+    const source = join(proj, "src", "slugify.ts");
+    const write = guardWrite(proj, source);
+    expect(write.code, write.stderr).toBe(0);
+    writeFileSync(source, "export const slugify = (title: string) => title.toLowerCase();\n");
+
+    for (const name of ["code-summary", "traceability"]) {
+      writeFileSync(join(stageDir(proj, "unit-a"), artifactFilename(name)), `# ${name}\nBuilt unit-a.\n`);
+    }
+    const stage = findStageBySlug("code-generation")!;
+    const fields = {
+      Stage: stage.slug, Unit: "unit-a", Reviewer: stage.reviewer!, Iteration: "1",
+      "Artifact Fingerprint": reviewArtifactFingerprint(proj, stage, "unit-a")!,
+    };
+    appendAuditEntry("REVIEW_REQUESTED", fields, proj);
+    appendAuditEntry("REVIEW_COMPLETED", { ...fields, Verdict: "READY" }, proj);
+    return proj;
+  }
+
+  function codexGuard(proj: string, command: string, toolUseId: string): ReturnType<typeof spawnSync> {
+    return spawnSync(BUN, [join(REPO_ROOT, "dist", "codex", ".codex", "hooks", "aidlc-codex-adapter.ts"), "plan-approval-guard"], {
+      cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      input: JSON.stringify({ hook_event_name: "PreToolUse", session_id: SESSION, cwd: proj, tool_use_id: toolUseId,
+        tool_name: "Bash", tool_input: { command } }),
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj, AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0" },
+    });
+  }
+
+  for (const unitMajor of [false, true]) {
+    test(`${unitMajor ? "unit-major" : "stage-major"}: next refreshes retired authority before its exact receipt command is guarded`, () => {
+      const proj = readyUnit(unitMajor);
+      reply(proj, "Use scope-dependent skeleton stance");
+      runInstalled(proj, "bun .claude/tools/aidlc-state.ts set-skeleton-stance scope-dependent");
+      expect(readActiveDirectiveMarker(proj, readFileSync(seededStateFile(proj), "utf-8"))).toBeNull();
+      const complete = "bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit unit-a";
+      expect(guardBash(proj, complete).code).toBe(2);
+      const staleCodex = codexGuard(proj, complete, "before-next");
+      expect(staleCodex.status, String(staleCodex.stderr)).toBe(2);
+      const probe = runOrchestrateNext(ORCHESTRATE, proj, [], {
+        env: { ...process.env, AIDLC_ROUTE_CHECK: "1" },
+      });
+      expect(probe.directive).toMatchObject({ kind: "run-stage", unit: "unit-a" });
+      expect(readActiveDirectiveMarker(proj, readFileSync(seededStateFile(proj), "utf-8"))).toBeNull();
+      const recovered = next(proj) as Emitted & { unit_record_step?: string; gate_note?: string };
+      const admitted = guardBash(proj, complete);
+      expect(admitted.code, admitted.stderr).toBe(0);
+      expect(recovered).toMatchObject({ kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" } });
+      expect(recovered.unit_record_step).toContain(complete);
+      expect(recovered.gate_note).toBe(recovered.unit_record_step);
+      expect(recovered).toMatchObject({ mode: "inline" });
+      expect(recovered).not.toHaveProperty("plan_note");
+      expect(recovered.narration ?? "").not.toContain("Building");
+      const codex = codexGuard(proj, complete, "after-next");
+      expect(codex.status, String(codex.stderr)).toBe(0);
+      // The state command still owns Unit/artifact admission; another Unit has
+      // neither the outputs nor its review and cannot borrow this recovery.
+      const other = spawnSync(BUN, [STATE, "unit", "complete", "--stage", "code-generation", "--unit", "unit-b", "--project-dir", proj], {
+        cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env: { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "0" },
+      });
+      expect(other.status, other.stderr).not.toBe(0);
+      expect(unitCompletedReceipts(proj, "code-generation").has("unit-b")).toBe(false);
+      next(proj);
+      runInstalled(proj, complete);
+      expect(unitCompletedReceipts(proj, "code-generation").has("unit-a")).toBe(true);
+      expect(JSON.stringify(next(proj))).not.toContain("completion is not recorded");
+    });
+
+  }
+
+  for (const missing of [true, false]) {
+    test(`${missing ? "a missing artifact" : "a stale review"} keeps the normal work step`, () => {
+      const proj = readyUnit();
+      const summary = join(stageDir(proj, "unit-a"), "code-summary.md");
+      if (missing) rmSync(summary);
+      else writeFileSync(summary, "# Code summary\nChanged after review.\n");
+      const routed = next(proj);
+      expect(routed).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+      expect(routed).not.toHaveProperty("unit_record_step");
+      if (missing) {
+        const result = spawnSync(BUN, [STATE, "unit", "complete", "--stage", "code-generation", "--unit", "unit-a", "--project-dir", proj], {
+          cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          env: { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "0", AIDLC_SKIP_REVIEWER_GATE_GUARD: "0" },
+        });
+        expect(result.status, result.stderr).not.toBe(0);
+      }
+      expect(unitCompletedReceipts(proj, "code-generation").has("unit-a")).toBe(false);
+    });
+  }
+
+  test("a changed approved plan routes to approval instead of another refused receipt", () => {
+    const proj = readyUnit();
+    writeFileSync(join(stageDir(proj, "unit-a"), "code-generation-plan.md"),
+      `${readFileSync(join(stageDir(proj, "unit-a"), "code-generation-plan.md"), "utf-8")}\nNew work to approve.\n`);
+    // Review the changed files so the receipt-only candidate still exists.
+    const stage = findStageBySlug("code-generation")!;
+    const fields = { Stage: stage.slug, Unit: "unit-a", Reviewer: stage.reviewer!, Iteration: "2",
+      "Artifact Fingerprint": reviewArtifactFingerprint(proj, stage, "unit-a")! };
+    appendAuditEntry("REVIEW_REQUESTED", fields, proj);
+    appendAuditEntry("REVIEW_COMPLETED", { ...fields, Verdict: "READY" }, proj);
+    const recovered = next(proj);
+    expect(recovered).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(JSON.stringify(recovered)).not.toContain("unit_record_step");
+    const blocked = guardBash(proj, "bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit unit-a");
+    expect(blocked.code, blocked.stderr).toBe(2);
+    expect(unitCompletedReceipts(proj, "code-generation").has("unit-a")).toBe(false);
   });
 });

@@ -449,6 +449,8 @@ export interface RunStageDirective {
   // Re-present an open approval gate. Body and review are settled; do not rerun
   // the stage or edit its outputs. Team gates retain their unit_gate routing.
   gate_only?: true;
+  /** Exact remaining Unit record commands; the stage body is already written. */
+  unit_record_step?: string;
   // Every Unit this per-Unit stage covers was built in the current attempt, so
   // the beat presents the stage gate with nothing left to plan or build. Set by
   // the engine only; the conductor handles the beat as before.
@@ -964,6 +966,7 @@ const RUN_STAGE_FIELDS = [
   "protocol_modules",
   "swarm_settled",
   "gate_only",
+  "unit_record_step",
   "build_settled",
   "approve_together",
   "conductor_persona",
@@ -998,6 +1001,7 @@ const DISPATCH_SUBAGENT_FIELDS = [
       field !== "protocol_modules" &&
       field !== "swarm_settled" &&
       field !== "gate_only" &&
+      field !== "unit_record_step" &&
       field !== "build_settled" &&
       field !== "approve_together" &&
       field !== "legacy_plan_approval_choices" &&
@@ -1497,7 +1501,7 @@ export function knownDirectiveFieldNames(): string[] {
 // a Unit or batch checkpoint and a team gate are handled without it, and a wave
 // hands the body to its builders. Notes about the body ride only when it runs.
 export function bodyRuns(d: Record<string, unknown>): boolean {
-  if (d.gate_only === true || d.swarm_settled === true) return false;
+  if (d.gate_only === true || d.swarm_settled === true || typeof d.unit_record_step === "string") return false;
   if ("construction_checkpoint" in d || "swarm_checkpoint" in d || "unit_gate" in d || "wave" in d) return false;
   return (d.construction_policy as { completion_only?: boolean } | undefined)?.completion_only !== true;
 }
@@ -1580,6 +1584,8 @@ export function withAgentNotes<T extends object>(
       notes.gate_note = verificationCommandRecovery(typeof d.stage === "string" ? d.stage : undefined, logInvocation, stateInvocation);
     } else if (d.gate === GATE_UNRESOLVED) {
       notes.gate_note = unresolvedGateNote(invocation);
+    } else if (typeof d.unit_record_step === "string") {
+      notes.gate_note = d.unit_record_step;
     } else if (showsGateAgain(d)) {
       notes.gate_note = gateOnlyNote();
     } else if (
@@ -2096,6 +2102,7 @@ function checkRunStageShared(
     checkOptionalProtocolModules(o, kind, errors);
     checkOptionalTrue(o, "swarm_settled", kind, errors);
     checkOptionalTrue(o, "gate_only", kind, errors);
+    checkOptionalString(o, "unit_record_step", kind, errors);
     checkOptionalTrue(o, "build_settled", kind, errors);
     checkOptionalApproveTogether(o, kind, errors);
   }
