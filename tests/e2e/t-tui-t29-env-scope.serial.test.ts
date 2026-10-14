@@ -46,7 +46,7 @@
 //   its own process. This is MORE faithful to the production surface than the
 //   shell export the .sh used (the .sh even needed `--strip-env-scope` to stop
 //   the shipped settings.json default from shadowing its shell export — line
-//   49-53). Cases A/override use the shipped `feature` default unedited; the
+//   49-53). Cases A/override use the shipped `classic` default unedited; the
 //   error case rewrites the env block to `bogus` (the TUI equivalent of the .sh's
 //   strip-env-scope + shell export). If a future harness wants shell-env
 //   forwarding for the TUI, tui-drive would need a `--env K=V` / tmux setenv

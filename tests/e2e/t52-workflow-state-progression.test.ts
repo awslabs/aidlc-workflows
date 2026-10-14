@@ -12,7 +12,7 @@
 // under a headless auto-approve mode the refactor kills. The .sh's subject is
 // "state file INTEGRITY: checkbox counts, stage ordering, field updates" — and the
 // state file's STRUCTURE + all its fields are written DETERMINISTICALLY by
-// explicit init (`aidlc-utility.ts init`, the State-Version-7 template,
+// explicit init (`aidlc-utility.ts init`, the State-Version-8 template,
 // utility.ts:2044-2097), BEFORE any gate. So this sdk twin drives the init turn,
 // stops the instant the init stdout lands, and asserts the deterministic state STRUCTURE + the
 // counter↔checkbox invariant on the landed file. The FULL multi-stage progression
@@ -26,7 +26,7 @@
 // THE JOURNEY. `/aidlc --scope bugfix <description>` on a fresh
 // `--no-aidlc-docs` project routes through intent creation and
 // `aidlc-utility.ts init --scope bugfix` (SKILL.md), which writes the full
-// State-Version-7 aidlc-state.md: the 3
+// State-Version-8 aidlc-state.md: the 3
 // init stages marked [x], every other in-scope stage [ ], the Completed counter
 // synced to the [x] count, and the Lifecycle Phase / Status / Last Updated /
 // Active Agent / State Version fields. Init STOPs (print-terminal).
@@ -44,7 +44,7 @@
 //   7 Status field present           -> readStateField(state,"Status") defined.
 //   8 Last Updated has ISO timestamp -> the Last Updated field matches YYYY-MM-DDThh:mm:ss.
 //   9 Active Agent field present     -> readStateField(state,"Active Agent") defined.
-//   10 State Version is 7            -> readStateField(state,"State Version") === "7".
+//   10 State Version is 8            -> readStateField(state,"State Version") === "8".
 //   2/3 (>4 completed / advanced past init): NOT asserted here - those require
 //       running the workflow to completion; the deep-progression surface is the tui
 //       t50 journey. At the deterministic init landing the 3 init stages ARE [x]
@@ -53,8 +53,8 @@
 //
 // Known-answer literals (read from the SHIPPED tool, not guessed):
 //   - init dispatch:           SKILL.md -> `aidlc-utility.ts init --scope bugfix`
-//   - State-Version-7 template: aidlc-utility.ts:2044-2097 (all the fields above)
-//   - State Version literal 7:  aidlc-utility.ts:2051
+//   - State-Version-8 template: aidlc-utility.ts:2044-2097 (all the fields above)
+//   - State Version literal 8:  aidlc-utility.ts:2051
 //   - init-stage [x] markers:   aidlc-utility.ts:1995-1998
 //   - State initialized summary: aidlc-utility.ts:2154
 //

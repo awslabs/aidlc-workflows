@@ -27,7 +27,7 @@
 // knowledge that reaches that agent, bound sensors, and rules. The customHarness
 // fixture (tests/harness/custom-harness.ts) seeds a `data-migration` scope with
 // a TWO-STAGE CHAIN — the schema-snapshot stage (2.0, produces the `source-schema`
-// artefact) -> the migration-plan stage (2.9, consumes `source-schema`, produces
+// artefact) -> the migration-plan stage (2.10, consumes `source-schema`, produces
 // the `migration-strategy` artefact), both inception — plus a custom
 // `Data Migration Agent`, a custom knowledge playbook, a `schema-validator`
 // sensor, and a unique project-rule marker. Note the slug≠ artefact split

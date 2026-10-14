@@ -21,7 +21,7 @@
 //
 // The byte-verbatim status/doctor/help output ("AI-DLC doctor", the stock
 // scopes, "No active AI-DLC workflow found.", ...) has NO home on the ACP surface;
-// anymore; it is covered deterministically by the SDK twins (t20 status / t22
+// it is covered deterministically by the SDK twins (t20 status / t22
 // doctor / t23 help — drive the real /aidlc flag and assert the Bash
 // tool_result bytes) AND the CLI twins (t27 status+doctor+help / t31 help —
 // spawn aidlc-utility.ts <sub> directly and assert stdout).
