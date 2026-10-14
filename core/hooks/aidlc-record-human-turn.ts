@@ -467,12 +467,14 @@ const PROMPT_CONTEXT_MAX_CHARS = 9_500;
 
 // The help, handed to the agent with the person's own line when that line asks
 // for it and nothing else (the engine's own reading of a typed command), so the
-// agent shows it with no command to run.
+// agent shows it with no command to run. Only AI-DLC's own help: a help typed
+// after a command family (`knowledge help`) is that family's, and its command
+// runs as before.
 async function helpRelay(typedPrompt: string, projectDir: string, sessionId: string): Promise<string | null> {
   const entryWords = aidlcEntryWords(typedPrompt);
   if (entryWords === null) return null;
   const command = classifyTerminalCommand(splitKiroCommandArgs(entryWords), projectDir, sessionId || undefined);
-  if (command?.subcommand !== "help") return null;
+  if (command?.subcommand !== "help" || command.source !== "read-only-flag") return null;
   const { renderHelpText } = await import("../tools/aidlc-utility.ts");
   return terminalCommandRelay(typedPrompt.trim(), renderHelpText());
 }

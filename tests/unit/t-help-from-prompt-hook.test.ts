@@ -114,6 +114,19 @@ describe("t-help-from-prompt-hook: the prompt hook hands the agent the help", ()
       const context = prompted(hook, `${hook.entry} build a notes app with help pages`);
       expect(context).not.toContain(HELP_HEADER);
     });
+
+    // The help of one command family is that family's own: the general help
+    // never stands in for it where this hook answers help (Kiro's own prompt
+    // hook runs each family's command itself).
+    const families = hook.harness === "claude" || hook.harness === "codex"
+      ? ["knowledge help", "knowledge -h", "knowledge --help"]
+      : [];
+    for (const family of families) {
+      test(`${hook.harness}: ${hook.entry} ${family} is not answered with the general help`, () => {
+        const context = prompted(hook, `${hook.entry} ${family}`);
+        expect(context).not.toContain(HELP_HEADER);
+      });
+    }
   }
 });
 
