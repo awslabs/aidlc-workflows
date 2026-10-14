@@ -163,7 +163,9 @@ directive's effective `support_agents` is missing. A lead-only run has none.
 **Write element-level traceability.** Create
 `<record>/inception/user-stories/traceability.json`. Enumerate every `FR` and
 `NFR` ID from `requirements.md` in `upstream_ids`, with one `coverage` row per
-ID. `OK` targets must name one or more existing `USx.y` IDs. Use `Deferred`
+ID; a requirement with sub-requirements is traced through its `FR{n}.{m}` IDs
+and needs no row of its own. `OK` targets must name one or more existing
+`USx.y` IDs. Use `Deferred`
 only with a named downstream stage and `N/A` only with a justification:
 
 ```json
