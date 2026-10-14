@@ -180,7 +180,7 @@ content just to keep the template shape.
 
 "Retry with fix" runs the same settlement-aware procedure as the autonomous
 loop-back, including its re-entry override (see "Gated failure loop-back" under
-Artifact Re-use in stage-protocol.md). Artifact-only workflows may take the
+its Artifact Re-use below). Artifact-only workflows may take the
 all-covered `gate: true` fast path; receipt-mode workflows instead re-emit
 per-unit directives. On either path the planned fix and deterministic
 Modify/Keep decisions MUST be applied BEFORE the settle/approval gate, and
@@ -189,3 +189,41 @@ gate is presented. A human-approved retry does count an entry in the Loop-Back
 Log, and the human may override the bound explicitly. Every option's
 description must carry its estimated impact where one is known — presenting an
 impact-unestimated give-up option is a protocol violation.
+
+### Artifact Re-use on a failure loop-back replay
+
+On a replay the failure loop-back started, stage-protocol.md's Artifact Re-use question (Keep, Modify, Redo) is decided as follows.
+
+**Autonomous failure loop-back**: when the replay was initiated by the
+Build-and-Test failure loop-back in the loop-back protocol module
+(`aidlc-common/protocols/stage-protocol-loopback.md`) under `Construction
+Autonomy Mode: autonomous`, the 3-option question is NOT presented (the loop is
+meant to run without the human). The conductor decides deterministically from
+the Loop-Back Log's planned fix: **Modify** for the unit(s) the fix targets,
+**Keep** for all other units, **Modify** for build-and-test itself on re-entry
+(Redo is forbidden there — it would erase the Loop-Back Log). Every
+auto-decision is still audited via `aidlc-state.ts reuse-artifact <slug>
+--decision <keep|modify> --artifacts "<comma-separated list of existing
+artifacts found>"`. In receipt mode apply those decisions inside each emitted
+per-unit replay between `unit start` and the fresh reviewer / `unit complete`;
+in artifact-only mode apply them through the pre-gate override. Either way,
+fresh current-attempt reviews for every applicable unit are mandatory before
+the replayed gate is auto-approved.
+
+**Gated failure loop-back**: the same override applies when the human chose
+"Retry with fix" at the Build-and-Test halt-and-ask in the loop-back
+protocol module (`aidlc-common/protocols/stage-protocol-loopback.md`) under
+`Construction Autonomy Mode: gated` (or unset). Artifact-only workflows may
+arrive directly at the all-covered `gate: true` directive, where the ordinary
+Artifact Re-use question never fires; receipt-mode workflows instead receive
+per-unit replay directives. In the fast path, BEFORE presenting the gate,
+apply the planned fix through the override. In receipt mode, apply it inline
+while the units re-run. Both use **Modify** for the unit(s) the fix targets,
+**Keep** for all other units, and **Modify** for build-and-test itself on
+re-entry (Redo is forbidden there — it would erase the Loop-Back Log), audited
+via the same `aidlc-state.ts reuse-artifact <slug> --decision <keep|modify>
+--artifacts "<comma-separated list of existing artifacts found>"` call. After
+those decisions, dispatch the declared reviewer for every applicable unit and
+record fresh current-attempt reviews BEFORE presenting the settle/approval
+gate. The human already gave the confirming decision by choosing "Retry with
+fix"; this is not a second, silent autonomy inference.

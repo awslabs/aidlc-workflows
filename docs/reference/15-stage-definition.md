@@ -625,7 +625,7 @@ The fixed order means a stage's sensor bindings and learning-loop pointer
 always have a place of their own. See [Sensor
 System](07-sensor-system.md) for the `## Sensors` binding semantics and
 the pull-import model. Shared sensor behavior is defined once in
-`stage-protocol.md` section 14, while `stage-protocol-learnings.md` section 13 defines the diary and ritual only when `directive.protocol_modules` lists `learnings`; otherwise skip both.
+`stage-protocol-sensors.md`, while `stage-protocol-learnings.md` section 13 defines the diary and ritual only when `directive.protocol_modules` lists `learnings`; otherwise skip both.
 The `## Sensors` and `## Learn` headings are checked by
 `t87-stage-compartment-headers` across all 33 stages; `## Steps` is in every
 stage but has no test of its own.

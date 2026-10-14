@@ -223,7 +223,7 @@ describe("t-checkpoint-recheck-routing: re-checks of an approved Unit's changed 
     expect(beat.produces?.length).toBeGreaterThan(0);
     for (const path of beat.produces ?? []) expect(path).toContain(`/alpha/${DOCUMENT_STAGE}/`);
     for (const path of beat.consumes ?? []) expect(path).not.toContain("/alpha/nfr-design/");
-    expect(beat.protocol_modules).toEqual(["reviewer", "reviewer-unit", "reviewer-repair", "construction", "checkpoint"]);
+    expect(beat.protocol_modules).toEqual(["reviewer", "reviewer-unit", "reviewer-repair", "construction", "checkpoint", "sensors"]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Guard Policy strict: code and a document both changed are re-checked one at a time, then asked about once", () => {

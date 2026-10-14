@@ -39047,6 +39047,18 @@ export function effectivePlanAction(
   return scope ? loadScopeMapping()[scope]?.stages[slug] : undefined;
 }
 
+// The stages the plan runs after Initialization, in run order: every one that
+// finished, and every one not skipped that the plan executes. Status, the
+// progress line and each stage's start line count from this one list.
+export function plannedStages(stateContent: string, scope: string): StageEntry[] {
+  const boxes = parseCheckboxes(stateContent);
+  const stateOf = (slug: string) => boxes.find((c) => c.slug === slug)?.state;
+  const runs = (slug: string) =>
+    stateOf(slug) === "completed" ||
+    (stateOf(slug) !== "skipped" && effectivePlanAction(slug, scope, stateContent) === "EXECUTE");
+  return loadStageGraph().filter((stage) => stage.phase !== "initialization" && runs(stage.slug));
+}
+
 // --- Plans composed for one piece of work ---
 //
 // A plan the composer builds for one piece of work, and the person approves

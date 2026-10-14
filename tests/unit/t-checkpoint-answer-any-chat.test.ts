@@ -239,12 +239,12 @@ describe("t-checkpoint-answer-any-chat: what a new chat is told to do", () => {
     const p = fixture();
     const before = next(p);
     expect(before.construction_checkpoint?.unit, JSON.stringify(before)).toBe("alpha");
-    expect(before.protocol_modules).toEqual(["construction", "checkpoint", "learnings"]);
+    expect(before.protocol_modules).toEqual(["construction", "checkpoint", "learnings", "sensors"]);
     expect(checkpoint(p, ["--action", "ask", "--session", OLD]).status).toBe(0);
     const after = next(p);
     expect(after.construction_checkpoint?.unit, JSON.stringify(after)).toBe("alpha");
     expect(after.construction_checkpoint?.approved).toBe(false);
-    expect(after.protocol_modules).toEqual(["construction", "checkpoint"]);
+    expect(after.protocol_modules).toEqual(["construction", "checkpoint", "sensors"]);
   });
 
   test("words while the approval is open name the Unit's own approve and reject steps", () => {

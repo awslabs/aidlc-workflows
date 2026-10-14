@@ -759,8 +759,10 @@ swarm Unit still needs initial Plan Approval; when several Units' plans are read
 question for all of them and records one approval per Unit. After approval,
 plan, test instruction, and Testing Contract edits for the same target and
 attempt follow the effective plan-approval fence: lowered permits continuation,
-on asks again. Other code moving never asks again. The original human approval
-evidence remains intact.
+on asks again. Other code moving never asks again, except the person's own files
+under `strict`: prepare then refuses until the plan is approved again, and the
+source landing refuses the same change until it is undone or Guard Policy is
+`relaxed`. The original human approval evidence remains intact.
 
 **Initial prepare requires committed approved source.** For protected Code
 Generation in either legacy autonomy or new checkpoint workflows, the approved

@@ -1014,7 +1014,10 @@ This stage has a **two-part structure**: planning followed by generation.
    thereby approved. Testing Posture, scope, strategy, or project type changes
    follow that same rule. Other code moving after approval never asks again on
    any Guard Policy: the build continues with one `change_notices` line naming
-   the files. A different intent or target, a new attempt, or missing actual
+   the files. A swarm under `strict` is the exception for the person's own
+   files: prepare refuses until the plan is approved again, and the source
+   landing refuses the same change until it is undone or Guard Policy is
+   `relaxed`. A different intent or target, a new attempt, or missing actual
    initial approval still requires its own approval. After a rejected gate (the
    Code Generation completion gate, a Unit checkpoint, or a swarm batch
    checkpoint), while the plan is still the one approved before, `next` first

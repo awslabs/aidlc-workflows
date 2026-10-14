@@ -20,6 +20,26 @@
 import type { HarnessManifest } from "../../scripts/manifest-types.ts";
 import onboardingFills from "./onboarding.fills.ts";
 
+// The personas with an agent JSON below. Kiro CLI's 3.0 engine also loads each
+// one's prompt .md as an agent of the same name, and a dispatch runs that one
+// (#1394): its frontmatter carries the tools the JSON grants on v2.
+const PERSONA_AGENTS = [
+  "aidlc-architect-agent",
+  "aidlc-developer-agent",
+  "aidlc-product-lead-agent",
+  "aidlc-architecture-reviewer-agent",
+  "aidlc-composer-agent",
+  "aidlc-product-agent",
+  "aidlc-design-agent",
+  "aidlc-delivery-agent",
+  "aidlc-aws-platform-agent",
+  "aidlc-compliance-agent",
+  "aidlc-devsecops-agent",
+  "aidlc-quality-agent",
+  "aidlc-pipeline-deploy-agent",
+  "aidlc-operations-agent",
+] as const;
+
 const manifest: HarnessManifest = {
   name: "kiro",
   productName: "Kiro CLI",
@@ -191,6 +211,13 @@ const manifest: HarnessManifest = {
     // determinism guard.
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
+
+  // The Kiro IDE row's tools line, without its permissions: on v2 the JSON
+  // still decides, and the .md is only its prompt.
+  frontmatterAdditions: PERSONA_AGENTS.map((agent) => ({
+    file: `agents/${agent}.md`,
+    lines: [`tools: ["read", "write", "shell"]`],
+  })),
 
   // Neutral root guidance is shared; native setup is loaded through agent resources.
   onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "steering/aidlc-onboarding.md", fills: onboardingFills },

@@ -873,8 +873,13 @@ function buildTree(
       if (fmLines) {
         // The additions are for the harness's dispatch (Kiro IDE: about 32 KB
         // of tool permissions); the lead reading the persona in its own chat
-        // gets the persona without them, from the copy the roster names.
-        if (harnessRel.startsWith("agents/") && inlineAgentSet(CORE_ROOT).has(basename(outPath, ".md"))) {
+        // gets the persona without them, from the copy the roster names. A
+        // tools line alone (Kiro CLI) is no weight to keep out: no copy.
+        if (
+          harnessRel.startsWith("agents/") &&
+          fmLines.some((line) => line.split(":", 1)[0] === "permissions") &&
+          inlineAgentSet(CORE_ROOT).has(basename(outPath, ".md"))
+        ) {
           const copy = join(treeRoot, "aidlc-common", "personas", basename(outPath));
           mkdirSync(dirname(copy), { recursive: true });
           writeFileSync(copy, out);

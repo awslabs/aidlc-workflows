@@ -366,7 +366,7 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     expect(d.unit).toBe("api"); // the last unit in topological order
     expect(d.gate).toBe(true);
     expect(d.swarm_settled).toBe(true);
-    expect(d.protocol_modules).toEqual(["construction", "swarm", "learnings"]);
+    expect(d.protocol_modules).toEqual(["construction", "swarm", "learnings", "sensors"]);
     expect(d.reviewer).toBeUndefined();
     expect(d.review_artifact).toBeUndefined();
     expect(d.review_class).toBeUndefined();
@@ -409,7 +409,7 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     expect(directive.review_artifact).toBeUndefined();
     expect(directive.review_class).toBeUndefined();
     expect(directive.reviewer_max_iterations).toBeUndefined();
-    expect(directive.protocol_modules).toEqual(["construction", "swarm", "learnings"]);
+    expect(directive.protocol_modules).toEqual(["construction", "swarm", "learnings", "sensors"]);
     expect(directive.swarm_settled).toBe(true);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 

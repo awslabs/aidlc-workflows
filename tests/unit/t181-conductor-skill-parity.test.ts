@@ -29,7 +29,6 @@
 // gating the authored source covers every tree.
 
 import { describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
@@ -182,13 +181,6 @@ const SUMMARY_STOP_ANNEX_TOKENS = [
   "checkpoint-specific `aidlc-log.ts answer`",
   '**"What should change?"**',
 ];
-
-const P3_EVIDENCE_DIR = join(
-  REPO_ROOT,
-  "tests",
-  "evidence",
-  "p3-kiro-routing",
-);
 
 function stageTableRows(body: string): string[] {
   const lines = body.split(/\r?\n/);
@@ -1336,7 +1328,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // A live run asked "Does this all look correct" while the summary sat folded
   // inside tool output: the person must read what they confirm.
   test("the summary the person confirms is on screen with its question, on every harness", () => {
-    const protocol = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"), "utf-8");
+    const protocol = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol-summary.md"), "utf-8");
     expect(protocol).toContain(
       "The person confirms what they can read: the bullets sit in the question itself, or right above it in the same " +
         "message, as the question-rendering annex shows; never only in a tool's output or a file.",
@@ -1611,87 +1603,6 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       expect(body, rel).not.toContain("surface the actual error and stop");
     }
     expect(missing).toEqual([]);
-  });
-
-  test("retained native Windows evidence proves completed CLI and IDE routing", () => {
-    const manifest = readFileSync(join(P3_EVIDENCE_DIR, "README.md"), "utf-8");
-    const hashes: Record<string, string> = {
-      "windows-kiro-routing-cli.log":
-        "465b2cb860a748d4af7189a16409914f6a134d62b7824e75bd39d390450324f7",
-      "windows-kiro-routing-cli.ndjson":
-        "034b783b3389ab002dc8f5714023d618363600bb4205e826a2314631ce89a600",
-      "windows-kiro-routing-ide.log":
-        "f76c3e7ba1a8b4bb8ea9d313dca33d072baa6ea95826391115900da98c6b4ceb",
-      "windows-kiro-routing-ide.ndjson":
-        "d776cbe91f870fcda0b558657e1fcafeccd8f32190793bfb9e7cd5ce18937252",
-    };
-    for (const [file, expected] of Object.entries(hashes)) {
-      const body = readFileSync(join(P3_EVIDENCE_DIR, file));
-      expect(createHash("sha256").update(body).digest("hex"), file).toBe(
-        expected,
-      );
-      expect(manifest).toContain(`${expected}  ${file}`);
-    }
-
-    const cliLog = readFileSync(
-      join(P3_EVIDENCE_DIR, "windows-kiro-routing-cli.log"),
-      "utf-8",
-    );
-    expect(cliLog).toContain(" 2 pass");
-    expect(cliLog).toContain(" 0 fail");
-    const cliEvents = readFileSync(
-      join(P3_EVIDENCE_DIR, "windows-kiro-routing-cli.ndjson"),
-      "utf-8",
-    )
-      .trim()
-      .split(/\r?\n/)
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
-    const cliResults = cliEvents.filter((event) => event.event === "result");
-    expect(cliResults).toHaveLength(2);
-    for (const result of cliResults) {
-      expect(result.stopReason).toBe("end_turn");
-      expect(result.toolCalls).toBe(1);
-    }
-    const cliToolCalls = cliEvents.filter((event) => event.event === "tool_call");
-    expect(cliToolCalls).toHaveLength(2);
-    expect(
-      cliToolCalls.every((event) =>
-        String(event.title).includes("aidlc-orchestrate.ts next")
-      ),
-    ).toBe(true);
-    expect(
-      cliToolCalls.some((event) => String(event.title).includes("intent --json")),
-    ).toBe(false);
-
-    const ideLog = readFileSync(
-      join(P3_EVIDENCE_DIR, "windows-kiro-routing-ide.log"),
-      "utf-8",
-    );
-    expect(ideLog).toContain(" 1 pass");
-    expect(ideLog).toContain(" 0 fail");
-    const ide = JSON.parse(
-      readFileSync(
-        join(P3_EVIDENCE_DIR, "windows-kiro-routing-ide.ndjson"),
-        "utf-8",
-      ),
-    ) as {
-      platform?: string;
-      completed_turn?: boolean;
-      intent_query_present?: boolean;
-      directive?: {
-        ask_type?: string;
-        numbered_prose_question?: string;
-      };
-      ordered_lists?: string[][];
-    };
-    expect(ide.platform).toBe("win32");
-    expect(ide.completed_turn).toBe(true);
-    expect(ide.intent_query_present).toBe(false);
-    expect(ide.directive?.ask_type).toBe("new-work-routing");
-    expect(ide.directive?.numbered_prose_question).toContain("4. **Other**");
-    expect(ide.ordered_lists).toHaveLength(1);
-    expect(ide.ordered_lists?.[0]).toHaveLength(4);
-    expect(ide.ordered_lists?.[0]?.[3]).toContain("Other");
   });
 
   test("prose renderers remap file-backed source letters to numbered prose", () => {

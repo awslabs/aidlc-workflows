@@ -3609,7 +3609,7 @@ describe("t304 protocol and harness projections use the deterministic renderer",
         "core",
         "aidlc-common",
         "protocols",
-        "stage-protocol.md",
+        "stage-protocol-summary.md",
       ),
       "utf-8",
     );

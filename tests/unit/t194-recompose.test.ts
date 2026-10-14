@@ -207,25 +207,26 @@ describe("t194 recompose - flips land as suffix edits and the router honours the
   // five-second default on Windows; keep all plan/count assertions bounded.
   test("derived fields rebuilt: Total/Completed/Next Stage + --status counts track the plan", () => {
     const proj = createdProject();
+    // --status counts against the recomposed plan (the static-grid divergence
+    // this P4 closed), so its total drops by 1 too. It counts the stages after
+    // Initialization, as the plan offer does, so it is read before and after
+    // rather than against Total Stages, which counts setup as well.
+    const shownTotal = (): number => {
+      const status = run(proj, "aidlc-utility.ts", ["status"]);
+      expect(status.status).toBe(0);
+      const m = /^Completion: +\d+\/(\d+) stages/m.exec(status.out);
+      if (!m) throw new Error(`no Completion line in:\n${status.out}`);
+      return Number(m[1]);
+    };
     const before = readState(proj);
     const totalBefore = Number(/- \*\*Total Stages\*\*: (\d+)/.exec(before)?.[1]);
+    const shownBefore = shownTotal();
     run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
     const after = readState(proj);
     const totalAfter = Number(/- \*\*Total Stages\*\*: (\d+)/.exec(after)?.[1]);
     expect(totalAfter).toBe(totalBefore - 1);
     expect(after).toMatch(/- \*\*Stages to Skip\*\*: .*market-research/);
-    // --status counts against the recomposed plan (the static-grid divergence
-    // this P4 closed): total in the progress line drops by 1 too.
-    const status = run(proj, "aidlc-utility.ts", ["status"]);
-    expect(status.status).toBe(0);
-    const m = /Progress: (\d+)\/(\d+)/.exec(status.out) ?? /(\d+)\/(\d+) stages/.exec(status.out);
-    if (m) {
-      expect(Number(m[2])).toBe(totalAfter);
-    } else {
-      // Fall back: the status body must not still claim the pre-flip total
-      // wherever it renders counts.
-      expect(status.out).toContain(String(totalAfter));
-    }
+    expect(shownTotal()).toBe(shownBefore - 1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 

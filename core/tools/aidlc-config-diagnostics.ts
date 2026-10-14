@@ -2891,6 +2891,16 @@ export function shellOnlyRuntimes(
     .map((binary) => binary.name);
 }
 
+// The runtime fixes setup asks the person for, at its top line and its end
+// alike. A runtime found on this shell's PATH needs nothing from a harness
+// started from a terminal; the doctor says what to do if its hooks never run.
+export function runtimeFixesNeeded(diagnostics: RuntimeDiagnostics): DiagnosticIssue[] {
+  return runtimeIssues({
+    ...diagnostics,
+    binaries: diagnostics.binaries.filter((binary) => binary.status !== "interactive-only"),
+  });
+}
+
 export function postApplyOutstandingActions(
   projectDir: string,
   harnessDir: string,
@@ -2909,13 +2919,7 @@ export function postApplyOutstandingActions(
       ...options.runtime,
       includeHarnessCli: false,
     });
-    // A runtime found on this shell's PATH needs nothing from a harness started
-    // from a terminal; the doctor says what to do if its hooks never run.
-    const needed = {
-      ...diagnostics,
-      binaries: diagnostics.binaries.filter((binary) => binary.status !== "interactive-only"),
-    };
-    actions.push(...runtimeIssues(needed).map((issue) => ({
+    actions.push(...runtimeFixesNeeded(diagnostics).map((issue) => ({
       section: "runtime" as const,
       id: issue.id,
       message: issue.message,
