@@ -347,7 +347,7 @@ $ git status --short
 | Path | What it is | Commit it? |
 | --- | --- | --- |
 | `.claude/` | Claude Code's AI-DLC files: the `/aidlc` skill, agents, stages, hooks, tools, and `settings.json` (hooks, permissions, the welcome message) | Yes |
-| `aidlc/` | The workspace: `aidlc/spaces/default/memory/` holds the rules (the framework's defaults, and your team's and project's own), and each piece of work gets its record here | Yes |
+| `aidlc/` | AI-DLC's records: `aidlc/spaces/default/memory/` holds the rules (the framework's defaults, and your team's and project's own), and each piece of work gets its record here | Yes |
 | `.gitignore` | AI-DLC's own marked block, added to yours if you had one | Yes |
 | `.mcp.json` | The MCP servers, when you chose them | Yes |
 | `aidlc.settings.json` | The model preset | Yes |

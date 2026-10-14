@@ -436,8 +436,9 @@ package shares one `aidlc/`. Work in this layout records no repos, so generated
 code and git operations stay in the folder itself. Put the install in one
 package's subfolder instead and that package gets a separate `aidlc/`, with its
 own records. Git is not separated: branches and worktrees still belong to the
-whole repo, because git resolves the repo from the subfolder. Do that only when
-the packages have separate teams that want separate records.
+whole repo, because git resolves the repo from the subfolder. If several teams
+share the repo, a space per team (see Spaces, above) is the better fit;
+use a subfolder install only when a package is really its own project.
 
 ### Several repos beside one `aidlc/`
 
@@ -457,7 +458,9 @@ The record of the work lives once, in `aidlc/`, not once per repo, so a change
 that touches both repos has one set of requirements and one audit trail.
 
 The folder holding them does not have to be a git repo, and AI-DLC does not
-make it one. What that means for `aidlc/`:
+make it one. Because it holds no `.git` or project file, `aidlc config` asks you
+to confirm it the first time (in a script, pass `--project-dir`); running
+`git init` first avoids the question. What that means for `aidlc/`:
 
 - **Just you:** nothing to do. `aidlc/` stays on your disk, untracked.
 - **A team:** run `git init` in the folder and push it as its own small
@@ -468,7 +471,8 @@ make it one. What that means for `aidlc/`:
   tool keeps them out for you; otherwise add an ignore line for each. A
   teammate clones the workspace repo and runs the sync tool to clone the code
   repos beside it.
-- **Codex CLI and Cursor:** these need a git repo for their hooks
+- **Codex CLI and Cursor:** Codex finds its hooks only in a git repo, and
+  Cursor may skip them outside one
   ([Getting Started](01-getting-started.md)), so run `git init` in the folder
   whichever way you share it.
 
@@ -479,7 +483,7 @@ make it one. What that means for `aidlc/`:
 | The code is in one repo | One repo: install in it |
 | One piece of work changes several repos | Several repos beside one `aidlc/` |
 | Several teams share the same repos | One workspace, with a space per team (see Spaces, above) |
-| Unrelated projects | A separate folder and `aidlc/` for each. They share no records, rules, or knowledge; only machine-wide settings reach both ([what carries over](#what-carries-over-and-what-doesnt)) |
+| Unrelated projects | A separate folder and `aidlc/` for each. They share no records, rules, or knowledge; only machine-wide settings and the active release reach both ([what carries over](#what-carries-over-and-what-doesnt)) |
 
 What to commit in each layout is in [What's committed and what's not](#whats-committed-and-whats-not).
 
@@ -499,7 +503,7 @@ the right repo automatically.
 
 ```
 my-project/
-├── aidlc/          # the workspace
+├── aidlc/          # AI-DLC's records
 ├── checkout-api/   # repo-a   ┐ both auto-discovered as siblings;
 └── checkout-web/   # repo-b   ┘ an intent here can touch either or both
 ```
@@ -561,9 +565,12 @@ and machines.
 | Output-format overrides (`memory/templates/`) | Shared | Per space. Not copied into a new space | Copy the files |
 | Agents you add (in the harness folder) | Shared | Shared by every space | Copy the files |
 | Repo list (`repos.json`) | One per workspace | One per workspace | Per project |
-| Model and flag policy, update and offline settings | Shared | Shared | Applies to every project on the machine through the machine settings file. A project's own `aidlc.settings.json` overrides it ([the hierarchy](18-install-and-lifecycle.md)) |
+| Model and flag policy | Shared | Shared | Set once in the machine settings file and applied to every project on the machine. A project's own `aidlc.settings.json` overrides it value by value, except bypasses, which add up across the files ([the hierarchy](18-install-and-lifecycle.md)) |
+| Update, offline, mirror, and CA-bundle settings | Shared | Shared | Machine-only. A project file cannot set them |
+| The AI-DLC release itself | Shared | Shared | A native project with no pinned release (`.aidlc-version`) runs the release the machine has active, so `aidlc update` changes it for every such project (its own files catch up at its next `aidlc config`). A copied project runs its own copied release |
 
-Apart from those machine-wide settings, nothing in AI-DLC links two projects.
+Apart from those machine-wide settings and the active release, nothing in
+AI-DLC links two projects.
 Teammates get the shared files by pulling the repo, and the per-user files in
 [What's committed and what's not](#whats-committed-and-whats-not) never travel.
 
@@ -576,8 +583,10 @@ wants everywhere. A new project starts from a copy of it and adds its own
 each project the way you bring any other change, through a pull request.
 
 If you refresh a project by copying a new release over it, the copy replaces the
-default space's `org.md` with the shipped one and keeps `team.md` and
-`project.md`. Check the git diff before you commit
+default space's `org.md` and `phases/` rules with the shipped ones and keeps
+`team.md` and `project.md`. Check the git diff before you commit
+([Copy Channel](18-install-and-lifecycle.md#copy-channel)). A native
+`aidlc config` refresh keeps every space's memory files
 ([Configure or Refresh a Project](18-install-and-lifecycle.md#configure-or-refresh-a-project)).
 
 ---
