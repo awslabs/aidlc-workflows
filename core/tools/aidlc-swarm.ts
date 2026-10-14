@@ -18,12 +18,12 @@
 //       Fork an isolated git worktree per unit (aidlc-worktree create +
 //       aidlc-bolt start --worktree) and emit SWARM_STARTED once for the units
 //       whose worktrees were successfully prepared.
-//       --repo (P7) selects the sibling repo the batch's worktrees fork inside (a
+//       --repo selects the sibling repo the batch's worktrees fork inside (a
 //       multi-repo intent requires it; single-repo infers the lone repo); the
 //       resolved name is forwarded to every aidlc-worktree create + bolt start.
-//       The anti-tamper baseline is each worktree's OWN git fork (HEAD) — nothing
-//       is stored; check/finalize re-derive the pristine bytes with `git diff
-//       --quiet HEAD`. Runs before any worker, so it cannot fold into check.
+//       The anti-tamper baseline is each worktree's OWN HEAD: nothing is stored;
+//       check/finalize re-derive the pristine bytes with `git diff --quiet HEAD`.
+//       Runs before any worker, so it cannot fold into check.
 //       --degraded-from records a loud downgrade (AIDLC_USE_SWARM=1 but the
 //       Workflow tool was unavailable, so the conductor ran the subagent floor):
 //       emits SWARM_DEGRADED. The driver-SELECTION read (AIDLC_USE_SWARM) is
@@ -39,22 +39,23 @@
 //       (--show-output: the command's own output on stderr as it runs, for a
 //       worker or reviewer running the Unit's tests; exit 0 = green,
 //       the AUTHORITATIVE signal — a worker's own success claim is never trusted)
-//       plus an anti-tamper compare of the protected file against its forked-git
-//       baseline. Prints {unit, converged, tampered, reason}; exits 0 iff the unit
-//       is GENUINELY converged (green AND untampered), non-zero otherwise. Emits
-//       no audit — it informs the conductor's retry decision (knowledge), it does
-//       not commit anything. Same input → same verdict, however many times called.
+//       plus an anti-tamper compare of the protected file against its content at
+//       HEAD. Prints {unit, converged, tampered, reason}; exits 0 iff the unit is
+//       GENUINELY converged (green AND no blocking tamper), non-zero otherwise.
+//       Emits no audit - it informs the conductor's retry decision (knowledge), it
+//       does not commit anything. Same input -> same verdict, however many times
+//       called.
 //   finalize --batch <n> --units <a,b,c> --claimed <a,b> [--check-cmd <cmd>]
 //            [--test-file <path>] [--reasons <unit>=<reason>,...]
 //       The AUTHORITATIVE gate. The conductor's claimed-converged set is an
 //       explicit input and the only thing finalize trusts from it. For each
-//       claimed unit, RE-RUN the check (green + untampered) and, when the current
-//       stage declares a reviewer, require that unit's matching post-BOLT_STARTED
-//       REVIEW_COMPLETED receipt before any merge. A unit named in --claimed but
-//       red or unreviewed on disk is refused the merge and lands in the failure
-//       envelope (the lying-conductor guard). Serialised HOLD-MERGE merge-back of
-//       the genuine passes only, then emit the full SWARM_* audit trail + the typed
-//       envelope + exit 0/2. --reasons carries the conductor's
+//       claimed unit, RE-RUN the check (green + no blocking tamper) and, when the
+//       current stage declares a reviewer, require that unit's matching
+//       post-BOLT_STARTED REVIEW_COMPLETED receipt before any merge. A unit named
+//       in --claimed but red or unreviewed on disk is refused the merge and lands
+//       in the failure envelope (the lying-conductor guard). Serialised HOLD-MERGE
+//       merge-back of the genuine passes only, then emit the full SWARM_* audit
+//       trail + the typed envelope + exit 0/2. --reasons carries the conductor's
 //       typed attribution for a DECLINED (unclaimed) unit — unsatisfiable /
 //       budget-exhausted / cap-exhausted — recorded faithfully (the conductor
 //       judges WHY a unit gave up; the tool only records it, never for a claimed
@@ -63,10 +64,10 @@
 // WHY STATELESS / NO CAP CONSTANT. "The cap" is three jobs on three concerns — the
 // verdict (determinism -> check), the retry decision (knowledge -> the conductor,
 // which judges "one more try vs unsatisfiable"), and the runaway backstop
-// (determinism -> the harness 8-block Stop-hook ceiling). A per-unit counter here
-// would make determinism do the knowledge job and is redundant on the other
-// drivers (the ultracode script's cap is its `for`-bound; /goal's is its
-// turn-clause). So this tool holds none of it: check is advisory, finalize is
+// (determinism -> the harness's run-mode-aware Stop-hook ceiling). A per-unit
+// counter here would make determinism do the knowledge job and is redundant on
+// the other drivers (the ultracode script's cap is its `for`-bound; /goal's is
+// its turn-clause). So this tool holds none of it: check is advisory, finalize is
 // authoritative (re-verifies at the merge gate), so a red unit cannot merge even
 // if the conductor lies or misremembers.
 //
@@ -272,16 +273,16 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
 // claim of success is never trusted (it could fake a pass).
 //
 // Run via a shell rather than a hardcoded `bash` argv, because `bash` is ENOENT
-// on native Windows PowerShell — the old form launched bash with a -c argument
-// and made every convergence check spuriously fail there. We pick the shell so the
-// command runs on every platform AND keeps its original interpreter on POSIX:
+// on native Windows PowerShell: launching bash with a -c argument makes every
+// convergence check spuriously fail there. We pick the shell so the command
+// runs on every platform AND keeps its original interpreter on POSIX:
 //   - win32: shell:true → cmd.exe (bash is unavailable; there is no other
 //     choice, and a Construction check command on Windows is written for it).
 //   - POSIX with /bin/bash present: shell:"/bin/bash" → preserves the exact
-//     bash interpreter the old code used, so a bash-only check command
-//     (`[[ ]]`, process substitution, arrays) keeps working. Bare shell:true
-//     would route through /bin/sh, which on dash-default distros (Debian/Ubuntu)
-//     would regress those bashisms — so we keep bash where it exists.
+//     bash interpreter, so a bash-only check command (`[[ ]]`, process
+//     substitution, arrays) keeps working. Bare shell:true would route through
+//     /bin/sh, which on dash-default distros (Debian/Ubuntu) would regress
+//     those bashisms - so we keep bash where it exists.
 //   - POSIX without /bin/bash: shell:true → /bin/sh (best available).
 // Exit-code semantics (0 = converged) and the project-check backstop agree across
 // all three.
@@ -332,11 +333,11 @@ function swarmCheckCommand(projectDir: string, supplied: string | undefined, act
   return authorization;
 }
 
-// Anti-tamper, re-derived from the worktree's own git fork (stateless): the
-// protected file's pristine bytes are its content at HEAD (the fork point), so a
+// Anti-tamper, re-derived from the worktree's own HEAD (stateless): the
+// protected file's pristine bytes are its content at HEAD, so an uncommitted
 // worker edit shows as a working-tree change. `git diff --quiet HEAD -- <path>`
-// exits 0 when unchanged, 1 when changed; any other status (e.g. 128 — path not
-// tracked at HEAD) is not a confirmed tamper, so only status 1 trips the guard.
+// exits 0 when unchanged, 1 when changed; any other status (e.g. 128 - invalid
+// HEAD) is not a confirmed tamper, so only status 1 trips the guard.
 function fileTampered(cwd: string, relPath: string): boolean {
   const result = spawnSync("git", ["diff", "--quiet", "HEAD", "--", relPath], {
     cwd,
@@ -1102,12 +1103,6 @@ function mergeReviewedRecordSnapshot(
   return null;
 }
 
-// Materialize the reviewed application bytes as an immutable commit without
-// moving the Bolt branch. The temporary index starts from HEAD, overlays the
-// worktree, then restores framework-owned paths from HEAD so the later source
-// merge carries application source only. Recompute the fingerprint after the
-// object is written to close a concurrent-edit window; the validated value is
-// the one carried to the convergence row.
 function recoverableSubmoduleUrls(
   repoDir: string,
 ): Map<string, string> | null {
@@ -1619,6 +1614,13 @@ function initializedSubmoduleSourceError(
   return null;
 }
 
+// Materialize the reviewed application bytes as an immutable commit without
+// moving the Bolt branch. The temporary index starts from HEAD, overlays the
+// worktree, then restores framework-owned paths from HEAD
+// (shapeSourceSnapshotIndex) so the later source merge carries application
+// source only. Recompute the fingerprint after the object is written to close a
+// concurrent-edit window; the validated value is the one carried to the
+// convergence row.
 function bindReviewedSource(
   identity: BoltIdentity,
   fingerprint: string,
@@ -2332,7 +2334,7 @@ function releasePreparationRegistration(pd: string, unit: string): void {
 // its metadata names this unit, batch, stage, attempt and repository (the
 // fields resume compares), and the attempt's own SWARM_STARTED named the unit.
 // A failed fork (no start row), another attempt's leftover and a discarded
-// worker are not retained; they take the ordinary path, which refuses as before.
+// worker are not retained; they take the ordinary path, which refuses.
 function retainedSwarmWorktree(
   pd: string, batch: string, unit: string, identity: BoltIdentity, attempt: SwarmAttemptStamp, repoName: string | null,
 ): string | null {
@@ -2469,11 +2471,11 @@ function handlePrepare(rest: string[]): void {
   }
   assertUniqueSwarmBoltSlugs(dag.units);
 
-  // P7: the construction repo this batch targets. resolveConstructionRepo errors
+  // The construction repo this batch targets. resolveConstructionRepo errors
   // on a multi-repo intent with no --repo (forwarded as the batch failure), infers
   // the lone repo for a single-repo intent, and yields cwd=projectDir for a legacy
-  // intent (today's behaviour). The repoCwd is where `--base` is derived from and
-  // is forwarded to every `aidlc-worktree create` so the worktree forks in-repo.
+  // intent. The repoCwd is where `--base` is derived from and is forwarded to
+  // every `aidlc-worktree create` so the worktree forks in-repo.
   let repoCwd: string;
   let repoName: string | null;
   try {
@@ -2637,8 +2639,6 @@ function handlePrepare(rest: string[]): void {
           ? questionsFileApprovalFingerprint(readFileSync(childQuestions, "utf-8")) : null;
         if (parentFingerprint && parentFingerprint !== childFingerprint) {
           try {
-            // The new approval starts its own protected Code Generation, then
-            // reaches the worktree the way the first prepare transferred the old one.
             swarmChangeNotices.push(...beginCodeGeneration(projectDir, { unit }));
             bindCodeGenerationWorktreeApproval(projectDir, kept, unit);
             transferred = true;
@@ -3120,8 +3120,6 @@ function handleFinalize(rest: string[]): void {
           }
         }
       } else {
-        // Claimed converged, but the check command does not pass on re-verify —
-        // the lying / misremembering conductor. Refuse the merge.
         results.push({
           unit,
           status: "failed",

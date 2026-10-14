@@ -131,7 +131,6 @@ let projectDir: string | undefined;
 export function main(argv: string[]): void {
   const rawArgs = [...argv];
 
-  // Extract --project-dir
   const filteredArgs: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
     if (rawArgs[i] === "--project-dir" && i + 1 < rawArgs.length) {
@@ -336,7 +335,6 @@ function handleResolve(args: string[]): void {
   const pd = resolveProjectDir(projectDir);
   const content = readStateFile(pd);
 
-  // Determine scope
   const scope = flags.scope || getField(content, "Scope") || "feature";
   const scopeMapping = loadScopeMapping()[scope];
   if (!scopeMapping) error(`Unknown scope: ${scope}`);
@@ -351,7 +349,6 @@ function handleResolve(args: string[]): void {
       ? parseStateStageSuffixes(content)
       : new Map<string, "EXECUTE" | "SKIP">();
 
-  // Determine current position
   const currentSlug = getField(content, "Current Stage") || "state-init";
   const currentStage = resolveStage(currentSlug);
   if (!currentStage) error(`Cannot resolve current stage: ${currentSlug}`);
@@ -401,7 +398,6 @@ function handleResolve(args: string[]): void {
     error("Usage: resolve --stage <slug|#> [--allow-skipped] or --phase <name|#> [--scope <scope>]");
   }
 
-  // Determine direction
   const currentIdx = stageIndex(currentStage.slug);
   const targetIdx = stageIndex(targetStage.slug);
 
@@ -415,14 +411,12 @@ function handleResolve(args: string[]): void {
   const affectedSlugs: string[] = [];
 
   if (direction === "forward") {
-    // Stages between current (exclusive) and target (exclusive)
     for (let i = currentIdx + 1; i < targetIdx; i++) {
       if (effectiveAction(suffixes, scopeMapping, graph[i].slug) === "EXECUTE") {
         affectedSlugs.push(graph[i].slug);
       }
     }
   } else if (direction === "backward") {
-    // Target and all stages after (on the effective plan)
     for (let i = targetIdx; i < graph.length; i++) {
       if (effectiveAction(suffixes, scopeMapping, graph[i].slug) === "EXECUTE") {
         affectedSlugs.push(graph[i].slug);
@@ -474,7 +468,6 @@ function movedState(
   const targetIdx = stageIndex(targetSlug);
   const checkboxes = parseCheckboxes(content);
 
-  // Build a lookup of current checkbox states
   const checkboxMap = new Map(checkboxes.map((c) => [c.slug, c.state]));
 
   const stagesSkipped: string[] = [];
@@ -540,19 +533,16 @@ function movedState(
       }
     }
   } else {
-    // redo: reset target only → [ ]
     content = setCheckbox(content, targetSlug, "pending");
     stagesReset.push(targetSlug);
   }
 
-  // Mark target [-] so state and checkbox agree. This was missing before the
-  // refactor — jump set Current Stage=target but left the checkbox at [ ]/[S]/
-  // pending, causing an orchestrator to see an inconsistent state.
+  // Mark target [-] so state and checkbox agree.
   content = setCheckbox(content, targetSlug, "in-progress");
 
-  // Detect phase-boundary crossing. Jump asymmetry was a MAJOR finding —
-  // advance emits PHASE_COMPLETED/VERIFIED/STARTED when crossing phases,
-  // but jump did not. Now it does, matching the state machine contract.
+  // Detect phase-boundary crossing. advance emits PHASE_COMPLETED/VERIFIED/
+  // STARTED when crossing phases, and so does jump, matching the state machine
+  // contract.
   const currentStageForPhase = findStageBySlug(currentSlug);
   const crossesPhaseBoundary =
     !!currentStageForPhase && currentStageForPhase.phase !== targetStage.phase;
@@ -578,7 +568,6 @@ function movedState(
   content = setField(content, "In Progress", targetSlug);
   content = setField(content, "Next Action", `Execute ${targetStage.name}`);
 
-  // Count [x] checkboxes for Completed field
   const completedCount = countCheckboxes(content, "completed");
   content = setField(content, "Completed", String(completedCount));
 
@@ -616,7 +605,6 @@ function movedState(
     content = setPhaseProgress(content, targetStage.phase, "Active");
   }
 
-  // Find last completed stage before target
   const allCheckboxes = parseCheckboxes(content);
   let lastCompleted = "state-init";
   for (let i = targetIdx - 1; i >= 0; i--) {
@@ -683,7 +671,6 @@ function handleExecute(args: string[]): void {
   }
 
   const graph = loadStageGraph();
-  // Get current stage for audit
   const currentSlug = getField(content, "Current Stage") || "state-init";
   // Where the person was: the active Unit's own step in a unit-at-a-time walk,
   // which Current Stage does not name, or else the step the engine last put to
@@ -725,7 +712,6 @@ function handleExecute(args: string[]): void {
 
   // Atomic audit emissions (audit-first — throws before writeStateFile if any fail)
   try {
-    // Per-stage STAGE_SKIPPED for every skipped stage (one event per [S] transition)
     for (const skippedSlug of stagesSkipped) {
       emitAudit(pd, "STAGE_SKIPPED", {
         Stage: skippedSlug,
