@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
+  auditBlockField,
+  type AuditShardEvent,
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
@@ -241,4 +243,97 @@ export function pruneExpiredMessages(projectDir: string): void {
       // As above.
     }
   }
+}
+
+// Rows that spend the person's messages: a decision of another kind than an
+// answer. One message backs at most one approval plus any answers (round 2 of
+// the input-record design), so answers never spend it.
+export const MESSAGE_SPENDING_EVENTS: ReadonlySet<string> = new Set([
+  "GATE_APPROVED",
+  "GATE_REJECTED",
+  "PLAN_APPROVAL_RECORDED",
+  "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
+  "CONSTRUCTION_POLICY_RECORDED",
+  "QUESTION_UNANSWERED",
+  // A routing answer sends the words before it to the work they named.
+  "REQUEST_ROUTED",
+]);
+
+export function latestSpendingTimestamp(rows: readonly AuditShardEvent[]): string | null {
+  let latest: string | null = null;
+  for (const row of rows) {
+    if (MESSAGE_SPENDING_EVENTS.has(row.event) && (latest === null || row.timestamp > latest)) latest = row.timestamp;
+  }
+  return latest;
+}
+
+// A message that can answer a question: it carries the person's words, and its
+// turn was not only a command to AIDLC or a question about a switch (the marks
+// the presence check reads on the HUMAN_TURN row).
+export function messageIsReply(rows: readonly AuditShardEvent[], message: StoredMessage): boolean {
+  if (message.words === null) return false;
+  for (const row of rows) {
+    if (row.event !== "HUMAN_TURN" || auditBlockField(row.block, "Message Id") !== message.id) continue;
+    const mark = auditBlockField(row.block, "Reply");
+    if (mark === "command" || mark === "question") return false;
+  }
+  return true;
+}
+
+// The chats that have spoken on this work since the last spending row. A message
+// counts when a HUMAN_TURN row of this record names it: the hook wrote that row
+// only while the chat was on the work, so a chat that joined through its turn
+// alone counts from that turn, and words a chat typed while it was on nothing
+// (before the work was chosen here, or a cold workspace) never count, however
+// the chat stands now. A message no hook minted a row for (none exists today
+// besides those) is read as before.
+export function chatsSince(rows: readonly AuditShardEvent[], pd: string, spentAt: string | null): Set<string> {
+  const named = new Set<string>();
+  for (const row of rows) {
+    const id = row.event === "HUMAN_TURN" ? auditBlockField(row.block, "Message Id") : null;
+    if (id !== null) named.add(id);
+  }
+  return new Set(listMessages(pd)
+    .filter((m) => (spentAt === null || m.at >= spentAt) && (m.session === null || named.has(m.id)))
+    .map((m) => m.session ?? "terminal"));
+}
+
+/**
+ * The reply of the person's that the agent quoted: a message of `session` that
+ * is a reply, sent since the last decision or the chat's newest message (a
+ * decision it led to itself, "looks fine, but turn the sensors off", leaves its
+ * other half standing), whose words (or whole text) are exactly `quoted`,
+ * spacing and case aside. The agent read the chat and names the reply; this
+ * only finds the record that says it, and reads nothing into the words. Words
+ * that are part of a reply, or of another chat's, find nothing. With no chat
+ * named, the one chat that has spoken since the last decision is this one.
+ */
+export function replyOfTheirs(
+  projectDir: string,
+  session: string | null,
+  quoted: string | undefined,
+  rows: readonly AuditShardEvent[],
+): StoredMessage | null {
+  const plain = (text: string): string => text.replace(/\s+/g, " ").trim().toLowerCase();
+  const wanted = plain(quoted ?? "");
+  if (wanted === "") return null;
+  const spentAt = latestSpendingTimestamp(rows);
+  // A command whose chat the engine cannot name is this work's one chat, as
+  // proveMessage reads it: the only chat that has spoken since the last decision.
+  if (session === null) {
+    const chats = chatsSince(rows, projectDir, spentAt);
+    if (chats.size !== 1 || chats.has("terminal")) return null;
+    session = [...chats][0];
+  }
+  let found: StoredMessage | null = null;
+  const chat = listMessages(projectDir).filter((message) => message.session === session);
+  const newest = chat.at(-1)?.id;
+  for (const message of chat) {
+    if (message.words === null) continue;
+    if (spentAt !== null && message.at < spentAt && message.id !== newest) continue;
+    if (!messageIsReply(rows, message)) continue;
+    if (plain(message.words) === wanted || plain(message.text) === wanted) found = message;
+  }
+  return found;
 }

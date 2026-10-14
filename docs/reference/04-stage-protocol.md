@@ -21,7 +21,7 @@ map to the static protocol or the named conditional module.
 
 ## Protocol File Structure
 
-The stage protocol is split across twelve files, loaded conditionally by the
+The stage protocol is split across fourteen files, loaded conditionally by the
 conductor based on workflow context:
 
 | File | Contents | When Loaded |
@@ -30,7 +30,9 @@ conductor based on workflow context:
 | `stage-protocol-recovery.md` | Error Recovery + Change Handling | On session resume, or when a change event is detected mid-stage |
 | `stage-protocol-governance.md` | Phase Boundary Verification (§13) | At phase boundaries (1.7->2.1, 2.9->3.1, 3.7->4.1) |
 | `stage-protocol-learnings.md` | §13 diary, surfacing, human learning question, admission check, and persistence | Only when `directive.protocol_modules` lists `learnings` |
-| `stage-protocol-reviewer.md` | Reviewer dispatch, receipts, read scope, terminal ordering, and NOT-READY loop | When the directive names an effective reviewer |
+| `stage-protocol-reviewer.md` | Reviewer dispatch, receipts, and terminal ordering | When the directive names an effective reviewer |
+| `stage-protocol-reviewer-unit.md` | A Unit's review: membership, per-Unit inputs and source, read scope, dispatch record | When `directive.protocol_modules` lists `reviewer-unit`: a Unit's review and every invoke-swarm |
+| `stage-protocol-reviewer-repair.md` | The adversarial NOT-READY loop and the strict stale-receipt recovery | When `directive.protocol_modules` lists `reviewer-repair`: an adversarial review, Guard Policy `strict`, a checkpoint re-check, and every invoke-swarm |
 | `stage-protocol-ensemble.md` | Ensemble topology and subagent returns | For subagent, pipeline, mob, or support-agent stages |
 | `stage-protocol-collaborators.md` | Contribution files, mob rounds, and objection triage | When `directive.protocol_modules` lists `collaborators`: a stage that dispatches support agents |
 | `stage-protocol-construction.md` | Construction routing, policy changes, the autonomy choice, halt-and-ask, the shipped per-unit walk, receipts, team-owned Units, and Grouped Plan Approval | On the first Construction directive of the session and every invoke-swarm |
@@ -54,7 +56,9 @@ The conductor's Routing section defines the loading rules:
   is needed.
 - **`stage-protocol-learnings.md`**: load only when `protocol_modules` includes `learnings`. With `ceremony.learnings: off`, keep no diary and skip the entire ritual.
 - **`stage-protocol-reviewer.md`**: load when `protocol_modules` includes
-  `reviewer`, or when the directive carries a reviewer.
+  `reviewer`, or when the directive carries a reviewer. **`stage-protocol-reviewer-unit.md`**
+  and **`stage-protocol-reviewer-repair.md`** load when it names `reviewer-unit` or
+  `reviewer-repair`.
 - **`stage-protocol-ensemble.md`**: load when `protocol_modules` includes
   `ensemble`; the fallback trigger is a dispatched topology or support agents.
 - **`stage-protocol-construction.md`**: load on the first Construction
@@ -1271,8 +1275,9 @@ change. See
    consumed - an advisory normal-flow budget is exactly one pass, so a counted
    cut-off would exhaust it without any review happening), and a second
    incomplete attempt records the terminal receipt `--verdict NOT-READY` with no
-   review file and the brief's fallback finding "review did not complete within
-   its turn budget" - the gate is reached with a concrete finding, never
+   review file, and the brief names it "The review did not finish, so there is
+   no review result to rely on." (followed by the conductor's `--fallback-finding` reason when
+   the reviewer's reply said why) - the gate is reached with a concrete finding, never
    presented on (or deadlocked by) a silently missing verdict. That receipt
    is no reviewer's verdict: the logger marks its row `Review Finished: no`,
    a Unit checkpoint asks about it with `review_not_finished.question`, and the

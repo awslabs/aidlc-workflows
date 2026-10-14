@@ -1,4 +1,4 @@
-// covers: function:clearSessionProcessTable function:resolveInvokingSessionId function:readSessionBinding function:writeSessionBinding function:resolveWorkflowSelection function:workflowParticipation function:readActiveIntentCursor function:SessionResolutionConflictError function:validSessionId function:writeSessionPidEntry function:writeSessionPidAncestry function:resolveSessionIdFromAncestry function:hookChildEnv function:windowsSessionProcessIdentity
+// covers: function:clearSessionProcessTable function:resolveInvokingSessionId function:readSessionBinding function:writeSessionBinding function:resolveWorkflowSelection function:workflowParticipation function:readActiveIntentCursor function:SessionResolutionConflictError function:validSessionId function:writeSessionPidEntry function:writeSessionPidAncestry function:sessionAncestryBudgetMs function:resolveSessionIdFromAncestry function:hookChildEnv function:windowsSessionProcessIdentity
 //
 // Deterministic coverage for the per-session binding store and PID ancestry
 // resolver. All writes stay under a fresh project fixture.
@@ -26,6 +26,7 @@ import {
   resolveSessionIdFromAncestry,
   resolveWorkflowSelection,
   SessionResolutionConflictError,
+  sessionAncestryBudgetMs,
   sessionPidMapDir,
   sessionsDir,
   setActiveIntentCursor,
@@ -61,8 +62,15 @@ function mockMacProcessTree(parents = new Map<number, number>(), msPerPs = 5) {
   const ps = spyOn(childProcess, "spawnSync").mockImplementation(((
     command: string,
     args: readonly string[],
+    options?: { timeout?: number },
   ) => {
     expect(command).toBe("ps");
+    // A call that outlasts its timeout is killed there, as spawnSync does.
+    const timeout = options?.timeout;
+    if (timeout !== undefined && msPerPs > timeout) {
+      now += timeout;
+      return { pid: 123, output: [null, "", ""], stdout: "", stderr: "", status: null, signal: "SIGTERM" };
+    }
     now += msPerPs;
     // `ps -A` lists every process the mocked tree knows; `-p <pid>` one of them.
     const pids = args.includes("-A")
@@ -396,9 +404,8 @@ describe("t318 session binding helpers", () => {
       );
     }
 
-    // Model a 5ms ps call deterministically: GC-first exhausts the 50ms budget
-    // on stale entries. The current walk resolves its parent once and GC
-    // reaps dead PIDs without ps, regardless of host scheduling.
+    // Model a 5ms ps call deterministically: the walk resolves its parent once
+    // and GC reaps dead PIDs without ps, regardless of host scheduling.
     const lookup = mockMacProcessTree();
     try {
       writeSessionPidAncestry(proj, "fresh-session");
@@ -415,8 +422,7 @@ describe("t318 session binding helpers", () => {
   });
 
   test("a deep chain is read with one ps call and its nearest entry found within the budget", () => {
-    // Five hops at 15 ms per ps call: one call per hop reaches the 50 ms
-    // deadline before the fifth hop; one process table reads every hop.
+    // Five hops at 15 ms per ps call: one process table reads every hop.
     const children = Array.from({ length: 4 }, () => Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 60000)"]));
     try {
       const [a, b, c, d] = children.map((child) => child.pid);
@@ -473,6 +479,51 @@ describe("t318 session binding helpers", () => {
     }
   });
 
+  test("only macOS gets the longer walk budget", () => {
+    for (const [platform, budget] of [["darwin", 250], ["linux", 50], ["win32", 50]] as const) {
+      process.env.AIDLC_TEST_SESSION_PLATFORM = platform;
+      expect(sessionAncestryBudgetMs()).toBe(budget);
+    }
+  });
+
+  // One `ps -A` takes about 16 ms on an idle macOS runner and several times that
+  // on a busy Mac, so 60 ms models a busy Mac here.
+  test("on a busy Mac SessionStart still records its chat", () => {
+    const lookup = mockMacProcessTree(new Map([[process.ppid, process.pid]]), 60);
+    try {
+      writeSessionPidAncestry(proj, "busy-session");
+      const entry = JSON.parse(readFileSync(join(sessionPidMapDir(proj), String(process.ppid)), "utf-8"));
+      expect(entry).toEqual({ sessionId: "busy-session", startTime: `fixture-start-${process.ppid}` });
+    } finally {
+      lookup.restore();
+    }
+  });
+
+  test("on a busy Mac a command still finds the chat it runs in", () => {
+    const lookup = mockMacProcessTree(new Map([[process.ppid, process.pid]]), 60);
+    try {
+      writeSessionPidEntry(proj, process.ppid, "busy-session", Date.now() + 1000, { ppid: process.pid, startTime: `fixture-start-${process.ppid}` });
+      expect(resolveSessionIdFromAncestry(proj)).toBe("busy-session");
+      expect(lookup.ps).toHaveBeenCalledTimes(1);
+    } finally {
+      lookup.restore();
+    }
+  });
+
+  test("a ps that never answers costs a macOS walk at most a quarter second", () => {
+    const lookup = mockMacProcessTree(new Map([[process.ppid, process.pid]]), 60_000);
+    try {
+      let started = Date.now();
+      writeSessionPidAncestry(proj, "stuck-session");
+      expect(Date.now() - started).toBeLessThanOrEqual(250);
+      started = Date.now();
+      expect(resolveSessionIdFromAncestry(proj)).toBeNull();
+      expect(Date.now() - started).toBeLessThanOrEqual(250);
+    } finally {
+      lookup.restore();
+    }
+  });
+
   test("a chat the host or a hook payload names is used without walking the process chain", () => {
     const lookup = mockMacProcessTree(new Map([[process.ppid, process.pid]]));
     try {
@@ -520,7 +571,7 @@ describe("t318 session binding helpers", () => {
     const single = childProcess.spawnSync("ps", ["-o", "lstart=", "-p", String(process.ppid)], { encoding: "utf-8" });
     expect(recorded.startTime).toBe(single.stdout.trim());
     // A SessionStart walk and a resolve walk with the real ps find the session.
-    // A shared runner can stall the walk's own `ps -A` past its 50 ms budget,
+    // A shared runner can stall the walk's own `ps -A` past its budget,
     // so the walk gets three tries, and a miss is skipped, not failed, when the
     // walk itself ran out: SessionStart left only its barrier for this process's
     // parent, or the resolve walk returned nothing after spending its budget.
@@ -534,7 +585,7 @@ describe("t318 session binding helpers", () => {
       };
       const started = performance.now();
       found = resolveSessionIdFromAncestry(proj);
-      ranOut = entry.sessionId !== "real-session" || (found === null && performance.now() - started >= 45);
+      ranOut = entry.sessionId !== "real-session" || (found === null && performance.now() - started >= 245);
     }
     if (found !== "real-session" && ranOut) return;
     expect(found).toBe("real-session");

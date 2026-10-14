@@ -179,6 +179,7 @@ import {
   CHANGE_CONTROL_FIELD,
   CEREMONY_FLAGS,
   CEREMONY_KEYS,
+  guardFenceConfigKey,
   guardFenceFromConfigKey,
   guardPolicyMemoryStrictRefusal,
   memoryGuardPolicyDeclarations,
@@ -283,6 +284,8 @@ import {
   openPendingDecision,
   parseCheckboxes,
   parseGuardPolicy,
+  PERSON_WORDS_FILL,
+  PERSON_WORDS_SLOT,
   resolveGuardPolicy,
   guardPolicyAcceptsChanges,
   type GuardPolicy,
@@ -542,6 +545,7 @@ import {
   planApprovalEnv,
   planApprovalOffForOpenRequest,
   settingsKeptSince,
+  settingTheirs,
   switchKeptForNextWork,
   resolvePlanApprovalSetting,
 } from "./aidlc-guard-switch.ts";
@@ -1301,7 +1305,17 @@ function sayPendingPersonLines(requested: Directive, transported: Directive): ((
   return pending.said;
 }
 
+// A Unit's review reads the per-Unit review rules. Many routes set the Unit
+// after the step is built, so the module is named as the step goes out.
+function nameUnitReviewModule(directive: Directive): void {
+  if (directive.kind !== "run-stage" || typeof directive.unit !== "string") return;
+  const modules = directive.protocol_modules;
+  const at = modules?.indexOf("reviewer") ?? -1;
+  if (modules && at >= 0 && !modules.includes("reviewer-unit")) modules.splice(at + 1, 0, "reviewer-unit");
+}
+
 function prepareEmission(directive: Directive): PreparedEmission {
+  nameUnitReviewModule(directive);
   const requested = directive;
   // Read before the notices below can copy the directive. A guard-recovery
   // ask whose ways on are the conductor's own work (agent_work) is no question
@@ -2783,11 +2797,23 @@ function resumeAgain(flags: ParsedFlags): string {
   return ["next --resume", ...typedSettingModifiers(flags).map((modifier) => `--${modifier}`)].join(" ");
 }
 
-function configSetCommand(modifiers: string[]): string {
+function configSetCommand(modifiers: string[], personWords = false): string {
   return [
     aidlcDispatcherInvocation(`config set ${modifiers[0]}`),
     ...modifiers.slice(1).map((modifier) => `--${modifier}`),
+    ...(personWords ? [`--person-words '${PERSON_WORDS_SLOT}'`] : []),
   ].join(" ");
+}
+
+// A setting the person's own line did not carry (the agent read it from their
+// words) is theirs only with those words (settingTheirs), so a step that names
+// the setter for it names the flag for the agent to fill with the reply that
+// asked. A depth, test strategy or review level names no one, so needs no words.
+function settingNeedsTheirWords(projectDir: string, modifiers: readonly string[]): boolean {
+  return modifiers.some((modifier) => {
+    const [key, value] = modifier.split(" ");
+    return !["depth", "test-strategy", "review"].includes(key) && !routedSettingTheirs(projectDir, [key], value);
+  });
 }
 
 // Settings typed with a description while other work exists ride on each
@@ -3424,6 +3450,8 @@ function openPlanQuestionReplyDirective(
   requestId: string,
   undo = "",
   settings: string[] = [],
+  // A setting read from their words: the setter names those words.
+  needsWords = false,
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   // Settings typed on the same line ("/aidlc --guard-policy off approve the
@@ -3432,7 +3460,8 @@ function openPlanQuestionReplyDirective(
   // words describe it, where the routing answer carries them.
   const typed = settings.length > 0
     ? ` The line also carries ${settings.map((modifier) => `\`--${modifier}\``).join(" ")}: if the words answer the ` +
-      `question, those settings are for this work, so run \`${configSetCommand(settings)}\` first and print its output ` +
+      `question, those settings are for this work, so run \`${configSetCommand(settings, needsWords)}\`` +
+      `${needsWords ? `${PERSON_WORDS_FILL},` : ""} first and print its output ` +
       "verbatim; if the words are new work, the settings ride with them."
     : "";
   const answer = editing
@@ -5383,6 +5412,11 @@ function createPrintDirective(
   if ((flags.planChanges?.skip.length || flags.planChanges?.add.length) && flags.planName) {
     cmd.push(`--plan-name ${flags.planName}`);
   }
+  // A setting read from their words names those words, as Branch 5's does.
+  const named = cmd.filter((part) => /^--(guard-policy|guard\.[a-z-]+|sensors|learnings|summary-confirmation|plan-approval|collaborators) /.test(part))
+    .map((part) => part.slice(2));
+  const unnamed = settingNeedsTheirWords(projectDir, named);
+  if (unnamed) cmd.push(`--person-words '${PERSON_WORDS_SLOT}'`);
   // Disclose the ceremony on the print: an explicitly named scope creates
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
@@ -5394,7 +5428,8 @@ function createPrintDirective(
   // New work, like the first, carries on in this chat: the creation binds the
   // chat to the new work, so the next `next` runs its first stage.
   const directive = printDirective(
-    `${runCmd} to start the ${flags.newIntent ? "new intent" : "workflow"}${cost}, then re-run \`next\` to continue.${labelHint}`,
+    `${runCmd} to start the ${flags.newIntent ? "new intent" : "workflow"}${cost}${unnamed ? PERSON_WORDS_FILL : ""}, ` +
+      `then re-run \`next\` to continue.${labelHint}`,
   );
   // The user named a scope (or one was inferred and confirmed), so the spoken
   // line can say what is being set up and how much process that means, with the
@@ -5509,7 +5544,7 @@ function routedGuardPolicyNote(flags: ParsedFlags, projectDir: string, question:
     // What the setting does comes with its name, as it does on the check line beside it.
     return flags.scope !== undefined && scopeGuardPolicyDefault(flags.scope) === value
       ? ""
-      : `${guardPolicyNamed()} is ${value} for the new work (set by you).`;
+      : `${guardPolicyNamed()} is ${value} for the new work${routedSettingTheirs(projectDir, ["guard-policy"], value) ? " (set by you)" : ""}.`;
   }
   const target = question.askedAbout?.targets.length === 1 ? question.askedAbout.targets[0] : undefined;
   let askedState: string | null = null;
@@ -5600,7 +5635,20 @@ function routedFencesNote(flags: ParsedFlags, projectDir: string): string {
   } catch {
     locked = true;
   }
-  return locked ? "" : `${checksAre(typed)} off for the new work (set by you).`;
+  const theirs = routedSettingTheirs(projectDir, typed.map((fence) => guardFenceConfigKey(fence)), "off");
+  return locked ? "" : `${checksAre(typed)} off for the new work${theirs ? " (set by you)" : ""}.`;
+}
+
+// Whether every setting a routed line carries is the person's on record, by the
+// setter's own rule (settingTheirs): their typed line or their own terminal.
+function routedSettingTheirs(projectDir: string, keys: readonly string[], value: string): boolean {
+  let session: string | null = null;
+  try {
+    session = resolveInvokingSessionId(projectDir);
+  } catch {
+    session = null;
+  }
+  return keys.every((key) => settingTheirs(projectDir, session, key, value) !== null);
 }
 
 // The composer-dispatch print for a compose request (the adaptive-workflows
@@ -5673,11 +5721,13 @@ function composeDispatchDirective(
       "This is mode in-flight, not matched/custom routing: preserve the current scope, depth, frozen actions, and full effective grid; stock-distance rankings are advisory only and MUST NOT trigger stock-grid adoption. Return the exact approved command delta as changes.skip and changes.add arrays.",
       "A request to turn sensors, learnings, summary confirmation, collaborators, plan approval, or reviews on or off is not a stage flip: the composer returns it as settingsChanges (plan_approval only as on: the person turns plan approval off in their own words, never through the composer), typed values you show on the approval gate under \"Also suggested by the composer\" and apply only when the human approves them, by running next with the matching flags, following its directive, and relaying the output (a setting the human asks for in plain chat, without compose, you apply directly with next); build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, collaborators to --collaborators, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command. A review level set for the piece of work replaces its scope's ceiling, so full reviews is --review adversarial and changes no stages. When the composer reports a kill switch set on this machine: if config get shows AIDLC_DISABLE_<NAME> in <file>, run config flags --clear-bypass AIDLC_DISABLE_<NAME> --yes when the person asks and say the line it prints; if it shows env AIDLC_DISABLE_<NAME>, say in one line that starting the editor or CLI without that variable turns it back on, and never look for where it is set: shell startup files, environment listings, and harness settings files can hold credentials.",
       "When the composer returns empty changes.skip and changes.add and no settingsChanges, write no marker, present no approval gate, and run no recompose: relay its answer and stop. When it returns only settingsChanges, write the marker and present them on the gate (Approve / Reject): on approve, delete the marker, then apply them by running next with the matching flags, which ends the turn; run no recompose. A request with both offers Approve all / Approve stages only / Reject: on Approve all, run ONE recompose carrying the stage delta and the settingsChanges as its matching flags, so both land in the same write, then delete the marker (leave summary confirmation off out of it, because recompose refuses that lowering; after it lands, run " +
-        `\`${aidlcDispatcherInvocation("config set summary-confirmation off")}\`` +
-        " yourself, which carries out their approval); on Approve stages only, run the recompose without them and delete the marker; on reject, delete the marker and apply nothing.",
+        `\`${aidlcDispatcherInvocation("config set summary-confirmation off")} --person-words '${PERSON_WORDS_SLOT}'\`` +
+        ` yourself, which carries out their approval${PERSON_WORDS_FILL}); on Approve stages only, run the recompose without them and delete the marker; on reject, delete the marker and apply nothing.`,
       "BEFORE presenting the gate, write the pending-proposal marker `aidlc/.aidlc-compose-pending` (any content) so the turn can end at the gate; on approve run `" +
         aidlcDispatcherInvocation("recompose") +
-        " [--skip <changes.skip>] [--add <changes.add>] [approved setting flags]` (join each nonempty array with commas; omit the flag when its approved array is empty, never pass a bare --skip or --add) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.",
+        ` [--skip <changes.skip>] [--add <changes.add>] [approved setting flags --person-words '${PERSON_WORDS_SLOT}']\`` +
+        " (join each nonempty array with commas; omit the flag when its approved array is empty, never pass a bare --skip or --add; " +
+        `with setting flags, ${PERSON_WORDS_SLOT} is the person's reply that approved them, word for word) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.`,
     );
   } else {
     parts.push(
@@ -7222,6 +7272,14 @@ function buildRunStageDirective(
   const protocolModules: ProtocolModule[] = [];
   if (directive.reviewer && directive.review_class) {
     protocolModules.push("reviewer");
+    // A review that can repair: an adversarial one, or the one stale-receipt
+    // recovery Guard Policy strict allows.
+    if (
+      directive.review_class === "adversarial" ||
+      !codekbCtx || !guardPolicyAcceptsChanges(codekbCtx.projectDir, stateContent)
+    ) {
+      protocolModules.push("reviewer-repair");
+    }
   }
   if (
     node.mode === "subagent" ||
@@ -9349,10 +9407,17 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       stateContent && source === "state" && flags.scope && validScopes().has(flags.scope) &&
       !flags.stage && !flags.phase && !startsNewWork && !composesInFlight && !flags.intent?.trim()
     ) {
-      const parts = [`--scope ${scopeArg(flags.scope)}`, ...typedSettingModifiers(flags).map((modifier) => `--${modifier}`)];
+      const typed = typedSettingModifiers(flags);
+      // A setting read from their words names those words, as Branch 5's does.
+      const unnamed = settingNeedsTheirWords(pd, typed);
+      const parts = [
+        `--scope ${scopeArg(flags.scope)}`, ...typed.map((modifier) => `--${modifier}`),
+        ...(unnamed ? [`--person-words '${PERSON_WORDS_SLOT}'`] : []),
+      ];
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
-      emit(flags.planChanges ? planChangeDirective(flags.planChanges, command, null) : turnEndingPrint(
-        `Run \`${command}\` to change scope, then print its output verbatim and stop.`,
+      const fill = unnamed ? PERSON_WORDS_FILL : "";
+      emit(flags.planChanges ? planChangeDirective(flags.planChanges, command, null, false, null, fill) : turnEndingPrint(
+        `Run \`${command}\` to change scope${fill}, then print its output verbatim and stop.`,
       ));
       return;
     }
@@ -9389,8 +9454,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // through the config setter, then the reshape is composed.
     const reshapeSettings = routingCompose && inFlight ? typedSettingModifiers(flags) : [];
     if (reshapeSettings.length > 0 && question) {
+      const unnamed = settingNeedsTheirWords(pd, reshapeSettings);
       emit(printDirective(
-        `Run \`${configSetCommand(reshapeSettings)}\` to apply the settings typed with this request to the work being reshaped, ` +
+        `Run \`${configSetCommand(reshapeSettings, unnamed)}\` to apply the settings typed with this request to the work being reshaped` +
+          `${unnamed ? PERSON_WORDS_FILL : ""}, ` +
           `then run \`${aidlcToolInvocation("orchestrate")} next compose --request ${question.id}\` and follow what it returns.`,
       ));
       return;
@@ -9589,17 +9656,21 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     ) {
       const parts = [`--scope ${scopeArg(flags.scope)}`];
       for (const modifier of modifiers) parts.push(`--${modifier}`);
+      // A setting read from their words names those words, as Branch 5's does.
+      const unnamed = settingNeedsTheirWords(pd, modifiers);
+      if (unnamed) parts.push(`--person-words '${PERSON_WORDS_SLOT}'`);
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
+      const fill = unnamed ? PERSON_WORDS_FILL : "";
       withdrawSettingWords(pd);
       // On finished work the change starts the first stage the new scope adds
       // after the last one (the tool reads the same predicate), so nothing
       // waits on the person: the agent carries on into it instead of ending
       // the turn, as a setting over running work does (#2261).
       const reopensFinishedWork = stageReopenedByScopeChange(stateContent, flags.scope) !== null;
-      emit(planChanges ? planChangeDirective(planChanges, command, null, planApprovalAskIsOpen(pd), stillParked) : keptWhilePlanWaits(
+      emit(planChanges ? planChangeDirective(planChanges, command, null, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
         reopensFinishedWork
-          ? printDirective(`Run \`${command}\` to change scope, then print its output verbatim and re-run next to carry on with the work.`)
-          : turnEndingPrint(`Run \`${command}\` to change scope, then ${verbatimThenStop}`),
+          ? printDirective(`Run \`${command}\` to change scope${fill}, then print its output verbatim and re-run next to carry on with the work.`)
+          : turnEndingPrint(`Run \`${command}\` to change scope${fill}, then ${verbatimThenStop}`),
         planApprovalAskIsOpen(pd),
       ));
       return;
@@ -9635,13 +9706,17 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
     if (modifiers.length > 0 && !describedWork) {
-      const command = configSetCommand(modifiers);
+      // A stage change beside the setting keeps its own step, which names
+      // their words for the setter as this one does.
+      const unnamed = settingNeedsTheirWords(pd, modifiers);
+      const command = configSetCommand(modifiers, unnamed);
+      const fill = unnamed ? PERSON_WORDS_FILL : "";
       withdrawSettingWords(pd);
-      emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd), stillParked) : keptWhilePlanWaits(
+      emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
         pickedUpIfTurnEnds(
           settingPrint(
-            `Run \`${command}\` to update the configuration, then ${verbatimThenStop}`,
-            `Run \`${command}\` to update the configuration, then print its output verbatim and re-run next to carry on with the work.`,
+            `Run \`${command}\` to update the configuration${fill}, then ${verbatimThenStop}`,
+            `Run \`${command}\` to update the configuration${fill}, then print its output verbatim and re-run next to carry on with the work.`,
           ),
         ),
         planApprovalAskIsOpen(pd),
@@ -9856,8 +9931,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
     if (settingBeforeWork) {
-      const kept = `Run \`${configSetCommand(typedBeforeWork)}\` to keep these settings for the piece of work the person starts ` +
-        `next, then print its output verbatim and ${thenWait}`;
+      const unnamed = settingNeedsTheirWords(pd, typedBeforeWork);
+      const kept = `Run \`${configSetCommand(typedBeforeWork, unnamed)}\` to keep these settings for the piece of work the person starts ` +
+        `next${unnamed ? PERSON_WORDS_FILL : ""}, then print its output verbatim and ${thenWait}`;
       emit(pickFollows ? printDirective(kept) : turnEndingPrint(kept));
       return;
     }
@@ -9982,7 +10058,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
           undefined, routingSettings(carriedRoutingFlags(flags)),
         );
-        emit(openPlanQuestionReplyDirective(planQuestion.editing, words.id, undo, typedSettingModifiers(flags)));
+        const settings = typedSettingModifiers(flags);
+        emit(openPlanQuestionReplyDirective(planQuestion.editing, words.id, undo, settings, settingNeedsTheirWords(pd, settings)));
         return;
       }
     }
@@ -10611,7 +10688,7 @@ function applyConstructionCheckpointShape(
     directive.produces = rechecked.produces;
   }
   directive.protocol_modules = checkpoint.rereview
-    ? ["reviewer", "construction", "checkpoint"]
+    ? ["reviewer", "reviewer-repair", "construction", "checkpoint"]
     : ["construction", "checkpoint"];
   // A checkpoint the person approves offers one learnings ritual for the
   // stages it covers, as a stage's own approval gate does. A re-check of
@@ -10885,7 +10962,7 @@ function tryEmitSwarm(
   // A swarm batch verifies with the checkpoint's command and can replay a
   // Build and Test loop-back.
   const protocolModules: ProtocolModule[] = [
-    ...(node.reviewer ? (["reviewer"] as const) : []),
+    ...(node.reviewer ? (["reviewer", "reviewer-unit", "reviewer-repair"] as const) : []),
     "construction",
     "checkpoint",
     "loopback",
@@ -13755,7 +13832,10 @@ function planChangeDirective(
   planWaits = false,
   // Parked work stays parked: the one line ends by saying so.
   stillParked: string | null = null,
+  // What the agent puts in place of a slot `before` names (their words).
+  beforeFill = "",
 ): PrintDirective {
+  const filled = beforeFill === "" ? "" : `${beforeFill},`;
   const kept = (directive: PrintDirective): PrintDirective => keptWhilePlanWaits(directive, planWaits);
   const end = " Then stop.";
   const parkedTail = stillParked === null ? "" : ` ${stillParked}`;
@@ -13782,7 +13862,7 @@ function planChangeDirective(
     : "";
   if (skip.length === 0 && add.length === 0) {
     return kept(turnEndingPrint(
-      `${before ? `Run \`${before}\` and print its output verbatim, then tell` : "Tell"} the person in one line: ` +
+      `${before ? `Run \`${before}\`${filled} and print its output verbatim, then tell` : "Tell"} the person in one line: ` +
         `"${noted} The plan is unchanged.${parkedTail}"${end}${resume}`,
     ));
   }
@@ -13878,7 +13958,7 @@ function planChangeDirective(
     // What their words must say: for which Units the step that waits on them.
     const asked = unitStep.others ? step : listed(restWalk.map(name));
     return kept(turnEndingPrint(
-      `${before === null ? "" : `Run \`${before}\` and print its output verbatim. `}` +
+      `${before === null ? "" : `Run \`${before}\`${filled} and print its output verbatim. `}` +
         `The person asked to skip ${listed(skip.map(name))}, and the ${unitName} Unit is on ${step} now. ` +
         `If their words mean the ${unitName} Unit only, run ${onlyUnit}, then tell the person in one line: ` +
         `"${onlyLine}${parkedTail}" ` +
@@ -13914,19 +13994,21 @@ function planChangeDirective(
       "change covers every Unit. If the person's words mean one Unit only, run nothing and tell them in one line: " +
       `"${listed(notHere.map(name))} can be skipped for one Unit while that Unit is working on it; the ${unitName} Unit is ` +
       `${unitIsAt} now." and stop. Otherwise: `;
-  const lead = `${aheadNote}${before === null ? run : `Run \`${before}\` and print its output verbatim, ${run}`}`;
+  const lead = `${aheadNote}${before === null ? run : `Run \`${before}\`${filled} and print its output verbatim, ${run}`}`;
   // The way back: a plan flip is undone by the opposite flip while the work
   // runs; a stage skipped where it stood is run on its own, the route
   // recompose itself names for a skipped stage, and a Unit's step skipped for
   // that Unit is reopened for it. A way back after the person's own action is
   // a plain fact that names the command, never a line telling them to type it
   // (t-offers-are-plain-questions).
-  const onItsOwn = `${entrySkillInvocation()} --stage <stage> --single`;
+  // Each command names its stage, so it can be typed as shown.
+  const onItsOwn = skip.map((slug) => `\`${entrySkillInvocation()} --stage ${slug} --single\``);
+  const anyOf = onItsOwn.length <= 1 ? onItsOwn.join("") : `${onItsOwn.slice(0, -1).join(", ")} or ${onItsOwn.at(-1)}`;
   const wayBack = unitStep !== null
     ? forTheUnit
     : started === null
       ? "You can undo that any time."
-      : `${skip.length === 1 ? "It" : "Either one"} can still be run on its own with \`${onItsOwn}\`.`;
+      : `${skip.length === 1 ? "It" : skip.length === 2 ? "Either one" : "Any of them"} can still be run on its own with ${anyOf}.`;
   const line = `"${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ${wayBack}${noted ? ` ${noted}` : ""}${parkedTail}"`;
   const undo = `If they later ask to undo it, run \`${aidlcDispatcherInvocation("recompose")} ${flips(add, planSkip)}\`.`;
   const message =

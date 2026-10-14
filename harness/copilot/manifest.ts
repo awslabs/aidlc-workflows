@@ -184,6 +184,8 @@ const manifest: HarnessManifest = {
           // The variant whose onboarding said headless `copilot -p` runs also
           // need GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1 (a trusted folder is enough).
           "sha256:6130b11ceb91e334f30940d3a3a1f40b41e82519ac777b0177c089b35f348442",
+          // The variant whose setter rows named no --person-words.
+          "sha256:ad6ccb9e0d8fbfc3224448ed45c6d3b278ffb8afdffe697ef2f362cfafeb44bf",
         ],
       },
     },

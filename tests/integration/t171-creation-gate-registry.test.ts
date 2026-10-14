@@ -183,10 +183,27 @@ function asWork(words: string) {
   return JSON.parse(runEmittedCommand(`${request!} --propose ${planFor(words)}`).stdout.trim());
 }
 
+// The person's approval of a composed plan, recorded as their hook records a
+// reply; the creation the engine prints names it in place of <their words>.
+const APPROVAL = "Approve";
+function personApproves(p = proj): void {
+  const r = Bun.spawnSync({
+    cmd: [process.execPath, join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+    cwd: p,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: p },
+    stdin: Buffer.from(JSON.stringify({
+      hook_event_name: "UserPromptSubmit", session_id: "01995000-7a11-7000-8000-000000000171", cwd: p, prompt: APPROVAL,
+    })),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(r.exitCode, r.stderr.toString()).toBe(0);
+}
+
 function printedCommand(message: string): string {
   const command = message.match(/Run `([^`]+)`/)?.[1];
   expect(command, message).toBeDefined();
-  return command!.replace('"<2-3 word kebab essence>"', "pending-work");
+  return command!.replace('"<2-3 word kebab essence>"', "pending-work").replace("'<their words>'", `'${APPROVAL}'`);
 }
 
 function createdDescription(): string {
@@ -548,6 +565,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
         expect(composed).toMatch(/^[0-9a-f]{8}$/);
         // Approval, as the conductor runs it: the base scope with the plan's typed changes and settings.
+        personApproves();
         const approval = runEmittedCommand(
           `${ORCH_SH} next --scope bugfix --request ${composed} ${PLAN.join(" ")}${taskless ? ` -- '${description}'` : ""}`,
         );
@@ -588,6 +606,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       seedTwoIntentsNoCursor();
       const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
       const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      personApproves();
       const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
       expect(ask.ask_type).toBe("new-work-routing");
       // Other work is created and selected before the human answers "reshape".
@@ -1202,6 +1221,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
           seedTwoIntentsNoCursor();
           const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
           const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+          personApproves();
           const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
           expect(ask.ask_type).toBe("new-work-routing");
           const creation = directive(text);

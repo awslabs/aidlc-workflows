@@ -723,9 +723,14 @@ export async function run(
       case "knowledge": return verb === "onboard" || verb === "sync";
       // One of the person's checks switched as they asked runs click-free when
       // the setter would carry it out (on always, off once they asked since the
-      // last decision); any other setting keeps the prompt.
+      // last decision), with or without their words beside it (--person-words, or
+      // --person-words-file for words in a file);
+      // any other setting keeps the prompt.
       case "config":
-        return verb === "set" && !(rest.length === 2 && personCheckSwitchAllowed(projectDir, rest[0], rest[1]));
+        return verb === "set" && !(
+          (rest.length === 2 || (rest.length === 4 && (rest[2] === "--person-words" || rest[2] === "--person-words-file"))) &&
+          personCheckSwitchAllowed(projectDir, rest[0], rest[1])
+        );
       // Turning Construction checkpoints on or off runs click-free when the
       // setter's own check passes (the person asked for it since the last
       // decision, or chose it); without that it keeps the prompt.

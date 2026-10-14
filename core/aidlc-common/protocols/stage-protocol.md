@@ -27,7 +27,7 @@ what they say, in their own words and in context, and do it.
   approval, "Review the plan" brings the question back.
 - When they ask to turn a check off for this piece of work, in their own words
   or by picking a guard's turn-it-off choice, run the setter yourself (that
-  choice's `command`, or `{{INVOKE}} engine config set guard.<fence> off`) and
+  choice's `command`, or `{{INVOKE}} engine config set guard.<fence> off --person-words '<their words>'`) and
   say in one line that it is off for this piece of work, comes back on for the
   next one, and that they can ask you to turn it back on. Never hand them a
   command to type.
@@ -1189,8 +1189,10 @@ Load it when `directive.mode` is `subagent`, `pipeline`, or `mob`, or when the s
 
 ### Conditional reviewer protocol
 
-Reviewer dispatch, receipts, read scope, terminal ordering, and the NOT-READY loop live in
-`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-reviewer.md`.
+Reviewer dispatch, receipts, and terminal ordering live in
+`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-reviewer.md`; a Unit's review rules (read scope, dispatch record) in
+`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-reviewer-unit.md`, and the NOT-READY repair loop and
+stale-receipt recovery in `{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-reviewer-repair.md`, each named on the reviews that take it.
 Load it when the directive names a reviewer with an effective review class other than `none` (the engine lists it in `directive.protocol_modules`).
 ## 13. Learnings Ritual
 

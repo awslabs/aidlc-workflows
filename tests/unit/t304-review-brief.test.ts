@@ -2888,17 +2888,21 @@ describe("t304 engine-owned report replay and compatibility", () => {
     const completed = run(LOG, [...request, "--verdict", "NOT-READY"], project.proj);
     expect(completed.status, completed.out).toBe(0);
     expect(run(STATE, ["revise", "requirements-analysis"], project.proj).status).toBe(0);
-    const fallback = "review did not complete within its turn budget";
     const brief = renderReviewBrief(
       project.proj,
       findStageBySlug("requirements-analysis")!,
       "revision",
       undefined,
-      fallback,
+      "the reviewer stopped before writing its review",
     );
     expect(brief).toContain("Rejected: Known gap");
     expect(brief).toContain(`| R-02 | Major | ${project.relativeArtifact.split("/").at(-1)} > review completion | Unresolved |`);
-    expect(brief).toContain(`> R-02 Finding: ${fallback}`);
+    expect(brief).toContain(
+      "> R-02 Finding: The review did not finish, so there is no review result to rely on. The reviewer stopped before writing its review.",
+    );
+    // The revision's re-review did not finish, so it was not re-checked.
+    expect(brief).toContain("**Why now:** Revision re-check did not finish.");
+    expect(brief).not.toContain("Revision re-checked.");
     expect(brief).toContain("**Review outcome:** Concerns remain for your decision.");
   });
 
@@ -3881,7 +3885,7 @@ describe("t304 protocol and harness projections use the deterministic renderer",
 
     const stage = findStageBySlug("requirements-analysis")!;
     expect(readReviewArtifactContexts(proj, stage)).toHaveLength(0);
-    const fallbackFinding = "review did not complete within its turn budget";
+    const fallbackFinding = "it stopped before writing its review";
     const brief = run(
       REVIEW_BRIEF,
       [
@@ -3896,8 +3900,52 @@ describe("t304 protocol and harness projections use the deterministic renderer",
       proj,
     );
     expect(brief.status, brief.out).toBe(0);
-    expect(brief.stdout).toContain(fallbackFinding);
+    expect(brief.stdout).toContain("The review did not finish, so there is no review result to rely on. It stopped before writing its review.");
+    expect(brief.stdout).toContain("**Why now:** First review did not finish.");
     expect(brief.stdout).not.toContain("| - | - | - | No findings |");
+  });
+
+  // A live run on Kiro CLI: the reviewer had no tool to write its review, and
+  // the gate said it "did not complete within its turn budget". The record
+  // says the review did not finish; only the conductor, from what the reviewer
+  // returned, can say why.
+  test("the gate says the review did not finish from the record, and why only when the conductor knows it", () => {
+    const { proj, artifact } = requirementProject([]);
+    writeFileSync(artifact, "# Requirements\n\nReviewed requirements.\n", "utf-8");
+    const request = [
+      "review",
+      "--stage",
+      "requirements-analysis",
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--iteration",
+      "1",
+    ];
+    expect(run(LOG, request, proj).status).toBe(0);
+    expect(run(LOG, [...request, "--retry-pending"], proj).status).toBe(0);
+    const completed = run(LOG, [...request, "--verdict", "NOT-READY"], proj);
+    expect(completed.status, completed.out).toBe(0);
+    const brief = (extra: string[]) =>
+      run(REVIEW_BRIEF, ["review", "--stage", "requirements-analysis", "--why", "first", ...extra], proj);
+
+    const plain = brief([]);
+    expect(plain.status, plain.out).toBe(0);
+    expect(plain.stdout).toMatch(/^> R-01 Finding: The review did not finish, so there is no review result to rely on\.$/m);
+    expect(plain.stdout).toContain("**Review outcome:** Concerns remain for your decision.");
+    expect(plain.stdout).toContain("**Why now:** First review did not finish.");
+    expect(plain.stdout).not.toContain("First review completed.");
+    expect(plain.stdout).not.toContain("No blocking concerns were found.");
+    // A reviewer stopped before writing may still have read the work: the
+    // record says only that no review result exists.
+    expect(plain.stdout).not.toContain("nothing was checked");
+    expect(plain.stdout).not.toContain("turn budget");
+
+    const said = brief(["--fallback-finding", "the reviewer said it had no tool to write its review"]);
+    expect(said.status, said.out).toBe(0);
+    expect(said.stdout).toMatch(
+      /^> R-01 Finding: The review did not finish, so there is no review result to rely on\. The reviewer said it had no tool to write its review\.$/m,
+    );
+    expect(said.stdout).not.toContain("turn budget");
   });
 
   test("a record replaces a legacy embedded review for the same scope at the gate", () => {

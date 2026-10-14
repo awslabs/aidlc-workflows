@@ -3,12 +3,9 @@ import type { AuditEntryInput } from "./aidlc-audit.ts";
 import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./aidlc-question-store.ts";
 import {
   guardPolicyAtLeast,
-  latestPersonTurn,
-  isReplyTurn,
   personSpokeSinceGate,
   readAuditShardEvents,
   type AuditShardEvent,
-  auditBlockField,
   CEREMONY_ENV,
   CEREMONY_FIELDS,
   CEREMONY_FLAGS,
@@ -55,6 +52,7 @@ import {
   resolveWorkflowSelection,
   setField,
   setGuardPolicyLine,
+  guardsLineSource,
   setGuardsOffLine,
   setGuardsOnLine,
   stateFilePath,
@@ -68,7 +66,7 @@ import {
   splitKiroCommandArgs,
 } from "./aidlc-lib.ts";
 import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
-import { latestMessage } from "./aidlc-message-store.ts";
+import { chatsSince, latestMessage, latestSpendingTimestamp, listMessages, replyOfTheirs } from "./aidlc-message-store.ts";
 import { quoted } from "./aidlc-recorded-switches.ts";
 import { settingPurpose } from "./aidlc-settings.ts";
 
@@ -235,30 +233,6 @@ function setCeremonyField(content: string, key: CeremonyKey, value: CeremonySett
 
 // Pure state transformation plus audit/output preparation. CLI setters call this
 // under the intent lock and commit audit before state.
-// The person's latest turn is a reply (words of theirs, not a typed switch or a
-// command to AIDLC, which the hook carries out itself) and came after this setting
-// last changed. Their words stand behind a setter run that follows them, not
-// behind the setter's own later reversal (the way back after an off they asked
-// for), which no turn of theirs asked for. Rows in one shard order by position;
-// across shards by second, and an equal second is not read as after.
-function personTurnSinceSetting(projectDir: string, key: CeremonyKey, selection: { intent?: string; space?: string }): boolean {
-  let rows: AuditShardEvent[];
-  try {
-    rows = readAuditShardEvents(projectDir, selection.intent, selection.space);
-  } catch {
-    return false;
-  }
-  const after = (row: AuditShardEvent, other: AuditShardEvent): boolean =>
-    row.timestamp > other.timestamp ||
-    (row.timestamp === other.timestamp && row.shardIndex === other.shardIndex && row.pos > other.pos);
-  const latest = (pick: (row: AuditShardEvent) => boolean): AuditShardEvent | null =>
-    rows.filter(pick).reduce<AuditShardEvent | null>((last, row) => (last === null || after(row, last) ? row : last), null);
-  const turn = latest((row) => row.event === "HUMAN_TURN");
-  if (turn === null || !isReplyTurn(turn)) return false;
-  const setting = latest((row) => row.event === "CEREMONY_SET" && auditBlockField(row.block, "Key") === key);
-  return setting === null || after(turn, setting);
-}
-
 // The same setting typed as this engine's own setter command carries none of
 // `next`'s flags for the message record to hold, so the dispatcher that owns
 // the command's shape is asked what their line named: `config set <key> <value>
@@ -283,15 +257,83 @@ function setterCommandNames(text: string, key: string, value: string): boolean {
   }
 }
 
+/**
+ * Whether a setting is the person's, with their words, from recorded facts
+ * only: the one rule behind every "set by you" the setter, the kept settings,
+ * creation and the routed line say. Theirs when they typed it on their own line
+ * in this chat (the message record's settings, or the setter command typed
+ * whole), on their latest line or one no decision has spent since; when they
+ * ran the command at their own terminal; or when the agent, which read the
+ * chat, passed their words (--person-words) and a reply of theirs in this chat
+ * since the last decision is exactly those words. A routing answer is no
+ * decision here: it sends the words and the settings before it to the work it
+ * names, where this setter runs. Null otherwise: the setting is still carried
+ * out, and recorded as the command's. Who may lower a check is not decided here.
+ */
+export function settingTheirs(
+  projectDir: string,
+  sessionId: string | null,
+  key: string,
+  value: string | undefined,
+  personWords?: string,
+  selection: { intent?: string; space?: string } = {},
+): { words: string | null } | null {
+  if (commandAtPersonsTerminal()) return { words: null };
+  let rows: AuditShardEvent[] = [];
+  try {
+    rows = readAuditShardEvents(projectDir, selection.intent, selection.space);
+  } catch {
+    rows = [];
+  }
+  // A command whose chat the engine cannot name is this work's one chat: the
+  // only one that has spoken since the last decision (as proveMessage reads it).
+  // A decision their newest message led to itself (the plan answer typed
+  // beside the setting) leaves none spoken since; that message's chat is it.
+  let chat = sessionId;
+  if (chat === null) {
+    const chats = chatsSince(rows, projectDir, latestSpendingTimestamp(rows));
+    const newest = chats.size === 0 ? listMessages(projectDir).at(-1) : undefined;
+    if (newest?.session) chats.add(newest.session);
+    chat = chats.size === 1 && !chats.has("terminal") ? [...chats][0] : null;
+  }
+  if (chat === null) return null;
+  // Their lines and replies count from the last decision; a routing answer is
+  // none here (see above).
+  const decisions = rows.filter((row) => row.event !== "REQUEST_ROUTED");
+  if (value !== undefined) {
+    const latest = latestMessage(projectDir, chat);
+    const spentAt = latestSpendingTimestamp(decisions);
+    const lines = listMessages(projectDir).filter((message) =>
+      message.session === chat && (spentAt === null || message.at >= spentAt));
+    if (latest !== null && !lines.some((message) => message.id === latest.id)) lines.push(latest);
+    // Plan approval has two names for one switch.
+    const names = key === "plan-approval" || key === "guard.plan-approval" ? ["plan-approval", "guard.plan-approval"] : [key];
+    if (lines.some((message) => message.settings.some((setting) => names.includes(setting.key) && setting.value === value) ||
+      names.some((name) => setterCommandNames(message.text, name, value)))) {
+      return { words: null };
+    }
+  }
+  if (personWords === undefined) return null;
+  const reply = replyOfTheirs(projectDir, chat, personWords, decisions);
+  return reply === null ? null : { words: reply.words ?? reply.text };
+}
+
 export function applyIntentSettings(
   projectDir: string,
   content: string,
   requested: IntentSettingsRequest,
-  { sessionId = null, typedByPerson = false, fail: die = throwSettingsError, reviewScope, ...selection }: {
+  {
+    sessionId = null, typedByPerson = false, fail: die = throwSettingsError, reviewScope, personWords, notTheirs,
+    ...selection
+  }: {
     intent?: string; space?: string; sessionId?: string | null; typedByPerson?: boolean;
     fail?: (message: string) => never;
     /** The scope a review level is compared with; defaults to the state's own. */
     reviewScope?: string;
+    /** The person's words the agent says asked for this (--person-words), proven against their replies. */
+    personWords?: string;
+    /** Settings carried with `typedByPerson` that were kept as a command's, not theirs. */
+    notTheirs?: ReadonlySet<string>;
   },
 ): { content: string; audit: AuditEntryInput[]; lines: string[] } {
   // `guard.plan-approval` is another way to say `plan-approval`: one switch that
@@ -481,55 +523,36 @@ export function applyIntentSettings(
   ) {
     die(guardSwitchRefusal(lowering[0], projectDir));
   }
-  // The setter carries out what the person asked: their words go on the record.
-  // A command they ran themselves, at their own terminal, is their own act and
-  // belongs to no chat, so no message of theirs is quoted for it. Everything else
-  // is the agent carrying out what they asked in the chat, and their words stand
-  // behind it. Which session is RUNNING the command decides nothing: a chat records
-  // its whole ancestor chain, so a terminal beside it resolves the same session
-  // anyway, and the walk that resolves it fails closed under load, which would
-  // drop the person's own words from their record for no reason they could see.
-  const turn = personsRequest && !typedByPerson && !atTheirTerminal
-    ? latestPersonTurn(projectDir)
-    : null;
-  const askedIn = turn?.words ?? null;
-  // Asked for in the chat (not typed): each check it turns off is said in one
-  // line, in their words, with the way back, instead of the setter's own line.
-  const askedInChat = personsRequest && !typedByPerson && process.env.AIDLC_UNATTENDED !== "1" &&
-    personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true });
-  // Theirs either way: asked for in their chat, or run by them at their terminal.
-  // Both get the one line that names the check, where it applies and the way
-  // back, and both record the person as the one who set it.
-  const personsOwn = askedInChat || atTheirTerminal;
+  // The setter carries out what the person asked, and records it as theirs only
+  // when a fact on record says so (settingTheirs): they typed it on their own
+  // line, ran it at their own terminal, or the agent passed their words and a
+  // reply of theirs in this chat is exactly those words. Their words go on the
+  // record then; anything else is recorded as the command's, with no words, so
+  // the work never says they decided what they did not. A setting carried with
+  // typedByPerson is theirs unless it was kept as a command's (notTheirs).
+  const proofs = new Map<string, { words: string | null } | null>();
+  const theirs = (key: string): { words: string | null } | null => {
+    if (typedByPerson) return notTheirs?.has(key) ? null : { words: null };
+    if (requested[key as ConfigKey]?.source !== "you") return null;
+    if (!proofs.has(key)) {
+      const value = requested[key as ConfigKey]?.value.trim().toLowerCase();
+      proofs.set(key, settingTheirs(projectDir, sessionId, key, value, personWords, selection));
+    }
+    return proofs.get(key) ?? null;
+  };
+  const askedKeys = Object.keys(requested).filter((key) => requested[key as ConfigKey]?.source === "you");
+  const askedIn = typedByPerson || atTheirTerminal
+    ? null
+    : askedKeys.map((key) => theirs(key)?.words ?? null).find((words) => words !== null) ?? null;
+  // Theirs, asked in the chat or run at their terminal: each check it turns off
+  // is said in one line, with their words where the record has them, and the way
+  // back, instead of the setter's own line.
   const saidAsAsked = (key: string): boolean =>
-    personsOwn && key !== "plan-approval" && lowering.some((item) => item.key === key);
-  // A check the person asked in the chat to turn off is theirs, whoever runs the
-  // setter: turning one off needs their turn, so it is on record behind it. Any
-  // other setting requested as theirs is theirs at their own terminal, or when
-  // their latest turn stands behind the setter run, newer than the setting's own
-  // last row (so the way back the agent runs after an off they asked for is the
-  // command's, not theirs).
-  // A setting the person typed as a flag on their own line in this chat is
-  // theirs, whoever runs the setter: the hook recorded the line whole and the
-  // engine's own parse of it is on the record (aidlc-message-store.ts), the
-  // same proof creation reads. Their settings-only line is a command turn, so
-  // the words rule below never sees it, and the work would otherwise say a
-  // command set what they typed with their own hands.
-  const typedOnTheirLine = (key: string, value: string | undefined): boolean => {
-    if (value === undefined) return false;
-    const message = latestMessage(projectDir, sessionId);
-    if (message === null) return false;
-    return message.settings.some((setting) => setting.key === key && setting.value === value) ||
-      setterCommandNames(message.text, key, value);
-  };
-  const personAsked = (key: string): boolean => {
-    if (typedByPerson) return true;
-    if (lowering.some((item) => item.key === key)) return personsOwn;
-    const ceremony = theirCeremonies.find((candidate) => CEREMONY_FLAGS[candidate].slice(2) === key);
-    if (ceremony === undefined) return false;
-    return atTheirTerminal || typedOnTheirLine(key, ceremonies[ceremony]) ||
-      (askedInChat && personTurnSinceSetting(projectDir, ceremony, selection));
-  };
+    !typedByPerson && key !== "plan-approval" && lowering.some((item) => item.key === key) && theirs(key) !== null;
+  const personAsked = (key: string): boolean => theirs(key) !== null;
+  // The source a setting is written with: the request's own, except that a
+  // person's request nothing on record stands behind is the command's.
+  const writtenSource = (key: string, source: string): string => source === "you" && !personAsked(key) ? "command" : source;
 
   const audit: AuditEntryInput[] = [];
   const lines: string[] = [];
@@ -592,9 +615,13 @@ export function applyIntentSettings(
   // Explicit strict is also recordable; explicit relaxed was refused above.
   if (ccRequest !== undefined && changeControl !== null) {
     const previous = cc.rawStateValue;
-    const line = formatGuardPolicy(changeControl, ccRequest.source);
-    if (previous === line && cc.stateField === GUARD_POLICY_FIELD && getField(content, CHANGE_CONTROL_FIELD) === null) {
-      if (!scopeDefault("guard-policy")) lines.push(`Guard Policy is already ${line}`);
+    const policySource = writtenSource("guard-policy", ccRequest.source);
+    const line = formatGuardPolicy(changeControl, policySource);
+    // A command's run of the person's own value never relabels their choice.
+    const sameAsTheirs = policySource === "command" && previous === formatGuardPolicy(changeControl, "you");
+    if ((previous === line || sameAsTheirs) && cc.stateField === GUARD_POLICY_FIELD && getField(content, CHANGE_CONTROL_FIELD) === null) {
+      // It says whose it already is, as the ceremony lines do.
+      if (!scopeDefault("guard-policy")) lines.push(`Guard Policy is already ${previous ?? line}`);
     } else {
       // Every write keeps only the Guard Policy line, even when its stored text is unchanged.
       // Resolving a conflict records one GUARD_POLICY_SET from the prior effective policy, not a name-only rename.
@@ -607,8 +634,9 @@ export function applyIntentSettings(
           audit.push({
             eventType: "GUARD_POLICY_SET",
             fields: {
-              "Old Value": oldValue, "New Value": changeControl, Source: ccRequest.source,
-              ...(askedIn && lowering.some((item) => item.key === "guard-policy") ? { "Person Reply": askedIn } : {}),
+              "Old Value": oldValue, "New Value": changeControl, Source: policySource,
+              ...(askedIn && policySource === "you" && lowering.some((item) => item.key === "guard-policy")
+                ? { "Person Reply": askedIn } : {}),
             },
           });
         }
@@ -631,9 +659,10 @@ export function applyIntentSettings(
       content = cleared;
       for (const fence of SWITCHABLE_GUARD_FENCES) {
         if (before[fence].value === after[fence].value) continue;
+        const source = writtenSource("guard-policy", ccRequest.source);
         const fenceFields = {
-          Guard: fence, Scope: getField(content, "Scope") ?? "", Source: ccRequest.source,
-          ...(askedIn && after[fence].value === "off" ? { "Person Reply": askedIn } : {}),
+          Guard: fence, Scope: getField(content, "Scope") ?? "", Source: source,
+          ...(askedIn && source === "you" && after[fence].value === "off" ? { "Person Reply": askedIn } : {}),
         };
         audit.push(
           after[fence].value === "off"
@@ -664,9 +693,17 @@ export function applyIntentSettings(
       const nextOn = raised.filter((fence) => fence !== request.fence);
       if (request.value === "off") nextOff.push(request.fence);
       else if (byPolicy.includes(request.fence)) nextOn.push(request.fence);
+      const source = writtenSource(guardFenceConfigKey(request.fence), request.source);
+      // One label for each line of checks: theirs while every check on it is.
+      const lineSource = (field: string, had: readonly SwitchableGuardFence[]): string =>
+        source === "you" && (had.length === 0 || guardsLineSource(getField(content, field)) === "you") ? "you" : "command";
       let updated = content;
-      if (nextOff.length !== lowered.length) updated = setGuardsOffLine(updated, nextOff);
-      if (nextOn.length !== raised.length) updated = setGuardsOnLine(updated, nextOn);
+      if (nextOff.length !== lowered.length) {
+        updated = setGuardsOffLine(updated, nextOff, request.value === "off" ? lineSource(GUARDS_OFF_FIELD, lowered) : undefined);
+      }
+      if (nextOn.length !== raised.length) {
+        updated = setGuardsOnLine(updated, nextOn, nextOn.length > raised.length ? lineSource(GUARDS_ON_FIELD, raised) : undefined);
+      }
       const after = resolveFences(policy, updated)[request.fence];
       if (before.value === after.value) {
         // The plan this work runs already leaves the check where the person
@@ -681,8 +718,8 @@ export function applyIntentSettings(
           audit.push({
             eventType: "GUARD_DISABLED",
             fields: {
-              Guard: request.fence, Scope: scopeName, Source: request.source,
-              ...(askedIn ? { "Person Reply": askedIn } : {}),
+              Guard: request.fence, Scope: scopeName, Source: source,
+              ...(askedIn && source === "you" ? { "Person Reply": askedIn } : {}),
             },
           });
         }
@@ -694,8 +731,8 @@ export function applyIntentSettings(
       // eventType: the emitter drift guard reads these call sites as text, and a
       // computed event name is invisible to it.
       const fenceFields = {
-        Guard: request.fence, Scope: scopeName, Source: request.source,
-        ...(askedIn && after.value === "off" ? { "Person Reply": askedIn } : {}),
+        Guard: request.fence, Scope: scopeName, Source: source,
+        ...(askedIn && source === "you" && after.value === "off" ? { "Person Reply": askedIn } : {}),
       };
       audit.push(
         after.value === "off"
@@ -719,7 +756,7 @@ export function applyIntentSettings(
     // never relabels the person's own identical choice.
     const flag = CEREMONY_FLAGS[key].slice(2) as ConfigKey;
     const requestedSource = requested[flag]!.source;
-    const source = requestedSource === "you" && !personAsked(flag) ? "command" : requestedSource;
+    const source = writtenSource(flag, requestedSource);
     const field = CEREMONY_FIELDS[key];
     const previous = getField(content, field);
     const line = formatCeremony(value, source);
@@ -900,6 +937,12 @@ interface PlanApprovalCreationGrant {
   version: 1;
   session: string;
   /**
+   * The settings this record holds that were kept as a command's, not the
+   * person's (settingTheirs found nothing on record behind them). Absent: all
+   * theirs, as every record written before this field was.
+   */
+  notTheirs?: string[];
+  /**
    * The new-work question the words answered. Said before any was open, it is
    * the first one this chat asks next (bound when creation reads the record).
    */
@@ -928,6 +971,8 @@ export function perCheckSettingClearedBy(policy: string | null | undefined): "on
 // Where a setting kept before any work is selected goes: the piece of work the
 // chat starts next or, with work here to pick up, whichever it picks or starts.
 const FOR_WORK_STARTED = "for the piece of work you start now";
+// " (set by you)" on a kept setting's line only when it is theirs.
+const byYou = (theirs: boolean): string => (theirs ? " (set by you)" : "");
 const FOR_WORK_PICKED_OR_STARTED = "for the work you pick up or start next";
 
 /**
@@ -963,6 +1008,7 @@ export function grantPlanApprovalOffAtCreation(
   space: string | null,
   withDescription = false,
   forNext = FOR_WORK_STARTED,
+  theirs = true,
 ): TypedGuardSwitchOutcome {
   try {
     const memoryStrict = memoryGuardPolicyDeclarations(projectDir, { ...(space === null ? {} : { space }), sessionId })
@@ -970,23 +1016,29 @@ export function grantPlanApprovalOffAtCreation(
     if (memoryStrict !== undefined) {
       return { applied: false, lines: [planApprovalMemoryLockRefusal(memoryStrict.path)] };
     }
-    recordPlanApprovalCreationGrant(projectDir, sessionId, withDescription);
+    recordPlanApprovalCreationGrant(projectDir, sessionId, withDescription, theirs);
   } catch (error) {
     return { applied: false, lines: [errorMessage(error)] };
   }
   return {
     applied: true,
     lines: [
-      `Plan approval${settingPurpose("plan approval")} will be off ${forNext} ` +
-        "(set by you). You can ask to see a plan before it is built any time.",
+      `Plan approval${settingPurpose("plan approval")} will be off ${forNext}${byYou(theirs)}. ` +
+        "You can ask to see a plan before it is built any time.",
     ],
   };
 }
 
-export function recordPlanApprovalCreationGrant(projectDir: string, sessionId: string, withDescription = false): void {
+export function recordPlanApprovalCreationGrant(
+  projectDir: string,
+  sessionId: string,
+  withDescription = false,
+  theirs = true,
+): void {
   const grant: PlanApprovalCreationGrant = {
     version: 1,
     session: sessionId,
+    ...(theirs ? {} : { notTheirs: ["plan-approval"] }),
     request: withDescription ? null : latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS),
     recordedAt: isoTimestamp(),
     ...(withDescription ? { withDescription: true as const } : {}),
@@ -1064,6 +1116,7 @@ export function grantGuardPolicyAtCreation(
   value: "relaxed" | "off",
   withDescription = false,
   forNext = FOR_WORK_STARTED,
+  theirs = true,
 ): TypedGuardSwitchOutcome {
   try {
     const memoryStrict = memoryGuardPolicyDeclarations(projectDir, { ...(space === null ? {} : { space }), sessionId })
@@ -1073,6 +1126,7 @@ export function grantGuardPolicyAtCreation(
       version: 1,
       session: sessionId,
       value,
+      ...(theirs ? {} : { notTheirs: ["guard-policy"] }),
       request: withDescription ? null : latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS),
       recordedAt: isoTimestamp(),
       ...(withDescription ? { withDescription: true as const } : {}),
@@ -1086,8 +1140,8 @@ export function grantGuardPolicyAtCreation(
     // What the setting is for comes with its name: the person reading this may
     // never have met it, and the fence lines beside it say the same.
     lines: [withDescription
-      ? `${guardPolicyNamed()} is ${value} for the work you are asking for (set by you).`
-      : `${guardPolicyNamed()} is ${value} ${forNext} (set by you).`],
+      ? `${guardPolicyNamed()} is ${value} for the work you are asking for${byYou(theirs)}.`
+      : `${guardPolicyNamed()} is ${value} ${forNext}${byYou(theirs)}.`],
   };
 }
 
@@ -1146,12 +1200,17 @@ export function recordCeremoniesAtCreation(
   sessionId: string,
   settings: Record<string, string>,
   withDescription: boolean,
+  notTheirs: readonly string[] = [],
 ): void {
   try {
-    // A later word on one setting replaces the earlier one; the others stay.
+    // A later word on one setting replaces the earlier one; the others stay,
+    // with whose each one is.
     let earlier: Record<string, string> = {};
+    let earlierNotTheirs: string[] = [];
     try {
-      earlier = readCeremoniesCreationGrant(projectDir, sessionId)?.settings ?? {};
+      const record = readCeremoniesCreationGrant(projectDir, sessionId);
+      earlier = record?.settings ?? {};
+      earlierNotTheirs = record?.notTheirs ?? [];
     } catch {
       // An unreadable earlier record is replaced by this one.
     }
@@ -1166,10 +1225,16 @@ export function recordCeremoniesAtCreation(
         if (fence !== "plan-approval" && earlier[key] === cleared) delete earlier[key];
       }
     }
+    const merged = { ...earlier, ...settings };
+    const commandsOwn = [
+      ...earlierNotTheirs.filter((key) => settings[key] === undefined),
+      ...notTheirs.filter((key) => settings[key] !== undefined),
+    ].filter((key) => merged[key] !== undefined);
     const grant: CeremoniesCreationGrant = {
       version: 1,
       session: sessionId,
-      settings: { ...earlier, ...settings },
+      settings: merged,
+      ...(commandsOwn.length > 0 ? { notTheirs: commandsOwn } : {}),
       request: withDescription ? null : latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS),
       recordedAt: isoTimestamp(),
       ...(withDescription ? { withDescription: true as const } : {}),
@@ -1250,22 +1315,33 @@ export function grantFencesOffAtCreation(
   fences: readonly SwitchableGuardFence[],
   withDescription = false,
   forNext = FOR_WORK_STARTED,
+  theirs = true,
 ): TypedGuardSwitchOutcome {
   try {
     const memoryStrict = memoryGuardPolicyDeclarations(projectDir, { ...(space === null ? {} : { space }), sessionId })
       .find((declaration) => declaration.value === "strict");
     if (memoryStrict !== undefined) return { applied: false, lines: [guardPolicyMemoryStrictRefusal(memoryStrict)] };
-    // Each check said off before the work stays off with the next one said.
+    // Each check said off before the work stays off with the next one said,
+    // with whose each one is.
     let earlier: SwitchableGuardFence[] = [];
+    let earlierNotTheirs: string[] = [];
     try {
-      earlier = readFencesOffCreationGrant(projectDir, sessionId)?.fences ?? [];
+      const record = readFencesOffCreationGrant(projectDir, sessionId);
+      earlier = record?.fences ?? [];
+      earlierNotTheirs = record?.notTheirs ?? [];
     } catch {
       // An unreadable earlier record is replaced by this one.
     }
+    const named = fences.map((fence) => guardFenceConfigKey(fence));
+    const commandsOwn = [
+      ...earlierNotTheirs.filter((key) => !named.includes(key)),
+      ...(theirs ? [] : named),
+    ];
     const grant: FencesOffCreationGrant = {
       version: 1,
       session: sessionId,
       fences: SWITCHABLE_GUARD_FENCES.filter((fence) => earlier.includes(fence) || fences.includes(fence)),
+      ...(commandsOwn.length > 0 ? { notTheirs: commandsOwn } : {}),
       request: withDescription ? null : latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS),
       recordedAt: isoTimestamp(),
       ...(withDescription ? { withDescription: true as const } : {}),
@@ -1277,8 +1353,8 @@ export function grantFencesOffAtCreation(
   return {
     applied: true,
     lines: [withDescription
-      ? `${checksAre(fences)} off for the work you are asking for (set by you).`
-      : `${checksAre(fences)} off ${forNext} (set by you).`],
+      ? `${checksAre(fences)} off for the work you are asking for${byYou(theirs)}.`
+      : `${checksAre(fences)} off ${forNext}${byYou(theirs)}.`],
   };
 }
 
@@ -1410,11 +1486,17 @@ export function keepSettingsForNextWork(
   // question open to bind it to, the setting goes to whichever work the chat
   // picks or starts next (keptForPickedWork), and its line says so.
   workToPick = false,
+  // The person's words the agent says asked for this (--person-words).
+  personWords?: string,
 ): string[] {
   const forNext = workToPick && latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS) === null
     ? FOR_WORK_PICKED_OR_STARTED
     : FOR_WORK_STARTED;
   const value = (key: string): string | undefined => requested[key as ConfigKey]?.value.trim().toLowerCase();
+  // Kept as theirs only when a fact on record says so (settingTheirs), as on
+  // open work; otherwise kept as the command's, and the line says nothing of them.
+  const theirs = (key: string): boolean =>
+    settingTheirs(projectDir, sessionId, key, value(key), personWords) !== null;
   const planApproval = value("plan-approval") ?? value("guard.plan-approval");
   const policy = value("guard-policy");
   const fences = SWITCHABLE_GUARD_FENCES.filter((fence) => fence !== "plan-approval");
@@ -1461,23 +1543,27 @@ export function keepSettingsForNextWork(
     if (!outcome.applied) fail(outcome.lines.join(" "));
     lines.push(...outcome.lines);
   };
+  const planApprovalKey = requested["plan-approval"] !== undefined ? "plan-approval" : "guard.plan-approval";
   if (planApproval === "off") {
-    keep(grantPlanApprovalOffAtCreation(projectDir, sessionId, space, false, forNext));
+    keep(grantPlanApprovalOffAtCreation(projectDir, sessionId, space, false, forNext, theirs(planApprovalKey)));
   } else if (planApproval === "on") {
     consumePlanApprovalCreationGrant(projectDir, sessionId);
-    lines.push(`Plan approval will be on ${forNext} (set by you).`);
+    lines.push(`Plan approval will be on ${forNext}${byYou(theirs(planApprovalKey))}.`);
   }
   if (policy === "relaxed" || policy === "off") {
-    keep(grantGuardPolicyAtCreation(projectDir, sessionId, space, policy, false, forNext));
+    keep(grantGuardPolicyAtCreation(projectDir, sessionId, space, policy, false, forNext, theirs("guard-policy")));
   } else if (policy === "strict") {
     consumeGuardPolicyCreationGrant(projectDir, sessionId);
     withdrawFencesOffAtCreation(projectDir, sessionId, SWITCHABLE_GUARD_FENCES);
-    lines.push(`${guardPolicyNamed()} will be strict ${forNext} (set by you).`);
+    lines.push(`${guardPolicyNamed()} will be strict ${forNext}${byYou(theirs("guard-policy"))}.`);
   }
-  if (fencesOff.length > 0) keep(grantFencesOffAtCreation(projectDir, sessionId, space, fencesOff, false, forNext));
+  if (fencesOff.length > 0) {
+    const allTheirs = fencesOff.every((fence) => theirs(guardFenceConfigKey(fence)));
+    keep(grantFencesOffAtCreation(projectDir, sessionId, space, fencesOff, false, forNext, allTheirs));
+  }
   if (fencesOn.length > 0) {
     withdrawFencesOffAtCreation(projectDir, sessionId, fencesOn);
-    lines.push(`${checksAre(fencesOn)} on ${forNext} (set by you).`);
+    lines.push(`${checksAre(fencesOn)} on ${forNext}${byYou(fencesOn.every((fence) => theirs(guardFenceConfigKey(fence))))}.`);
   }
   // Everything kept, as typed: the ceremonies and levels creation reads back,
   // and the rest as the mark that the setter ran since the person's message.
@@ -1493,11 +1579,13 @@ export function keepSettingsForNextWork(
       kept[key] = typed;
     }
   }
-  recordCeremoniesAtCreation(projectDir, sessionId, kept, false);
+  const keptNotTheirs = Object.keys(kept).filter((key) =>
+    !theirs(key === "plan-approval" ? planApprovalKey : key));
+  recordCeremoniesAtCreation(projectDir, sessionId, kept, false, keptNotTheirs);
   for (const key of [...CREATION_CEREMONY_FLAGS, "collaborators", ...KEPT_LEVEL_KEYS]) {
     const typed = kept[key];
     if (typed !== undefined) {
-      lines.push(`${KEPT_SETTING_LABELS[key]} will be ${typed} ${forNext} (set by you).`);
+      lines.push(`${KEPT_SETTING_LABELS[key]} will be ${typed} ${forNext}${byYou(!keptNotTheirs.includes(key))}.`);
     }
   }
   return lines;
@@ -1546,6 +1634,41 @@ export function keptForPickedWork(projectDir: string, sessionId: string | null):
   } catch {
     return null;
   }
+}
+
+/**
+ * The settings this chat kept for its next work that were kept as a command's,
+ * not the person's (each record's notTheirs): creation and the picked work write
+ * those as the command's. Setting keys as the setter names them.
+ */
+export function keptSettingsNotTheirs(projectDir: string, sessionId: string | null): Set<string> {
+  const out = new Set<string>();
+  if (!sessionId) return out;
+  const records: Array<PlanApprovalCreationGrant | null> = [];
+  for (const read of [
+    () => readFencesOffCreationGrant(projectDir, sessionId),
+    () => readCeremoniesCreationGrant(projectDir, sessionId),
+    () => readPlanApprovalRuntimeRecord<GuardPolicyCreationGrant>(
+      guardPolicyCreationGrantPath(projectDir, sessionId), "Guard Policy creation grant"),
+    () => readPlanApprovalRuntimeRecord<PlanApprovalCreationGrant>(
+      planApprovalCreationGrantPath(projectDir, sessionId), "plan approval creation grant"),
+  ]) {
+    try {
+      records.push(read());
+    } catch {
+      // An unreadable record keeps nothing, so nothing of it is relabelled.
+    }
+  }
+  for (const record of records) {
+    if (record?.version !== 1 || record.session !== sessionId || !Array.isArray(record.notTheirs)) continue;
+    for (const key of record.notTheirs) if (typeof key === "string") out.add(key);
+  }
+  // One name for one setting: plan approval kept by either name is both.
+  if (out.has("plan-approval") || out.has("guard.plan-approval")) {
+    out.add("plan-approval");
+    out.add("guard.plan-approval");
+  }
+  return out;
 }
 
 /** Spent by the work the chat picks, as by the work it creates. */

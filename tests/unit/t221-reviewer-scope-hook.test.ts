@@ -1192,12 +1192,13 @@ describe("t221 (c) harness registration and protocol prose", () => {
   });
 
   test("reviewer protocol module carries the dispatch-record write, and leaves the delete to the engine", () => {
+    // The dispatch record is per Unit, so it is in the per-Unit review module.
     const body = readFileSync(
       join(
         AIDLC_SRC,
         "aidlc-common",
         "protocols",
-        "stage-protocol-reviewer.md",
+        "stage-protocol-reviewer-unit.md",
       ),
       "utf-8",
     );

@@ -1076,6 +1076,9 @@ export function readReviewArtifactContexts(
   projectDir: string,
   stage: ReviewFingerprintStage,
   unit?: string,
+  // The gate brief also keeps a scope whose latest review did not finish, to
+  // say so; the reviewer's context and the approval read reviews only.
+  keepUnfinished = false,
 ): ReviewArtifactContext[] {
   const contexts: ReviewArtifactContext[] = [];
   const entries = reviewArtifactEntries(projectDir, stage, unit);
@@ -1098,12 +1101,13 @@ export function readReviewArtifactContexts(
       workspaceArtifactPath(projectDir, entry),
       scopeUnit,
     );
-    // A retried incomplete review with nothing listed stays context-free, so
-    // the gate supplies its explicit fallback finding.
+    // A retried incomplete review with nothing listed stays context-free,
+    // except at the gate, which says the review did not finish.
     if (
       (!context.incompleteReview && context.verdict !== null) ||
       context.findings.length > 0 ||
-      context.findingsText !== undefined
+      context.findingsText !== undefined ||
+      (keepUnfinished && context.incompleteReview === true)
     ) {
       contexts.push(context);
     }
@@ -2066,6 +2070,15 @@ function unitOwnApproval(projectDir: string, unit: string): boolean {
   }
 }
 
+// What the person reads for a review that did not finish, with the reason the
+// conductor gives when it knows one.
+function unfinishedReviewFinding(reason?: string): string {
+  const said = "The review did not finish, so there is no review result to rely on.";
+  const why = reason?.trim() ?? "";
+  if (why === "") return said;
+  return `${said} ${why.charAt(0).toUpperCase()}${why.slice(1)}${/[.!?]$/.test(why) ? "" : "."}`;
+}
+
 export function renderReviewBrief(
   projectDir: string,
   stage: ReviewFingerprintStage & { name: string },
@@ -2078,30 +2091,31 @@ export function renderReviewBrief(
   const contextUnit = stage.for_each === "unit-of-work" && !(unit && unitOwnApproval(projectDir, unit))
     ? undefined
     : unit;
-  let contexts = readReviewArtifactContexts(projectDir, stage, contextUnit);
-  if (fallbackFinding) {
-    // The incomplete fallback re-checked nothing, so a list carried from
-    // earlier reviews also shows the recorded finding, under the next unused
-    // ID so it never lands on an earlier decision's ID.
-    contexts = contexts.map((context) => {
-      if (!context.incompleteReview) return context;
-      const finding: ReviewFinding = {
-        artifact: context.artifact,
-        ...(context.unit ? { unit: context.unit } : {}),
-        id: nextFindingId(context.findings),
-        severity: "Major",
-        location: `${context.artifact} > review completion`,
-        finding: fallbackFinding,
-        requiredAction: "Request changes and rerun the reviewer.",
-        status: "Unresolved",
-        fingerprint: "",
-      };
-      return {
-        ...context,
-        findings: [...context.findings, withFingerprint(finding)],
-      };
-    });
-  }
+  let contexts = readReviewArtifactContexts(projectDir, stage, contextUnit, true);
+  // The incomplete fallback re-checked nothing: the record says the review did
+  // not finish, and the conductor's --fallback-finding, given only when what
+  // the reviewer returned says why, follows it. A list carried from earlier
+  // reviews shows it under the next unused ID so it never lands on an earlier
+  // decision's ID.
+  const unfinished = unfinishedReviewFinding(fallbackFinding);
+  contexts = contexts.map((context) => {
+    if (!context.incompleteReview) return context;
+    const finding: ReviewFinding = {
+      artifact: context.artifact,
+      ...(context.unit ? { unit: context.unit } : {}),
+      id: nextFindingId(context.findings),
+      severity: "Major",
+      location: `${context.artifact} > review completion`,
+      finding: unfinished,
+      requiredAction: "Request changes and rerun the reviewer.",
+      status: "Unresolved",
+      fingerprint: "",
+    };
+    return {
+      ...context,
+      findings: [...context.findings, withFingerprint(finding)],
+    };
+  });
   if (contexts.length === 0 && fallbackFinding) {
     const entry = reviewArtifactEntries(projectDir, stage, unit)?.[0];
     const artifact = entry
@@ -2113,7 +2127,7 @@ export function renderReviewBrief(
       id: "R-01",
       severity: "Major",
       location: `${artifact} > review completion`,
-      finding: fallbackFinding,
+      finding: unfinished,
       requiredAction: "Request changes and rerun the reviewer.",
       status: "Unresolved",
       fingerprint: "",
@@ -2148,9 +2162,11 @@ export function renderReviewBrief(
           : "No blocking concerns were found.";
   // `stale` also covers a conductor edit that self-invalidated the receipt, so naming
   // only upstream change misleads; the accurate cause is appended below either way.
+  // A review that did not finish is neither a completed review nor a re-check.
+  const unfinishedReview = contexts.some((context) => context.incompleteReview);
   const why = {
-    first: "First review completed.",
-    revision: "Revision re-checked.",
+    first: unfinishedReview ? "First review did not finish." : "First review completed.",
+    revision: unfinishedReview ? "Revision re-check did not finish." : "Revision re-checked.",
     stale: "Re-check required: the previous review receipt is no longer valid.",
   }[reason];
 

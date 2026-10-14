@@ -1282,7 +1282,10 @@ with the aidlc-devsecops-agent providing security testing expertise.
   tests in CI before merge." line, or a memory note's "CI execution before
   merge") is a target only when the plan runs CI Pipeline (`ci-pipeline` listed
   as `EXECUTE` and not `[S]` in `aidlc-state.md`); otherwise it is recorded
-  `N/A` with that reason and is never a failure
+  `N/A` with that reason and is never a failure. While CI Pipeline is still
+  ahead (`[ ]`), the target is CI Pipeline's to meet: recorded `N/A` with Owning
+  Stage `ci-pipeline` and the reason that CI Pipeline, later in the plan, sets up
+  CI to run these tests before merge, never a failure
 
 ### Steps
 
@@ -1326,8 +1329,8 @@ with the aidlc-devsecops-agent providing security testing expertise.
      Evidence, Owning Stage, and Verdict
    - Applicable targets begin `Pending`; `N/A` is valid only when the
      source-complete inventory found no applicable measurable target, or for a
-     target the plan makes inapplicable (the CI obligation of a plan that runs
-     no CI Pipeline)
+     target the plan makes inapplicable here (the CI obligation of a plan that
+     runs no CI Pipeline or has it still ahead)
    - Readiness assessment (build-ready, test-ready, deployment-ready)
    - Known limitations or outstanding items
 

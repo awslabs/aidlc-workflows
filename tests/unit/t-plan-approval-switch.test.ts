@@ -63,6 +63,9 @@ const CLEAR = {
   AIDLC_SESSION_OVERRIDE: SESSION,
   AIDLC_UNATTENDED: "0",
 };
+// The agent's setter after "skip plan approval for this work": it names that
+// reply as the one that asked, so the setting is recorded as the person's.
+const SKIP_ASKED = ["--plan-approval", "off", "--person-words", "skip plan approval for this work"];
 
 interface Emitted {
   kind: string;
@@ -510,7 +513,7 @@ describe("only the person turns plan approval off", () => {
     // Their words are recorded; the agent reads them and runs the setter.
     expect(reply(proj, "skip plan approval for this work")).not.toContain("Plan Approval changed");
     expect(planApprovalLine(proj)).toBe("on (set by you)");
-    const lowered = setterOff(proj);
+    const lowered = setterOff(proj, SKIP_ASKED);
     expect(lowered.status, lowered.stderr).toBe(0);
     expect(planApprovalLine(proj)).toBe("off (set by you)");
     expect(auditText(proj)).toContain("**Event**: CEREMONY_SET");
@@ -660,7 +663,7 @@ describe("asked before the piece of work exists", () => {
     const proj = emptyProject();
     const asked = requestOf(proj, "build the export");
     reply(proj, "skip plan approval for this work");
-    const kept = setterOff(proj);
+    const kept = setterOff(proj, SKIP_ASKED);
     expect(kept.status, kept.stderr).toBe(0);
     expect(kept.stdout).toContain("Plan approval (it shows you the plan before any code is written) will be off for the piece of work you start now (set by you)");
     expect(planApprovalCreationGranted(proj, SESSION, asked.id)).toBe(true);
@@ -679,7 +682,7 @@ describe("asked before the piece of work exists", () => {
   test("said before the work is described, it answers the next request this chat makes", () => {
     const proj = emptyProject();
     reply(proj, "skip plan approval for this work");
-    expect(setterOff(proj).status).toBe(0);
+    expect(setterOff(proj, SKIP_ASKED).status).toBe(0);
     const asked = requestOf(proj, "build the export");
     expect(asked.message).toContain("; no plan approval; lead agent only)");
     const made = utility(proj, ["intent-create", "--request", asked.id]);
@@ -708,7 +711,7 @@ describe("asked before the piece of work exists", () => {
       askedMinutesAgo(proj, older.id, 5);
       const composition = composeOf(proj, compose);
       reply(proj, "skip plan approval for this work");
-      const kept = setterOff(proj);
+      const kept = setterOff(proj, SKIP_ASKED);
       expect(kept.status, kept.stderr).toBe(0);
       expect(kept.stdout).toContain("Plan approval (it shows you the plan before any code is written) will be off for the piece of work you start now (set by you)");
       expect(planApprovalCreationGranted(proj, SESSION, older.id)).toBe(false);
@@ -727,12 +730,12 @@ describe("asked before the piece of work exists", () => {
       // Said at the gate, or just before the composition was asked for.
       if (before) {
         reply(proj, "skip plan approval for this work");
-        expect(setterOff(proj).status).toBe(0);
+        expect(setterOff(proj, SKIP_ASKED).status).toBe(0);
       }
       composeOf(proj, ["compose", "--report", "sonar.json"]);
       if (!before) {
         reply(proj, "skip plan approval for this work");
-        expect(setterOff(proj).status).toBe(0);
+        expect(setterOff(proj, SKIP_ASKED).status).toBe(0);
       }
       // The person rejects that plan and describes other work instead.
       const other = requestOf(proj, "add a settings page");
@@ -746,7 +749,7 @@ describe("asked before the piece of work exists", () => {
   test("said just before a report-only compose, it answers the work that compose creates", () => {
     const proj = emptyProject();
     reply(proj, "skip plan approval for this work");
-    expect(setterOff(proj).status).toBe(0);
+    expect(setterOff(proj, SKIP_ASKED).status).toBe(0);
     const composition = composeOf(proj, ["compose", "--report", "sonar.json"]);
     const asked = approveComposed(proj, composition, "fix the null checks the scan found");
     expect(asked.message).toContain("; no plan approval; lead agent only)");
@@ -780,7 +783,7 @@ describe("asked before the piece of work exists", () => {
     const proj = emptyProject();
     const composition = composeOf(proj, ["compose", "--report", "sonar.json"]);
     reply(proj, "skip plan approval for this work");
-    expect(setterOff(proj).status).toBe(0);
+    expect(setterOff(proj, SKIP_ASKED).status).toBe(0);
     requestOf(proj, "add a settings page");
     const late = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "feature", "--request", composition, "--", "fix the scan findings"], {
       env: { ...process.env, ...CLEAR },
@@ -821,7 +824,7 @@ describe("asked before the piece of work exists", () => {
       const composition = /--request ([0-9a-f]{8})/.exec(String((dispatch.directive as { message?: unknown } | null)?.message))?.[1];
       if (composition === undefined) throw new Error(`no request in ${dispatch.out}`);
       reply(proj, "skip plan approval for this work");
-      const kept = setterOff(proj);
+      const kept = setterOff(proj, SKIP_ASKED);
       expect(kept.status, kept.stderr).toBe(0);
       expect(kept.stdout).toContain("Plan approval (it shows you the plan before any code is written) will be off for the piece of work you start now (set by you)");
       const approval = runOrchestrateNext(ORCHESTRATE, proj, [
@@ -938,7 +941,7 @@ describe("asked before the piece of work exists", () => {
     const proj = emptyProject();
     const first = requestOf(proj, "build the export");
     reply(proj, "skip plan approval for this work");
-    expect(setterOff(proj).status).toBe(0);
+    expect(setterOff(proj, SKIP_ASKED).status).toBe(0);
     // The person rejects that plan and describes other work instead.
     const other = requestOf(proj, "add a settings page");
     const made = utility(proj, ["intent-create", "--request", other.id]);
@@ -950,7 +953,7 @@ describe("asked before the piece of work exists", () => {
   test("a creation that names no request never takes it", () => {
     const proj = emptyProject();
     reply(proj, "skip plan approval for this work");
-    expect(setterOff(proj).status).toBe(0);
+    expect(setterOff(proj, SKIP_ASKED).status).toBe(0);
     const made = utility(proj, ["intent-create", "--scope", "feature"]);
     expect(made.status, made.stderr).toBe(0);
     expect(createdPlanApproval(proj)).toBe("on (from scope feature)");
@@ -960,7 +963,7 @@ describe("asked before the piece of work exists", () => {
     const proj = emptyProject();
     const asked = requestOf(proj, "build the export");
     reply(proj, "skip plan approval for this work");
-    expect(setterOff(proj).status).toBe(0);
+    expect(setterOff(proj, SKIP_ASKED).status).toBe(0);
     expect(planApprovalCreationGranted(proj, SESSION, asked.id)).toBe(true);
     reply(proj, "/aidlc config set plan-approval on");
     expect(setterOff(proj, ["--plan-approval", "on"]).status).toBe(0);
@@ -1015,7 +1018,7 @@ describe("asked before the piece of work exists", () => {
     // as it does for every check (t-agent-runs-the-check-switch), and relays the
     // refusal the setter reports as one JSON line.
     reply(proj, "skip plan approval for this work");
-    const locked = setterOff(proj);
+    const locked = setterOff(proj, SKIP_ASKED);
     expect(locked.status).not.toBe(0);
     expect(refusalText(locked.stderr)).toContain(
       `Your team set Guard Policy to strict in ${memory}, so plan approval stays on for everyone on this repo`,
