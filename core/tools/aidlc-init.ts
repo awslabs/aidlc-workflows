@@ -2267,8 +2267,8 @@ function diagnosticWizard(
     ? issues.map((issue) => codexHookTrustStep(issue.id)).find((step) => step !== null)
     : undefined;
   if (codexStep) writeMenuRow("  ", `${CODEX_HOOK_TRUST_UNMET}: ${codexStep}.`);
-  // Kiro settings AI-DLC cannot read are the person's to correct, in the file
-  // or in Kiro; the review question below does not clear them.
+  // A Kiro settings file with an error is the person's to fix; the review
+  // question below does not clear it.
   const kiroUnreadable = issues.find((issue) => issue.id === KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID);
   if (kiroUnreadable) writeMenuRow("  ", `${kiroUnreadable.message}: ${kiroUnreadable.remediation}.`);
   const answer = promptYesDefault(

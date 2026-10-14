@@ -5,7 +5,8 @@
 // settings only (its scope is "application"), so the switch covers every
 // project on the computer: AI-DLC turns it off only when the person says yes,
 // and keeps their answer once per machine so no project asks again.
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { insertJsoncSetting, jsoncRootMembers, jsoncSettingValue, replaceJsoncSetting } from "./aidlc-distribution.ts";
@@ -22,7 +23,7 @@ export const KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID = "kiro-workflows-unreadable";
 export type KiroWorkflowsAnswer = "off" | "on" | "asked";
 const ANSWERS: readonly KiroWorkflowsAnswer[] = ["off", "on", "asked"];
 export const KIRO_WORKFLOWS_ANSWER_FILE = "kiro-ide-workflows";
-/** Kept while a chat has told the person their settings file has an error. */
+/** The settings file error a chat last told the person about. */
 const KIRO_SETTINGS_ERROR_TOLD_FILE = "kiro-ide-settings-error-told";
 
 export type KiroIdeWorkflows = {
@@ -189,41 +190,45 @@ export function kiroWorkflowsUnreadableMessage(): string {
 }
 
 export function kiroWorkflowsUnreadableFix(settingsPath: string): string {
-  return `fix the error in ${settingsPath}, so AI-DLC can tell whether Kiro's Workflows feature is on`;
+  return `fix the error in ${settingsPath}`;
 }
 
-// The chat line for that file, once until it reads again: a later error is
-// told again. null while the file reads.
+// The chat line for that file, once for each error: the marker holds the file
+// and its text, so a different error, or one in another Kiro's file, is told
+// again. null while the file reads.
 function kiroSettingsErrorNotice(env: NodeJS.ProcessEnv): string | null {
   const state = readKiroIdeWorkflows(env);
-  if (!state.settingsPath) return null;
-  const told = join(installRoot(), KIRO_SETTINGS_ERROR_TOLD_FILE);
-  if (state.readable) {
-    try {
-      rmSync(told, { force: true });
-    } catch {
-      // A later error is not told; trust, setup and doctor still name it.
-    }
-    return null;
+  if (state.readable) return null;
+  let error: string;
+  try {
+    error = createHash("sha256").update(`${state.settingsPath}\n`).update(readFileSync(state.settingsPath)).digest("hex");
+  } catch {
+    return "";
   }
-  if (existsSync(told)) return "";
+  const told = join(installRoot(), KIRO_SETTINGS_ERROR_TOLD_FILE);
+  try {
+    if (readFileSync(told, "utf-8").trim() === error) return "";
+  } catch {
+    // Not told yet.
+  }
   try {
     mkdirSync(dirname(told), { recursive: true });
-    writeFileAtomic(told, "told\n");
+    writeFileAtomic(told, `${error}\n`);
   } catch {
     // Not told rather than told in every chat.
     return "";
   }
   return "TELL ONCE: after you answer the person's message, tell them this in their language: " +
     `"Kiro's settings file (${state.settingsPath}) has an error, so AI-DLC cannot tell whether Kiro's Workflows ` +
-    "feature is on. While it is on, AI-DLC's reviews and helpers do not run in your chats. Fix the error in that " +
-    "file and AI-DLC can tell again.\" Do not say it again.";
+    "feature is on. While Kiro's Workflows feature is on, AI-DLC's reviews and helpers do not run in your chats. " +
+    "Fix the error in that file and AI-DLC can tell again.\" Do not say it again.";
 }
 
 /**
  * The one chat line a Kiro IDE chat gives the agent while Workflows is on and the
  * person was never asked on this machine, or "". Asking counts as their answer:
- * a "no" is simply not acting, and no chat asks again.
+ * a "no" is simply not acting, and no chat asks again. While the settings file
+ * has an error, the line tells them that instead, whatever they answered.
  */
 export function kiroIdeWorkflowsAsk(invoke: string, env: NodeJS.ProcessEnv = process.env): string {
   if (!insideKiroIde(env)) return "";

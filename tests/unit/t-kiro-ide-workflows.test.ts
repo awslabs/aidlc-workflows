@@ -272,22 +272,33 @@ describe("the chat asks once", () => {
     });
   });
 
-  test("a settings file with an error is told once, whatever was answered, and told again after it read fine", () => {
+  test("a settings file with an error is told once for each error, whatever was answered", () => {
     const m = machine(MISSING_COMMA);
     withEnv(inKiro(m), () => {
       recordKiroWorkflowsAnswer("on");
       const line = kiroIdeWorkflowsAsk("aidlc", process.env);
       expect(line).toStartWith("TELL ONCE:");
       expect(line).toContain(`Kiro's settings file (${m.settingsPath}) has an error, so AI-DLC cannot tell whether Kiro's Workflows feature is on.`);
+      expect(line).toContain("While Kiro's Workflows feature is on, AI-DLC's reviews and helpers do not run in your chats.");
       expect(line).toContain("Fix the error in that file");
       expect(line).not.toContain("--kiro-workflows");
       expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toBe("");
       expect(readKiroWorkflowsAnswer()).toBe("on");
-      // Fixed, then broken again: told again.
+      // A file fixed, checked, and broken again in another way is told again.
       writeFileSync(m.settingsPath, `{ "${KEY}": true }\n`);
-      expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toBe("");
-      writeFileSync(m.settingsPath, MISSING_COMMA);
+      expect(readKiroIdeWorkflows(m.env).readable).toBe(true);
+      writeFileSync(m.settingsPath, `{ "${KEY}": true,, }\n`);
       expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toStartWith("TELL ONCE:");
+    });
+  });
+
+  test("never asked: the error is told first, and the question still comes once the file is fixed", () => {
+    const m = machine(MISSING_COMMA);
+    withEnv(inKiro(m), () => {
+      expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toStartWith("TELL ONCE:");
+      expect(readKiroWorkflowsAnswer()).toBeNull();
+      writeFileSync(m.settingsPath, ON_WITH_COMMENTS);
+      expect(kiroIdeWorkflowsAsk("aidlc", process.env)).toContain("Do you want me to turn Workflows off?");
     });
   });
 
@@ -324,7 +335,7 @@ describe("config trust and doctor", () => {
   test("a settings file AI-DLC cannot read is named as unknown, never as off, with the person's own step", () => {
     const m = machine(MISSING_COMMA);
     const unknown = "Kiro Workflows: Kiro's settings file has an error, so AI-DLC cannot tell whether Workflows is on";
-    const step = `fix the error in ${m.settingsPath}, so AI-DLC can tell whether Kiro's Workflows feature is on`;
+    const step = `fix the error in ${m.settingsPath}`;
     const setup = installKiroIde(m.env);
     expect(readFileSync(m.settingsPath, "utf-8")).toBe(MISSING_COMMA);
     expect(setup.out).toContain(unknown);
