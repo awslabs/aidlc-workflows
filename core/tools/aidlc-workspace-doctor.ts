@@ -97,16 +97,22 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
         // release it is on, which may predate the line.
         ...(ignored
           ? []
-          : [`add the line \`${REQUEST_TEXT_DIR}/\` to .gitignore, and check no later rule of yours un-ignores it`]),
+          : [
+            `add the line \`${REQUEST_TEXT_DIR}/\` to the project folder's .gitignore, ` +
+            "and check no later rule of yours un-ignores it",
+          ]),
         ...(tracked.length > 0
           ? [
             `in the project folder, take the tracked ones out of git, keeping the files: ` +
             `\`git rm --cached -r -f -- ${REQUEST_TEXT_DIR}/\``,
           ]
           : []),
-        // The removal, and the ignore rule, reach teammates' clones only once pushed.
+        // The removal, and the ignore rule, reach teammates' clones only once
+        // pushed; a refresh may have left the rule in .gitignore uncommitted.
         ...(tracked.length + removed > 0
-          ? [ignored ? "commit and push the removal" : "commit and push the removal and the .gitignore change"]
+          ? [ignored
+            ? "commit and push the removal, with .gitignore if its change is not committed yet"
+            : "commit and push the removal and the .gitignore change"]
           : ["commit and push the .gitignore change"]),
       ];
       // `git add aidlc/` would take a request in while git tracks one, shows
@@ -168,8 +174,9 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
           label:
             `Workspace records: ${dirty.length} uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; ` +
             (requestBlocksCommit
-              ? "commit & push them so teammates get them once the request folder below is out of git)"
+              ? "commit & push them so teammates get them once the request folder steps below are done)"
               : "commit & push so teammates get them: `git add aidlc/ && git commit && git push`)"),
+          ...(requestBlocksCommit ? { fix: "do the request folder steps below first; then this row names the commit" } : {}),
         });
       }
     }
