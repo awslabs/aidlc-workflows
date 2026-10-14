@@ -2,7 +2,7 @@
 
 AI-DLC is a structured, gated methodology for AI-driven software development.
 This repository runs it natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI,
-Cursor, opencode, and GitHub Copilot.
+Cursor, opencode, GitHub Copilot, and Google Antigravity.
 
 ## Quick Start
 
@@ -39,7 +39,7 @@ aidlc config --harness claude
 aidlc doctor
 ```
 
-Replace `claude` with `kiro`, `kiro-ide`, `codex`, `cursor`, `opencode`, or
+Replace `claude` with `kiro`, `kiro-ide`, `codex`, `cursor`, `opencode`, `antigravity`, or
 `copilot`. A bare `aidlc config` starts the interactive setup.
 
 ### 3. Start
@@ -64,6 +64,7 @@ provider setup, trust prompts, project refreshes, and the first workflow.
 | Cursor | [AI-DLC on Cursor](guide/harnesses/cursor.md) |
 | opencode | [AI-DLC on opencode](guide/harnesses/opencode.md) |
 | GitHub Copilot | [AI-DLC on GitHub Copilot](guide/harnesses/copilot.md) |
+| Google Antigravity | [AI-DLC on Google Antigravity](guide/harnesses/antigravity.md) |
 
 ## Choose Your Guide
 

@@ -38,12 +38,16 @@ function projectFromPayload(): string | null {
 
   let roots: string[] = [];
   try {
-    const parsed = JSON.parse(rawInput) as { workspace_roots?: unknown };
-    if (Array.isArray(parsed.workspace_roots)) {
-      roots = parsed.workspace_roots.filter(
-        (root): root is string => typeof root === "string" && root.length > 0,
-      );
-    }
+    // Cursor names the roots workspace_roots; Antigravity workspacePaths.
+    const parsed = JSON.parse(rawInput) as { workspace_roots?: unknown; workspacePaths?: unknown };
+    const named = Array.isArray(parsed.workspace_roots)
+      ? parsed.workspace_roots
+      : Array.isArray(parsed.workspacePaths)
+        ? parsed.workspacePaths
+        : [];
+    roots = named.filter(
+      (root): root is string => typeof root === "string" && root.length > 0,
+    );
   } catch {
     // Fall through to cwd for manual/source-tree invocations.
   }

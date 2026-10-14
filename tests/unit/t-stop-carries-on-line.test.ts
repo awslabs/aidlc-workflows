@@ -156,7 +156,7 @@ describe("t-stop-carries-on-line: the agent's steps for the one-line Stop note",
     const paths = readFileSync(join(REPO_ROOT, "core/tools/aidlc-runtime-paths.ts"), "utf-8");
     const list = /export function hidesStopNote\(harnessName: string\): boolean \{\n {2}return ([^\n]+);\n\}/.exec(paths);
     if (list === null) throw new Error("aidlc-runtime-paths.ts has no hidesStopNote");
-    expect([...list[1].matchAll(/"([a-z-]+)"/g)].map((m) => m[1]).sort()).toEqual(["kiro", "kiro-ide", "opencode"]);
+    expect([...list[1].matchAll(/"([a-z-]+)"/g)].map((m) => m[1]).sort()).toEqual(["antigravity", "kiro", "kiro-ide", "opencode"]);
     const stop = readFileSync(join(REPO_ROOT, "core/hooks/aidlc-continue-workflow.ts"), "utf-8");
     expect(stop).toContain("hidesStopNote(runtimeHarnessName(projectDir))");
     expect(stop).toContain("on its own line; ");
