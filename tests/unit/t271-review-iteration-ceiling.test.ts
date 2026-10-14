@@ -3889,6 +3889,25 @@ describe("a pass past the cap runs only when the person asked for it", () => {
     }
   });
 
+  // The agent sent the person's request without the flag and with a pass that
+  // is not the next one: the one refusal names both, so following it lands
+  // the review (a second refusal would end that request on every harness).
+  test("a request missing the flag and naming the wrong pass is answered in one step that names both", () => {
+    const proj = reviewedOnce();
+    try {
+      typed(proj, "Please have the reviewer look at the requirements again");
+      const own = runReview(proj, pass(3));
+      expect(own.status).not.toBe(0);
+      const step = /run the same command again with (--person-asked(?: --iteration (\d+))?)\./.exec(own.stderr);
+      expect(step?.[1], own.stderr).toBe("--person-asked --iteration 2");
+      const followed = runReview(proj, [...pass(Number(step?.[2] ?? 3)), "--person-asked"]);
+      expect(followed.status, followed.stderr).toBe(0);
+      expect(auditBlockField(auditBlocks(proj, "REVIEW_REQUESTED").at(-1)!, "Person Asked")).toBe("true");
+    } finally {
+      cleanupTestProject(proj);
+    }
+  });
+
   test("--person-asked with nothing said since the review: the refusal is today's", () => {
     const proj = reviewedOnce();
     try {

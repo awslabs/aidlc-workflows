@@ -251,9 +251,13 @@ describe("t-approval-offers-a-check", () => {
     writeFileSync(join(p, "src", "alpha.ts"), "export const alpha = 3; // another approach\n");
     expect(toTheQuestion(p, false).asked.check_offer).toBe(OFFER);
     humanTurn(p, "yes, check it again");
-    const unflagged = tool(p, "log", reviewArgs("code-generation", "alpha", 4));
+    // Sent without the flag and at a pass that is not the next one: one step
+    // names both (a spent recovery refuses it here, not the pass count).
+    const unflagged = tool(p, "log", reviewArgs("code-generation", "alpha", 5));
     expect(unflagged.status).not.toBe(0);
-    expect(unflagged.out).toContain("If the person asked for this review, run the same command again with --person-asked.");
+    expect(unflagged.out).toContain(
+      "If the person asked for this review, run the same command again with --person-asked --iteration 4.",
+    );
     expect(unflagged.out).not.toContain("guard-recovery");
     review(p, "code-generation", 4, undefined, "alpha", true);
     const asked = readAuditShardEvents(p).filter((row) => row.event === "REVIEW_REQUESTED").at(-1)!;

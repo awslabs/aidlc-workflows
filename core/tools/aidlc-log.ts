@@ -2815,21 +2815,22 @@ function personSpokeSinceReviewRequest(
 // A refusal of a review past the cap when the person spoke since it was last
 // requested and the conductor did not say they asked for it: their words decide
 // which way it goes on, so the flag comes first and the usual way on only if
-// they did not ask.
-function unlessPersonAsked(lead: string, rest: string, personMayHaveAsked: boolean): string {
-  if (!personMayHaveAsked) return lead + rest;
-  const asked = `${lead}If the person asked for this review, run the same command again with --person-asked.`;
+// they did not ask. `retryWith` is everything that retry needs (the flag, and
+// the next pass when the request named another), so one refusal says it all.
+function unlessPersonAsked(lead: string, rest: string, retryWith: string | null): string {
+  if (retryWith === null) return lead + rest;
+  const asked = `${lead}If the person asked for this review, run the same command again with ${retryWith}.`;
   return rest === "" ? asked : `${asked} Otherwise ${rest.charAt(0).toLowerCase()}${rest.slice(1)}`;
 }
 
-function reviewBudgetMessage(stage: string, ordinal: number, budget: number, personMayHaveAsked = false): string {
+function reviewBudgetMessage(stage: string, ordinal: number, budget: number, retryWith: string | null = null): string {
   return unlessPersonAsked(
     `Cannot request review pass ${ordinal} for "${stage}" because this stage allows ` +
       `${budget} review pass${budget === 1 ? "" : "es"}. `,
     budget === 1
       ? "Do not ask the reviewer again; include the findings in the approval summary for the human."
       : "Present the unresolved findings at the approval gate for the human instead of starting another review.",
-    personMayHaveAsked,
+    retryWith,
   );
 }
 
@@ -2842,7 +2843,7 @@ export function reviewRecoverySpentMessage(
     batch: string | null;
   },
   requestChangesResetValid = true,
-  personMayHaveAsked = false,
+  retryWith: string | null = null,
 ): string {
   const prefix =
     `Cannot start another review for "${stage}": the one recovery review was ` +
@@ -2864,7 +2865,7 @@ export function reviewRecoverySpentMessage(
       `${batch} with the original base/repo arguments. The fresh Bolt attempt ` +
       "restores one review allowance without claiming convergence. Do not " +
       "record a Request Changes decision on the human's behalf.",
-      personMayHaveAsked,
+      retryWith,
     );
   }
   return unlessPersonAsked(
@@ -2874,7 +2875,7 @@ export function reviewRecoverySpentMessage(
         ? " Only a human Request Changes decision resets the review attempt; do not " +
           "record that rejection on the human's behalf."
         : ""),
-    personMayHaveAsked,
+    retryWith,
   );
 }
 
@@ -2911,7 +2912,7 @@ function reviewRecoveryAlreadyRequestedMessage(
   iteration: number,
   guidance: string,
   requestChangesResetValid: boolean,
-  personMayHaveAsked = false,
+  retryWith: string | null = null,
 ): string {
   return unlessPersonAsked(
     `Cannot request another recovery review for "${stage}" because one already exists ` +
@@ -2922,7 +2923,7 @@ function reviewRecoveryAlreadyRequestedMessage(
         ? " Only a human Request Changes decision resets the review attempt; do not record " +
           "that rejection on the human's behalf."
         : ""),
-    personMayHaveAsked,
+    retryWith,
   );
 }
 
@@ -3470,6 +3471,8 @@ function handleReview(args: string[]): void {
           return false;
         };
         const personMayHaveAsked = (): boolean => !saysPersonAsked && personSpoke();
+        const personAskedRetry = (): string | null =>
+          !personMayHaveAsked() ? null : iteration === expected ? "--person-asked" : `--person-asked --iteration ${expected}`;
         const refuseAttemptGuard = (
           code: string,
           invariant: string,
@@ -3790,7 +3793,7 @@ function handleReview(args: string[]): void {
                 flags.stage,
                 teamGate,
               ),
-              personMayHaveAsked(),
+              personAskedRetry(),
             );
           refuseBound(
             "REVIEW_RECOVERY_SPENT",
@@ -3814,7 +3817,7 @@ function handleReview(args: string[]): void {
                 flags.stage,
                 teamGate,
               ),
-              personMayHaveAsked(),
+              personAskedRetry(),
             );
           refuseBound(
             "REVIEW_RECOVERY_ALREADY_REQUESTED",
@@ -3856,7 +3859,7 @@ function handleReview(args: string[]): void {
           refuseBound(
             "REVIEW_BUDGET_EXHAUSTED",
             "Review requests do not exceed the configured attempt budget.",
-            reviewBudgetMessage(flags.stage, pass, budget, personMayHaveAsked()),
+            reviewBudgetMessage(flags.stage, pass, budget, personAskedRetry()),
           );
         }
         if (iteration !== expected) {
