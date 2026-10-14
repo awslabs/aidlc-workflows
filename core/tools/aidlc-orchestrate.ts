@@ -121,7 +121,7 @@ import {
   saveRestartRequest,
   takeRestartRequest,
 } from "./aidlc-question-store.ts";
-import { latestMessage } from "./aidlc-message-store.ts";
+import { latestMessage, noReplySince } from "./aidlc-message-store.ts";
 import { aidlcEntryWords } from "./aidlc-reply-reader.ts";
 import {
   type AskDirective,
@@ -294,6 +294,7 @@ import {
   humanPresenceGuardDisabled,
   isNonAnswer,
   commandAtPersonsTerminal,
+  unattendedHumanPresenceHint,
   personSpokeSinceGate,
   planApprovalAskIsOpen,
   planApprovalRuntimeFile,
@@ -8629,6 +8630,22 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // plan, so the person's yes runs the same prebuilt command as ever.
     if (flags.propose !== undefined && flags.propose !== "" && found.origin === "front" && !found.proposedScope) {
       emit(freshWorkOfferDirective(flags, questionDir, flags.propose, found.id, found.newWork === true || flags.newIntent === true));
+      return;
+    }
+    // The plan is the person's to pick: an answer to the plan question that
+    // picks one (a plan, the tailored plan, or the question's own) needs a
+    // message of theirs after the question was asked, as a stage gate needs
+    // their reply after it was shown.
+    if (
+      found.origin === "front" && (flags.scope || flags.positionalScope || flags.compose) &&
+      !humanPresenceGuardDisabled() && !commandAtPersonsTerminal() &&
+      noReplySince(questionDir, engineSessionId ?? null, found.createdAt)
+    ) {
+      emit(printDirective(
+        "Nothing was started: the person has not answered the plan question yet, and the plan is theirs to pick. " +
+          "Show them the question as it was given and end your turn." +
+          unattendedHumanPresenceHint(questionDir),
+      ));
       return;
     }
   }

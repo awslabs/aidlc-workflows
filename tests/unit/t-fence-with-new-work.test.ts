@@ -232,6 +232,7 @@ describe("a fence switch typed with a request beside open work", () => {
     const offer = next(proj, answerArgs((propose as string).replace("<plan>", "bugfix")));
     const confirm = (offer.directive as { confirm_command?: string } | null)?.confirm_command;
     expect(confirm, offer.out).toContain("--guard.review-freeze off");
+    reply(proj, "1");
     const creating = next(proj, answerArgs(confirm));
     // The work the person asked for is created, not refused, with the check on.
     const made = createFromPrint(proj, creating);

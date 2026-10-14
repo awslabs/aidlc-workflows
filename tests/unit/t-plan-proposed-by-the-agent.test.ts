@@ -576,6 +576,8 @@ describe("t-plan-proposed-by-the-agent: creation retires the request's whole cha
     // Work exists but none is selected here: the reading print, the agent's plan, the plan question.
     const offer = follow(CLAUDE_TOOLS, proj, ["add", "a", "CSV", "export"], "feature", chat).last;
     expect(offer.ask_type, JSON.stringify(offer).slice(0, 300)).toBe("scope-confirm");
+    // The person goes ahead with the plan.
+    reply(proj, "1", OTHER_CHAT);
     createFromConfirm(proj, offer, chat);
     const record = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim();
     const state = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", record, "aidlc-state.md"), "utf-8");

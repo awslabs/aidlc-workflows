@@ -261,6 +261,8 @@ describe("a check typed off with a request, routed through a second question", (
     // that hop to the work it becomes.
     const offer = next(proj, answerArgs(ask?.new_intent_command));
     expect(offer.directive?.ask_type, offer.out).toBe("scope-confirm");
+    // The person goes ahead with the plan.
+    reply(proj, "1");
     const routed = next(proj, answerArgs((offer.directive as { confirm_command?: string }).confirm_command));
     expect(heard(proj, routed), routed.out).toContain(FOR_NEW_WORK);
     expect(heard(proj, routed), routed.out).not.toContain(STARTS_ON);
@@ -513,6 +515,7 @@ describe("a switch typed while the engine's question is open, before any work ex
     const route = (again.directive as { confirm_command?: string; scope_commands?: Array<{ scope: string; command: string }> });
     const command = route.confirm_command ??
       route.scope_commands?.find((row) => row.scope === "poc")?.command;
+    reply(proj, "1");
     const printed = next(proj, answerArgs(command));
     const made = createFromPrint(proj, printed);
     expect(made.status, made.stderr).toBe(0);
@@ -639,6 +642,7 @@ describe("a ceremony the person typed before any work exists", () => {
       scope_commands?: Array<{ scope: string; command: string }>;
     };
     const command = route.confirm_command ?? route.scope_commands?.find((row) => row.scope === "poc")?.command;
+    reply(proj, "1");
     const printed = next(proj, answerArgs(command));
     const made = createFromPrint(proj, printed);
     expect(made.status, made.stderr).toBe(0);

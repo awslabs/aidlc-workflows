@@ -216,6 +216,25 @@ export function latestMessage(
 }
 
 /**
+ * Whether the person has said nothing since `since` (a question's createdAt):
+ * messages are on record and none came after it. Before any work exists this is
+ * the form of a stage gate's reply-since-shown rule, as the record has no turn
+ * rows yet. It reads the chat `session` when that chat has a message on record,
+ * otherwise every chat's (a hook that kept another id for the same chat still
+ * finds the reply). A message keeps whole seconds and a question milliseconds,
+ * so a message in the question's own second counts as after it: a pick can come
+ * that fast, and the request the question was asked about came at least two of
+ * the agent's steps before it. Nothing on record at all is false: a tool that
+ * runs no prompt hook has nothing to tell by.
+ */
+export function noReplySince(projectDir: string, session: string | null, since: string): boolean {
+  const all = listMessages(projectDir);
+  const chat = all.filter((message) => message.session === session);
+  const from = Math.floor(Date.parse(since) / 1000) * 1000;
+  return all.length > 0 && !(chat.length > 0 ? chat : all).some((message) => Date.parse(message.at) >= from);
+}
+
+/**
  * Remove records older than a day, then the oldest beyond MESSAGE_MAX_RECORDS.
  * A file this process may not remove is left for the operating system's
  * permissions to decide.

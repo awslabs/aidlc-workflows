@@ -873,6 +873,8 @@ describe("asked before the piece of work exists", () => {
       );
       const confirm = String((offer.directive as { confirm_command?: string } | null)?.confirm_command);
       expect(confirm, offer.out).toContain(" next ");
+      // The person goes ahead with the plan.
+      reply(proj, "1");
       const routed = runOrchestrateNext(ORCHESTRATE, proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" "), {
         env: { ...process.env, ...CLEAR },
       });
@@ -908,6 +910,8 @@ describe("asked before the piece of work exists", () => {
     );
     const confirm = String((offer.directive as { confirm_command?: string } | null)?.confirm_command);
     expect(confirm, offer.out).toContain("--summary-confirmation off");
+    // The person goes ahead with the plan.
+    reply(proj, "1");
     const routed = runOrchestrateNext(ORCHESTRATE, proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" "), {
       env: { ...process.env, ...CLEAR },
     });
@@ -1124,6 +1128,8 @@ describe("Guard Policy typed before or with the new work", () => {
       )?.[1];
       expect(propose, step.out).toBeDefined();
       const offer = nextOf(proj, (propose as string).replace("<plan>", plan));
+      // The person goes ahead with the plan.
+      reply(proj, "1");
       step = nextOf(proj, (offer.directive as { confirm_command?: unknown } | null)?.confirm_command);
     }
     return step;
