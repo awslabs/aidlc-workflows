@@ -2226,8 +2226,12 @@ function withParkedReply(directive: Directive): Directive {
       words: cut ? words.slice(0, PARKED_REPLY_MAX_CHARS) : words,
       note: cut ? `${PARKED_REPLY_NOTE}${PARKED_REPLY_CUT_NOTE}` : PARKED_REPLY_NOTE,
     };
-    // A step that still cannot be sent alone goes without it; the record keeps the words.
-    if (Buffer.byteLength(JSON.stringify(directive), "utf-8") > directiveMaxBytes()) delete directive.parked_reply;
+    // Their words outrank the lead's persona text, which the step can list as a
+    // file to read instead. A step that still cannot be sent alone goes without
+    // them; the record keeps the words.
+    const tooBig = (): boolean => Buffer.byteLength(JSON.stringify(directive), "utf-8") > directiveMaxBytes();
+    if (tooBig()) listLeadPersona(directive);
+    if (tooBig()) delete directive.parked_reply;
   } catch (e) {
     recordHookDrop(projectDir, "parked-reply", errorMessage(e));
   }
