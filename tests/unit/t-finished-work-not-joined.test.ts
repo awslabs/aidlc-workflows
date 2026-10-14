@@ -59,7 +59,7 @@ function joined(): ReturnType<typeof enterHookWorkflow> {
 }
 
 function laterPrompt(): { status: number; stdout: string; stderr: string } {
-  const env = { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj };
+  const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj };
   delete env.AIDLC_SESSION_OVERRIDE;
   delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
   delete env.AIDLC_UNATTENDED;

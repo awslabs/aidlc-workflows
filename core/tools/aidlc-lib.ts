@@ -7516,7 +7516,12 @@ export function workflowParticipation(
 export function enterHookWorkflow(
   projectDir: string,
   payloadSessionId: unknown,
-): { selection: WorkflowSelection | null; participation: WorkflowParticipation; restore: () => void } {
+): {
+  selection: WorkflowSelection | null;
+  participation: WorkflowParticipation;
+  projectDir: string;
+  restore: () => void;
+} {
   const raw = typeof payloadSessionId === "string" ? validSessionId(payloadSessionId) : null;
   const chat = raw === null ? null : resolveChat(projectDir, raw, { bind: false });
   // Placed: this chat has a binding, or the id belongs to a chat an adapter named.
