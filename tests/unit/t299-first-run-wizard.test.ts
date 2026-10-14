@@ -684,14 +684,17 @@ describe("t299 first-run setup wizard", () => {
   // A live first run on Kiro CLI read "Runtime    one PATH fix needed - shown
   // at the end", and the end showed none. A harness started from a terminal
   // hands that terminal's PATH to AI-DLC's hooks, so aidlc found only there
-  // needs no fix at the end, and the line at the top says the same.
+  // needs no fix at the end; the line at the top promises none and says where
+  // to start the harness, as the status summary does.
   test("the Runtime line promises only the PATH fix the end shows", () => {
     const shellOnly = runWizard("\n", { aidlc: false, shellOnlyAidlc: true });
     expect(shellOnly.status, shellOnly.stdout + shellOnly.stderr).toBe(0);
     expect(shellOnly.stdout).toContain("Writing project files ... done");
     expect(shellOnly.stdout).not.toContain("Hooks run outside your interactive shell PATH");
     expect(shellOnly.stdout).not.toContain("shown at the end");
-    expect(shellOnly.stdout).toContain("    Runtime    ready\n");
+    expect(shellOnly.stdout).toContain(
+      "    Runtime    aidlc on this shell's PATH only: start Claude Code from a terminal\n",
+    );
     // aidlc on no PATH at all: the top and the end both name the fix.
     const missing = runWizard("\n", { aidlc: false, runtimeIssue: "probe" });
     expect(missing.status, missing.stdout + missing.stderr).toBe(0);

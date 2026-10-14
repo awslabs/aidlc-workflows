@@ -110,7 +110,7 @@ $ aidlc config
     Harness    Claude Code detected  (2.1.296 on your PATH)
     Project    git repo, no AI-DLC files yet
     AWS        credentials not found
-    Runtime    ready
+    Runtime    aidlc on this shell's PATH only: start Claude Code from a terminal
 
   Set up AI-DLC for Claude Code with recommended defaults?
 
@@ -138,9 +138,10 @@ Nothing is written before you answer. What it checked:
   Amazon Bedrock as the model provider.
 - **Runtime**: whether AI-DLC's hooks can find the `aidlc` command. Claude Code
   started from a terminal hands that terminal's PATH to the hooks, so `aidlc`
-  on your shell's PATH is enough and this says ready; a PATH fix it counts here
-  is shown at the end of setup. If you start Claude Code from a desktop icon
-  instead, `aidlc doctor` says what to add, in step 4.
+  on your shell's PATH is enough, and the line says to start it from a
+  terminal; a PATH fix it counts here is shown at the end of setup. If you
+  start Claude Code from a desktop icon instead, `aidlc doctor` says what to
+  add, in step 4.
 
 Press Enter for the recommended defaults. They record:
 

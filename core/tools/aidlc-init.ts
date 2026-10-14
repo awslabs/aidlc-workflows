@@ -2805,7 +2805,7 @@ function setupMapRows(
       detail: runtime.length > 0
         ? runtime[0].message
         : shellOnly.length > 0
-        ? `${shellOnly.join(" and ")} on this shell's PATH only: start ${projectionProductName(root, distribution)} from a terminal`
+        ? shellOnlyRuntimeDetail(shellOnly, projectionProductName(root, distribution))
         : "hook PATH ready",
       section: "runtime",
       needs: runtime.length > 0,
@@ -7595,6 +7595,8 @@ type FirstRunDetection = {
   }>;
   aws: ReturnType<typeof detectAwsCredentials>;
   runtimeIssues: ReturnType<typeof runtimeIssues>;
+  // With no fix needed, the runtimes this shell finds that the hook PATH does not.
+  shellOnlyRuntimes: string[];
   bedrockReachable?: boolean;
 };
 
@@ -7871,10 +7873,14 @@ function detectFirstRun(
         { includeHarnessCli: false },
       ))
     : [];
+  const shellOnly = first && runtime.length === 0
+    ? shellOnlyRuntimes(first.root, first.descriptor.harnessDir, modelHarness(first.stamp.distribution))
+    : [];
   return {
     harnesses,
     aws: injected?.aws ?? detectAwsCredentials(),
     runtimeIssues: injected?.runtimeIssues ?? runtime,
+    shellOnlyRuntimes: injected?.runtimeIssues !== undefined ? injected.shellOnlyRuntimes ?? [] : shellOnly,
     ...(injected?.bedrockReachable !== undefined
       ? { bedrockReachable: injected.bedrockReachable }
       : {}),
@@ -8097,6 +8103,12 @@ function firstRunNextCommands(distribution: string): [string, string] {
     return ["copilot                        open Copilot CLI in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
   return ["claude                         open Claude Code in this repo", '/aidlc "what you want built"  describe your first intent'];
+}
+
+// A runtime this shell finds that the hook PATH does not needs no fix when the
+// harness starts from a terminal; first-run setup and the status say so alike.
+function shellOnlyRuntimeDetail(names: readonly string[], product: string): string {
+  return `${names.join(" and ")} on this shell's PATH only: start ${product} from a terminal`;
 }
 
 function firstRunSettingsTargetLabel(target: SettingsTarget): string {
@@ -9092,7 +9104,9 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   writeMenuRow(
     "    Runtime    ",
     runtimeCount === 0
-      ? "ready"
+      ? detection.shellOnlyRuntimes.length > 0
+        ? shellOnlyRuntimeDetail(detection.shellOnlyRuntimes, candidate.descriptor.productName)
+        : "ready"
       : `${runtimeCount === 1 ? "one" : runtimeCount} PATH fix${
           runtimeCount === 1 ? "" : "es"
         } needed - shown at the end`,
