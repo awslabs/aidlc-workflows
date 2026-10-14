@@ -551,6 +551,95 @@ describe("a fresh start for the steps", () => {
   });
 });
 
+// A Unit whose whole approved plan is built and ticked owes its review, also
+// after a rejection reopened it: this attempt's plan approval and its ticks
+// are the evidence the files are this attempt's, so `next` names the review
+// instead of handing the stage body back to recheck finished files (#2487).
+describe("a built plan owes its review, also after a reopen", () => {
+  // The settled-Unit step reads Unit receipts, which Construction Checkpoints
+  // require; the run that found this had them on.
+  function unitMajorProject(): string {
+    const proj = project();
+    writeFileSync(seededStateFile(proj), readFileSync(seededStateFile(proj), "utf-8").replace(
+      "- **Skeleton Stance**: off\n",
+      "- **Skeleton Stance**: off\n- **Construction Checkpoints**: enabled\n" +
+        "- **Construction Iteration**: stage-major\n- **Construction Execution**: serial\n- **Unit Ownership**: solo\n",
+    ), "utf-8");
+    // A message through the person's hook first, as in a real chat: a stage
+    // event in a record no hook has written to stops `next` (hooks-off check).
+    reply(proj, "carry on");
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    return proj;
+  }
+  /** Build and tick every step, then write Step 5's handoff (with its source manifest unless told not to). */
+  function finishBuild(proj: string, manifest = true): void {
+    const steps = planSteps(readFileSync(planPath(proj), "utf-8")).length;
+    tick(proj, UNIT, ...Array.from({ length: steps }, (_, index) => index + 1));
+    const dir = codeGenerationRecordDir(proj, UNIT);
+    writeFileSync(join(dir, "code-summary.md"), "# Code Summary\n\nNine parts.\n", "utf-8");
+    writeFileSync(join(dir, "traceability.json"), `${JSON.stringify({ upstream_ids: [], coverage: [] })}\n`, "utf-8");
+    if (!manifest) return;
+    writeFileSync(join(dir, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: UNIT, version: 1, writes: [{ path: "src/" }],
+    })}\n`, "utf-8");
+  }
+  /** Request Changes at the completion gate, revise and re-approve the plan, and start its build. */
+  function reopenAndRebuild(proj: string): void {
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "code-generation", Unit: UNIT, "User Input": "Request Changes", Feedback: "log every part",
+    }, proj);
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "log every part" });
+    revisePlan(proj);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    approve(proj);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    dispatch(proj, brief(proj));
+  }
+  function revisePlan(proj: string): void {
+    writeFileSync(planPath(proj), readFileSync(planPath(proj), "utf-8")
+      .replace("- [ ] Step 9:", "- [ ] Step 10: log every part in `src/part10.ts`\n- [ ] Step 9:"), "utf-8");
+  }
+  const REVIEW_STEP = `Unit "${UNIT}"'s Code Generation work is written, but its review was never asked for`;
+
+  test("first attempt: next names the review step", () => {
+    const proj = unitMajorProject();
+    interrupted(proj);
+    finishBuild(proj);
+    const step = next(proj) as Emitted & { message?: string };
+    expect(step.kind).toBe("print");
+    expect(step.message ?? "").toContain(REVIEW_STEP);
+  });
+
+  test("reopened by Request Changes, rebuilt in full: next names the review step, not the stage again", () => {
+    const proj = unitMajorProject();
+    interrupted(proj, 1, 2, 3, 4);
+    reopenAndRebuild(proj);
+    finishBuild(proj);
+    const step = next(proj) as Emitted & { message?: string };
+    expect(step.narration ?? "").not.toContain(PICK_UP);
+    expect(step.kind).toBe("print");
+    expect(step.message ?? "").toContain(REVIEW_STEP);
+  });
+
+  test("reopened, a ticked step's file missing: the stage comes back to redo it", () => {
+    const proj = unitMajorProject();
+    interrupted(proj, 1, 2, 3, 4);
+    reopenAndRebuild(proj);
+    finishBuild(proj);
+    rmSync(join(proj, "src", "part9.ts"));
+    expect(next(proj).kind).toBe("run-stage");
+  });
+
+  test("reopened and rebuilt, but Step 5 wrote no source manifest yet: the stage comes back to finish it", () => {
+    const proj = unitMajorProject();
+    interrupted(proj, 1, 2, 3, 4);
+    reopenAndRebuild(proj);
+    finishBuild(proj, false);
+    expect(next(proj).kind).toBe("run-stage");
+  });
+});
+
 // The worker ticks the plan file as it builds, and a pick-up reads those ticks.
 // A worker told only to keep out of the record folder never ticked, so the
 // brief names the plan file and the one change the worker makes to it.

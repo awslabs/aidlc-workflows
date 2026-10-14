@@ -253,11 +253,15 @@ describe("t148 dist/kiro file structure", () => {
       expect(fm, agent).toContain("permissions:");
       expect(fm, agent).toContain("  rules:");
       expect(fm, agent).toContain(`        - "aidlc/spaces/**"`);
+      // A side-by-side worker's own unit records in its worktree.
+      expect(fm, agent).toContain(`        - ".aidlc/worktrees/*/aidlc/spaces/**"`);
       // Exactly the read-only version check; `bun test` and the rest still ask.
       expect(fm, agent).toContain(`        - "bun --version"`);
       expect(fm, agent).not.toContain(`        - "bun *"`);
       expect(fm, agent).not.toContain("disallowedTools:");
     }
+    // A delegate runs under the conductor's allow on Kiro's 3.0 engine and in Kiro IDE.
+    expect(frontmatter(join(ideAgents, "aidlc-aidlc.md"))).toContain(`        - ".aidlc/worktrees/*/aidlc/spaces/**"`);
   });
 
   test("the Kiro CLI composer may write only its grid proposal file", () => {

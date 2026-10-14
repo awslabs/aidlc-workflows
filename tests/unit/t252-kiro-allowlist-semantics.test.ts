@@ -392,9 +392,9 @@ function writeVerdict(agent: { allowedTools?: string[]; allowedPaths: string[] }
 }
 
 /** The glob subset the shipped paths use: `*` and `**` match any run of
- *  characters, `/` included, and `[!x]` is a negated class. Whether Kiro's `*`
- *  crosses `/` does not change a verdict here: the shipped `[!.]*` and
- *  `[!.]*` + `/**` pair allows the same paths either way. */
+ *  characters, `/` included, and `[!x]` is a negated class. Kiro 2.29.0's `*`
+ *  crosses `/` too (measured with a hook-free agent: `.aidlc/worktrees/*` +
+ *  `/[!.]*` + `/**` allowed `.aidlc/worktrees/<w>/.kiro/agents/x.json`). */
 function globRegExp(glob: string): RegExp {
   let out = "";
   for (let i = 0; i < glob.length; i++) {
@@ -445,6 +445,33 @@ const WRITE_ASK = [
   "../outside.txt",
   "web/../../outside.txt",
   "~/outside.txt",
+];
+
+// A side-by-side build gives each worker its own checkout at
+// `.aidlc/worktrees/bolt-<id8>_<slug>`, a top-level dot entry. The unit's own
+// records there are written like the same records in the project; the worker's
+// code there, the worktree's own dot entries and the rest of `.aidlc/` still
+// ask. Measured on 2.29.0: a broader worktree glob also let a worker write its
+// worktree's `.kiro/agents` and `.github/workflows`, so those stay pinned here.
+// Kiro resolves `..` before it matches, so a record path cannot step out of it.
+const WORKTREE = ".aidlc/worktrees/bolt-1a2b3c4d_u1";
+const WORKTREE_RECORD = `${WORKTREE}/aidlc/spaces/default/intents/fix/construction/u1/code-generation/code-generation-plan.md`;
+const WORKTREE_WRITE_ALLOW = [WORKTREE_RECORD, `/project/${WORKTREE_RECORD}`];
+const WORKTREE_WRITE_ASK = [
+  `${WORKTREE}/src/app.js`,
+  `${WORKTREE}/test/app.test.js`,
+  `${WORKTREE}/README.md`,
+  `${WORKTREE}/.kiro/agents/aidlc.json`,
+  `${WORKTREE}/.github/workflows/ci.yml`,
+  `${WORKTREE}/.gitignore`,
+  `${WORKTREE}/.git`,
+  ".aidlc/worktrees/notes.txt",
+  ".aidlc/other/notes.md",
+  `${WORKTREE}/../../../../outside.txt`,
+  `${WORKTREE}/aidlc/spaces/../../src/app.js`,
+  `${WORKTREE}/aidlc/spaces/../../.kiro/agents/aidlc.json`,
+  `${WORKTREE}/aidlc/spaces/../../../../../.kiro/agents/aidlc.json`,
+  "aidlc/spaces/../../.kiro/agents/aidlc.json",
 ];
 
 describe("t252 Kiro execute_bash allowlist semantics", () => {
@@ -596,6 +623,20 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
       const architect = writeSettings(harness, "aidlc-architect-agent.json");
       expect(writeVerdict(architect, "web/src/filter.ts")).toBe("ask");
       expect(writeVerdict(architect, "aidlc/spaces/default/intents/fix/plan.md")).toBe("allow");
+    });
+
+    test(`${harness}: a side-by-side worker writes its unit's records in its worktree, and nothing else there`, () => {
+      for (const agent of CODE_WRITERS) {
+        const settings = writeSettings(harness, agent);
+        for (const path of WORKTREE_WRITE_ALLOW) {
+          expect(writeVerdict(settings, path), `${harness}/${agent}: should allow writing ${path}`).toBe("allow");
+        }
+        for (const path of WORKTREE_WRITE_ASK) {
+          expect(writeVerdict(settings, path), `${harness}/${agent}: should ask before writing ${path}`).toBe("ask");
+        }
+      }
+      // The other personas keep their records in the project.
+      expect(writeVerdict(writeSettings(harness, "aidlc-architect-agent.json"), WORKTREE_RECORD)).toBe("ask");
     });
   }
 });
