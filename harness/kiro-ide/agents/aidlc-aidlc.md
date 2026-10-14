@@ -58,6 +58,7 @@ permissions:
       effect: allow
       match:
         - "aidlc/spaces/**"
+        - ".aidlc/worktrees/*/aidlc/spaces/**"
         - "{{HARNESS_DIR}}/sensors/**"
         - "aidlc/.aidlc-compose-pending"
         - "aidlc/.aidlc-request-text/**"

@@ -91,16 +91,15 @@ import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-// P4: init CREATES a per-intent record; state lives under
-// aidlc/spaces/<space>/intents/<slug>-<id8>/ and audit is SHARDED per clone
+// Intent creation CREATES a per-intent record; state lives under
+// aidlc/spaces/<space>/intents/<YYMMDD>-<slug>/ and audit is SHARDED per clone
 // under <record>/audit/. Read state through the resolved record dir and audit
-// through the shipped merge helper (default-resolves the active intent, falls
-// back to flat aidlc-docs for a not-yet-created project).
+// through the shipped merge helper (default-resolves the active intent).
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const SCOPE_GRID = join(AIDLC_SRC, "tools", "data", "scope-grid.json");
@@ -114,11 +113,10 @@ afterAll(() => {
 
 interface CliResult {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string;
   stdout: string;
 }
 
-/** Spawn `bun <tool.ts> <args...>`. */
 function run(tool: string, args: string[]): CliResult {
   const res = spawnSync(BUN, [tool, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" });
   const stdout = res.stdout ?? "";
@@ -130,10 +128,9 @@ function run(tool: string, args: string[]): CliResult {
 }
 
 /**
- * setup_construction_project (mvp) — historical shell-helper parity.
- * Fresh integration sandbox with the greenfield stub, then `aidlc-utility init
- * --force --scope mvp` so aidlc-docs/aidlc-state.md exists (the dispatch tools
- * + the v7-state assertion both probe it).
+ * Fresh integration sandbox with the greenfield stub, then `aidlc-utility
+ * intent-create --force --scope mvp` so the per-intent aidlc-state.md exists
+ * (the dispatch tools + the v8-state assertion both resolve it).
  */
 function setupConstructionProject(): string {
   const proj = setupIntegrationProject({ withGreenfieldStub: true });
@@ -152,7 +149,7 @@ function setupConstructionProject(): string {
   return proj;
 }
 
-// P4: resolve the created intent's record dir from the active-space + active-intent
+// Resolve the created intent's record dir from the active-space + active-intent
 // cursors (a record dir is the one holding aidlc-state.md), falling back to the
 // flat aidlc-docs/ layout for a not-yet-created project.
 function recordDirOf(p: string): string {
@@ -171,19 +168,17 @@ function recordDirOf(p: string): string {
   return join(p, "aidlc-docs");
 }
 
-/** Merged audit-shard text for the created intent (P4 shards audit per clone). */
+/** Merged audit-shard text for the created intent (audit is sharded per clone). */
 const auditText = (p: string): string => readAllAuditShards(p);
 const statePath = (p: string): string => join(recordDirOf(p), "aidlc-state.md");
 
-/** Count audit blocks whose line is exactly `**Event**: <ev>` in audit TEXT. */
 function auditEventCount(text: string, ev: string): number {
   return text.split("\n").filter((l) => l === `**Event**: ${ev}`).length;
 }
 
 /**
- * Value of <key> from the FIRST audit block whose `**Event**:` matches <ev>.
- * Block-scoped (resets at `## ` headings and `---`). Mirrors the awk-scoped
- * block grep the sibling .cli ports use. Returns "" when absent.
+ * FIRST value of <key> from an audit block whose `**Event**:` matches <ev>.
+ * Block-scoped (resets at `## ` headings and `---`). Returns "" when absent.
  */
 function auditField(text: string, ev: string, key: string): string {
   let matched = false;
@@ -209,7 +204,6 @@ function auditField(text: string, ev: string, key: string): string {
   return "";
 }
 
-/** Read the compiled scope-grid.json EXECUTE/SKIP mode for mvp.<stage>. */
 function gridMode(stage: string): string {
   const grid = JSON.parse(readFileSync(SCOPE_GRID, "utf-8")) as Record<
     string,
@@ -219,20 +213,14 @@ function gridMode(stage: string): string {
 }
 
 describe("t62 construction-worktrees mvp (migrated from t62-construction-worktrees-mvp.sh, plan 5)", () => {
-  // --- Test 1 (.sh test 1): scope-grid mvp code-generation = EXECUTE [none] ---
   test("1: scope-grid.json mvp code-generation = EXECUTE", () => {
-    // The same `require($MAPPING).mvp.stages[...]` observable the .sh read
-    // (t62.sh:28-34 + assert_scope_codegen_mode). mvp is skeleton-on, so it
-    // EXECUTEs code-generation.
     expect(gridMode("code-generation")).toBe("EXECUTE");
   });
 
-  // --- Test 3 (.sh test 3): mvp EXECUTEs practices-discovery [none] ---
   test("3: scope-grid.json mvp practices-discovery = EXECUTE", () => {
     expect(gridMode("practices-discovery")).toBe("EXECUTE");
   });
 
-  // --- Test 2 (.sh test 2): MERGE_DISPATCH_INVOKED emits cleanly for mvp [cli] ---
   test("2: dispatch-event MERGE_DISPATCH_INVOKED emits cleanly for scope=mvp", () => {
     const proj = setupConstructionProject();
     const r = run(BOLT, [
@@ -246,13 +234,12 @@ describe("t62 construction-worktrees mvp (migrated from t62-construction-worktre
       "--project-dir",
       proj,
     ]);
-    // STRONGER than the .sh (which discarded stdout + grepped file-wide):
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('"emitted":"MERGE_DISPATCH_INVOKED"');
     const f = auditText(proj);
     expect(auditEventCount(f, "MERGE_DISPATCH_INVOKED")).toBe(1);
-    // The .sh asserted `Bolt slug.*t-mvp-bolt-1` was present; we read the exact
-    // block-scoped field values, including the excerpt the helper threaded.
+    // Read the exact block-scoped field values, including the excerpt the helper
+    // threaded.
     expect(auditField(f, "MERGE_DISPATCH_INVOKED", "Bolt slug")).toBe(
       "t-mvp-bolt-1",
     );
@@ -261,7 +248,6 @@ describe("t62 construction-worktrees mvp (migrated from t62-construction-worktre
     );
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  // --- Test 4 (.sh test 4): MERGE_DISPATCH_FALLBACK observability path [cli] ---
   test("4: dispatch-event FALLBACK observability path works for mvp", () => {
     const proj = setupConstructionProject();
     const r = run(BOLT, [
@@ -277,7 +263,6 @@ describe("t62 construction-worktrees mvp (migrated from t62-construction-worktre
       "--project-dir",
       proj,
     ]);
-    // STRONGER than the .sh's bare file-wide presence grep:
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('"emitted":"MERGE_DISPATCH_FALLBACK"');
     const f = auditText(proj);
@@ -295,16 +280,14 @@ describe("t62 construction-worktrees mvp (migrated from t62-construction-worktre
     // deadline; retain every event, envelope and audit-field assertion.
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  // --- Test 5 (.sh test 5): v7 state has the v0.4.0 fields for mvp [cli] ---
   test("5: v7 state (init --scope mvp) carries Worktree Path + Bolt Refs", () => {
     const proj = setupConstructionProject();
     const state = readFileSync(statePath(proj), "utf-8");
     const lines = state.split("\n");
-    // The .sh grepped both `Worktree Path` and `Bolt Refs`. The v7 template
-    // (aidlc-utility.ts:2057-2058) emits them as empty list-shaped fields.
+    // The v8 template (aidlc-utility.ts handleIntentCreateStateBuild) emits them as
+    // empty list-shaped fields.
     expect(lines.some((l) => l.startsWith("- **Worktree Path**:"))).toBe(true);
     expect(lines.some((l) => l.startsWith("- **Bolt Refs**:"))).toBe(true);
-    // STRONGER: pin the v7 template + scope these fields ride on.
     expect(lines).toContain("- **State Version**: 8");
     expect(lines).toContain(`- **Scope**: ${SCOPE}`);
   });

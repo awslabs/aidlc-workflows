@@ -289,7 +289,7 @@ The four design stages (3.1-3.4) prune their artifacts to each unit's **kind** (
 
 ## Question Files
 
-Every stage that collects user input produces a co-located question file named `{stage-name}-questions.md`. Questions use lettered options (A-E) plus a mandatory `X. Other (please specify)` option, with `[Answer]:` tags for recording responses.
+Every stage that collects user input produces a co-located question file named `{stage-name}-questions.md`. Questions use lettered options (A-E) plus a mandatory `X. Other (please specify)` option, with `[Answer]:` tags for recording responses. In a file the agent creates, each ordinary question's heading names who would usually answer it (`## Q3. [Developer] ...`), and each person's questions are kept together unless one has to wait for another person's answer. A question added later goes at the end. Confirmation, change-request and approval sections carry no label. An existing file keeps its questions as they were, unless you ask to redo the stage from scratch, which replaces it with a new one.
 
 You choose how to answer at each stage:
 

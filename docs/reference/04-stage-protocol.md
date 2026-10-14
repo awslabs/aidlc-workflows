@@ -400,6 +400,13 @@ changes** options are unlettered. All `[Answer]:` tags start blank.
 Multi-select questions add "(select all that apply)" to the question text;
 answer format: `[Answer]: A, B, E`.
 
+The agent groups a fresh file's questions by who would answer them: each
+heading names the trade whose decision it is after its number
+(`## Q3. [Developer] ...`), and each trade's questions sit together unless a
+question depends on another's answer. The trade alone never skips or
+delegates a question. An existing file is never reordered or renumbered; a
+follow-up takes the next unused number.
+
 When the stage's `<slug>-questions.md` already exists with its questions (an
 `[Answer]:` tag, filled in or still blank), the run-stage directive carries
 `questions_answered` (`path`), on `next --resume`, a bare `next` and every

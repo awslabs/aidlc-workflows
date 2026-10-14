@@ -2,7 +2,7 @@
 // IDE (the Electron desktop app). The harness twin of tui-drive.ts (Kiro CLI over
 // tmux) and kiro-acp-drive.ts (Kiro CLI over ACP) - this one drives the GUI app.
 //
-// WHY raw CDP and NOT Playwright (proven in the human-presence CDP spike):
+// WHY raw CDP and NOT Playwright:
 //   - electron.launch() TIMES OUT on Kiro's VS-Code-fork firstWindow handshake.
 //   - connectOverCDP HANGS under bun on Electron's BROWSER-level endpoint (it only
 //     worked under node), and even once connected it did NOT expose the nested
@@ -11,22 +11,20 @@
 //   target in /json/list carries its own webSocketDebuggerUrl we can drive with
 //   Runtime.evaluate / Input.* .
 //
-// Import-safe: NO top-level side effects (mirrors tui-fixtures.ts:9-10) so importing
+// Import-safe: NO top-level side effects (mirrors tui-fixtures.ts) so importing
 // this module never launches Electron. Driving happens only when you call launchKiroIde().
 //
-// Distilled from the CDP spike primitives (the raw cdp / ctx-click / ctx-scan /
-// drive-unblocked / live-fix-drive probes kept under the private tmp working area).
-// Test-grade choices that REPLACE spike shortcuts are marked TEST-GRADE below:
+// Test-grade choices:
 //   - Electron binds port 0 and reports its OS-assigned CDP endpoint on stderr.
 //     It owns the socket continuously; parallel launches never reserve/release
 //     a candidate port or attach using a stale profile's endpoint file.
-//   - waitForChatInput() polls the chat-input placeholder instead of the spike's
-//     fixed 11_000ms / 2000ms settle sleeps (spike gotcha: fixed sleeps are brittle
-//     on a loaded CI box; the placeholder string is the same signal the Kiro TUI
-//     test waits on - "ask a question or describe a task").
+//   - waitForChatInput() polls for the chat editor or its placeholder instead of
+//     fixed settle sleeps, which are brittle on a loaded CI box; the placeholder
+//     string is the same signal the Kiro TUI test waits on - "ask a question or
+//     describe a task".
 //   - the seed user-data-dir is a PATH the caller provides (a DISTILLED profile),
-//     never a 44MB clone of a real profile (spike gotcha: leaks personal/internal
-//     state, must never ship in a public repo).
+//     never a 44MB clone of a real profile, which would leak personal/internal
+//     state and must never ship in a public repo.
 
 import { type ChildProcess, type SpawnOptions, spawn, spawnSync } from "node:child_process";
 import { Database } from "bun:sqlite";
@@ -108,7 +106,7 @@ function cdpTimeoutError(fallback: Error, deadlineMs?: number): Error {
 }
 
 // ---------------------------------------------------------------------------
-// Raw CDP target (the substrate, ported from cdp.mjs:13-107).
+// Raw CDP target (the substrate).
 // ---------------------------------------------------------------------------
 
 interface ExecContext {
@@ -278,8 +276,7 @@ export function numberedListMarkersAreVisible(
 /** One CDP connection to a single page/iframe target. JSON-RPC over a Bun-native
  *  WebSocket. Accumulates Runtime.executionContextCreated events so nested webview
  *  frames are reachable by contextId (the only way to reach the doubly-nested chat
- *  webview - a top-frame Runtime.evaluate and Playwright's frame list both miss it,
- *  ctx-scan.mjs:1-5). */
+ *  webview - a top-frame Runtime.evaluate and Playwright's frame list both miss it). */
 export class CdpTarget {
   private ws: WebSocket | null = null;
   private nextId = 0;
@@ -352,8 +349,6 @@ export class CdpTarget {
     });
   }
 
-  /** JSON-RPC send with an auto-incrementing id and a per-call reject timeout
-   *  (cdp.mjs:56-68: the spike used a fixed 20_000ms). */
   send(method: string, params: Record<string, unknown> = {}, timeoutMs = LIVE_COMMAND_TIMEOUT_MS): Promise<unknown> {
     const allocation = remainingOperationTimeoutMs(timeoutMs, {
       deadlineMs: this.deadlineMs, phase: "IDE CDP request",
@@ -381,7 +376,6 @@ export class CdpTarget {
     });
   }
 
-  /** Runtime.enable then evaluate in the default context (cdp.mjs:69-80). */
   async evaluate<T = unknown>(expression: string): Promise<T> {
     await this.send("Runtime.enable").catch(() => {});
     const r = (await this.send("Runtime.evaluate", {
@@ -396,8 +390,7 @@ export class CdpTarget {
   }
 
   /** Enable Runtime and wait briefly so executionContextCreated events for every
-   *  frame (including nested OOPIF webviews) arrive into this.contexts
-   *  (cdp.mjs:83-87). */
+   *  frame (including nested OOPIF webviews) arrive into this.contexts. */
   async enableContexts(waitMs = 1500): Promise<ExecContext[]> {
     await this.send("Runtime.enable").catch((error) => {
       if (error instanceof TestBudgetExhaustedError) throw error;
@@ -408,8 +401,8 @@ export class CdpTarget {
     return this.contexts;
   }
 
-  /** Evaluate inside a specific frame's execution context (cdp.mjs:90-101) - reaches
-   *  nested webview frames a top-frame Runtime.evaluate cannot. */
+  /** Evaluate inside a specific frame's execution context - reaches nested webview
+   *  frames a top-frame Runtime.evaluate cannot. */
   async evaluateInContext<T = unknown>(contextId: number, expression: string): Promise<T> {
     const r = (await this.send("Runtime.evaluate", {
       expression,
@@ -436,19 +429,18 @@ export class CdpTarget {
 // Seed generation (skip onboarding with NO committed profile, NO credentials).
 // ---------------------------------------------------------------------------
 
-// Spike-proven (the seed spike under the private tmp working area): a fresh
-// Kiro user-data-dir hits the "Import configuration" onboarding wall and never
+// A fresh Kiro user-data-dir hits the "Import configuration" onboarding wall and never
 // reaches chat. The ONLY load-bearing flag that skips it is the global-state row
 // `kiroAgent.onboarding.onboardingCompleted = "true"` in
 // User/globalStorage/state.vscdb (an empty fresh DB seeded with just that row was
-// verified to land directly on the workbench). The macOS spike found Kiro auth outside
+// verified to land directly on the workbench). A macOS probe found Kiro auth outside
 // the profile (grepping the real DB's 80 keys for auth/token/credential/cookie/sso/secret
 // returned nothing), so this seed contains ZERO credentials. A signed-in host is still
 // required; on Windows an unsigned host reaches chat but rejects prompts with an
 // authentication wall. We GENERATE the seed from constants at setup time rather than
 // committing or copying any real profile - nothing sensitive ever touches the repo. The
-// two extra rows + settings only mute cosmetic notification toasts (MCP tools, Builder
-// steering, git-repo prompt); the onboarding row is what unblocks chat.
+// two extra rows only mute cosmetic notification toasts; the onboarding row is what
+// unblocks chat, and each SEED_SETTINGS entry says why it is there.
 //
 // Current Kiro versions can additionally show a session-storage migration carousel.
 // Its "Remind me later" action does not persist a durable global-state key, so it is
@@ -953,8 +945,6 @@ export async function withKiroIdeCleanup<T>(
   return result;
 }
 
-/** Poll GET /json/version until the CDP endpoint answers (drive-unblocked.mjs:48-56
- *  - this is already a proper poll in the spike; kept verbatim in shape). */
 export async function waitForCdp(port: number, timeoutMs = LIVE_STARTUP_TIMEOUT_MS): Promise<boolean> {
   const allocation = remainingOperationTimeoutMs(timeoutMs, { phase: "IDE CDP readiness" });
   const end = Date.now() + (timeoutMs === 0 ? 0 : allocation ?? timeoutMs);
@@ -975,8 +965,7 @@ export async function waitForCdp(port: number, timeoutMs = LIVE_STARTUP_TIMEOUT_
   return false;
 }
 
-/** GET /json/list - every page/iframe target with a webSocketDebuggerUrl
- *  (cdp.mjs:8-11). */
+/** GET /json/list - every page/iframe target with a webSocketDebuggerUrl. */
 export async function listTargets(port: number, deadlineMs?: number): Promise<CdpTargetInfo[]> {
   const timeoutMs = remainingOperationTimeoutMs(LIVE_STARTUP_TIMEOUT_MS, { deadlineMs, phase: "IDE target discovery" });
   try {
@@ -992,8 +981,7 @@ export async function listTargets(port: number, deadlineMs?: number): Promise<Cd
   }
 }
 
-/** Open a CdpTarget on the top-level page target - the keyboard/screenshot channel
- *  (drive-unblocked.mjs:68-74). */
+/** Open a CdpTarget on the top-level page target - the keyboard/screenshot channel. */
 export async function pageTarget(port: number): Promise<CdpTarget> {
   const targets = await listTargets(port);
   const page = targets.find((t) => t.type === "page");
@@ -1015,21 +1003,20 @@ const PRIMARY_SHORTCUT_MODIFIER = platform() === "darwin" ? META : CONTROL;
 const SHIFT = 8;
 
 /** The prompt the Kiro chat input renders - the SAME signal the Kiro TUI test waits
- *  on (t-tui-kiro-status.serial.test.ts:95). Lowercased for a tolerant match. Kept as
+ *  on (t-tui-kiro-status.serial.test.ts). Lowercased for a tolerant match. Kept as
  *  a SECONDARY signal only: a live probe found the desktop app does NOT expose it as
  *  an attribute or in body.innerText (see FIND_CHAT_INPUT_EXPR). */
 const CHAT_PLACEHOLDER = "ask a question or describe a task";
 
 /** Detect that the Kiro chat input is present and laid out, in whatever execution
- *  context owns it. TEST-GRADE replacement for the spike's fixed 11_000ms settle sleep:
- *  the workbench is "ready" once the chat editor exists.
+ *  context owns it. The workbench is "ready" once the chat editor exists.
  *
  *  Live probe (generated onboarding-skip seed): the input is a
  *  tiptap/ProseMirror `contenteditable` DIV inside the doubly-nested vscode-webview
  *  iframe, and its "ask a question..." prompt is a CSS ::before - NOT a
  *  placeholder/aria/data-placeholder attribute and NOT present in document.body.innerText
  *  ({tag:"DIV",ce:"true",ph:null,cls:"tiptap ProseMirror ..."} with
- *  bodyHasPlaceholder=false). So the old attribute-only match never fired. We now anchor
+ *  bodyHasPlaceholder=false). So an attribute-only match never fires. We anchor
  *  on the EDITOR element: a visible contenteditable/textbox whose class is the ProseMirror
  *  chat editor, or (fallback) any visible editable in the chat webview origin. The prompt
  *  text is still checked first in case a future Kiro exposes it as an attribute or text. */
@@ -1054,8 +1041,7 @@ const FIND_CHAT_INPUT_EXPR = `(() => {
   return false;
 })()`;
 
-/** Poll all contexts for the chat-input placeholder before driving keystrokes.
- *  Replaces the spike's fixed settle sleeps (drive-unblocked.mjs:57-58,119). */
+/** Poll all contexts for the chat editor or its placeholder before driving keystrokes. */
 export async function waitForChatInput(port: number, timeoutMs = LIVE_STARTUP_TIMEOUT_MS): Promise<boolean> {
   const allocation = remainingOperationTimeoutMs(timeoutMs, { phase: "IDE chat readiness" });
   const end = Date.now() + (timeoutMs === 0 ? 0 : allocation ?? timeoutMs);
@@ -1067,9 +1053,9 @@ export async function waitForChatInput(port: number, timeoutMs = LIVE_STARTUP_TI
         const t = new CdpTarget(tgt.webSocketDebuggerUrl, end);
         try {
           await t.connect();
-          // 1500ms (not the spike's 500ms): the deeply-nested OOPIF chat webview's
-          // executionContextCreated arrives late on a loaded box - a 500ms budget raced
-          // past it and missed the input on a first pass (live probe finding).
+          // 1500ms: the deeply-nested OOPIF chat webview's executionContextCreated
+          // arrives late on a loaded box - a 500ms budget raced past it and missed the
+          // input on a first pass.
           const contexts = await t.enableContexts(1500);
           for (const c of contexts) {
             try {
@@ -1095,7 +1081,7 @@ export async function waitForChatInput(port: number, timeoutMs = LIVE_STARTUP_TI
     }
   } catch (error) {
     if (!(error instanceof TestBudgetExhaustedError)) throw error;
-    // The readiness deadline has always returned false. Recheck the file alone
+    // The readiness deadline returns false. Recheck the file alone
     // first: if both deadlines expire together, shared-budget failure must win.
     remainingOperationTimeoutMs(undefined, { phase: "IDE chat readiness" });
     if (Date.now() < end) throw error;
@@ -1384,7 +1370,6 @@ async function focusChatEditor(port: number): Promise<boolean> {
   return false;
 }
 
-/** Select-all then Delete to clear the focused chat editor between retries. */
 async function selectAllAndDelete(t: CdpTarget): Promise<void> {
   await t.send("Input.dispatchKeyEvent", {
     type: "rawKeyDown",
@@ -1418,8 +1403,8 @@ async function selectAllAndDelete(t: CdpTarget): Promise<void> {
 
 /** Focus the chat input, type `text`, VERIFY it landed in the editor, submit with a
  *  TEXT-BEARING Enter keyDown (the `text:"\r"` is load-bearing - that is what submits
- *  in the tiptap editor, drive-unblocked.mjs:123-128), then VERIFY the submit landed
- *  by confirming the editor cleared (a submitted prompt empties the input).
+ *  in the tiptap editor), then VERIFY the submit landed by confirming the editor
+ *  cleared (a submitted prompt empties the input).
  *
  *  Why focus + settle + read-back + retry: the chat editor element EXISTS
  *  (waitForChatInput returns true) a beat before it reliably accepts Input.insertText.
@@ -1525,8 +1510,8 @@ const clickByTextExpr = (texts: string[]): string => `(() => {
 })()`;
 
 /** Click a control by visible DOM text/aria-label in whatever execution context owns
- *  it (ctx-click.mjs:11-50). No pixel coordinates - the only way to reach the
- *  doubly-nested vscode-webview chat controls. Returns the matched label or null. */
+ *  it. No pixel coordinates - the only way to reach the doubly-nested
+ *  vscode-webview chat controls. Returns the matched label or null. */
 export async function clickByText(port: number, texts: string[]): Promise<string | null> {
   const expr = clickByTextExpr(texts);
   const targets = await listTargets(port);
@@ -1730,7 +1715,7 @@ export async function snapshotNumberedLists(
 
 /** Auto-approve Kiro's OWN Run/Allow tool-permission prompts (SEPARATE from the
  *  human-presence hooks). Without this the agent turn stalls waiting for a human to
- *  click Run (drive-unblocked.mjs:82-112). The watch loop calls this every iteration.
+ *  click Run. The watch loop calls this every iteration.
  *  Note: the seed trusts hook/shell COMMANDS (SEED_SETTINGS) so the mint/block hooks
  *  run without a card, but the agent's per-tool permission cards are a separate gate -
  *  this still clicks those through so the turn proceeds. */
@@ -1743,8 +1728,7 @@ export function autoApprove(port: number): Promise<string | null> {
 // ---------------------------------------------------------------------------
 
 /** Count NDJSON marker lines in a file matching field === value. The hooks append
- *  one JSON line per firing; the test asserts on this, never on chat prose
- *  (countLabel drive-unblocked.mjs:61-65 / countCommitted live-fix-drive.mjs:97-100). */
+ *  one JSON line per firing; the test asserts on this, never on chat prose. */
 export function countMarkers(file: string, field: string, value: string): number {
   if (!existsSync(file)) return 0;
   return readFileSync(file, "utf-8")
@@ -1759,9 +1743,8 @@ export function countMarkers(file: string, field: string, value: string): number
     }).length;
 }
 
-/** Poll a predicate over a marker file within a wall-clock budget (replaces the
- *  spike's trust-a-settle-delay shape, drive-unblocked.mjs:135-145). Calls
- *  onPoll each tick (e.g. autoApprove) so gates get clicked while we wait. */
+/** Poll a predicate over a marker file within a wall-clock budget. Calls onPoll
+ *  each tick (e.g. autoApprove) so gates get clicked while we wait. */
 export async function watchMarkers(
   predicate: () => boolean,
   budgetMs: number,
@@ -1780,9 +1763,9 @@ export async function watchMarkers(
   return predicate();
 }
 
-/** PNG screenshot of the page target (Page.captureScreenshot) as a base64 string -
- *  caller decides whether to persist it (drive-unblocked.mjs:76-79). Screenshots are
- *  diagnostic only; assertions live on disk markers. */
+/** PNG screenshot of the page target (Page.captureScreenshot) as a Buffer, or
+ *  null when the capture fails - caller decides whether to persist it.
+ *  Screenshots are diagnostic only; assertions live on disk markers. */
 export async function screenshot(t: CdpTarget): Promise<Buffer | null> {
   const s = (await t.send("Page.captureScreenshot", { format: "png" }).catch(() => null)) as {
     data?: string;

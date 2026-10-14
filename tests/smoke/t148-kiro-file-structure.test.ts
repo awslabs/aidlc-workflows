@@ -5,9 +5,9 @@
 // Mirrors t01's pattern for the Kiro shell: the SHIPPED dist/kiro tree has
 // the right shape — core dirs present and populated, authored shell files
 // present, agent configs are valid JSON with the load-bearing fields the
-// design pinned (allowedCommands-only shell grant per findings 0.9b; no
-// subagent tool on delegation targets; chat.defaultAgent activation; hooks
-// registered through the adapter). Pure fs reads — no spawn, no LLM.
+// design pinned (allowedCommands-only shell grant; no subagent tool on
+// delegation targets; chat.defaultAgent activation; hooks registered through
+// the adapter). File reads plus a spawned doctor run; no LLM.
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -128,12 +128,11 @@ describe("t148 dist/kiro file structure", () => {
   });
 
   test("ships the method ('memory') tree at the workspace root aidlc/spaces/default/memory/", () => {
-    // The AIDLC method relocated OUT of the harness dir (the old .kiro/steering/
-    // rule layers) to the workspace root under aidlc/spaces/default/memory/ — one
-    // hand-editable source of truth, identical on every harness, read by Kiro via
-    // the agent JSON `resources` globs of the engine's git-ignored copy of the
-    // active space (file://aidlc/active-memory/**/*.md).
-    // It sits beside .kiro/, so resolve from KIRO, not K.
+    // The AIDLC method lives at the workspace root, aidlc/spaces/default/memory/:
+    // one hand-editable source of truth, identical on every harness, read by Kiro
+    // via the agent JSON `resources` globs of the engine's git-ignored copy of the
+    // active space (file://aidlc/active-memory/**/*.md). It sits beside .kiro/, so
+    // resolve from KIRO, not K.
     const mem = (...parts: string[]) =>
       join(KIRO, "aidlc", "spaces", "default", "memory", ...parts);
     for (const f of ["org.md", "team.md", "project.md"]) {
@@ -142,7 +141,7 @@ describe("t148 dist/kiro file structure", () => {
     for (const p of ["ideation", "inception", "construction", "operation"]) {
       expect(existsSync(mem("phases", `${p}.md`))).toBe(true);
     }
-    // Steering now carries onboarding, not copies of the workspace method.
+    // Steering carries onboarding, not copies of the workspace method.
     expect(readdirSync(join(K, "steering"))).toEqual(["aidlc-onboarding.md"]);
   });
 
@@ -204,8 +203,8 @@ describe("t148 dist/kiro file structure", () => {
     expect(cmds.some((c) => c.includes(".kiro/tools/"))).toBe(true);
     // No `.kiro/tools/` grant may end in an open wildcard: Kiro matches the
     // whole command string, so a trailing `.*` after the directory swallows
-    // path traversal (`bun .kiro/tools/../../anything.ts` ran unprompted before
-    // 2.5.16). t252 asserts the resulting accept/reject behaviour in full.
+    // path traversal (`bun .kiro/tools/../../anything.ts`).
+    // t252 asserts the resulting accept/reject behaviour in full.
     for (const c of cmds) {
       if (!c.includes(".kiro/tools/")) continue;
       expect(c, `open wildcard after .kiro/tools/: ${c}`)
@@ -254,11 +253,15 @@ describe("t148 dist/kiro file structure", () => {
       expect(fm, agent).toContain("permissions:");
       expect(fm, agent).toContain("  rules:");
       expect(fm, agent).toContain(`        - "aidlc/spaces/**"`);
+      // A side-by-side worker's own unit records in its worktree.
+      expect(fm, agent).toContain(`        - ".aidlc/worktrees/*/aidlc/spaces/**"`);
       // Exactly the read-only version check; `bun test` and the rest still ask.
       expect(fm, agent).toContain(`        - "bun --version"`);
       expect(fm, agent).not.toContain(`        - "bun *"`);
       expect(fm, agent).not.toContain("disallowedTools:");
     }
+    // A delegate runs under the conductor's allow on Kiro's 3.0 engine and in Kiro IDE.
+    expect(frontmatter(join(ideAgents, "aidlc-aidlc.md"))).toContain(`        - ".aidlc/worktrees/*/aidlc/spaces/**"`);
   });
 
   test("the Kiro CLI composer may write only its grid proposal file", () => {

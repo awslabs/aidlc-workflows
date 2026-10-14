@@ -5,32 +5,31 @@
 // asserting the deterministic surfaces that survive the userPromptSubmit seam
 // through `kiro-cli acp`.
 //
-// SEAM CHANGE (why the read-only cases no longer assert tool output). A Kiro
-// userPromptSubmit seam (agents/aidlc.json → aidlc-kiro-adapter.ts) now
+// SEAM (why the read-only cases do not assert tool output). A Kiro
+// userPromptSubmit seam (agents/aidlc.json -> aidlc-kiro-adapter.ts)
 // classifies the read-only flags (`--status`/`--doctor`/`--help`/`--version`)
 // as TERMINAL and runs them OFF-BAND inside the hook, handing the conductor the
 // verbatim output with a do-NOT-advance instruction; a turn-scoped engine
 // `done`-guard + a preToolUse backstop neutralize any trailing bare `next`.
-// CONSEQUENCE: a read-only flag no longer surfaces as an `aidlc-utility.ts <sub>`
+// CONSEQUENCE: a read-only flag never surfaces as an `aidlc-utility.ts <sub>`
 // ACP tool_call — the seam ran it off-band, so stopAfterToolTitle would never
 // fire and the tool output would never reach an ACP surface. The robust surfaces for these
 // seam-dispatched read-only commands are stopReason === "end_turn" and the
-// on-disk read-only NO-OP (seeded state byte-unchanged). This mirrors the staged
+// on-disk read-only NO-OP (seeded state byte-unchanged). This mirrors the
 // t-acp-kiro-journey-workspace leg, which drives terminal verbs to end_turn and
 // asserts on disk rather than on stopAfterToolTitle.
 //
-// The byte-verbatim status/doctor/help output ("AI-DLC doctor", the nine
-// scopes, "No active AI-DLC workflow found.", …) has NO home on the ACP surface
-// anymore; it is covered deterministically by the SDK twins (t20 status / t22
+// The byte-verbatim status/doctor/help output ("AI-DLC doctor", the stock
+// scopes, "No active AI-DLC workflow found.", ...) has NO home on the ACP surface;
+// it is covered deterministically by the SDK twins (t20 status / t22
 // doctor / t23 help — drive the real /aidlc flag and assert the Bash
 // tool_result bytes) AND the CLI twins (t27 status+doctor+help / t31 help —
-// spawn aidlc-utility.ts <sub> directly and assert stdout). So dropping the ACP
-// byte asserts loses no coverage.
+// spawn aidlc-utility.ts <sub> directly and assert stdout).
 //
 // config-change (`--test-strategy`) is a MUTATION — classifyTerminalCommand
 // returns null for it, so the seam exits 0 and the conductor runs it NORMALLY,
-// so its `aidlc-utility.ts config-change` tool_call STILL surfaces; that case is
-// UNCHANGED and keeps its stopAfterToolTitle + on-disk mutation asserts.
+// so its `aidlc-utility.ts config-change` tool_call surfaces; that case keeps
+// its stopAfterToolTitle + on-disk mutation asserts.
 //
 // Trust anchor: kiro-acp-drive.calibration.test.ts (byte-faithfulness,
 // known-answer state fields, negative guard, gate loop).
@@ -110,7 +109,6 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
         });
         expect(r.toolCallIssues).toEqual([]);
         expect(r.stopReason).toBe("end_turn");
-        // Read-only contract, byte-compared.
         expect(readFileSync(statePath, "utf-8")).toBe(stateBefore);
       } finally {
         cleanupTuiProject(proj);
@@ -148,7 +146,6 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
         });
         expect(r.toolCallIssues).toEqual([]);
         expect(r.stopReason).toBe("end_turn");
-        // Read-only contract (state), byte-compared.
         expect(readFileSync(statePath, "utf-8")).toBe(stateBefore);
       } finally {
         cleanupTuiProject(proj);
@@ -168,7 +165,7 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
         // never fire); the conductor only relays prose. Drive to the natural
         // end_turn and assert the deterministic surfaces: clean turn end + the
         // on-disk no-op (no state creates from a help run). The verbatim usage
-        // sections + the ten scopes are covered by the SDK twin t23 + the CLI
+        // sections + the stock scopes are covered by the SDK twin t23 + the CLI
         // twins t27/t31 (see header).
         const r = await driveKiroAcp({
           projectDir: proj,
@@ -207,8 +204,6 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
           stopAfterToolTitle: /aidlc-utility\.ts config-change/,
         });
         expect(r.toolCallIssues).toEqual([]);
-        // Disk is the contract: the state field flipped and the audit row
-        // landed (tool-owned emission).
         expect(r.stateFile ?? readFileSync(seededStateFile(proj), "utf-8")).toMatch(
           /\*\*Test Strategy\*\*:[ \t]*Minimal/,
         );

@@ -94,7 +94,6 @@ function recordedNow(item: AnswersItem, proj: string, start: Start): string {
       return "none";
     case "plan-offer":
     case "scope-confirm":
-      // Going ahead creates the work on the offered plan; a different plan creates it on another.
       if (fresh) return fresh.scope === "bugfix" ? 'Go ahead with the "bugfix" plan' : `A different plan (${fresh.scope ?? "?"})`;
       return "none";
     case "intent-pick": {
@@ -149,7 +148,6 @@ function endReached(item: AnswersItem, proj: string, start: Start): boolean {
 const asksAllowed = (item: AnswersItem): number => item.expected.engine.words === null ? Math.max(item.expected.end.asks, 1) : item.expected.end.asks;
 const SETTING_FIELDS: Record<string, string> = { "plan-approval": "Plan Approval", review: "Review", "guard-policy": "Guard Policy" };
 
-// The end state against `expected.end`, and the record against the typed line.
 function judge(item: AnswersItem, proj: string, typed: string, transcript: Transcript, start: Start): { failures: string[]; endSummary: string } {
   const failures: string[] = [];
   const end = item.expected.end;
@@ -195,7 +193,7 @@ function pickerSpec(item: AnswersItem): { spec: AnswerSpec; label: string | null
 
 // The agent's first turn must show the item's question: when what it showed offers no such choice (re-entry showed another
 // question, or none), the reply answers nothing this item judges, and the line says what was shown instead.
-// The choice the corpus names most often for a question: its first option, the most stable wording the agent shows.
+// The choice the corpus names most often for a question: the most stable wording the agent shows.
 const USUAL_CHOICE = new Map<string, string>();
 for (const question of [...new Set(ANSWERS.map((i) => i.question))]) {
   const counts = new Map<string, number>();
@@ -248,7 +246,6 @@ async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutco
   const driveFailures: string[] = [];
   // What the person said as the record keeps it: the typed line, or for a picker reply the label the box offered.
   let said = typed;
-  // What the agent showed before the person replied.
   let firstText = "";
   try {
     await buildQuestion(proj, item.question);

@@ -460,6 +460,24 @@ starts the questions afresh (`artifact_reuse`, or **Redo from scratch** under
 
 For multi-select questions (where user may choose more than one option), add "(select all that apply)" to the question text. The user writes multiple letters: `[Answer]: A, B, E`
 
+**Group the questions by who would answer them.** One stage's questions often
+belong to different people: what the product does is the product owner's, how
+it is built is the developer's, how it runs is the operations engineer's. When
+you create a fresh questions file, name for each question the one trade whose
+decision it is, after the question number: `## Q<n>. [<trade>] <title>`. Only
+`Q<n>.` is fixed; the trade, like the title, is in the conversation language.
+Then put each trade's questions together, keeping their relative order, except
+where a question depends on another question's answer: the question that
+decides comes first, even when a trade then appears twice. The stage file's
+topic order is what to cover, not the order to write; number the questions in
+the order you settle on. The trade only says who would answer: anyone may
+answer any question, and it never skips one or leaves it to you. Arrange only a
+file you are creating: never reorder or renumber an existing questions file (a
+redo the person asked for starts a fresh one), and give a follow-up question
+the next unused number and its trade, at the end. The summary and assumption
+confirmations, the `## Requested Changes Feedback` question and approval
+headings such as `## Plan Approval`, numbered or not, carry no trade.
+
 ### Depth-aware question generation
 
 Stage files list **topic areas and example questions** — they are guidance, not a script. The agent determines what to actually ask based on three factors:

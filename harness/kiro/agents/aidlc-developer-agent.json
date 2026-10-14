@@ -28,7 +28,8 @@
       "allowedPaths": [
         "aidlc/spaces/**",
         "[!.]*",
-        "[!.]*/**"
+        "[!.]*/**",
+        ".aidlc/worktrees/*/aidlc/spaces/**"
       ]
     }
   },

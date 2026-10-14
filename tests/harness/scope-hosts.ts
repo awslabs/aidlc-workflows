@@ -29,7 +29,6 @@ import {
   activeRecord,
   cleanupScopeProjects,
   clip,
-  commandWords,
   createScopeProject,
   expectedStages,
   type RunResult,
@@ -224,8 +223,8 @@ export abstract class NativeScopeHost extends ScopeHost {
   private uses = 0;
   protected turn = "";
 
-  constructor(proj: string) {
-    super(proj);
+  constructor(proj: string, base?: NodeJS.ProcessEnv) {
+    super(proj, base);
     // The tool gives its hooks and the agent's shell the project as their folder, and no Claude variable.
     delete this.env.CLAUDE_PROJECT_DIR;
     this.fullHost = true;
@@ -268,8 +267,7 @@ export abstract class NativeScopeHost extends ScopeHost {
     this.fired.push({ event, tool, commands });
     const input = JSON.stringify(this.payload(event, fields));
     return commands.map((line) => {
-      const words = commandWords(line);
-      const res = this.spawn(`${event}${tool ? ` ${tool}` : ""}: ${line}`, [words[0] === "bun" ? process.execPath : words[0], ...words.slice(1)], input, this.hookEnv());
+      const res = this.spawn(`${event}${tool ? ` ${tool}` : ""}: ${line}`, this.argv(line), input, this.hookEnv());
       if (res.status !== 0 && !(res.status === 2 && /^(PreToolUse|preToolUse|Stop|stop)$/.test(event))) {
         this.hookFailures.push(`${event}${tool ? ` ${tool}` : ""}: ${line} exited ${res.status}: ${clip(res.stderr || res.stdout, 400)}`);
       }
@@ -288,9 +286,7 @@ export abstract class NativeScopeHost extends ScopeHost {
   }
 
   protected run(line: string): RunResult {
-    const words = commandWords(line);
-    if (words[0] !== "bun") throw new Error(`the stand-in runs only bun commands, got: ${line}`);
-    return this.spawn(line, [process.execPath, ...words.slice(1)], undefined, this.shellEnv());
+    return this.spawn(line, this.argv(line), undefined, this.shellEnv());
   }
 
   override hook(name: string): RunResult {
@@ -313,6 +309,7 @@ export abstract class NativeScopeHost extends ScopeHost {
 /** Codex CLI: `.codex/hooks.json` through `engine adapter codex`, apply_patch for files, spawn_agent for helpers. */
 export class CodexScopeHost extends NativeScopeHost {
   override readonly dir = ".codex";
+  override readonly skill = ".agents/skills/aidlc/SKILL.md";
 
   protected override sessionName(n: number): string {
     return `019ee000-${hex(this.hostNumber, 4)}-7000-8000-${hex(n, 12)}`;
@@ -435,6 +432,7 @@ export class CodexScopeHost extends NativeScopeHost {
  */
 export class CopilotScopeHost extends NativeScopeHost {
   override readonly dir = ".aidlc";
+  override readonly skill = ".github/skills/aidlc/SKILL.md";
   override readonly picker = false;
 
   protected override sessionName(n: number): string {
@@ -562,6 +560,7 @@ export function kiroSkillPrompt(proj: string, args: string): string {
  */
 export class KiroCliScopeHost extends NativeScopeHost {
   override readonly dir = ".kiro";
+  override readonly skill = ".kiro/skills/aidlc/SKILL.md";
   override readonly picker = false;
   protected override readonly stopEvent = "stop";
   /** The agent whose JSON hooks fire: the conductor's, or a helper's own while it works. */
@@ -682,6 +681,7 @@ export class KiroCliScopeHost extends NativeScopeHost {
  */
 export class KiroIdeScopeHost extends NativeScopeHost {
   override readonly dir = ".kiro";
+  override readonly skill = ".kiro/skills/aidlc/SKILL.md";
   override readonly picker = false;
   private readonly shellTool = process.platform === "win32" ? "execute_pwsh" : "execute_bash";
 
@@ -788,6 +788,7 @@ export class KiroIdeScopeHost extends NativeScopeHost {
  */
 export class CursorScopeHost extends NativeScopeHost {
   override readonly dir = ".cursor";
+  override readonly skill = ".cursor/skills/aidlc/SKILL.md";
   override readonly picker = false;
   protected override readonly stopEvent = "stop";
 
@@ -929,25 +930,31 @@ interface PluginAnswer {
  * in its environment, which the plugin's hooks inherit. A refusal is the hook's
  * thrown error; a turn end that blocks sends a nudge through
  * `client.session.prompt`. A helper is a child session whose parent the client
- * names. A new chat after a stop for the day is a new opencode process, so the
- * plugin starts again. The agent's shell carries `OPENCODE=1`.
+ * names. A new chat after a stop for the day is a new opencode process, which
+ * loads the plugin again. The agent's shell carries `OPENCODE=1`.
  */
 export class OpencodeScopeHost extends ScopeHost {
   override readonly dir = ".aidlc";
+  override readonly skill = ".aidlc/skills/aidlc/SKILL.md";
   override readonly picker = false;
   override readonly removesDispatch = false;
   private readonly sab = new SharedArrayBuffer(8 + (16 << 20));
   private readonly flag = new Int32Array(this.sab, 0, 2);
-  private readonly worker: Worker;
+  private worker!: Worker;
   private readonly hostNumber = ++hostCount;
   private child: string | null = null;
   private uses = 0;
 
-  constructor(proj: string) {
-    super(proj);
+  constructor(proj: string, base?: NodeJS.ProcessEnv) {
+    super(proj, base);
     delete this.env.CLAUDE_PROJECT_DIR;
     this.fullHost = true;
     this.session = this.sessionName(1);
+    this.launch();
+  }
+
+  /** An opencode process: the plugin loaded from the project as it is now, with state of its own. */
+  private launch(): void {
     this.worker = new Worker(join(import.meta.dir, "opencode-plugin-worker.ts"), { workerData: { sab: this.sab, env: this.env } });
     this.worker.unref();
     this.startPlugin();
@@ -1003,8 +1010,9 @@ export class OpencodeScopeHost extends ScopeHost {
   protected override startChat(): void {}
 
   override newSession(): void {
-    // The next day is a new opencode process: the plugin starts again.
-    this.startPlugin();
+    // The next day is a new opencode process, which loads the plugin again.
+    void this.worker.terminate();
+    this.launch();
     super.newSession();
   }
 
@@ -1025,9 +1033,8 @@ export class OpencodeScopeHost extends ScopeHost {
 
   override bash(line: string): RunResult {
     return this.tool("bash", { command: line, description: "Run the step AI-DLC named" }, (args) => {
-      const words = commandWords(String(args.command ?? line));
-      if (words[0] !== "bun") throw new Error(`the stand-in runs only bun commands, got: ${line}`);
-      return this.spawn(String(args.command ?? line), [process.execPath, ...words.slice(1)], undefined, { ...this.env, OPENCODE: "1" });
+      const ran = String(args.command ?? line);
+      return this.spawn(ran, this.argv(ran), undefined, { ...this.env, OPENCODE: "1" });
     }, (res) => `${res.stdout}${res.stderr}`);
   }
 
@@ -1088,15 +1095,16 @@ function parseJson(text: string): Record<string, unknown> | null {
 // Projects
 // ---------------------------------------------------------------------------
 
-function hostFor(name: "claude" | HostName, proj: string): ScopeHost {
+/** The host that plays a tool on a project; `base` is the environment the person's machine gives it. */
+export function hostFor(name: "claude" | HostName, proj: string, base?: NodeJS.ProcessEnv): ScopeHost {
   switch (name) {
-    case "claude": return new ScopeHost(proj);
-    case "codex": return new CodexScopeHost(proj);
-    case "copilot": return new CopilotScopeHost(proj);
-    case "kiro": return new KiroCliScopeHost(proj);
-    case "kiro-ide": return new KiroIdeScopeHost(proj);
-    case "cursor": return new CursorScopeHost(proj);
-    case "opencode": return new OpencodeScopeHost(proj);
+    case "claude": return new ScopeHost(proj, base);
+    case "codex": return new CodexScopeHost(proj, base);
+    case "copilot": return new CopilotScopeHost(proj, base);
+    case "kiro": return new KiroCliScopeHost(proj, base);
+    case "kiro-ide": return new KiroIdeScopeHost(proj, base);
+    case "cursor": return new CursorScopeHost(proj, base);
+    case "opencode": return new OpencodeScopeHost(proj, base);
   }
 }
 

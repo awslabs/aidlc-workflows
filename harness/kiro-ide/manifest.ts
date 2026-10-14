@@ -46,7 +46,9 @@ const DELEGATION_AGENTS = [
 // (the proposalPath detect --json prints). It writes no scope and not the
 // scope grid; saving a scope is the engine's `scope save`.
 const composerProposalPath = "aidlc/spaces/*/intents/.aidlc-engine/composer-proposal.json";
-const spacePaths = ["aidlc/spaces/**"];
+// A side-by-side worker's own unit records sit in its worktree, a top-level dot
+// entry (`.aidlc/worktrees/bolt-<id8>_<slug>`); its code there still asks.
+const spacePaths = ["aidlc/spaces/**", ".aidlc/worktrees/*/aidlc/spaces/**"];
 
 const quoted = (paths: readonly string[]) =>
   paths.map((path) => `        - "${path}"`);

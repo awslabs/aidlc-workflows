@@ -1,14 +1,12 @@
 // covers: scope:bugfix
 //
-// t-tui-t139-revision-loop-idempotency.serial.tui.test.ts — METAMORPHIC INVARIANT
+// t-tui-t139-revision-loop-idempotency.serial.test.ts - METAMORPHIC INVARIANT
 // (§5-D, Phase 4): revision-loop idempotency, as a TUI JOURNEY. Drive the REAL
 // claude TUI by keystroke through TWO bugfix run-throughs and assert that a
 // reject->revise->approve cycle leaves the SAME terminal on-disk state as a clean
 // approve, MODULO Revision Count.
 //
-// ⚠️ WHY TUI, NOT sdk (the §5-D doc says {sdk} — this is the documented exception,
-// user-decided 2026-06-07). The {sdk} routing is INFEASIBLE and the doc label is a
-// bug, proven by live diagnostic (tmp/phase4-runs/diag-t128.log, 2026-06-07): a
+// WHY TUI, NOT sdk. The {sdk} routing is INFEASIBLE, proven by live diagnostic: a
 // single driveAidlc() run STOPS at the first gated stage — it emits SESSION_ENDED
 // with Status=Running, Current Stage=requirements-analysis, and the ONLY
 // AskUserQuestion it ever presents is the scope-confirmation menu, NEVER an
@@ -43,17 +41,17 @@
 // SOURCE-PINNED FACTS (verify-never-guess):
 //   - gate options exactly {Approve(1), Request changes(2)} (stage-protocol.md:41-42,
 //     165-167); option 1 is the highlighted Recommended default.
-//   - selecting "Request changes" -> aidlc-state.ts handleReject (:769): emits
-//     GATE_REJECTED + STAGE_REVISING, marks [?]->[R], Revision Count++ (:786).
+//   - selecting "Request changes" -> aidlc-state.ts handleReject: emits
+//     GATE_REJECTED + STAGE_REVISING, marks [?]->[R], Revision Count++.
 //     The orchestrator then re-runs the stage and re-presents the SAME gate.
 //   - bugfix scope: Ideation entirely SKIP; on a brownfield workspace the first
 //     post-init approval gate is reverse-engineering's (it runs first and holds
 //     its own Request-Changes gate), then requirements-analysis
-//     (scope-mapping.json "bugfix" + aidlc-utility.ts greenfield downgrade).
+//     (scope-grid.json "bugfix" + aidlc-utility.ts greenfield downgrade).
 //     RE is a codekb stage: its revision at the gate is counted via the
-//     approve-time backstop's codekb arm (aidlc-state.ts producesArtifactFile;
-//     the 2026-07-13 live run proved the pre-fix gap - reject honored
-//     conversationally, Revision Count stuck at 0).
+//     approve-time backstop's codekb arm (aidlc-lib.ts producesArtifactFile;
+//     without it a live run honored the reject conversationally and left
+//     Revision Count stuck at 0).
 //   - Completed counter == `- [x]` grid count (aidlc-state.ts:256-258 sync); the
 //     terminator + the cross-run comparison both read this field.
 //   - the AUQ gate footer + exact `❯` caret signal is gridHasMenu
@@ -310,7 +308,6 @@ interface Terminal {
   rawState: string;
 }
 
-/** Read the comparable terminal fields off the post-run aidlc-state.md. */
 function readTerminal(sandbox: string): Terminal {
   const md = readFileSync(stateFilePathFor(sandbox), "utf8");
   const scope = /\*\*Scope\*\*:[ \t]*(\S+)/.exec(md)?.[1];
@@ -340,8 +337,6 @@ function readTerminal(sandbox: string): Terminal {
   };
 }
 
-/** Launch claude on a fresh brownfield bugfix project, clear modals, submit the
- *  bugfix command. Returns the session name (caller drives gates + reads disk). */
 function launchBugfix(session: string, sandbox: string, fidelity: NativeFidelity, env: NodeJS.ProcessEnv): void {
   // run-tests.ts disables the approve-time revision backstop globally because
   // most fixtures intentionally omit revision evidence. This test is the live
@@ -387,8 +382,8 @@ function launchBugfix(session: string, sandbox: string, fidelity: NativeFidelity
 
   // Explicit `--scope bugfix` (not the bare keyword) so the shipped
   // AWS_AIDLC_DEFAULT_SCOPE=classic env-default does NOT trigger a scope-
-  // disambiguation gate at START (the t50 lesson, SKILL.md:105 "explicit CLI flag
-  // wins"). The trailing description satisfies the step-6 "what to build?" prompt
+  // disambiguation gate at START (the t50 lesson: an explicit flag wins over the
+  // env default). The trailing description satisfies the "what to build?" prompt
   // up front (answer-gate can't type free text).
   drive([
     "send",

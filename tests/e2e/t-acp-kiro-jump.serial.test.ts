@@ -105,7 +105,6 @@ describe("t-acp-kiro-jump (backward phase jump over ACP; t26-class flake policy 
         expect(audit).toContain(AUDIT_TARGET_LINE);
         expect(audit).toContain(AUDIT_DIRECTION_LINE);
 
-        // Disk: state now points at the jump target.
         const state = readFileSync(seededStateFile(proj), "utf-8");
         expect(state).toMatch(/\*\*Current Stage\*\*:[ \t]*intent-capture/);
       } finally {

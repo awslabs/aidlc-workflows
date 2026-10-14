@@ -7590,7 +7590,12 @@ export function workflowParticipation(
 export function enterHookWorkflow(
   projectDir: string,
   payloadSessionId: unknown,
-): { selection: WorkflowSelection | null; participation: WorkflowParticipation; restore: () => void } {
+): {
+  selection: WorkflowSelection | null;
+  participation: WorkflowParticipation;
+  projectDir: string;
+  restore: () => void;
+} {
   const raw = typeof payloadSessionId === "string" ? validSessionId(payloadSessionId) : null;
   const chat = raw === null ? null : resolveChat(projectDir, raw, { bind: false });
   // Placed: this chat has a binding, or the id belongs to a chat an adapter named.
@@ -7612,34 +7617,66 @@ export function enterHookWorkflow(
   }
   try {
     const selection = resolveWorkflowSelection(projectDir);
-    return { selection, participation: workflowParticipation(projectDir, selection), restore };
+    return {
+      selection,
+      participation: workflowParticipation(projectDir, selection),
+      projectDir,
+      restore,
+    };
   } catch {
-    return { selection: null, participation: "indeterminate", restore };
+    return { selection: null, participation: "indeterminate", projectDir, restore };
   }
 }
 
-// A hook stands outside when its selection names a record this conversation has
-// not joined, or when participation cannot be decided. Hooks that only write into
-// the record skip on it. A selection with no record (a cold workspace) is not
-// "outside": there is nothing to protect, and hooks keep their pre-workflow
-// behaviour.
-export function hookStandsOutside(workflow: ReturnType<typeof enterHookWorkflow>): boolean {
+// This conversation has not joined the selected record, or participation cannot
+// be decided. A selection with no record (a cold workspace) has not failed to
+// join one: there is nothing to protect.
+function conversationHasNotJoined(workflow: ReturnType<typeof enterHookWorkflow>): boolean {
   if (workflow.selection === null) return true;
   if (workflow.selection.intent !== null) return workflow.participation !== "participant";
   // Bound to no record because the record it found was not joined: still outside
   // that record, unlike a session in a workspace that has none.
-  const source = workflow.selection.binding?.source;
-  return source === "unjoined";
+  return workflow.selection.binding?.source === "unjoined";
+}
+
+// The selected record's own Status. Completed and Archived are finished work:
+// the conversation may still be the one that did it, and the record stays
+// selected, but a later chat event is not part of that work.
+export function selectedRecordIsFinished(
+  projectDir: string,
+  selection: WorkflowSelection | null,
+): boolean {
+  if (!projectDir || selection === null) return false;
+  let content: string;
+  try {
+    content = readFileSync(stateFilePathForSelection(projectDir, selection), "utf-8");
+  } catch {
+    return false;
+  }
+  const status = getField(content, "Status");
+  return status === "Completed" || status === "Archived";
+}
+
+// A hook stands outside when its selection names a record this conversation has
+// not joined, when participation cannot be decided, or when that record is
+// finished (Completed or Archived). Hooks that only write into the record skip
+// on it. A selection with no record (a cold workspace) is not "outside": there
+// is nothing to protect, and hooks keep their pre-workflow behaviour.
+export function hookStandsOutside(workflow: ReturnType<typeof enterHookWorkflow>): boolean {
+  if (conversationHasNotJoined(workflow)) return true;
+  return selectedRecordIsFinished(workflow.projectDir, workflow.selection);
 }
 
 // Whether a gate may stand aside for this conversation: only when the selection
-// resolved and the conversation is known not to have joined it. A selection that
-// failed to resolve, or a participation that cannot be decided (malformed or
-// stale delegated worktree metadata), does not lower a gate: the gate takes its
-// ordinary path, which fails closed on the same error.
+// resolved and the conversation is known not to have joined it. Finished work
+// is not that case: the conversation did join it, so a gate keeps the path it
+// takes for a participant. A selection that failed to resolve, or a
+// participation that cannot be decided (malformed or stale delegated worktree
+// metadata), does not lower a gate: the gate takes its ordinary path, which
+// fails closed on the same error.
 export function hookOutsideGate(workflow: ReturnType<typeof enterHookWorkflow>): boolean {
   if (workflow.selection === null || workflow.participation === "indeterminate") return false;
-  return hookStandsOutside(workflow);
+  return conversationHasNotJoined(workflow);
 }
 
 export function stateFilePathForSelection(

@@ -222,13 +222,23 @@ export class ScopeHost {
   session = "scope-run-session-1";
   /** The tree's own folder: the agent's commands are `bun <dir>/tools/...`. */
   readonly dir: string = ".claude";
+  /** The orchestrator skill the agent follows, in the project. */
+  readonly skill: string = ".claude/skills/aidlc/SKILL.md";
   /** A question is a picker whose answer comes back in the same turn; otherwise the person types the reply. */
   readonly picker: boolean = true;
   /** The stand-in deletes a per-Unit reviewer's dispatch record after the review; the protocol leaves that to the engine. */
   readonly removesDispatch: boolean = true;
+  /**
+   * The person's installed `aidlc` command, as the argv that runs it, where a
+   * release set the project up: the engine then names its commands
+   * `aidlc ...` and the wiring runs `aidlc engine hook ...`. Null for a tree
+   * copied from this repository, whose commands are `bun <dir>/tools/...`.
+   */
+  launcher: readonly string[] | null = null;
 
-  constructor(readonly proj: string) {
-    const env = testGuardEnvironment({ ...process.env, CLAUDE_PROJECT_DIR: proj }, "production");
+  /** `base` is the environment the person's machine gives the tool; this process's by default. */
+  constructor(readonly proj: string, base: NodeJS.ProcessEnv = process.env) {
+    const env = testGuardEnvironment({ ...base, CLAUDE_PROJECT_DIR: proj }, "production");
     delete env.AWS_AIDLC_DEFAULT_SCOPE;
     delete env.AIDLC_UNATTENDED;
     env.GIT_AUTHOR_NAME = "Scope Run";
@@ -277,16 +287,23 @@ export class ScopeHost {
     if (this.fullHost) throw new ScopeRunRefused(`the guard refused ${tool} ${clip(JSON.stringify(input), 200)}`, res.stderr);
   }
 
+  /** The argv for an AI-DLC command line, as the agent's shell or the tool's hook runner would run it. */
+  argv(line: string): string[] {
+    const [first, ...rest] = commandWords(line);
+    if (first === "bun" && this.launcher === null) return [process.execPath, ...rest];
+    if (first === "aidlc" && this.launcher !== null) return [...this.launcher, ...rest];
+    throw new Error(`the stand-in runs only ${this.launcher === null ? "bun" : "aidlc"} commands, got: ${line}`);
+  }
+
   /** Run a command line as the agent's Bash tool would, with the host's Bash hooks. */
   bash(line: string): RunResult {
-    const words = commandWords(line);
-    if (words[0] !== "bun") throw new Error(`the stand-in runs only bun commands, got: ${line}`);
+    const argv = this.argv(line);
     // The guard is fired on the engine's loop commands, where a refusal would
     // stop the person's run; logging and read-only helpers skip it.
     if (this.fullHost || /\borchestrate(?:\.ts)? (?:next|continue|report)\b|\borchestrate-?\.?ts continue\b|aidlc-orchestrate\.ts /.test(line)) {
       this.preTool("Bash", { command: line });
     }
-    const res = this.spawn(line, [process.execPath, ...words.slice(1)]);
+    const res = this.spawn(line, argv);
     // The Bash PostToolUse hook acts only on transition commands, on work being
     // created (it joins the session to it) and on an engine error it relays;
     // for anything else it exits at once, so the host's call is skipped.
@@ -308,9 +325,10 @@ export class ScopeHost {
     rmSync(abs, { force: true });
   }
 
-  /** `bun <dir>/tools/aidlc.ts engine <args>`, the skill's dispatcher form. */
+  /** `bun <dir>/tools/aidlc.ts engine <args>`, the skill's dispatcher form, or `aidlc engine <args>` on an installed project. */
   engine(...args: string[]): RunResult {
-    return this.bash(["bun", `${this.dir}/tools/aidlc.ts`, "engine", ...args].map(shellQuote).join(" "));
+    const head = this.launcher === null ? ["bun", `${this.dir}/tools/aidlc.ts`] : ["aidlc"];
+    return this.bash([...head, "engine", ...args].map(shellQuote).join(" "));
   }
 
   /** Write a file as the agent's Write tool would, then the host's Write hook. */
@@ -332,7 +350,7 @@ export class ScopeHost {
   hook(name: string, payload: Record<string, unknown>): RunResult {
     return this.spawn(
       `hook ${name}`,
-      [process.execPath, join(this.proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", name],
+      [...(this.launcher ?? [process.execPath, join(this.proj, ".claude", "tools", "aidlc.ts")]), "engine", "hook", name],
       JSON.stringify({ session_id: this.session, cwd: this.proj, ...payload }),
     );
   }
@@ -623,6 +641,10 @@ export interface StandInOptions {
   beforePlanAnswer?: (unit: string | null, agent: AgentStandIn) => void;
   /** Follow each refusal's named step instead of stopping (the guard matrix). */
   followRefusals?: boolean;
+  /** The drive returns when the person stops for the day, before their next chat; `resume` carries on from there. */
+  pauseAtStop?: boolean;
+  /** The drive returns at the first directive this picks, before the stand-in acts on it. */
+  until?: (d: Directive) => boolean;
   /** What a stage's body writes to one of its files instead of the stand-in's own text. */
   artifactText?: (path: string, stage: string) => string | undefined;
 }
@@ -675,6 +697,9 @@ export class AgentStandIn {
   private pickedWork = false;
   /** What `park` answered each time the person stopped for the day. */
   readonly parks: Directive[] = [];
+  private readonly pauseAtStop: boolean;
+  private readonly until?: StandInOptions["until"];
+  private paused = false;
 
   constructor(
     readonly host: ScopeHost,
@@ -690,16 +715,24 @@ export class AgentStandIn {
       artifactText: options.artifactText,
     };
     this.followRefusals = options.followRefusals ?? false;
+    this.pauseAtStop = options.pauseAtStop ?? false;
+    this.until = options.until;
   }
 
-  /** How the engine names its own commands on the host's tree. */
-  private get tools(): string {
-    return `bun ${this.host.dir}/tools/`;
+  /**
+   * A backquoted command the engine names on the host's tree, captured:
+   * `bun <dir>/tools/<dev>`, or `aidlc <installed>` where a release set the
+   * project up.
+   */
+  private named(dev: string, installed = dev): RegExp {
+    const [prefix, rest] = this.host.launcher === null ? [`bun ${this.host.dir}/tools/`, dev] : ["aidlc ", installed];
+    return new RegExp(`\`(${prefix.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}${rest})\``);
   }
 
-  /** A backquoted command of the host's tree, `bun <dir>/tools/<rest>`, captured. */
-  private named(rest: string): RegExp {
-    return new RegExp(`\`(${this.tools.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}${rest})\``);
+  /** One of the agent's own tool calls, as the stage names it: the tool's file on a tree, its dispatcher route on an install. */
+  private tool(file: string, route: string, args: string): RunResult {
+    const head = this.host.launcher === null ? `bun ${this.host.dir}/tools/${file}` : `aidlc engine ${route}`;
+    return this.host.bash(args ? `${head} ${args}` : head);
   }
 
   /**
@@ -866,7 +899,7 @@ export class AgentStandIn {
     let d = first;
     for (let i = 0; i < 5 && d.kind === "print"; i++) {
       const message = String(d.message ?? "");
-      const create = this.named("aidlc\\.ts engine intent create [^`]+").exec(message);
+      const create = this.named("aidlc\\.ts engine intent create [^`]+", "engine intent create [^`]+").exec(message);
       if (!create) break;
       const line = create[1].replace(/--label "[^"]*"/, '--label "scope run"');
       let res = this.host.bash(line);
@@ -895,6 +928,7 @@ export class AgentStandIn {
     let d = first;
     const seen = new Map<string, number>();
     while (true) {
+      if (this.until?.(d)) return d;
       if (++this.steps > 600) this.fail("over 600 directives without done", d);
       const key = `${String(d.kind)} ${String(d.stage ?? d.ask_type ?? "")} ${String(d.unit ?? "")} ${JSON.stringify(d.construction_checkpoint ?? d.plan_approval ?? d.gate ?? "")}`;
       const times = (seen.get(key) ?? 0) + 1;
@@ -910,6 +944,7 @@ export class AgentStandIn {
         if (!(error instanceof ScopeRunRefused) || error instanceof ScopeRunDeadlock || !this.followRefusals) throw error;
         this.followRefusal(error.refusal);
       }
+      if (this.paused) return d;
       if (d.kind === "done" && d.workflow_continues !== true && !this.pending) return d;
       d = this.pending ?? this.next();
       this.pending = undefined;
@@ -984,7 +1019,6 @@ export class AgentStandIn {
     throw new ScopeRunDeadlock(`a refusal named no step to take: ${clip(said, 800)}`, said);
   }
 
-  /** One directive's work. */
   private step(d: Directive): void {
       const cp = d.construction_checkpoint as { unit?: unknown } | undefined;
       this.unitInHand = typeof d.unit === "string" ? d.unit : typeof cp?.unit === "string" ? cp.unit : null;
@@ -1009,7 +1043,7 @@ export class AgentStandIn {
           if (!this.named("[^`]+").test(message)) this.fail("a print mid-run named no step to take", d);
           // The agent's own work the step names: the units block, from the Units it wrote.
           const repaired = this.repairUnitsBlockIfNamed(message, "next");
-          if (!repaired || !/orchestrate\.ts next`\.$/.test(message)) this.actOnPrint(d);
+          if (!repaired || !/orchestrate(?:\.ts)? next`\.$/.test(message)) this.actOnPrint(d);
           this.pending = /next --resume/.test(message) ? this.next("--resume") : this.next();
           break;
         }
@@ -1136,7 +1170,6 @@ export class AgentStandIn {
       // What this entry wrote, for the matrix's changes: an entry reads as the Unit's own body.
       this.worked.push({ ...d, unit, produces, wave: undefined });
       if (entry.build_required === true) {
-        // The builder runs the Unit's own question flow, then writes its outputs.
         const questions = produces.find((p) => p.endsWith(`${stage}-questions.md`));
         if (questions) this.askQuestions({ ...d, unit, wave: undefined }, questions);
         for (const p of produces) {
@@ -1222,7 +1255,7 @@ export class AgentStandIn {
     const { intent, space } = activeRecord(this.host.proj);
     const record = `aidlc/spaces/${space}/intents/${intent}`;
     this.host.engine("workspace", "codekb-scope-diff", "--repo", repo);
-    const snap = parseJson(this.host.bash(`${this.tools}aidlc-utility.ts codekb-snapshot --repo ${repo} --paths ./ --json`).stdout);
+    const snap = parseJson(this.tool("aidlc-utility.ts codekb-snapshot", "workspace codekb-snapshot", `--repo ${repo} --paths ./ --json`).stdout);
     if (!snap?.source_fingerprint) this.fail("codekb snapshot printed no source fingerprint", d);
     const scan = `${record}/inception/reverse-engineering/developer-scan.md`;
     const synthesise = () => {
@@ -1235,8 +1268,10 @@ export class AgentStandIn {
       const check = this.host.engine("workspace", "codekb-scope-diff", "--repo", repo, "--check", `${staged}/reverse-engineering-timestamp.md`);
       if (!/VALID/.test(check.stdout)) this.fail(`staged timestamp is not VALID: ${clip(check.stdout + check.stderr)}`, d);
       this.host.engine("workspace", "codekb", "--repo", repo);
-      const published = this.host.bash(
-        `${this.tools}aidlc-utility.ts codekb-publish --repo ${repo} --staged ${staged}/ --paths ./ ` +
+      const published = this.tool(
+        "aidlc-utility.ts codekb-publish",
+        "workspace codekb-publish",
+        `--repo ${repo} --staged ${staged}/ --paths ./ ` +
           `--expect-store ${String(snap.store_generation)} --expect-source ${String(snap.source_fingerprint)} --json`,
       );
       if (published.status !== 0) this.fail(`codekb publish refused: ${clip(published.stdout + published.stderr, 1200)}`, d);
@@ -1246,10 +1281,10 @@ export class AgentStandIn {
       this.host.write(scan, DEVELOPER_SCAN);
       if (rest.length === 0) synthesise();
     });
-    this.host.bash(`${this.tools}aidlc-log.ts link --stage reverse-engineering --link ${first} --artifact "${scan}"`);
+    this.tool("aidlc-log.ts link", "log link", `--stage reverse-engineering --link ${first} --artifact "${scan}"`);
     for (const link of rest) {
       this.host.task(link, "Write the code knowledge base", synthesise);
-      this.host.bash(`${this.tools}aidlc-log.ts link --stage reverse-engineering --link ${link}`);
+      this.tool("aidlc-log.ts link", "log link", `--stage reverse-engineering --link ${link}`);
     }
   }
 
@@ -1413,11 +1448,26 @@ export class AgentStandIn {
    */
   stopForTheDay(meanwhile?: () => void): void {
     this.person.say("let's stop here for today");
-    const parked = this.must("orchestrate", "park", "--person-asked");
+    // The park the agent's skill names when the person asks to stop: a release
+    // from before `--person-asked` names plain `park`.
+    const skill = readFileSync(join(this.host.proj, this.host.skill), "utf-8");
+    const parked = this.must("orchestrate", "park", ...(skill.includes("park --person-asked") ? ["--person-asked"] : []));
     this.parks.push(parked as Directive);
     meanwhile?.();
+    if (this.pauseAtStop) {
+      this.paused = true;
+      return;
+    }
     this.host.newSession();
     this.pending = this.personTypes("/aidlc --resume");
+  }
+
+  /** The person's next chat after a paused stop for the day: `/aidlc --resume`, and the drive carries on. */
+  resume(): Directive {
+    if (!this.paused) this.fail("there is no stop for the day to resume from");
+    this.paused = false;
+    this.host.newSession();
+    return this.drive(this.personTypes("/aidlc --resume"));
   }
 
   // --- code generation ----------------------------------------------------
@@ -1427,7 +1477,7 @@ export class AgentStandIn {
     const planPath = produces.find((p) => p.endsWith("code-generation-plan.md"));
     const tests = produces.find((p) => p.endsWith("unit-test-instructions.md"));
     if (!planPath || !tests) this.fail("code-generation names no plan or test instructions", d);
-    const contract = this.host.bash(`${this.tools}aidlc-testing-posture.ts render`);
+    const contract = this.tool("aidlc-testing-posture.ts render", "testing-posture render", "");
     if (contract.status !== 0) this.fail(`testing posture render failed: ${clip(contract.stderr)}`, d);
     // A revision puts the requested change in the plan as its own step
     // (Code Generation Step 3), so the plan asked about is the revised one.
@@ -1443,9 +1493,7 @@ export class AgentStandIn {
   handoffPrompt(d: Directive): string {
     if (d.stage !== "code-generation") return `Run ${String(d.stage)}`;
     const unit = typeof d.unit === "string" ? d.unit : null;
-    const brief = this.host.bash(unit
-      ? `${this.tools}aidlc-testing-posture.ts brief --unit ${unit}`
-      : `${this.tools}aidlc-testing-posture.ts brief --stage-level`);
+    const brief = this.tool("aidlc-testing-posture.ts brief", "testing-posture brief", unit ? `--unit ${unit}` : "--stage-level");
     if (brief.status !== 0) this.fail(`testing posture brief failed: ${clip(brief.stdout + brief.stderr)}`, d);
     return brief.stdout;
   }
@@ -1657,7 +1705,6 @@ function codePlanText(contract: string, change: string | null = null): string {
   return `# Code Generation Plan\n\n## Summary\n\n- Builds: one function and its test\n- Touches: src/scope-run.ts, test/scope-run.test.ts\n- Tests: 1 unit test\n\n## Steps\n\n- [ ] Step 1: Write src/scope-run.ts (FR1)\n- [ ] Step 2: Write and run test/scope-run.test.ts (FR1)\n${revised}\n${contract.trim()}\n`;
 }
 
-/** The active intent's record dir and state file. */
 export function activeRecord(proj: string): { space: string; intent: string; dir: string; state: string } {
   const spaceFile = join(proj, "aidlc", "active-space");
   const space = existsSync(spaceFile) ? readFileSync(spaceFile, "utf-8").trim() || "default" : "default";
@@ -1828,7 +1875,6 @@ export function scopeScratchDir(prefix: string): string {
   return dir;
 }
 
-/** Remove every project this file's runs made. */
 export function cleanupScopeProjects(): void {
   while (projects.length > 0) cleanupTestProject(projects.pop());
 }

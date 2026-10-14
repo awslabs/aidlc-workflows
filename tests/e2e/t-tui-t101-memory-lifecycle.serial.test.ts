@@ -6,20 +6,18 @@
 // Approve / Request Changes menu without answering it. This leaves the workflow
 // paused on approval-handoff while proving the real approval gate rendered.
 //
-// WHAT IT PROVES (the memory.md lifecycle the SKILL.md ## Routing block drives):
-//   - init-from-template fires at stage START — the orchestrator copies
+// WHAT IT PROVES (the memory.md lifecycle bootstrapDirectiveMemory drives):
+//   - init-from-template fires at stage START - the engine copies
 //     knowledge/aidlc-shared/memory-template.md into the stage's
 //     <record>/ideation/approval-handoff/memory.md (file exists, non-empty).
 //   - the created file carries all FOUR canonical `## ` H2 headings
-//     (## Interpretations / ## Deviations / ## Tradeoffs / ## Open questions)
-//     — the .sh's assertion 2.
-//   - the ownership header is the VERBATIM template blockquote — the .sh's
-//     assertion 3 (here asserted UNCONDITIONALLY: stronger than the .sh, which
-//     skipped when the orchestrator approximated the copy. A malformed/missing
-//     header is a real defect, not LLM variance, so we hold the bar).
+//     (## Interpretations / ## Deviations / ## Tradeoffs / ## Open questions).
+//   - the ownership header is the VERBATIM template blockquote, asserted
+//     UNCONDITIONALLY: a malformed/missing header is a real defect, not LLM
+//     variance, so we hold the bar.
 //   - the jump landed on disk: aidlc-state.md `Current Stage` == approval-handoff.
 //   - parseMemoryHeadings(file).total == the visible `- ` entry count on disk —
-//     the .sh's assertion 7 (parser ↔ disk agreement), ported by importing the
+//     (parser <-> disk agreement), asserted by importing the
 //     exported helper from the distributable (aidlc-lib.ts:982; import-safe under
 //     bun without loading terminal driver dependencies).
 //   - RENDER (the tui-only value-add the SDK path is blind to): the captured
@@ -47,8 +45,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 // parseMemoryHeadings is the SAME parser the runtime-graph populator uses
-// (aidlc-lib.ts:982). Importing it here ports the .sh's parser↔disk assertion 7.
-// aidlc-lib.ts is import-safe under bun on every platform.
+// (aidlc-lib.ts, imported by aidlc-runtime.ts). aidlc-lib.ts is import-safe
+// under bun on every platform.
 import { parseMemoryHeadings } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
@@ -91,14 +89,14 @@ function remainingCleanupMs(): number {
 
 
 
-// The terminal artifact the journey terminates on (relative to the active intent
-// RECORD dir — P9 per-intent layout). Created at stage start; its existence +
-// content is the lifecycle contract.
+// The stage artifact the journey inspects (relative to the active intent
+// RECORD dir). Created at stage start; its existence + content is the
+// lifecycle contract.
 const MEM_RELPATH = join("ideation", "approval-handoff", "memory.md");
 
 // The verbatim template ownership blockquote (knowledge/aidlc-shared/
-// memory-template.md). The init is an LLM-driven copy of that template; a faithful
-// copy reproduces this byte-for-byte.
+// memory-template.md). The init is an engine-owned copy of that template
+// (bootstrapDirectiveMemory, copyFileSync), so it reproduces this byte-for-byte.
 const OWNERSHIP_LINE =
   "> This file is kept up to date automatically while the stage runs. " +
   "Add observations at the review step, not by editing here directly.";
@@ -149,19 +147,18 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
     `approval-handoff stage creates a faithful memory.md and renders its gate${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       const session = `aidlc_tui_t101_${process.pid}`;
-      // Mirror the .sh setup: mid-ideation state + seeded audit, target the
-      // approval-handoff gate stage (a lightweight gate, ideation phase — the
-      // t24 timeout-avoidance choice).
+      // Mid-ideation state + seeded audit, target the approval-handoff gate stage (a
+      // lightweight gate, ideation phase - the t24 timeout-avoidance choice).
       const sandbox = setupTuiProject({
         withState: "state-mid-ideation.md",
         withAudit: true,
         // Seed the 3 required upstream ideation artifacts so the forward `--stage
         // approval-handoff` jump finds its required `consumes` present and does NOT
-        // render the Missing-inputs gate (SKILL.md jump step 10; same fix as t24).
-        // Without this, the missing-inputs gate fires and the driver would
-        // prove that gate instead of the approval gate this test targets. The jump
-        // lands gatelessly (post-0.5.17 the gate keys only on REQUIRED inputs), the
-        // approval-handoff stage runs, and its approval gate is what the detector proves.
+        // render the Missing-inputs gate. Without this, the missing-inputs gate fires
+        // and the driver would prove that gate instead of the approval gate this test
+        // targets. The jump lands gatelessly (the gate keys only on REQUIRED inputs),
+        // the approval-handoff stage runs, and its approval gate is what the detector
+        // proves.
         ideationArtifacts: true,
         runtimeGraph: true,
       });
@@ -241,16 +238,15 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         expect(approvalGrid).toMatch(/\d+\.\s+Approve\b/i);
         expect(approvalGrid).toMatch(/\d+\.\s+Request Changes\b/i);
 
-        // --- assert ON DISK (equal-or-stronger than the .sh) ------------------
+        // --- assert ON DISK ------------------
         const memPath = join(seededRecordDir(sandbox), MEM_RELPATH);
-        // 1. memory.md exists & non-empty (.sh assertion 1). The terminator
-        //    guarantees this on green; we read it for the content asserts.
+        // 1. memory.md exists & non-empty. We read it for the content asserts.
         expect(existsSync(memPath)).toBe(true);
         const mem = readFileSync(memPath, "utf8");
         expect(mem.length).toBeGreaterThan(0);
 
-        // 2. all four canonical `## ` H2 headings (.sh assertion 2). Anchored to
-        //    line starts so a heading mentioned in prose can't satisfy it.
+        // 2. all four canonical `## ` H2 headings. Anchored to line starts so a
+        //    heading mentioned in prose can't satisfy it.
         expect(mem).toMatch(/^## Interpretations$/m);
         expect(mem).toMatch(/^## Deviations$/m);
         expect(mem).toMatch(/^## Tradeoffs$/m);
@@ -266,10 +262,10 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         expect(mem).toMatch(ownershipRe);
 
         // 4. parseMemoryHeadings(file).total == visible `- ` entry count on disk
-        //    (.sh assertion 7 — parser ↔ disk agreement). The parser counts real
-        //    dated entries under canonical headings; the disk count is the `- `
-        //    bullet lines. A fresh template (examples are single-line HTML
-        //    comments) parses to total=0 with 0 bullets — they agree at 0 too.
+        //    (parser <-> disk agreement). The parser counts real dated entries under
+        //    canonical headings; the disk count is the `- ` bullet lines. A fresh
+        //    template (examples are single-line HTML comments) parses to total=0 with
+        //    0 bullets - they agree at 0 too.
         const parsedTotal = parseMemoryHeadings(mem).total;
         const visible = mem.split("\n").filter((l) => l.startsWith("- ")).length;
         expect(parsedTotal).toBe(visible);
@@ -280,8 +276,6 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         const stateMd = readFileSync(seededStateFile(sandbox), "utf8");
         expect(stateMd).toMatch(/\*\*Current Stage\*\*:[ \t]*approval-handoff\b/);
 
-        // The captured numbered choices above prove the real approval gate
-        // rendered and remained unanswered.
       } finally {
         cleanupTuiProjectAfterKill(
           sandbox,

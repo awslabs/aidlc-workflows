@@ -231,7 +231,9 @@ ask.
 
 **What still asks you.** The developer agent and the `aidlc` agent write
 project files without asking: any path inside the project whose top-level name
-does not start with a dot. Their writes into `.kiro/` (apart from the `aidlc` agent's own
+does not start with a dot. In a side-by-side build they also write each unit's
+own records in its checkout (`.aidlc/worktrees/<unit>/aidlc/spaces/`) without
+asking; the worker's edits to your code there still ask. Their writes into `.kiro/` (apart from the `aidlc` agent's own
 `.kiro/sensors/` files), `.git/`, or any other
 top-level dot entry, and anything outside the project, still ask. Your
 project's own test and build commands (`bun test`, `npm test`, `pytest`, and so

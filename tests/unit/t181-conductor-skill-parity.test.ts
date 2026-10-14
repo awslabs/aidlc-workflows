@@ -1699,6 +1699,26 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(stale).toEqual([]);
   });
 
+  test("a fresh questions file groups its questions by who would answer them", () => {
+    // A stage's questions mixed the product owner's with the developer's in the
+    // stage file's topic order, so each person read every question to find
+    // theirs. The protocol now names the trade on each question and keeps each
+    // trade's questions together, behind the questions they depend on.
+    const protocol = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"), "utf-8")
+      .replace(/\s+/g, " ");
+    const missing = [
+      "name for each question the one trade whose decision it is, after the question number",
+      "Only `Q<n>.` is fixed; the trade, like the title, is in the conversation language.",
+      "`## Q<n>. [<trade>] <title>`",
+      "the question that decides comes first, even when a trade then appears twice",
+      "The stage file's topic order is what to cover, not the order to write;",
+      "anyone may answer any question, and it never skips one or leaves it to you",
+      "never reorder or renumber an existing questions file (a redo the person asked for starts a fresh one)",
+      "give a follow-up question the next unused number and its trade, at the end",
+    ].filter((rule) => !protocol.includes(rule));
+    expect(missing).toEqual([]);
+  });
+
   test("a bare re-entry carries on: no surface offers the old resume menu", () => {
     // A new session's bare /aidlc used to stop on a Resume / Redo / Jump / Start
     // Fresh menu although the person wanted to carry on. Every copy of that rule

@@ -1,23 +1,13 @@
-// tui-fixtures.ts — shared project seeding for TUI journey tests, the TypeScript
-// mirror of bash setup_integration_project (tests/lib/fixtures.sh:150-198). The
+// tui-fixtures.ts - shared project seeding for TUI journey tests. The
 // render-surface tests inline `cpSync(AIDLC_SRC) + writeFileSync(state)`; the
 // JOURNEY tests additionally need the greenfield/brownfield/RE stubs that drive
-// workspace-detection and reverse-engineering — those are fixture-DIRECTORY copies
-// (fixtures.sh:168-173), too much to re-inline per file. This is the one helper.
+// workspace-detection and reverse-engineering - those are fixture-DIRECTORY
+// copies, too much to re-inline per file. This is the one helper.
 //
 // It is import-safe (no top-level side effects) and primarily used by TUI tests,
 // which SPAWN tui-drive.ts as a subprocess. The runtime-graph fixture compiler
 // is also shared by seeded SDK tests and is safe to import under bun on every
 // platform.
-//
-// Mirrors the bash flags faithfully:
-//   withState        -> seed_state_file       (fixtures.sh:165)  aidlc-docs/aidlc-state.md
-//   withAudit        -> seed_audit_file       (fixtures.sh:166)  aidlc-docs/audit.md
-//   noAidlcDocs      -> --no-aidlc-docs        (fixtures.sh:167)  rm -rf aidlc-docs
-//   greenfieldStub   -> --with-greenfield-stub (fixtures.sh:168)  cp greenfield-todo/.
-//   brownfieldStub   -> --with-brownfield-stub (fixtures.sh:169)  cp brownfield-todo/.
-//   reArtifacts      -> --with-re-artifacts     (fixtures.sh:170)  cp re-artifacts/*.md
-//                                                                  -> spaces/default/codekb/<repo>/
 
 import {
   cpSync,
@@ -62,7 +52,6 @@ import {
   seededRecordDir,
 } from "./fixtures.ts";
 
-// tests/harness/ -> repo root -> dist/claude/.claude (the shipped distributable).
 const HARNESS_DIR = import.meta.dir;
 const REPO_ROOT = join(HARNESS_DIR, "..", "..");
 export const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -427,15 +416,17 @@ export interface TuiProjectOptions {
    *  carries the v2 hook JSON files the IDE reads - the human-presence mint + block).
    *  Everything else (state, audit, stubs) is harness-neutral. */
   harness?: "claude" | "kiro" | "kiro-ide";
-  /** Seed aidlc-docs/aidlc-state.md from tests/fixtures/<withState> (a filename like
-   *  "state-mid-ideation.md"). Omit for a fresh project. */
+  /** Seed the active intent record's aidlc-state.md from tests/fixtures/<withState>
+   *  (a filename like "state-mid-ideation.md"). Omit for a fresh project. */
   withState?: string;
   /** Exact initial request in the marked record's public description sidecar. */
   projectDescription?: string;
-  /** Seed an empty-ish aidlc-docs/audit.md so the workflow appends to it. */
+  /** Seed an empty-ish audit shard under the active intent record's audit/ so the
+   * workflow appends to it.
+   */
   withAudit?: boolean;
-  /** Remove aidlc-docs/ entirely (the --no-aidlc-docs case: a brand-new workspace
-   *  that the journey will scaffold itself). */
+  /** Remove the default space's intents/ directory (a brand-new workspace that the
+   *  journey will scaffold itself). */
   noAidlcDocs?: boolean;
   /** Copy the greenfield-todo stub (a README.md) into the project root — drives
    *  workspace-detection to Greenfield. */
@@ -449,13 +440,14 @@ export interface TuiProjectOptions {
   reArtifacts?: boolean;
   /** Pre-seed the 3 REQUIRED ideation artifacts (intent-statement,
    *  scope-document, intent-backlog) at their canonical producing-stage paths
-   *  under aidlc-docs/ideation/. A forward `--stage` jump into a late ideation
-   *  stage (e.g. approval-handoff) scans the target's `consumes` and renders a
-   *  Missing-inputs Continue/Cancel gate if a required upstream artifact is
-   *  absent (SKILL.md:212-215). A mid-ideation state fixture marks stages [x]
-   *  but ships no artifacts, so without this the jump gates. Seeding them makes
-   *  the fixture self-consistent (state [x] ⇒ artifact exists) and the jump
-   *  gateless — the genuine deterministic landing the journey tests. */
+   *  under the intent record's ideation/. A forward `--stage` jump into a late
+   *  ideation stage (e.g. approval-handoff) splits the target's `consumes` by
+   *  presence and reports a required upstream artifact that is absent as
+   *  `consumes_absent` (splitConsumesByPresence in aidlc-orchestrate.ts). A
+   *  mid-ideation state fixture marks stages [x] but ships no artifacts, so
+   *  without this the jump reports gaps. Seeding them makes the fixture
+   *  self-consistent (state [x] => artifact exists) and the jump gap-free - the
+   *  genuine deterministic landing the journey tests. */
   ideationArtifacts?: boolean;
   /**
    * Seed the Harness-Engineer custom harness (custom scope + two chained stages
@@ -477,7 +469,7 @@ export interface TuiProjectOptions {
    * builder suppresses that segment until listSpaces().length > 1
    * (aidlc-statusline.ts orientationPrefix → listSpaces(projectDir).length > 1),
    * so a single-space fixture never paints the space token — the render-half
-   * journey (P10 / Stage E) needs >1 space + an active intent for the FULL
+   * journey needs >1 space + an active intent for the FULL
    * `<space> · <intent> · <phase>` orientation to appear in a real TUI pane.
    *
    * The second space gets the same default-space memory shell shape (so it is a
@@ -492,8 +484,8 @@ export interface TuiProjectOptions {
 /**
  * Create a temp project seeded for a TUI journey and return its absolute path.
  * The caller cpSyncs nothing else — this does the distributable copy + every
- * requested stub. Mirrors setup_integration_project. The caller is responsible
- * for cleanup (rmSync) in a finally block, exactly as the inline tests do.
+ * requested stub. The caller is responsible for cleanup (rmSync) in a finally
+ * block, exactly as the inline tests do.
  */
 export function setupTuiProject(opts: TuiProjectOptions = {}): string {
   if (opts.projectDescription !== undefined &&
@@ -503,7 +495,7 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
   let proj = mkdtempSync(join(tmpdir(), "aidlc-tui-"));
   // Canonicalise so app-written paths (e.g. state Project Root) compare equal —
   // on macOS mkdtemp hands back /tmp|/var symlinks but the app records the
-  // resolved /private/... realpath. Mirrors fixtures.ts createTestProject:70-82
+  // resolved /private/... realpath. Mirrors fixtures.ts createTestProject
   // (the t70 macOS symlink bug). Reading/writing/cleanup resolve transparently.
   try {
     proj = realpathSync(proj);
@@ -623,8 +615,9 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
     // Seed the 3 REQUIRED ideation artifacts at the canonical paths their
     // producing stages write under the intent record (intent-capture/
     // intent-statement.md; scope-definition/{scope-document,intent-backlog}.md).
-    // This is what the forward-jump missing-input scan checks (SKILL.md:212), so
-    // seeding them keeps the jump gateless without touching checkbox state.
+    // This is what the forward-jump input presence check reads
+    // (splitConsumesByPresence in aidlc-orchestrate.ts), so seeding them keeps
+    // the jump free of `consumes_absent` gaps without touching checkbox state.
     const src = join(FIXTURES_DIR, "ideation-artifacts");
     const intentDir = join(record, "ideation", "intent-capture");
     const scopeDir = join(record, "ideation", "scope-definition");

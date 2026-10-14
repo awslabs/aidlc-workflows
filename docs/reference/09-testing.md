@@ -285,7 +285,10 @@ read in its own form: Codex and Kiro refuse with exit 2, Copilot with a deny
 decision, Copilot runs the command its hook rewrote, and Kiro's person-turn hook
 may run the turn's first `next` itself, so the agent acts on that reply. Every
 tool call fires the hooks, so a refusal stops the run, and a hook command that
-fails is a problem.
+fails is a problem. A host can also run on a project an installed release set
+up (`ScopeHost.launcher`): the agent's commands and the wiring's hooks then run
+through the person's `aidlc`, and the stand-in acts on the `aidlc engine ...`
+commands the installed engine names. The release's update check uses that.
 
 Each `t-scope-host-<harness>.test.ts` (`claude`, `codex`, `copilot`, `kiro`,
 `kiro-ide`, `cursor`, `opencode`) drives one
@@ -1570,7 +1573,18 @@ warning, gives way first, so a failing suite never stops a preview whose planned
 notes fit GitHub's 125,000-character release limit.
 The `update-from-previous` job (`scripts/ci-update-from-previous.ts`) updates an
 install of the last stable release to the candidate on Linux, macOS and Windows
-and runs every harness project's hooks, refresh and doctor. When it fails, the
+and runs every harness project's hooks, refresh and doctor. Each project holds
+the person's own committed app, `.gitignore` and `AGENTS.md`, and their work
+waits at a gate: before the update, on the last release's own engine and hooks,
+the scripted stand-in (`tests/harness/work-open.ts`, on that tool's scope host)
+starts a bugfix, answers the Requirements questions and stops for the day at
+the open Requirements gate, in all seven projects side by side. After the
+refresh, the person types `/aidlc --resume` in a new chat and approves. The
+check fails when the gate does not come back, the stage runs again, an answer
+is asked for again, the approval is not backed by the person's reply, the next
+stage does not start, or a file they committed changed outside AI-DLC's marked
+part. When the stand-in cannot leave work open on the last release at all, the
+check says so in its own line. When it fails, the
 preview still publishes, its notes open with a warning and the report gains a
 line for it; `release.yml` does not publish a stable release that fails it.
 `Release result` requires successful preview publication or an intentional

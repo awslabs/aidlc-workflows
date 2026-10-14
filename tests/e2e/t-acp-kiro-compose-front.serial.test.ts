@@ -140,7 +140,6 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
         const grid = JSON.parse(readFileSync(gridPath, "utf-8")) as Record<string, unknown>;
         expect(Object.keys(grid).every((k) => STOCK_SCOPES.has(k))).toBe(true);
 
-        // The created state runs a stock scope with the plan composed for it.
         const spaceCursor = join(root, "aidlc", "active-space");
         const space = existsSync(spaceCursor)
           ? readFileSync(spaceCursor, "utf-8").trim() || "default"
