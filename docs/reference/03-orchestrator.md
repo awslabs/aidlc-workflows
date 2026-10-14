@@ -423,8 +423,8 @@ sequenceDiagram
     participant S as aidlc-state.md
     participant AU as audit/ shard
 
-    O->>A: 1. Apply load-steering parts, then read inline_context_paths
-    Note over A: Rules arrive as content - persona and knowledge remain path-loaded
+    O->>A: 1. Apply load-steering parts, take on lead_persona, then read inline_context_paths
+    Note over A: Rules and the lead's persona arrive as content - other personas and knowledge remain path-loaded
 
     O->>SF: 2. Read stage file
     Note over SF: directive.stage_file
@@ -514,7 +514,7 @@ Inline stages run directly in the orchestrator conversation. The user can intera
 
 The 6-step process:
 
-1. **Load the stage steering.** Follow the ordered `load-steering` sequence until `run-stage`; it delivers every substantive active-space rule as content. Then read every `inline_context_paths` entry. Persona and knowledge remain path-loaded; missing, unreadable, or invalid UTF-8 optional files are omitted from the roster and reported through specific or aggregated `context_warnings`.
+1. **Load the stage steering.** Follow the ordered `load-steering` sequence until `run-stage`; it delivers every substantive active-space rule as content. The step carries the lead's persona as content (`lead_persona`); take it on, then read every `inline_context_paths` entry. Support personas and knowledge remain path-loaded (a lead persona too large to ride beside its step is listed first instead); missing, unreadable, or invalid UTF-8 optional files are omitted from the roster and reported through specific or aggregated `context_warnings`.
 2. **Read the stage file.** The conductor reads the exact `directive.stage_file`.
 3. **Read resolved inputs.** The conductor reads the existing artifacts in `directive.consumes`, applying the stage's documented fallback for expected absent inputs.
 4. **Load conditional protocol modules.** Read every file named by
@@ -546,9 +546,9 @@ The 6-step process:
 1. **Load delivered rules, read stage and inputs.** Apply every ordered
    `load-steering` part before `run-stage`. Use the exact directive paths for
    the stage file and artifacts.
-2. **Load conductor-owned context.** A mob directive carries its lead's complete
-   path roster in `inline_context_paths`; fully dispatched subagent/pipeline
-   directives carry an empty roster.
+2. **Load conductor-owned context.** A mob directive carries its lead's persona
+   in `lead_persona` and the lead's knowledge roster in `inline_context_paths`;
+   fully dispatched subagent/pipeline directives carry neither.
 3. **Prepare briefs: rules as content, artifacts as paths.** Deliver the
    stage's rules per `stage-protocol.md` § "For subagent stages" step 2; pass relevant artifact paths and task
    instructions. The named
@@ -569,7 +569,7 @@ The 6-step process:
 Some stages involve multiple agents: a lead agent and one or more support agents. The coordination pattern follows `directive.mode` — the stage's communication topology — and is always orchestrator-mediated:
 
 1. Execute the lead agent's work first, producing primary artifacts.
-2. Bring in each support agent per the topology. On an `inline` stage the orchestrator reads every lead/support entry in `directive.inline_context_paths` and adopts those perspectives rather than dispatching them. On `mob`, it reads the lead-only roster and performs the lead work inline, while each support is a real dispatch. On `subagent` (hub-and-spoke) and `pipeline` (chain), the lead and supports are dispatched: mutually-blind spokes on subagent, ordered enrichment hops on pipeline, and parallel blind contributions plus a bounded objection round on mob (`stage-protocol-ensemble.md`). Every returned pipeline hop is recorded with `aidlc-log.ts link`; multi-repo chains include `--repo`, isolated runs include `--single`, and repo-scoped reuse rows suppress dispatch for reused stores.
+2. Bring in each support agent per the topology. On an `inline` stage the orchestrator takes on the lead's persona from `directive.lead_persona`, reads every support entry in `directive.inline_context_paths` and adopts those perspectives rather than dispatching them. On `mob`, it takes on the lead's persona, reads the lead's knowledge roster and performs the lead work inline, while each support is a real dispatch. On `subagent` (hub-and-spoke) and `pipeline` (chain), the lead and supports are dispatched: mutually-blind spokes on subagent, ordered enrichment hops on pipeline, and parallel blind contributions plus a bounded objection round on mob (`stage-protocol-ensemble.md`). Every returned pipeline hop is recorded with `aidlc-log.ts link`; multi-repo chains include `--repo`, isolated runs include `--single`, and repo-scoped reuse rows suppress dispatch for reused stores.
 3. Synthesize all agent outputs into the final stage artifacts — dispatched support agents write contribution files (Contribution + Positions, `stage-protocol-collaborators.md`) that the lead integrates; the lead alone edits the `produces[]` artifacts (pipeline links advance them directly); unresolved mob judgment calls surface to the human mid-stage, and maintained dissent is quoted verbatim at the gate.
 4. Agents do NOT invoke each other -- only the orchestrator delegates. Authored core and Claude personas enforce this with `disallowedTools: Task`; harness projections use their native tool policy instead where needed. Kiro omits that unsupported Markdown key and excludes the `subagent` tool from delegate JSON/frontmatter allowlists.
 

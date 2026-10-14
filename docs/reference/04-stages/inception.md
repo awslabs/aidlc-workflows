@@ -607,8 +607,8 @@ not in the upstream reference.
 
 ### Steps
 
-1. **Load the Lead Persona** -- Load aidlc-product-agent persona from
-   `agents/aidlc-product-agent.md` and knowledge from
+1. **Load the Lead Persona** -- The step carries the aidlc-product-agent
+   persona (`lead_persona`); read its knowledge from
    `.claude/knowledge/aidlc-product-agent/`. The support agents (design,
    developer, quality) are NOT loaded inline - this is a mob stage; they are
    dispatched as independent collaborators during generation.

@@ -52,9 +52,10 @@ outputs: stories.md, personas.md, user-stories-assessment.md, traceability.json 
 
 ### Step 1: Load the Lead Persona (mob stage)
 
-Read every path in `directive.inline_context_paths` per the stage protocol. For
-this mob the roster contains the aidlc-product-agent persona and its shared/role
-knowledge only; the product manager owns the inline draft and integration work.
+The step carries the aidlc-product-agent persona (`directive.lead_persona`); work
+this stage as that agent. Read every path in `directive.inline_context_paths` per
+the stage protocol: for this mob it holds the product agent's shared and role
+knowledge only. The product manager owns the inline draft and integration work.
 
 This stage runs `mode: mob` (stage-protocol-ensemble.md §5 "Multi-agent stages"): the support agents (aidlc-design-agent for user experience, aidlc-developer-agent for implementability, aidlc-quality-agent for testability) are NOT voices to adopt — they are dispatched as independent participants during PART 2. Do not load their personas into your own context.
 

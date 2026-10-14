@@ -60,6 +60,7 @@ const HOST_ENV = [
 type Printed = {
   kind: string;
   narration?: string;
+  lead_persona?: { path: string; text: string };
   conductor_persona?: string;
   receipt?: string;
   rules_content?: Array<{ path: string; text: string }>;
@@ -285,6 +286,14 @@ async function next(
   throw new Error("rules did not reach run-stage in 10 hops");
 }
 
+// What a step printed besides the lead's persona, which rides every stage step
+// the lead works (its file was read at every stage before): the rules are what
+// a pointer leaves out.
+function bytesBesidePersona(delivery: { bytes: number; final: Printed }): number {
+  const persona = delivery.final.lead_persona;
+  return delivery.bytes - (persona === undefined ? 0 : Buffer.byteLength(JSON.stringify(persona), "utf-8"));
+}
+
 function sentInFull(delivery: { results: Printed[]; final: Printed }): boolean {
   return delivery.final.kind === "run-stage" &&
     delivery.final.rules_held === undefined &&
@@ -313,7 +322,7 @@ describe("Claude Code: the memory the host loaded at the chat's last load", () =
     const first = await next(proj, "claude", env);
     expect(pointerOnly(first), JSON.stringify(first.final).slice(0, 400)).toBe(true);
     expect(first.final.rules_in_context?.length).toBeGreaterThan(0);
-    expect(first.bytes).toBeLessThan(8_000);
+    expect(bytesBesidePersona(first)).toBeLessThan(8_000);
 
     editTeam(proj, "Every API change carries a contract test.");
     const edited = await next(proj, "claude", env);
@@ -591,7 +600,7 @@ describe("Kiro IDE: the chat holds the steering file it captured when it started
     expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
     const held = await next(proj, "kiro-ide", inKiroIde(sid));
     expect(pointerOnly(held), JSON.stringify(held.final).slice(0, 400)).toBe(true);
-    expect(held.bytes).toBeLessThan(8_000);
+    expect(bytesBesidePersona(held)).toBeLessThan(8_000);
     expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
 
     // The chat keeps the copy it started with: after an edit, the text every step.
