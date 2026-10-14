@@ -123,11 +123,79 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     expect(rows[0].label).toContain("no uncommitted changes under aidlc/");
     const request = rows.find((r) => r.label.startsWith("Request folder:"));
     expect(request).toMatchObject({ pass: false, severity: "warn" });
-    expect(request?.label).toContain("1 file(s) in aidlc/.aidlc-request-text/ are committed");
-    expect(request?.label).toContain("`git rm --cached -r -- aidlc/.aidlc-request-text/`");
+    expect(request?.label).toContain("files in aidlc/.aidlc-request-text/ hold your own requests (1 that git tracks)");
+    expect(request?.label).toContain("in the project folder, take the tracked ones out of git, keeping the files: `git rm --cached -r -f -- aidlc/.aidlc-request-text/`");
+    expect(request?.label).not.toContain("refresh AI-DLC");
+    // While the request row stands, the records row gives no commit command:
+    // `git add aidlc/` would take the tracked request in.
+    writeFileSync(join(ws, "aidlc", "note.md"), "a record\n", "utf-8");
+    const records = workspaceManifestChecks(ws)[0].label;
+    expect(records).toContain("1 uncommitted change(s) under aidlc/");
+    expect(records).toContain("once the request folder below is out of git");
+    expect(records).not.toContain("git add aidlc/");
     // Doctor only names the step: the file is still tracked and unchanged.
     expect(g("ls-files", "--", "aidlc/.aidlc-request-text").stdout.trim()).toBe("aidlc/.aidlc-request-text/request.txt");
     expect(readFileSync(join(ws, "aidlc", ".aidlc-request-text", "request.txt"), "utf-8")).toBe("my later words\n");
+  });
+
+  test("a request folder an older .gitignore does not ignore is named with the refresh first", () => {
+    const ws = freshGitWorkspace();
+    const g = (...args: string[]) => spawnSync("git", ["-C", ws, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    mkdirSync(join(ws, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(ws, "aidlc", ".aidlc-request-text", "request.txt"), "my words\n", "utf-8");
+    // Untracked and not ignored: refreshing is the step.
+    const rows = workspaceManifestChecks(ws);
+    let request = rows.find((r) => r.label.startsWith("Request folder:"));
+    expect(request?.label).toContain("hold your own requests (1 not ignored)");
+    expect(request?.label).toContain("make .gitignore ignore the folder: refresh AI-DLC, and check no later rule of yours un-ignores it");
+    expect(request?.label).not.toContain("git rm --cached");
+    // The workspace row never asks to commit it.
+    expect(rows[0].label).toContain("no uncommitted changes under aidlc/");
+    // Tracked and not ignored: refresh first, then untrack.
+    g("add", "aidlc");
+    g("commit", "-q", "-m", "earlier commit");
+    request = workspaceManifestChecks(ws).find((r) => r.label.startsWith("Request folder:"));
+    expect(request?.label).toMatch(/\(1 that git tracks\); make \.gitignore ignore the folder: .*, then in the project folder, take the tracked ones out of git, keeping the files: `git rm --cached -r -f -- aidlc\/\.aidlc-request-text\/`/);
+    // Doctor passes the refresh that names the harness (a bare `config` takes the walk).
+    request = workspaceManifestChecks(ws, "aidlc config --harness claude").find((r) => r.label.startsWith("Request folder:"));
+    expect(request?.label).toContain("refresh AI-DLC (`aidlc config --harness claude`), and check no later rule of yours un-ignores it");
+  });
+
+  test("a project below its repository root, and a request named with a space and Korean, are never asked to be committed", () => {
+    const repo = freshGitWorkspace();
+    const project = join(repo, "app");
+    mkdirSync(join(project, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(project, "aidlc", ".aidlc-request-text", "내 요청 1.txt"), "my words\n", "utf-8");
+    const rows = workspaceManifestChecks(project);
+    expect(rows[0].label).toContain("no uncommitted changes under aidlc/");
+    expect(rows.find((r) => r.label.startsWith("Request folder:"))?.label).toContain("(1 not ignored)");
+  });
+
+  test("every tracked request is tried against the ignore rules, not only the first", () => {
+    const ws = freshGitWorkspace();
+    const g = (...args: string[]) => spawnSync("git", ["-C", ws, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    mkdirSync(join(ws, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(ws, "aidlc", ".aidlc-request-text", "a.txt"), "first\n", "utf-8");
+    writeFileSync(join(ws, "aidlc", ".aidlc-request-text", "b.md"), "second\n", "utf-8");
+    g("add", "aidlc");
+    g("commit", "-q", "-m", "earlier commit");
+    // A narrower rule ignores one of the two.
+    writeFileSync(join(ws, ".gitignore"), "aidlc/.aidlc-request-text/*.txt\n", "utf-8");
+    const request = workspaceManifestChecks(ws).find((r) => r.label.startsWith("Request folder:"));
+    expect(request?.label).toContain("(2 that git tracks)");
+    expect(request?.label).toContain("make .gitignore ignore the folder");
+  });
+
+  test("an ignored, untracked request file gets no row, and other aidlc/ changes still count", () => {
+    const ws = freshGitWorkspace();
+    writeFileSync(join(ws, ".gitignore"), "aidlc/.aidlc-request-text/\n", "utf-8");
+    mkdirSync(join(ws, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(ws, "aidlc", ".aidlc-request-text", "request.txt"), "my words\n", "utf-8");
+    expect(workspaceManifestChecks(ws).some((r) => r.label.startsWith("Request folder:"))).toBe(false);
+    writeFileSync(join(ws, "aidlc", "note.md"), "a record\n", "utf-8");
+    const rows = workspaceManifestChecks(ws);
+    expect(rows[0].label).toContain("1 uncommitted change(s) under aidlc/");
+    expect(rows.some((r) => r.label.startsWith("Request folder:"))).toBe(false);
   });
 
   test("doctor warns when a later user rule hides committed records, without changing its exit code", () => {
