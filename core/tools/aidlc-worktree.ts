@@ -97,9 +97,9 @@ import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
 import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
 
 // kebab-case slug shape: lowercase letter, then lowercase letters / digits /
-// hyphens. Mirrors stage-schema.ts:95+:101 — the codebase already duplicates
-// this regex across conceptual domains; a one-line constant beats a cross-
-// module import for a tool-local check.
+// hyphens. Mirrors SLUG_RE in aidlc-stage-schema.ts: the codebase already
+// duplicates this regex across conceptual domains; a one-line constant beats a
+// cross-module import for a tool-local check.
 const SLUG_RE = /^[a-z][a-z0-9-]*$/;
 // The emitter uses isoTimestamp() (YYYY-MM-DDTHH:MM:SSZ); fixtures may carry fractional seconds.
 const AUDIT_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
@@ -113,7 +113,7 @@ const VALID_VERIFY_EVENTS = new Set([
   "WORKTREE_DISCARDED",
 ]);
 
-// --- Flag parsing (mirrors aidlc-bolt.ts:30-46) ---
+// --- Flag parsing (mirrors aidlc-bolt.ts parseFlags) ---
 
 function parseFlags(args: string[]): Record<string, string> {
   const flags: Record<string, string> = {};
@@ -495,11 +495,11 @@ function deleteRetainedSourceRefs(repoCwd: string, identity: BoltIdentity, refs:
 // Intent-scoped branches avoid collisions between these external checkouts;
 // pre-upgrade names are supported for existing Bolts, never for new creation.
 //
-// P7 (multi-repo): the guard is RE-ANCHORED to the TARGET repo's checkout. When
+// Multi-repo: the guard is ANCHORED to the TARGET repo's checkout. When
 // `--repo <name>` selects a sibling repo, `repoCwd` is that repo dir and every
 // git probe runs there — so the nesting test is evaluated against the sibling
-// repo, not the (non-git) workspace root. Absent `--repo` (legacy single-repo),
-// `repoCwd` is the projectDir and the behaviour is unchanged.
+// repo, not the (non-git) workspace root. Absent `--repo`, the lone recorded
+// repo is inferred, or `repoCwd` is the projectDir for a legacy intent.
 
 // True when `child` is strictly inside `parent` (never for equal paths). A leading
 // `..` segment on a separator boundary means outside, not a `..foo` directory name.
@@ -615,7 +615,7 @@ function resolveCommandBoltIdentity(
   }
 }
 
-// Resolve the cwd every git op in a construction handler must run in (P7). With
+// Resolve the cwd every git op in a construction handler must run in. With
 // `--repo <name>` it is the sibling repo dir; absent it the lone recorded repo is
 // inferred (or the projectDir for a legacy single-repo intent). A disambiguation
 // failure (multi-repo intent without --repo, or an out-of-set name) errors before
@@ -640,9 +640,9 @@ function resolveRepoTarget(
 //                              [--swarm-unit <unit> --swarm-batch <n>
 //                               --swarm-stage <slug> --swarm-floor <floor>]
 //
-// --repo (P7): the sibling repo to fork the worktree inside (a multi-repo intent
+// --repo: the sibling repo to fork the worktree inside (a multi-repo intent
 // requires it; a single-repo intent infers the lone repo; a legacy intent with no
-// recorded repos runs in the projectDir, today's behaviour).
+// recorded repos runs in the projectDir).
 function rawBaseSourceListing(
   repoCwd: string,
   baseCommit: string,
@@ -714,7 +714,7 @@ function handleCreate(args: string[]): void {
   if (selection.intent !== null) flags.intent = selection.intent;
   flags.space = selection.space;
   const intentRecord = relativeRecordDirForSelection(selection);
-  // P7: anchor every git op to the target sibling repo (or the projectDir for a
+  // Anchor every git op to the target sibling repo (or the projectDir for a
   // legacy single-repo intent). The guard is evaluated against that same checkout.
   const repoTarget = resolveRepoTarget(pd, flags, slug);
   const repoCwd = repoTarget.cwd;
@@ -916,7 +916,7 @@ function handleCreate(args: string[]): void {
 //   aidlc-worktree merge --slug <slug> --target <branch> --strategy <squash|merge|rebase>
 //                        [--message <msg>] [--repo <name>] [--intent <dir>] [--space <name>]
 //
-// --repo (P7): the sibling repo the merge lands in — same resolution as `create`.
+// --repo: the sibling repo the merge lands in - same resolution as `create`.
 // Refuse a source merge whose worktree no longer holds the bytes that
 // converged. Reads the newest SWARM_UNIT_CONVERGED for this unit; a Bolt that
 // never went through the swarm has none and passes straight through, and a
@@ -2678,7 +2678,7 @@ function handleMerge(args: string[]): void {
       flags.repo = cleanupAuthority.repo;
     }
   }
-  // P7: anchor every git op to the target sibling repo. The merge runs IN that
+  // Anchor every git op to the target sibling repo. The merge runs IN that
   // repo's main checkout (squash/merge/ff/commit/worktree-remove/branch-D); the
   // rebase still runs in the worktree (wtPath). Legacy single-repo → repoCwd=pd.
   const repoTarget = resolveRepoTarget(pd, flags, slug);
@@ -2848,8 +2848,8 @@ function handleMerge(args: string[]): void {
   // squash/merge run in the target repo's main checkout (cwd = repoCwd), rebase
   // runs in the worktree (cwd = wtPath). For conflict-file enumeration, we query
   // `git diff --name-only --diff-filter=U` in the SAME cwd so the index reflects
-  // the real conflict. (P7: repoCwd is the sibling repo, or the projectDir for a
-  // legacy single-repo intent — squash/merge default to it now, not the caller's cwd.)
+  // the real conflict. (repoCwd is the sibling repo, or the projectDir for a
+  // legacy single-repo intent - squash/merge default to it.)
   let conflictCwd: string | undefined = repoCwd;
   let conflictHit = false;
   switch (strategy) {
@@ -3206,10 +3206,9 @@ function currentSha(cwd?: string): string {
 }
 
 function isConflict(r: GitResult): boolean {
-  // Anchor on git's canonical CONFLICT marker prefix. The previous
-  // permissive form (`/conflict/i` etc.) false-positived on stdout that
-  // happened to contain the substring "conflict" — including unrelated
-  // hint text in future git releases.
+  // Anchor on git's canonical CONFLICT marker prefix. A permissive form
+  // (`/conflict/i` etc.) false-positives on stdout that happens to contain the
+  // substring "conflict", including unrelated hint text in future git releases.
   const blob = `${r.stdout}\n${r.stderr}`;
   return /^CONFLICT \(/m.test(blob);
 }
@@ -3445,7 +3444,7 @@ function assertNoForeignBoltDirectory(pd: string, identity: BoltIdentity, select
 // Usage: aidlc-worktree discard --slug <slug> [--repo <name>]
 //                               [--intent <dir>] [--space <name>]
 //
-// --repo (P7): the sibling repo the worktree was forked in — same resolution as
+// --repo: the sibling repo the worktree was forked in - same resolution as
 // `create`. Park the attempt in Git before auditing/removing the live checkout.
 // With no directory, branch, or retained sources, succeed without another audit.
 function handleDiscard(args: string[]): void {
@@ -3511,7 +3510,7 @@ function handleDiscard(args: string[]): void {
       `refusing to discard: selected repository ${JSON.stringify(flags.repo)} does not match creating repository ${JSON.stringify(creatingRepo ?? "-")}`,
     );
   }
-  // P7: anchor every git op to the target sibling repo (or projectDir for legacy).
+  // Anchor every git op to the target sibling repo (or projectDir for legacy).
   const { cwd: repoCwd, repo: parkedRepo } = creatingRepo === null
     ? { cwd: pd, repo: null }
     : resolveRepoTarget(pd, flags, slug);
@@ -4060,9 +4059,9 @@ function handleList(_args: string[]): void {
 // Usage: aidlc-worktree verify --event <WORKTREE_*> --slug <slug>
 //                              [--max-age-seconds <n>] [--intent <dir>] [--space <name>]
 //
-// Greps `aidlc-docs/audit.md` for the most recent block matching both
-// `**Event**: <event>` and `**Bolt slug**: <slug>`. Read-only — no audit
-// emission. The orchestrator's deterministic post-dispatch backstop.
+// Reads the selected workflow's audit shards for the most recent block
+// matching both `**Event**: <event>` and `**Bolt slug**: <slug>`. Read-only,
+// no audit emission. The orchestrator's deterministic post-dispatch backstop.
 function handleVerify(args: string[]): void {
   const flags = parseFlags(args);
   if (!flags.event) error(`Missing --event <${[...VALID_VERIFY_EVENTS].join("|")}>`);
@@ -4081,7 +4080,6 @@ function handleVerify(args: string[]): void {
 
   const pd = resolveProjectDir(projectDir);
   const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
-  // Read across every per-clone audit shard (single shard in the common case).
   const audit = readAllAuditShards(pd, selection.intent ?? undefined, selection.space);
   if (audit.length === 0) {
     process.stdout.write(
@@ -4149,7 +4147,6 @@ function handleInfo(args: string[]): void {
 
   const pd = resolveProjectDir(projectDir);
   const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
-  // Read across every per-clone audit shard (single shard in the common case).
   const audit = readAllAuditShards(pd, selection.intent ?? undefined, selection.space);
   if (audit.length === 0) {
     process.stderr.write(
@@ -4270,9 +4267,9 @@ function findLatestEvent(
   // `worktree verify --max-age-seconds` reporting a fresh worktree STALE, or
   // `worktree info` returning a stale path/branch). Delegate to findAllEvents,
   // which CRLF-normalizes before splitting and sorts ascending by ISO-8601
-  // timestamp with a buffer-position tiebreak — the SAME ordering fix the other
-  // readers (findAllEvents / buildWorkflowHeader / hasStageAuditEvent) already
-  // use — then take the last (newest) match. Returns null on no match.
+  // timestamp with a buffer-position tiebreak, the SAME ordering the other
+  // readers (findAllEvents / buildWorkflowHeader / hasStageAuditEvent) use, then
+  // take the last (newest) match. Returns null on no match.
   const matches = findAllEvents(audit, event, slug);
   if (matches.length === 0) return null;
   const newest = matches[matches.length - 1];

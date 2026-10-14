@@ -12,8 +12,8 @@ import {
 } from "./aidlc-lib.ts";
 
 // One record per message the person sends, written once by the human-turn hook
-// as the message arrives. It proves two things and reads no meaning into either:
-// that a real person said this in this chat, and exactly what they said: the
+// as the message arrives. It records two things and reads no meaning into either:
+// that the host delivered this in this chat, and exactly what was said: the
 // text as the host delivered it, the flags the engine's own parser finds in a
 // typed `/aidlc` line, and the words after them. Nothing is applied here: the
 // agent reads the line and runs the setter the engine names. Which question a
@@ -135,12 +135,12 @@ function readStoredMessage(projectDir: string, id: string): StoredMessage | null
   }
 }
 
-/** The message behind `id`; null when it is missing, unreadable, or not a record of ours. */
 /** Whether any message of the person's is on record for this project (the store keeps a day). */
 export function hasStoredMessages(projectDir: string): boolean {
   return recordIds(projectDir).length > 0;
 }
 
+/** The message behind `id`; null when it is missing, unreadable, or not a record of ours. */
 export function readMessage(projectDir: string, id: string): StoredMessage | null {
   return readStoredMessage(projectDir, id);
 }
@@ -272,8 +272,8 @@ export function pruneExpiredMessages(projectDir: string): void {
 }
 
 // Rows that spend the person's messages: a decision of another kind than an
-// answer. One message backs at most one approval plus any answers (round 2 of
-// the input-record design), so answers never spend it.
+// answer. One message backs at most one approval plus any answers, so answers
+// never spend it.
 export const MESSAGE_SPENDING_EVENTS: ReadonlySet<string> = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
@@ -312,8 +312,8 @@ export function messageIsReply(rows: readonly AuditShardEvent[], message: Stored
 // only while the chat was on the work, so a chat that joined through its turn
 // alone counts from that turn, and words a chat typed while it was on nothing
 // (before the work was chosen here, or a cold workspace) never count, however
-// the chat stands now. A message no hook minted a row for (none exists today
-// besides those) is read as before.
+// the chat stands now. A message with no chat on it (one typed at the
+// terminal) counts without that check.
 export function chatsSince(rows: readonly AuditShardEvent[], pd: string, spentAt: string | null): Set<string> {
   const named = new Set<string>();
   for (const row of rows) {

@@ -1449,7 +1449,7 @@ function windowsShimHelperFor(version: string): string {
       return renderSilentWindowsShimHelper(STABLE_ONLY_HELPER_PATTERN);
     }
   } catch {
-    // An unparsable version cannot be older than 2.8.2.
+    // An unparsable version is not treated as older than 2.8.2.
   }
   return renderSilentWindowsShimHelper(VERSION_ID_PATTERN);
 }
