@@ -987,17 +987,17 @@ function findGeneratedRegion(
   const lastEndIdx = body.lastIndexOf(endMarker);
   if (beginIdx === -1 || endIdx === -1) {
     throw new Error(
-      `SKILL.md at ${skillPath} is missing ${verb} markers. Expected:\n  ${beginMarker}\n  ${endMarker}`,
+      `${skillPath} is missing ${verb} markers. Expected:\n  ${beginMarker}\n  ${endMarker}`,
     );
   }
   if (beginIdx !== lastBeginIdx || endIdx !== lastEndIdx) {
     throw new Error(
-      `SKILL.md at ${skillPath} has duplicate ${verb} markers. Expected exactly one BEGIN and one END.`,
+      `${skillPath} has duplicate ${verb} markers. Expected exactly one BEGIN and one END.`,
     );
   }
   if (endIdx < beginIdx) {
     throw new Error(
-      `SKILL.md at ${skillPath} has ${verb} markers out of order (END before BEGIN).`,
+      `${skillPath} has ${verb} markers out of order (END before BEGIN).`,
     );
   }
   return { beginIdx, endIdx, regionEndIdx: endIdx + endMarker.length };
@@ -1009,7 +1009,7 @@ function replaceGeneratedRegion(
   endMarker: string,
   region: string,
 ): void {
-  const path = skillMdPath();
+  const path = tablesMdPath();
   const before = readFileSync(path, "utf-8").replace(/\r\n/g, "\n");
   const located = findGeneratedRegion(before, beginMarker, endMarker, verb, path);
   const after = before.slice(0, located.beginIdx) + region + before.slice(located.regionEndIdx);
@@ -12675,15 +12675,15 @@ export function findScopeByKeyword(kw: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// scope-table - compiled summary of the scope grid for SKILL.md
+// scope-table - compiled summary of the scope grid for tables.md
 //
-// Emits a Markdown table delimited by BEGIN/END HTML comments. SKILL.md
-// has a matching region that is regenerated via this tool. --check mode
-// byte-compares the current SKILL.md region against the rendered output
+// Emits a Markdown table delimited by BEGIN/END HTML comments. tables.md
+// (beside the skill) has a matching region that is regenerated via this tool.
+// --check mode byte-compares the current tables.md region against the rendered output
 // and exits 1 on drift. Mirrors aidlc-graph.ts compile / compile --check.
 //
 // AIDLC_SKILL_MD_PATH env-seam lets t67 sandbox --check against a
-// fixture SKILL.md (so drift tests never mutate the real file).
+// fixture tables.md (so drift tests never mutate the real file).
 
 const SCOPE_TABLE_BEGIN =
   `<!-- BEGIN: compiled scope grid via \`${aidlcDispatcherInvocation("gen scope-table")}\` - do NOT hand-edit -->`;
@@ -12715,6 +12715,13 @@ export function renderScopeTable(): string {
 /** Canonical byte-shape: BEGIN\n\n<table>\n\nEND. */
 export function canonicalScopeTableRegion(table: string): string {
   return `${SCOPE_TABLE_BEGIN}\n\n${table}\n\n${SCOPE_TABLE_END}`;
+}
+
+// The generated scope and stage tables live beside the skill, out of its body.
+// AIDLC_SKILL_MD_PATH names a test fixture that holds the regions.
+function tablesMdPath(): string {
+  if (process.env.AIDLC_SKILL_MD_PATH) return process.env.AIDLC_SKILL_MD_PATH;
+  return join(dirname(skillMdPath()), "tables.md");
 }
 
 function skillMdPath(projectDir?: string, harnessDir?: string): string {
@@ -12770,13 +12777,13 @@ function checkGeneratedTableRegion(
   endMarker: string,
   renderRegion: () => string,
 ): void {
-  const skillPath = skillMdPath();
+  const skillPath = tablesMdPath();
   let skillRaw: string;
   try {
     skillRaw = readFileSync(skillPath, "utf-8");
   } catch (err) {
     console.error(
-      `SKILL.md not readable at ${skillPath}: ${errorMessage(err)}`
+      `tables.md not readable at ${skillPath}: ${errorMessage(err)}`
     );
     process.exit(1);
   }
@@ -12801,7 +12808,7 @@ function checkGeneratedTableRegion(
   }
 
   console.error(
-    `SKILL.md ${verb} region is out of date. Refresh it from \`${aidlcDispatcherInvocation(`gen ${verb}`)}\`.`
+    `tables.md ${verb} region is out of date. Refresh it from \`${aidlcDispatcherInvocation(`gen ${verb}`)}\`.`
   );
   process.exit(1);
 }
@@ -12828,15 +12835,15 @@ function handleScopeTable(
 }
 
 // ---------------------------------------------------------------------------
-// stage-table — compiled summary of the stage graph for SKILL.md
+// stage-table — compiled summary of the stage graph for tables.md
 //
-// Emits a Markdown table delimited by BEGIN/END HTML comments. SKILL.md
-// has a matching region that is regenerated via this tool. --check mode
-// byte-compares the current SKILL.md region against the rendered output
+// Emits a Markdown table delimited by BEGIN/END HTML comments. tables.md
+// (beside the skill) has a matching region that is regenerated via this tool. --check mode
+// byte-compares the current tables.md region against the rendered output
 // and exits 1 on drift. Mirrors scope-table above.
 //
 // AIDLC_SKILL_MD_PATH env-seam lets tests sandbox --check against a
-// fixture SKILL.md (so drift tests never mutate the real file).
+// fixture tables.md (so drift tests never mutate the real file).
 
 const STAGE_TABLE_BEGIN =
   `<!-- BEGIN: compiled stage graph via \`${aidlcDispatcherInvocation("gen stage-table")}\` - do NOT hand-edit -->`;

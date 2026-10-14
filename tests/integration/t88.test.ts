@@ -105,9 +105,8 @@ const FIXTURES = join(
   "v05-mr7a-rule-resolution",
 );
 // The bootstrap source: compileStageGraph harvests {number, name} from the
-// existing stage-graph.json. The .sh copied this byte-for-byte into a per-case
-// tempfile (AIDLC_STAGE_GRAPH); for a read-only bootstrap pointing the seam
-// straight at the shipped file is equivalent (compile never writes to it —
+// existing stage-graph.json. For a read-only bootstrap pointing the seam
+// straight at the shipped file is safe (compile never writes to it -
 // the CLI `compile` handler does the writeFileAtomic, not the function).
 const SEED_GRAPH = join(
   REPO_ROOT,
@@ -132,15 +131,13 @@ afterAll(() => {
 });
 
 // Restore the env between cases so a leaked AIDLC_RULES_DIR / AIDLC_STAGE_GRAPH
-// from one test can't shadow the next (the .sh got fresh env per `bun`
-// subprocess; in-process we manage it explicitly).
+// from one test can't shadow the next.
 let savedRulesDir: string | undefined;
 let savedStageGraph: string | undefined;
 
 beforeEach(() => {
   savedRulesDir = process.env.AIDLC_RULES_DIR;
   savedStageGraph = process.env.AIDLC_STAGE_GRAPH;
-  // Bootstrap source is the same shipped graph for every case.
   process.env.AIDLC_STAGE_GRAPH = SEED_GRAPH;
 });
 
@@ -152,12 +149,6 @@ afterEach(() => {
   __resetGraphCache();
 });
 
-/**
- * compile_with_fixture (t88:51-60): point AIDLC_RULES_DIR at a fixture dir,
- * reset caches, and return the compiled { json, stages }. Mirrors the .sh's
- * `bun aidlc-graph.ts compile` + read-back, but in-process against the real
- * return value.
- */
 function compileWithRulesDir(dir: string): {
   json: string;
   stages: GraphStage[];
@@ -176,8 +167,8 @@ describe("t88 compileStageGraph rules_in_context resolution (migrated from t88-c
   test("1: org-only -> rules_in_context length is 1 on every stage", () => {
     const { stages } = compileWithRulesDir(join(FIXTURES, "org-only"));
     expect(stages[0].rules_in_context).toHaveLength(1);
-    // STRONGER than the .sh's stage[0]-only probe: the single org rule attaches
-    // to EVERY stage (universal-default tier), so all stages are length 1.
+    // The single org rule attaches to EVERY stage (universal-default tier), so
+    // all stages are length 1.
     expect(stages.every((s) => s.rules_in_context.length === 1)).toBe(true);
   });
 
@@ -190,7 +181,6 @@ describe("t88 compileStageGraph rules_in_context resolution (migrated from t88-c
   test("3: org-team-project -> precedence order org,team,project", () => {
     const { stages } = compileWithRulesDir(join(FIXTURES, "org-team-project"));
     expect(scopesOf(stages[0])).toEqual(["org", "team", "project"]);
-    // STRONGER: the additive triple attaches to every stage identically.
     expect(
       stages.every(
         (s) =>
@@ -208,7 +198,6 @@ describe("t88 compileStageGraph rules_in_context resolution (migrated from t88-c
     expect(construction.every((s) => s.rules_in_context.length === 4)).toBe(
       true,
     );
-    // STRONGER: pin the phase entry's position + scope value, not just length.
     expect(
       construction.every(
         (s) => scopesOf(s).join(",") === "org,team,project,phase",
@@ -221,12 +210,11 @@ describe("t88 compileStageGraph rules_in_context resolution (migrated from t88-c
     const init = stages.filter((s) => s.phase === "initialization");
     expect(init.length).toBeGreaterThan(0);
     expect(init.every((s) => s.rules_in_context.length === 3)).toBe(true);
-    // STRONGER: the phase rule (aidlc-phase-construction.md) must NOT attach to
-    // initialization stages — assert phase scope is absent.
+    // The phase rule (phases/construction.md) must NOT attach to initialization
+    // stages - assert phase scope is absent.
     expect(init.every((s) => !scopesOf(s).includes("phase"))).toBe(true);
   });
 
-  // --- Case 7: pairing-feedforward-only ------------------------------------
   test("6: pairing-feedforward-only -> schema-valid; rule still resolves (length 1, org)", () => {
     const fixture = join(FIXTURES, "pairing-feedforward-only");
     // Schema-valid pairing: feedforward-only must NOT throw.
@@ -236,11 +224,8 @@ describe("t88 compileStageGraph rules_in_context resolution (migrated from t88-c
     expect(stages[0].rules_in_context[0].scope).toBe("org");
   });
 
-  // --- Case 8: zero-rules ---------------------------------------------------
   test("7: zero-rules -> every stage gets rules_in_context []", () => {
-    // Empty temp dir == no aidlc-*.md files == loadRules returns []. (The .sh
-    // pointed at a non-existent FIXTURES/zero-rules path; an empty existing dir
-    // is the same observable — no rule files matched.)
+    // Empty temp dir == no rule files == loadRules returns [].
     const empty = mkTemp("aidlc-t88-zero-");
     const { stages } = compileWithRulesDir(empty);
     expect(stages.every((s) => s.rules_in_context.length === 0)).toBe(true);
@@ -248,7 +233,7 @@ describe("t88 compileStageGraph rules_in_context resolution (migrated from t88-c
 
   // --- Case 9: --check round-trip detects rule-file edits ------------------
   test("8: --check semantics -> adding a rule after compile produces drift", () => {
-    // Reproduces runCompileCheck (aidlc-graph.ts:1068-1076): drift == the
+    // Reproduces runCompileCheck's graph comparison (aidlc-graph.ts): drift == the
     // freshly-compiled json differs from the on-disk graph. Compile org-only,
     // write that json to a temp graph file (stands in for stage-graph.json on
     // disk), then add a team rule to a WRITABLE rules dir and recompile.
@@ -257,26 +242,23 @@ describe("t88 compileStageGraph rules_in_context resolution (migrated from t88-c
 
     const first = compileWithRulesDir(rulesDir);
     const onDisk = first.json;
-    // Sanity: org-only resolves to a single org rule.
     expect(first.stages[0].rules_in_context.map((r) => r.scope)).toEqual(["org"]);
 
-    // Add a team rule — the resolver must now include it, changing the output.
     writeFileSync(
       join(rulesDir, "team.md"),
       "# team rule added after compile\n",
       "utf-8",
     );
     const second = compileWithRulesDir(rulesDir);
-    // runCompileCheck's exit-1 predicate is exactly json !== onDisk.
+    // runCompileCheck's graph-drift predicate is json !== onDisk.
     expect(second.json).not.toBe(onDisk);
-    // STRONGER: pin WHY it drifted — the chain grew org -> org+team.
+    // Pin WHY it drifted - the chain grew org -> org+team.
     expect(second.stages[0].rules_in_context.map((r) => r.scope)).toEqual([
       "org",
       "team",
     ]);
   });
 
-  // --- Case 10: round-trip stability (deterministic compile) ---------------
   test("9: round-trip -> same fixture produces byte-identical compile output", () => {
     const a = compileWithRulesDir(join(FIXTURES, "all-four")).json;
     const b = compileWithRulesDir(join(FIXTURES, "all-four")).json;
@@ -286,9 +268,8 @@ describe("t88 compileStageGraph rules_in_context resolution (migrated from t88-c
   // --- Case 8 (bad pairing): schema rejection ------------------------------
   test("10: invalid pairing value fails compile (throws, names file + diagnostic)", () => {
     // pairing must be "feedforward-only" or start with "aidlc-". A bare
-    // "garbage" token fails validateRuleFrontmatter (aidlc-rule-schema.ts:71),
-    // and the throw propagates out of compileStageGraph -> loadRules. The .sh
-    // observed exit 1; in-process we observe the throw + its message.
+    // "garbage" token fails validateRuleFrontmatter (aidlc-rule-schema.ts),
+    // and the throw propagates out of compileStageGraph -> loadRules.
     const badRules = mkTemp("aidlc-t88-bad-pairing-");
     writeFileSync(
       join(badRules, "org.md"),
@@ -298,7 +279,6 @@ describe("t88 compileStageGraph rules_in_context resolution (migrated from t88-c
     process.env.AIDLC_RULES_DIR = badRules;
     __resetGraphCache();
     expect(() => compileStageGraph()).toThrow(/pairing must be/);
-    // STRONGER: the error names the offending file path (compile fails loud).
     expect(() => compileStageGraph()).toThrow(/org\.md/);
   });
 
@@ -331,19 +311,16 @@ describe("t88 compileStageGraph rules_in_context resolution (migrated from t88-c
     }
   });
 
-  // --- Case 12: BOM-prefixed frontmatter parses correctly ------------------
   test("11: BOM-prefixed frontmatter parses; phase rule attaches to all construction stages", () => {
     const { stages } = compileWithRulesDir(join(FIXTURES, "bom-frontmatter"));
     const construction = stages.filter((s) => s.phase === "construction");
     expect(construction.length).toBeGreaterThan(0);
-    // BOM (EF BB BF) on aidlc-phase-construction.md must be stripped so its
+    // BOM (EF BB BF) on phases/construction.md must be stripped so its
     // frontmatter parses and the phase rule attaches to every construction
-    // stage. (.sh: every construction stage's scope set contains "phase".)
+    // stage.
     expect(
       construction.every((s) => scopesOf(s).includes("phase")),
     ).toBe(true);
-    // STRONGER: the full org,team,project,phase chain attaches (length 4),
-    // not merely the phase tag.
     expect(construction.every((s) => s.rules_in_context.length === 4)).toBe(
       true,
     );

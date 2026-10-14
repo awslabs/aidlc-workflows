@@ -100,11 +100,9 @@ describe("t196 in-flight recompose journey (/aidlc compose mid-workflow, sdk liv
         }
         const cursorAfter = /- \*\*Current Stage\*\*: (.*)/.exec(after)?.[1];
         expect(cursorAfter).toBe(cursorBefore);
-        // Derived fields rebuilt: two fewer stages to run.
         const totalBefore = Number(/- \*\*Total Stages\*\*: (\d+)/.exec(before)?.[1]);
         const totalAfter = Number(/- \*\*Total Stages\*\*: (\d+)/.exec(after)?.[1]);
         expect(totalAfter).toBe(totalBefore - 2);
-        // And the rebuilt Stages to Skip names both.
         const toSkip = /- \*\*Stages to Skip\*\*: (.*)/.exec(after)?.[1] ?? "";
         expect(toSkip).toContain("market-research");
         expect(toSkip).toContain("team-formation");

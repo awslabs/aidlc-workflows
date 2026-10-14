@@ -140,10 +140,8 @@ describe("t-inline-roster-format-docs", () => {
   test("each place that uses a format doc names it by path", () => {
     const token = `{{HARNESS_DIR}}/${SHARED}`;
     const link = `../../${SHARED}`;
+    // The /aidlc skill uses none: the tools write every audit event (stage-protocol.md, 4. State Tracking).
     const uses: ReadonlyArray<readonly [string, string]> = [
-      ...TREES.map(([tree]) =>
-        [`harness/${tree}/skills/aidlc/SKILL.md`, `${token}/audit-format.md`] as const
-      ),
       ["harness/claude/skills/aidlc/question-rendering.md", `${token}/worktree-info-schema.md`],
       ["core/aidlc-common/protocols/stage-protocol-construction.md", `${link}/worktree-info-schema.md`],
       ["core/aidlc-common/protocols/stage-protocol-swarm.md", `${link}/worktree-info-schema.md`],

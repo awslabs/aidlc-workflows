@@ -76,7 +76,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-// Producer-side pure function — Case 1's `bun -e import parseMemoryHeadings`.
 import {
   auditFilePath,
   parseMemoryHeadings,
@@ -84,21 +83,20 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { toPortablePath } from "../harness/fixtures.ts";
 
-// P9: with no intent cursor seeded, compile resolves the BARE space record root
+// With no intent cursor seeded, compile resolves the BARE space record root
 // (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/. State,
 // runtime-graph, the per-stage memory.md, and the per-clone audit SHARD all
-// live under it (the flat aidlc-docs/ root is retired — there is no fallback);
-// compile reads each stage's memory.md at the bare-space-prefixed memory_path.
+// live under it (there is no flat aidlc-docs/ fallback); compile reads each
+// stage's memory.md at the bare-space-prefixed memory_path.
 const RECORD_REL = join("aidlc", "spaces", "default", "intents");
 function recordRoot(proj: string): string {
   return join(proj, RECORD_REL);
 }
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 const RUNTIME_TS = join(AIDLC_SRC, "tools", "aidlc-runtime.ts");
-// The SHIPPED milestone 13 template the .sh `cp`s (t102:29).
 const TEMPLATE = join(AIDLC_SRC, "knowledge", "aidlc-shared", "memory-template.md");
 
 const tempDirs: string[] = [];
@@ -112,7 +110,6 @@ interface SpawnResult {
   out: string;
 }
 
-/** run_compile (t102:79-82): CLAUDE_PROJECT_DIR=<proj> bun RUNTIME_TS compile [args], 2>&1. */
 function runCompile(proj: string, ...args: string[]): SpawnResult {
   const res = spawnSync(BUN, [RUNTIME_TS, "compile", ...args], {
     encoding: "utf-8",
@@ -121,7 +118,6 @@ function runCompile(proj: string, ...args: string[]): SpawnResult {
   return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 
-// Standard 1-stage approved audit, intent-capture / ideation (t102:37-62).
 const AUDIT_APPROVED = `## Workflow Start
 **Timestamp**: 2026-05-27T10:00:00Z
 **Event**: WORKFLOW_STARTED
@@ -146,15 +142,14 @@ const AUDIT_APPROVED = `## Workflow Start
 
 ---`;
 
-// state cursor (t102:64-68).
 const STATE_FEATURE = [
   "- **Scope**: feature",
   "- **Current Stage**: scope-definition",
 ].join("\n");
 
 /**
- * make_project (t102:70-77): fresh temp project with AUDIT_APPROVED +
- * STATE_FEATURE under aidlc-docs/. toPortablePath for the Windows round-trip
+ * Fresh temp project with AUDIT_APPROVED + STATE_FEATURE under
+ * aidlc/spaces/default/intents/. toPortablePath for the Windows round-trip
  * (the tool resolves audit/graph paths through forward-slash helpers).
  */
 function makeProject(): string {
@@ -170,17 +165,14 @@ function makeProject(): string {
   return proj;
 }
 
-/** memdir (t102:84): the per-stage memory dir for intent-capture (ideation phase). */
 function memDir(proj: string): string {
   return join(recordRoot(proj), "ideation", "intent-capture");
 }
 
-/** Path to the memory.md the .sh `cp`s the template into. */
 function memFile(proj: string): string {
   return join(memDir(proj), "memory.md");
 }
 
-/** Copy the SHIPPED template into the stage's memory.md (mirrors `cp "$TEMPLATE" ...`). */
 function seedTemplateMemory(proj: string): void {
   mkdirSync(memDir(proj), { recursive: true });
   cpSync(TEMPLATE, memFile(proj));
@@ -189,16 +181,14 @@ function seedTemplateMemory(proj: string): void {
 const graphPath = (proj: string): string =>
   join(recordRoot(proj), "runtime-graph.json");
 
-/** Parse the runtime-graph.json the tool wrote. */
 // biome-ignore lint/suspicious/noExplicitAny: test reads arbitrary graph shape
 function readGraph(proj: string): any {
   return JSON.parse(readFileSync(graphPath(proj), "utf-8"));
 }
 
 /**
- * Count MEMORY_EMPTY rows, mirroring the .sh's
- * `grep -c "^\*\*Event\*\*: MEMORY_EMPTY"` (t102:131,146,178). Reads the merged
- * audit shards (compile appends MEMORY_EMPTY to the resolved shard).
+ * Count MEMORY_EMPTY rows. Reads the merged audit shards (compile appends
+ * MEMORY_EMPTY to the resolved shard).
  */
 function memoryEmptyCount(proj: string): number {
   return readAllAuditShards(proj)
@@ -208,10 +198,9 @@ function memoryEmptyCount(proj: string): number {
 
 describe("t102 memory.md producer -> runtime compile round-trip (migrated from t102-memory-roundtrip.sh, plan 6)", () => {
   // --- Case 1: memory.md created from template at start ---------------------
-  // PRODUCER-side, in-process: the .sh `cp`s the template, counts `## ` H2
-  // headings (must be 4), and imports parseMemoryHeadings to confirm a fresh
-  // template parses to total 0 (the MEMORY_EMPTY trigger). Both observables
-  // preserved exactly.
+  // PRODUCER-side, in-process: copy the template, count `## ` H2 headings (must
+  // be 4), and import parseMemoryHeadings to confirm a fresh template parses to
+  // total 0 (the MEMORY_EMPTY trigger).
   test("1: memory.md created from template at start (4 headings, parses to total 0)", () => {
     const proj = makeProject();
     seedTemplateMemory(proj);
@@ -225,7 +214,6 @@ describe("t102 memory.md producer -> runtime compile round-trip (migrated from t
   test("2: N=3 real entries -> memory_entries === 3, breakdown sums to 3 (milestone 8 reads milestone 13's file)", () => {
     const proj = makeProject();
     seedTemplateMemory(proj);
-    // Append 3 real entries: 2 interpretations + 1 tradeoff (t102:108-114).
     let raw = readFileSync(memFile(proj), "utf-8");
     raw = raw.replace(
       "## Interpretations\n",
@@ -237,12 +225,11 @@ describe("t102 memory.md producer -> runtime compile round-trip (migrated from t
     );
     writeFileSync(memFile(proj), raw, "utf-8");
     const r = runCompile(proj);
-    expect(r.rc).toBe(0); // STRONGER: .sh discarded stdout; we pin clean exit
+    expect(r.rc).toBe(0);
     const g = readGraph(proj);
     expect(g.stages[0].memory_entries).toBe(3);
     const b = g.stages[0].memory_breakdown;
     expect(b.interpretations + b.deviations + b.tradeoffs + b.open_questions).toBe(3);
-    // STRONGER than the .sh's bare sum: pin the exact per-heading split.
     expect(b.interpretations).toBe(2);
     expect(b.tradeoffs).toBe(1);
     expect(b.deviations).toBe(0);
@@ -256,7 +243,7 @@ describe("t102 memory.md producer -> runtime compile round-trip (migrated from t
     const r = runCompile(proj);
     expect(r.rc).toBe(0);
     const g = readGraph(proj);
-    // STRONGER: the trigger condition the emit depends on.
+    // The trigger condition the emit depends on.
     expect(g.stages[0].memory_entries).toBe(0);
     expect(memoryEmptyCount(proj)).toBe(1);
   });
@@ -265,7 +252,6 @@ describe("t102 memory.md producer -> runtime compile round-trip (migrated from t
   test("4: stage with N>=1 entries -> no MEMORY_EMPTY (guard correctness)", () => {
     const proj = makeProject();
     seedTemplateMemory(proj);
-    // Append 1 deviation entry (t102:139-144).
     let raw = readFileSync(memFile(proj), "utf-8");
     raw = raw.replace(
       "## Deviations\n",
@@ -275,7 +261,7 @@ describe("t102 memory.md producer -> runtime compile round-trip (migrated from t
     const r = runCompile(proj);
     expect(r.rc).toBe(0);
     const g = readGraph(proj);
-    // STRONGER: the guard's input (one entry -> not empty).
+    // The guard's input (one entry -> not empty).
     expect(g.stages[0].memory_entries).toBe(1);
     expect(memoryEmptyCount(proj)).toBe(0);
   });
@@ -284,7 +270,6 @@ describe("t102 memory.md producer -> runtime compile round-trip (migrated from t
   test("5: memory.md persists across sessions; re-compile still reads memory_entries", () => {
     const proj = makeProject();
     seedTemplateMemory(proj);
-    // Append 1 open-question entry (t102:154-159).
     let raw = readFileSync(memFile(proj), "utf-8");
     raw = raw.replace(
       "## Open questions\n",
@@ -309,7 +294,7 @@ describe("t102 memory.md producer -> runtime compile round-trip (migrated from t
     expect(r.rc).toBe(0);
     const g = readGraph(proj);
     expect(g.stages[0].memory_entries).toBeNull();
-    // STRONGER: the paired backfill field the .sh did not check.
+    // The paired backfill field.
     expect(g.stages[0].memory_breakdown).toBeNull();
     expect(memoryEmptyCount(proj)).toBe(0);
   });

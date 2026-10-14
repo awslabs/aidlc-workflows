@@ -435,7 +435,7 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
     const unexpected = join(root, `${session}-unexpected`);
     const trace = join(process.env.AIDLC_TEST_LOG_DIR ?? root, `${session}.ndjson`);
     const program = join(root, `${session}.ts`);
-    // The labels are from R32 Windows t50's retained visible approval frame.
+    // The labels are from a retained Windows approval frame.
     // Initial wrapping + cursor-addressed row replacement creates real stale
     // wrap metadata in the emulator; no internal xterm properties are assigned.
     writeFileSync(program, `
@@ -526,15 +526,14 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an answered menu that repaints slowly or partially is not answered again", async () => {
-    // Preview Release 36355828064: a loaded Windows host repainted one row of
-    // the answered menu after the gate's settle, so the gate answered it twice.
-    // Each program takes longer than the settle to handle an answer's final key,
-    // then repaints only the first row, leaving the menu below it on screen,
-    // before or after it writes the signal. A compound answer's first key
-    // (Space ticks a box, Down moves the caret) repaints at once. A step with no
-    // repaint and no finish is a lost key: the program reads and ignores it. The
-    // approval gate pauses mid-paint, when its caret sits above the previous
-    // menu's footer (Preview Release 36383850370, Windows).
+    // A loaded Windows host repainted one row of the answered menu after the gate's
+    // settle, so the gate answered it twice. Each program takes longer than the
+    // settle to handle an answer's final key, then repaints only the first row,
+    // leaving the menu below it on screen, before or after it writes the signal. A
+    // compound answer's first key (Space ticks a box, Down moves the caret) repaints
+    // at once. A step with no repaint and no finish is a lost key: the program reads
+    // and ignores it. The approval gate pauses mid-paint, when its caret sits above
+    // the previous menu's footer on Windows.
     type Step = { key: string; rows?: [number, string][]; finish?: true };
     const footer = "Enter to select · ↑/↓ to navigate · Esc to cancel";
     const strip = "←  ☐ Areas  ☐ Approve RE  ✔ Submit  →";

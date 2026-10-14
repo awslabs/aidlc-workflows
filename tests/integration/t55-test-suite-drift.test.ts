@@ -1,13 +1,10 @@
 // covers: harness-instrument:test-suite-drift
 //
 // t55 — drift guard for test-suite metadata + the framework path/version-marker
-// drift sweeps + the closed-harness-framing anti-rot guard. Migrated from
-// tests/integration/t55-test-suite-drift.sh (TAP plan 7); test 8 added by the
-// docs re-architecture (du/unit-7), plus the DocumentKB skill existence pairing,
-// so this twin now carries 9 test() cases.
+// drift sweeps + the closed-harness-framing anti-rot guard, plus the DocumentKB
+// skill existence pairing.
 // Mechanism: none (pure file reads/parsing over tests/, tests/README.md, and
 // docs/ — readFileSync/readdirSync only; zero spawn, zero LLM, zero tokens).
-// Starts suffix-free.
 //
 // This is a META-TEST over the test suite + docs. It instruments the harness
 // itself rather than any framework unit (function/audit/scope/stage/hook/
@@ -15,84 +12,25 @@
 // `harness-instrument:test-suite-drift` — the same convention
 // gen-coverage-registry.test.ts (harness-instrument:coverage-registry-generator)
 // and t112.serial.none.test.ts (harness-instrument:runner-exit-equals-failed-files)
-// use. parseCoversHeader records claims only when they match an enumerated unit,
-// so this benign namespace counts toward nothing and breaks no coverage ratchet.
-//
-// ─────────────────────────────────────────────────────────────────────────────
-// milestone-4-REALITY ADAPTATION (why this twin is NOT a 1:1 transliteration)
-// ─────────────────────────────────────────────────────────────────────────────
-// The .sh's whole premise was validating drift across `.sh` test files: each
-// `.sh` encodes its assertion count in three places — the TAP `plan N` line, the
-// header `(N tests)` comment, and its tests/README.md registry row — and those
-// drifted independently. The milestone 4 migration has retired ~159 of the 160
-// deterministic `.sh` to `t<NN>[-desc].test.ts` (this t55 is the last; milestone 5
-// retires the remaining ~29 claude-driving `.sh`). The tree is now ~30 `.sh` +
-// ~200 `.test.ts`.
+// use. parseCoversHeader collects the token, but the registry join credits a
+// claim only when it matches an enumerated unit, so this benign namespace
+// counts toward nothing and breaks no coverage ratchet.
 //
 // A `.test.ts` has NO `plan N` (bun:test has no TAP plan) — its assertion count
 // lives implicitly in describe()/test() blocks plus an optional header comment,
-// not on a `plan` line. So the plan-vs-header-vs-README drift model (the .sh's
-// checks 1, 2, 4, 5) applies ONLY to the surviving `.sh`. We do NOT fabricate a
-// `plan N` concept for `.test.ts`. Each check below documents exactly what it is
-// scoped to and asserts what IS true of the current tree.
+// not on a `plan` line. So the plan-vs-header-vs-README drift model (checks 1,
+// 2, 4, 5) applies ONLY to `.sh` files. We do NOT fabricate a `plan N` concept
+// for `.test.ts`. Each check below documents exactly what it is scoped to and
+// asserts what IS true of the current tree.
 //
-// REGISTRY SHAPE (verified on disk this session): tests/README.md tracks ONLY
-// `.sh` rows — all surviving `.sh`, zero `.test.ts` rows. The README tables are
-// empty because the test levels are now entirely `.test.ts`.
-// The `.test.ts` coverage registry lives elsewhere (tests/.coverage-registry.json
-// via the `covers:` headers + gen-coverage-registry.ts), NOT in this README. So
-// the bidirectional README check (the load-bearing check 3) is scoped to `.sh`:
-// every `.sh` on disk has a README row, every README row points to an existing
-// file. A `.test.ts` lacking a README row is CORRECT under the current design and
-// must NOT red. (When milestone 5 retires the last `.sh`, the README's test-row tables go
-// empty and check 3 becomes vacuously true on both sides — still correct.)
-//
-// ─────────────────────────────────────────────────────────────────────────────
-// Old TAP -> new test parity (the .sh's 7 `ok` lines -> named test() cases)
-// ─────────────────────────────────────────────────────────────────────────────
-//   .sh ok 1 (header drift: plan N == header (N tests))
-//        -> test 1 "surviving .sh: header (N tests) matches plan N"
-//           SCOPE: surviving `.sh` only. `.test.ts` have no plan N to drift.
-//   .sh ok 2 (README drift: plan N == README (N tests))
-//        -> test 2 "surviving .sh: tests/README.md (N tests) matches plan N"
-//           SCOPE: surviving `.sh` listed in README.
-//   .sh ok 3 (README bidirectional reflection of tests/ on disk) — LOAD-BEARING
-//        -> test 3 "tests/README.md ⇄ tests/ on disk (.sh rows, bidirectional)"
-//           SCOPE: `.sh` (what the README is designed to track today). Kept STRONG
-//           and bidirectional: missing rows AND orphan rows both red.
-//   .sh ok 4 (DYNAMIC_PLAN_ALLOWLIST honesty)
-//        -> test 4 "dynamic-plan allowlist is obsolete (no surviving .sh has a
-//           computed plan; the 3 former entries are now .test.ts)"
-//           ADAPTED: the 3 former allowlist entries
-//           (unit/t15-knowledge-file-inventory, unit/t26-delivery-agent-timeline-
-//           guardrail, integration/t32-stage-graph-consistency) are now `.test.ts`
-//           (the `.sh` are GONE), so the allowlist is empty by construction. The
-//           honest invariant today: NO surviving `.sh` carries a non-literal plan,
-//           so nothing needs allowlisting. We also assert the 3 former stems still
-//           exist as `.test.ts` (the count simply moved into describe/test blocks).
-//   .sh ok 5 (09-testing.md (N tests) == tests/README.md)
-//        -> test 5 "docs/reference/09-testing.md (N tests) matches tests/README.md"
-//           SCOPE: rows whose path appears (with a literal count) in BOTH docs.
-//   .sh ok 6 (path + version-marker drift sweep) — DURABLE CORE
-//        -> test 6 "no stale path strings or version markers in framework code,
-//           tests, or docs" — KEPT VERBATIM (equal-or-stronger). Carve-out update:
-//           t55 and t06 are excluded by STEM (`t55-test-suite-drift`,
-//           `t06-claude-md-paths`) so BOTH the `.sh` and the `.test.ts` forms are
-//           carved (both legitimately embed the search patterns; t06 is now
-//           `.test.ts`). All original carve-outs preserved (aidlc-version.ts,
-//           /data/, /sensors/aidlc-, the "Per ROADMAP" message, node_modules,
-//           tests/logs/).
-//   .sh ok 7 (legacy aidlc-claude-code/ distributable-root sweep)
-//        -> test 7 "no stale aidlc-claude-code/ distributable-root references"
-//           — KEPT VERBATIM. Carve-out update: t55/t06/t112 excluded by STEM so
-//           their `.test.ts` forms are carved (t06 and t112 are now `.test.ts`).
-//           The README/09-testing t112 rows stay carved.
-//
-// 7 .sh `ok` lines -> 7 expect()-bearing test() cases here (same count, same
-// observables, scoped to the current milestone 4 tree as documented per-check),
-// PLUS test 8 (the docs re-architecture's closed-harness-framing guard) — a new
-// drift sweep with no `.sh` ancestor, in the same grepHits + carve-out idiom as
-// checks 6/7. The suite now has 8 test() cases.
+// REGISTRY SHAPE: tests/README.md carries no test rows; the test levels are
+// entirely `.test.ts`. The `.test.ts` coverage registry lives elsewhere
+// (tests/.coverage-registry.json via the `covers:` headers +
+// gen-coverage-registry.ts), NOT in this README. So the bidirectional README
+// check (the load-bearing check 3) is scoped to `.sh`: every `.sh` on disk has a
+// README row, every README row points to an existing file. A `.test.ts` lacking
+// a README row is CORRECT under the current design and must NOT red. With no
+// `.sh` on disk, check 3 is vacuously true on both sides - still correct.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { setDefaultTimeout, describe, expect, test } from "bun:test";
@@ -102,12 +40,10 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-// import.meta.dir is tests/integration/; TESTS_DIR is its parent (tests/).
 const TESTS_DIR = join(import.meta.dir, "..");
 const README = join(TESTS_DIR, "README.md");
 const TESTING_DOC = join(REPO_ROOT, "docs", "reference", "09-testing.md");
 
-// The four level directories the suite walks.
 const TIERS = [
   "smoke",
   "unit",
@@ -116,14 +52,14 @@ const TIERS = [
 ] as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Parsing helpers — TS ports of the .sh's awk/grep/sed extractors.
+// Parsing helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * extract_plan_n (t55.sh:71-84): the literal integer from a `.sh`'s TAP `plan N`
- * line, "DYNAMIC" for an expression/variable, or null when there is no `plan`
- * line. Anchors on `^plan ` after optional leading whitespace. `.test.ts` files
- * have no TAP plan, so this is only ever called on `.sh`.
+ * The literal integer from a `.sh`'s TAP `plan N` line, "DYNAMIC" for an
+ * expression/variable, or null when there is no `plan` line. Anchors on `^plan `
+ * after optional leading whitespace. `.test.ts` files have no TAP plan, so this
+ * is only ever called on `.sh`.
  */
 function extractPlanN(body: string): number | "DYNAMIC" | null {
   const line = body
@@ -134,15 +70,13 @@ function extractPlanN(body: string): number | "DYNAMIC" | null {
     .replace(/^[ \t]*plan[ \t]+/, "")
     .replace(/[ \t]*#.*$/, "")
     .trim();
-  // Strip one layer of surrounding quotes (single or double).
   arg = arg.replace(/^["']/, "").replace(/["']$/, "");
   return /^[0-9]+$/.test(arg) ? Number.parseInt(arg, 10) : "DYNAMIC";
 }
 
 /**
- * extract_header_n (t55.sh:89-96): the first `(N tests)` / `(N assertions)` in
- * the first 10 lines of a file's header, or null. Stage tests use
- * "(N assertions, M turns)"; both forms count.
+ * The first `(N tests)` / `(N assertions)` in the first 10 lines of a file's
+ * header, or null. Stage tests use "(N assertions, M turns)"; both forms count.
  */
 function extractHeaderN(body: string): number | null {
   const head = body.split("\n").slice(0, 10).join("\n");
@@ -158,7 +92,7 @@ interface ReadmeRow {
 }
 
 /**
- * Parse tests/README.md test rows (t55.sh:102-118). Rows start with `| tNN `.
+ * Parse tests/README.md test rows. Rows start with `| tNN `.
  * Column 2 holds a backticked `level/file` path; the description's LAST
  * parenthesised count is canonical (a row like "31 stages ... (93 tests)" takes
  * the last). Keyed by full `level/file` — bare IDs collide across levels.
@@ -171,7 +105,7 @@ function parseReadmeRows(readmeBody: string): ReadmeRow[] {
     const btick = line.match(/`([^`]+)`/);
     const path = btick ? btick[1] : "";
     if (!path) continue;
-    // Description column: awk -F'|' '{print $4}'. Splitting on "|" yields
+    // Description column: splitting on "|" yields
     // ["", " tNN ", " `path` ", " desc ", ...]; index 3 is the description.
     const cols = line.split("|");
     const desc = cols[3] ?? "";
@@ -182,7 +116,7 @@ function parseReadmeRows(readmeBody: string): ReadmeRow[] {
   return rows;
 }
 
-/** Lookup a README row's count by full `level/file` path (null = not listed). */
+/** Lookup a README row's count by full `level/file` path (undefined = not listed). */
 function readmeCount(rows: ReadmeRow[], needle: string): number | null | undefined {
   const row = rows.find((r: ReadmeRow) => r.path === needle);
   return row ? row.count : undefined; // undefined = not in README at all
@@ -291,34 +225,26 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
       .map((r: ReadmeRow) => r.path)
       .filter((p: string) => !onDisk.has(p));
 
-    // Document the current design in the assertion surface: the README is the
-    // `.sh` registry, so both halves are scoped to `.sh` rows.
     expect({ missingFromReadme, orphanRows }).toEqual({
       missingFromReadme: [],
       orphanRows: [],
     });
   });
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Check 4 — dynamic-plan allowlist honesty (ADAPTED to milestone 4).
-  // The .sh's DYNAMIC_PLAN_ALLOWLIST named three `.sh` whose `plan` was a
-  // computed expression. All three were migrated to `.test.ts` in milestone 4 (the `.sh`
-  // are GONE), and a `.test.ts` has no TAP plan at all — so the allowlist concept
-  // is obsolete. The honest invariant now: NO surviving `.sh` carries a
-  // non-literal (DYNAMIC) plan, so nothing needs allowlisting. We also confirm
-  // the three former stems still exist as `.test.ts` (their counts simply moved
-  // into describe/test blocks), proving the entries were RE-HOMED, not lost.
-  // ───────────────────────────────────────────────────────────────────────────
+  // Check 4 - dynamic-plan allowlist honesty. The allowlist named three `.sh`
+  // whose `plan` was a computed expression. All three are now `.test.ts`, and a
+  // `.test.ts` has no TAP plan at all - so the allowlist concept is obsolete. The
+  // honest invariant now: NO surviving `.sh` carries a non-literal (DYNAMIC) plan,
+  // so nothing needs allowlisting. We also confirm the three former stems still
+  // exist as `.test.ts` (their counts simply moved into describe/test blocks),
+  // proving the entries were RE-HOMED, not lost.
   test("4: dynamic-plan allowlist is obsolete — no surviving .sh has a computed plan [.sh ok 4]", () => {
-    // No surviving `.sh` carries a DYNAMIC plan -> the allowlist is empty by
-    // construction.
     const dynamicSh = shFiles.filter((rel: string) => {
       const body = readFileSync(join(TESTS_DIR, rel), "utf-8");
       return extractPlanN(body) === "DYNAMIC";
     });
     expect(dynamicSh).toEqual([]);
 
-    // The three former allowlist entries are now `.test.ts`; the `.sh` are gone.
     const formerEntries = [
       { tier: "unit", stem: "t15-knowledge-file-inventory" },
       { tier: "unit", stem: "t26-delivery-agent-timeline-guardrail" },
@@ -333,17 +259,16 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
       };
     });
     for (const v of verdicts) {
-      expect(v.shGone).toBe(true); // the .sh was retired
-      expect(v.tsPresent).toBe(true); // its twin exists
+      expect(v.shGone).toBe(true);
+      expect(v.tsPresent).toBe(true);
     }
   });
 
   // ───────────────────────────────────────────────────────────────────────────
   // Check 5 — 09-testing.md vs tests/README.md. For each `09-testing.md` test row
   // that names a `tests/<level>/<file>.sh` path AND carries a literal count, that
-  // count must equal the README row for the same `level/file`. (09-testing.md
-  // still references the now-`.test.ts` files by their old `.sh` paths; only rows
-  // present-with-a-count in BOTH docs are compared — exactly the .sh's scoping.)
+  // count must equal the README row for the same `level/file`. Only rows
+  // present-with-a-count in BOTH docs are compared.
   // ───────────────────────────────────────────────────────────────────────────
   test("5: docs/reference/09-testing.md (N tests) matches tests/README.md [.sh ok 5]", () => {
     const docDrift: string[] = [];
@@ -351,7 +276,7 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
     try {
       testingDoc = readFileSync(TESTING_DOC, "utf-8");
     } catch {
-      // The .sh guarded `if [ -f "$TESTING_DOC" ]`; absence is a no-op pass.
+      // Absence is a no-op pass.
       expect(docDrift).toEqual([]);
       return;
     }
@@ -372,13 +297,12 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
     expect(docDrift).toEqual([]);
   });
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Check 6 — path + version-marker drift sweep (DURABLE CORE — kept verbatim).
-  // Scans dist/claude/.claude/, tests/, docs/ for stale path strings and scans
-  // dist/claude/.claude/ for stale release-version markers in framework code.
-  // Carve-outs preserved; t55 + t06 excluded by STEM so both `.sh` and `.test.ts`
-  // forms are carved (both legitimately embed the search patterns).
-  // ───────────────────────────────────────────────────────────────────────────
+  // Check 6 - path + version-marker drift sweep.
+  // Scans core/, harness/, dist/claude/.claude/, tests/, docs/ for stale path
+  // strings and scans core/, harness/, dist/claude/.claude/ for stale
+  // release-version markers in framework code. t55 + t06 excluded by STEM so
+  // both `.sh` and `.test.ts` forms are carved (both legitimately embed the
+  // search patterns).
   test("6: no stale path strings or version markers in framework code, tests, or docs [.sh ok 6]", () => {
     const pathDrift: string[] = [];
 
@@ -390,44 +314,40 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
       "practices/org.md",
       "practices/project.md",
       "aidlc-docs/.sensors/",
-      // ── learnings→practices relocation (docs-freshness sweep) ──
+      // -- learnings-filename sweep --
       // The two retired learnings FILES — aidlc-team-learnings.md and
       // aidlc-project-learnings.md — collapsed into the unified practices
       // written under aidlc/spaces/<space>/memory/{team,project}.md (see
       // core/tools/aidlc-learnings.ts → memoryDirFor). These concrete filenames
       // have ZERO legitimate survivors anywhere in core/harness/dist/docs — the
-      // only on-disk hits are three tests that embed them as negative-match data
-      // (carved by STEM below). So these tokens catch any stale learnings-FILE
-      // reference that re-enters the corpus.
+      // only on-disk hits are tests that embed them as negative-match data (carved
+      // by STEM below). So these tokens catch any stale learnings-FILE reference
+      // that re-enters the corpus.
       //
       // We anchor on the full `aidlc-<scope>-learnings.md` filename, NOT a bare
       // `-learnings.md` substring: the explanatory glob `*-learnings.md` (the
       // prose that DOCUMENTS the collapse — "there is no parallel `*-learnings.md`
-      // surface") appears legitimately in ~17 files (core stage-protocol +
-      // aidlc-{graph,learnings}.ts, their dist copies, docs/{guide,reference,
-      // harness-engineering}, and tests). That retirement-narrating prose is
-      // correct, not stale, and is already pinned by t174 over the authored
-      // surfaces — so a bare-substring token would over-broaden into it.
+      // surface") appears legitimately across core, dist, docs and tests. That
+      // retirement-narrating prose is correct, not stale, and is already pinned by
+      // t174 over the authored surfaces - so a bare-substring token would
+      // over-broaden into it.
       //
       // NOTE: the sibling rules→memory relocation (the DOTTED dirs
       // `.claude/rules/`, `.kiro/steering/`, `.codex/aidlc-rules/`) is
       // deliberately NOT swept here either. Those dotted forms survive
-      // legitimately in ~77 files: the 52 rendered dist/claude/.claude copies
-      // (token-substitution output), the packager/emit/@-stub/native-glob
-      // sources, the resolver doc-comments in aidlc-{lib,graph}.ts, and the
-      // authored-prose mentions of the `.claude/rules/aidlc.md` @-import stub —
-      // and the bare `{{HARNESS_DIR}}/rules/` template token (~73× in
-      // core/aidlc-common) is a SEPARATE deferred sweep (G6) that must NOT be
-      // matched here. That lane is already pinned by t174 (docs-legacy-refs-gate)
-      // over the authored-prose surfaces; duplicating it here would mean carving
-      // all 77 paths.
+      // legitimately in the rendered dist/claude/.claude copies (token-substitution
+      // output), the packager/emit/@-stub/native-glob sources, the resolver
+      // doc-comments in aidlc-{lib,graph}.ts, and the authored-prose mentions of
+      // the `.claude/rules/aidlc.md` @-import stub. That lane is already pinned by
+      // t174 (docs-legacy-refs-gate) over the authored-prose surfaces; duplicating
+      // it here would mean carving every one of those paths.
       "aidlc-team-learnings.md",
       "aidlc-project-learnings.md",
     ];
     const pathHits = grepHits(
       [
-        // Authorship moved from dist/claude/.claude to core/ + harness/
-        // (dist-unified keystone); scan the generated local projection too.
+        // Authored sources live in core/ + harness/;
+        // scan the generated local projection too.
         join(REPO_ROOT, "core"),
         join(REPO_ROOT, "harness"),
         join(REPO_ROOT, "dist", "claude", ".claude"),
@@ -482,13 +402,10 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
     }
   });
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Check 7 — legacy distributable-root sweep (kept verbatim). The bare literal
+  // Check 7 - legacy distributable-root sweep. The bare literal
   // `aidlc-claude-code` must not reappear as a live path in framework tree,
   // tests, or docs. Carve-outs: t55/t06/t112 by STEM (so their `.test.ts` forms
-  // are carved — t06 and t112 are now `.test.ts`), plus the README/09-testing
-  // t112 rows that narrate the move.
-  // ───────────────────────────────────────────────────────────────────────────
+  // are carved), plus the README/09-testing t112 rows that narrate the move.
   test("7: no stale aidlc-claude-code/ distributable-root references (post-v0.6.0-milestone-0) [.sh ok 7]", () => {
     const hits = grepHits(
       [
@@ -503,11 +420,8 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
     expect(hits).toEqual([]);
   });
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Check 8 — closed-harness-framing anti-rot guard (NEW; docs re-architecture
-  // du/unit-7). The corpus moved from "one core, three harnesses" (a CLOSED count
-  // baked into titles, taglines, and the canonical architecture heading) to "one
-  // core, MANY harnesses" — an open, growable set where Claude/Kiro/Codex are an
+  // Check 8 - closed-harness-framing anti-rot guard. The corpus says "one core,
+  // MANY harnesses" - an open, growable set where Claude/Kiro/Codex are an
   // enumeration that grows, not a hardcoded three. This guard pins that: it reds
   // on any ARCHITECTURAL closed-count framing that re-enters the authored corpus.
   //
@@ -529,10 +443,6 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
   // 3 test-strategy levels, 3 Bolts, 3 compartments, 3 session skills, 3 phases,
   // 3 interaction modes) and ordinal "fourth" uses (fourth phase, fourth audit
   // stream) never match — they are not the harness count.
-  //
-  // This guard is created RED on the pre-Wave-1 corpus (the framing reframe turns it
-  // green); after Wave 1 it stays green and pins the open-set framing against rot.
-  // ───────────────────────────────────────────────────────────────────────────
   test("8: no closed 'three harnesses' framing in authored docs (open-set guard) [du/unit-7]", () => {
     const hits = grepHits(
       [
@@ -548,63 +458,57 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Carve-out predicates (TS ports of the .sh's `grep -v` chains). Each takes a
-// "path:lineno:content" hit string. STEM matching (e.g. "t55-test-suite-drift")
-// carves BOTH the `.sh` and the `.test.ts` form of a file — the milestone 4 update that
-// the original `.sh`-suffix carve-outs missed.
-// ─────────────────────────────────────────────────────────────────────────────
+// Carve-out predicates. Each takes a "path:lineno:content" hit string. STEM
+// matching (e.g. "t55-test-suite-drift") carves BOTH the `.sh` and the
+// `.test.ts` form of a file.
 
-/** Shared excludes for every sweep: node_modules and the runner log dir. */
 function commonExcluded(hit: string): boolean {
   return hit.includes("node_modules") || hit.includes("tests/logs/");
 }
 
-/** Check-6 path-string carve-outs (t55.sh:283-286). */
+/** Check-6 path-string carve-outs. */
 function pathHitCarvedOut(hit: string): boolean {
   return (
     commonExcluded(hit) ||
     hit.includes("t55-test-suite-drift") || // STEM: carves .sh AND .test.ts
-    hit.includes("t06-claude-md-paths") || // STEM: t06 is now .test.ts
-    // ── learnings-filename carve-outs (learnings→practices relocation sweep) ──
+    hit.includes("t06-claude-md-paths") ||
+    // -- learnings-filename carve-outs --
     // The retired filenames aidlc-team-learnings.md / aidlc-project-learnings.md
-    // have ZERO legitimate survivors in core/harness/dist/docs (verified: grep
-    // for the concrete filenames returns nothing there). Their only on-disk
-    // appearances are these three tests, which embed the filename as
-    // negative-match TEST DATA — they assert the file is GONE (the .sh
-    // ancestor's `assert_file_not_exists`) or narrate the old learnings flow.
-    // Carved by STEM so the embedded filename never self-trips this sweep.
+    // have ZERO legitimate survivors in core/harness/dist/docs. The tests carved
+    // below embed the filename as negative-match TEST DATA (they assert the file
+    // is GONE) or narrate the old learnings flow. Carved by STEM so the embedded
+    // filename never self-trips this sweep.
     hit.includes("t99-learnings-gate-flow") || // narrates old learnings landing paths
     hit.includes("t86-stage-protocol-section-13") || // asserts filename absent in stage-protocol
     hit.includes("t158-memory-writer-reader-seam") // asserts old learnings file not created
   );
 }
 
-/** Check-6 version-marker carve-outs (t55.sh:302-306). */
+/** Check-6 version-marker carve-outs. */
 function versionHitCarvedOut(hit: string): boolean {
   return (
     hit.includes("node_modules") ||
     hit.includes("aidlc-version.ts") || // its job is to declare a version
     hit.includes("/data/") || // stage-graph.json "number" identifiers
-    /aidlc-utility\.ts.*Per ROADMAP/.test(hit) || // user-facing migration message
+    /aidlc-utility\.ts.*Per ROADMAP/.test(hit) ||
     hit.includes("/sensors/aidlc-") // sensor default-version-of-behaviour prose
   );
 }
 
-/** Check-7 legacy-root carve-outs (t55.sh:336-342). */
+/** Check-7 legacy-root carve-outs. */
 function legacyRootCarvedOut(hit: string): boolean {
   return (
     commonExcluded(hit) ||
-    hit.includes("t55-test-suite-drift") || // this file (.sh AND .test.ts)
+    hit.includes("t55-test-suite-drift") ||
     hit.includes("t06-claude-md-paths") || // .test.ts negative-match guard
     hit.includes("t112-learnings-distribution-guard") || // .test.ts migration prose
-    /tests\/README\.md:.*\| t112 /.test(hit) || // README t112 row
-    /09-testing\.md:.*\| t112 /.test(hit) // 09-testing.md t112 row
+    /tests\/README\.md:.*\| t112 /.test(hit) ||
+    /09-testing\.md:.*\| t112 /.test(hit)
   );
 }
 
 /**
- * Check-8 closed-harness-framing forbidden pattern (docs re-architecture du/unit-7).
+ * Check-8 closed-harness-framing forbidden pattern.
  * Matches the architectural CLOSED-COUNT tells — the framing that hardcodes
  * "three" (or presupposes it via "add a fourth") as the harness set — while
  * leaving the ~dozen incidental "all three / three X" methodology facts and
@@ -618,14 +522,13 @@ const CLOSED_FRAMING_RE =
 
 /**
  * The retired KNOWLEDGE DIRECTORY `<any-root>/aidlc-knowledge/`, renamed to
- * `knowledge/` in milestone 2.
+ * `knowledge/`.
  *
- * This was a plain `"aidlc-knowledge/"` substring in PATH_PATTERNS until
- * 2026-08-08, when the DocumentKB SKILL landed at `skills/aidlc-knowledge/` and
- * made the bare token ambiguous — it flagged every legitimate reference to the
- * new skill. Two fixes were rejected before this one:
+ * A plain `"aidlc-knowledge/"` substring in PATH_PATTERNS would flag every
+ * legitimate reference to the DocumentKB SKILL at `skills/aidlc-knowledge/`
+ * (the bare token is ambiguous). Two fixes were rejected before this one:
  *
- *   per-file carve-out   the six S1-14 doc files that reference the skill would
+ *   per-file carve-out   the doc files that reference the skill would
  *                        each need their own STEM carve, so the carve-out list,
  *                        not the pattern, becomes the maintained artefact.
  *   prefix allowlist     enumerating `.claude/`, `.kiro/`, `.codex/`,
@@ -661,13 +564,11 @@ function framingHitCarvedOut(hit: string): boolean {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // grepHits — a recursive `grep -rn` in pure TS. Returns "relpath:lineno:content"
 // for every line in every text file under the given roots that matches `pred`.
-// Relative to REPO_ROOT so carve-out predicates match the same path shapes the
-// .sh's grep emitted (e.g. "tests/README.md:36:..."). Skips node_modules, .git,
-// and binary/log noise the .sh's `grep -v` chain also excluded.
-// ─────────────────────────────────────────────────────────────────────────────
+// Relative to REPO_ROOT so carve-out predicates match the same path shapes
+// (e.g. "tests/README.md:36:..."). Skips node_modules, .git, and binary/log
+// noise.
 
 const SKIP_DIRS = new Set(["node_modules", ".git"]);
 
@@ -688,15 +589,13 @@ function walk(
   } catch {
     // Not a directory (ENOTDIR for a file ROOT like README.md / AGENTS.md) or
     // unreadable/non-existent. grepFile handles the file case and no-ops on a
-    // truly absent path (its own readFileSync catch). The original directory
-    // roots are unaffected — readdirSync succeeds for them.
+    // truly absent path (its own readFileSync catch).
     grepFile(abs, pred, hits);
     return;
   }
   for (const ent of entries) {
-    // SKIP_DIRS mirrors the .sh's `grep -v node_modules` (and .git, which a
-    // `grep -rn` over a source tree would never contain test content for). The
-    // .sh scanned everything else, dotfiles included; so do we.
+    // SKIP_DIRS excludes node_modules and .git (neither holds test content for
+    // this sweep). Scan everything else, dotfiles included.
     if (SKIP_DIRS.has(ent.name)) continue;
     const child = join(abs, ent.name);
     if (ent.isDirectory()) {
@@ -733,9 +632,9 @@ function grepFile(
   }
 }
 
-/** Repo-relative POSIX-style path so carve-out predicates match `.sh`-grep shapes. */
+/** Repo-relative POSIX-style path so carve-out predicates match hit paths. */
 function relFromRepo(abs: string): string {
   const root = REPO_ROOT.endsWith("/") ? REPO_ROOT : `${REPO_ROOT}/`;
   const rel = abs.startsWith(root) ? abs.slice(root.length) : abs;
-  return rel.split("\\").join("/"); // normalise Windows separators
+  return rel.split("\\").join("/");
 }

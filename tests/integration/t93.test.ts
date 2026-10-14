@@ -57,7 +57,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOL = join(
   REPO_ROOT,
@@ -70,11 +70,10 @@ const TOOL = join(
 
 interface CliResult {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string;
   stdout: string;
 }
 
-/** Spawn `bun aidlc-sensor.ts <args...>`. Mirrors `bun "$SENSOR_TS" ...` 2>&1. */
 function sensor(...args: string[]): CliResult {
   const res = spawnSync(BUN, [TOOL, ...args], { encoding: "utf-8" });
   const stdout = res.stdout ?? "";
@@ -87,9 +86,8 @@ function sensor(...args: string[]): CliResult {
 
 /**
  * Parse `list` stdout into rows of [id, kind, description]. handleList emits
- * one tab-separated row per sensor (aidlc-sensor.ts:145-147); the .sh counted
- * rows via `grep -c '\t'` and split columns via `awk -F'\t'`. We split the same
- * way, dropping any trailing blank line.
+ * one tab-separated row per sensor (aidlc-sensor.ts); split on tabs, dropping
+ * any trailing blank line.
  */
 function listRows(out: string): string[][] {
   return out
@@ -114,14 +112,13 @@ const EXPECTED_IDS = [
 describe("t93 aidlc-sensor list (extended from t93-sensor-list-describe.sh, plan 13)", () => {
   test("1: list emits exactly 6 framework sensors", () => {
     const r = sensor("list");
-    expect(r.status).toBe(0); // STRONGER: .sh discarded $? on list; we pin clean exit
+    expect(r.status).toBe(0);
     expect(listRows(r.out)).toHaveLength(6);
   });
 
   test("2: list column 2 is 'deterministic' for every row", () => {
     const r = sensor("list");
     const rows = listRows(r.out);
-    // .sh: `awk -F'\t' '$2 != "deterministic"' | wc -l` == 0.
     const nonDeterministic = rows.filter((cols) => cols[1] !== "deterministic");
     expect(nonDeterministic).toHaveLength(0);
   });
@@ -129,24 +126,21 @@ describe("t93 aidlc-sensor list (extended from t93-sensor-list-describe.sh, plan
   test("3: list is alpha-sorted by id", () => {
     const r = sensor("list");
     const ids = listRows(r.out).map((cols) => cols[0]);
-    // .sh: IDS == (IDS | sort). Deep-equal against the sorted copy.
     expect(ids).toEqual([...ids].sort());
   });
 
   test("4: list returns exactly the 6 framework sensor ids", () => {
     const r = sensor("list");
     const ids = listRows(r.out).map((cols) => cols[0]);
-    // .sh sentinel set — flags drift if a sensor is renamed/added/removed.
     expect(ids).toEqual(EXPECTED_IDS);
   });
 });
 
 // ============================================================
-// describe subcommand (stronger-parity coverage of the .sh's describe cases)
+// describe subcommand
 // ============================================================
 
 describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, plan 12)", () => {
-  /** Line-membership against the describe stdout (mirrors `grep -q '^<line>$'`). */
   function hasLine(out: string, line: string): boolean {
     return out.split("\n").includes(line);
   }
@@ -224,13 +218,13 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
 
   test("11: describe <unknown-id> exits 1 with a known-ids hint", () => {
     const r = sensor("describe", "definitely-not-a-real-sensor-id");
-    expect(r.status).toBe(1); // STRONGER: .sh asserted `-ne 0`; the tool's dispatchError exits 1
+    expect(r.status).toBe(1); // the tool's dispatchError exits 1
     expect(r.out).toContain("unknown sensor id");
   });
 });
 
 // ============================================================
-// Help / dispatch (the .sh's --help, -h, and no-subcommand cases)
+// Help / dispatch (--help, -h, and no-subcommand cases)
 // ============================================================
 
 describe("t93 aidlc-sensor help + dispatch (extended from t93-sensor-list-describe.sh, plan 13)", () => {
@@ -249,7 +243,7 @@ describe("t93 aidlc-sensor help + dispatch (extended from t93-sensor-list-descri
 
   test("14: no subcommand exits 1 with a usage hint", () => {
     const r = sensor();
-    expect(r.status).toBe(1); // STRONGER: .sh asserted `-ne 0`; main()'s no-cmd arm exits 1
+    expect(r.status).toBe(1); // main()'s no-cmd arm exits 1
     expect(r.out).toContain("Usage: aidlc-sensor");
   });
 });

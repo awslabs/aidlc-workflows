@@ -409,7 +409,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files plus each
 
 ## Stage Execution Engine
 
-Every stage follows one of the four active execution patterns: inline, subagent, pipeline, or mob (29 / 2 / 1 / 1 in the shipped graph). The compiled stage graph (`tools/data/stage-graph.json`) carries each stage's mode; the engine reads it and delivers it on the `run-stage` directive as `directive.mode`. The Stage Graph table in SKILL.md is a human-readable mirror, not the dispatch source.
+Every stage follows one of the four active execution patterns: inline, subagent, pipeline, or mob (29 / 2 / 1 / 1 in the shipped graph). The compiled stage graph (`tools/data/stage-graph.json`) carries each stage's mode; the engine reads it and delivers it on the `run-stage` directive as `directive.mode`. The Stage Graph table in `tables.md`, beside the orchestrator skill, is a human-readable mirror, not the dispatch source.
 
 ### Full Stage Lifecycle
 

@@ -268,7 +268,7 @@ test("owned descendant",async()=>{
       const release = join(dir, "release");
       // A quarter of the file deadline is the cleanup reserve, which must cover
       // stopping the leader and retiring its tree on a loaded Windows runner;
-      // five seconds left 1.25 s and was reported as ERROR (run 36312402336).
+      // five seconds left 1.25 s and was reported as ERROR.
       const runner = launch(dir, ["--e2e", "--isolated-e2e", "--e2e-file-timeout", mode === "timeout" ? "20" : String(NATIVE_FIXTURE_SETUP_TIMEOUT_MS / 1000)], {
         RUNNER_LEAF: leaf, RUNNER_RELEASE: release,
       });

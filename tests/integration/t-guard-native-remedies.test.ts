@@ -725,8 +725,8 @@ describe("source and native guard remedies execute their owning operations", () 
         result_sha256: createHash("sha256").update(output.stdout.trim(), "utf-8").digest("hex"),
       },
     });
-    // Source tools retain their existing trusted admission. This case verifies
-    // delivery/selection preservation, not a new source-tool consent check.
+    // Source tools retain their trusted admission. This case verifies
+    // delivery/selection preservation, not a source-tool consent check.
     expect(json(p.exact(jump))).toMatchObject({
       target: "code-generation", direction: "redo", state_updated: true,
     });
@@ -825,7 +825,7 @@ describe("source and native guard remedies execute their owning operations", () 
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  // t331 keeps its existing seven-source-harness proof. Here source Claude
+  // t331 keeps its seven-source-harness proof. Here source Claude
   // covers all lifecycle remedies; the same cases cross all seven native
   // runtimes, including the shared-directory Kiro/Kiro IDE and Copilot/OpenCode.
   for (const projection of ["source", "native"] as const) {

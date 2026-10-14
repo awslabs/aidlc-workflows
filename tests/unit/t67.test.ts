@@ -50,7 +50,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
@@ -66,6 +66,7 @@ const TOOL = join(
   "tools",
   "aidlc-utility.ts",
 );
+// The generated tables live in tables.md beside the orchestrator skill.
 const SKILL = join(
   REPO_ROOT,
   "dist",
@@ -73,7 +74,7 @@ const SKILL = join(
   ".claude",
   "skills",
   "aidlc",
-  "SKILL.md",
+  "tables.md",
 );
 const SCOPE_GRID = join(
   REPO_ROOT,
@@ -319,7 +320,7 @@ describe("t67 scope-table --check drift guard (migrated from t67 §4-6)", () => 
   test("13: skill-text prints the SKILL.md whole, byte for byte", () => {
     const r = util(["skill-text"]);
     expect(r.status, r.stderr).toBe(0);
-    const skill = readFileSync(SKILL, "utf-8");
+    const skill = readFileSync(join(dirname(SKILL), "SKILL.md"), "utf-8");
     expect(r.stdout).toBe(skill.endsWith("\n") ? skill : `${skill}\n`);
     const seam = join(mkdtempSync(join(tmpdir(), "t67-skill-text-")), "skill.md");
     tempFiles.push(seam);

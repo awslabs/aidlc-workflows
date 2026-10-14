@@ -3,17 +3,15 @@
 // Mechanism: cli (spawned dist intent-create) + in-process pure-function asserts
 // against the dist lib audit readers.
 //
-// Blocker B2 regression — migration must PRESERVE the pre-migration audit trail.
-// The flat→per-intent migration (migrateFlatLayout) used to blind-copy the flat
-// `aidlc-docs/audit.md` FILE to `<record>/audit.md`, where it sat ORPHANED: the
-// audit readers (auditShards/readAllAuditShards) glob the `<record>/audit/` DIR,
-// and the flat-fallback only fires when the record dir is absent (never, post-
-// migration). So the WORKFLOW_STARTED/STAGE history was on disk but invisible to
-// runtime-graph compile, summary/replay, and every hook — contradicting the
-// in-code claim that "the migrated record carries its prior state + audit
-// history". The fix RELOCATES the flat audit.md into the shard layout
-// `<record>/audit/<host>-<clone>.md` during migration (honours decision #1:
-// a per-clone shard, NOT a single audit.md + merge=union).
+// Regression - migration must PRESERVE the pre-migration audit trail.
+// Blind-copying the flat `aidlc-docs/audit.md` FILE to `<record>/audit.md` would
+// leave it ORPHANED: the audit readers (auditShards/readAllAuditShards) glob the
+// `<record>/audit/` DIR, and the flat-fallback only fires when the record dir is
+// absent (never, post-migration): the WORKFLOW_STARTED/STAGE history would be on
+// disk but invisible to runtime-graph compile, summary/replay, and every hook.
+// migrateFlatLayout therefore RELOCATES the flat audit.md into the shard layout
+// `<record>/audit/<host>-<clone>.md` during migration: a per-clone shard, NOT a
+// single audit.md + merge=union.
 //
 // WHY a populated audit.md: t165's migration-wiring block seeds a HEADER-ONLY
 // audit.md (no events), which is exactly why the orphaning escaped there. This
@@ -99,7 +97,6 @@ describe("t172 migration preserves the pre-migration audit trail (B2)", () => {
     const r = util(["intent-create", "--scope", "feature"]);
     expect(r.status).toBe(0);
 
-    // One migrated record carrying the flat state.
     const records = readdirSync(intentsDir(proj)).filter((d) =>
       existsSync(join(intentsDir(proj), d, "aidlc-state.md")),
     );
@@ -107,7 +104,7 @@ describe("t172 migration preserves the pre-migration audit trail (B2)", () => {
     const recordDirName = records[0];
     const record = join(intentsDir(proj), recordDirName);
 
-    // --- B2 core: the pre-migration events are reachable through the readers ---
+    // --- The pre-migration events are reachable through the readers ---
     // readAllAuditShards over the migrated intent returns the WORKFLOW_STARTED
     // (and STAGE_TRANSITION) events from the flat audit.md.
     const intent = activeIntent(proj);
@@ -124,13 +121,11 @@ describe("t172 migration preserves the pre-migration audit trail (B2)", () => {
       expect(dirname(s)).toBe(join(record, "audit"));
       expect(s.endsWith(".md")).toBe(true);
     }
-    // The relocated shard actually holds the migrated content.
     expect(readFileSync(shards[0], "utf-8")).toContain("WORKFLOW_STARTED");
 
     // No stray top-level `<record>/audit.md` FILE remains (it was relocated).
     const strayFile = join(record, "audit.md");
     expect(existsSync(strayFile) && statSync(strayFile).isFile()).toBe(false);
-    // And `<record>/audit` is the shard DIR.
     expect(statSync(join(record, "audit")).isDirectory()).toBe(true);
 
     // --- migration still works end-to-end ---
@@ -138,7 +133,6 @@ describe("t172 migration preserves the pre-migration audit trail (B2)", () => {
     expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("Legacy App");
     // .migrated marker exists (idempotency key).
     expect(existsSync(join(proj, "aidlc", ".migrated"))).toBe(true);
-    // The flat tree was git-rm'd from the working tree post-move.
     expect(existsSync(join(flat, "aidlc-state.md"))).toBe(false);
     expect(existsSync(join(flat, "audit.md"))).toBe(false);
   });

@@ -705,8 +705,11 @@ describe("t295 Finding 4: the per-document size check runs BEFORE the read, not 
   });
 
   test("behavioral: a REAL over-cap file never gets fully buffered — RSS stays far below its size", () => {
-    // Chosen over a sparse file on purpose: a file of real bytes makes a skipped
-    // full-buffer read observable -- if this ever got read in full, RSS would climb
+    // Chosen over a sparse file on purpose: a sparse file's blocks are never
+    // materialised even if read() is called on the whole span (macOS/Linux
+    // both fault in zero pages cheaply), so it CANNOT distinguish "stat-then-
+    // refuse" from "read-then-check". A file filled with real, incompressible
+    // bytes closes that gap -- if this ever got read in full, RSS would climb
     // by roughly the file's size, not by a rounding error.
     const p = scratchProject();
     const abs = doc(p, "real-big.bin", Buffer.alloc(0));

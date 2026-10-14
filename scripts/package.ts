@@ -1661,7 +1661,9 @@ function refreshGeneratedSkillRegions(
   harnessDir: string,
   manifest: HarnessManifest,
 ): void {
-  const skillPath = assembledOrchestratorSkill(outRoot, manifest);
+  // The generated tables live beside the skill (tables.md), out of its body.
+  const skillPath = join(dirname(assembledOrchestratorSkill(outRoot, manifest)), "tables.md");
+  if (!existsSync(skillPath)) return;
   let body = readFileSync(skillPath, "utf-8").replace(/\r\n/g, "\n");
 
   for (const region of GENERATED_SKILL_REGIONS) {

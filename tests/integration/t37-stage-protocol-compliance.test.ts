@@ -1,35 +1,30 @@
 // covers: doc:aidlc-common/protocols/stage-protocol.md, doc:aidlc-common/protocols/stage-protocol-ensemble.md, doc:aidlc-common/conductor.md, doc:aidlc-common/stages, doc:knowledge/aidlc-shared/state-template.md, doc:SKILL.md(routing)
 //
-// t37 — cross-file stage-protocol compliance. Migrated from the bash TAP test
-// tests/integration/t37-stage-protocol-compliance.sh (plan 75). The subject is a
-// set of CROSS-FILE structural invariants over the shipped tree under
-// dist/claude/.claude (AIDLC_SRC): every stage references the protocol, the
-// state template carries every required section, fixtures conform to that
-// section structure and to the protocol's checkbox notation, SKILL.md routing
-// mandates all three protocol files, the protocol's silent-bookkeeping section
-// names the state fields the tools write, init stages are exempt from approval
-// gates, and the protocol + conductor both forbid Task() for inline support
-// agents.
+// t37 - cross-file stage-protocol compliance. The subject is a set of CROSS-FILE
+// structural invariants over the shipped tree under dist/claude/.claude
+// (AIDLC_SRC): every stage references the protocol, the state template carries
+// every required section, fixtures conform to that section structure and to the
+// protocol's checkbox notation, SKILL.md routing mandates all three protocol
+// files, the protocol's silent-bookkeeping section names the state fields the
+// tools write, init stages are exempt from approval gates, and the ensemble
+// protocol + conductor both forbid dispatching inline support agents.
 //
 // Mechanism: none. Every assertion is a structural / filesystem inspection of
-// the shipped bytes — read the same files the .sh grepped (via AIDLC_SRC from
-// tests/harness/fixtures.ts), assert on their content in process. There is no
-// tool argv / exit-code / stdout seam and no LLM: the .sh used grep/sed only,
-// so the TS twin reads the files with readFileSync and asserts. Zero spawn,
-// zero subprocess, zero tokens.
+// the shipped bytes (via AIDLC_SRC from tests/harness/fixtures.ts), asserted
+// on their content in process. There is no tool argv / exit-code / stdout seam
+// and no LLM.
 //
 // Source under test (paths relative to AIDLC_SRC = dist/claude/.claude):
 //   aidlc-common/protocols/stage-protocol.md
-//     :15  "## 1. Approval Gates" — names the 3 init stages as exempt
+//     "## 1. Approval Gates" - names the 3 init stages as exempt
 //     "### Silent bookkeeping writes" — names **Current Stage** / **Lifecycle
 //          Phase** / **Active Agent** / **In Progress** / **Completed** fields
 //     "[S]" — documents the skipped-via-jump checkbox state
-//     "### Multi-agent stages:" — forbids Task() for inline support agents,
-//          reserves Task for `mode: subagent`
+//   aidlc-common/protocols/stage-protocol-ensemble.md
+//     "## 5. Multi-agent stages" - forbids dispatching inline support agents
 //   aidlc-common/conductor.md — mirrors the inline-support-agent guidance
-//          (forbids Task for inline support agents; reserves Task for
-//          `directive.mode == "subagent"`)
-//   aidlc-common/stages/<phase>/<slug>.md — 32 stage files; all reference
+//          and makes the conductor the only delegator
+//   aidlc-common/stages/<phase>/<slug>.md - 33 stage files; all reference
 //          "stage-protocol"
 //   knowledge/aidlc-shared/state-template.md — the 7 required ## sections
 //   knowledge/aidlc-<agent>-agent/ — one knowledge dir per agents/*.md file
@@ -37,44 +32,11 @@
 // Fixtures (tests/fixtures, via FIXTURES_DIR):
 //   state-mid-ideation.md — section structure + [x]/[-]/[ ] checkbox notation
 //   state-jumped.md       — [S] skipped-via-jump notation
-//
-// Equal-or-stronger note: the .sh's stage-protocol loop tolerated an init stage
-// that did NOT reference the protocol (it scored such a stage `ok` as
-// "optional"). The shipped tree has all 32 stages — init included — referencing
-// it, so this twin asserts the STRONGER invariant: every stage (init and
-// non-init alike) references stage-protocol, and additionally records that no
-// non-init stage may ever omit it (the only branch that produced a `not_ok` in
-// the .sh). The init-exemption-from-approval-gates row (.sh "approval exemption
-// lists initialization stage: X") is preserved verbatim as a separate check.
-//
-// Old TAP -> new test parity (1:1, 75 .sh assertions -> 75 expect()s, grouped):
-//   .sh stage-protocol loop (32 stages, one ok/not_ok each)
-//        -> "every stage file references stage-protocol" (32 expects, one/stage)
-//        -> STRONGER: "no non-initialization stage omits stage-protocol"
-//   .sh agent knowledge-dir loop (13 agents)
-//        -> "every agent has a knowledge directory" (13 expects, one/agent)
-//   .sh state-template section loop (7 sections)
-//        -> "state template has every required ## section" (7 expects)
-//   .sh fixture mid-ideation section loop (5 sections)
-//        -> "mid-ideation fixture has every expected ## section" (5 expects)
-//   .sh routing protocol-file checks (3)
-//        -> "SKILL.md routing mandates all three protocol files" (3 expects)
-//   .sh bookkeeping field-ref checks (5)
-//        -> "silent-bookkeeping section names every state field" (5 expects)
-//   .sh init approval-exemption checks (3)
-//        -> "approval-gates section exempts every initialization stage" (3)
-//   .sh fixture checkbox-notation checks (3)
-//        -> "mid-ideation fixture uses [x] / [-] / [ ] notation" (3 expects)
-//   .sh protocol [S] documentation (1)
-//        -> "protocol documents the [S] skipped-via-jump notation" (1)
-//   .sh jumped-fixture [S] (1)
-//        -> "jumped fixture uses [S] skipped notation" (1)
-//   .sh multi-agent / conductor inline-support checks (4)
-//        -> "protocol §5 + conductor forbid Task for inline support agents" (4)
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
+import { protocolNote } from "../../core/tools/aidlc-directive.ts";
 import { AIDLC_SRC, FIXTURES_DIR } from "../harness/fixtures.ts";
 
 const PROTOCOL = join(AIDLC_SRC, "aidlc-common", "protocols", "stage-protocol.md");
@@ -91,17 +53,16 @@ const KNOWLEDGE_DIR = join(AIDLC_SRC, "knowledge");
 const STATE_TEMPLATE = join(AIDLC_SRC, "knowledge", "aidlc-shared", "state-template.md");
 const SKILL = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
 
-// The .sh treated these three as exempt-from-protocol-reference (orchestrator
-// handles them) AND lists them as exempt from approval gates.
+// The three initialization stages: the offender check below excludes them, and
+// the approval-gates section must list them as exempt.
 const INIT_STAGES = ["workspace-scaffold", "workspace-detection", "state-init"];
 
 function read(path: string): string {
   return readFileSync(path, "utf8");
 }
 
-/** Extract the lines of a markdown section: from the line matching `start`
- *  (anchored at column 0) up to (but not including) the next line matching
- *  `end`. Mirrors the .sh's `sed -n '/start/,/end/p'` blocks. */
+/** Extract the lines of a markdown section: from the line matching `start` up
+ *  to (but not including) the next line matching `end`. */
 function section(text: string, start: RegExp, end: RegExp): string {
   const lines = text.split("\n");
   const out: string[] = [];
@@ -120,8 +81,7 @@ function section(text: string, start: RegExp, end: RegExp): string {
   return out.join("\n");
 }
 
-/** Every <phase>/<slug>.md under STAGES_DIR, in stable sorted order — the same
- *  set the .sh's nested `for phase_dir / for f in *.md` loop walked. */
+/** Every <phase>/<slug>.md under STAGES_DIR, in stable sorted order. */
 function allStageFiles(): { slug: string; path: string }[] {
   const result: { slug: string; path: string }[] = [];
   for (const phase of readdirSync(STAGES_DIR).sort()) {
@@ -139,17 +99,12 @@ function allStageFiles(): { slug: string; path: string }[] {
 const STAGE_FILES = allStageFiles();
 
 describe("every stage references the stage protocol", () => {
-  // .sh: the protocol-reference loop scored every stage. All 32 shipped stages
-  // — including the 3 init stages — reference stage-protocol, so this is the
-  // STRONGER form: every stage must reference it (the .sh's only failing branch
-  // was a non-init stage missing the reference).
   test("the shipped tree has exactly 33 stage files [.sh TOTAL_STAGES]", () => {
     expect(STAGE_FILES.length).toBe(33);
   });
 
   for (const { slug, path } of STAGE_FILES) {
     test(`stage '${slug}' references stage-protocol [.sh stage loop]`, () => {
-      // grep -qi "stage-protocol" — case-insensitive substring.
       expect(read(path).toLowerCase().includes("stage-protocol")).toBe(true);
     });
   }
@@ -165,7 +120,6 @@ describe("every stage references the stage protocol", () => {
 });
 
 describe("every agent has a knowledge directory", () => {
-  // .sh: for agent_file in $AGENTS_DIR/*.md; assert_dir_exists knowledge/<agent>
   const agents = readdirSync(AGENTS_DIR)
     .filter((f) => f.endsWith(".md"))
     .map((f) => basename(f, ".md"))
@@ -185,7 +139,6 @@ describe("every agent has a knowledge directory", () => {
 });
 
 describe("state template has every required section", () => {
-  // .sh TEMPLATE_SECTIONS — assert_grep "$STATE_TEMPLATE" "$section".
   const TEMPLATE_SECTIONS = [
     "## Project Information",
     "## Scope Configuration",
@@ -204,7 +157,6 @@ describe("state template has every required section", () => {
 });
 
 describe("mid-ideation fixture conforms to the template section structure", () => {
-  // .sh: assert_grep "$FIXTURES_DIR/state-mid-ideation.md" for each section.
   const FIXTURE_SECTIONS = [
     "## Project Information",
     "## Scope Configuration",
@@ -221,10 +173,18 @@ describe("mid-ideation fixture conforms to the template section structure", () =
 });
 
 describe("SKILL.md routing mandates the static and conditional protocol files", () => {
-  // .sh: ROUTING_SECTION = sed -n '/^## Routing/,/^## /p'; assert_contains each.
   const routing = section(read(SKILL), /^## Routing/, /^## /);
+  // Each step names the stage protocol and its modules in its own note (#1330);
+  // the routing section names the two no step names.
+  const note = protocolNote(".claude/aidlc-common/stages/construction/code-generation.md", [
+    "reviewer",
+    "swarm",
+    "ensemble",
+    "construction",
+  ]) ?? "";
   test("routing mandates stage-protocol.md [.sh routing 1]", () => {
-    expect(routing.includes("stage-protocol.md")).toBe(true);
+    expect(routing).toContain("Each step names the stage protocol and the modules it runs by.");
+    expect(note).toContain(".claude/aidlc-common/protocols/stage-protocol.md");
   });
   test("routing mandates stage-protocol-recovery.md [.sh routing 2]", () => {
     expect(routing.includes("stage-protocol-recovery.md")).toBe(true);
@@ -239,14 +199,12 @@ describe("SKILL.md routing mandates the static and conditional protocol files", 
     "stage-protocol-construction.md",
   ]) {
     test(`routing mandates ${module}`, () => {
-      expect(routing.includes(module)).toBe(true);
+      expect(note).toContain(module);
     });
   }
 });
 
 describe("silent-bookkeeping section names every state field the tools write", () => {
-  // .sh: SED_SECTION = sed -n '/^### Silent bookkeeping writes/,/^---$/p';
-  // assert_contains each **Field** literal.
   const sedSection = section(
     read(PROTOCOL),
     /^### Silent bookkeeping writes/,
@@ -267,8 +225,6 @@ describe("silent-bookkeeping section names every state field the tools write", (
 });
 
 describe("approval-gates section exempts every initialization stage", () => {
-  // .sh: APPROVAL_SECTION = sed -n '/^## 1\. Approval Gates/,/^---$/p';
-  // assert_contains each init stage slug.
   const approval = section(read(PROTOCOL), /^## 1\. Approval Gates/, /^---$/);
   for (const slug of INIT_STAGES) {
     test(`approval exemption lists initialization stage: ${slug} [.sh approval loop]`, () => {
@@ -278,9 +234,6 @@ describe("approval-gates section exempts every initialization stage", () => {
 });
 
 describe("fixtures use the protocol's checkbox notation", () => {
-  // .sh: assert_grep on mid-ideation for ^- [x], ^- [-], ^- [ ]; and on
-  // state-jumped for ^- [S]. Anchored line-start patterns, replicated as
-  // per-line regex tests over the fixture bytes.
   const midLines = read(join(FIXTURES_DIR, "state-mid-ideation.md")).split("\n");
   const jumpedLines = read(join(FIXTURES_DIR, "state-jumped.md")).split("\n");
 
@@ -299,18 +252,15 @@ describe("fixtures use the protocol's checkbox notation", () => {
 });
 
 describe("protocol documents the [S] skipped-via-jump notation", () => {
-  // .sh: assert_grep "$PROTOCOL" '\[S\]'.
   test("protocol mentions the [S] checkbox state [.sh protocol [S]]", () => {
     expect(read(PROTOCOL).includes("[S]")).toBe(true);
   });
 });
 
 describe("ensemble protocol §5 + conductor forbid dispatching inline support agents", () => {
-  // Originally pinned the pre-2.5.0 "Task is reserved for mode: subagent"
-  // literals. Under the ensemble topologies (2.5.0) dispatch is legal on
-  // subagent/pipeline/mob stages, so the invariant narrows to: INLINE
-  // support agents are voices, never dispatches — and the conductor remains
-  // the only delegator on every topology.
+  // Under the ensemble topologies dispatch is legal on subagent/pipeline/mob
+  // stages, so the invariant is: INLINE support agents are voices, never
+  // dispatches - and the conductor remains the only delegator on every topology.
   const multiAgent = section(
     read(ENSEMBLE),
     /^## 5\. Multi-agent stages/,

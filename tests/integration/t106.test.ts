@@ -68,16 +68,16 @@ import { dirname, join } from "node:path";
 import { toPortablePath } from "../harness/fixtures.ts";
 import { auditFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
-// P9: with no intent cursor seeded, compile/summary resolve the BARE space
+// With no intent cursor seeded, compile/summary resolve the BARE space
 // record root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/.
 // State, runtime-graph, per-stage memory, and the per-clone audit SHARD all
-// live under it (the flat aidlc-docs/ root is retired — there is no fallback).
+// live under it (there is no flat aidlc-docs/ fallback).
 const RECORD_REL = join("aidlc", "spaces", "default", "intents");
 function recordRoot(proj: string): string {
   return join(proj, RECORD_REL);
 }
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const RUNTIME_TS = join(
   REPO_ROOT,
@@ -98,10 +98,9 @@ interface SpawnResult {
   rc: number;
   stdout: string;
   stderr: string;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string; // combined stdout+stderr
 }
 
-/** run_compile (t106:42-45): CLAUDE_PROJECT_DIR=<proj> bun RUNTIME_TS compile [args]. */
 function runCompile(proj: string, ...args: string[]): SpawnResult {
   const res = spawnSync(BUN, [RUNTIME_TS, "compile", ...args], {
     encoding: "utf-8",
@@ -112,7 +111,6 @@ function runCompile(proj: string, ...args: string[]): SpawnResult {
   return { rc: res.status ?? -1, stdout, stderr, out: `${stdout}${stderr}` };
 }
 
-/** run_summary (t106:47-50): CLAUDE_PROJECT_DIR=<proj> bun RUNTIME_TS summary [args]. */
 function runSummary(proj: string, ...args: string[]): SpawnResult {
   const res = spawnSync(BUN, [RUNTIME_TS, "summary", ...args], {
     encoding: "utf-8",
@@ -124,8 +122,8 @@ function runSummary(proj: string, ...args: string[]): SpawnResult {
 }
 
 /**
- * make_project (t106:31-40): fresh temp project with the given audit.md +
- * aidlc-state.md under aidlc-docs/. toPortablePath: compile/summary resolve
+ * Fresh temp project with the given audit trail + aidlc-state.md under
+ * aidlc/spaces/default/intents/. toPortablePath: compile/summary resolve
  * audit/graph paths through forward-slash helpers, so on Windows the raw
  * mktemp path can't round-trip — mirrors createTestProject (fixtures.ts).
  */
@@ -149,7 +147,6 @@ function makeBareProject(): string {
   return proj;
 }
 
-/** Per-stage memory.md under the bare space record root <phase>/<slug>/. */
 function writeMemory(
   proj: string,
   phase: string,
@@ -161,17 +158,15 @@ function writeMemory(
   writeFileSync(join(dir, "memory.md"), body, "utf-8");
 }
 
-// STATE_FEATURE (t106:52-56).
 const STATE_FEATURE = [
   "- **Scope**: feature",
   "- **Current Stage**: scope-definition",
 ].join("\n");
 
-// AUDIT_MIX (t106:59-107): two approved (intent-capture 10:00->10:10,
-// feasibility 10:11->10:40) + one pending (scope-definition started 10:41,
-// never completed). All three slugs are phase=ideation per stage-graph.json
-// (lines 103-302). Duration spans first start (10:00) to latest completed
-// (10:40) = 40 min.
+// AUDIT_MIX: two approved (intent-capture 10:00->10:10, feasibility
+// 10:11->10:40) + one pending (scope-definition started 10:41, never
+// completed). All three slugs are phase=ideation per stage-graph.json.
+// Duration spans first start (10:00) to latest completed (10:40) = 40 min.
 const AUDIT_MIX = `## Workflow Start
 **Timestamp**: 2026-05-27T10:00:00Z
 **Event**: WORKFLOW_STARTED
@@ -220,8 +215,8 @@ const AUDIT_MIX = `## Workflow Start
 ---
 `;
 
-// Memory body for intent-capture (t106:110-115): 2 interpretations + 1
-// tradeoff = 3 total entries (canonical §13 headings, parseMemoryHeadings).
+// Memory body for intent-capture: 2 interpretations + 1 tradeoff = 3 total
+// entries (the canonical headings parseMemoryHeadings reads).
 const MEMORY_INTENT = `## Interpretations
 - one
 - two
@@ -229,7 +224,7 @@ const MEMORY_INTENT = `## Interpretations
 - a tradeoff
 `;
 
-// AUDIT_PENDING (t106:149-164): a single STAGE_STARTED, no COMPLETED.
+// AUDIT_PENDING: a single STAGE_STARTED, no COMPLETED.
 const AUDIT_PENDING = `## Workflow Start
 **Timestamp**: 2026-05-27T10:00:00Z
 **Event**: WORKFLOW_STARTED
@@ -315,7 +310,6 @@ const SINGLE_STAGE_PAIR = `## Stage Start
 // biome-ignore lint/suspicious/noExplicitAny: test reads arbitrary summary shape
 type Summary = any;
 
-/** Compile then parse the summary --json stdout. Asserts both exits clean. */
 function compileAndSummarize(proj: string): { summary: Summary; raw: string } {
   const c = runCompile(proj);
   expect(c.rc).toBe(0); // fixture build must succeed before summary
@@ -356,7 +350,6 @@ describe("t106 aidlc-runtime summary — CLI contract (migrated from t106-runtim
     test("A5: ideation phase rollup totals 3 (+ approved/pending split, S1)", () => {
       const { summary } = compileAndSummarize(caseAProject());
       expect(summary.by_phase.ideation.total).toBe(3);
-      // S1 STRONGER: the .sh only checked the phase total; assert the split too.
       expect(summary.by_phase.ideation.approved).toBe(2);
       expect(summary.by_phase.ideation.pending).toBe(1);
       expect(summary.by_phase.ideation.failed).toBe(0);
@@ -389,7 +382,6 @@ describe("t106 aidlc-runtime summary — CLI contract (migrated from t106-runtim
       const j2 = runSummary(proj, "--json");
       expect(j1.rc).toBe(0);
       expect(j2.rc).toBe(0);
-      // Same observable as the .sh's `[ "$JSON" = "$JSON2" ]` string compare.
       expect(j2.stdout).toBe(j1.stdout);
     });
 
@@ -397,7 +389,6 @@ describe("t106 aidlc-runtime summary — CLI contract (migrated from t106-runtim
       const proj = caseAProject();
       runCompile(proj);
       const h = runSummary(proj); // no --json -> renderSummary path
-      // S2 STRONGER: the .sh only grepped; pin clean exit too.
       expect(h.rc).toBe(0);
       expect(h.stdout).toContain("Session Summary");
     });
@@ -408,8 +399,8 @@ describe("t106 aidlc-runtime summary — CLI contract (migrated from t106-runtim
     const proj = makeProject(AUDIT_PENDING, STATE_FEATURE);
     const { summary } = compileAndSummarize(proj);
     expect(summary.duration_minutes).toBeNull();
-    // S3 STRONGER: confirm the null is because the one stage is pending, not
-    // because the graph is empty (no completed_at anywhere).
+    // Confirm the null is because the one stage is pending, not because the
+    // graph is empty (no completed_at anywhere).
     expect(summary.stages.total).toBe(1);
     expect(summary.stages.pending).toBe(1);
     expect(summary.stages.approved).toBe(0);
@@ -420,8 +411,6 @@ describe("t106 aidlc-runtime summary — CLI contract (migrated from t106-runtim
     const proj = makeBareProject(); // no compile -> no runtime-graph.json
     const r = runSummary(proj, "--json");
     expect(r.rc).toBe(1);
-    // S4 STRONGER: the .sh discarded stderr (2>&1 >/dev/null); assert the
-    // diagnostic the tool emits (aidlc-runtime.ts:1230-1232).
     expect(r.stderr).toContain("no runtime-graph.json found");
   });
 
@@ -439,7 +428,7 @@ describe("t106 aidlc-runtime summary — CLI contract (migrated from t106-runtim
 
   // --- Case E: --single synthetic pair does not inflate summary counts -----
   // The synthetic `Workflow: single-stage:<slug>` pair must be excluded at
-  // compile-time pairing, so summary (which reads only the compiled graph)
+  // compile-time pairing, so summary (which does not re-walk audit)
   // sees the same Case-A numbers with or without the pair appended. Without
   // the exclusion, the inception phase appears in by_phase and stages.total/
   // approved each over-count by one.

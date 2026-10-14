@@ -108,7 +108,7 @@ import {
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
 const WT_TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
 
@@ -120,10 +120,9 @@ afterAll(() => {
 
 interface RunResult {
   status: number;
-  out: string; // stdout+stderr combined, mirroring the .sh's `2>&1`
+  out: string;
 }
 
-/** Spawn `bun aidlc-bolt.ts <args...> --project-dir <proj>`. Mirrors `bun "$TOOL" ... --project-dir "$PROJ"`. */
 function runBolt(proj: string, ...args: string[]): RunResult {
   const res = spawnSync(BUN, [BOLT, ...args, "--project-dir", proj], {
     encoding: "utf-8",
@@ -132,7 +131,6 @@ function runBolt(proj: string, ...args: string[]): RunResult {
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 
-/** Spawn `bun aidlc-worktree.ts <args...> --project-dir <proj>` (the .sh's WT_TOOL). */
 function runWorktree(proj: string, ...args: string[]): RunResult {
   const res = spawnSync(BUN, [WT_TOOL, ...args, "--project-dir", proj], {
     encoding: "utf-8",
@@ -161,7 +159,7 @@ function doctorAttempts(proj: string): {
   return JSON.parse(res.stdout).data.parked_attempts;
 }
 
-/** Run a git command in proj; ignore failure (the .sh wraps init in `|| true`). */
+/** Run a git command in proj; ignore failure. */
 function git(proj: string, ...args: string[]): { status: number; stdout: string; stderr: string } {
   const result = spawnSync("git", ["-C", proj, ...args], { encoding: "utf-8" });
   return {
@@ -171,7 +169,6 @@ function git(proj: string, ...args: string[]): { status: number; stdout: string;
   };
 }
 
-/** setup_lifecycle_project (.sh:35-41): create + seed Construction state + seed audit. */
 function setupLifecycleProject(): string {
   const proj = createTestProject();
   tempDirs.push(proj);
@@ -180,7 +177,6 @@ function setupLifecycleProject(): string {
   return proj;
 }
 
-/** Init a real git repo on `main` with one (empty) commit (the .sh's git init prelude). */
 function gitInitMain(proj: string): void {
   git(proj, "init", "-q", "-b", "main");
   git(proj, "config", "user.email", "t@t");
@@ -210,7 +206,6 @@ function setupRecordedSymlinkProject(): { proj: string; external: string } {
   return { proj, external };
 }
 
-/** Resolve the selected fixture intent's canonical worktree directory. */
 function worktreeDir(proj: string, slug: string): string {
   return worktreePath(proj, fixtureIntentId8(proj), slug);
 }
@@ -241,8 +236,6 @@ function readMainAudit(proj: string): string {
   } catch {
     return "";
   }
-  // Split each shard into `\n---\n`-separated blocks, tag each with its
-  // **Timestamp**, then stable-sort across all shards by timestamp.
   const blocks: { ts: string; text: string }[] = [];
   for (const n of names) {
     const body = readFileSync(join(dir, n), "utf-8");
@@ -257,13 +250,11 @@ function readMainAudit(proj: string): string {
   return blocks.map((b) => b.text).join("\n---\n");
 }
 
-/** The single `Bolt Refs` line from main's state (the .sh's `grep "Bolt Refs" | head -1`). */
 function boltRefsLine(proj: string): string {
   const state = readFileSync(seededStateFile(proj), "utf-8");
   return state.split("\n").find((l) => l.includes("Bolt Refs")) ?? "";
 }
 
-/** The ordered list of `**Event**: <TYPE>` event types in main's audit shards. */
 function auditEvents(proj: string): string[] {
   return readMainAudit(proj)
     .split("\n")
@@ -406,7 +397,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
   // ===========================================================================
   // Lifecycle 1 — complete-merge happy path. Drives T1-T6.
   // Pre-create the worktree dir (in production aidlc-worktree create does this;
-  // here we satisfy the audit-fork "directory exists" check, .sh:45-50).
+  // here we satisfy the audit-fork "directory exists" check).
   // ===========================================================================
   describe("Lifecycle 1: start --worktree -> complete --merge round-trip", () => {
     const proj = setupLifecycleProject();
@@ -423,16 +414,15 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
     });
 
     test("L1: forked worktree state file exists [.sh T2]", () => {
-      // STRONGER: the forked state file lands under the canonical worktree mirror
+      // The forked state file lands under the canonical worktree mirror
       // record (aidlc/spaces/default/intents/<record>/) — the worktreePath contract.
       expect(existsSync(join(wtRecordDir(proj, slug), "aidlc-state.md"))).toBe(true);
     });
 
     test("L1: forked Worktree Path is written project-relative, never an absolute machine path [#937]", () => {
-      // Regression for #937: aidlc-state.ts:6616 writes `Worktree Path` as
+      // Regression for #937: aidlc-state.ts handleFork writes `Worktree Path` as
       // relative(projectDir, worktreePath) (forward-slashed) so a committed state
-      // file carries no host-specific absolute path. The .sh + T2 only proved the
-      // forked file EXISTS; this pins its VALUE.
+      // file carries no host-specific absolute path. This pins its VALUE.
       const wtState = readFileSync(join(wtRecordDir(proj, slug), "aidlc-state.md"), "utf-8");
       const line = wtState.split("\n").find((l) => l.startsWith("- **Worktree Path**:")) ?? "";
       const value = line.replace("- **Worktree Path**:", "").trim();
@@ -443,7 +433,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
     });
 
     test("L1: forked worktree audit file exists [.sh T3]", () => {
-      // Audit is now a per-clone shard DIR; audit-fork copies the main shard into
+      // Audit is a per-clone shard DIR; audit-fork copies the main shard into
       // <wt>/<record>/audit/, so at least one *.md shard exists there.
       const wtAuditDir = join(wtRecordDir(proj, slug), "audit");
       const shards = existsSync(wtAuditDir)
@@ -453,7 +443,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
     });
 
     // Simulate per-Unit work in the worktree by marking a Construction stage
-    // [ ] -> [x] in the worktree state (the .sh's sed_i). Per-field merge then
+    // [ ] -> [x] in the worktree state. Per-field merge then
     // propagates back on complete --merge.
     test("L1: simulate per-Unit work in the worktree (checkbox flip)", () => {
       const wtState = join(wtRecordDir(proj, slug), "aidlc-state.md");
@@ -488,7 +478,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
         "STATE_MERGED",
         "AUDIT_MERGED",
       ]);
-      // STRONGER: ordering invariants — start precedes every fork row,
+      // Ordering invariants - start precedes every fork row,
       // complete precedes every merge row.
       const idx = (e: string): number => last6.indexOf(e);
       expect(idx("BOLT_STARTED")).toBeLessThan(idx("STATE_FORKED"));
@@ -500,8 +490,8 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
 
   // ===========================================================================
   // Lifecycle 2 — abort --discard with a successful discard emits BOLT_FAILED.
-  // Post-fix ordering: discard FIRST, audit AFTER. So BOLT_FAILED only lands
-  // when discard succeeded. Set up a real git worktree so discard can run.
+  // Discard FIRST, audit AFTER, so BOLT_FAILED only lands when discard
+  // succeeded. Set up a real git worktree so discard can run.
   // Drives T7-T8 (the failure event must ACTUALLY fire — §6-E).
   // ===========================================================================
   describe("Lifecycle 2: abort --discard fires BOLT_FAILED on successful discard", () => {
@@ -514,9 +504,8 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
     );
 
     test("L2: abort --discard exits 0 (discard succeeded)", () => {
-      // Not a .sh assertion (the .sh wrapped abort in set +e), but proves the
-      // discard-first path actually ran rather than failJson-ing — without
-      // this the BOLT_FAILED below would be a happy-path-only pass.
+      // Proves the discard-first path actually ran rather than failJson-ing -
+      // without this the BOLT_FAILED below would be a happy-path-only pass.
       expect(abortRes.status).toBe(0);
     });
 
@@ -527,7 +516,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
     });
 
     test("L2: abort BOLT_FAILED carries Reason=aborted [.sh T8]", () => {
-      // STRONGER: Reason=aborted is block-scoped to the BOLT_FAILED row, not a
+      // Reason=aborted is block-scoped to the BOLT_FAILED row, not a
       // file-wide grep — sub-classifier vs the plain `fail` verb.
       const block = lastEventBlock(proj);
       expect(block[0]).toContain("BOLT_FAILED");
@@ -536,7 +525,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
   });
 
   // ===========================================================================
-  // Lifecycle 3 — abort WITHOUT --discard preserves the worktree (US-1 AC :51).
+  // Lifecycle 3 - abort WITHOUT --discard preserves the worktree (US-1 AC).
   // Drives T9-T10.
   // ===========================================================================
   describe("Lifecycle 3: abort without --discard preserves the worktree", () => {
@@ -556,7 +545,6 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
     });
 
     test("L3: worktree contents preserved for inspection [.sh T10]", () => {
-      // The marker file survives — worktree contents are not touched.
       expect(existsSync(join(wt, "marker.txt"))).toBe(true);
       expect(readFileSync(join(wt, "marker.txt"), "utf-8")).toBe(
         "synthetic worktree content",
@@ -592,10 +580,10 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
   });
 
   // ===========================================================================
-  // Lifecycle 5 — abort --discard VERIFICATION (review fold-in): when discard
-  // succeeds, the worktree directory is actually torn down. Real git so
-  // aidlc-worktree create can fork; do NOT pre-create the dir (create handles
-  // mkdir + git worktree add atomically). Drives T13.
+  // Lifecycle 5 - abort --discard VERIFICATION: when discard succeeds, the
+  // worktree directory is actually torn down. Real git so aidlc-worktree create
+  // can fork; do NOT pre-create the dir (create handles mkdir + git worktree add
+  // atomically). Drives T13.
   // ===========================================================================
   describe("Lifecycle 5: abort --discard tears down the worktree directory", () => {
     const proj = setupLifecycleProject();
@@ -678,7 +666,8 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
 
   describe("Recoverable discard", () => {
     test("abort parks source and review evidence; restore and purge never touch a recreated live Bolt", () => {
-      // R4(d): namespaced snapshot recovery keeps every parked ref scoped to its recorded intent.
+      // Namespaced snapshot recovery keeps every parked ref scoped to its recorded
+      // intent.
       const proj = setupLifecycleProject();
       const slug = "recoverable";
       const wt = worktreeDir(proj, slug);
@@ -795,7 +784,8 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
     }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
     test("namespaced purge under another intent refuses the owner's exact parked stamp", () => {
-      // R4(d): an explicit stamp cannot authorize recovery or purge outside its recording intent.
+      // An explicit stamp cannot authorize recovery or purge outside its recording
+      // intent.
       const proj = setupLifecycleProject();
       const slug = "intent-park";
       writeFileSync(join(proj, "saved.txt"), "base source\n");
@@ -1149,7 +1139,8 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       gitInitMain(proj);
       const head = git(proj, "rev-parse", "HEAD").stdout.trim();
       expect(git(proj, "update-ref", ref, head).status).toBe(0);
-      // R4(d): calendar validation applies only after this intent's discard provenance admits the stamp.
+      // Calendar validation applies only after this intent's discard provenance
+      // admits the stamp.
       recordParkedAttempt(proj, slug, ref.slice(0, -"/head".length));
 
       const purged = runWorktree(proj, "purge", "--slug", slug, "--older-than", "0");
@@ -1174,7 +1165,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       for (const marker of ["head", "snapshot"]) {
         expect(git(proj, "update-ref", `${oldRef}/${marker}`, `${freshRef}/${marker}`).status).toBe(0);
       }
-      // R4(d): copied historical refs also need their own recorded discard attempt.
+      // Copied historical refs also need their own recorded discard attempt.
       recordParkedAttempt(proj, slug, oldRef);
 
       const purged = runWorktree(proj, "purge", "--slug", slug, "--older-than", "30");
@@ -1255,7 +1246,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       const slug = "exact-repository";
       for (const [cwd, stamp] of [[proj, "20260101T000000Z"], [sibling, "20260201T000000Z"]]) {
         expect(git(cwd, "update-ref", `${parkedRefPrefix(fixtureIntentId8(proj), slug)}${stamp}/head`, "HEAD").status).toBe(0);
-        // R4(d): stamp ownership and repository selection are independent checks.
+        // Stamp ownership and repository selection are independent checks.
         recordParkedAttempt(proj, slug, `${parkedRefPrefix(fixtureIntentId8(proj), slug)}${stamp}`, cwd === proj ? null : "api");
       }
       const restored = runWorktree(proj, "restore", "--slug", slug, "--parked", "20260101T000000Z");
@@ -1310,7 +1301,8 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       writeFileSync(join(sibling, "saved.txt"), "sibling attempt\n");
       gitInitMain(sibling);
       for (const cwd of [proj, sibling]) expect(git(cwd, "update-ref", ref, "HEAD").status).toBe(0);
-      // R4(d): selecting a historical intent admits only the stamps its own discard audit records.
+      // Selecting a historical intent admits only the stamps its own discard audit
+      // records.
       for (const repo of [null, "historical"]) {
         recordParkedAttempt(proj, slug, ref.slice(0, -"/head".length), repo, historicalRecord, "history");
       }
@@ -1393,7 +1385,8 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(existsSync(join(proj, ".aidlc", "restored"))).toBe(false);
 
       writeFileSync(join(historicalAudit, "history.md"), [
-        // R4(d): creation may locate a repo, but only discard provenance authorizes its parked stamp.
+        // Creation may locate a repo, but only discard provenance authorizes its
+        // parked stamp.
         ...(event === "WORKTREE_CREATED" ? [
           "## Worktree Discarded", "**Timestamp**: 2024-01-01T00:00:00Z", "**Event**: WORKTREE_DISCARDED",
           `**Bolt slug**: ${slug}`, `**Parked ref**: ${prefix}`, "\n---\n",
@@ -1609,7 +1602,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
         expect(discarded.status, discarded.out).toBe(0);
         const { parked_ref: parkedRef } = JSON.parse(discarded.out) as { parked_ref: string };
         // Legacy parks predate discriminator refs; retain only the raw snapshot head.
-        // R4(d): remove both modern discriminator refs to model a pre-upgrade snapshot.
+        // Remove both modern discriminator refs to model a pre-upgrade snapshot.
         expect(git(proj, "update-ref", "-d", `${parkedRef}/branch-tip`).status).toBe(0);
         expect(git(proj, "update-ref", "-d", `${parkedRef}/snapshot`).status).toBe(0);
         expect(git(proj, "for-each-ref", "--format=%(refname)", `${parkedRef}/`).stdout.trim()).toBe(`${parkedRef}/head`);
@@ -2202,7 +2195,8 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       const newerRef = `${parkedRefPrefix(fixtureIntentId8(proj), slug)}${newerStamp}`;
       expect(git(proj, "update-ref", `${olderRef}/head`, olderCommit).status).toBe(0);
       expect(git(proj, "update-ref", `${newerRef}/head`, newerCommit).status).toBe(0);
-      // R4(d): both synthetic attempts belong to the selected intent before numeric ordering is considered.
+      // Both synthetic attempts belong to the selected intent before numeric
+      // ordering is considered.
       recordParkedAttempt(proj, slug, olderRef);
       recordParkedAttempt(proj, slug, newerRef);
 
@@ -2261,7 +2255,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       for (const [ref, head] of [[retainedA, headA], [retainedB, headB], [parkedA, headA], [parkedB, headB]]) {
         expect(git(proj, "update-ref", ref!, head!).status).toBe(0);
       }
-      // R4(d): admitted parks must still enforce the live Bolt's foreign-checkout protection.
+      // Admitted parks must still enforce the live Bolt's foreign-checkout protection.
       recordParkedAttempt(proj, slug, parkedA.slice(0, -"/head".length));
       writeFileSync(join(wtA, "owner.txt"), "A must survive\n");
       writeFileSync(join(wtB, "owner.txt"), "B must survive\n");

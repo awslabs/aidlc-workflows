@@ -1,32 +1,32 @@
 // covers: subcommand:aidlc-worktree:verify, subcommand:aidlc-worktree:info, subcommand:aidlc-state:fork, function:findAllEvents
 //
-// t164 — Stage B FIX 2 + FIX 1a regression, against REAL tools on a per-intent
-// layout. Mechanism: cli (process-boundary).
+// t164 - two regressions, against REAL tools on a per-intent layout. Mechanism:
+// cli (process-boundary).
 //
-// TWO independent residual-MAJOR closures share this file (both per-intent,
-// multi-shard concerns; one fixture style):
+// TWO independent regressions share this file (both per-intent, multi-shard
+// concerns; one fixture style):
 //
-//   PART A — FIX 2 (findLatestEvent multi-shard ORDERING). aidlc-worktree's
+//   PART A - findLatestEvent multi-shard ORDERING. aidlc-worktree's
 //   verify/info pick the "latest" WORKTREE_* block for a slug from the
 //   readAllAuditShards buffer. That buffer concatenates per-clone shards in
-//   FILENAME (lexical) order, NOT time order. The pre-fix findLatestEvent walked
-//   the buffer end→start and took the last-by-POSITION match, so a chronologically
-//   OLDER block living in a lexically-LATER shard was returned as "latest" —
-//   `info` then reports the stale path/branch and `verify --max-age-seconds` calls
-//   a fresh worktree STALE. The fix selects the MAX **Timestamp** (via the shared
+//   FILENAME (lexical) order, NOT time order. Walking the buffer end->start and
+//   taking the last-by-POSITION match returns a chronologically OLDER block
+//   living in a lexically-LATER shard as "latest" - `info` then reports the
+//   stale path/branch and `verify --max-age-seconds` calls a fresh worktree
+//   STALE. Selection uses the MAX **Timestamp** instead (via the shared
 //   findAllEvents, which CRLF-normalizes + timestamp-sorts). This test seeds two
 //   shards OUT of lexical/time agreement and asserts the NEWER block wins.
 //
-//   PART B — FIX 1a (fork/merge LOCK == WRITE bucket on the omitted-intent path).
-//   handleFork resolved the per-intent record for its WRITES but, pre-fix, threaded
-//   the RAW --intent flag to the wrapping withAuditLock. With --intent OMITTED on a
-//   per-intent layout the lock keyed the __workspace__ sentinel while the writes
-//   hit the resolved per-intent shard → an omitted-intent fork and a concurrent
-//   EXPLICIT-intent op on the SAME record held DIFFERENT locks → the lost-update
-//   race the lock exists to prevent. The fix resolves the intent (activeIntent)
-//   BEFORE locking so lock==write on both paths. This test races an omitted-intent
-//   fork against an explicit-intent fork on the SAME record and asserts BOTH slugs
-//   land in Bolt Refs (serialized, no clobber).
+//   PART B - fork/merge LOCK == WRITE bucket on the omitted-intent path.
+//   handleFork resolves the per-intent record for its WRITES; threading the RAW
+//   --intent flag to the wrapping withAuditLock would, with --intent OMITTED on
+//   a per-intent layout, key the lock on the __workspace__ sentinel while the
+//   writes hit the resolved per-intent shard -> an omitted-intent fork and a
+//   concurrent EXPLICIT-intent op on the SAME record would hold DIFFERENT locks
+//   -> the lost-update race the lock exists to prevent. handleFork resolves the
+//   intent (activeIntent) BEFORE locking so lock==write on both paths. This test
+//   races an omitted-intent fork against an explicit-intent fork on the SAME
+//   record and asserts BOTH slugs land in Bolt Refs (serialized, no clobber).
 //
 // SOURCE UNDER TEST (dist/claude/.claude/tools/):
 //   aidlc-worktree.ts findLatestEvent → findAllEvents (max-timestamp selection).
@@ -67,7 +67,7 @@ function shardDir(): string {
 }
 
 /** Seed the minimal per-intent layout: registry + active-space/intent cursors +
- *  a record dir with the genuine v7 construction-stage state file (it carries
+ *  a record dir with the genuine v8 construction-stage state file (it carries
  *  the Worktree Path + Bolt Refs fields handleFork's setFieldStrict requires). */
 function seedLayout(): void {
   const intentsDir = join(proj, "aidlc", "spaces", SPACE, "intents");
@@ -81,7 +81,6 @@ function seedLayout(): void {
   writeFileSync(join(intentsDir, "active-intent"), `${RECORD}\n`, "utf-8");
 }
 
-/** Write a WORKTREE_CREATED audit block into a named shard. */
 function seedWorktreeCreatedShard(
   shardFile: string,
   slug: string,
@@ -145,7 +144,7 @@ describe("t164 PART A — findLatestEvent picks the chronologically-newest block
   // block. Both canonical rows share the slug+event: the older legacy identity
   // transitions to the newer intent-scoped identity, with distinct paths/branches.
   function seedOutOfOrder(): { newerTs: string } {
-    // Newer = "now" (so verify --max-age passes post-fix); stale = ~2 days ago.
+    // Newer = "now" (so verify --max-age passes); stale = ~2 days ago.
     const newerTs = new Date().toISOString();
     const staleTs = new Date(Date.now() - 2 * 24 * 3600 * 1000).toISOString();
     seedWorktreeCreatedShard("host-aaaa.md", SLUG, newerTs, worktreePath(proj, RECORD_ID8, SLUG), boltName(RECORD_ID8, SLUG));
@@ -171,8 +170,9 @@ describe("t164 PART A — findLatestEvent picks the chronologically-newest block
       "verify", "--event", "WORKTREE_CREATED", "--slug", SLUG,
       "--max-age-seconds", "120", "--intent", RECORD,
     ]);
-    // Pre-fix: picks the ~2-day-old block → ageMs > 120s → verified:false, exit 1.
-    // Post-fix: picks the now-timestamp block → verified:true, exit 0.
+    // Position-based selection would pick the ~2-day-old block -> ageMs > 120s ->
+    // verified:false, exit 1. Timestamp-based selection picks the now-timestamp
+    // block -> verified:true, exit 0.
     expect(r.status).toBe(0);
     const out = JSON.parse(r.stdout);
     expect(out.verified).toBe(true);
@@ -183,10 +183,10 @@ describe("t164 PART B — omitted-intent fork serializes with an explicit-intent
   // Two forks on the SAME per-intent record, fired concurrently: one with --intent
   // OMITTED (resolves to the active cursor = RECORD), one with --intent RECORD
   // explicit. Each appends its slug to the SAME Bolt Refs field (a read-modify-write
-  // of main state). Pre-fix the omitted fork locked the __workspace__ sentinel and
-  // the explicit fork locked RECORD's per-intent bucket → DIFFERENT locks → both
+  // of main state). If the omitted fork locks the __workspace__ sentinel and
+  // the explicit fork locks RECORD's per-intent bucket -> DIFFERENT locks -> both
   // read the empty Bolt Refs and one clobbers the other → only ONE slug survives.
-  // Post-fix both resolve RECORD before locking → SAME lock → serialized → BOTH
+  // Both must resolve RECORD before locking -> SAME lock -> serialized -> BOTH
   // slugs land. (target-dir points each fork at a throwaway worktree dir so no git
   // is needed; the worktree-side state write is incidental to the main-side race.)
   test("both forks' slugs survive in Bolt Refs (lock==write serializes the RMW)", async () => {
@@ -218,8 +218,8 @@ describe("t164 PART B — omitted-intent fork serializes with an explicit-intent
     expect(codes.every((c) => c === 0)).toBe(true);
 
     // Both slugs are present in the SINGLE main state file under the record. A
-    // lost update (pre-fix) leaves exactly one (the second writer clobbered the
-    // first's Bolt Refs append against a stale snapshot).
+    // lost update leaves exactly one (the second writer clobbered the first's Bolt
+    // Refs append against a stale snapshot).
     const mainState = readFileSync(join(recordPath(), "aidlc-state.md"), "utf-8");
     const refsLine = mainState.split("\n").find((l) => l.startsWith("- **Bolt Refs**:")) ?? "";
     expect(refsLine).toContain("slug-omitted");

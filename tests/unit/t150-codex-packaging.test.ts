@@ -619,6 +619,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
           "SKILL.md",
           "composer.md",
           "question-rendering.md",
+          "tables.md",
         ]);
       } else {
         expect(readFileSync(guard, "utf-8")).toContain("allow_implicit_invocation: false");
