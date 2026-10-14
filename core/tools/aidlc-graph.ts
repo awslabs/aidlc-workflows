@@ -1413,6 +1413,12 @@ export function consumedArtifactProducerCollisions(): {
  *  declared-prose artifact. Lives here so both invocation sites derive it
  *  identically without importing the dispatcher (whose top-level main() would
  *  run on import). */
+/** The sensors that read a stage's whole output: given one file, each
+ *  evaluates every declared deliverable in that file's folder (the dispatcher
+ *  threads --deliverables for them), so one evaluation per folder is the
+ *  stage's verdict. The dispatcher and the gate both read this set. */
+export const STAGE_WIDE_SENSOR_IDS: ReadonlySet<string> = new Set(["upstream-coverage", "claim-sources"]);
+
 export function templateEligibleArtifacts(produces: string[]): string[] {
   return (produces ?? []).filter(
     (a) =>

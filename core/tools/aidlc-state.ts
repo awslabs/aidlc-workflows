@@ -235,7 +235,7 @@ import {
   recordHookDrop,
   engineDir,
 } from "./aidlc-lib.js";
-import { memoryDirFor } from "./aidlc-graph.ts";
+import { memoryDirFor, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
@@ -3710,6 +3710,29 @@ function gateSensorMatchesOutput(
     new Bun.Glob(sensor.matches).match(outputPath.replace(/\\/g, "/"));
 }
 
+// The deliverables the gate fires a sensor on. A stage-wide sensor evaluates
+// every deliverable in the folder of the file it is given, so it fires once per
+// folder (each Unit's folder at a per-Unit stage), on the folder's first
+// markdown deliverable that is not a questions or timestamp file; any other
+// sensor fires on each deliverable its matches glob accepts.
+function gateSensorOutputs(
+  sensor: NonNullable<
+    NonNullable<ReturnType<typeof findStageBySlug>>["sensors_applicable"]
+  >[number],
+  paths: string[],
+): string[] {
+  const matching = paths.filter((path) => gateSensorMatchesOutput(sensor, path));
+  if (!STAGE_WIDE_SENSOR_IDS.has(sensor.id)) return matching;
+  const isDocument = (path: string): boolean =>
+    path.endsWith(".md") && templateEligibleArtifacts([basename(path, ".md")]).length === 1;
+  const byFolder = new Map<string, string>();
+  for (const path of matching) {
+    const chosen = byFolder.get(dirname(path));
+    if (chosen === undefined || (!isDocument(chosen) && isDocument(path))) byFolder.set(dirname(path), path);
+  }
+  return [...byFolder.values()];
+}
+
 function artifactFingerprint(path: string): string | null {
   try {
     return createHash("sha256").update(readFileSync(path)).digest("hex");
@@ -3774,8 +3797,7 @@ function fireGateSensors(
   const executable = compiledExecutable();
   const sensorTool = fileURLToPath(new URL("./aidlc-sensor.ts", import.meta.url));
   for (const sensor of sensors) {
-    for (const outputPath of paths) {
-      if (!gateSensorMatchesOutput(sensor, outputPath)) continue;
+    for (const outputPath of gateSensorOutputs(sensor, paths)) {
       const expectedFingerprint = fingerprints.get(outputPath);
       if (
         sensor.default_severity === "blocking" &&
@@ -6317,8 +6339,7 @@ function latestCheckResults(pd: string, stage: GateStage, unit: string | null = 
     });
   }
   for (const sensor of sensors) {
-    for (const path of paths) {
-      if (!gateSensorMatchesOutput(sensor, path)) continue;
+    for (const path of gateSensorOutputs(sensor, paths)) {
       const rel = relative(pd, path).split(sep).join("/");
       const result = latest.get(`${sensor.id}@${rel}`);
       if (result === undefined) results.rest.push(`${sensor.id}@${rel}=not-run`);

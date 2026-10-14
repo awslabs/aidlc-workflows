@@ -55,6 +55,7 @@ import {
 	loadSensors,
 	memoryTemplatesDir,
 	producersOf,
+	STAGE_WIDE_SENSOR_IDS,
 	type SensorFile,
 	templateEligibleArtifacts,
 } from "./aidlc-graph.ts";
@@ -614,7 +615,7 @@ function handleFire(args: string[]): void {
 	// not only the file whose write triggered the hook. Questions/timestamp
 	// scaffolding is excluded from that union. claim-sources still locates the
 	// sibling questions file explicitly as its source universe.
-	if (id === "upstream-coverage" || id === "claim-sources") {
+	if (STAGE_WIDE_SENSOR_IDS.has(id)) {
 		scriptArgs.push(
 			"--deliverables",
 			templateEligibleArtifacts([
