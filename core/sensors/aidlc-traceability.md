@@ -48,8 +48,7 @@ Deterministic element-level verification of each stage's JSON coverage table:
   "upstream_ids": ["AC1.1.1", "AC1.2.1"],
   "coverage": [
     { "id": "AC1.1.1", "status": "OK", "target": "BR1.1" },
-    { "id": "AC1.2.1", "status": "GAP" },
-    { "id": "AC1.3.1", "status": "N/A", "target": "export is out of this Unit" }
+    { "id": "AC1.2.1", "status": "GAP" }
   ],
   "reverse": [
     { "id": "BR1.3", "status": "ORPHAN" },
