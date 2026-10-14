@@ -3895,7 +3895,7 @@ function handleReview(args: string[]): void {
       reviewFile,
       recordVerdict,
       ...(swarmUnit && swarmUnit.swarmUnit === flags.unit
-        ? { test_command: swarmUnitTestCommand(swarmUnit.parent, flags.unit) }
+        ? { test_command: swarmUnitTestCommand(flags.unit) }
         : {}),
       ...(requestChangeNotices.length > 0 ? { change_notices: requestChangeNotices } : {}),
     }));

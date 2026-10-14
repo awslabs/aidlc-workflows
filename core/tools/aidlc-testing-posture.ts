@@ -1596,7 +1596,7 @@ function swarmUnitTestsLine(projectDir: string, unit: string | null): string {
   const marker = readActiveDirectiveMarker(projectDir, state);
   const approved = authorizedVerificationCommand(projectDir, state);
   if (marker?.kind !== "invoke-swarm" || !marker.units?.includes(unit) || !approved) return "";
-  return `\nTo run the tests the person approved (\`${approved.label}\`), run \`${swarmUnitTestCommand(projectDir, unit)}\` ` +
+  return `\nTo run the tests the person approved (\`${approved.label}\`), run \`${swarmUnitTestCommand(unit)}\` ` +
     `as a command of its own from the project's main folder \`${resolve(projectDir)}\`, not from your worktree and ` +
     "with no `cd` before it: it runs them in your worktree and shows their output, and its JSON line says " +
     "`\"converged\":true` when they pass.\n";

@@ -2186,8 +2186,8 @@ and `set-construction-verification-command`, rather than substituting a passing
 command. With no workflow, both commands refuse. `check --show-output` sends the
 command's own output to stderr as it runs; stdout keeps the one verdict line. In a
 side-by-side build each worker's brief and each reviewer's review request
-(`test_command`) name `check <Unit> --show-output --project-dir <main folder>`, run
-from the project's main folder, so the tests you approved run through AI-DLC's own
+(`test_command`) name `check <Unit> --show-output`, run from the project's main
+folder, so the tests you approved run through AI-DLC's own
 command. `check` is advisory; `finalize` reruns the command and validates
 review evidence before merging each claimed Unit. Re-running `finalize` withdraws
 every open checkpoint question and captured checkpoint response for this intent,
