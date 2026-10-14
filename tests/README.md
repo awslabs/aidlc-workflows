@@ -63,6 +63,17 @@ The suite runs on macOS, Linux, and Windows through the native Bun runner (`bun 
 
 See [docs/reference/09-testing.md § Cross-Platform Coverage](../docs/reference/09-testing.md#cross-platform-coverage) for the Windows CFN runbook and the full story.
 
+## Live tests: what to assert
+
+A live test drives a real agent, which takes its own route to the same result. Check what the person meets or what the engine recorded, so two runs the person cannot tell apart pass or fail together:
+
+- Assert the outcome or the record, never the agent's incidental choice: which file it read first, how many commands it ran, how it worded a menu. [`harness/outcomes.ts`](harness/outcomes.ts) reads the record (a stage completed once, the stages a plan change skipped, a file read before the first write). Whether a decision recorded as the person's had a reply of theirs behind it is the person-turn check every driver already runs ([`harness/person-turns.ts`](harness/person-turns.ts)).
+- Derive a time bound from the call's own bound, or measure it on the same runner; never a fixed number for how fast a machine is.
+- Wait on an event: poll a condition with a deadline, never a fixed sleep.
+- A person-turn failure is never retried away; the runner refuses ([`lib/file-retry.ts`](lib/file-retry.ts)).
+
+[`unit/t-live-test-lint.test.ts`](unit/t-live-test-lint.test.ts) rejects these shapes in the live test files. When a line has to check one because the person sees it (on Kiro ACP the question is the agent's own numbered prose), say so on that line or right above it: `// person-facing: <what the person sees>`.
+
 ## Test Registry
 
 > **Note:** t19 appears in both unit (`unit/t19.test.ts`, the jump CLI tool) and integration (`integration/t19.test.ts`, the live preflight gate).

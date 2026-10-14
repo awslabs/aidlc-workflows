@@ -390,6 +390,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
             offerR1.toolCalls.slice(typedAskIndex + 1),
             "a typed new-work ask must end tool use for the turn",
           ).toEqual([]);
+          // person-facing: on Kiro ACP the offer is the agent's numbered prose, so these options are what the person reads.
           expect(offerR1.assistantText).toMatch(/(?:^|\n)\s*1\./m);
           expect(offerR1.assistantText).toMatch(/(?:^|\n)\s*2\./m);
           expect(offerR1.assistantText).toMatch(/(?:^|\n)\s*3\./m);
