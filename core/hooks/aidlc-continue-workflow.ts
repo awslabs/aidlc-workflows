@@ -58,7 +58,7 @@
 //      conductor ends its turn to await an `AskUserQuestion` answer. At an
 //      approval gate ([?] awaiting-approval) or in the Request-Changes loop
 //      ([R] revising) the engine still returns a pending run-stage (the stage is
-//      in-flight, aidlc-orchestrate.ts:1161-1176), so without a carve-out the
+//      in-flight in aidlc-orchestrate.ts), so without a carve-out the
 //      hook would block and spam the forwarding-loop nudge until the cap bleeds
 //      out. So when the current stage's checkbox is positively [?]/[R] we ALLOW
 //      the stop (isHumanWaitStop below), until the person's reply to the open
@@ -671,7 +671,7 @@ function resetGuard(projectDir: string): void {
 // the engine still returning a pending directive — and from the engine's vantage
 // it looks identical, because a stage in `awaiting-approval` ([?]) or `revising`
 // ([R]) is still "in-flight", so `next` re-emits a run-stage for it
-// (aidlc-orchestrate.ts:1161-1176). Yet these states exist BECAUSE the human was
+// (in aidlc-orchestrate.ts). Yet these states exist BECAUSE the human was
 // engaged: [?] only because a gate is open awaiting approve/reject, [R] only
 // because changes were just requested. Blocking there spams the forwarding-loop
 // nudge until the cap bleeds out — confusing and unprofessional at an
@@ -687,7 +687,7 @@ function resetGuard(projectDir: string): void {
 //
 // One honest caveat on [R]: the row stays `revising` across the WHOLE rework
 // window (it flips back to [?] only when the conductor calls `revise`; see
-// stage-protocol.md:164). So [R] covers both the human-wait prompt ("what would
+// stage-protocol.md, "Part 0: Enter the approval gate"). So [R] covers both the human-wait prompt ("what would
 // you like changed?") AND the autonomous rework edits that follow. Allowing the
 // stop on [R] means a conductor that quits mid-rework is not nudged — the same
 // [-]-style ambiguity we accept for in-progress, here scoped to a window the
@@ -770,7 +770,7 @@ function repliedToGate(projectDir: string, gate: { stage: string; unit?: string 
 // True when the `<slug>-questions.md` under the active stage dir has an
 // unanswered tag.
 // An `[Answer]:` line is "unanswered" when, after the colon, only whitespace or
-// underscores remain (stage-protocol.md:333 — "blank or contains only
+// underscores remain (stage-protocol.md, "Error handling for invalid/missing answers": "blank or contains only
 // underscores"). Standard stages use `<record>/<phase>/<slug>/`; a per-unit
 // Construction directive carries its exact unit and uses
 // `<record>/construction/<unit>/<slug>/`. We never recursively accept a question
@@ -2004,7 +2004,7 @@ if (kind === "notice") {
 // weren't needed. When autonomous, decline the parked allow and fall through to
 // the cap-bounded block below (the loop stays alive; a genuine hang still
 // releases via the no-progress cap). This mirrors isPendingQuestionStop's
-// identical guard (:391) for consistency across every carve-out in this hook.
+// identical guard for consistency across every carve-out in this hook.
 // A park a person asked for ("Approve, but let's stop for today") is not a
 // self-park: `Parked By: person` is written only by that attended park, since
 // the state tool refuses every other park under autonomy, so it ends the turn

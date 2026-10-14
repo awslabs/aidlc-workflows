@@ -31222,10 +31222,10 @@ export function removeField(content: string, field: string): string {
 // --- Refs-list field operations (Bolt Refs in v7 state template) ---
 //
 // `Bolt Refs` is a list-shaped single-line value with a literal `[empty list]`
-// placeholder when empty (state-template.md:11) — `aidlc-utility.ts`'s init
-// emitter at line 1391 also produces a bare-empty shape (no value after the
-// colon). Both are tolerated on parse; emit always produces `[empty list]`
-// when empty for round-trip determinism.
+// placeholder when empty; `aidlc-utility.ts` handleIntentCreateStateBuild
+// writes a bare-empty shape (no value after the colon). Both are tolerated on
+// parse; emit always produces `[empty list]` when empty for round-trip
+// determinism.
 export function parseRefsList(value: string): string[] {
   const trimmed = value.trim();
   if (trimmed === "" || trimmed === "[empty list]") return [];
@@ -38743,8 +38743,8 @@ export function parseMemoryEntries(raw: string): Array<{
 }
 
 // Split a single counted memory line into ts / unit / summary / context. The
-// canonical shape is `- <ISO> — <summary>; <context>` (stage-protocol.md
-// :876-879). Tolerates a missing `;` (tail → summary, context empty) and a
+// canonical shape is `- <ISO> — <summary>; <context>`.
+// Tolerates a missing `;` (tail → summary, context empty) and a
 // missing ts/em-dash (degrade to summary = the whole line, ts empty).
 // A Unit's iteration of a stage adds `[unit <name>]` after the timestamp.
 function parseMemoryEntryLine(trimmed: string): {
@@ -38779,7 +38779,7 @@ function parseMemoryEntryLine(trimmed: string): {
 // emitStageFrontmatter is the inverse — turns a StageFrontmatter-shaped
 // object back into YAML bytes. Symmetric with parseStageFrontmatter:
 // parse → emit → parse yields the same object. Field order is pinned
-// to stage-definition.md:84-110's worked example so diffs stay stable.
+// to the worked example in stage-definition.md so diffs stay stable.
 export function emitStageFrontmatter(obj: Record<string, unknown>): string {
   const needsQuote = (v: string): boolean => /[:#]|^\s|\s$/.test(v);
   const emitScalar = (v: string): string =>
@@ -39169,7 +39169,7 @@ export function nextInScopeStage(
   // subgraphForScope-based iteration — proven by t66 walk parity across
   // all 11 scopes. The uncommon case (a hand-edited state file promoting
   // a scope-SKIP stage to EXECUTE) is the power-user escape hatch
-  // aidlc-state.ts:276-284's explicit-advance path also honours; keeping
+  // aidlc-state.ts's explicit-advance path (handleAdvance) also honours; keeping
   // both callers consistent on the same input.
   const graph = loadStageGraph();
   const currentIdx = graph.findIndex((s) => s.slug === afterSlug);

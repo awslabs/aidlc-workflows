@@ -6259,7 +6259,8 @@ export async function collectDoctorReport(
   // Sub-case (c): PRACTICES_OVERRIDE Reason filter — write-failure-* rows
   //   without a following PRACTICES_AFFIRMED are flagged as orphan; rows
   //   carrying Reason: bolt-plan-marker-conflict are expected behaviour and
-  //   ignored. audit-format.md:138 anchors the discriminator routing.
+  //   ignored. The PRACTICES_OVERRIDE row in audit-format.md anchors the
+  //   discriminator routing.
   //
   // Sub-case (c) shares the orphan-audit umbrella because both classes ride
   // the same audit-walker pass; per plan-v3 §51, this is one Check, not two.
@@ -6369,8 +6370,7 @@ export async function collectDoctorReport(
   //
   // Read `Practices Affirmed Timestamp` from main state. Compare to now.
   // Empty / missing → informational pass (never affirmed). Within 90 days → ✓.
-  // Older → advisory pass=true (does NOT fail exit code; mirrors heartbeat
-  // and state/audit drift advisory pattern at aidlc-utility.ts:421-466).
+  // Older → advisory pass=true (does NOT fail exit code).
   // Invalid ISO timestamp → fail readable.
   // ---------------------------------------------------------------------------
   try {

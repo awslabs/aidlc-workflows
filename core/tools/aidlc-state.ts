@@ -5642,7 +5642,7 @@ function handleFinalize(args: string[]): void {
   }
   // Thread the live state content into BOTH walks so per-stage EXECUTE/SKIP
   // suffix overrides (a recomposed plan) and prior [x]/[S] checkboxes are
-  // honoured - the same threading the advance path does (:869/:935). Without
+  // honoured - the same threading handleAdvance does. Without
   // it these two calls project the next move from the STATIC scope grid and
   // route around any recompose flip.
   const nextStage = nextInScopeStage(completedSlug, scope, content);

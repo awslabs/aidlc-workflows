@@ -119,12 +119,12 @@ if (
 }
 
 // Step 6 — Pre-init guard. No audit.md → no active workflow → no-op.
-// Mirrors aidlc-write-audit-log.ts:48-50 + aidlc-rebuild-stage-graph.ts:62-64.
+// Mirrors the no-audit exit in aidlc-write-audit-log.ts and aidlc-rebuild-stage-graph.ts.
 if (!existsSync(auditFilePath(projectDir))) return 0;
 
 // Step 7 — State-file guard.
 //
-// readStateFile throws on missing aidlc-state.md (lib.ts:169-175).
+// readStateFile throws on missing aidlc-state.md.
 // Pre-init or partially-deleted workspaces could have audit.md without
 // state.md (audit.md is write-direct; state.md is overwrite-rename).
 // G5 ("always exit 0") demands a guard before the read.
@@ -266,7 +266,7 @@ for (const entry of applicableSensors) {
     );
     // Sensor outcomes stay inside the dispatcher (paired audit rows by
     // Fire id; dispatcher exits 0). Hook-level failures get recorded
-    // for `--doctor` to surface (mirrors aidlc-rebuild-stage-graph.ts:115-121):
+    // for `--doctor` to surface (mirrors aidlc-rebuild-stage-graph.ts's dispatch step):
     //   - timeout: spawnSync sets BOTH `result.error.code === "ETIMEDOUT"`
     //     and `result.signal === "SIGTERM"` on timeout. We OR-check
     //     defensively (either alone is sufficient evidence) and check

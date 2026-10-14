@@ -342,7 +342,7 @@ function stagesDir(): string {
 }
 
 /** Resolve the stage-graph.json path. Mirrors lib.ts:loadStageGraph()'s
- *  AIDLC_STAGE_GRAPH env-var seam (lib.ts:295-296) so tests can point both
+ *  AIDLC_STAGE_GRAPH env-var seam so tests can point both
  *  loader and compile-check at a temp file. Evaluated at call time so tests
  *  that set/unset the env mid-process see the change. */
 function stageGraphPath(): string {

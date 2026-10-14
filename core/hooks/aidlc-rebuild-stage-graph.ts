@@ -10,7 +10,7 @@
 // `aidlc-runtime.ts compile` on match.
 //
 // WORKFLOW_COMPLETED is in the transition set so the final-stage approve
-// fires the compile (handleCompleteWorkflow at aidlc-state.ts:572-590
+// fires the compile (handleCompleteWorkflow in aidlc-state.ts
 // emits 5 audit rows ending with WORKFLOW_COMPLETED — without it in the
 // regex, the last 3 blocks would be PHASE_COMPLETED + PHASE_VERIFIED +
 // WORKFLOW_COMPLETED, none in the original transition set, and the
@@ -319,7 +319,7 @@ if (ideAuditMode) {
 
 // 8. Dispatch — sync subprocess. Hook waits for completion. On non-zero
 //    exit, record the drop for `--doctor` to surface; never block the
-//    parent Bash call (mirrors aidlc-write-audit-log.ts:95-101).
+//    parent Bash call (mirrors aidlc-write-audit-log.ts).
 const runtimeTs = join(projectDir, harnessDir(), "tools", "aidlc-runtime.ts");
 try {
   // Same reason as the Stop hook: a bare "bun" child never exists in a native
