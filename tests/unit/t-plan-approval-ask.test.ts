@@ -93,6 +93,7 @@ import {
   writeSessionPidEntry,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { listMessages, saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { FILE_TOOLS_RULE } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 setDefaultTimeout(120_000);
@@ -195,13 +196,17 @@ function answer(
   proj: string,
   details: string,
   extra: string[] = [],
+  chat?: string,
 ): { code: number; recorded?: string; message: string } {
   const result = spawnSync(BUN, [
     join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
     "--details", details, ...extra, "--project-dir", proj,
   ], {
     cwd: proj,
-    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+    env: {
+      ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0",
+      ...(chat ? { AIDLC_SESSION_OVERRIDE: chat } : {}),
+    },
     encoding: "utf-8",
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
@@ -958,6 +963,77 @@ describe("the engine asks for Plan Approval", () => {
     const again = next(proj);
     expect(again.kind).toBe("ask");
     expect(again.plan_approval.note).toBeUndefined();
+  });
+
+  // Two live runs typed "/aidlc go back to code generation for a second round:
+  // also accept -S ..."; the plan question opened for that message, the change
+  // was refused as no reply, and the person was asked to pick Request Changes.
+  // Their message record in this chat is the proof, on finished work too,
+  // where a prompt leaves no turn row.
+  for (const finished of [false, true]) {
+    test(`a change asked for in the message the question opened for is its Request Changes${finished ? ", on finished work" : ""}; an approval still needs a reply`, () => {
+      const proj = project();
+      writePlan(proj);
+      const turns = () => auditText(proj).split("**Event**: HUMAN_TURN").length;
+      if (finished) {
+        // The first round, then the work finished. Message records keep whole
+        // seconds: the second round comes in a later one.
+        reply(proj, "build the slugify helper");
+        Bun.sleepSync(1050 - (Date.now() % 1000));
+        const path = seededStateFile(proj);
+        writeFileSync(path, readFileSync(path, "utf-8")
+          .replace(/^- \[[-R ]\] ([a-z-]+) \u2014 EXECUTE$/gm, "- [x] $1 \u2014 EXECUTE")
+          .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: build-and-test")
+          .replace(/^- \*\*Status\*\*:.*$/m, "- **Status**: Completed"));
+      }
+      const words = "go back to code generation: also accept -S as a short form of --shout";
+      const before = turns();
+      reply(proj, `/aidlc ${words}`);
+      // A prompt on finished work leaves no turn row there.
+      expect(turns() - before).toBe(finished ? 0 : 1);
+      if (finished) {
+        const back = spawnSync(BUN, [
+          join(AIDLC_SRC, "tools", "aidlc-jump.ts"), "execute", "--target", "code-generation", "--direction", "backward",
+          "--scope", "poc", "--project-dir", proj,
+        ], { cwd: proj, env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj }, encoding: "utf-8" });
+        expect(back.status, `${back.stdout}${back.stderr}`).toBe(0);
+      }
+      expect(next(proj).ask_type).toBe("plan-approval");
+      // Words typed before the question never approve it.
+      expect(answer(proj, "Approve Plan", [], SESSION).message).toContain("has not replied to the plan question");
+      // Another chat's message is not this chat's.
+      expect(answer(proj, "Request Changes: also accept -S", [], OTHER_SESSION).message)
+        .toContain("has not replied to the plan question");
+      expect(answer(proj, "Request Changes: also accept -S", [], SESSION).message).toContain('Recorded "Request Changes"');
+      const recorded = auditText(proj).split("\n---\n").find((block) => block.includes("**Details**: Request Changes"));
+      expect(recorded).toContain("**User Input**: also accept -S");
+      expect(recorded).toContain(`**Person Reply**: ${words}`);
+      expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "also accept -S" });
+      // The revised plan's question is a later one: it needs a reply of its own.
+      writePlan(proj, "- [ ] Step 2: accept -S\n");
+      expect(next(proj).ask_type).toBe("plan-approval");
+      expect(answer(proj, "Request Changes", [], SESSION).message).toContain("has not replied to the plan question");
+      expect(answer(proj, "Approve Plan", [], SESSION).message).toContain("has not replied to the plan question");
+      reply(proj, "1");
+      expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    });
+  }
+
+  // Two of this chat's messages in the same second cannot be told apart by
+  // their records: neither is taken, and the agent names the one it means.
+  test("two messages in the opening's second: neither is taken unless the agent names one", () => {
+    const proj = project();
+    writePlan(proj);
+    const words = "/aidlc go back to code generation: also accept -S as a short form of --shout";
+    reply(proj, words);
+    const opening = listMessages(proj).find((m) => m.session === SESSION && m.text === words);
+    expect(opening).toBeDefined();
+    const { id: _id, ...rest } = opening!;
+    saveMessage(proj, { ...rest, text: "also make it blue", words: "also make it blue" });
+    expect(next(proj).ask_type).toBe("plan-approval");
+    expect(answer(proj, "Request Changes", [], SESSION).message).toContain("has not replied to the plan question");
+    expect(answer(proj, "Request Changes", ["--message", opening!.id], SESSION).message).toContain('Recorded "Request Changes"');
+    expect(auditText(proj)).toContain("**User Input**: go back to code generation: also accept -S as a short form of --shout");
   });
 
   // The agent may word the picker its own way: the pick counts by the choices

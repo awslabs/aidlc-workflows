@@ -999,7 +999,13 @@ This stage has a **two-part structure**: planning followed by generation.
    is one of the choices, the same way it records an exact pick typed in chat,
    naming the file in one line for the conductor. When the person says it in
    their own words instead ("I put my answer in the file"), the conductor reads
-   the line and records the choice they made. The
+   the line and records the choice they made. When the person's message in
+   this chat that the question opened for already asked for a change ("go back
+   to code generation: also accept -S", on finished work too) and no decision
+   has used it, the conductor records it as that question's Request Changes,
+   with their words (the message record is the proof, as `--message` reads
+   it); an approval still needs a reply after the question shows, and the
+   revised plan's question needs its own. The
    next `next` returns the run-stage with `plan_approval.status: "approved"`
    (build), `revise` (with the person's words), `repair` (a Testing Contract an
    edit broke), or `plan` (finish the files). In edit mode the person changes the
