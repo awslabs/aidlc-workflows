@@ -5252,7 +5252,8 @@ function freshWorkOfferDirective(
 
 // The plan proposal step: a request that names no plan is kept as a question
 // and handed to the agent with every plan this install ships (its length here,
-// what it is for, and the hints its author wrote), so the agent proposes the
+// whether its stages split the work into Units, what it is for, and the hints
+// its author wrote), so the agent proposes the
 // one that fits what the person described and the engine renders the plan
 // question with it. A tool never reads the request for meaning; the agent does.
 // Re-run with the same request (`--request <id>`), the step reuses that
@@ -5278,7 +5279,8 @@ function planProposalDirective(
     const cost = effectiveScopeCostSummary(scope, pd, undefined, undefined, undefined, flags.projectType);
     const meta = metadata[scope];
     const hints = meta?.keywords?.length ? `; hints: ${meta.keywords.join(", ")}` : "";
-    return `${scope}${cost ? ` (${cost.shown} ${cost.shown === 1 ? "stage" : "stages"})` : ""}: ${meta?.description ?? ""}${hints}`;
+    const units = cost && cost.perUnitStages > 0 ? ", splits the work into Units" : "";
+    return `${scope}${cost ? ` (${cost.shown} ${cost.shown === 1 ? "stage" : "stages"}${units})` : ""}: ${meta?.description ?? ""}${hints}`;
   });
   return printDirective(
     `The person asked for new work: "${requestPreview(description)}".${documentSplitSentence(description)} No plan is ` +
