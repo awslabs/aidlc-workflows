@@ -43,6 +43,7 @@ import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RECORDABLE_PROJECT_BYPASSES } from "../../core/tools/aidlc-settings.ts";
 import { CONFIG_SECTIONS } from "../../core/tools/aidlc-command.ts";
+import { copyChannelToolScripts } from "../../core/tools/aidlc.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -685,6 +686,26 @@ describe("t252 Kiro native release allowlist", () => {
         "aidlc system config global set offline true",
       ]) {
         expect(evaluate(eb, command), `${agent}: should ask for \`${command}\``).not.toBe("allow");
+      }
+    }
+  });
+});
+
+// Kiro CLI's upgrade for its 3.0 engine turns each allowedCommands regular
+// expression into shell globs, and drops one with an alternation group: on
+// kiro-cli 2.29.0 the one entry for every tool script had no glob after the
+// upgrade, so each `bun .kiro/tools/aidlc-<tool>.ts` AI-DLC's chat ran asked the
+// person on 3.0 (seven times in one Requirements Analysis). Each script gets
+// its own entry, in the shape of the engine entry Kiro translates.
+describe("t252 Kiro tool scripts each have their own allow entry", () => {
+  test("every agent that runs AI-DLC's tool scripts lists each one, and none in an alternation", () => {
+    const scripts = copyChannelToolScripts().map((script) => script.slice(0, -".ts".length));
+    expect(scripts.length).toBeGreaterThan(20);
+    for (const agent of ["aidlc.json", ...PERSONAS]) {
+      const allowed = execBash("kiro", agent).allowedCommands ?? [];
+      expect(allowed.filter((entry) => entry.includes(".kiro/tools/") && entry.includes("|")), agent).toEqual([]);
+      for (const script of scripts) {
+        expect(allowed, `${agent}: ${script}`).toContain(`bun (run )?["']?\\.kiro/tools/${script}\\.ts["']?( .*)?`);
       }
     }
   });
