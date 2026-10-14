@@ -1162,7 +1162,7 @@ export const ORCHESTRATOR_LAUNCHER_OPTIONS = ["--project-dir", "--aidlc-attempt-
  * one way aidlc-orchestrate's main() does: each with the token after it, only
  * in front of the `--` mark and of the person's own words (requestWordsBeginAt),
  * and never with the mark as its value. A Copilot claim and the engine hash the
- * line that is left, so both read it here.
+ * line that is left, so both read it here, as do the other hooks that need it.
  */
 export function readOrchestratorLauncherOptions(rawArgs: readonly string[]): {
   args: string[];
@@ -40374,9 +40374,10 @@ export interface NextToken {
 /**
  * The one reading of which tokens on a `next` line are this engine's own and
  * which are the person's. parseNextFlags takes its flags from it, readNextLine
- * reads the line from it, and every seam that has to know whether a line
- * carries a flag asks it (nextLineFlags), so none of them reads a word of the
- * person's as a flag, or a flag's value as a flag of its own. `literal` is
+ * reads the line from it, and seams such as the Copilot claim ask it
+ * (nextLineFlags for the flags `next` takes, the `read-only` role for a utility
+ * flag), so they never read a word of the person's as one of those flags, or a
+ * flag's value as a flag of its own. `literal` is
  * every word behind the mark, kept as typed; null when there is no mark.
  */
 export function readNextTokens(args: readonly string[]): {

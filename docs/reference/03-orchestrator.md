@@ -101,11 +101,12 @@ claim gate all consult), so nothing acts off-band on a line the engine would
 hand to the agent. Which token is a flag, which is a flag's value and which is
 the person's is decided once as well: `readNextTokens` reads only the tokens in
 front of the `--` mark, so neither the mark nor a word behind it is ever a flag
-or a flag's value. `parseNextFlags` takes its flags from it, and a seam that
-asks whether a line carries a flag (the Copilot claim, the Kiro IDE Guard Policy
-check) asks `nextLineFlags`; the orchestrator's own `--project-dir` and attempt
-id are taken off the line by `readOrchestratorLauncherOptions`, which the
-engine, a Copilot claim and the Stop hook share. **Exact**: every token read under the grammar, with any free
+or a flag's value. `parseNextFlags` takes its flags from it, and the Copilot
+claim and the Plan Approval guard ask `nextLineFlags` which flags a line
+carries; the orchestrator's own `--project-dir`
+and attempt id are taken off the line by `readOrchestratorLauncherOptions`, the
+reading the engine's `main()` uses and hooks such as the Copilot claim and the
+Stop hook share. **Exact**: every token read under the grammar, with any free
 words marked as theirs (the `--` delimiter, or a plan named with a colon); it
 acts as it always has. **Words**: nothing on the line was read, so it is a
 request. **A reading step** otherwise: the `print` above, with no `narration`,
