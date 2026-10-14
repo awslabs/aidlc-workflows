@@ -565,9 +565,10 @@ ask targeted follow-up. Do NOT proceed until resolved.
   hook kept, a question box's reply, or the request that started the work.
   Otherwise it tells the agent to quote their words or show the questions and
   wait. Where the record lacks some of what they said (a host that passed no
-  words, a message older than the store keeps, no hook), the choice is
-  recorded as before. The agent then says one line: "You left <the
-  question> to me, so I chose <the choice>. Say if you want something else."
+  words, a message too long to keep whole, a message older than the store
+  keeps, no hook), the choice is recorded as before. The agent then says one
+  line: "You left <the question> to me, so I chose <the choice>. Say if you
+  want something else."
   (for several questions, "You left <Stage>'s <N> questions to me, so I chose
   the recommended answers: ... Say if you want any of them changed."), and
   once per piece of work: "Approvals are still yours: I'll stop at each stage

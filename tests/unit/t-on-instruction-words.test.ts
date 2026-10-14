@@ -16,7 +16,7 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { readMessage, saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
+import { MESSAGE_TEXT_MAX_CHARS, readMessage, saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { cleanupTestProject, createTestProject, seededRecordDir, seedStateFile } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
@@ -201,6 +201,18 @@ describe("t-on-instruction-words: a choice left to the agent quotes words the pe
       rmSync(join(p, "aidlc", ".aidlc-sessions", "messages", `${id}.json`));
       askQuestions(p);
       const r = leftToAgent(p, "whatever you think is best");
+      expect(r.status, r.out).toBe(0);
+    });
+
+    test("a message of theirs too long to keep whole, whose end left the choice", () => {
+      const p = project();
+      const brief = `${"Here is the brief. ".repeat(Math.ceil(MESSAGE_TEXT_MAX_CHARS / 19))}Pick whatever defaults make sense.`;
+      expect(brief.length).toBeGreaterThan(MESSAGE_TEXT_MAX_CHARS);
+      typed(p, brief);
+      const turn = readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN").at(-1);
+      expect(readMessage(p, auditBlockField(turn!.block, "Message Id") ?? "")?.cut).toBe(true);
+      askQuestions(p);
+      const r = leftToAgent(p, "pick whatever defaults make sense");
       expect(r.status, r.out).toBe(0);
     });
 

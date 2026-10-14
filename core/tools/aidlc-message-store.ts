@@ -322,9 +322,10 @@ export function holdsQuote(said: string, quoted: string): boolean {
  * they typed; of a question box, what they picked or wrote, never its
  * question), the picks and question-box replies on `rows`, and the request
  * that started the work. `everyTurnHeld` says whether every turn of theirs on
- * `rows` names a kept message with its words in it. A host that passed no
- * words, a record gone with the day, or no turn on record at all leaves it
- * false, and then nothing proves a quote is not theirs.
+ * `rows` names a kept message with all its words in it. A host that passed no
+ * words, a message too long to keep whole, a record gone with the day, or no
+ * turn on record at all leaves it false, and then nothing proves a quote is
+ * not theirs.
  */
 export function personsSaidWords(
   projectDir: string,
@@ -343,7 +344,9 @@ export function personsSaidWords(
     if (row.event === "HUMAN_TURN") {
       turns++;
       const message = kept.get(auditBlockField(row.block, "Message Id") ?? "");
-      if (message === undefined || (message.source !== "picker" && message.text.trim() === "")) held = false;
+      if (message === undefined || message.cut === true || (message.source !== "picker" && message.text.trim() === "")) {
+        held = false;
+      }
       try {
         const picks = JSON.parse(auditBlockField(row.block, "Picked") ?? "[]") as unknown;
         if (Array.isArray(picks)) said.push(...picks.filter((pick): pick is string => typeof pick === "string"));
