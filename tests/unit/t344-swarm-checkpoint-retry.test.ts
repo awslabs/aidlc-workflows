@@ -189,7 +189,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     const checkpoint = next();
     expect(checkpoint.code, checkpoint.err).toBe(0);
     expect(JSON.parse(checkpoint.out).swarm_checkpoint, checkpoint.out).toBeTruthy();
-    expect(JSON.parse(checkpoint.out).protocol_modules).toEqual(["construction", "checkpoint", "swarm"]);
+    expect(JSON.parse(checkpoint.out).protocol_modules).toEqual(["construction", "checkpoint", "swarm", "sensors"]);
     if (approvalMode === "grouped") {
       for (const unit of units) {
         const approval = evaluateCodeGenerationApproval(pd, { unit });

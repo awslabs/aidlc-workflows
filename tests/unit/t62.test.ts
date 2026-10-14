@@ -5,29 +5,14 @@
 //    RESERVED_AGENT_SLUG export directly — the orchestrator pseudo-agent that
 //    Rule 9 exempts from the agent-registration cross-check)
 //
-// t62 — stage-frontmatter schema validation. Migrated from the bash TAP test
-// tests/unit/t62-stage-schema.sh (plan 62). The original spawned `bun -e`
-// importing validateStageFrontmatter (and RESERVED_AGENT_SLUG) and stringifying
-// the result as "VALID" / "INVALID:<errors joined by |>". The tool is a PURE
+// t62 - stage-frontmatter schema validation. The tool is a PURE
 // validator — "no I/O, no YAML parsing, no mutation" (aidlc-stage-schema.ts:6-7)
-// — so every one of the 62 behavioural contracts can be asserted in-process by
+// - so every behavioural contract can be asserted in-process by
 // importing and CALLING validateStageFrontmatter directly. There is no CLI
 // arg-parsing or process.exit shell to keep as a spawn seam: the .ts file is a
-// library, not an executable entrypoint (no `import.meta.main` block,
-// grep-verified). So all 62 contracts migrate to in-process expect() calls;
-// zero spawns remain.
+// library, not an executable entrypoint (no `import.meta.main` block).
 //
 // Mechanism: none (pure function calls, zero subprocess, zero LLM, zero tokens).
-//
-// PARITY NOTE on the .sh "VALID" / "INVALID:..." string protocol: the original
-// reduced the ValidationResult discriminated union to a single line so bash
-// could grep it. In-process we assert the union directly — `result.valid`
-// (boolean) and either `result.data` (on success) or `result.errors` (string[])
-// on failure. assert_eq "$OUT" "VALID" becomes expect(result.valid).toBe(true);
-// assert_contains "$OUT" "<substr>" becomes
-// expect(result.errors.join("|")).toContain("<substr>") — same observable
-// behaviour (the substring is present in the surfaced error set), expressed
-// against the real return value instead of its stringification.
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -37,10 +22,9 @@ import {
   validateStageFrontmatter,
 } from "../../dist/claude/.claude/tools/aidlc-stage-schema.ts";
 
-// Shared valid fixture — mirrors the .sh FIXTURE (t62-stage-schema.sh:18-34),
-// itself the scope-definition worked example at stage-definition.md:84-109.
-// A fresh deep copy per case (via fixture()) replaces the .sh's `{...$FIXTURE, …}`
-// spread + per-call `delete fx.$field`, so no case can leak mutation into another.
+// Shared valid fixture: the scope-definition worked example in
+// stage-definition.md (section Worked example). A fresh object per case (via
+// fixture()) means no case can leak mutation into another.
 function fixture(): Record<string, unknown> {
   return {
     slug: "scope-definition",
@@ -61,10 +45,6 @@ function fixture(): Record<string, unknown> {
   };
 }
 
-// Mirror of the .sh run_validator helper: call the validator and reduce the
-// failure case to the pipe-joined error string the original asserted against.
-// On success we return the literal "VALID" so the positive assertions read
-// identically to assert_eq "$OUT" "VALID".
 function errs(obj: unknown, ctx?: ValidationContext): string {
   const r = validateStageFrontmatter(obj, ctx);
   return r.valid ? "VALID" : r.errors.join("|");
@@ -83,8 +63,8 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
   test("valid fixture -> data.slug returned", () => {
     const r = validateStageFrontmatter(fixture());
     expect(r.valid).toBe(true);
-    // narrowed by valid===true; data aliases the input per the validator's
-    // documented trust boundary (aidlc-stage-schema.ts:262-271).
+    // narrowed by valid===true; data is the normalized clone the validator
+    // returns at its documented trust boundary (validateStageFrontmatter).
     const data = (r as { valid: true; data: StageFrontmatter }).data;
     expect(data.slug).toBe("scope-definition");
   });
@@ -138,7 +118,6 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
 
   // ============================================================
   // Required fields missing — one per (12 assertions)
-  // Mirrors the .sh `for field in … delete fx.$field` loop (lines 88-101).
   // ============================================================
 
   const REQUIRED_FIELDS = [
@@ -270,12 +249,12 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
 
   // ============================================================
   // Reserved keys — each produces a reserved-key error (5 assertions)
-  // Exact strings pin RESERVED_KEYS map (aidlc-stage-schema.ts:67-73).
+  // Exact strings pin RESERVED_KEYS map (aidlc-stage-schema.ts).
   // ============================================================
 
   // `when` is an ACTIVE structured activation predicate (plugin mechanism,
-  // Layer 4) — no longer reserved. A valid single-key producer-in-plan map
-  // passes; a wrong-shape or unknown-predicate value is rejected.
+  // Layer 4). A valid single-key producer-in-plan map passes; a wrong-shape
+  // or unknown-predicate value is rejected.
   test("when: valid producer-in-plan predicate passes", () => {
     const r = validateStageFrontmatter({ ...fixture(), when: { "producer-in-plan": "some-artifact" } });
     expect(r.valid).toBe(true);
@@ -291,8 +270,8 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
     );
   });
 
-  // number / name / plugin — optional plugin-mechanism metadata, accepted when
-  // shape-valid (previously rejected as unknown keys).
+  // number / name / plugin - optional plugin-mechanism metadata, accepted
+  // when shape-valid.
   test("number/name/plugin: valid values pass", () => {
     const r = validateStageFrontmatter({ ...fixture(), number: "4.50", name: "My Stage", plugin: "test-pro" });
     expect(r.valid).toBe(true);
@@ -456,7 +435,7 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
 
   // ============================================================
   // Dynamic agent lookup (3 assertions)
-  // Exercises the ctx.agents branch (aidlc-stage-schema.ts:242-256).
+  // Exercises the ctx.agents branch (Rule 9 in validateStageFrontmatter).
   // ============================================================
 
   test("lead_agent not in ctx.agents -> error", () => {
@@ -487,7 +466,7 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
   // Rule 9 must exempt it even when ctx.agents is supplied. Exercises the
   // RESERVED_AGENT_SLUG export and the `!== RESERVED_AGENT_SLUG` guards on both
   // the lead_agent and support_agents arms of Rule 9
-  // (aidlc-stage-schema.ts:75 + :274-295).
+  // (aidlc-stage-schema.ts validateStageFrontmatter).
   // ============================================================
 
   test("RESERVED_AGENT_SLUG export is 'orchestrator'", () => {
@@ -524,9 +503,8 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
 
   // ============================================================
   // Error-field-name regression guard (3 assertions)
-  // The .sh asserted the error ARRAY contains an entry mentioning the field —
-  // i.e. errors are field-addressable, not a generic blob. In-process we assert
-  // against r.errors.find(...) just like the original `r.errors.find(e => …)`.
+  // Errors are field-addressable, not a generic blob: the error ARRAY
+  // contains an entry mentioning the field.
   // ============================================================
 
   test("empty object error mentions slug", () => {
@@ -554,11 +532,11 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
   });
 
   // ============================================================
-  // Reviewer field validation (V2 + V3) — type, positive-integer,
+  // Reviewer field validation - type, positive-integer,
   // cap⇒reviewer coupling, and the Rule 9 roster cross-check.
   // Both fields are OPTIONAL: absent → valid; the only required relation is
   // the coupling (cap present ⇒ reviewer present). Exercises checkString on
-  // `reviewer`, the new checkPositiveInteger on `reviewer_max_iterations`,
+  // `reviewer`, checkPositiveInteger on `reviewer_max_iterations`,
   // and the reviewer arm of Rule 9.
   // ============================================================
 

@@ -1,22 +1,22 @@
 // covers: hook:aidlc-write-audit-log
 //
-// t170 — the P8 fix to the audit-logger GATE. Pre-workspace-move the hook gated
+// t170 - the audit-logger GATE. Before the workspace layout the hook gated
 // artifact logging on `file.includes("aidlc-docs/")` (aidlc-write-audit-log.ts:49).
-// After the record re-roots per intent
-// (aidlc/spaces/<space>/intents/<slug>-<id8>/<phase>/<stage>/…), that path no
-// longer contains "aidlc-docs/", so the old gate DROPPED every ARTIFACT_CREATED/
-// UPDATED on the new layout (the review minor this fixes). The gate now resolves
-// the active intent's record root via docsRoot() and logs writes under it. P9
-// RETIRED the transitional flat "aidlc-docs/" substring fallback — a write under
-// a flat aidlc-docs/ tree is no longer logged (last test pins that end state).
+// Under the per-intent record
+// (aidlc/spaces/<space>/intents/<YYMMDD>-<label>/<phase>/<stage>/...) that path
+// does not contain "aidlc-docs/", so that gate DROPPED every ARTIFACT_CREATED/
+// UPDATED. The gate resolves the active intent's record root via docsRoot() and
+// logs writes under it (plus the space's codekb tree); there is no flat
+// "aidlc-docs/" substring fallback - a write under a flat aidlc-docs/ tree is
+// not logged (last test pins that end state).
 //
 // WHY CLI: the SUBJECT is a hook (top-level run + process.exit gates + stdin),
 // spawned exactly as PostToolUse drives it — the same twin pattern as t07.
 //
 // SEEDING: createIntent() mints a real per-intent record + sets the active-intent
 // cursor; auditFilePath() then resolves the per-clone shard under that record's
-// audit/ dir (the precondition for the emit — the hook self-gates on the shard
-// existing, :57). We touch the shard, fire a Write under the record's stage dir,
+// audit/ dir (the precondition for the emit - recordArtifact self-gates on the
+// shard existing). We touch the shard, fire a Write under the record's stage dir,
 // and assert the ARTIFACT event + the record-relative breadcrumb landed.
 
 import {
@@ -83,7 +83,7 @@ function pinnedShardName(): string {
  *  the audit DIR + record root. The clone-id token (aidlc/.aidlc-clone-id) is
  *  PINNED on disk so the freshly-spawned hook subprocess (which reads the token
  *  from disk, not the test process's memoized one) resolves a predictable shard
- *  name — we create exactly that shard so the hook's "shard exists" gate (:57)
+ *  name - we create exactly that shard so recordArtifact's "shard exists" gate
  *  passes. Assertions glob-read every shard in the dir (clone-id-name-agnostic,
  *  mirroring readAllAuditShards) to tolerate any extra shard. */
 function seedIntentWithShard(p: string, slug: string): { auditDir: string; recordRoot: string } {
@@ -97,7 +97,6 @@ function seedIntentWithShard(p: string, slug: string): { auditDir: string; recor
   return { auditDir, recordRoot: docsRoot(p) };
 }
 
-/** Concatenate every shard in an audit dir (clone-id-name-agnostic read). */
 function readShards(auditDir: string): string {
   let names: string[];
   try {
@@ -142,20 +141,15 @@ describe("t170 audit-logger per-intent gate (mechanism cli — spawned hook)", (
   test("does NOT log a write to an audit shard itself (anti-recursion)", () => {
     const { auditDir, recordRoot } = seedIntentWithShard(proj, "perf");
     const before = readShards(auditDir);
-    // A write to any shard under the record's audit/ dir must be skipped.
     fire(proj, "Write", join(recordRoot, "audit", "some-host-clone.md"));
     expect(readShards(auditDir)).toBe(before);
   });
 
   test("a write under the flat aidlc-docs/ tree is NOT logged (P9 — no flat-legacy fallback)", () => {
-    // P9 retired the transitional `file.includes("aidlc-docs/")` gate. The
-    // logger now fires ONLY for writes under the per-intent record root. A write
-    // under a flat aidlc-docs/ tree no longer matches, so nothing is logged.
     const { auditDir } = seedIntentWithShard(proj, "legacy");
     const before = readShards(auditDir);
     const rc = fire(proj, "Write", join(proj, "aidlc-docs", "ideation", "feasibility", "f.md"));
     expect(rc).toBe(0); // advisory: the hook still exits clean
-    // No flat audit.md is created, and the per-intent shard is unchanged.
     expect(existsSync(join(proj, "aidlc-docs", "audit.md"))).toBe(false);
     expect(readShards(auditDir)).toBe(before);
   });

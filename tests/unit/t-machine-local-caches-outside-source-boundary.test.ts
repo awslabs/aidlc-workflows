@@ -57,7 +57,6 @@ describe("t-machine-local-caches-outside-source-boundary: .idea, .codegraph and 
     // Every IDE action rewrites it; the fingerprint must not move.
     writeFileSync(join(project, ".idea", "workspace.xml"), '<project version="4"><component name="ChangeListManager" rev="2"/></project>\n');
     expect(fingerprint(project)).toBe(before);
-    // The project's own source still counts.
     writeFileSync(join(project, "src", "main.dart"), "void main() { print('hi'); }\n");
     expect(fingerprint(project)).not.toBe(before);
   });

@@ -152,7 +152,6 @@ describe("t339 on-demand autonomy preserves protected stage approvals", () => {
     const reportRefused = run("orchestrate", [
       "report", "--stage", "nfr-requirements", "--result", "approved",
     ]);
-    // The agent's next step, with the question still open.
     expect(JSON.parse(reportRefused.stdout).kind).toBe("print");
     expect(JSON.parse(reportRefused.stdout).message).toContain('The question for "nfr-requirements" is still open.');
     expect(reportRefused.output).toContain("names no choice");

@@ -7,13 +7,13 @@
 // then an approval, and a setting typed while the question is open (the check
 // itself turned off, or another setting changed and then an approval).
 //
-// The gate this file exists for: this PR takes the plain-words and typed-switch
-// readers out of the prompt hook and makes the `Reply: command` mark
-// structural. If any of these six left the question unanswerable, or left the
-// guard refusing the build after an answer, the person would be stuck at a gate
-// with nothing to type. Each case ends with the answer on record (or the check
-// recorded off, set by them), the developer dispatch and a source write
-// admitted, and the question not asked again.
+// The gate this file exists for: the prompt hook reads no plain words and no
+// typed switch, and the `Reply: command` mark is structural. If any of these
+// six left the question unanswerable, or left the guard refusing the build
+// after an answer, the person would be stuck at a gate with nothing to type.
+// Each case ends with the answer on record (or the check recorded off, set by
+// them), the developer dispatch and a source write admitted, and the question
+// not asked again.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -107,7 +107,6 @@ function next(proj: string, args: string[] = []): Emitted {
   return result.directive as unknown as Emitted;
 }
 
-/** The engine asks for Plan Approval, as the person meets it. */
 function askFor(proj: string): void {
   writePlan(proj);
   const step = next(proj);
@@ -115,7 +114,6 @@ function askFor(proj: string): void {
   expect(step.ask_type).toBe("plan-approval");
 }
 
-/** The person's message, as their host delivers it to the prompt hook. */
 function reply(proj: string, prompt: string): void {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj,
@@ -141,7 +139,6 @@ function answer(proj: string, details: string, extra: string[] = []): { code: nu
   return { code: result.status ?? -1, message: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
-/** The setter the agent runs for a setting it read on their line. */
 function configSet(proj: string, args: string[]): { code: number; out: string } {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", ...args, "--project-dir", proj], {
     cwd: proj,
@@ -171,7 +168,7 @@ function guardWrite(proj: string, path: string): { code: number; stderr: string 
 
 function guardDispatch(proj: string): { code: number; stderr: string } {
   // The developer handoff is the engine's own brief, handed over verbatim, which
-  // is what its refusal asks for: the marker lines alone are refused on main too.
+  // is what its refusal asks for: the marker lines alone are refused.
   const approval = evaluateCodeGenerationApproval(proj, { unit: null });
   expect(approval.ok, approval.reason).toBe(true);
   const brief = spawnSync(BUN, [
@@ -202,7 +199,6 @@ function guardDispatch(proj: string): { code: number; stderr: string } {
 const rows = (proj: string, event: string): number =>
   readAuditShardEvents(proj).filter((row) => row.event === event).length;
 
-/** The build runs: the step is issued, and the guard admits the work it names. */
 function theBuildStarts(proj: string, note: string): void {
   const build = next(proj);
   expect(build.kind, `${note}: ${JSON.stringify(build)}`).toBe("run-stage");
@@ -211,7 +207,6 @@ function theBuildStarts(proj: string, note: string): void {
   expect(dispatch.code, `${note}: dispatch refused: ${dispatch.stderr}`).toBe(0);
   const write = guardWrite(proj, join(proj, "src", "slugify.ts"));
   expect(write.code, `${note}: source write refused: ${write.stderr}`).toBe(0);
-  // Their answer stands: the question is not put to them again.
   const after = next(proj);
   expect(after.ask_type, `${note}: asked again: ${JSON.stringify(after)}`).not.toBe("plan-approval");
 }
@@ -240,7 +235,6 @@ describe("the person's answer to the code plan question always lands, and the bu
     const revise = next(proj);
     expect(revise.kind, JSON.stringify(revise)).toBe("run-stage");
     expect(revise.plan_approval?.status).toBe("revise");
-    // The plan comes back carrying what they asked for, and they approve it.
     writePlan(proj, "- [ ] Step 2: a unit test for an empty name\n");
     const asked = next(proj);
     expect(asked.ask_type, JSON.stringify(asked)).toBe("plan-approval");
@@ -269,7 +263,6 @@ describe("the person's answer to the code plan question always lands, and the bu
     const lowered = configSet(proj, ["guard-policy", "relaxed"]);
     expect(lowered.code, lowered.out).toBe(0);
     expect(getField(readFileSync(seededStateFile(proj), "utf-8"), "Guard Policy")).toBe("relaxed (set by you)");
-    // The question is still theirs to answer, and their answer still lands.
     const stillAsking = next(proj);
     expect(stillAsking.ask_type, JSON.stringify(stillAsking)).toBe("plan-approval");
     reply(proj, "approve");

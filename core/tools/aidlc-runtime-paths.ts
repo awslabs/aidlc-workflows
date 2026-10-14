@@ -289,6 +289,15 @@ export function aidlcDispatcherInvocation(route: string): string {
   return `${aidlcInvocation()} engine ${route}`;
 }
 
+// The command a parallel batch's worker or reviewer runs for the tests the
+// person approved: AI-DLC's own `swarm check` with the command's output shown,
+// run from the project's main folder for the Unit's worktree. It names no
+// folder, so no shell has a path to quote (cmd.exe hands a quoted one on with
+// its quotes).
+export function swarmUnitTestCommand(unit: string): string {
+  return aidlcDispatcherInvocation(`swarm check ${quoteCommandArgument(unit)} --show-output`);
+}
+
 export function aidlcToolInvocation(
   route: string,
   sourceTool?: string,
@@ -648,8 +657,10 @@ export function resolveHarnessRoot(location: HarnessLocation = {}): string {
       ? projectDir
       : join(projectDir, harnessDir);
 
-  // Mutation is project-owned. Explicit/module/packaged roots are read
-  // fallbacks only and must never become a write target.
+  // Mutation goes to the project root when a project dir was named (location,
+  // AIDLC_RUNTIME_PROJECT_DIR or --project-dir), else to this module's own
+  // harness root when it has one, else the project root. Explicit and packaged
+  // roots are read fallbacks only and must never become a write target.
   if (location.mutable) {
     const root = location.projectDir !== undefined || explicitRuntimeProjectDir()
       ? projectRoot

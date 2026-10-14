@@ -216,7 +216,6 @@ describe("t337 scope ceremony metadata", () => {
     )).toThrow(
       `Scope file ${path} names both guard_policy ("strict") and change_control ("relaxed") with different values. Keep guard_policy only.`,
     );
-    // Agreeing values, the new key alone, and the retired key alone all read.
     writeFileSync(path, "---\nname: torn\ndepth: Standard\nguard_policy: off\nchange_control: off\n---\n");
     writeFileSync(join(scopes, "aidlc-fresh.md"), "---\nname: fresh\ndepth: Standard\nguard_policy: off\n---\n");
     writeFileSync(join(scopes, "aidlc-old.md"), "---\nname: old\ndepth: Standard\nchange_control: relaxed\n---\n");

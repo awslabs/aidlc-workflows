@@ -1,0 +1,203 @@
+{
+  "_provenance": "Live-captured on Kiro CLI 2.29.0 (Linux, v2 agent engine, --no-interactive) on 2026-10-14 with agent JSON hooks that appended their stdin to a log on every event: one chat that ran a shell command and dispatched one helper through the subagent tool, and the helper running its own agent JSON hooks (a shell command, a new file, its summary report). Folder paths are replaced with /tmp/example-project.",
+  "agentSpawn": {
+    "hook_event_name": "agentSpawn",
+    "cwd": "/tmp/example-project",
+    "session_id": "ddec7aa0-1340-4e17-8ff5-162240e3451c"
+  },
+  "userPromptSubmit": {
+    "hook_event_name": "userPromptSubmit",
+    "cwd": "/tmp/example-project",
+    "session_id": "ddec7aa0-1340-4e17-8ff5-162240e3451c",
+    "prompt": "We are checking that this project's hooks fire for a delegated helper. Step 1: run the shell command: echo main-shell KIRO_SESSION_ID=$KIRO_SESSION_ID TERM_PROGRAM=$TERM_PROGRAM . Step 2: call the subagent tool once, with mode blocking, task \"hook check\", and one stage named check1 whose role is probe-helper and whose prompt_template is: Run the shell command: echo helper-shell KIRO_SESSION_ID=$KIRO_SESSION_ID . Then create the file hello.txt containing the word hi. Then reply DONE. Step 3: reply DONE."
+  },
+  "preToolUse_shell": {
+    "hook_event_name": "preToolUse",
+    "cwd": "/tmp/example-project",
+    "session_id": "ddec7aa0-1340-4e17-8ff5-162240e3451c",
+    "tool_name": "shell",
+    "tool_tags": [
+      "shell",
+      "@builtin"
+    ],
+    "tool_input": {
+      "__tool_use_purpose": "Step 1: print session/env vars from the main shell for hook wiring check.",
+      "command": "echo main-shell KIRO_SESSION_ID=$KIRO_SESSION_ID TERM_PROGRAM=$TERM_PROGRAM"
+    }
+  },
+  "postToolUse_shell": {
+    "hook_event_name": "postToolUse",
+    "cwd": "/tmp/example-project",
+    "session_id": "ddec7aa0-1340-4e17-8ff5-162240e3451c",
+    "tool_name": "shell",
+    "tool_tags": [
+      "shell",
+      "@builtin"
+    ],
+    "tool_input": {
+      "__tool_use_purpose": "Step 1: print session/env vars from the main shell for hook wiring check.",
+      "command": "echo main-shell KIRO_SESSION_ID=$KIRO_SESSION_ID TERM_PROGRAM=$TERM_PROGRAM"
+    },
+    "tool_response": {
+      "items": [
+        {
+          "Json": {
+            "exit_status": "exit status: 0",
+            "stdout": "main-shell KIRO_SESSION_ID=ddec7aa0-1340-4e17-8ff5-162240e3451c TERM_PROGRAM=\n",
+            "stderr": ""
+          }
+        }
+      ]
+    }
+  },
+  "preToolUse_subagent": {
+    "hook_event_name": "preToolUse",
+    "cwd": "/tmp/example-project",
+    "session_id": "ddec7aa0-1340-4e17-8ff5-162240e3451c",
+    "tool_name": "subagent",
+    "tool_tags": [
+      "subagent",
+      "@builtin"
+    ],
+    "tool_input": {
+      "__tool_use_purpose": "Step 2: delegate to probe-helper to verify hooks fire for a delegated helper.",
+      "task": "hook check",
+      "mode": "blocking",
+      "stages": [
+        {
+          "name": "check1",
+          "role": "probe-helper",
+          "prompt_template": "Run the shell command: echo helper-shell KIRO_SESSION_ID=$KIRO_SESSION_ID . Then create the file hello.txt containing the word hi. Then reply DONE."
+        }
+      ]
+    }
+  },
+  "postToolUse_subagent": {
+    "hook_event_name": "postToolUse",
+    "cwd": "/tmp/example-project",
+    "session_id": "ddec7aa0-1340-4e17-8ff5-162240e3451c",
+    "tool_name": "subagent",
+    "tool_tags": [
+      "subagent",
+      "@builtin"
+    ],
+    "tool_input": {
+      "__tool_use_purpose": "Step 2: delegate to probe-helper to verify hooks fire for a delegated helper.",
+      "task": "hook check",
+      "mode": "blocking",
+      "stages": [
+        {
+          "name": "check1",
+          "role": "probe-helper",
+          "prompt_template": "Run the shell command: echo helper-shell KIRO_SESSION_ID=$KIRO_SESSION_ID . Then create the file hello.txt containing the word hi. Then reply DONE."
+        }
+      ]
+    },
+    "tool_response": {
+      "items": [
+        {
+          "Text": "Pipeline completed: 1 stages finished.\n\n## check1\n\nAll three steps completed successfully:\n1. Ran `echo helper-shell KIRO_SESSION_ID=$KIRO_SESSION_ID` — output: `helper-shell KIRO_SESSION_ID=ddec7aa0-1340-4e17-8ff5-162240e3451c` (exit status 0).\n2. Created /tmp/example-project/hello.txt containing the word \"hi\".\n3. Replied DONE."
+        }
+      ]
+    }
+  },
+  "stop": {
+    "hook_event_name": "stop",
+    "cwd": "/tmp/example-project",
+    "session_id": "ddec7aa0-1340-4e17-8ff5-162240e3451c",
+    "assistant_response": "DONE"
+  },
+  "helper_agentSpawn": {
+    "hook_event_name": "agentSpawn",
+    "cwd": "/tmp/example-project",
+    "session_id": "3f8820ee-d52d-4a17-82c7-bd8145c53b96"
+  },
+  "helper_userPromptSubmit": {
+    "hook_event_name": "userPromptSubmit",
+    "cwd": "/tmp/example-project",
+    "session_id": "3f8820ee-d52d-4a17-82c7-bd8145c53b96",
+    "prompt": "Run the shell command: echo helper-shell KIRO_SESSION_ID=$KIRO_SESSION_ID . Then create the file hello.txt containing the word hi. Then reply DONE."
+  },
+  "helper_preToolUse_write": {
+    "hook_event_name": "preToolUse",
+    "cwd": "/tmp/example-project",
+    "session_id": "3f8820ee-d52d-4a17-82c7-bd8145c53b96",
+    "tool_name": "write",
+    "tool_tags": [
+      "write",
+      "@builtin"
+    ],
+    "tool_input": {
+      "__tool_use_purpose": "Create hello.txt with the word hi.",
+      "command": "create",
+      "path": "/tmp/example-project/hello.txt",
+      "content": "hi"
+    }
+  },
+  "helper_postToolUse_write": {
+    "hook_event_name": "postToolUse",
+    "cwd": "/tmp/example-project",
+    "session_id": "3f8820ee-d52d-4a17-82c7-bd8145c53b96",
+    "tool_name": "write",
+    "tool_tags": [
+      "write",
+      "@builtin"
+    ],
+    "tool_input": {
+      "__tool_use_purpose": "Create hello.txt with the word hi.",
+      "command": "create",
+      "path": "/tmp/example-project/hello.txt",
+      "content": "hi"
+    },
+    "tool_response": {
+      "items": [
+        {
+          "Text": "Successfully created /tmp/example-project/hello.txt (1 lines)."
+        }
+      ]
+    }
+  },
+  "helper_preToolUse_summary": {
+    "hook_event_name": "preToolUse",
+    "cwd": "/tmp/example-project",
+    "session_id": "3f8820ee-d52d-4a17-82c7-bd8145c53b96",
+    "tool_name": "summary",
+    "tool_tags": [
+      "@builtin"
+    ],
+    "tool_input": {
+      "__tool_use_purpose": "Report task completion back to the main agent.",
+      "taskDescription": "Run the shell command `echo helper-shell KIRO_SESSION_ID=$KIRO_SESSION_ID`, then create the file hello.txt containing the word \"hi\", then reply DONE.",
+      "taskResult": "All three steps completed successfully:\n1. Ran `echo helper-shell KIRO_SESSION_ID=$KIRO_SESSION_ID` — output: `helper-shell KIRO_SESSION_ID=ddec7aa0-1340-4e17-8ff5-162240e3451c` (exit status 0).\n2. Created /tmp/example-project/hello.txt containing the word \"hi\".\n3. Replied DONE.",
+      "contextSummary": "Helper probe-helper (check1) executed in a hook wiring test. The shell command resolved KIRO_SESSION_ID=ddec7aa0-1340-4e17-8ff5-162240e3451c. File hello.txt was written at the project root."
+    }
+  },
+  "helper_postToolUse_summary": {
+    "hook_event_name": "postToolUse",
+    "cwd": "/tmp/example-project",
+    "session_id": "3f8820ee-d52d-4a17-82c7-bd8145c53b96",
+    "tool_name": "summary",
+    "tool_tags": [
+      "@builtin"
+    ],
+    "tool_input": {
+      "__tool_use_purpose": "Report task completion back to the main agent.",
+      "taskDescription": "Run the shell command `echo helper-shell KIRO_SESSION_ID=$KIRO_SESSION_ID`, then create the file hello.txt containing the word \"hi\", then reply DONE.",
+      "taskResult": "All three steps completed successfully:\n1. Ran `echo helper-shell KIRO_SESSION_ID=$KIRO_SESSION_ID` — output: `helper-shell KIRO_SESSION_ID=ddec7aa0-1340-4e17-8ff5-162240e3451c` (exit status 0).\n2. Created /tmp/example-project/hello.txt containing the word \"hi\".\n3. Replied DONE.",
+      "contextSummary": "Helper probe-helper (check1) executed in a hook wiring test. The shell command resolved KIRO_SESSION_ID=ddec7aa0-1340-4e17-8ff5-162240e3451c. File hello.txt was written at the project root."
+    },
+    "tool_response": {
+      "items": [
+        {
+          "Text": ""
+        }
+      ]
+    }
+  },
+  "helper_stop": {
+    "hook_event_name": "stop",
+    "cwd": "/tmp/example-project",
+    "session_id": "3f8820ee-d52d-4a17-82c7-bd8145c53b96",
+    "assistant_response": "DONE — ran the echo command (KIRO_SESSION_ID=ddec7aa0-1340-4e17-8ff5-162240e3451c), created hello.txt with \"hi\", and reported back via the summary tool."
+  }
+}

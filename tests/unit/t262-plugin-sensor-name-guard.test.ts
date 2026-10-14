@@ -4,11 +4,10 @@
 // (aidlc-graph.ts loadSensors / SENSOR_FILE_REGEX) does a FLAT scan of
 // <harness>/sensors/ and indexes ONLY basenames matching `aidlc-<id>.md`;
 // anything else is silently skipped. The compose hook copies a plugin's
-// sensors/ tree with no-clobber, and - before this guard - shipped no
-// precheck there (unlike stages/scopes/agents). So a plugin manifest under
-// any OTHER name, or one nested in a subdirectory the flat scan never reads,
-// composed successfully (the file landed) but was never picked up by graph
-// compile or sensor dispatch, with no signal to the author.
+// sensors/ tree with no-clobber; without a precheck there, a plugin manifest
+// under any OTHER name, or one nested in a subdirectory the flat scan never
+// reads, composes successfully (the file lands) but is never picked up by
+// graph compile or sensor dispatch, with no signal to the author.
 //
 // This test spawns the REAL authored compose hook against a fresh copy of the
 // shipped Claude harness, composing a synthetic plugin that ships three sensor
@@ -47,7 +46,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
 const COMPOSE_HOOK = join(REPO_ROOT, "scripts", "plugin-hooks-template", "compose.ts");
 const SENSOR_TOOL = join(CLAUDE_DIST, "tools", "aidlc-sensor.ts");
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const TIMEOUT_MS = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
 
 // A well-named manifest at the top of sensors/ (stem after `aidlc-` == id).
@@ -154,8 +153,6 @@ function composePlugin(files: Record<string, string>): ComposeOutcome {
   return { status: r.status ?? -1, drops, proj };
 }
 
-/** Run the shipped sensor loader's `list` against a composed project's sensors
- *  dir and return the discovered id column. */
 function discoveredSensorIds(proj: string): string[] {
   const r = spawnSync(BUN, [SENSOR_TOOL, "list"], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -214,7 +211,6 @@ describe("t262 plugin sensor-manifest name guard", () => {
   test("the well-named manifest lands and is discovered by the real sensor loader", () => {
     const landed = join(outcome.proj, ".claude", "sensors", "aidlc-t262-good.md");
     expect(existsSync(landed)).toBe(true);
-    // {{HARNESS_DIR}} was substituted on copy (the composed manifest is real).
     expect(readFileSync(landed, "utf-8")).toContain("bun .claude/tools/aidlc-sensor-t262-good.ts");
     const ids = discoveredSensorIds(outcome.proj);
     expect(ids).toContain("t262-good");

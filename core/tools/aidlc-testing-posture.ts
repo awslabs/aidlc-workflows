@@ -47,6 +47,7 @@ import {
   clearEngineAskMark,
   clearPlanApprovalReceipt,
   readActiveDirectiveMarker,
+  authorizedVerificationCommand,
   readIssuedDirectiveMarker,
   readAuditShardEvents,
   readBaselineSourceSnapshot,
@@ -148,7 +149,7 @@ import {
   TESTING_POSTURE_SUBCOMMANDS,
 } from "./aidlc-lib.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
-import { aidlcToolInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, entrySkillInvocation, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import { APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer, isOneOfChoices, pickerOffersChoices } from "./aidlc-reply-reader.ts";
 
 export type TestingMethodology = "tdd" | "bdd" | "atdd" | "test-after" | "custom";
@@ -1581,6 +1582,26 @@ export const WORKER_BRIEF_SECTIONS: ReadonlyArray<ReadonlyArray<string>> = [
   ["## Approved unit-test instructions", "## Current unit-test instructions"],
 ];
 
+// A Unit of a parallel batch runs the tests the person approved through AI-DLC's
+// own check rather than as one more command for the person to allow; from the
+// main folder, where the tool path and the project are the batch's.
+function swarmUnitTestsLine(projectDir: string, unit: string | null): string {
+  if (!unit) return "";
+  let state: string;
+  try {
+    state = readFileSync(stateFilePath(projectDir), "utf-8");
+  } catch {
+    return "";
+  }
+  const marker = readActiveDirectiveMarker(projectDir, state);
+  const approved = authorizedVerificationCommand(projectDir, state);
+  if (marker?.kind !== "invoke-swarm" || !marker.units?.includes(unit) || !approved) return "";
+  return `\nTo run the tests the person approved (\`${approved.label}\`), run \`${swarmUnitTestCommand(unit)}\` ` +
+    `as a command of its own from the project's main folder \`${resolve(projectDir)}\`, not from your worktree and ` +
+    "with no `cd` before it: it runs them in your worktree and shows their output, and its JSON line says " +
+    "`\"converged\":true` when they pass.\n";
+}
+
 export function workerBrief(
   projectDir: string,
   target: CodeGenerationTarget,
@@ -1631,7 +1652,7 @@ export function workerBrief(
     `${marker}\n` +
     `AIDLC-TESTING-CONTRACT: ${contractHash}\n` +
     (resume ? progressSection(resume) : "") +
-    `\n${files}\n\n${FILE_TOOLS_RULE}\n` +
+    `\n${files}\n\n${FILE_TOOLS_RULE}\n${swarmUnitTestsLine(projectDir, target.unit)}` +
     `\n${planFileSection}\n\nTick each step's box in \`${planFile}\` as you finish the step. ` +
     "That is the only change you make to that file.\n" +
     `\n${continuation ? planHeadings[1] : planHeadings[0]}\n\n` +

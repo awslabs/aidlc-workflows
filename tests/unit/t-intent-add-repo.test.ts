@@ -32,7 +32,6 @@ const GUARD = join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts");
 const SESSION = "01995000-7a11-7000-8000-00000000ad01";
 let proj: string;
 
-// The plan-approval guard's verdict on a shell command the agent is about to run.
 function guardBash(command: string): { code: number; stderr: string } {
   const r = spawnSync(process.execPath, [GUARD], {
     cwd: proj,
@@ -49,7 +48,6 @@ function guardBash(command: string): { code: number; stderr: string } {
   return { code: r.status ?? -1, stderr: r.stderr ?? "" };
 }
 
-// The person speaks in the chat: the human-turn hook records their words.
 function personSays(prompt: string): void {
   const r = spawnSync(process.execPath, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj,

@@ -92,7 +92,6 @@ const state = (proj: string, args: string[]) =>
 const log = (proj: string, args: string[]) => run(LOG, [...args, "--project-dir", proj]);
 const events = (proj: string, name: string) => readAuditShardEvents(proj).filter((row) => row.event === name);
 
-// `report` as the agent runs it in this chat.
 function report(proj: string, args: string[]): { kind: string; message?: string } {
   const r = run(ORCHESTRATE, ["report", ...args, "--project-dir", proj]);
   const line = r.out.split("\n").find((entry) => entry.startsWith("{"));
@@ -911,7 +910,6 @@ describe("an ordinary question keeps the person's own words", () => {
     expect(codex(JSON.stringify({ answers: { db: { answers: ["Postgres"] } } })).status).toBe(0);
     expect(events(proj, "QUESTION_REPLIED").map((row) => [field(row, "Question"), field(row, "Reply")]))
       .toEqual([["Which database?", "SQLite"], ["Which database, really?", "Postgres"]]);
-    // A box that came back empty answered nothing, and records no reply.
     expect(codex(JSON.stringify({ answers: {} })).status).toBe(0);
     expect(events(proj, "QUESTION_REPLIED")).toHaveLength(2);
     expect(events(proj, "QUESTION_UNANSWERED")).toHaveLength(1);
@@ -981,7 +979,7 @@ describe("when the engine cannot tell which chat answered", () => {
     expect(auditBlockField(block, "Person Reply")).toBe("looks good");
   });
   // Two chats have replied since the gate was shown, so which of them answered
-  // is not the engine's to guess: it points at neither, as before.
+  // is not the engine's to guess: it points at neither.
   test("with two chats replying since the gate, the row points at neither", () => {
     says(proj, "yes do that", "01995000-7a11-7000-8000-00000000beef");
     const approved = approves({ AIDLC_SESSION_OVERRIDE: "" });

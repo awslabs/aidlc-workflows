@@ -70,7 +70,7 @@ import {
   fileCleanupReserveMs,
 } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
-import { assertToolResultContains } from "../harness/assert.ts";
+import { assertResultOk, assertToolResultContains } from "../harness/assert.ts";
 import {
   cleanupTestProject,
   setupIntegrationProject,
@@ -120,6 +120,9 @@ describe("t23 /aidlc --help (sdk)", () => {
           }),
           stopAfterToolResult: STOP_AFTER_HELP,
         });
+        // A drive that ended before the help printed says why (an API error,
+        // a crash, a timeout) before the content checks below say what is missing.
+        if (!r.stoppedAfterToolResult) assertResultOk(r);
 
         // The --help path RAN: the help CLI fired via Bash and its verbatim
         // stdout carries each advertised literal. assertToolResultContains

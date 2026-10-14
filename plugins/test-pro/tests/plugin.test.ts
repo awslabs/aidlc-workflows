@@ -1,7 +1,8 @@
 // The test-pro plugin's own content validation.
 //
 // Distinct from the framework compose guard: this checks the plugin's authored
-// content before packaging. Copy this shape for your own plugin.
+// content, and its doctor check in a composed install. Copy this shape for your
+// own plugin.
 //
 // Run: bun test plugins/test-pro/tests/plugin.test.ts
 

@@ -62,7 +62,6 @@ const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const SESSION = "01995000-7a11-7000-8000-00000000c0de";
 const OTHER_SESSION = "01995000-7a11-7000-8000-00000000beef";
 
-// What the person typed at the gate, and what the agent reported instead.
 const TYPED = 'Call the list command "todo ls" instead of "todo list", and keep "done" as it is.';
 const PARAPHRASE = 'Rename the list command from "todo list" to "todo ls"; keep "done" as is.';
 const PUNCTUATED = `Rename "a & b" to 'c|d' (not <e>); keep 100% of $HOME & the rest, OK?! {f} = g \\ h`;
@@ -94,7 +93,6 @@ function run(
 const state = (proj: string, args: string[]) =>
   run(STATE, [...args, "--project-dir", proj], null, { AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" });
 
-// `report` as the agent runs it in this chat.
 function report(proj: string, args: string[], session: string | null = SESSION): { kind: string; message?: string } {
   const r = run(ORCHESTRATE, ["report", ...args, "--project-dir", proj], session);
   const line = r.out.split("\n").find((entry) => entry.startsWith("{"));
@@ -137,7 +135,6 @@ const field = (proj: string, name: string, key: string) => {
 };
 const wordsDir = (proj: string) => join(seededRecordDir(proj), ".aidlc-engine", "gate-words");
 
-// The GATE_REJECTED block as the renderer wrote it, with its timestamp masked.
 function rejectedBlock(proj: string): string[] {
   const found = rows(proj, "GATE_REJECTED");
   expect(found).toHaveLength(1);
@@ -167,10 +164,8 @@ describe("Request Changes records the person's own words", () => {
     expect(field(proj, "GATE_REJECTED", "Conductor Summary")).toBe(PARAPHRASE);
     expect(field(proj, "STAGE_REVISING", "Feedback")).toBe(words);
     expect(field(proj, "STAGE_REVISING", "Conductor Summary")).toBeNull();
-    // The revision is handed exactly what they said.
     expect(directive.message).toStartWith(`Recorded rejected for "${slug}".`);
     expect(directive.message).toContain(`revise from exactly what they said: ${JSON.stringify(words)}`);
-    // Short-lived: answered, the kept words are gone.
     expect(existsSync(wordsDir(proj))).toBe(false);
   });
 
@@ -242,7 +237,6 @@ describe("Request Changes records the person's own words", () => {
     says(proj, "/aidlc --status");
     says(proj, "/aidlc --guard-policy relaxed");
     const refused = rejectWith(proj, slug, ["--reason", PARAPHRASE]);
-    // The agent's next step, with the gate still theirs to answer.
     expect(refused.kind, JSON.stringify(refused)).toBe("print");
     expect(refused.message).toContain(`The question for "${slug}" is still open.`);
     expect(refused.message).toContain("a command to AIDLC, not a reply to this question");
@@ -344,7 +338,8 @@ describe("Request Changes records the person's own words", () => {
   });
 
   // Live on Kiro IDE .107: the person asked a question, then picked Request
-  // Changes, then answered "What should change?". Only the answer is feedback.
+  // Changes, then answered "What should change?". The question and the answer
+  // are both feedback.
   const LIVE = [
     "can you show me what changed first?",
     "Request Changes.",
@@ -402,7 +397,6 @@ describe("Request Changes records the person's own words", () => {
       Checkpoint: "construction-checkpoint", Stage: "code-generation", Unit: "alpha",
       Kind: "walking-skeleton", "Verification Id": "v1", Session: SESSION, "User Input": "Approve",
     }, proj);
-    // Then, at the stage gate, the person only picks Request Changes.
     says(proj, "Request Changes");
     rejectWith(proj, slug, ["--reason", PARAPHRASE]);
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(PARAPHRASE);
@@ -488,7 +482,6 @@ describe("the words are ordered against the gate row, not by time", () => {
     says(proj, "Before you finish: keep it short.");
     presentWithoutClearing();
     expect(gateWordsSincePresentation(proj, SESSION, { stage: slug })).toBeNull();
-    // Their reply to the question is the pick alone; the earlier message is not its words.
     says(proj, "Request Changes");
     rejectWith(proj, slug, ["--reason", PARAPHRASE]);
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(PARAPHRASE);
@@ -522,7 +515,6 @@ describe("the words are ordered against the gate row, not by time", () => {
     expect(personsGateFeedback(proj, null, { stage: slug })).toBeNull();
     expect(personsGateFeedback(proj, SESSION, { stage: "some-other-stage" })).toBeNull();
     expect(personsGateFeedback(proj, SESSION, { stage: slug, unit: "alpha" })).toBeNull();
-    // A corrupt file reads as no words.
     const file = join(wordsDir(proj), readdirSync(wordsDir(proj))[0]);
     writeFileSync(file, "{not json", "utf-8");
     expect(personsGateFeedback(proj, SESSION, { stage: slug })).toBeNull();

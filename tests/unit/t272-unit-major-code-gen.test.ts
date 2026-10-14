@@ -1,11 +1,9 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, function:writeActiveDirectiveMarker
 //
-// CLI-contract test for code-generation JOINING the unit-major walk (the
-// deferred follow-up of the original unit-major increment: "widening the
-// walk's block filter"). mechanism = cli.
+// CLI-contract test for code-generation in the unit-major walk. mechanism = cli.
 //
 // THE FEATURE: under `Construction Iteration: unit-major`, the walk's inner
-// block is now EVERY in-scope per-unit Construction stage in graph order -
+// block is EVERY in-scope per-unit Construction stage in graph order -
 // the four inline design stages plus code-generation (mode: subagent). For
 // each unit in Bolt DAG topo order, the engine emits design 3.1-3.4 then
 // code-generation for THAT unit before the next unit begins, so the first
@@ -19,7 +17,7 @@
 //
 // t209 pins the walk ordering + knob write path; t210 pins knob-off
 // byte-equivalence and the swarm suppression + its negative control. THIS
-// file pins the seams the widened block newly touches:
+// file pins the seams the block touches:
 //   1. one late approval covering all five stages, in order, through to
 //      Build and Test,
 //   2. a lone Code Generation gate presenting on the last unit,
@@ -133,7 +131,7 @@ const REVIEW_ARTIFACTS: Record<string, string> = {
   "infrastructure-design": "cicd-pipeline",
   "code-generation": "code-generation-plan",
 };
-// The widened walk block, graph order: design stages then code-generation.
+// The walk block, graph order: design stages then code-generation.
 const BLOCK = [
   "functional-design",
   "nfr-requirements",
@@ -403,7 +401,6 @@ describe("t272 code-generation joins the unit-major walk", () => {
     const done = runReport(proj, ["--stage", "functional-design", "--result", "approved"]);
     expect(done.kind).toBe("done");
 
-    // The workflow has left the per-unit block entirely.
     const next = runNext(proj);
     expect(next.stage).toBe("build-and-test");
   });
@@ -472,7 +469,7 @@ describe("t272 code-generation joins the unit-major walk", () => {
     expect(d.message).toContain("work items are not complete");
   });
 
-  // 4: revision re-entry through the widened block. From a fully-covered
+  // 4: revision re-entry through the block. From a fully-covered
   // grid, deleting one code-generation/alpha artifact re-enters the walk at
   // exactly (code-generation, alpha), gate suppressed - the same re-entry
   // t209 case 6 pins for a design stage.

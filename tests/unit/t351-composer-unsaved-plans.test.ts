@@ -87,7 +87,6 @@ function composedGrid(): Record<string, "EXECUTE" | "SKIP"> {
   return grid;
 }
 
-/** A fresh installed project (its own .claude tree) with no intent yet. */
 function installedProject(): string {
   const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
   tempDirs.push(proj);
@@ -257,7 +256,6 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
       });
       // No stock scope defaults to relaxed, so creation raises an off base to it.
       expect(scopeGuardPolicyDefault(relaxed)).toBe("off");
-      // The base's grid plus its changes is exactly the plan.
       const base = customPlanBase(grid, "relaxed", nearest, "standard");
       if ("changes" in base) expect(planWithChanges(base.scope, base.changes).stages).toEqual(grid);
       // Creation can always apply strict, so a strict plan takes the nearest of the rest.
@@ -378,14 +376,25 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
     expect(validated.status, validated.stdout + validated.stderr).toBe(0);
     const echoed = JSON.parse(validated.stdout) as { base_scope: string; plan_changes: { skip: string[]; add: string[] } };
     expect(withEnvAndFreshCaches(POLICY_ENV, () => scopeGuardPolicyDefault(echoed.base_scope))).toBe("off");
-    // What the conductor runs on approval. The presence bypass is off, so a lowering would be refused.
-    const args = ["intent-create", "--scope", echoed.base_scope, "--guard-policy", "relaxed", "--arguments", "x", "--label", "relaxed-plan"];
+    // What the conductor runs on approval, naming the person's approval. The
+    // presence bypass is off, so a lowering would be refused.
+    const session = "01995000-7a11-7000-8000-000000000351";
+    const env = {
+      ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0",
+      AIDLC_SESSION_OVERRIDE: session,
+    };
+    const approved = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      cwd: proj, encoding: "utf-8", env,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, cwd: proj, prompt: "Approve" }),
+    });
+    expect(approved.status, approved.stderr).toBe(0);
+    const args = [
+      "intent-create", "--scope", echoed.base_scope, "--guard-policy", "relaxed", "--arguments", "x", "--label", "relaxed-plan",
+      "--person-words", "Approve",
+    ];
     if (echoed.plan_changes.skip.length > 0) args.push("--skip", echoed.plan_changes.skip.join(","));
     if (echoed.plan_changes.add.length > 0) args.push("--add", echoed.plan_changes.add.join(","));
-    const created = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], {
-      encoding: "utf-8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0" },
-    });
+    const created = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], { encoding: "utf-8", env });
     expect(created.status, created.stdout + created.stderr).toBe(0);
     const intents = join(proj, "aidlc", "spaces", "default", "intents");
     const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
@@ -414,10 +423,8 @@ describe("t351 (3) creating a composed plan writes it to the work's state, not a
     expect(audit).toContain("**Stages skipped**: deployment-pipeline, deployment-execution");
     expect(audit).toContain(`**Stages added**: ${ADD}`);
     expect(audit).toContain("**Reason**: this plan excludes operation");
-    // Nothing piles up in the scope library.
     expect(scopeFiles(proj)).toEqual(before);
     expect(savedRecords(proj)).toEqual([]);
-    // Status names the plan.
     const status = runTool(proj, "aidlc-utility.ts", ["status"]);
     expect(status.out).toContain("Plan:           date-parser-fix (this piece of work only)");
     expect(status.out).not.toContain("based on bugfix");
@@ -484,9 +491,9 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     for (const flag of ["--depth", "--test-strategy"]) {
       for (const value of hostile) {
         const d = nextDirective(proj, ["--scope", "bugfix", flag, value, "--", "x"]);
-        // A value this engine's table does not hold is a reading step now
-        // (t-three-ways-to-read-a-line). What this case exists for is
-        // unchanged: their value is never a command, and it never runs.
+        // A value this engine's table does not hold is a reading step
+        // (t-three-ways-to-read-a-line). What this case exists for: their value
+        // is never a command, and it never runs.
         expect(d.kind, `${flag} ${value}`).toBe("print");
         expect(d.message, `${flag} ${value}`).toContain("minimal|standard|comprehensive");
         expect(d.message, `${flag} ${value}`).toContain(JSON.stringify(value));
@@ -501,7 +508,6 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
       expect(d.kind).toBe("error");
       expect(d.message).toBe(`${flag} requires stage slugs; "x;touch /tmp/t351-pwn" is not a stage.`);
     }
-    // A valid level still passes, lowercased.
     expect(nextDirective(proj, ["--scope", "bugfix", "--depth", "Standard", "--", "x"]).message).toContain("--depth standard");
     expect(existsSync("/tmp/t351-pwn")).toBe(false);
   });
@@ -514,7 +520,7 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(d.kind).toBe("print");
     expect(d.message).not.toContain("next compose");
     const command = /`([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? "";
-    expect(command.endsWith("engine recompose --skip team-formation"), d.message).toBe(true);
+    expect(command.endsWith("engine recompose --skip team-formation --reason 'the person asked to skip it'"), d.message).toBe(true);
     expect(d.message).toContain('"Skipped Team Formation. You can undo that any time."');
     expect(d.message).toContain("If they later ask to undo it, run `");
     expect(d.message.endsWith("recompose --add team-formation`."), d.message).toBe(true);
@@ -522,7 +528,9 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(d.message).toContain("do not show its output");
     expect(d.message).not.toContain("print its output verbatim");
     const words = command.split(" ");
-    const applied = runTool(proj, "aidlc.ts", words.slice(words.indexOf("engine")));
+    const applied = runTool(proj, "aidlc.ts", [
+      ...words.slice(words.indexOf("engine"), words.indexOf("--reason")), "--reason", "the person asked to skip it",
+    ]);
     expect(applied.status, applied.out).toBe(0);
     expect(applied.out).toContain("1 skipped (team-formation)");
     expect(stateOf(proj)).toContain("- [ ] team-formation \u2014 SKIP");
@@ -570,20 +578,25 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(d.kind).toBe("print");
     const commands = [...d.message.matchAll(/`([^`]*\.ts [^`]*)`/g)].map((m) => m[1]);
     const recompose = commands.find((c) => c.includes("engine recompose")) ?? "";
-    expect(recompose.endsWith("engine recompose --skip deployment-execution"), d.message).toBe(true);
+    expect(recompose.endsWith("engine recompose --skip deployment-execution --reason 'the person asked to skip it'"), d.message).toBe(true);
     const report = commands.find((c) => c.includes("report --stage deployment-pipeline --result skipped")) ?? "";
     expect(report, d.message).toContain("--reason 'the person asked to skip it'");
     expect(d.message).toContain('"Skipped Deployment Pipeline and Deployment Execution.');
     // The way back is a plain fact naming the command, never "type this"
     // (tests/unit/t-offers-are-plain-questions.test.ts).
-    expect(d.message).toContain("Either one can still be run on its own with `/aidlc --stage <stage> --single`.");
+    expect(d.message).toContain(
+      "Either one can still be run on its own with `/aidlc --stage deployment-pipeline --single` or " +
+        "`/aidlc --stage deployment-execution --single`.",
+    );
+    expect(d.message).not.toContain("<stage>");
     expect(d.message).not.toMatch(/[Tt]ype `\/aidlc/);
     expect(d.message).toMatch(/re-run `next`/);
     expect(d.message).not.toContain("Then stop.");
     expect(d.message).not.toContain("jump");
-    // The two commands it names do the whole thing on this state.
     const words = recompose.split(" ");
-    const applied = runTool(proj, "aidlc.ts", words.slice(words.indexOf("engine")));
+    const applied = runTool(proj, "aidlc.ts", [
+      ...words.slice(words.indexOf("engine"), words.indexOf("--reason")), "--reason", "the person asked to skip it",
+    ]);
     expect(applied.status, applied.out).toBe(0);
     const skipped = runTool(proj, "aidlc-orchestrate.ts", [
       "report", "--stage", "deployment-pipeline", "--result", "skipped", "--reason", "the person asked to skip it",
@@ -614,7 +627,7 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
       .replace("- **Next Stage**: environment-provisioning", "- **Next Stage**: ci-pipeline"));
     const d = nextDirective(proj, ["--skip", "deployment-pipeline,deployment-execution"]);
     expect(d.kind).toBe("print");
-    expect(d.message).toContain("engine recompose --skip deployment-pipeline,deployment-execution`");
+    expect(d.message).toContain("engine recompose --skip deployment-pipeline,deployment-execution --reason 'the person asked to skip it'`");
     expect(d.message).toContain('"Skipped Deployment Pipeline and Deployment Execution. You can undo that any time."');
     expect(d.message).toContain("the open Build and Test question");
     expect(d.message).toContain("report --stage build-and-test --result approved --user-input Approve");
@@ -654,7 +667,6 @@ describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
     expect(saved.out).toContain("Saved as scope quick-fix (");
     expect(saved.out).toContain("sensors on, learnings on, summary confirmation off, reviews none).");
     expect(saved.out).toContain('Next time: /aidlc --scope quick-fix "<what to build>"');
-    // The running work is left as it is.
     expect(stateOf(proj)).toBe(stateBefore);
     const record = readFileSync(join(proj, "aidlc", "scopes", "quick-fix.md"), "utf-8");
     for (const line of ["name: quick-fix", "depth: Standard", "guard_policy: off", "learnings: on", "summary_confirmation: off", "review_cap: none", "  - parser-fix"]) {
@@ -673,7 +685,6 @@ describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
     expect(suffixOf(stateBefore, "reverse-engineering")).toBe("SKIP");
     expect(stages["reverse-engineering"]).toBe("EXECUTE");
     expect(auditOf(proj)).toContain("**Saved as**: quick-fix");
-    // A new piece of work on the saved scope runs the saved plan.
     const again = runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "quick-fix", "--arguments=another fix", "--label", "another fix"]);
     expect(again.status, again.out).toBe(0);
     expect(suffixOf(stateOf(proj), ADD)).toBe("EXECUTE");
@@ -702,9 +713,9 @@ describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
     expect(savedRecords(proj)).toEqual(["quick-fix.md"]);
   });
 
-  // Nothing picks a plan by a hint any more: the plan proposal lists every
-  // plan's hints for the agent to weigh. So a hint another plan has is saved
-  // as asked, and the person is told once that it now names both.
+  // Nothing picks a plan by a hint: the plan proposal lists every plan's hints
+  // for the agent to weigh. So a hint another plan has is saved as asked, and
+  // the person is told once that it names both.
   test("a hint another plan already has is saved, with one line saying both plans have it", () => {
     const proj = installedProject();
     expect(createComposed(proj).status).toBe(0);
@@ -1015,7 +1026,6 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
     expect(dispatch).toContain("a plan_approval in creationSettings becomes --plan-approval like the others");
     expect(dispatch).toContain("so pass no --plan-approval flag at all");
     expect(dispatch).not.toContain("plan approval keeps the scope's value");
-    // The validate-grid references name all five settings.
     for (const surface of ["docs/guide/12-cli-commands.md", "docs/reference/03-orchestrator.md"]) {
       expect(read(surface), surface).not.toMatch(/four (scope settings|`scopeSettings`)/);
       expect(read(surface), surface).toContain("`plan_approval`");
@@ -1029,7 +1039,8 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
       expect(text, surface).toContain("`custom_start.scope_settings`");
       // An edit that turns a matched plan custom keeps what the gate showed.
       expect(text, surface).toContain("A matched proposal that the human's edit turns custom keeps the Guard Policy and settings the gate showed");
-      // The retired rules: settings from the nearest stock scope, and a Guard Policy chosen from risk.
+      // Rules no surface may state: settings from the nearest stock scope, and a
+      // Guard Policy chosen from risk.
       expect(text, surface).not.toContain("reads the same file as its settings baseline");
       expect(text, surface).not.toContain("For a custom grid, start from the validator's nearest stock scope.");
       expect(text, surface).not.toMatch(/relaxed for a spike|points to relaxed|propose the value from the evidence/);

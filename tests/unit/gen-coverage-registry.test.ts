@@ -70,7 +70,6 @@ import {
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-// This test lives in tests/unit/; the generator tool + repo root are one level up.
 const __FILE_DIR = dirname(fileURLToPath(import.meta.url));
 const TESTS_DIR = join(__FILE_DIR, "..");
 const REPO_ROOT = join(__FILE_DIR, "..", "..");
@@ -87,18 +86,18 @@ describe("enumeration is non-empty for every unit class (anti-rot guard a)", () 
   });
 
   test("each class enumerates a plausible MINIMUM count", () => {
-    // Hard floors transcribed from fresh source reads (2026-05-31), independent
-    // of the enumerator. A drop below any floor means an enumerator stopped
+    // Hard floors transcribed from fresh source reads, independent of the
+    // enumerator. A drop below any floor means an enumerator stopped
     // seeing source — exactly the silent-rot failure this guards.
     const counts = Object.fromEntries(
       UNIT_CLASSES.map((c) => [c, rows.filter((r) => r.unitClass === c).length]),
     ) as Record<string, number>;
-    expect(counts.function).toBeGreaterThanOrEqual(80); // 89 today (71 lib + 18 graph)
-    expect(counts.audit).toBeGreaterThanOrEqual(55); // 61 today
-    expect(counts.scope).toBeGreaterThanOrEqual(9); // 9 scope keys today
-    expect(counts.stage).toBeGreaterThanOrEqual(30); // 32 stage .md today
-    expect(counts.hook).toBeGreaterThanOrEqual(7); // 9 hooks today
-    expect(counts.subcommand).toBeGreaterThanOrEqual(60); // 74 today
+    expect(counts.function).toBeGreaterThanOrEqual(80);
+    expect(counts.audit).toBeGreaterThanOrEqual(55);
+    expect(counts.scope).toBeGreaterThanOrEqual(9);
+    expect(counts.stage).toBeGreaterThanOrEqual(30);
+    expect(counts.hook).toBeGreaterThanOrEqual(7);
+    expect(counts.subcommand).toBeGreaterThanOrEqual(60);
     expect(counts["render-surface"]).toBe(7); // statusline render branches (incl. agent display)
   });
 
@@ -146,16 +145,12 @@ describe("guarantee-principle gate (mechanism >= minMechanism)", () => {
   });
 
   test("a real subcommand unit (minMechanism cli) is NOT covered by a none-tier claim", () => {
-    // Pick the first subcommand unit. Its minMechanism is `cli`. No shipped
-    // test today claims it at cli mechanism, so it must be UNCOVERED — proving
-    // a hypothetical .none. claim would be gated out, never counted as covered.
     const { rows } = buildRegistry();
     const sub = rows.find(
       (r) => r.unitClass === "subcommand" && r.status !== "covered",
     );
     expect(sub).toBeDefined();
     expect(sub!.minMechanism).toBe("cli");
-    // Status is UNCOVERED (no adequate claim), never `covered`.
     expect(sub!.status).not.toBe("covered");
   });
 
@@ -165,7 +160,6 @@ describe("guarantee-principle gate (mechanism >= minMechanism)", () => {
     // demote the claim: status UNDER-MECHANISM (claims present but all too weak).
     const tmp = mkdtempSync(join(tmpdir(), "cov-undermech-"));
     try {
-      // Discover a real subcommand id to name in the claim.
       const realSub = enumerateAllUnits().find(
         (u) => u.unitClass === "subcommand",
       )!;
@@ -199,7 +193,6 @@ describe("guarantee-principle gate (mechanism >= minMechanism)", () => {
       // The claim WAS recorded (transparency) ...
       expect(row.coveredBy.length).toBeGreaterThanOrEqual(1);
       expect(row.coveredBy[0].mechanism).toBe("none");
-      // ... but the gate demoted it: too weak for a cli-min unit.
       expect(row.status).toBe("UNDER-MECHANISM");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
@@ -330,15 +323,12 @@ describe("--check builds the registry fresh (nothing committed)", () => {
       // The baseline FIRST (clean), so it omits the new event.
       expect(genInto(t).status).toBe(0);
 
-      // Now inject a fake new audit event into the TEMP source's
-      // VALID_EVENT_TYPES Set. The set's first member is "STAGE_STARTED"; we
-      // add a sibling after it.
       const audit = readFileSync(t.auditPath, "utf-8");
       const injected = audit.replace(
         '"STAGE_STARTED",',
         '"STAGE_STARTED",\n  "FAKE_INJECTED_EVENT",',
       );
-      expect(injected).not.toBe(audit); // the anchor really matched
+      expect(injected).not.toBe(audit);
       writeFileSync(t.auditPath, injected);
 
       expect(checkAgainst(t).status).toBe(0);
@@ -355,8 +345,6 @@ describe("--check builds the registry fresh (nothing committed)", () => {
     try {
       expect(genInto(t).status).toBe(0);
 
-      // Add a fake case to aidlc-audit.ts's entry switch (switch(subcommand)).
-      // The first case is `case "append": {`; inject a sibling before it.
       const audit = readFileSync(t.auditPath, "utf-8");
       const injected = audit.replace(
         'case "append": {',
@@ -679,11 +667,11 @@ describe("the real tree passes --check", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 8. mechanismsOf is BODY-DERIVED (milestone 3, the Wave-2 keystone).
+// 8. mechanismsOf is BODY-DERIVED.
 //
-// Until milestone 3, mechanism came from the filename SEGMENT (t17.cli -> cli). milestone 3
-// makes it the SET read from the drivers the body actually CALLS (refactor doc
-// §2): driveAidlc( -> sdk, a tui-drive.ts spawn -> tui, and a shipped-binary
+// Mechanism is the SET read from the drivers the body actually CALLS, with the
+// filename SEGMENT (t17.cli -> cli) only the fallback when the body calls none:
+// driveAidlc( -> sdk, a tui-drive.ts spawn -> tui, and a shipped-binary
 // subprocess (claude -p, a bun/node spawn of an aidlc-*.ts tool, or a bash
 // spawn of run-tests.sh) -> cli. These tests pin three properties:
 //
@@ -697,7 +685,7 @@ describe("the real tree passes --check", () => {
 //       predicate change drops any claim below its unit's bar), and by (c). A list that every
 //       spawner-adding PR appended to only made those PRs collide.
 //   (c) HONESTY: derived == recorded. For every coverage claim, the
-//       mechanism the registry stored equals mechanismsOf(body) recomputed live,
+//       mechanism the registry stored is in mechanismsOf(body) recomputed live,
 //       so the registry can never record a mechanism the body does not drive.
 // ---------------------------------------------------------------------------
 describe("mechanismsOf is body-derived (milestone 3)", () => {
@@ -791,7 +779,6 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
       "});",
     ].join("\n");
     expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
-    // Named only in a comment or an import, the helper drives nothing.
     expect(mechanismsOf("t99.none.test.ts", src.replace(`  const r = ${call};`, `  // ${call}`))).toEqual(["none"]);
   });
 
@@ -799,12 +786,10 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // codeView strips comments while respecting string literals — so the "//" in
     // an "https://…" string is NOT treated as a line-comment opener. This fixture
     // bites the string-aware strip SPECIFICALLY: the URL string and the spawn are
-    // on the SAME physical line, with the URL FIRST. The pre-hardening codeView
-    // (indexOf("//") line-strip) truncated that line at `"https:` — erasing the
-    // spawnSync + tool literal that follow it on the same line — so it derived
-    // none. The string-aware strip keeps the whole line, so the spawn registers
-    // cli. (Verified: this source derives cli under HEAD and none under the old
-    // indexOf form, so it distinguishes the two.)
+    // on the SAME physical line, with the URL FIRST. A plain indexOf("//")
+    // line-strip truncates that line at `"https:` - erasing the spawnSync + tool
+    // literal that follow it on the same line - so it derives none. The
+    // string-aware strip keeps the whole line, so the spawn registers cli.
     const src = [
       "// covers: subcommand:aidlc-state:show",
       'import { spawnSync } from "node:child_process";',
@@ -833,10 +818,10 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
   });
 
   test("a suffix-free file with a dotted descriptive slug seeds none (no throw)", () => {
-    // Forward-compat for milestone 6 (suffix drop): once .none/.cli are gone, a test whose
-    // basename carries a DOT in a descriptive slug (not a mechanism segment) must
-    // fall back to none, never crash the generator. mechanismOfTestFile recognises
-    // only real mechanism segments; any other trailing dot-segment seeds none.
+    // A test whose basename carries a DOT in a descriptive slug (not a mechanism
+    // segment) must fall back to none, never crash the generator.
+    // mechanismOfTestFile recognises only real mechanism segments; any other
+    // trailing dot-segment seeds none.
     const src = '// covers: function:foo\ntest("x", () => { expect(1).toBe(1); });';
     expect(mechanismsOf("t200.scope-exclusion.test.ts", src)).toEqual(["none"]);
   });
@@ -888,7 +873,6 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
   // the honest invariant — a recorded mechanism the body does not drive is a lie.)
   test("every recorded coverage mechanism is one the body actually derives", () => {
     const registry = JSON.parse(registryJson(buildRegistry().rows));
-    // Collect (file, mechanism) pairs from every unit's coveredBy[].
     const pairs = new Map<string, Set<string>>(); // file -> recorded mechanisms
     const collect = (node: unknown): void => {
       if (Array.isArray(node)) {
@@ -916,8 +900,6 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
       if (!relFile.endsWith(".test.ts")) continue;
       const abs = join(REPO_ROOT, relFile);
       const base = relFile.split("/").pop() as string;
-      // Compare as plain strings: `recorded` holds JSON mechanism strings, and we
-      // assert each is a MEMBER of the body-derived set (also as strings).
       const derived = new Set<string>(mechanismsOf(base, readFileSync(abs, "utf-8")));
       for (const m of recorded) {
         if (!derived.has(m)) {

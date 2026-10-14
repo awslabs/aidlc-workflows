@@ -382,7 +382,6 @@ describe("t-dotnet-build-outputs", () => {
     expect(skip).not.toContain("Open a file in it to tell which.");
     // A path the scan was asked for, or a registered source path, stays source.
     expect(skip).toContain("A folder the brief names to scan, or one listed in `.aidlc-source-paths.json`, is source whatever sits beside it.");
-    // The record says the folders were left out, not skimmed.
     expect(skip).toContain("List the folders you skip under **Left out** in the scan's coverage, not under **Skimmed only**.");
     const artifacts = prose("knowledge", "aidlc-developer-agent", "re-artifacts.md");
     expect(artifacts).toContain("- **Left out**: [folders not opened because \"What to Skip\" in code-analysis-guide.md skips them");

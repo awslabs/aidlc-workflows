@@ -35,7 +35,6 @@ function carryOnParagraph(rel: string): string {
   return found[0] as string;
 }
 
-// Every step the old notes named, now in the skill's own words.
 const STEPS = [
   '"AI-DLC is carrying on with <stage>." (or "AI-DLC is carrying on.")',
   '"The last AI-DLC step stopped on a problem: ..."',
@@ -47,10 +46,8 @@ const STEPS = [
   "`--single`, `--checkpoint` or `--questions-file`",
   "end your turn without asking it again",
   "If the person asked to stop here, run `{{INVOKE}} engine orchestrate park --person-asked`.",
-  // Rules parts: the receipt the agent holds; a stale one gets the current step.
   "`{{INVOKE}} engine orchestrate continue <receipt>` with the receipt of the last part you hold",
   "a receipt that no longer fits is answered with the current step",
-  // A recorded result that moved on, and stale evidence: one fresh next.
   "after a result you recorded moved the work on",
   "run one fresh `{{INVOKE}} engine orchestrate next` (never an earlier receipt)",
   "Never report an approval the person did not give, and never mark a stage done or approved just to end the turn.",
@@ -86,8 +83,6 @@ describe("t-stop-carries-on-line: the agent's steps for the one-line Stop note",
         );
         expect(paragraph, rel).not.toContain("first say the carrying-on line to them once");
       } else {
-        // One plain sentence in the agent's own reply, only when it carries on
-        // with the work: the line as the note names it, and nothing else.
         expect(paragraph, rel).toContain(
           `${tool} does not show the note to the person, so if you carry on with the work (the rules parts, the stage, or a fresh \`next\`), ` +
             "first say the carrying-on line to them once, word for word and as a sentence of its own",
@@ -184,8 +179,6 @@ describe("t-stop-carries-on-line: the agent's steps for the one-line Stop note",
       const step = REPORT_STEP.exec(carryOnParagraph(rel));
       if (step === null) throw new Error(`${rel}: no report step built from the run-stage`);
       expect(step[1], rel).toBe("{{INVOKE}} engine orchestrate report --stage <directive.stage> --result <outcome>");
-      // Filled from what the agent holds for a team-owned Unit's isolated
-      // step, it is one whole command with only the outcome left to fill in.
       const held = { stage: "code-generation", unit: "alpha", single: true };
       const built = [
         step[1].replace("{{INVOKE}}", "aidlc").replace("<directive.stage>", held.stage).replace(" --result", ` ${step[2].replace("<directive.unit>", held.unit)} --result`),

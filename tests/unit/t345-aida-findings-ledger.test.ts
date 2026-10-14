@@ -857,7 +857,6 @@ describe("t345 AIDA findings ledger", () => {
       const leftGone: LoadedLedger = { ledger: ledgerWith(entry("F1", "P1", "open", [lineAnchor(PATH, "LEFT", "base 10")])), commentId: 900, digest: null, migrated: false };
       expect(apply(review([], { readiness: 5, risk: 1 }, MERGE), leftGone, root).review.ledger?.resolvedIds).toEqual(["F1"]);
 
-      // Once the cited code is gone, the finding resolves and merge stands.
       const gone: LoadedLedger = { ledger: ledgerWith(entry("F1", "P1", "open", [lineAnchor(PATH, "RIGHT", "this line was removed")])), commentId: 900, digest: null, migrated: false };
       const resolved = apply(review([], { readiness: 5, risk: 1 }, MERGE), gone, root);
       expect(resolved.review.decision).toEqual(MERGE);
@@ -1040,7 +1039,6 @@ describe("t345 AIDA findings ledger", () => {
   test("the fetch, merge and publish CLIs carry the live digest for the compare-and-swap", () => {
     const root = mkdtempSync(join(tmpdir(), "aida-ledger-cli-"));
     try {
-      // Run the CLI in a real subprocess with an explicit fixture command.
       // A fixture-only PATH prevents falling through to the host gh.
       const env = { ...process.env, PATH: root };
       const gh = fakeGh(root, null, "write", "");

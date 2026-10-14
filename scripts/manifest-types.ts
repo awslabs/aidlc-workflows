@@ -35,7 +35,7 @@ export type EmitContext = {
   harnessName: string;
   /** Absolute path to the dist tree root for this harness (e.g. <repo>/dist/codex). */
   distRoot: string;
-  /** The harness directory name (".claude" | ".kiro" | ".codex"). */
+  /** The harness directory name (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;
   /** Route-table-derived namespace trusted by native host permission surfaces. */
   trustedRouteNamespace: string;
@@ -345,7 +345,7 @@ export type HarnessManifest = {
    */
   skipRunnerGen?: boolean;
   /**
-   * Optional per-shell emission plugin (codex only today). It always writes
+   * Optional per-shell emission plugin (codex, copilot and opencode today). It always writes
    * into ctx.distRoot; under --check the packager invokes it in two independent
    * temporary roots and compares the complete generated trees.
    */

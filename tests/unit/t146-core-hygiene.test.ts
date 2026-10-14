@@ -3,15 +3,13 @@
 //
 // covers: file:core/aidlc-common/protocols/stage-protocol.md, file:core/aidlc-common/protocols/stage-protocol-reviewer.md
 //
-// WHAT. The dist-unified keystone (MR-1) made core/ harness-neutral: every
-// path that names the harness directory in .md prose is written
-// `{{HARNESS_DIR}}/…` and the packager substitutes `.claude` / `.kiro` /
-// `.codex` per tree. A raw `.claude/<subdir>` (or `.kiro/` / `.codex/`) path
-// literal that slips into a core .md would ship verbatim into EVERY harness's
-// dist — a Claude path leaking into the Kiro and Codex trees. The dist-level
-// generated-projection gates catch a literal that the anchored migration WOULD
-// have tokenized; this test guards the other direction — a NEW core edit that
-// hardcodes a harness path instead of using the token.
+// WHAT. core/ is harness-neutral: every path that names the harness directory in
+// .md prose is written `{{HARNESS_DIR}}/...` and the packager substitutes
+// `.claude` / `.kiro` / `.codex` per tree. A raw `.claude/<subdir>` (or `.kiro/`
+// / `.codex/`) path literal that slips into a core .md would ship verbatim into
+// EVERY harness's dist - a Claude path leaking into the Kiro and Codex trees.
+// This test guards a core edit that hardcodes a harness path instead of using
+// the token.
 //
 // THE CARVE-OUTS (truthful, harness-specific prose that MUST stay literal):
 //   - workspace-detection.md enumerates all three harness dirs by name when it
@@ -23,8 +21,8 @@
 //   - stage-protocol.md's CWD-drift note says "on Claude Code,
 //     $CLAUDE_PROJECT_DIR/.claude/tools/" — a Claude-Code-specific example, true
 //     only for that harness.
-//   - stage-protocol-reviewer.md preserves the original Codex reviewer-binding
-//     clause verbatim, including the literal `.codex/agents/` resolution path.
+//   - stage-protocol-reviewer.md preserves the Codex reviewer-binding clause
+//     verbatim, including the literal `.codex/agents/` resolution path.
 //   - templates/onboarding.md is the harness-neutral root instruction block
 //     shared byte-identically by the five root-sharing harnesses. Only lines
 //     enumerating at least two distinct harness dirs or a labeled, backticked
@@ -40,7 +38,6 @@ import { fileURLToPath } from "node:url";
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CORE = join(REPO_ROOT, "core");
 
-// A hit is carved out iff its (relPath, lineText) is a known truthful literal.
 function isCarvedOut(relPath: string, line: string): boolean {
   // workspace-detection's and reverse-engineering's harness-dir enumerations:
   // the line names .kiro/ and .codex/ alongside .claude/, so it is
@@ -88,9 +85,8 @@ function* walkMd(dir: string): Generator<string> {
   }
 }
 
-// Raw harness-dir path literals: `.claude/`, `.kiro/`, `.codex/` followed by a
-// known core subdir name (the form the token replaces). Bare `.claude/` (e.g.
-// inside a `(.claude/, .kiro/, .codex/)` enumeration) is matched too, then
+// Raw harness-dir path literals: `.claude/`, `.kiro/`, `.codex/`. Bare `.claude/`
+// (e.g. inside a `(.claude/, .kiro/, .codex/)` enumeration) is matched too, then
 // filtered by the carve-out predicate.
 const HARNESS_PATH_RE = /\.(claude|kiro|codex)\//;
 
@@ -121,10 +117,9 @@ describe("t146 core hygiene — no stray harness-dir path literals in core/ pros
       const body = readFileSync(file, "utf-8");
       if (body.includes("{{HARNESS_DIR}}") || body.includes("{{INVOKE}}")) tokenFiles++;
     }
-    // 60 core .md files carried a tokenizable path at migration time; assert a
-    // healthy floor so a botched migration (token stripped) fails loudly. Files
-    // whose only tokenized path was an engine invocation now carry {{INVOKE}}
-    // instead of {{HARNESS_DIR}} - both count.
+    // Assert a healthy floor so a stripped token fails loudly. Files whose only
+    // tokenized path is an engine invocation carry {{INVOKE}} instead of
+    // {{HARNESS_DIR}} - both count.
     expect(tokenFiles).toBeGreaterThan(50);
   });
 });

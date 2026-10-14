@@ -222,7 +222,7 @@ export function changeHooks(change: GuardChange): Partial<ScopeRunOptions> {
       return {
         beforePlanAnswer: (_unit, agent) => once(agent.plans.size >= 2, () => {
           agent.person.say("before I approve the plan, have the reviewer look at Unit 1 again");
-          agent.reviewAgain("code-generation", MATRIX_UNITS[0]);
+          agent.reviewAgain("code-generation", MATRIX_UNITS[0], true);
         }),
       };
     case "doc-edit-agent":

@@ -43,6 +43,7 @@ import {
   type DriveResult,
 } from "../harness/sdk-drive.ts";
 
+import { readBeforeFirstAct } from "../harness/outcomes.ts";
 import { targetsStateFile } from "../harness/state-file-target.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
@@ -610,23 +611,13 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
             `.claude/agents/${support}.md`,
           );
         }
-        // inline_context_paths is only the manifest. The conductor contract
-        // requires it to read each inline persona before any stage/consume read.
-        const leadPersonaPath = ".claude/agents/aidlc-product-agent.md";
-        const leadReadIndex = readIndex(result.toolResults, leadPersonaPath);
-        const stageReadIndex = readIndex(
-          result.toolResults,
-          ".claude/aidlc-common/stages/inception/user-stories.md",
-        );
-        const consumeReadIndex = readIndex(result.toolResults, "requirements.md");
-        expect(leadReadIndex, "the conductor did not read the inline mob lead persona")
-          .toBeGreaterThanOrEqual(0);
-        expect(stageReadIndex, "stage_file read preceded the lead persona read").toBeGreaterThan(
-          leadReadIndex,
-        );
-        expect(consumeReadIndex, "consume read preceded the lead persona read").toBeGreaterThan(
-          leadReadIndex,
-        );
+        // inline_context_paths is only the manifest. The lead persona must
+        // shape the work: read before the first artifact write or support
+        // dispatch, in whatever order the agent read the stage file and inputs.
+        expect(
+          readBeforeFirstAct(result.toolResults, ".claude/agents/aidlc-product-agent.md"),
+          "the inline mob lead persona was not read before the first write or dispatch",
+        ).toBe(true);
 
         // Round 1 dispatched every declared support. Each brief names the
         // shared draft/input, carries the active-space rules delivered by the

@@ -138,7 +138,6 @@ describe("t284 sync detects each kind of change", () => {
 
     const rows = readIndex(p, SPACE).documents;
     expect(rows.length).toBe(1);
-    // Identity SURVIVES a same-path edit -- that is the narrowed guarantee.
     expect(rows[0].id).toBe(id);
     expect(rows[0].sha256).not.toBe(firstDigest);
   });
@@ -170,7 +169,6 @@ describe("t284 sync detects each kind of change", () => {
     doc(p, "y.md", "identical\n");
 
     const result = syncDocuments(p, SPACE, LATER);
-    // The original row is NOT silently re-pointed at x or y.
     const moved = result.changes.filter((c) => c.change === "moved");
     expect(moved).toEqual([]);
   });
@@ -232,12 +230,11 @@ describe("t284 sync detects each kind of change", () => {
   });
 
   test("RED-verify: array order does not decide which row wins the competing candidate", () => {
-    // Same scenario, but the fixture is built so a row-at-a-time pass (the
-    // pre-fix shape) would deterministically favour the row it visits FIRST
-    // -- proving the fix is order-independent, not merely order-lucky in the
-    // test above.
+    // Same scenario, but the fixture is built so a row-at-a-time pass would
+    // deterministically favour the row it visits FIRST -- proving the fix is
+    // order-independent, not merely order-lucky in the test above.
     const p = scratchProject();
-    doc(p, "z-first.md", "identical\n"); // sorts/iterates first in most orders
+    doc(p, "z-first.md", "identical\n"); // created first; the sorted walk visits a-second.md first
     doc(p, "a-second.md", "identical\n");
     const first = onboard(p, SPACE, undefined, NOW);
     const idOfZ = first.indexed.find((i) => i.path.endsWith("z-first.md"))?.id;
@@ -250,8 +247,6 @@ describe("t284 sync detects each kind of change", () => {
     const rows = readIndex(p, SPACE).documents;
     const zRow = rows.find((r) => r.id === idOfZ);
     const aRow = rows.find((r) => r.id === idOfA);
-    // Neither survives as "moved" to the-winner.md -- both tombstone, and
-    // the-winner.md lands under its OWN fresh identity, not either old one.
     expect(zRow?.removed_at).toBeTruthy();
     expect(aRow?.removed_at).toBeTruthy();
     const winnerRow = rows.find((r) => r.source.path === "documents/the-winner.md");
@@ -547,12 +542,11 @@ describe("t284 rebind is the remedy failing closed requires", () => {
     // row it just set to `invalidated`. That promise was broken: `sync`'s
     // digest-unchanged branch only ever consulted shouldRetryExtraction, which
     // handled `extractor_unavailable` and a version-changed `extraction_failed`
-    // -- never `invalidated`. Reproduced exactly as the reviewer measured it: a
-    // moved-and-edited TEXT document (so extraction needs no external tool and
-    // this test has no PATH dependency), rebind, then a plain sync with the
-    // digest unchanged from the rebind. Before the fix, sync reported
-    // "unchanged", the row stayed `invalidated` forever, and content.md was
-    // never regenerated.
+    // -- never `invalidated`. Reproduced with a moved-and-edited TEXT document
+    // (so extraction needs no external tool and this test has no PATH
+    // dependency), rebind, then a plain sync with the digest unchanged from the
+    // rebind. Before the fix, sync reported "unchanged", the row stayed
+    // `invalidated` forever, and content.md was never regenerated.
     const p = scratchProject();
     const abs = doc(p, "policy.md", "v1 original\n");
     const { indexed } = onboard(p, SPACE, undefined, NOW);
@@ -566,7 +560,7 @@ describe("t284 rebind is the remedy failing closed requires", () => {
 
     // The digest is UNCHANGED between rebind and this sync -- no edit happens
     // in between -- so this exercises the digest-unchanged retry branch, not
-    // the "changed" branch that already worked.
+    // the "changed" branch.
     const result = syncDocuments(p, SPACE, EVEN_LATER);
     const after = readIndex(p, SPACE).documents.find((r) => r.id === id)!;
     expect(after.extraction.state, "the row must leave invalidated").toBe("extracted");

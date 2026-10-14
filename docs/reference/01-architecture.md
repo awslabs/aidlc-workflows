@@ -505,7 +505,10 @@ prompt. On Kiro IDE it also reads Kiro's Workflows switch
 sub-agent tool from chats; `core/tools/aidlc-kiro-ide-workflows.ts` changes that
 one JSONC key on the person's answer (`--kiro-workflows`, setup, `config --yes`,
 or the once-per-machine chat ask from session start) and keeps the answer in the
-install root's `kiro-ide-workflows` marker. On Windows it also reads Kiro's
+install root's `kiro-ide-workflows` marker. A settings file it cannot read as
+JSONC is reported as unknown, never as off (trust, setup, doctor), and session
+start tells the chat once per error, keeping the file's path and fingerprint in
+the `kiro-ide-settings-error-told` marker. On Windows it also reads Kiro's
 default terminal profile (`terminal.integrated.defaultProfile.windows`): in
 Command Prompt the agent's AI-DLC commands split the person's words and every
 command reports exit code -1, so `core/tools/aidlc-kiro-ide-terminal.ts` sets
@@ -762,6 +765,8 @@ dist/claude/.claude/
     |   +-- stage-protocol-recovery.md
     |   +-- stage-protocol-governance.md
     |   +-- stage-protocol-reviewer.md
+    |   +-- stage-protocol-reviewer-unit.md
+    |   +-- stage-protocol-reviewer-repair.md
     |   +-- stage-protocol-ensemble.md
     |   +-- stage-protocol-collaborators.md
     |   +-- stage-protocol-construction.md
@@ -770,6 +775,8 @@ dist/claude/.claude/
     |   +-- stage-protocol-wave.md
     |   +-- stage-protocol-swarm.md
     |   +-- stage-protocol-learnings.md
+    |   +-- stage-protocol-summary.md
+    |   +-- stage-protocol-sensors.md
     +-- stages/
         +-- initialization/
         |   +-- workspace-scaffold.md
@@ -920,13 +927,16 @@ length and PID are validated; process handles are closed on every path.
 Creation times stay lossless in PID receipts. Each parent must predate its child,
 so a recycled parent PID cannot join the walk to a newer process. Receipts
 without a verified Windows creation time do not establish session ownership.
-Lookup failure, an ambiguous parent edge, or exhaustion of the existing
-50 ms / 64-ancestor budget yields no ancestry session; null barriers and the
+Lookup failure, an ambiguous parent edge, or exhaustion of the
+2-second / 64-ancestor limit yields no ancestry session; null barriers and the
 negative cache retain their existing behavior. Linux reads `/proc` for each hop; macOS
 reads the whole process table (pid, parent, `lstart`) with one `ps` call per walk and
-every hop from it, so a deep chain fits the same budget and the recorded start times
+every hop from it, and the recorded start times
 are the strings a per-pid lookup prints. One process reuses that table for up to a
-second (the negative cache's window); a SessionStart write clears it.
+second (the negative cache's window); a SessionStart write clears it. The limit
+is the same on every OS and only bounds a walk that cannot finish (a `ps` that
+never answers): a walk ends as soon as it has its answer, a few milliseconds on
+an idle machine, and on a busy one it finishes instead of losing the chat.
 
 Multiple Kiro IDE chats
 and opencode sessions can still share one process; process ancestry cannot

@@ -206,7 +206,7 @@ describe("t213 scope policy cost clauses", () => {
     );
   });
 
-  // Express is the lightest run and now says so in its own frontmatter: it is
+  // Express is the lightest run and says so in its own frontmatter: it is
   // the one scope that declares every ceremony off, so its clause names every
   // one of them. Feature keeps the first four on but, like every scope except
   // enterprise, ships collaborators off, so its clause names that alone.

@@ -47,7 +47,7 @@ install runs its hooks and commands through `aidlc` and does not call `bun`. On
 Windows, it installs for the current account, registers the bin directory in
 persistent User PATH, and updates the current PowerShell process. Run it from a
 normal PowerShell window; one opened with "Run as administrator" gets a warning
-and a prompt, since installing as administrator is less safe. If another session cannot find `aidlc`, open a new terminal.
+and a prompt, since installing as administrator is less safe. A terminal app or IDE that was already open (Kiro, VS Code, Cursor) keeps the PATH it started with, so quit and reopen it before using `aidlc` there; a new tab inside it is not enough.
 Use [`-NoModifyPath`](18-install-and-lifecycle.md#windows-powershell) to skip
 both PATH changes and invoke the printed direct command instead. On macOS,
 Linux, or WSL, apply the installer's PATH instruction if `aidlc` is not found.
@@ -110,7 +110,7 @@ $ aidlc config
     Harness    Claude Code detected  (2.1.296 on your PATH)
     Project    git repo, no AI-DLC files yet
     AWS        credentials not found
-    Runtime    one PATH fix needed - shown at the end
+    Runtime    aidlc on this shell's PATH only: start Claude Code from a terminal
 
   Set up AI-DLC for Claude Code with recommended defaults?
 
@@ -136,10 +136,12 @@ Nothing is written before you answer. What it checked:
   ([Configure or Refresh a Project](18-install-and-lifecycle.md#configure-or-refresh-a-project)).
 - **AWS**: whether it found AWS credentials, which matters only if you choose
   Amazon Bedrock as the model provider.
-- **Runtime**: whether AI-DLC's hooks can find the `aidlc` command. The fix it
-  counts here matters only if you start Claude Code from a desktop icon rather
-  than a terminal. Setup does not print it at the end; `aidlc doctor` does, in
-  step 4.
+- **Runtime**: whether AI-DLC's hooks can find the `aidlc` command. Claude Code
+  started from a terminal hands that terminal's PATH to the hooks, so `aidlc`
+  on your shell's PATH is enough, and the line says to start it from a
+  terminal; a PATH fix it counts here is shown at the end of setup. If you
+  start Claude Code from a desktop icon instead, `aidlc doctor` says what to
+  add, in step 4.
 
 Press Enter for the recommended defaults. They record:
 

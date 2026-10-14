@@ -100,7 +100,7 @@ export const PRE_TOOL_USE_GROUP_TARGET = "guard-tool-call";
 export interface HookGroupMember {
   /** The hook's name, as `engine hook <name>` and `aidlc-<name>.ts`. */
   readonly hook: string;
-  /** The tools this member runs for: the matcher its own row had. */
+  /** The tools this member runs for. */
   readonly matcher: string;
 }
 

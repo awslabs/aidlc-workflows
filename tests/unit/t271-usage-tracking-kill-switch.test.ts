@@ -4,12 +4,12 @@
 // whole usage seam: the producer writes no ledger and no transcript pointers,
 // and every consumer (audit rollup fields, the statusline's session aggregate)
 // returns empty - while an ALREADY-recorded ledger is left untouched on disk so
-// re-enabling the flag restores history rather than restarting it.
+// clearing the flag restores history rather than restarting it.
 //
 // Mechanism: none. In-process imports from the shipped dist tree; deterministic
 // fixtures in a temp project (same JSONL shape as t267-usage). Zero tokens.
 // The flag is read at call time (never cached), so tests toggle it per-case and
-// afterEach restores the untracked default.
+// afterEach restores the unset default.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -111,14 +111,12 @@ describe("t271 - AIDLC_DISABLE_USAGE_TRACKING kill switch", () => {
     expect(stageUsageAuditFields(dir, "stage-a")["Tokens Out"]).toBe("100");
     expect(sessionUsageAggregate(dir, join(dir, "session.jsonl"))).not.toBeNull();
 
-    // Flip the switch: every consumer goes quiet, nothing is deleted.
     process.env.AIDLC_DISABLE_USAGE_TRACKING = "1";
     expect(stageUsageAuditFields(dir, "stage-a")).toEqual({});
     expect(workflowUsageAuditFields(dir)).toEqual({});
     expect(sessionUsageAggregate(dir, join(dir, "session.jsonl"))).toBeNull();
     expect(readFileSync(ledgerPath(dir), "utf-8")).toBe(before);
 
-    // Re-enable: history is intact, not restarted.
     delete process.env.AIDLC_DISABLE_USAGE_TRACKING;
     expect(stageUsageAuditFields(dir, "stage-a")["Tokens Out"]).toBe("100");
   });

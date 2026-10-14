@@ -1,22 +1,18 @@
 // covers: subcommand:aidlc:knowledge subcommand:aidlc-knowledge:onboard subcommand:aidlc-knowledge:sync subcommand:aidlc-knowledge:list subcommand:aidlc-knowledge:show subcommand:aidlc-knowledge:associate subcommand:aidlc-knowledge:dissociate subcommand:aidlc-knowledge:rebind
 //
-// t293 - the DOCUMENTKB JOURNEY. PR #731 had two review rounds where a
-// reviewer found user-reachable defects that 460 passing tests, four green CI
-// jobs and six adversarial reviews all missed -- because every existing test
-// spawns the tool per-behaviour with a purpose-built fixture, and nothing ever
+// t293 - the DOCUMENTKB JOURNEY. Per-behaviour tests, each spawning the tool
+// with a purpose-built fixture, missed user-reachable defects because nothing
 // asked "does the documented workflow actually work, end to end, from an empty
 // project, using only the public command?" Two concrete defects a journey test
-// would have caught immediately, both reproduced live against the shipped
-// dispatcher/tool before this file existed:
+// would have caught immediately:
 //
 //   THE DISPATCHER NEVER RAN A KNOWLEDGE VERB. `aidlc.ts knowledge <verb>`
-//   is the ONLY public surface a user or a skill actually invokes; every prior
-//   knowledge test spawned `aidlc-knowledge.ts` directly, so a dispatcher-only
-//   defect (the knowledge route registered under the wrong route `kind`,
-//   silently falling through to "unknown verb") shipped and was reported,
-//   claimed fixed, and never executed.
+//   is the ONLY public surface a user or a skill actually invokes; a test that
+//   spawns `aidlc-knowledge.ts` directly cannot see a dispatcher-only defect
+//   (the knowledge route registered under the wrong route `kind`, silently
+//   falling through to "unknown verb").
 //
-//   AN OVERSIZED FILE USED TO TOMBSTONE WHILE SITTING ON DISK. Growing an
+//   AN OVERSIZED FILE TOMBSTONED WHILE SITTING ON DISK. Growing an
 //   already-onboarded file past the 32 MiB per-document cap made `sync`
 //   report `change: "removed"` and `list` report `tombstoned` for a file `ls`
 //   shows plainly present -- reachable only by a multi-step sequence (onboard,
@@ -323,10 +319,9 @@ describe("t293 the documented workflow, end to end, through the public dispatche
       let rows = checkInvariants(p, "after onboard growing.md (small)");
       const id = rows[0].id;
 
-      // Grow it PAST the 32 MiB per-document cap. Reproduced live against the
-      // shipped tool before this test existed: the old behaviour reported
-      // `change: "removed"` and `list` said "tombstoned" for a file `ls`
-      // shows plainly present.
+      // Grow it PAST the 32 MiB per-document cap. The regression: `sync` reported
+      // `change: "removed"` and `list` said "tombstoned" for a file `ls` shows
+      // plainly present.
       const chunk = Buffer.alloc(1024 * 1024, "a");
       const fh = require("node:fs").openSync(abs, "a");
       for (let i = 0; i < 33; i++) require("node:fs").writeSync(fh, chunk);
@@ -375,10 +370,9 @@ describe("t293 the documented workflow, end to end, through the public dispatche
       let rows = checkInvariants(p, "after onboarding 21 documents one at a time");
       expect(rows.length).toBe(total);
 
-      // Reproduced live against the shipped tool before this test existed:
-      // `sync` over a tree that ALREADY held >20 reconciled documents refused
-      // forever ("documents/ holds 21 files, over the 20-document batch
-      // cap"), even with nothing changed on disk.
+      // The regression: `sync` over a tree that ALREADY held >20 reconciled
+      // documents refused forever ("documents/ holds 21 files, over the 20-document
+      // batch cap"), even with nothing changed on disk.
       const syncOverCap = run(p, "sync over a 21-document tree, nothing changed", ["sync"]);
       const changes = syncOverCap.changes as { change: string }[];
       expect(changes.every((c) => c.change === "unchanged"), "a no-op sync must not churn").toBe(true);

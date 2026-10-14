@@ -320,7 +320,8 @@ describe("t148 dist/kiro file structure", () => {
     // every dispatch path; the persona's own permissions bind only on the
     // invoke_sub_agent / orchestrate_subagent path the conductor selects. The
     // kiro-ide manifest injects both during projection; they must land on
-    // every delegation target there and must NOT leak into any other
+    // every delegation target there. The tools line also ships on the kiro
+    // row (t-kiro-cli-persona-tools); it must NOT leak into any other
     // harness's agents (on Claude a `tools:` frontmatter field would RESTRICT
     // the agent to non-Claude tool names, breaking it).
     const IDE_AGENTS = join(KI, "agents");
@@ -366,7 +367,7 @@ describe("t148 dist/kiro file structure", () => {
     expect(fmToolsOf(join(IDE_AGENTS, "aidlc-aidlc.md"))).toBe(
       `["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent"]`,
     );
-    // Leak guard: the grant is IDE-native and must not ship anywhere else.
+    // Leak guard: the grant is Kiro-native and must not ship anywhere else.
     const nonIdeAgentTrees = HARNESS_MATRIX.filter(
       (harness) => !harness.capabilities.ideAgentTools,
     ).map((harness) => join(harness.engineRoot, "agents"));

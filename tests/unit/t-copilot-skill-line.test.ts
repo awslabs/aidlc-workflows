@@ -59,7 +59,6 @@ function fresh(): string {
 
 const skillFile = (proj: string): string => join(proj, ".github", "skills", "aidlc", "SKILL.md");
 
-/** The newest record the hook wrote. */
 function record(proj: string): StoredMessage {
   const dir = join(proj, "aidlc", ".aidlc-sessions", "messages");
   expect(existsSync(dir), "no message record was written").toBe(true);

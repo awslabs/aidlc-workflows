@@ -14,14 +14,10 @@
 // ships verbatim into the others and tells their conductors to run a tool at a
 // path that does not exist there.
 //
-// This is the exact CRIT-class seam bug the dist-unified review found for the
-// rules dir (rulesSubdir). The merge-endgame re-homed v0.6.8's createPrintDirective
-// into core/, where main's original hardcoded `.claude/tools/aidlc-utility.ts`;
-// the port rewrote it to `${harnessDir()}/tools/...`. This test is the
-// determinism mechanism that proves no such literal re-enters a directive string
-// — t146 guards the SAME leak in core/*.md prose; this guards core/*.ts directives.
+// This test proves no such literal re-enters a directive string - t146 guards
+// the SAME leak in core/*.md prose; this guards core/*.ts directives.
 //
-// SCOPE (deliberately narrow — avoids the ~59 legitimate `.claude/` literals in
+// SCOPE (deliberately narrow - avoids legitimate `.claude/` literals in
 // core .ts that are comments, error text naming the literal Claude tree, install
 // instructions like `dist/claude/.claude/settings.json`, and the example
 // directive-shape fixtures in aidlc-directive.ts). The dangerous form is

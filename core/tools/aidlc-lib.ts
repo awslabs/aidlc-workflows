@@ -1010,23 +1010,6 @@ export function leadingOrchestratorVerb(args: readonly string[]): OrchestratorVe
   return null;
 }
 
-// parseNextFlags in aidlc-orchestrate.ts consumes these values regardless of
-// spelling: `--report --status` composes from a file named "--status", not a
-// read-only mode switch. --review, --change-control and ceremony flags refuse
-// --prefixed values and are deliberately absent.
-const VALUED_NEXT_FLAGS: ReadonlySet<string> = new Set([
-  "--scope",
-  "--stage",
-  "--phase",
-  "--depth",
-  "--test-strategy",
-  "--report",
-  "--claim",
-  "--release",
-  "--team",
-  "--rhythm",
-]);
-
 const RETIRED_NEXT_FLAGS: ReadonlySet<string> = new Set(["--init", "--force"]);
 
 // Retired initialization flags are terminal only when they are the whole
@@ -1120,8 +1103,8 @@ export function isReadOnlyNextArgv(argv: readonly string[]): boolean {
   if (verb === "park") return false;
   // Mirror engine Branch 1b2: typed config commands are terminal, not workflow engagement.
   if (args[0] === "config" && (args[1] === "set" || args[1] === "get" || args[1] === "list")) return true;
-  // parseNextFlags returns on --config at any position (config print or usage refusal) before workflow inspection, without honoring the -- delimiter.
-  if (args.includes("--config")) return true;
+  // parseNextFlags returns on --config anywhere in front of the -- delimiter (config print or usage refusal) before workflow inspection; behind it the token is one of their words.
+  if (beforeDelimiter(args).includes("--config")) return true;
   // A leading --statusline is the person's status line switch (or its usage line).
   if (args[0] === "--statusline") return true;
   // Leading plugin/knowledge nouns own the argv and are not in routeNext's marker exclusion, so a trailing read-only spelling is theirs, not a mode switch.
@@ -1129,31 +1112,119 @@ export function isReadOnlyNextArgv(argv: readonly string[]): boolean {
   const workspace = parseWorkspaceCommand(args);
   if (workspace.kind !== "not-workspace") return workspace.kind !== "create-intent";
   if (nextArgsCarryRequestWords(args)) return false;
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--") break;
-    if (READ_ONLY_FLAGS.has(arg)) return true;
-    if (VALUED_NEXT_FLAGS.has(arg)) i++;
-  }
-  return false;
+  // A utility flag the engine's reading takes, never a flag's value.
+  return readNextTokens(args).tokens.some((token) => token.role === "read-only");
 }
 
-// Match aidlc-orchestrate.main's launcher-option extraction before subcommand
-// routing; the literal delimiter preserves all following intent text. A trailing
-// option without a value stays, as in main().
-export function stripOrchestratorLauncherOptions(args: readonly string[]): string[] {
-  const normalized: string[] = [];
+/**
+ * The words that make a `next` line this engine's own command in a fixed shape
+ * rather than a request of the person's: the workspace commands, this
+ * orchestrator's own verbs, its configuration verb and its help. A line that
+ * opens with one of these carries no word of theirs, so its options are its own
+ * wherever they sit.
+ */
+const NEXT_OWN_COMMAND_WORDS: ReadonlySet<string> = new Set([
+  ...WORKSPACE_VERBS,
+  ...ORCHESTRATOR_VERBS,
+  "config",
+  "help",
+]);
+
+/**
+ * Where a request of the person's own begins on a `next` line: at its first
+ * bare word. This engine's own launcher options ride ahead of that word, which
+ * is where every caller puts them, so among their words the same token is a
+ * word of their request and nothing of theirs is read as a folder to work in or
+ * an attempt to claim. The `--` mark already separates their words itself. The
+ * dispatcher reads its own options to the same boundary (aidlc.ts
+ * theirWordsBegin), so the launcher's two layers take the same tokens.
+ */
+export function requestWordsBeginAt(rawArgs: readonly string[]): number {
+  if (rawArgs[0] !== "next") return Number.POSITIVE_INFINITY;
+  for (let i = 1; i < rawArgs.length; i++) {
+    const token = rawArgs[i];
+    if (token === "--") return Number.POSITIVE_INFINITY;
+    if (token.startsWith("-")) {
+      // A token after a flag is that flag's value, never a word of theirs.
+      if (rawArgs[i + 1] !== undefined && !rawArgs[i + 1].startsWith("-")) i++;
+      continue;
+    }
+    return NEXT_OWN_COMMAND_WORDS.has(token) ? Number.POSITIVE_INFINITY : i;
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+/** The options the orchestrator's launcher takes off the line before the subcommand reads it. */
+export const ORCHESTRATOR_LAUNCHER_OPTIONS = ["--project-dir", "--aidlc-attempt-id"] as const;
+
+/**
+ * The orchestrator's launcher options, taken off `[subcommand, ...args]` the
+ * one way aidlc-orchestrate's main() does: each with the token after it, only
+ * in front of the `--` mark and of the person's own words (requestWordsBeginAt),
+ * and never with the mark as its value. A Copilot claim and the engine hash the
+ * line that is left, so both read it here, as do the other hooks that need it.
+ */
+export function readOrchestratorLauncherOptions(rawArgs: readonly string[]): {
+  args: string[];
+  /** Where each option it took stands in `rawArgs` (its value is the next token). */
+  taken: number[];
+  /** Where the subcommand stands, after the options in front of it. */
+  verbAt: number;
+  /** Where an option stands that it would take but nothing it can take follows. */
+  dangling?: number;
+  projectDir?: string;
+  attemptId?: string;
+  conflictingAttemptId: boolean;
+} {
+  const isOption = (token: string | undefined) =>
+    (ORCHESTRATOR_LAUNCHER_OPTIONS as readonly (string | undefined)[]).includes(token);
+  let verbAt = 0;
+  while (isOption(rawArgs[verbAt]) && rawArgs[verbAt + 1] !== undefined && rawArgs[verbAt + 1] !== "--") verbAt += 2;
+  const requestFrom = verbAt + requestWordsBeginAt(rawArgs.slice(verbAt));
+  const args: string[] = [];
+  const taken: number[] = [];
+  let dangling: number | undefined;
+  let projectDir: string | undefined;
+  let attemptId: string | undefined;
+  let conflictingAttemptId = false;
   let literal = false;
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
+  for (let i = 0; i < rawArgs.length; i++) {
+    const arg = rawArgs[i];
+    const value = rawArgs[i + 1];
     if (arg === "--") literal = true;
-    if (!literal && (arg === "--project-dir" || arg === "--aidlc-attempt-id") && i + 1 < args.length) {
-      i++;
+    const launcher = !literal && i < requestFrom && value !== undefined && value !== "--";
+    if (!literal && i < requestFrom && !launcher && isOption(arg)) dangling ??= i;
+    if (launcher && arg === "--project-dir") {
+      projectDir = value;
+      taken.push(i++);
+    } else if (launcher && arg === "--aidlc-attempt-id") {
+      if (/^[A-Za-z0-9._:-]{1,128}$/.test(value)) {
+        if (attemptId !== undefined && attemptId !== value) conflictingAttemptId = true;
+        attemptId = value;
+      }
+      taken.push(i++);
     } else {
-      normalized.push(arg);
+      args.push(arg);
     }
   }
-  return normalized;
+  return {
+    args,
+    taken,
+    verbAt,
+    ...(dangling === undefined ? {} : { dangling }),
+    ...(projectDir === undefined ? {} : { projectDir }),
+    ...(attemptId === undefined ? {} : { attemptId }),
+    conflictingAttemptId,
+  };
+}
+
+// aidlc-orchestrate.main's launcher-option extraction before subcommand
+// routing (readOrchestratorLauncherOptions); the literal delimiter preserves
+// all following intent text. A trailing option without a value stays, as in
+// main(). Its one caller (the Kiro CLI agent-v1 row) passes the words after
+// `next` without the verb, so their unmarked words are not told apart here.
+export function stripOrchestratorLauncherOptions(args: readonly string[]): string[] {
+  return readOrchestratorLauncherOptions(args).args;
 }
 
 export const WORKSPACE_NOUNS = ["intent", "space"] as const;
@@ -1268,9 +1339,10 @@ function isIntentRepoVerb(token: string | undefined): token is IntentRepoVerb {
 // `intent list [--json] [--all]` / `space list [--json]`. The flags may appear
 // in either order after the verb. `--all` (intents only) includes archived
 // records, which the default listing hides; the `all` field is set only when
-// requested so the plain list keeps its two-field shape.
+// requested so the plain list keeps its two-field shape. Behind the `--` mark a
+// token is one of the person's words, never one of these.
 function explicitWorkspaceList(noun: WorkspaceNoun, tokens: readonly string[]): WorkspaceCommand {
-  const flags = tokens.slice(2);
+  const flags = beforeDelimiter(tokens.slice(2));
   const command: WorkspaceCommand = { kind: "list", noun, json: flags.includes("--json") };
   if (noun === "intent" && flags.includes("--all")) command.all = true;
   return command;
@@ -1701,8 +1773,8 @@ function terminalCommandFromKnowledgeCommand(
 
 // The allowlisted trailing flags `--doctor` accepts (diagnostic export). Kept
 
-// The allowlisted trailing flags `--doctor` accepts. Kept
-// as a set here so the engine (parseNextFlags) and this classifier — the two
+// The allowlisted trailing flags `--doctor` accepts, read once by
+// readNextTokens, so the engine (parseNextFlags) and this classifier — the two
 // terminal-command deciders — stay byte-for-byte in agreement. A fixed
 // allowlist, so an arbitrary token can never ride the read-only path into the
 // tool.
@@ -1711,27 +1783,6 @@ export const DOCTOR_EXPORT_FLAGS: ReadonlySet<string> = new Set([
   "--output",
   "--verbose",
 ]);
-
-// Collect the allowlisted `--doctor` args (`--export`, `--output <dir>`,
-// `--verbose`)
-// from the token stream after the `--doctor` match, so the seam runs the same
-// command the engine's directive names. Mirrors parseNextFlags in the engine.
-function collectDoctorExportArgs(args: string[], doctorIdx: number): string[] {
-  const extra: string[] = [];
-  for (let j = doctorIdx + 1; j < args.length; j++) {
-    const t = args[j];
-    if (!DOCTOR_EXPORT_FLAGS.has(t)) continue;
-    extra.push(t);
-    if (t === "--output") {
-      const val = args[j + 1];
-      if (val !== undefined && !val.startsWith("--")) {
-        extra.push(val);
-        j++;
-      }
-    }
-  }
-  return extra;
-}
 
 function terminalCommandFromWorkspaceCommand(
   command: WorkspaceCommand,
@@ -1829,22 +1880,26 @@ export function classifyTerminalCommand(argv: string[], projectDir?: string, ses
   }
   // Among the person's own words a utility flag is part of their request.
   if (nextArgsCarryRequestWords(args)) return null;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (READ_ONLY_FLAGS.has(a)) {
-      const subcommand = a.replace(/^--/, "");
-      // --doctor carries allowlisted args (--export, --output <dir>, --verbose)
-      // so the documented diagnostic surfaces reach the tool through the
-      // Kiro/Codex seam too, not only a direct invocation. Carried via `args` (v2's
-      // forwarded-args field), mirrored by the engine's parseNextFlags.
-      if (a === "--doctor") {
-        const extra = collectDoctorExportArgs(args, i);
-        if (extra.length > 0) return { subcommand, source: "read-only-flag", args: extra };
-      }
-      return { subcommand, source: "read-only-flag" };
-    }
-  }
-  return null;
+  // The utility the engine runs is the last one its reading takes, never a
+  // flag's value (`--report --status` reports from a file named `--status`).
+  const { tokens } = readNextTokens(args);
+  // A flag `next` takes with nothing it can take after it (`--depth --status`)
+  // is answered by the engine about that flag before any utility runs.
+  if (tokens.some(nextFlagLacksValue)) return null;
+  const utility = tokens.filter((token) => token.role === "read-only").at(-1);
+  if (utility === undefined) return null;
+  const subcommand = utility.token.replace(/^--/, "");
+  // --doctor carries allowlisted args (--export, --output <dir>, --verbose)
+  // so the documented diagnostic surfaces reach the tool through the
+  // Kiro/Codex seam too, not only a direct invocation. Carried via `args` (v2's
+  // forwarded-args field), as the engine's parseNextFlags reads them.
+  const extra = utility.token === "--doctor"
+    ? tokens.filter((token) => token.role === "doctor-arg")
+      .flatMap((token) => [token.token, ...(token.value === undefined ? [] : [token.value])])
+    : [];
+  return extra.length > 0
+    ? { subcommand, source: "read-only-flag", args: extra }
+    : { subcommand, source: "read-only-flag" };
 }
 
 // A host that drives the CLI for the person may deliver each turn as ONE prompt
@@ -2589,16 +2644,18 @@ function engineInvocationFromWords(
   }
   const native = command === "aidlc";
   let projectDir: string | null = null;
-  // Match dispatcher global extraction, then the orchestrator's own attempt
-  // selector extraction. Neither consumes options after the literal delimiter.
-  const stripGlobals = (args: string[], attempt: boolean): string[] | null => {
+  // Match dispatcher global extraction, then the orchestrator's own launcher
+  // options, read the one way its main() reads them. Neither consumes options
+  // after the literal delimiter, and the dispatcher takes no `--`-prefixed
+  // token as a folder (it refuses that line).
+  const stripGlobals = (args: string[], attempt: boolean, wordsFrom = Number.POSITIVE_INFINITY): string[] | null => {
     const clean: string[] = [];
     let literal = false;
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
-      if (arg === "--") literal = true;
+      if (arg === "--" || i >= wordsFrom) literal = true;
       if (!literal && (arg === "--project-dir" || (attempt && arg === "--aidlc-attempt-id"))) {
-        if (i + 1 >= args.length) return null;
+        if (i + 1 >= args.length || (native && args[i + 1].startsWith("--"))) return null;
         if (arg === "--project-dir") projectDir = args[i + 1];
         i++;
       } else if (!literal && arg.startsWith("--project-dir=")) {
@@ -2609,13 +2666,28 @@ function engineInvocationFromWords(
     }
     return clean;
   };
-  let args = stripGlobals(tokens.slice(commandIndex + 1), !native);
+  const orchestratorArgs = (args: string[]): string[] => {
+    const read = readOrchestratorLauncherOptions(args);
+    if (read.projectDir !== undefined) projectDir = read.projectDir;
+    return read.args;
+  };
+  if (/^aidlc-orchestrate(?:\.ts)?$/.test(command)) {
+    return { command, args: orchestratorArgs(tokens.slice(commandIndex + 1)), projectDir };
+  }
+  const raw = tokens.slice(commandIndex + 1);
+  // The dispatcher reads its own options on a `next` line only in front of the
+  // person's words (aidlc.ts theirWordsBegin), the boundary the orchestrator's
+  // launcher reads too (requestWordsBeginAt).
+  const verb = raw.findIndex((token, at) => token === "next" && raw[at - 1] !== "--project-dir");
+  const route = native && verb >= 0 ? stripGlobals(raw.slice(0, verb), false)?.join(" ") : undefined;
+  const wordsFrom = route === "" || route === "orchestrate" || route === "engine orchestrate"
+    ? verb + requestWordsBeginAt(raw.slice(verb))
+    : Number.POSITIVE_INFINITY;
+  let args = stripGlobals(raw, !native, wordsFrom);
   if (!args) return null;
   if (native && args[0] === "engine") args.shift();
-  if (native && ["orchestrate", "next", "report", "park"].includes(args[0])) {
-    args = stripGlobals(args, true);
-    if (!args) return null;
-  }
+  if (native && args[0] === "orchestrate") args = ["orchestrate", ...orchestratorArgs(args.slice(1))];
+  else if (native && ["next", "report", "park"].includes(args[0])) args = orchestratorArgs(args);
   return { command, args, projectDir };
 }
 
@@ -2644,6 +2716,15 @@ function isTerminalUtilityNext(invocation: { command: string; args: string[] }):
   // Share the terminal early-return rule with the Copilot adapter claim gate.
   return isReadOnlyNextArgv(args);
 }
+
+// A setting the person's own line did not carry is theirs only with their
+// words (settingTheirs): the configuration step names --person-words with this
+// slot, and says what fills it, for the agent to put the reply that asked there.
+export const PERSON_WORDS_SLOT = "<their words>";
+export const PERSON_WORDS_FILL = `, with ${PERSON_WORDS_SLOT} the person's reply that asked for it, word for word`;
+const CONFIGURATION_STEP = new RegExp(
+  `^Run \`([^\`]+)\` to update the configuration(${escapeRegex(PERSON_WORDS_FILL)})?, then print its output verbatim and stop\\.$`,
+);
 
 // A modifier-only next, or one naming a scope, can initialize work or dispatch
 // configuration or a scope change depending on state. Its own successful
@@ -2727,8 +2808,9 @@ function isTerminalConfigurationDispatch(
     if (!validated.valid || validated.data.kind !== "print") return false;
     const match = (scope !== undefined
       ? /^Run `([^`]+)` to change scope, then print its output verbatim and stop\.$/
-      : /^Run `([^`]+)` to update the configuration, then print its output verbatim and stop\.$/).exec(validated.data.message);
+      : CONFIGURATION_STEP).exec(validated.data.message);
     if (!match) return false;
+    if (match[2] !== undefined) expected.push("--person-words", PERSON_WORDS_SLOT);
     const literal = parseLiteralShellInvocation(match[1]);
     if (!literal || literal.directory !== null) return false;
     const command = engineInvocationFromWords(literal.argv, literal.rawWords);
@@ -6702,7 +6784,14 @@ export interface ProcessIdentity {
   startTime: string | null;
 }
 
-const SESSION_ANCESTRY_BUDGET_MS = 50;
+// The most one walk may spend finding its chat, on every OS. A walk ends as
+// soon as it has its answer (a few ms when idle), so this bounds only one that
+// cannot finish, such as a `ps -A` that never answers. It is checked between
+// steps, so on a busy machine a shorter one never saved the time a slow step
+// took; it only lost the chat.
+export function sessionAncestryBudgetMs(): number {
+  return 2000;
+}
 const SESSION_ANCESTRY_MAX_DEPTH = 64;
 const SESSION_ANCESTRY_CACHE_MS = 1000;
 const sessionAncestryCache = new Map<
@@ -6827,7 +6916,7 @@ let windowsSessionProcessApi: ReturnType<typeof loadWindowsSessionProcessApi> | 
 // independent of the lock subsystem's process probes.
 export function windowsSessionProcessIdentity(
   pid: number,
-  deadlineMs = Date.now() + SESSION_ANCESTRY_BUDGET_MS,
+  deadlineMs = Date.now() + sessionAncestryBudgetMs(),
 ): ProcessIdentity | null {
   // A test platform override must never load Windows DLLs on another host.
   if (
@@ -6983,7 +7072,7 @@ export function writeSessionPidEntry(
   projectDir: string,
   pid: number,
   sessionId: string,
-  deadlineMs: number = Date.now() + SESSION_ANCESTRY_BUDGET_MS,
+  deadlineMs: number = Date.now() + sessionAncestryBudgetMs(),
   identity: ProcessIdentity | null | undefined = undefined,
 ): void {
   sessionAncestryCache.delete(projectDir);
@@ -7064,7 +7153,7 @@ export function writeSessionPidAncestry(
   sessionAncestryCache.delete(projectDir);
   clearSessionProcessTable();
   if (validSessionId(sessionId) === null) return;
-  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  const deadline = Date.now() + sessionAncestryBudgetMs();
   const windows = sessionProcessPlatform() === "win32";
   const readIdentity = processIdentityReader(deadline);
   let childIdentity: ProcessIdentity | null = null;
@@ -7126,7 +7215,7 @@ export function resolveSessionIdFromAncestry(projectDir: string): string | null 
 // A valid payload always carries the private source marker, so the selection
 // chokepoint lets payload identity win without weakening bare env refusal. It
 // used to be set only when this process's ancestry walk named a different
-// session, but that walk fails closed within its 50 ms budget on a loaded host:
+// session, but that walk fails closed within its budget on a loaded host:
 // the child then saw an unmarked override, its own walk could find the other
 // session, and it refused. enterHookWorkflow and the Codex adapter already mark
 // payload identity without a walk.
@@ -7148,7 +7237,7 @@ export function hookChildEnv(
 
 function resolveSessionIdFromAncestryUncached(projectDir: string): string | null {
   if (!existsSync(sessionPidMapDir(projectDir))) return null;
-  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  const deadline = Date.now() + sessionAncestryBudgetMs();
   const windows = sessionProcessPlatform() === "win32";
   let childIdentity = windows ? windowsSessionProcessIdentity(process.pid, deadline) : null;
   if (windows && (!childIdentity || childIdentity.ppid !== process.ppid)) return null;
@@ -12415,6 +12504,23 @@ export function personAskedSinceGate(projectDir: string): boolean {
     personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true });
 }
 
+// The person asked for the lowering the agent's command carries out: they ran
+// it at their own terminal, or a turn of theirs since the last decision stands
+// behind it. Before any work exists there is no decision for a turn to be
+// "since", and no HUMAN_TURN row either: the hook writes that row only once a
+// state file is there, and keeps the person's message from their first prompt
+// on (aidlc-message-store.ts). The message of this chat is the proof then, as
+// the turn is once work exists. Per chat, never the project's messages: a
+// teammate's turn in their own chat is not this one's.
+export function personAskedForThisLowering(projectDir: string, sessionId: string | null): boolean {
+  if (commandAtPersonsTerminal()) return true;
+  if (existsSync(stateFilePath(projectDir))) {
+    return personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true });
+  }
+  const { latestMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  return latestMessage(projectDir, sessionId) !== null;
+}
+
 // The person's checks a setter switches for this piece of work, and the values
 // that turn each one on (only adding a stop) or off (the person's call).
 const PERSON_CHECK_SWITCH_VALUES: Readonly<Record<string, { on: readonly string[]; off: readonly string[] }>> = {
@@ -12756,6 +12862,17 @@ export function isConstructionSwarmEnabled(stateContent: string | null): boolean
 
 // An approved skeleton Unit was deliberately built before a stage-major swarm.
 // Its per-Unit source binding survives unrelated Units changing the workspace.
+// A Unit the person skipped every code-writing step for (UNIT_SKIPPED in that
+// step's current attempt) has nothing a checkpoint could verify, so it owes
+// none: the walk goes on to the next Unit and nothing waits on its approval,
+// as when the plan does not run Code Generation at all.
+export function unitSkippedItsCode(projectDir: string, stateContent: string, unit: string): boolean {
+  const code = unitMajorConstructionStageSlugs(getField(stateContent, "Scope") ?? "", stateContent, true)
+    .filter((slug) => findStageBySlug(slug)?.workspace_requires === true);
+  return code.length > 0 &&
+    code.every((slug) => unitSkippedUnits(projectDir, slug, undefined, stateContent).has(unit));
+}
+
 export function approvedConstructionUnits(
   projectDir: string,
   stateContent: string,
@@ -12777,6 +12894,11 @@ export function approvedConstructionUnits(
   if (dag.state !== "ok") return approved;
   const skeleton = constructionSkeletonOn(stateContent) ? dag.batches.flat()[0] : null;
   for (const unit of dag.units) {
+    // It owes no checkpoint, so it stands where an approved one does.
+    if (unitSkippedItsCode(projectDir, stateContent, unit)) {
+      approved.add(unit);
+      continue;
+    }
     const kind = unit === skeleton
       ? "skeleton"
       : "unit";
@@ -25919,6 +26041,15 @@ export function unclaimableIgnoredSourceKeys(
   return unclaimable;
 }
 
+function registryExcludesSourcePath(
+  registry: SourceFingerprintRegistry,
+  path: string,
+): boolean {
+  const under = (entry: string): boolean => path === entry || path.startsWith(`${entry}/`);
+  return [...registry.excludes].some(under) &&
+    ![...registry.paths].some((entry) => under(entry) || entry.startsWith(`${path}/`));
+}
+
 /**
  * The source keys (`<repo>\0<path>`) among `keys` that the `exclude` list of
  * that repo root's `.aidlc-source-paths.json` now leaves out of the walk: the
@@ -25948,10 +26079,7 @@ export function registryExcludedSourceKeys(
     }
     const registry = registries.get(root);
     if (!registry) continue;
-    const under = (entry: string): boolean => parsed.path === entry || parsed.path.startsWith(`${entry}/`);
-    if (![...registry.excludes].some(under)) continue;
-    const registered = [...registry.paths].some((entry) => under(entry) || entry.startsWith(`${parsed.path}/`));
-    if (!registered) excluded.add(key);
+    if (registryExcludesSourcePath(registry, parsed.path)) excluded.add(key);
   }
   return excluded;
 }
@@ -26083,7 +26211,16 @@ function ignoredSourceClaimReason(
     if (ignoredDescendants.status !== 0) {
       return `Git could not enumerate ignored source below ${JSON.stringify(path)}`;
     }
-    const firstIgnored = ignoredDescendants.stdout.split("\0").find(Boolean);
+    // A directory claim covers the declared source boundary, not build output
+    // the repo's registry explicitly leaves out. Keep the same paths-over-exclude
+    // rule as completion; an unreadable registry exempts nothing.
+    const failure = lastSourceFailure;
+    const registry = sourceFingerprintRegistry(sourceRepoDir, carriesWorkspaceShell);
+    lastSourceFailure = failure;
+    const firstIgnored = ignoredDescendants.stdout.split("\0").find((descendant) =>
+      descendant.length > 0 &&
+      (registry === null || !registryExcludesSourcePath(registry, descendant))
+    );
     return firstIgnored
       ? `${JSON.stringify(path)} contains ignored application source ${JSON.stringify(firstIgnored)}`
       : null;
@@ -31309,13 +31446,16 @@ function guardOperation(operation: GuardRecoveryOperation): Pick<GuardRemedy, "o
  * "Turn this fence off for this piece of work": the in-band offer that makes the
  * switch reachable at the moment it is needed. When the person picks it, the
  * conductor runs the setter; the setter accepts it because their reply is on
- * record, and a memory-held strict Guard Policy withholds the offer.
+ * record, and a memory-held strict Guard Policy withholds the offer. The
+ * command stays the exact setter; the agent adds the reply that picked it, so
+ * the check reads as theirs.
  */
 export function lowerFenceRemedy(fence: SwitchableGuardFence): GuardRemedy {
   return {
     op: "lower-fence",
     action:
-      `Turn the ${fence} check off for this piece of work. After the command succeeds, tell the person in one ` +
+      `Turn the ${fence} check off for this piece of work: run the command with \`--person-words ` +
+      `'${PERSON_WORDS_SLOT}'\` added${PERSON_WORDS_FILL}. After the command succeeds, tell the person in one ` +
       "line that it is off for this piece of work, comes back on for the next one, and that they can ask you " +
       "to turn it back on; then retry what was refused.",
     ...guardOperation({ kind: "lower-fence", fence }),
@@ -31329,8 +31469,9 @@ export function lowerFenceSentence(fence: SwitchableGuardFence): string {
   const setter = renderGuardOperation({ kind: "lower-fence", fence }, { harnessDir: harnessDir() });
   return (
     `If the person meant to do this now, offer to turn the ${fence} check off for this piece of work. When ` +
-    `they say so, run \`${setter}\` yourself and tell them in one line that it is off for this piece of work, ` +
-    "comes back on for the next one, and that they can ask you to turn it back on."
+    `they say so, run \`${setter} --person-words '${PERSON_WORDS_SLOT}'\` yourself${PERSON_WORDS_FILL}, and ` +
+    "tell them in one line that it is off for this piece of work, comes back on for the next one, and that " +
+    "they can ask you to turn it back on."
   );
 }
 
@@ -35808,6 +35949,25 @@ export function pipelineLinkEvidence(
   return { links, repos, receipts, reusedRepos, completed, missing };
 }
 
+// The way on for missing pipeline handoffs, one sentence for the engine's
+// refusal and the state tool's floor: the conductor's own step. The evidence
+// switch is the person's, so neither names it.
+export function pipelineLinkWayOn(
+  projectDir: string,
+  slug: string,
+  options: { repos: boolean; singleRun?: boolean },
+): string {
+  const singleRun = options.singleRun === true;
+  return `Re-run \`${aidlcToolInvocation("orchestrate")} next${singleRun ? ` --single --stage ${slug}` : ""}\` ` +
+    `and dispatch the missing pipeline links in their declared order, carrying the human's revision feedback. ` +
+    (guardPolicyAcceptsChanges(projectDir)
+      ? ""
+      : "Rejection starts a new attempt: earlier scans and receipts cannot certify this revision, even for a targeted artifact edit. ") +
+    `After each link returns, run \`${aidlcToolInvocation("log")} link --stage ${slug} ` +
+    `--link <agent>${options.repos ? " --repo <repo>" : ""}` +
+    `${singleRun ? " --single" : ""}\`. Do not re-stamp an old handoff or disable evidence checks to reopen the gate.`;
+}
+
 export type UnitGateScope = "per-stage" | "unit-end";
 export type UnitGateStatus =
   | "pending"
@@ -39012,6 +39172,18 @@ export function effectivePlanAction(
   return scope ? loadScopeMapping()[scope]?.stages[slug] : undefined;
 }
 
+// The stages the plan runs after Initialization, in run order: every one that
+// finished, and every one not skipped that the plan executes. Status, the
+// progress line and each stage's start line count from this one list.
+export function plannedStages(stateContent: string, scope: string): StageEntry[] {
+  const boxes = parseCheckboxes(stateContent);
+  const stateOf = (slug: string) => boxes.find((c) => c.slug === slug)?.state;
+  const runs = (slug: string) =>
+    stateOf(slug) === "completed" ||
+    (stateOf(slug) !== "skipped" && effectivePlanAction(slug, scope, stateContent) === "EXECUTE");
+  return loadStageGraph().filter((stage) => stage.phase !== "initialization" && runs(stage.slug));
+}
+
 // --- Plans composed for one piece of work ---
 //
 // A plan the composer builds for one piece of work, and the person approves
@@ -40088,13 +40260,17 @@ export const formatChangeControl = formatGuardPolicy;
 /**
  * What `next` does with the token after each flag it takes: `none` takes no
  * value, `free` takes any word, `words` only the words listed. `needsFollowing`
- * marks the four whose branch reads `a === "--x" && i + 1 < args.length`, so
- * with nothing after them this engine does not take them at all.
+ * marks the four this engine does not take at all with nothing after them.
+ * `valueMayLookLikeFlag` marks the flags whose value is the next token whatever
+ * it looks like (`--report --status` reports from a file named `--status`);
+ * every other flag takes the next token as its value only when it does not
+ * start with `--`. A value is never the `--` mark or a word behind it.
  */
 export interface NextFlagShape {
   value: "none" | "free" | "words";
   words?: readonly string[];
   needsFollowing?: true;
+  valueMayLookLikeFlag?: true;
 }
 
 // Written out rather than imported from aidlc-guard-switch.ts, which imports
@@ -40129,13 +40305,13 @@ export const NEXT_FLAGS: ReadonlyMap<string, NextFlagShape> = new Map<string, Ne
   // Retired, still taken so the token never becomes task text.
   ["--init", { value: "none" }],
   ["--force", { value: "none" }],
-  ["--scope", { value: "free", needsFollowing: true }],
+  ["--scope", { value: "free", needsFollowing: true, valueMayLookLikeFlag: true }],
   // The plan the agent proposes for a request; its words are read at call time
   // (nextFlagShape), and a missing value is an agent-facing step, not a refusal.
   ["--propose", { value: "free" }],
-  ["--stage", { value: "free", needsFollowing: true }],
-  ["--phase", { value: "free", needsFollowing: true }],
-  ["--report", { value: "free", needsFollowing: true }],
+  ["--stage", { value: "free", needsFollowing: true, valueMayLookLikeFlag: true }],
+  ["--phase", { value: "free", needsFollowing: true, valueMayLookLikeFlag: true }],
+  ["--report", { value: "free", needsFollowing: true, valueMayLookLikeFlag: true }],
   // Valued: a missing or `--`-prefixed value is this engine's own refusal, with
   // the flag named, not a token it does not take.
   ["--request", { value: "free" }],
@@ -40144,10 +40320,10 @@ export const NEXT_FLAGS: ReadonlyMap<string, NextFlagShape> = new Map<string, Ne
   ["--plan-name", { value: "free" }],
   ["--skip", { value: "free" }],
   ["--add", { value: "free" }],
-  ["--claim", { value: "free" }],
-  ["--release", { value: "free" }],
-  ["--team", { value: "free" }],
-  ["--rhythm", { value: "free" }],
+  ["--claim", { value: "free", valueMayLookLikeFlag: true }],
+  ["--release", { value: "free", valueMayLookLikeFlag: true }],
+  ["--team", { value: "free", valueMayLookLikeFlag: true }],
+  ["--rhythm", { value: "free", valueMayLookLikeFlag: true }],
   ["--depth", { value: "words", words: DEPTH_VALUES }],
   ["--test-strategy", { value: "words", words: DEPTH_VALUES }],
   ["--review", { value: "words", words: ["adversarial", "advisory", "none"] }],
@@ -40253,13 +40429,112 @@ export function splitFlagShapedArguments(argv: readonly string[]): string[] {
   ).filter((token) => token.length > 0);
 }
 
+/**
+ * The tokens in front of the `--` mark, which are the only ones a command
+ * reads as its options: behind it every token is the person's word, as
+ * `parseArgs` reads it for every tool.
+ */
+export function beforeDelimiter(args: readonly string[]): string[] {
+  const mark = args.indexOf("--");
+  return mark < 0 ? [...args] : args.slice(0, mark);
+}
+
+/**
+ * What one token in front of the `--` mark is to `next`: a flag it takes (with
+ * the value that flag takes), a flag-shaped token it does not take (with the
+ * word after it), a word of the person's, a utility flag (only on a line with
+ * no words of theirs), one of `--doctor`'s own options, or the leading
+ * `compose` verb. `at` is its place in the arguments.
+ */
+export interface NextToken {
+  role: "flag" | "untaken" | "word" | "read-only" | "doctor-arg" | "compose";
+  token: string;
+  at: number;
+  value?: string;
+}
+
+/**
+ * The one reading of which tokens on a `next` line are this engine's own and
+ * which are the person's. parseNextFlags takes its flags from it, readNextLine
+ * reads the line from it, and seams such as the Copilot claim ask it
+ * (nextLineFlags for the flags `next` takes, the `read-only` role for a utility
+ * flag), so they never read a word of the person's as one of those flags, or a
+ * flag's value as a flag of its own. `literal` is
+ * every word behind the mark, kept as typed; null when there is no mark.
+ */
+export function readNextTokens(args: readonly string[]): {
+  head: string[];
+  literal: string[] | null;
+  tokens: NextToken[];
+} {
+  const mark = args.indexOf("--");
+  const head = beforeDelimiter(args);
+  // Among the person's own words a utility flag is part of what they asked for.
+  const requestWords = nextArgsCarryRequestWords(args);
+  const tokens: NextToken[] = [];
+  let readOnly: string | undefined;
+  for (let at = 0; at < head.length; at++) {
+    const token = head[at];
+    const following = head[at + 1];
+    if (READ_ONLY_FLAGS.has(token) && !requestWords) {
+      readOnly = token;
+      tokens.push({ role: "read-only", token, at });
+      continue;
+    }
+    // `--doctor`'s own options count only once it has matched.
+    if (readOnly === "--doctor" && DOCTOR_EXPORT_FLAGS.has(token) && token !== "--output") {
+      tokens.push({ role: "doctor-arg", token, at });
+      continue;
+    }
+    if (readOnly === "--doctor" && token === "--output") {
+      const value = following !== undefined && !following.startsWith("--") ? following : undefined;
+      tokens.push({ role: "doctor-arg", token, at, ...(value === undefined ? {} : { value }) });
+      if (value !== undefined) at++;
+      continue;
+    }
+    if (at === 0 && token === "compose") {
+      tokens.push({ role: "compose", token, at });
+      continue;
+    }
+    const kind = nextTokenKind(token, following);
+    if (kind === "words") {
+      tokens.push({ role: "word", token, at });
+      continue;
+    }
+    const shape = kind === "flag" ? nextFlagShape(token) : null;
+    const takesValue = kind === "untaken" || (shape !== null && shape.value !== "none");
+    const value = takesValue && following !== undefined &&
+        (shape?.valueMayLookLikeFlag === true || !following.startsWith("--"))
+      ? following
+      : undefined;
+    tokens.push({ role: kind, token, at, ...(value === undefined ? {} : { value }) });
+    if (value !== undefined) at++;
+  }
+  return { head, literal: mark < 0 ? null : args.slice(mark + 1), tokens };
+}
+
+/**
+ * Whether a flag `next` takes stands with nothing it can take as its value, so
+ * the engine answers the line about that flag (its refusal, or for an empty
+ * `--propose` the agent's own step) before anything else on it.
+ */
+export function nextFlagLacksValue(token: NextToken): boolean {
+  if (token.role !== "flag" || token.value !== undefined) return false;
+  return nextFlagShape(token.token)?.value !== "none";
+}
+
+/** The flags `next` takes on this line, each with the value it takes (readNextTokens). */
+export function nextLineFlags(args: readonly string[]): NextToken[] {
+  return readNextTokens(args).tokens.filter((token) => token.role === "flag");
+}
+
 export function readNextLine(argv: readonly string[]): NextLineReading {
   const args = splitFlagShapedArguments(argv);
   if (args.length === 0) return { kind: "exact" };
   // Words behind the delimiter are theirs and marked, so what is in front of it
   // decides and their words never make a reading step.
   const mark = args.indexOf("--");
-  const head = mark >= 0 ? args.slice(0, mark) : args;
+  const head = beforeDelimiter(args);
   if (head.length === 0) return mark + 1 < args.length ? { kind: "words" } : { kind: "exact" };
 
   // A leading noun owns its argv, and that noun's own parser says whether it can
@@ -40289,47 +40564,24 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
   if (head[0] === "--statusline") return { kind: "exact" };
   if (head.length === 1 && (head[0] === "help" || head[0] === "-h")) return { kind: "exact" };
 
-  const requestWords = nextArgsCarryRequestWords(args);
   const words: string[] = [];
   let took = false;
-  let readOnly: string | undefined;
-  for (let i = 0; i < head.length; i++) {
-    const token = head[i];
-    const following = head[i + 1];
-    // A utility flag among their own words is one of their words; alone, or
-    // among other flags, it is the utility.
-    if (READ_ONLY_FLAGS.has(token) && !requestWords) {
-      readOnly = token;
-      took = true;
-      continue;
-    }
-    if (readOnly === "--doctor" && (token === "--export" || token === "--verbose")) {
-      took = true;
-      continue;
-    }
-    if (readOnly === "--doctor" && token === "--output") {
-      took = true;
-      if (following !== undefined && !following.startsWith("--")) i++;
-      continue;
-    }
-    const kind = nextTokenKind(token, following);
-    if (kind === "words") {
+  for (const { role, token, value } of readNextTokens(args).tokens) {
+    // A utility flag among their own words is one of their words (a word here);
+    // alone, or among other flags, it is the utility.
+    if (role === "word") {
       words.push(token);
       continue;
     }
-    if (kind === "untaken") {
-      return { kind: "untaken-flag", token, ...(following !== undefined && !following.startsWith("--") ? { value: following } : {}) };
-    }
+    if (role === "untaken") return { kind: "untaken-flag", token, ...(value === undefined ? {} : { value }) };
     took = true;
-    const shape = nextFlagShape(token);
-    if (shape === null || shape.value === "none") continue;
-    if (following === undefined || following.startsWith("--")) continue; // the engine's own refusal, by name
-    i++;
+    // A flag with no value it can take is the engine's own refusal, by name.
+    const shape = role === "flag" ? nextFlagShape(token) : null;
     // A flag this engine takes, with a value its own table does not hold: the
     // person meant one of the words it does hold, and the agent re-runs it.
-    if (shape.value === "words" && shape.words !== undefined &&
-      !shape.words.includes(following.toLowerCase())) {
-      return { kind: "value", flag: token, value: following, valid: shape.words };
+    if (value !== undefined && shape?.value === "words" && shape.words !== undefined &&
+      !shape.words.includes(value.toLowerCase())) {
+      return { kind: "value", flag: token, value, valid: shape.words };
     }
   }
   if (!took && words.length === 0) return { kind: "exact" };
@@ -40942,7 +41194,9 @@ export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[
 }
 
 export function guardSwitchRefusal(
-  wanted: GuardSwitch,
+  // A check with no per-work key (a project switch such as the human presence
+  // check) is named by its own words.
+  wanted: GuardSwitch | { check: string },
   projectDir?: string,
 ): string {
   // A terminal their own tool runs (Copilot in VS Code, Kiro IDE, Cursor): the
@@ -40950,7 +41204,9 @@ export function guardSwitchRefusal(
   // Their tool is named as they know it, with no environment variable in sight.
   const host = agentTerminalHost();
   if (host !== null) {
-    const what = wanted.key === "guard-policy"
+    const what = "check" in wanted
+      ? `turn the ${wanted.check} check off`
+      : wanted.key === "guard-policy"
       ? `set Guard Policy ${wanted.value}`
       : wanted.key === "plan-approval"
       ? "turn plan approval off"
@@ -40969,6 +41225,7 @@ export function guardSwitchRefusal(
   const wait = ownTerminal
     ? ""
     : " No reply from the person has arrived since the last decision: run it when they ask for it.";
+  if ("check" in wanted) return `Turning the ${wanted.check} check off is the person's call.${wait}${hint}`;
   if (wanted.key === "plan-approval") {
     return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call.${wait}${hint}`;
   }
@@ -41006,19 +41263,32 @@ export function parseGuardsOnLine(raw: string | null | undefined): SwitchableGua
   return parseGuardsOffLine(raw);
 }
 
-/** The `Guards Off` line for a set of lowered fences, in canonical order. */
-export function formatGuardsOffLine(fences: readonly SwitchableGuardFence[]): string {
+/**
+ * The `Guards Off` line for a set of lowered fences, in canonical order, with one
+ * label for the line: `set by you` while every check on it is the person's,
+ * `set by a command` otherwise. One trailing label keeps the line readable by
+ * every version (parseGuardsOffLine drops the whole parenthesis).
+ */
+export function formatGuardsOffLine(fences: readonly SwitchableGuardFence[], source = "you"): string {
   const ordered = SWITCHABLE_GUARD_FENCES.filter((fence) => fences.includes(fence));
-  return ordered.length === 0 ? "none" : `${ordered.join(", ")} (set by you)`;
+  return ordered.length === 0 ? "none" : `${ordered.join(", ")} (${changeControlSourceLabel(source)})`;
 }
 
 /** The `Guards On` line for fences raised above the policy, in canonical order. */
-export function formatGuardsOnLine(fences: readonly SwitchableGuardFence[]): string {
-  return formatGuardsOffLine(fences);
+export function formatGuardsOnLine(fences: readonly SwitchableGuardFence[], source = "you"): string {
+  return formatGuardsOffLine(fences, source);
+}
+
+/** Whose a `Guards Off` / `Guards On` line says its checks are: `you`, `command`, or a line with no label, `you`. */
+export function guardsLineSource(raw: string | null | undefined): string {
+  const label = /\(([^()]*)\)\s*$/.exec(raw ?? "")?.[1]?.trim() ?? "";
+  return changeControlSourceFromLabel(label);
 }
 
 /** Write the `Guards Off` line, inserting it under the policy line when absent. */
-export function setGuardsOffLine(content: string, fences: readonly SwitchableGuardFence[]): string {
+export function setGuardsOffLine(content: string, fences: readonly SwitchableGuardFence[], source?: string): string {
+  // With no source named, the line keeps its own label as checks leave it.
+  const label = source ?? guardsLineSource(getField(content, GUARDS_OFF_FIELD));
   if (getField(content, GUARDS_OFF_FIELD) === null) {
     const beforeInsert = content;
     for (const anchor of [GUARD_POLICY_FIELD, CHANGE_CONTROL_FIELD, "Review Override", "Test Strategy", "Scope"]) {
@@ -41030,11 +41300,12 @@ export function setGuardsOffLine(content: string, fences: readonly SwitchableGua
     }
     if (content === beforeInsert) content = `${content.trimEnd()}\n- **${GUARDS_OFF_FIELD}**:\n`;
   }
-  return setField(content, GUARDS_OFF_FIELD, formatGuardsOffLine(fences));
+  return setField(content, GUARDS_OFF_FIELD, formatGuardsOffLine(fences, label));
 }
 
 /** Write `Guards On`, inserting it under `Guards Off` or the same state anchors. */
-export function setGuardsOnLine(content: string, fences: readonly SwitchableGuardFence[]): string {
+export function setGuardsOnLine(content: string, fences: readonly SwitchableGuardFence[], source?: string): string {
+  const label = source ?? guardsLineSource(getField(content, GUARDS_ON_FIELD));
   if (getField(content, GUARDS_ON_FIELD) === null) {
     const beforeInsert = content;
     for (const anchor of [GUARDS_OFF_FIELD, GUARD_POLICY_FIELD, CHANGE_CONTROL_FIELD, "Review Override", "Test Strategy", "Scope"]) {
@@ -41046,7 +41317,7 @@ export function setGuardsOnLine(content: string, fences: readonly SwitchableGuar
     }
     if (content === beforeInsert) content = `${content.trimEnd()}\n- **${GUARDS_ON_FIELD}**:\n`;
   }
-  return setField(content, GUARDS_ON_FIELD, formatGuardsOnLine(fences));
+  return setField(content, GUARDS_ON_FIELD, formatGuardsOnLine(fences, label));
 }
 
 export interface FenceResolution {
@@ -41067,6 +41338,8 @@ export function resolveFences(
 ): Record<GuardFence, FenceResolution> {
   const perRunOff = parseGuardsOffLine(getField(stateContent ?? "", GUARDS_OFF_FIELD));
   const perRunOn = parseGuardsOnLine(getField(stateContent ?? "", GUARDS_ON_FIELD));
+  const offSource = guardsLineSource(getField(stateContent ?? "", GUARDS_OFF_FIELD));
+  const onSource = guardsLineSource(getField(stateContent ?? "", GUARDS_ON_FIELD));
   const byPolicy = fencesLoweredByPolicy(policy.value);
   const out = {} as Record<GuardFence, FenceResolution>;
   for (const fence of GUARD_FENCES) {
@@ -41074,9 +41347,9 @@ export function resolveFences(
     if (env !== undefined && resolveProjectFlag(env) === "1") {
       out[fence] = { fence, value: "off", source: killSwitchSource(env) };
     } else if (policy.memoryStrict === null && isSwitchableGuardFence(fence) && perRunOff.includes(fence)) {
-      out[fence] = { fence, value: "off", source: "you" };
+      out[fence] = { fence, value: "off", source: offSource };
     } else if (isSwitchableGuardFence(fence) && perRunOn.includes(fence)) {
-      out[fence] = { fence, value: "on", source: "you" };
+      out[fence] = { fence, value: "on", source: onSource };
     } else if (policy.memoryStrict !== null && isSwitchableGuardFence(fence) && perRunOff.includes(fence)) {
       out[fence] = {
         fence,
@@ -41097,7 +41370,9 @@ export function resolveFences(
 }
 
 export function fenceSourceLabel(resolution: FenceResolution): string {
-  return resolution.source === "you" ? "set by you" : resolution.source;
+  return resolution.source === "you" || resolution.source === "command"
+    ? changeControlSourceLabel(resolution.source)
+    : resolution.source;
 }
 
 /** `on (default)`, `on (set by you)`, `off (set by you)`, `off (env ...)`, or `off (guard policy off (from scope express))`. */

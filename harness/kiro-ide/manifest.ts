@@ -82,13 +82,15 @@ const SHELL_FORM_ASKS = RISKY_SHELL_FORMS.map((form) => `bun .kiro/tools/aidlc*$
 // conductor's tools list selects those (agents/aidlc-aidlc.md). On that path its
 // shell allow is not applied, the conductor's is (delegate-shell-deny.ts); the
 // allow still serves a persona the person selects directly. tools is enforced on
-// every dispatch path; it names no MCP server, so a persona reaches none (an
-// @mcp wildcard would expose every user- and workspace-level server).
+// every dispatch path. includeMcpJson gives a persona every server in the
+// person's workspace and user mcp.json; no rule allows an MCP call, so each
+// one asks.
 function personaFrontmatter(agent: string): string[] {
   const writePaths = agent === "aidlc-composer-agent" ? [composerProposalPath] : spacePaths;
   // Engine-owned trees are never a persona's to write; a deny beats every allow.
   return [
     `tools: ["read", "write", "shell"]`,
+    "includeMcpJson: true",
     "permissions:",
     "  rules:",
     "    - capability: shell",
@@ -229,7 +231,9 @@ const manifest: HarnessManifest = {
       "folder in Kiro IDE: choose Trust Folder & Continue when Kiro asks whether you trust it, or " +
       "select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window " +
       "from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), send a message and run " +
-      "doctor again. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.",
+      "doctor again. If AI-DLC was installed while Kiro IDE was open, quit Kiro IDE fully and reopen " +
+      "it instead: it keeps the PATH it started with, so its hooks cannot find aidlc, and Reload " +
+      "Window does not change that. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.",
     // A second cause, measured live on Kiro IDE 1.2.37 (#2167): a folder
     // trusted after Kiro opened it runs the agent's commands, but Kiro's agent
     // started with hooks off for the untrusted folder ("hooks.v2.execution
@@ -272,6 +276,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/active-memory/ (the
           // engine's copy of the active space's method).
           "sha256:a21217e44700aa0d6e703ebb524c4e07a3c4c12f7097d1923034b10b9a6d0549",
+          // The variant shipped before the block ignored aidlc/.aidlc-request-text/
+          // (a request the engine has not read yet).
+          "sha256:6c6ff7641c17829d77fdd023f340b938db11dcc26c734a0c452d5213f9bd19cf",
         ],
       },
     },

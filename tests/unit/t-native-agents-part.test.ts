@@ -112,7 +112,7 @@ describe("a root file's part is the root file's text", () => {
   });
 
   test("copilot: a native project already told it needs bun refreshes to the native wording", () => {
-    // What a refresh wrote before this fix: AI-DLC's part in the copy wording.
+    // What an earlier release's refresh wrote: AI-DLC's part in the copy wording.
     const earlier = join(temp("aidlc-t-native-part-earlier-"), "copilot");
     cpSync(join(REPO_ROOT, "dist-release", "copilot"), earlier, { recursive: true });
     const { descriptor } = projectionFiles(earlier);

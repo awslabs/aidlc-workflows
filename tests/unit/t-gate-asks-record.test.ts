@@ -148,7 +148,7 @@ describe("t-gate-asks-record: the gate row says what the person was asked to dec
     expect(field(openGate(), "Brief Digest")).toBe(`sha256:${digest}`);
   });
 
-  // Live (dev-1, 2026-10-08): the agent renders the brief one second AFTER the gate row is written, as the protocol
+  // The agent renders the brief AFTER the gate row is written, as the protocol
   // orders it, so the gate-open row says none in the normal flow. The approval row is written after the brief was
   // shown: it carries the digest of what the person decided on.
   test("the approval row carries the digest of the brief rendered after the gate opened; none when none was", () => {
@@ -170,7 +170,7 @@ describe("t-gate-asks-record: the gate row says what the person was asked to dec
     expect(field(rows("GATE_APPROVED").at(-1)!, "Brief Digest")).toBe("none");
   });
 
-  // AIDA on #2166 (F1): the kept brief was written with link-following calls under a path that joined an unchecked
+  // #2166: the kept brief was written with link-following calls under a path that joined an unchecked
   // Unit name. A cloned repo can carry a planted link under the record's reviews tree; the keep must never follow it,
   // and the brief must still print.
   test("a briefs folder that is a link to the outside is not written through; the brief still prints", () => {

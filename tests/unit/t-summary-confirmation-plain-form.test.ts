@@ -108,7 +108,6 @@ function rows(proj: string, event: string) {
   return readAuditShardEvents(proj).filter((entry) => entry.event === event);
 }
 
-// The summary prompt recorded the way that counts, then the person's turn.
 function presentSummary(proj: string, questions: string): void {
   const decision = run(
     ["decision", "--stage", STAGE, "--checkpoint", "summary-confirmation", "--questions-file", questions,
@@ -191,7 +190,6 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
     appendAuditEntry("DECISION_RECORDED", {
       Stage: STAGE, Decision: "Does this all look correct?", Options: "Looks correct,Request changes",
     }, proj);
-    // Another work item's question was asked, and the person replied to it.
     appendAuditEntry("DECISION_RECORDED", { Stage: "user-stories", Decision: "Which persona first?", Options: "Admin,Guest" }, proj);
     appendAuditEntry("HUMAN_TURN", {}, proj);
     const decision = run(

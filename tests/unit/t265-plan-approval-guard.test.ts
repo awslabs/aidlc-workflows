@@ -1995,6 +1995,26 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // `next` takes no `--bypass`, so on its line, behind `--` or among their
+  // words, the token is the person's: a request to build such an option turns
+  // no check off.
+  test("the person's words that name --bypass on a next line are not a switch while the plan waits", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "u1", { plan: true, answer: null });
+      for (const command of ["aidlc engine orchestrate next -- add a --bypass option", "aidlc next add a --bypass option"]) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+      // Any other command is read whole, as the tool that applies it reads it.
+      const flags = runHook(proj, BASH("aidlc config flags -- --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes"));
+      expect(flags.code, flags.stderr).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   // Switching a check off for the project, or back on, is the person's call,
   // and the engine then tells them which check is off. While a plan waits,
   // turning one back on always passes; turning one off passes once a person
@@ -2293,6 +2313,52 @@ describe("t265b hook lifecycle", () => {
         }
         expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).stderr)
           .toContain("Nothing is built or changed while the plan waits for your approval.");
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    });
+  }
+
+  // On the kiro-ide row the person's MCP servers reach the chat, and the Kiro
+  // adapter marks such a call `aidlc_external_tool: "mcp"`, outside the agent's
+  // input. While the plan waits it runs like their other asks (Kiro asks them
+  // before it runs). Unmarked, or marked on a write, a shell or the developer,
+  // it waits; before the question is asked it waits too.
+  for (const policy of ["strict (set by you)", "off (from scope poc)"]) {
+    test(`while the plan waits, a call the adapter marks as the person's MCP server runs (Guard Policy ${policy})`, () => {
+      const proj = scratchProject();
+      try {
+        seedState(proj);
+        const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+        writeFileSync(statePath, readFileSync(statePath, "utf-8")
+          .replace("- **Scope**: poc\n", `- **Scope**: poc\n- **Guard Policy**: ${policy}\n`), "utf-8");
+        seedUnit(proj, null, { plan: true, answer: null });
+        const marker = (kind: "ask" | "run-stage") => writeActiveDirectiveMarker(proj, {
+          kind,
+          ...(kind === "ask" ? { ask_type: "plan-approval" } : {}),
+          stage: "code-generation",
+          state_sha256: stateDigest(readFileSync(statePath, "utf-8")),
+        });
+        const MCP = (extra: Record<string, unknown> = {}) => ({
+          hook_event_name: "PreToolUse",
+          tool_name: "mcp_docs_query_docs",
+          tool_input: { query: "zod v4 refine" },
+          ...extra,
+        });
+        const MARK = { aidlc_external_tool: "mcp" };
+        marker("ask");
+        const marked = runHook(proj, MCP(MARK));
+        expect(marked.code, marked.stderr).toBe(0);
+        expect(runHook(proj, MCP()).code).toBe(2);
+        for (const payload of [
+          { ...WRITE(join(proj, "src", "inline.ts")), ...MARK },
+          { ...BASH("echo 'export const x = 1;' > src/inline.ts"), ...MARK },
+          { ...STAGE_DISPATCH(proj, "Build the plan."), ...MARK },
+        ]) {
+          expect(runHook(proj, payload).code, JSON.stringify(payload)).toBe(2);
+        }
+        marker("run-stage");
+        expect(runHook(proj, MCP(MARK)).code).toBe(2);
       } finally {
         rmSync(proj, { recursive: true, force: true });
       }

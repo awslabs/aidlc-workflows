@@ -11,11 +11,11 @@
 // differs and names the diff, one CHANGE_ACCEPTED row is written, and the
 // reviewer's verdict is never altered. An output saved without the current
 // summary confirmation is recorded and the stage continues. The review-freeze
-// fence holds under strict and stands aside (one line, one GUARD_STOOD_ASIDE
-// row) under relaxed and off. Plan Approval additionally requires the initial
-// human approval and artifacts before its lowered fence permits changed content;
-// no value ever skips a human gate, the autonomous-mode plan stop, or a review
-// in progress.
+// fence holds under strict and stands aside under relaxed and off, one
+// GUARD_STOOD_ASIDE row each time; relaxed also says so in one line, off says
+// nothing. Plan Approval additionally requires the initial human approval and
+// artifacts before its lowered fence permits changed content; no value ever
+// skips a human gate, the autonomous-mode plan stop, or a review in progress.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -142,8 +142,6 @@ function project(mode: Mode): string {
   return proj;
 }
 
-/** The one line the human hears when a relaxed or off policy carries a change through. */
-
 function stageDir(proj: string): string {
   const dir = join(seededRecordDir(proj), "inception", STAGE);
   mkdirSync(dir, { recursive: true });
@@ -178,7 +176,6 @@ function expectValidationError(stderr: string, path: string): void {
   );
 }
 
-/** Request and record one READY review through the shipped review command. */
 function recordReadyReview(proj: string): void {
   const dir = stageDir(proj);
   for (const name of ["requirements.md", `${STAGE}-questions.md`]) {
@@ -197,7 +194,6 @@ function recordReadyReview(proj: string): void {
   expect(completed.status, completed.stderr).toBe(0);
 }
 
-/** Change the reviewed bytes after the receipt and record the write in the ledger. */
 function editReviewedArtifact(proj: string): void {
   appendFileSync(artifact(proj), "\nA requirement added after the review.\n", "utf-8");
   appendAuditEntry(
@@ -223,7 +219,6 @@ function reviewCompletedRows(proj: string) {
   return readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED");
 }
 
-/** The change_notices lines the state tool printed. */
 function printedNotices(stdout: string): string[] {
   const notices: string[] = [];
   for (const line of stdout.split("\n")) {
@@ -283,7 +278,6 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(printedNotices(approved.stdout)).toEqual([]);
     rows = acceptedRows(proj);
     expect(rows).toHaveLength(1);
-    // The reviewer's verdict is exactly what was recorded.
     const completed = reviewCompletedRows(proj);
     expect(completed).toHaveLength(1);
     expect(auditBlockField(completed[0].block, "Verdict")).toBe("READY");
@@ -425,7 +419,6 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
           expect(passed.stderr, `${policy} ${harness}`).not.toContain("Continuing past");
         }
       }
-      // The audit trail still has every write it let through.
       const rows = readAuditShardEvents(proj).filter((entry) => entry.event === "GUARD_STOOD_ASIDE");
       expect(rows, policy).toHaveLength(writes * 2);
     }
@@ -582,7 +575,6 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     );
     expect(printedNotices(refused.stdout)).toEqual([]);
     expect(acceptedRows(proj)).toHaveLength(0);
-    // With the ledger writable the same transition records and continues.
     const recorded = run(STATE_TOOL, ["gate-start", STAGE], proj);
     expect(recorded.status, recorded.stderr).toBe(0);
     expect(acceptedRows(proj)).toHaveLength(1);
@@ -651,7 +643,6 @@ const SUMMARY_ENV = {
   AIDLC_SKIP_REVIEWER_GATE_GUARD: "1",
 };
 
-/** Present and confirm the summary through the shipped log command. */
 function confirm(proj: string, questions: string): void {
   writeFileSync(questions, questionsBody(""));
   const decision = run(
@@ -959,7 +950,6 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     return join(unitDir(proj), "functional-spec.md");
   }
 
-  /** Start and complete the Unit's stage body, then record one READY review for it. */
   function settleUnit(proj: string): void {
     const started = run(STATE_TOOL, ["unit", "start", "--stage", UNIT_STAGE, "--unit", UNIT], proj, UNIT_ENV);
     expect(started.status, started.stderr).toBe(0);
@@ -1008,7 +998,6 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     const rows = acceptedRows(proj);
     expect(rows).toHaveLength(1);
     expect(auditBlockField(rows[0].block, "Unit")).toBe(UNIT);
-    // The line names the Unit in plain words, never its numbered id.
     expect(unitPlainName("u1-note-store")).toBe("note store");
     expect(unitPlainName("payments_api")).toBe("payments api");
     expect(auditBlockField(rows[0].block, "Checkpoint")).toBe("review-receipt");
@@ -1090,7 +1079,6 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
 });
 
 describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progress review refuse identically; the two lowered fences stand aside", () => {
-  /** The same scenario under all three values, normalised to the strict project's paths. */
   function pair(build: (mode: Mode) => { proj: string; out: string }) {
     const strict = build("strict");
     const relaxed = build("relaxed");

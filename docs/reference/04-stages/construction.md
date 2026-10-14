@@ -356,7 +356,7 @@ legacy name and require the selected intent's exact `WORKTREE_DISCARDED`
 | Lead Agent        | aidlc-architect-agent                                                                                   |
 | support_agents    | aidlc-developer-agent                                                                                   |
 | mode              | inline                                                                                            |
-| Inputs            | unit-of-work.md, unit-of-work-story-map.md, requirements.md, domain design artifacts         |
+| Inputs            | unit-of-work.md, unit-of-work-story-map.md, stories.md (if produced), requirements.md, domain design artifacts |
 | Outputs           | `<record>/construction/{unit-name}/functional-design/` -- functional-spec.md, rules.md, entities.md, traceability.json, CONDITIONAL: frontend-components.md (per Unit kind) |
 
 ### Purpose
@@ -369,13 +369,14 @@ feasibility input.
 
 - Unit definition from `<record>/inception/units-generation/unit-of-work.md`
 - Assigned stories from `<record>/inception/units-generation/unit-of-work-story-map.md`
+- Acceptance criteria of those stories from `<record>/inception/user-stories/stories.md` (if produced)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md`
 - Domain design artifacts from `<record>/inception/domain-design/`
 
 ### Steps
 
-1. **Read Unit Context** -- Read the unit definition, assigned stories,
-   requirements, and domain design artifacts.
+1. **Read Unit Context** -- Read the unit definition, assigned stories and
+   their acceptance criteria, requirements, and domain design artifacts.
 
 2. **Create Functional Design Plan** -- Analyze the unit's scope and create a
    questions file at
@@ -429,7 +430,7 @@ feasibility input.
 | rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
 | entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
 | frontend-components.md   | (CONDITIONAL) Component hierarchy, props/state, interaction flows, form validation, API integration |
-| traceability.json        | Every acceptance criterion assigned to the Unit mapped to the `BRx.y` rules in rules.md |
+| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR), each `OK` to `BRx.y` rules in rules.md, `N/A` or `Deferred` with its reason, or `GAP` |
 
 Which files a Unit gets follows its kind: a `ui` Unit gets no entities.md or
 rules.md, only a `ui` Unit gets frontend-components.md, and a `packaging`
@@ -1013,7 +1014,10 @@ This stage has a **two-part structure**: planning followed by generation.
    thereby approved. Testing Posture, scope, strategy, or project type changes
    follow that same rule. Other code moving after approval never asks again on
    any Guard Policy: the build continues with one `change_notices` line naming
-   the files. A different intent or target, a new attempt, or missing actual
+   the files. A swarm under `strict` is the exception for the person's own
+   files: prepare refuses until the plan is approved again, and the source
+   landing refuses the same change until it is undone or Guard Policy is
+   `relaxed`. A different intent or target, a new attempt, or missing actual
    initial approval still requires its own approval. After a rejected gate (the
    Code Generation completion gate, a Unit checkpoint, or a swarm batch
    checkpoint), while the plan is still the one approved before, `next` first
@@ -1281,7 +1285,10 @@ with the aidlc-devsecops-agent providing security testing expertise.
   tests in CI before merge." line, or a memory note's "CI execution before
   merge") is a target only when the plan runs CI Pipeline (`ci-pipeline` listed
   as `EXECUTE` and not `[S]` in `aidlc-state.md`); otherwise it is recorded
-  `N/A` with that reason and is never a failure
+  `N/A` with that reason and is never a failure. While CI Pipeline is still
+  ahead (`[ ]`), the target is CI Pipeline's to meet: recorded `N/A` with Owning
+  Stage `ci-pipeline` and the reason that CI Pipeline, later in the plan, sets up
+  CI to run these tests before merge, never a failure
 
 ### Steps
 
@@ -1325,8 +1332,8 @@ with the aidlc-devsecops-agent providing security testing expertise.
      Evidence, Owning Stage, and Verdict
    - Applicable targets begin `Pending`; `N/A` is valid only when the
      source-complete inventory found no applicable measurable target, or for a
-     target the plan makes inapplicable (the CI obligation of a plan that runs
-     no CI Pipeline)
+     target the plan makes inapplicable here (the CI obligation of a plan that
+     runs no CI Pipeline or has it still ahead)
    - Readiness assessment (build-ready, test-ready, deployment-ready)
    - Known limitations or outstanding items
 

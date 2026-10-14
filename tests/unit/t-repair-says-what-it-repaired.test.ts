@@ -165,7 +165,6 @@ describe("a repair the person did not cause never claims their edit", () => {
       expect(routed.kind, JSON.stringify(routed)).toBe("run-stage");
       expect(routed.plan_approval?.status, JSON.stringify(routed)).toBe("plan");
       claimsNoEditOfTheirs(JSON.stringify(routed), "the planning directive");
-      // The agent writes the file; the question that follows is the plain one.
       writePlan(proj);
       const asked = next(proj);
       expect(asked.ask_type).toBe("plan-approval");
@@ -187,7 +186,6 @@ describe("a repair the person did not cause never claims their edit", () => {
     expect(repair.kind).toBe("run-stage");
     expect(repair.plan_approval?.status).toBe("repair");
     claimsNoEditOfTheirs(JSON.stringify(repair), "the repair directive");
-    // The agent re-renders the block; the person is asked the plain question.
     writePlan(proj, "- [ ] Step 2: a test for empty titles\n");
     const asked = next(proj);
     expect(asked.ask_type).toBe("plan-approval");
@@ -209,12 +207,10 @@ describe("a repair the person did not cause never claims their edit", () => {
     const said = answer(proj, "Approve Plan");
     expect(said.message).toContain("code-generation-plan.md");
     claimsNoEditOfTheirs(said.message, "the refusal");
-    // Their editing turn is over: this is no longer the edit-mode question.
     const routed = next(proj);
     expect(routed.kind, JSON.stringify(routed)).toBe("run-stage");
     expect(routed.plan_approval?.editing, JSON.stringify(routed)).toBeUndefined();
     claimsNoEditOfTheirs(JSON.stringify(routed), "the directive");
-    // The agent writes the plan again, and they are asked once, plainly.
     writePlan(proj);
     const asked = next(proj);
     expect(asked.ask_type).toBe("plan-approval");

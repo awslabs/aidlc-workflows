@@ -139,10 +139,8 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       // The dispatch relay is on stdout (conductor relays, never advances).
       expect(r.stdout).toContain("has already run; it carries no workflow work");
       expect(r.stdout).toContain("/aidlc --status");
-      // Turn-clock bumped to 1.
       expect(existsSync(counterPath(dir))).toBe(true);
       expect(readFileSync(counterPath(dir), "utf-8").trim()).toBe("1");
-      // Latch stamped at turn 1, source read-only-flag.
       expect(existsSync(latchPath(dir))).toBe(true);
       const latch = JSON.parse(readFileSync(latchPath(dir), "utf-8")) as {
         turn?: number;
@@ -292,18 +290,15 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       expect(latch.turn).toBe(1);
       expect(latch.source).toBe("knowledge-verb");
       expect(latch.flag).toBe("knowledge onboard --json");
-      // The NON-COMPILED path must spawn aidlc-knowledge.ts, not
-      // aidlc-utility.ts. Every terminal family before DocumentKB lived in the
-      // utility tool, so the adapter hardcoded it; a knowledge verb sent there
-      // gets "unknown subcommand". Assert on the relayed output because that is
-      // the only observable -- and without this the tool-selection line is
-      // unpinned (verified: reverting it left the whole file green).
+      // The NON-COMPILED path must spawn aidlc-knowledge.ts, not aidlc-utility.ts. A
+      // knowledge verb sent to the utility tool gets "unknown subcommand". Assert on
+      // the relayed output because that is the only observable -- and without this
+      // the tool-selection line is unpinned.
       //
-      // The verb is `onboard` because that is what the tool implements today.
-      // Using a not-yet-built verb made this assert against the tool's OWN
-      // "unknown subcommand" error rather than against the wrong-tool error it
-      // exists to catch -- a test that passed for the wrong reason until the
-      // tool arrived, then failed for the wrong reason too.
+      // The verb is `onboard` because that is what the tool implements. Using an
+      // unimplemented verb makes this assert against the tool's OWN "unknown
+      // subcommand" error rather than against the wrong-tool error it exists to
+      // catch.
       const relayed = relayedOutput(r.stdout);
       expect(relayed).toBeDefined();
       expect(relayed).not.toMatch(/unknown subcommand/i);

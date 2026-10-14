@@ -735,7 +735,8 @@ Changes**.
   mandatory ensemble evidence; approval is refused until the lead has
   integrated all three. A lead-only run owes none.
 - Stories produced here are consumed by Refined Mockups (2.5), Domain
-  Design (2.6), Units Generation (2.7), and Delivery Planning (2.9).
+  Design (2.6), Units Generation (2.7), Delivery Planning (2.9), and
+  Functional Design (3.1), which traces each Unit's acceptance criteria.
 - The aidlc-design-agent support adds a UX view to the stories.
 
 ---

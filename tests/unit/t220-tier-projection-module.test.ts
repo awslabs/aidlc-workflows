@@ -67,10 +67,10 @@ const EXPECTED: Record<
     opencode: { model: null, variant: null },
   },
   balanced: {
-    // Balanced is the reviewer tier; medium effort pinned (2.5.40) after
-    // live A/B showed a medium review pass at ~half the xhigh wall-clock
-    // with no finding-quality loss (an xhigh session pin was silently
-    // doubling every review's cost via inherit).
+    // Balanced is the reviewer tier; medium effort pinned after live A/B showed
+    // a medium review pass at ~half the xhigh wall-clock with no finding-quality
+    // loss (an xhigh session pin was silently doubling every review's cost via
+    // inherit).
     claude: { model: "sonnet", effort: "medium" },
     codex: { model: null, effort: "medium" },
     // Cursor never pins a model either: model availability is Cursor-plan-
@@ -189,9 +189,7 @@ describe("t220 tier projection module", () => {
   });
 
   test("readMemoryCap: project.md overrides org.md - lower OR raise", () => {
-    // Lowering: org says balanced, project tightens to templated.
     const lower = memoryFixture({ org: "balanced", project: "templated" });
-    // Raising: org says templated, project relaxes back to judgment.
     const raise = memoryFixture({ org: "templated", project: "judgment" });
     try {
       expect(readMemoryCap(lower)).toBe("templated");

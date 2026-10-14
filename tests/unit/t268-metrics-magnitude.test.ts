@@ -3,8 +3,8 @@
 // t268 - metrics magnitude lines (aidlc-metrics.ts). The metrics helper runs
 // UNDER the audit lock, so every unit here is pure string work: no transcript
 // I/O, no ledger read, no network. We assert:
-//   (1) buildTagString produces the exact comma-joined tag body the counter line
-//       has always used - the regression that guards the refactor.
+//   (1) buildTagString produces the exact comma-joined tag body the counter
+//       line uses.
 //   (2) buildMagnitudeLines turns a STAGE_COMPLETED usage rollup into the
 //       expected token counters + cost gauge + per-model / per-agent variants,
 //       under a configurable metric-name prefix.
@@ -92,7 +92,6 @@ describe("buildTagString (counter-line regression)", () => {
       "phase:CONSTRUCTION",
     ].join(",");
     expect(buildTagString(c)).toBe(expected);
-    // Full counter line, unchanged shape under the default prefix.
     expect(`aidlc.stage_completed:1|c|#${buildTagString(c)}`).toBe(
       `aidlc.stage_completed:1|c|#${expected}`,
     );
@@ -163,15 +162,12 @@ describe("buildMagnitudeLines", () => {
     expect(lines).toContain(`aidlc.cache.write:700|c|#${tags}`);
     expect(lines).toContain(`aidlc.cost.usd:1.68|g|#${tags}`);
 
-    // Per-model cost gauges carry an extra model: tag.
     expect(lines).toContain(`aidlc.cost.usd:1.23|g|#${tags},model:opus-4-8`);
     expect(lines).toContain(`aidlc.cost.usd:0.45|g|#${tags},model:sonnet-4-6`);
 
-    // Per-agent cost gauges carry an extra agent: tag.
     expect(lines).toContain(`aidlc.cost.usd:1.1|g|#${tags},agent:main`);
     expect(lines).toContain(`aidlc.cost.usd:0.58|g|#${tags},agent:general-purpose`);
 
-    // Exactly the nine lines above - no extras.
     expect(lines.length).toBe(9);
   });
 
@@ -267,7 +263,6 @@ describe("buildMagnitudeLines", () => {
     };
     const lines = buildMagnitudeLines("WORKFLOW_COMPLETED", fields, tags, PREFIX);
     expect(lines).toContain(`aidlc.cost.usd:1.23|g|#${tags},model:opus-4-8`);
-    // Only the one well-formed model segment survives.
     expect(lines.filter((l) => l.includes("model:")).length).toBe(1);
   });
 });

@@ -66,7 +66,11 @@ aidlc doctor
 The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
 
 On Windows, download `install.ps1` and run
-`& $installer`. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
+`& $installer`. If Kiro was open while you installed, including when you ran
+the installer in Kiro's own terminal, quit Kiro fully and reopen it before
+your first `/aidlc`: Kiro keeps the PATH it started with, so its hooks, its
+agent and its other terminals cannot find `aidlc` until it restarts, and
+**Developer: Reload Window** is not enough. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
 for account scope, automatic User PATH registration, and `-NoModifyPath`.
 For an air-gapped package, use
 `install.sh --from <release-directory> --offline` on Unix or
@@ -461,7 +465,7 @@ ways to enable it, either works:
 | Dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent) | `Task` tool | `invoke_sub_agent` (Kiro IDE) or `orchestrate_subagent` (Kiro CLI) → all 14 Markdown personas, each running under the `tools:` and deny rules in its own frontmatter and the conductor's command allow |
 | Construction swarm | Parallel `Task` floor, optional ultracode Workflow | Subagent fan-out only; `AIDLC_USE_SWARM=1` is announced as a no-op |
 | Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` when a new session takes its first prompt, and on Kiro IDE `SESSION_RESUMED` when a prompt returns to an earlier chat (no genuine session-end trigger, so no `SESSION_ENDED`; no pre-compaction event) |
-| MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | None shipped |
+| MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | None shipped; AI-DLC's own chat and its 14 delegated personas get every server in your workspace and user `.kiro/settings/mcp.json`, and each call asks you first (on Kiro CLI from a persona's second step). In Code Generation, AI-DLC can refuse an MCP call until you approve the plan, except while it asks you to approve it: then MCP calls run, so you can look something up before you decide |
 | Quotes in recorded text on Windows | Recorded as typed | Kiro IDE runs the agent's commands in Windows PowerShell 5.1, which drops empty arguments and removes a double quote inside a value unless it is written as `\"`. The agent writes quotes that way, so answers and feedback are recorded with their quotes. A value that also holds `&`, `<`, `>`, `^`, or a pipe sign is written with single inner quotes instead, because the `aidlc` command runs through cmd.exe, which would act on those characters; the hook refuses a command where one would reach cmd.exe outside its quotes. If a question or answer still arrives split in two, AI-DLC refuses to record it and says how to pass it, so the audit trail never keeps only part of it |
 | Turning a guard, summary confirmation, or plan approval off mid-workflow | Ask in your own words and the agent runs the setter, or type the switch in chat, for example `/aidlc config set summary-confirmation off` | The same, except on Kiro IDE builds that give hooks an empty message (such as 1.0.242), which refuse the setter too. There, for summary confirmation or plan approval, run the terminal command the refusal names to turn it off now for all work, including the work running now (on a native install, `aidlc config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` or `--bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD`; `--clear-bypass` turns it back on); for another guard, update Kiro IDE and type the switch |
 
@@ -503,7 +507,10 @@ aidlc config trust --kiro-workflows off --yes   # or: on
 ```
 
 Kiro's own **Disable Workflows** and **Enable Workflows** commands do the same.
-`/aidlc --doctor` shows a warning while Workflows is on. Kiro CLI keeps its
+`/aidlc --doctor` shows a warning while Workflows is on, and while Kiro's
+settings file has an error AI-DLC cannot read past (Kiro may still read
+Workflows as on from it; the next chat tells you once, and the fix is the
+error in that file). Kiro CLI keeps its
 sub-agent tool with Workflows on (unless you turn its "Workflows: sub-agent
 tool" setting off), so it needs nothing.
 
@@ -607,8 +614,8 @@ the `/aidlc` skill and the Markdown `agents/aidlc-aidlc.md` are its conductor su
 JSON files (the `kiro` harness relies on the agent-JSON `hooks` block); it preloads standing rules through
 always-included steering rather than CLI agent resources; the shared Kiro
 projection removes the core persona's Claude-only `disallowedTools` key; and
-its manifest adds `tools:` and `permissions.rules` frontmatter to every persona
-(each persona a stage reads inline also ships without it, as
+its manifest adds `permissions.rules` frontmatter to every persona, beside the
+`tools:` line both harnesses add (each persona a stage reads inline also ships without them, as
 `.kiro/aidlc-common/personas/<agent>.md`, the file the lead reads in its own chat).
 It does not ship the `kiro` harness's agent-v1 JSON.
 See [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-harness.md).

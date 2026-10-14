@@ -660,7 +660,6 @@ describe("t278 engine-emitted wave contract", () => {
       "api",
       "web",
     ]);
-    // A wave step names the module that says how a wave runs.
     expect(directive.protocol_modules).toContain("wave");
 
     const api = directive.wave?.entries[0] as WaveEntry;
@@ -918,7 +917,6 @@ describe("t278 engine-emitted wave contract", () => {
       const after = next(proj).directive;
       expect(after.wave, JSON.stringify(after)).toBeUndefined();
       expect(after.gate).toBe(true);
-      // The gate opens and says the change once.
       const opened = spawnSync(BUN, [ORCH, "report", "--stage", "functional-design", "--result", "awaiting-approval", "--project-dir", proj], {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
         env: { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
@@ -1001,7 +999,6 @@ describe("t278 engine-emitted wave contract", () => {
     delete env.AIDLC_STOP_HOOK_PROBE;
     markHumanTurn(proj);
     expect(freezeWrite(proj, artifact).status).toBe(2);
-    // What a probe of `next` sees is the own-work ask the refusal left.
     const probed = runOrchestrateNext(ORCH, proj, [], { env: { ...env, AIDLC_STOP_HOOK_PROBE: "1" } });
     expect(probed.directive, probed.out).toMatchObject({ kind: "ask", ask_type: "guard-recovery", agent_work: true });
     // The hook's probe runs the project's own tree.
@@ -1035,7 +1032,6 @@ describe("t278 engine-emitted wave contract", () => {
       expect(handedBack.stdout, `${tree}: ${handedBack.stderr}\n${traces()}`).toContain('"decision":"block"');
       expect(handedBack.stdout).toContain("AI-DLC is carrying on with Functional Design for alpha.");
     }
-    // Handed back, the agent's own `next` is that same own-work ask.
     const asked = JSON.stringify(runOrchestrateNext(ORCH, proj, [], { env }).directive);
     expect(asked).toContain('"agent_work":true');
     expect(asked).toContain("--result revised");

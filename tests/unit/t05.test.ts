@@ -53,10 +53,9 @@ const STAGES_DIR = join(
   "stages",
 );
 
-// The .sh's stage_check() table, in source order. [phase, slug]. Driving
-// from this explicit table (rather than globbing) preserves the exact
-// semantic the .sh asserted: that slug equals the FILENAME STEM and phase
-// equals the PARENT DIRECTORY for each known stage — a glob would only
+// The stage table, in source order. [phase, slug]. Driving from this explicit
+// table (rather than globbing) asserts that slug equals the FILENAME STEM and
+// phase equals the PARENT DIRECTORY for each known stage - a glob would only
 // confirm self-consistency, not the filename/directory contract.
 const STAGE_TABLE: ReadonlyArray<readonly [phase: string, slug: string]> = [
   // Initialization (3)
@@ -71,7 +70,7 @@ const STAGE_TABLE: ReadonlyArray<readonly [phase: string, slug: string]> = [
   ["ideation", "team-formation"],
   ["ideation", "rough-mockups"],
   ["ideation", "approval-handoff"],
-  // Inception (8)
+  // Inception (9)
   ["inception", "reverse-engineering"],
   ["inception", "practices-discovery"],
   ["inception", "requirements-analysis"],
@@ -99,8 +98,6 @@ const STAGE_TABLE: ReadonlyArray<readonly [phase: string, slug: string]> = [
   ["operation", "feedback-optimization"],
 ];
 
-// parseStage(): mirror of the .sh's per-stage `bun -e` body — read the
-// file at $STAGES_DIR/$phase/$slug.md and parse its frontmatter. In-process.
 function parseStage(phase: string, slug: string): Record<string, unknown> {
   const file = join(STAGES_DIR, phase, `${slug}.md`);
   return parseStageFrontmatter(readFileSync(file, "utf8")) as Record<
@@ -109,9 +106,8 @@ function parseStage(phase: string, slug: string): Record<string, unknown> {
   >;
 }
 
-// Guard: the .sh hard-coded a plan of 64 (32 stages x 2). Pin the table
-// length so a stage added/removed without updating this port is caught,
-// matching the .sh's implicit count contract.
+// Guard: pin the table length so a stage added/removed without updating this
+// test is caught.
 describe("t05 stage table integrity", () => {
   test("table holds exactly 33 stages (plan 66 = 33 x 2)", () => {
     expect(STAGE_TABLE.length).toBe(33);
@@ -119,17 +115,15 @@ describe("t05 stage table integrity", () => {
 });
 
 // =========================================================================
-// Per-stage parse (.sh stage_check, 2 assertions per stage = 64 total).
+// Per-stage parse (2 assertions per stage = 66 total).
 // =========================================================================
 describe("each stage .md parses to a slug + phase matching its location", () => {
   for (const [phase, slug] of STAGE_TABLE) {
-    // .sh: ok "$phase/$slug slug matches filename"
     test(`${phase}/${slug} slug matches filename`, () => {
       const obj = parseStage(phase, slug);
       expect(obj.slug).toBe(slug);
     });
 
-    // .sh: ok "$phase/$slug phase matches directory"
     test(`${phase}/${slug} phase matches directory`, () => {
       const obj = parseStage(phase, slug);
       expect(obj.phase).toBe(phase);

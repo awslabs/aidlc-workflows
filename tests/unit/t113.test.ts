@@ -35,7 +35,7 @@ import {
   validateDirective,
 } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 
-// --- Well-formed fixtures, one per kind (mirror t113-directive-schema.sh:18-56) ---
+// --- Well-formed fixtures, by kind ---
 // Fresh object per call so a `delete`/spread in one case can't bleed into another.
 
 function loadSteering(): Record<string, unknown> {
@@ -327,9 +327,6 @@ function parked(): Record<string, unknown> {
   return { kind: "parked", reason: "Parked at feasibility.", stage: "feasibility" };
 }
 
-// Mirror of the .sh run_validator helper (t113-directive-schema.sh:60-67):
-// call the validator and reduce the failure case to the pipe-joined error
-// string the original asserted against. On success return "VALID".
 function errs(obj: unknown): string {
   const r = validateDirective(obj);
   return r.valid ? "VALID" : r.errors.join("|");
@@ -337,8 +334,7 @@ function errs(obj: unknown): string {
 
 describe("t113 directive-schema — validateDirective (migrated from t113-directive-schema.sh, plan 26)", () => {
   // ============================================================
-  // Positive baseline — a well-formed directive of each kind (8 assertions)
-  // .sh lines 75-82
+  // Positive baseline - a well-formed directive of each kind
   // ============================================================
 
   test("load-steering well-formed -> VALID", () => {
@@ -481,7 +477,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     ).toBe("VALID");
   });
 
-  // M1: the optional `repo` field (single-recorded-repo case) — the engine
+  // The optional `repo` field (single-recorded-repo case) - the engine
   // threads the lone sibling repo to the conductor as `prepare --repo`. repo is
   // optional, so a directive carrying it (well-formed string) must still validate.
   test("invoke-swarm with optional repo -> VALID", () => {
@@ -720,21 +716,19 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   // ============================================================
   // Positive returns the parsed directive as data (1 assertion)
-  // .sh lines 88-93: `kind=` + r.data.kind
   // ============================================================
 
   test("valid run-stage -> data.kind returned", () => {
     const r = validateDirective(runStage());
     expect(r.valid).toBe(true);
-    // narrowed by valid===true; data aliases the input per the validator's
-    // documented trust boundary (aidlc-directive.ts:281-288).
+    // narrowed by valid===true; data aliases the input per validateDirective's
+    // documented trust boundary (aidlc-directive.ts).
     const data = (r as { valid: true; data: Directive }).data;
     expect(data.kind).toBe("run-stage");
   });
 
   // ============================================================
-  // Per-kind missing required field — names the field + kind (8 assertions)
-  // .sh lines 99-121
+  // Per-kind missing required field - names the field + kind
   // ============================================================
 
   test("load-steering missing receipt or next -> error", () => {
@@ -822,7 +816,6 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   // ============================================================
   // Unknown kind (1 assertion)
-  // .sh lines 127-128
   // ============================================================
 
   test("unknown kind -> specific error", () => {
@@ -833,7 +826,6 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   // ============================================================
   // Unknown key on a valid run-stage (1 assertion)
-  // .sh lines 134-135
   // ============================================================
 
   test("unknown key on run-stage -> error", () => {
@@ -843,8 +835,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   });
 
   // ============================================================
-  // Type mismatches (3 assertions)
-  // .sh lines 141-148
+  // Type mismatches
   // ============================================================
 
   test("run-stage gate 'yes' -> boolean type error", () => {
@@ -970,20 +961,17 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   // ============================================================
   // The classify-round-trip gate sentinel + conductor_persona (4 assertions)
-  // .sh lines 162-173
   // ============================================================
   // The engine emits gate:"unresolved" for the one Construction skeleton stage
   // it cannot pre-classify; the conductor resolves it on the round trip
-  // (aidlc-directive.ts:31, :65, GATE_UNRESOLVED at :37). checkGate (:373-389)
-  // accepts boolean OR the exact sentinel string and rejects every other string
-  // so a typo'd sentinel surfaces loudly rather than being acted on as a
-  // deferred gate. conductor_persona is the optional D-E delivery field
-  // (aidlc-directive.ts:75-80, :100-101), validated by checkOptionalString
-  // (:393-403) — absent is fine, present-and-string is VALID, present-and-non-
-  // string is rejected.
+  // (GATE_UNRESOLVED in aidlc-directive.ts). checkGate accepts boolean OR the
+  // exact sentinel string and rejects every other string so a typo'd sentinel
+  // surfaces loudly rather than being acted on as a deferred gate.
+  // conductor_persona is the optional D-E delivery field, validated by
+  // checkOptionalString - absent is fine, present-and-string is VALID,
+  // present-and-non-string is rejected.
 
   test('run-stage gate:"unresolved" sentinel -> VALID (classify round-trip)', () => {
-    // .sh line 162-163: the sentinel is the ONLY accepted gate string.
     expect(errs({ ...runStage(), gate: "unresolved" })).toBe("VALID");
     expect(validateDirective({ ...runStage(), gate: "unresolved" }).valid).toBe(
       true,
@@ -991,9 +979,9 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   });
 
   test('run-stage gate:"maybe" (non-sentinel string) -> rejected', () => {
-    // .sh line 164-166: any OTHER gate-string is rejected with the same
-    // boolean-or-sentinel type error a non-string would produce — a typo'd
-    // sentinel must NOT be silently accepted as a deferred gate.
+    // Any OTHER gate-string is rejected with the same boolean-or-sentinel type
+    // error a non-string would produce - a typo'd sentinel must NOT be silently
+    // accepted as a deferred gate.
     const r = validateDirective({ ...runStage(), gate: "maybe" });
     expect(r.valid).toBe(false);
     expect(errs({ ...runStage(), gate: "maybe" })).toContain(
@@ -1002,7 +990,6 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   });
 
   test("run-stage conductor_persona string -> VALID (D-E first-next delivery)", () => {
-    // .sh line 169-170: conductor_persona present as a string is accepted.
     expect(errs({ ...runStage(), conductor_persona: "# Persona" })).toBe(
       "VALID",
     );
@@ -1013,7 +1000,6 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   });
 
   test("run-stage conductor_persona non-string -> rejected", () => {
-    // .sh line 171-173: present-and-non-string is rejected, naming kind+field.
     const r = validateDirective({ ...runStage(), conductor_persona: 42 });
     expect(r.valid).toBe(false);
     expect(errs({ ...runStage(), conductor_persona: 42 })).toContain(
@@ -1023,7 +1009,6 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   // ============================================================
   // mode enum miss on run-stage (1 assertion)
-  // .sh lines 179-180
   // ============================================================
 
   test("run-stage mode enum miss -> error", () => {
@@ -1033,7 +1018,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   });
 
   // ============================================================
-  // Reviewer fields on a run-stage directive (V4a)
+  // Reviewer fields on a run-stage directive
   // ============================================================
   // reviewer / reviewer_max_iterations are optional run-stage fields, present
   // only when the stage declares a reviewer. The directive validator mirrors
@@ -1198,7 +1183,6 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   // ============================================================
   // Shape failures — non-object inputs (3 assertions)
-  // .sh lines 186-188
   // ============================================================
 
   test("null -> shape error", () => {

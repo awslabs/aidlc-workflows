@@ -74,7 +74,6 @@ describe("t-source-paths-exclude: the exclude list in .aidlc-source-paths.json",
     expect(fingerprint(project)).toBe(before);
     fillCache(join(project, "tools", ".indexer"), 60, "v2");
     expect(fingerprint(project)).toBe(before);
-    // The project's own source still counts.
     writeFileSync(join(project, "src", "main.dart"), "void main() { print('hi'); }\n");
     expect(fingerprint(project)).not.toBe(before);
   });

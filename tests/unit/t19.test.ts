@@ -7,7 +7,7 @@
 // preserved by SPAWNING the real CLI via node:child_process spawnSync
 // (BUN + the tool .ts path), asserting on res.status / res.stdout /
 // res.stderr exactly as the .sh asserted on $?/stdout, plus on the
-// aidlc-state.md + audit.md the tool writes — the PROCESS boundary, not
+// aidlc-state.md + audit shards the tool writes - the PROCESS boundary, not
 // in-process handleResolve/handleExecute calls. An in-process twin would
 // lose the process.exit(1) shell that the .sh's `|| true` SKIP-rejection
 // case (Test 5) and the JSON-ack-to-stdout half rely on, and would not
@@ -83,12 +83,12 @@
 // FIXTURE DISCIPLINE (mirrors the .sh's create_test_project + seed_state_file
 // + cleanup_test_project per case): each case uses a FRESH temp project dir
 // (createTestProject, which toPortablePath-converts on Windows so the
-// aidlc-state.md / audit.md the tool writes — via toPosix path helpers —
+// aidlc-state.md / audit shards the tool writes - via toPosix path helpers -
 // round-trip when read back). State is seeded from the SAME on-disk fixtures
 // the .sh used (FIXTURES_DIR/state-*.md) via seedStateFile, so checkbox
 // baselines are byte-identical to the bash run. No audit seed is needed: the
-// tool creates audit.md on first emit, and STAGE_JUMPED is the only event the
-// assertions count, so a fresh (absent) audit.md yields an unambiguous
+// tool creates the audit shard on first emit, and STAGE_JUMPED is the only
+// event the assertions count, so a fresh (absent) shard yields an unambiguous
 // post-fire count of 1. All temp dirs cleaned in afterAll. NOTHING is written
 // under tests/fixtures/**.
 
@@ -111,7 +111,7 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-jump.ts");
 const STATE_TOOL = join(
@@ -129,7 +129,6 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-/** Fresh project seeded from a FIXTURES_DIR state fixture (create_test_project + seed_state_file). */
 function proj(stateFixture: string): string {
   const p = createTestProject();
   tempDirs.push(p);
@@ -137,7 +136,7 @@ function proj(stateFixture: string): string {
   return p;
 }
 
-// P9 per-intent layout: state lives in the active intent's record; the audit
+// Per-intent layout: state lives in the active intent's record; the audit
 // trail is a DIR of per-clone shards. The SPAWNED jump tool mints its own
 // clone-id, so audit reads glob every shard (readAllAuditShards) rather than a
 // single audit.md. seedStateFile seeds the record so the active-intent cursor
@@ -146,11 +145,10 @@ const statePath = (p: string): string => seededStateFile(p);
 
 interface CliResult {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string; // combined stdout+stderr
   stdout: string;
 }
 
-/** Spawn `bun aidlc-jump.ts <args...> --project-dir <p>`. Mirrors `bun "$TOOL" ...`. */
 function jump(args: string[], p: string): CliResult {
   const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", p], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -164,7 +162,6 @@ function jump(args: string[], p: string): CliResult {
   };
 }
 
-/** Spawn `bun aidlc-state.ts get <field> --project-dir <p>`. Mirrors `bun "$STATE_TOOL" get ...`. */
 function stateGet(field: string, p: string): CliResult {
   const res = spawnSync(BUN, [STATE_TOOL, "get", field, "--project-dir", p], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -178,12 +175,10 @@ function stateGet(field: string, p: string): CliResult {
   };
 }
 
-/** Read the aidlc-state.md the tool wrote. */
 function readState(p: string): string {
   return readFileSync(statePath(p), "utf-8");
 }
 
-/** Count audit blocks with `**Event**: <ev>` in a buffer (the .sh's grep, as a count). */
 function auditEventCount(body: string, ev: string): number {
   const re = new RegExp(`^\\*\\*Event\\*\\*: ${ev}$`);
   return body
@@ -195,7 +190,7 @@ function auditEventCount(body: string, ev: string): number {
  * Value of <key> from the FIRST audit block whose `**Event**:` matches <ev>.
  * Block-scoped: resets at `## ` headings and `---` separators; splits
  * `**label**: value` on the literal `**: ` separator. Mirrors auditField in
- * t31.cli.test.ts. Returns "" when absent.
+ * t31.test.ts. Returns "" when absent.
  */
 function auditField(body: string, ev: string, key: string): string {
   let matched = false;
@@ -227,7 +222,6 @@ function auditField(body: string, ev: string, key: string): string {
 
 // ============================================================
 // resolve subcommand (covers: subcommand:aidlc-jump:resolve)
-// .sh cases 1-6
 // ============================================================
 
 describe("t19 aidlc-jump resolve (migrated from t19-tool-jump.sh, plan 16)", () => {
@@ -240,7 +234,7 @@ describe("t19 aidlc-jump resolve (migrated from t19-tool-jump.sh, plan 16)", () 
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('"direction":"forward"');
     const parsed = JSON.parse(r.stdout);
-    expect(parsed.direction).toBe("forward"); // STRONGER: structured field
+    expect(parsed.direction).toBe("forward");
     expect(parsed.valid).toBe(true);
   });
 
@@ -252,7 +246,7 @@ describe("t19 aidlc-jump resolve (migrated from t19-tool-jump.sh, plan 16)", () 
     );
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('"direction":"backward"');
-    expect(JSON.parse(r.stdout).direction).toBe("backward"); // STRONGER
+    expect(JSON.parse(r.stdout).direction).toBe("backward");
   });
 
   test("3: resolve detects redo direction", () => {
@@ -263,7 +257,7 @@ describe("t19 aidlc-jump resolve (migrated from t19-tool-jump.sh, plan 16)", () 
     );
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('"direction":"redo"');
-    expect(JSON.parse(r.stdout).direction).toBe("redo"); // STRONGER
+    expect(JSON.parse(r.stdout).direction).toBe("redo");
   });
 
   test("4: resolve phase construction -> functional-design", () => {
@@ -274,13 +268,12 @@ describe("t19 aidlc-jump resolve (migrated from t19-tool-jump.sh, plan 16)", () 
     );
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('"target_slug":"functional-design"');
-    expect(JSON.parse(r.stdout).target_slug).toBe("functional-design"); // STRONGER
+    expect(JSON.parse(r.stdout).target_slug).toBe("functional-design");
   });
 
   test("5: resolve rejects SKIP stage", () => {
     const p = proj("state-initialization-done.md");
-    // intent-capture is SKIP for scope bugfix. The .sh swallowed $? with
-    // `|| true`; we PIN the non-zero exit (STRONGER) AND the message.
+    // intent-capture is SKIP for scope bugfix. We PIN the non-zero exit AND the message.
     const r = jump(
       ["resolve", "--stage", "intent-capture", "--scope", "bugfix"],
       p,
@@ -300,14 +293,13 @@ describe("t19 aidlc-jump resolve (migrated from t19-tool-jump.sh, plan 16)", () 
     const affected = JSON.parse(r.stdout).affected_stages;
     expect(Array.isArray(affected)).toBe(true);
     // Forward jump from intent-capture (current in this fixture) to
-    // code-generation has real in-scope intermediates -> non-empty (STRONGER).
+    // code-generation has real in-scope intermediates -> non-empty.
     expect(affected.length).toBeGreaterThan(0);
   });
 });
 
 // ============================================================
 // execute subcommand (covers: subcommand:aidlc-jump:execute)
-// .sh cases 7-14
 // ============================================================
 
 describe("t19 aidlc-jump execute (migrated from t19-tool-jump.sh, plan 16)", () => {
@@ -326,9 +318,7 @@ describe("t19 aidlc-jump execute (migrated from t19-tool-jump.sh, plan 16)", () 
       p,
     );
     expect(r.status).toBe(0);
-    // Mirrors assert_grep '\[S\] scope-definition'.
     expect(readState(p)).toContain("- [S] scope-definition");
-    // STRONGER: the [S] transition emits one STAGE_SKIPPED for that slug.
     expect(auditField(readAllAuditShards(p), "STAGE_SKIPPED", "Stage")).toBe(
       "scope-definition",
     );
@@ -348,7 +338,6 @@ describe("t19 aidlc-jump execute (migrated from t19-tool-jump.sh, plan 16)", () 
       ],
       p,
     );
-    // Mirrors assert_grep '\[x\] intent-capture'.
     expect(readState(p)).toContain("- [x] intent-capture");
   });
 
@@ -366,9 +355,8 @@ describe("t19 aidlc-jump execute (migrated from t19-tool-jump.sh, plan 16)", () 
       ],
       p,
     );
-    // Mirrors `ACTUAL=$(bun "$STATE_TOOL" get "Current Stage" ...)` -> assert_eq.
     const r = stateGet("Current Stage", p);
-    expect(r.status).toBe(0); // STRONGER: the .sh ignored $?
+    expect(r.status).toBe(0);
     expect(r.stdout.trim()).toBe("code-generation");
   });
 
@@ -386,8 +374,8 @@ describe("t19 aidlc-jump execute (migrated from t19-tool-jump.sh, plan 16)", () 
       ],
       p,
     );
-    // Mirrors assert_grep "STAGE_JUMPED". STRONGER: exact count against the
-    // fresh (no STAGE_JUMPED) baseline + block-scoped field values.
+    // Exact count against the fresh (no STAGE_JUMPED) baseline + block-scoped
+    // field values.
     const a = readAllAuditShards(p);
     expect(auditEventCount(a, "STAGE_JUMPED")).toBe(1);
     expect(auditField(a, "STAGE_JUMPED", "Direction")).toBe("FORWARD");
@@ -410,7 +398,6 @@ describe("t19 aidlc-jump execute (migrated from t19-tool-jump.sh, plan 16)", () 
       p,
     );
     expect(r.status).toBe(0);
-    // Mirrors assert_grep '\[-\] feasibility'.
     expect(readState(p)).toContain("- [-] feasibility");
   });
 
@@ -428,7 +415,6 @@ describe("t19 aidlc-jump execute (migrated from t19-tool-jump.sh, plan 16)", () 
       ],
       p,
     );
-    // Mirrors assert_grep '\[ \] code-generation'.
     expect(readState(p)).toContain("- [ ] code-generation");
   });
 
@@ -446,9 +432,8 @@ describe("t19 aidlc-jump execute (migrated from t19-tool-jump.sh, plan 16)", () 
       ],
       p,
     );
-    // Mirrors `ACTUAL=$(bun "$STATE_TOOL" get "Completed" ...)` -> assert_eq "5".
     const r = stateGet("Completed", p);
-    expect(r.status).toBe(0); // STRONGER
+    expect(r.status).toBe(0);
     expect(r.stdout.trim()).toBe("5");
   });
 
@@ -467,7 +452,6 @@ describe("t19 aidlc-jump execute (migrated from t19-tool-jump.sh, plan 16)", () 
       p,
     );
     expect(r.status).toBe(0);
-    // Mirrors assert_grep '\[-\] feasibility'.
     expect(readState(p)).toContain("- [-] feasibility");
   });
 
@@ -485,8 +469,7 @@ describe("t19 aidlc-jump execute (migrated from t19-tool-jump.sh, plan 16)", () 
       ],
       p,
     );
-    // Mirrors assert_grep '\[ \] scope-definition' — scope-definition was [ ]
-    // in the fixture and redo must leave it untouched.
+    // scope-definition is [ ] in the fixture and redo must leave it untouched.
     expect(readState(p)).toContain("- [ ] scope-definition");
   });
 
@@ -506,6 +489,6 @@ describe("t19 aidlc-jump execute (migrated from t19-tool-jump.sh, plan 16)", () 
     );
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('"state_updated":true');
-    expect(JSON.parse(r.stdout).state_updated).toBe(true); // STRONGER
+    expect(JSON.parse(r.stdout).state_updated).toBe(true);
   });
 });

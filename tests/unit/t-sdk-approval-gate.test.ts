@@ -389,7 +389,6 @@ describe("the answer stream stays open while subagents still run", () => {
     });
     expect(driven.toolResults.filter((row) => row.resultText.includes("Stream closed"))).toEqual([]);
     expect(driven.askedQuestions.map((asked) => asked.questions[0].header)).toEqual(["Kiosk privacy", "Approval"]);
-    // The unexpected question takes its first option; the approval is the scripted one.
     expect(driven.askedQuestions[0].answers).toEqual({ [kiosk().questions[0].question]: "A. Add an inactivity timeout" });
     expect(driven.askedQuestions[1].answers).toEqual({ "Approve the user stories?": "Approve" });
     expect(driven.stoppedAfterToolResult).toBe(true);
@@ -455,7 +454,6 @@ describe("the answer stream stays open while subagents still run", () => {
     const sent: unknown[] = [];
     let closedByDriver = false;
     scenario = async function* (input) {
-      // The CLI's stdin: each message the driver sends, until it closes.
       const prompts = (input.prompt as AsyncIterable<{ message: { content: unknown } }>)[Symbol.asyncIterator]();
       const signal = input.options!.abortController!.signal;
       const aborted = new Promise<undefined>((resolve) => signal.addEventListener("abort", () => resolve(undefined)));

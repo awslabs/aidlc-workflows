@@ -4,10 +4,10 @@
 // question is put to them, only a reply sent after it records one. A turn they
 // sent before the question (an answer to the stage's own questions, a remark
 // while the stage ran) does not: the agent records nothing and shows the gate,
-// and the person's next reply approves. The same rule reject has had since the
-// question was first bound to its reply. A gate the engine backfills for the
-// person's reported approval (report --stage on a running stage) keeps the
-// older rule: its row is written after their reply by design.
+// and the person's next reply approves. Reject follows the same rule. A gate
+// the engine backfills for the person's reported approval (report --stage on a
+// running stage) keeps the reply-since-the-last-decision rule: its row is
+// written after their reply by design.
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -72,7 +72,6 @@ function report(proj: string, args: string[]) {
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
-// What the person types, through the real prompt hook.
 function person(proj: string, prompt: string) {
   const r = spawnSync(BUN, [DISPATCH, "engine", "hook", "record-human-turn"], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", cwd: proj,
@@ -138,7 +137,6 @@ function teamProject(findings: string[] = []): string {
   for (const name of ["entities", "rules", "functional-spec", "frontend-components", "traceability"]) {
     writeFileSync(join(dir, artifactFilename(name)), `# ${name} for alpha\n`);
   }
-  // The Unit's step on this stage, started and completed in this attempt.
   const floor = latestMainWorkflowStageRunFloorForProject(team, "functional-design", true, "alpha");
   for (const event of ["UNIT_STARTED", "UNIT_COMPLETED"]) {
     appendAuditEntry(event, { Stage: "functional-design", Unit: "alpha", "Run floor": floor }, team);
@@ -177,8 +175,6 @@ describe("t-approve-needs-reply-to-question: only the person's reply to the appr
   });
   afterEach(() => cleanupTestProject(proj));
 
-  // What the agent is told: record nothing, show the question, wait. The
-  // stage stays at its gate.
   function expectWaits(out: string, slug: string) {
     expect(out).toContain('"kind":"print"');
     expect(out).toContain(WAITS);
@@ -207,7 +203,6 @@ describe("t-approve-needs-reply-to-question: only the person's reply to the appr
     expect(readFileSync(seededStateFile(proj), "utf-8")).not.toContain(`- [?] ${slug}`);
   });
 
-  // What the person sees: the gate, once; their one word then approves it.
   test("after the wait, the person's next reply approves the gate", () => {
     const slug = slugOf(proj);
     state(proj, ["checkbox", `${slug}=in-progress`]);

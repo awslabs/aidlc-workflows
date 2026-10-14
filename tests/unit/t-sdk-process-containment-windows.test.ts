@@ -95,7 +95,6 @@ function forceKill(pid: number): void {
   try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
 }
 
-/** Kill every recorded orphan and wait until each has really exited. */
 async function reapOrphans(): Promise<void> {
   for (const pid of orphans.splice(0)) {
     forceKill(pid);
@@ -156,7 +155,6 @@ describe("SDK contained bootstrap contract", () => {
     ]);
     orphans.push(child.pid!);
     const output = collect(child);
-    // Not released: nothing runs, nothing reaches stdout, the bootstrap waits.
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(child.exitCode).toBeNull();
     expect(output.stdout()).toBe("");
@@ -170,7 +168,6 @@ describe("SDK contained bootstrap contract", () => {
   test("never starts the command when its parent is gone before the release", async () => {
     const dir = scratchDir("aidlc-sdk-bootstrap-");
     const marker = join(dir, "started");
-    // A parent that has already exited: its PID is gone by the time the poll runs.
     const goneParent = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
     await exited(goneParent);
     const child = spawnBootstrap(join(dir, "never-written"), goneParent.pid!, [

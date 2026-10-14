@@ -441,7 +441,7 @@ describe("t320 review/summary deadlock prevention", () => {
       ],
     );
     // A historyless no-DAG Unit remains refused. A matching open or merged
-    // Bolt now supplies review-only membership without becoming a Unit DAG.
+    // Bolt supplies review-only membership without becoming a Unit DAG.
     expect(accepted.status).not.toBe(0);
     expect(accepted.stdout + accepted.stderr).toContain(
       "no authoritative unit DAG exists and no matching active or merged Bolt attempt",

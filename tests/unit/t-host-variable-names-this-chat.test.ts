@@ -120,7 +120,6 @@ describe("the host names this chat in the agent's own shell", () => {
   test("Kiro CLI: the chat's id is followed; another harness's variable is not read", () => {
     const dir = project(".kiro");
     expect(activeRecordSeenBy(dir, ".kiro", { KIRO_SESSION_ID: CHAT })).toBe(CHAT_RECORD);
-    // The id of a chat in another tool names nothing here.
     expect(activeRecordSeenBy(dir, ".kiro", {
       CLAUDE_CODE_SESSION_ID: CHAT,
       CLAUDE_PID: String(process.pid),

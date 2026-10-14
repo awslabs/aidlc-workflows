@@ -55,7 +55,6 @@ describe("t-source-exclusion-upgrade", () => {
 
     const state = workspaceSourceState(dir);
     expect(state).not.toBeNull();
-    // Today's walk binds only the real source.
     expect(state!.fingerprint).toBe(referenceFingerprint([["src/main.ts", "export const main = 1;\n"]]));
     // Evidence the earlier walk recorded (every file) still describes this source.
     const earlier = referenceFingerprint(files);
@@ -70,7 +69,6 @@ describe("t-source-exclusion-upgrade", () => {
     expect(after!.fingerprint).toBe(state!.fingerprint);
     expect(sameWorkspaceSource(earlier, after!.fingerprint)).toBe(false);
 
-    // A real source change moves today's value.
     writeFileSync(join(dir, "src/main.ts"), "export const main = 2;\n");
     expect(workspaceSourceState(dir)!.fingerprint).not.toBe(state!.fingerprint);
   });

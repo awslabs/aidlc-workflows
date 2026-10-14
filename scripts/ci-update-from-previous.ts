@@ -39,13 +39,11 @@ const HOOK_TIMEOUT_MS = 2 * 60_000;
 // report, not a cancelled job, says what went wrong.
 const CHECK_BUDGET_MS = 25 * 60_000;
 
-/** The harnesses a release's version.json ships that this check does not set up. */
 export function uncheckedHarnesses(versionJson: unknown): string[] {
   const listed = (versionJson as { distributions?: Array<{ name?: unknown }> } | null)?.distributions ?? [];
   return listed.map((entry) => String(entry?.name ?? "")).filter((name) => !(HARNESSES as readonly string[]).includes(name));
 }
 
-/** Every hook command a harness tree's JSON config files name. */
 export function hookCommands(treeDir: string): string[] {
   const found = new Set<string>();
   const visit = (value: unknown) => {
@@ -75,7 +73,6 @@ export function hookCommands(treeDir: string): string[] {
 // installers, binaries and hooks under test never need them.
 const CREDENTIAL = /^(?:GH_|GITHUB_TOKEN$|ACTIONS_|AWS_|AZURE_|GOOGLE_|ANTHROPIC_|OPENAI_)|TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY|PRIVATE_KEY/i;
 
-/** The environment every process the check starts gets: this one without credentials. */
 export function childEnvironment(inherited: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(inherited).filter(([name]) => !CREDENTIAL.test(name)));
 }
@@ -97,7 +94,6 @@ export function opencodeHookCommands(pluginFile: string): string[] {
   return [...hooks].sort().map((hook) => `${invoke} ${namespace} hook ${hook}`);
 }
 
-/** The hooks the hook phase trace in `directory` shows the engine ran and ended with code 0. */
 export function hooksTracedToCompletion(directory: string): Set<string> {
   const done = new Set<string>();
   if (!existsSync(directory)) return done;
@@ -129,13 +125,11 @@ const KIRO_IDE_TOOL_CALL = JSON.stringify({
 });
 const KIRO_IDE_TOOL_CALL_TARGETS = new Set(["guard-tool-call", ...KIRO_HOOK_GROUPS["guard-tool-call"].map((member) => member.target)]);
 
-/** The payload a hook command gets on stdin: Kiro IDE's tool-call guards a tool call, every other hook "{}". */
 export function hookInput(harness: string, command: string): string {
   const target = /^aidlc engine adapter kiro-ide ([a-z0-9-]+)$/.exec(command.trim())?.[1];
   return harness === "kiro-ide" && target !== undefined && KIRO_IDE_TOOL_CALL_TARGETS.has(target) ? KIRO_IDE_TOOL_CALL : "{}";
 }
 
-/** Whether the hook phase trace in `directory` shows the engine ran a hook and it ended with code 0. */
 export function tracedToCompletion(directory: string): boolean {
   return hooksTracedToCompletion(directory).size > 0;
 }
@@ -273,7 +267,6 @@ function check(previous: string, candidate: string, target: string, root: string
       : hookCommands(join(project, HARNESS_DIRS[harness as (typeof HARNESSES)[number]]));
     if (commands.length === 0) fail(`${harness} ${when}: the project has no hook commands to run`);
     if (harness === "opencode") {
-      // The plugin itself, driven the way opencode calls it.
       const trace = join(root, "trace", String(++traces));
       const driven = run(`opencode plugin ${when}`, process.execPath, ["-e", OPENCODE_EVENTS], {
         AIDLC_CHECK_PLUGIN: pathToFileURL(plugin).href,

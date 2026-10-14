@@ -322,7 +322,6 @@ describe("t332 summary authorization id", () => {
   test("the write-audit hook stamps stage outputs with the active authorization and nothing else", () => {
     const proj = project();
     const { artifact, questions } = paths(proj);
-    // Before any confirmation: a write carries no id.
     writeArtifact(proj, artifact, "# draft\n");
     expect(auditBlockField(artifactWrites(proj)[0].block, SUMMARY_AUTHORIZATION_FIELD)).toBeNull();
     const id = confirm(proj, questions);
@@ -661,8 +660,8 @@ describe("t332 stage-level questions for per-unit stages", () => {
         expect(auditBlockField(write.block, SUMMARY_AUTHORIZATION_FIELD)).toBe(id as string);
       }
 
-      // Before the lookup fix, this returns SUMMARY_QUESTIONS_MISSING even
-      // though the stage-level questions, human receipt, and writes all exist.
+      // Regression: this returned SUMMARY_QUESTIONS_MISSING even though the
+      // stage-level questions, human receipt, and writes all exist.
       expect(evidence(proj, target)).toMatchObject({ ok: true, required: true });
 
       // Obsolete Unit folders must not be mixed into the approved stage-level plan.
@@ -898,7 +897,6 @@ describe("t332 authorization scope resolution", () => {
       activeSummaryAuthorizationForRecordPath(proj, "construction/web/functional-design/entities.md", stageGraph),
     ).toBeNull();
     expect(activeSummaryAuthorizationForRecordPath(proj, path, stageGraph)?.id).toBe("2".repeat(64));
-    // Nor does another stage's isolated run.
     writeSummaryAuthorization(proj, { ...stageLevel, id: "4".repeat(64), workflow: "single-stage:build-and-test" });
     expect(
       activeSummaryAuthorizationForRecordPath(proj, "construction/web/functional-design/entities.md", stageGraph),
@@ -921,7 +919,6 @@ describe("t332 authorization scope resolution", () => {
     tempDirs.push(outsideRoot);
     const outside = join(outsideRoot, "elsewhere");
     mkdirSync(outside, { recursive: true });
-    // The registry directory is pre-created as a link out of the record.
     mkdirSync(dirname(join(record, ".aidlc-engine/summary-authorization")), { recursive: true });
     symlinkSync(outside, join(record, ".aidlc-engine/summary-authorization"));
 
@@ -1007,7 +1004,7 @@ describe("t332 authorization scope resolution", () => {
     expect(receipts(proj)).toHaveLength(1);
     expect(readSummaryAuthorization(proj, STAGE, null)?.id).toBe(id as string);
     // And the decision is spent exactly once: a second identical answer with no
-    // new human turn is refused as it always was.
+    // new human turn is refused.
     expect(answer(proj, questions, "Looks correct").status).not.toBe(0);
     writeArtifact(proj, artifact);
     expect(evidence(proj).ok).toBe(true);

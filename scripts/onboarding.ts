@@ -16,7 +16,6 @@
 // package.ts renders both templates for every harness. Adding a harness means
 // authoring one fills file and declaring its onboarding destinations.
 
-/** Per-harness fill set: the invoke command + the slot bodies. */
 export type OnboardingFills = {
   /** The invoke command this harness uses, e.g. "/aidlc" or "$aidlc". */
   invoke: string;
@@ -28,7 +27,6 @@ export type OnboardingFills = {
   slots: Record<string, string>;
 };
 
-/** Every {{SLOT:<name>}} marker the skeleton declares, for validation. */
 export function declaredSlots(skeleton: string): string[] {
   const out = new Set<string>();
   for (const m of skeleton.matchAll(/\{\{SLOT:([a-z_]+)\}\}/g)) out.add(m[1]);
@@ -47,11 +45,9 @@ export function declaredSlots(skeleton: string): string[] {
 export function renderOnboarding(skeleton: string, fills: OnboardingFills): string {
   let out = skeleton;
 
-  // Fill named slots. Every declared slot is replaced — with its fill body if
-  // provided, else with empty string (intentional omission). A slot marker that
-  // sits alone on its line is removed cleanly (line + its trailing newline) so
-  // an omitted section leaves no blank-line scar; a non-empty fill replaces the
-  // marker in place.
+  // A slot marker that sits alone on its line is removed with its line when the
+  // slot is omitted, so the section leaves no blank-line scar; a non-empty fill
+  // replaces the marker in place.
   for (const name of declaredSlots(skeleton)) {
     const body = fills.slots[name] ?? "";
     const loneLine = new RegExp(`^\\{\\{SLOT:${name}\\}\\}\\n`, "m");
@@ -62,11 +58,9 @@ export function renderOnboarding(skeleton: string, fills: OnboardingFills): stri
     }
   }
 
-  // Substitute the harness's user-facing skill command. Runtime command
-  // examples retain {{INVOKE}} for the package channel projection.
+  // Runtime command examples keep {{INVOKE}} for the package channel projection.
   out = out.split("{{SKILL_INVOKE}}").join(fills.invoke);
 
-  // Completeness guard: no slot/user-invoke marker may survive.
   const leftover = out.match(/\{\{SLOT:[a-z_]+\}\}|\{\{SKILL_INVOKE\}\}/);
   if (leftover) {
     throw new Error(
@@ -78,13 +72,11 @@ export function renderOnboarding(skeleton: string, fills: OnboardingFills): stri
   // Strip per-line trailing whitespace — an inline slot filled with "" can leave
   // a trailing space after the surrounding prose.
   out = out.replace(/[ \t]+$/gm, "");
-  // Collapse any run of 3+ blank lines an omitted slot may have left to 2.
+  // Collapse the blank lines an omitted slot may have left to one.
   out = out.replace(/\n{3,}/g, "\n\n");
-  // Ensure a single trailing newline.
   return out.replace(/\n*$/, "\n");
 }
 
-/** Normalize neutral onboarding, rejecting any harness-specific template marker. */
 export function renderNeutralOnboarding(skeleton: string): string {
   if (/\{\{/.test(skeleton)) {
     throw new Error("neutral onboarding must not contain template markers");

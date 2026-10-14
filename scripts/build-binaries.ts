@@ -788,7 +788,7 @@ function textFilesUnder(root: string): string {
       try {
         out += readFileSync(path, "utf-8");
       } catch {
-        // Ignore binary/non-readable project files.
+        // Ignore project files that cannot be read.
       }
     }
   }
@@ -1159,8 +1159,8 @@ function pathlessOrchestrateGate(
   }
 }
 
-// v2's single-stage boundary gate, reshaped to the engine namespace: `report
-// --single` now REQUIRES the open STAGE_STARTED boundary that `next --single`
+// The single-stage boundary gate: `report
+// --single` REQUIRES the open STAGE_STARTED boundary that `next --single`
 // records, so the gate proves the START half (typed stage work plus the
 // synthetic-workflow audit boundary) instead of committing a report cold.
 function pathlessSingleAuditGate(artifact: string): GateResult {

@@ -1,9 +1,8 @@
 // covers: function:walkDocuments function:resolveContainedPath function:portableSourcePath function:readDocumentMetadata function:onboard function:looksBinary function:hasPdfMagicInWindow function:decodesAsUtf8 function:hasNulByte function:describeFileKind function:readIndex function:writeIndex function:resolveSpaceFlag function:sha256Hex
 //
-// t289 - `aidlc-knowledge onboard` and the read boundary it enforces. This is
-// the first story that touches the filesystem, so it owns the invariants a pure
-// module could not: the recursive walk, per-leaf containment, and all-or-nothing
-// batch behaviour.
+// t289 - `aidlc-knowledge onboard` and the read boundary it enforces. This
+// touches the filesystem, so it owns the invariants a pure module could not:
+// the recursive walk, per-leaf containment, and all-or-nothing batch behaviour.
 //
 // Mechanism: real filesystem. The fixtures build actual symlink cycles, broken
 // symlinks, escaping subtrees, FIFOs, and sibling-impersonating paths, because
@@ -24,8 +23,8 @@
 //
 //   EVERY LEAF, not just the dir. A walk that validates a container and then
 //   trusts its contents will read a symlinked file inside an already-trusted
-//   directory. Worse, the earlier line of this work had one poisoned row strand
-//   its healthy siblings in the same pass - so a sibling must still index.
+//   directory. Worse, one poisoned row can strand its healthy siblings in the
+//   same pass - so a sibling must still index.
 //
 //   CONTAINMENT AFTER REALPATH. A check on the unresolved path answers "does
 //   this look inside?"; only a post-resolution check answers "does it land
@@ -37,10 +36,9 @@
 //   in index.json.
 //
 //   WRITER/READER AGREEMENT. onboard must never emit a row its own reader
-//   rejects. This is not hypothetical: the first build wrote
-//   `../../../private/tmp/...` into a committed path field because the anchor was
-//   unresolved while the file path was resolved, and the index was unreadable the
-//   moment it landed.
+//   rejects. This is not hypothetical: a build wrote `../../../private/tmp/...`
+//   into a committed path field because the anchor was unresolved while the file
+//   path was resolved, and the index was unreadable the moment it landed.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -155,7 +153,7 @@ describe("t289 the walk skips symlinks, which is what makes three failures impos
     doc(p, "real.md");
     const loop = join(documentsDir(p, SPACE), "loop");
     mkdirSync(loop, { recursive: true });
-    symlinkSync(loop, join(loop, "self")); // self-referential
+    symlinkSync(loop, join(loop, "self"));
     // Without the skip this recurses until the stack dies with a raw ELOOP.
     // Reaching the assertion at all is most of the proof.
     const found = walkDocuments(documentsDir(p, SPACE));
@@ -398,7 +396,7 @@ describe("t289 onboard writes rows its own reader accepts", () => {
     const second = onboard(p, SPACE, undefined, NOW);
     expect(first.indexed[0].status).toBe("fresh");
     expect(second.indexed[0].status).toBe("already");
-    expect(second.indexed[0].id).toBe(first.indexed[0].id); // identity survives
+    expect(second.indexed[0].id).toBe(first.indexed[0].id);
     expect(readIndex(p, SPACE).documents.length).toBe(1);
   });
 
@@ -445,20 +443,18 @@ describe("t289 onboard writes rows its own reader accepts", () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE IDENTITY MECHANISM this closes: onboard's identity for a re-onboarded
-// document is evidenced by `source.path` MATCHING a LIVE (non-tombstoned) row
-// -- never by content, never by minting a fresh id whenever the digest moved.
-// `sync` already had this rule right for its own "changed" case; onboard's
-// unchanged-digest shortcut checked the digest FIRST and fell through to
-// `buildRow` (a fresh uuid) the instant it differed, so a same-path EDIT
-// created a SECOND, independent row instead of refreshing the first.
+// THE IDENTITY MECHANISM: onboard's identity for a re-onboarded document is
+// evidenced by `source.path` MATCHING a LIVE (non-tombstoned) row -- never by
+// content, never by minting a fresh id whenever the digest moved. `sync` has
+// this rule for its own "changed" case; onboard's unchanged-digest shortcut
+// checked the digest FIRST and fell through to `buildRow` (a fresh uuid) the
+// instant it differed, so a same-path EDIT created a SECOND, independent row
+// instead of refreshing the first.
 //
-// Reproduced on the shipped tool before this fix: onboard `documents/a.md`,
-// edit it, onboard `documents/a.md` again -> index.json held TWO rows, BOTH
-// with `source.path: "documents/a.md"`, NEITHER tombstoned -- exactly the
-// state `rebindDocument`'s own doc comment calls invalid.
-// ─────────────────────────────────────────────────────────────────────────────
+// Reproduction: onboard `documents/a.md`, edit it, onboard `documents/a.md`
+// again -> index.json held TWO rows, BOTH with `source.path: "documents/a.md"`,
+// NEITHER tombstoned -- two live rows for one document, the outcome the tool's
+// own onboardCopyNote doc comment warns against.
 describe("t289 a same-path EDIT refreshes the existing row -- it never mints a second one", () => {
   test("editing the file and re-onboarding the SAME path keeps ONE row, same id, new digest", () => {
     const p = scratchProject();
@@ -476,7 +472,6 @@ describe("t289 a same-path EDIT refreshes the existing row -- it never mints a s
     expect(second.indexed[0].id).toBe(id);
     expect(second.indexed[0].sha256).not.toBe(firstDigest);
 
-    // The invariant this defends: ONE row for this path, never two.
     const rows = readIndex(p, SPACE).documents.filter((r) => r.source.path === "documents/a.md");
     expect(rows.length, "an edited-then-reonboarded path must never produce a second row").toBe(1);
     expect(rows[0].id).toBe(id);
@@ -512,7 +507,6 @@ describe("t289 a same-path EDIT refreshes the existing row -- it never mints a s
     const contentPath = join(documentDir(p, SPACE, id), "content.md");
     expect(existsSync(contentPath)).toBe(true);
     expect(readFileSync(contentPath, "utf-8")).toContain("v2 replaced text");
-    // No sibling directory was created for a phantom second id.
     expect(readdirSync(documentkbDir(p, SPACE)).filter((e) => e !== "index.json" && !e.startsWith(".")))
       .toEqual([id]);
   });
@@ -561,16 +555,16 @@ describe("t289 a same-path EDIT refreshes the existing row -- it never mints a s
     expect(body).toContain("**Change**: edited");
   });
 
-  // Finding 6: onboard's edited-row publish order. `sync`'s commit writes
-  // index.json (and every row's metadata.json) BEFORE any content.md -- its
-  // own comment explains why: `show` reads sha256/extraction/content from
-  // index.json ALONE and gates the text on `derivativeIsCurrent`
+  // onboard's edited-row publish order. `sync`'s commit writes index.json
+  // (and every row's metadata.json) BEFORE any content.md -- its own comment
+  // explains why: `show` reads sha256/extraction/content from index.json
+  // ALONE and gates the text on `derivativeIsCurrent`
   // (extraction.source_revision === sha256). `onboard`'s edited-row branch
-  // had the OPPOSITE order. Proved here the same way the report proved it:
-  // make content.md's WRITE fail (a directory pre-placed at that exact leaf,
-  // same technique as t287's write-failure-injection test) and confirm the
-  // row's digest already advanced in index.json while its content is
-  // WITHHELD, not served stale-but-labelled-current.
+  // had the OPPOSITE order. Proved here: make content.md's WRITE fail (a
+  // directory pre-placed at that exact leaf, same technique as t287's
+  // write-failure-injection test) and confirm the row's digest already
+  // advanced in index.json while its content is WITHHELD, not served
+  // stale-but-labelled-current.
   test("a content.md write failure leaves the row's digest advanced but its content WITHHELD, never stale-exposed", () => {
     const p = scratchProject();
     const abs = doc(p, "a.md", "v1 original\n");
@@ -587,8 +581,8 @@ describe("t289 a same-path EDIT refreshes the existing row -- it never mints a s
     // it as a thrown error, not a silent partial success.
     expect(() => onboard(p, SPACE, abs, "2026-08-08T00:00:00Z")).toThrow();
 
-    // THE FIX: index.json's digest already advanced -- proving metadata was
-    // published BEFORE the content write was even attempted, not after.
+    // index.json's digest already advanced -- proving metadata was published
+    // BEFORE the content write was even attempted, not after.
     const row = readIndex(p, SPACE).documents.find((r) => r.id === id)!;
     expect(row.sha256, "index.json must have committed the new digest").not.toBe(originalDigest);
 
@@ -645,9 +639,9 @@ describe("t289 a batch is ALL-OR-NOTHING", () => {
     //
     // The refusing candidate is an OVER-CAP file the walk genuinely visits (a
     // sparse truncate: st.size is over the 32 MiB per-document cap, no bytes
-    // written or read). An earlier version of this test planted a symlink,
-    // which the walk silently SKIPS -- the batch succeeded and the test named
-    // a refusal it never produced.
+    // written or read). A planted symlink would not do: the walk silently SKIPS
+    // it, so the batch would succeed and the test would name a refusal it never
+    // produced.
     const p = scratchProject();
     doc(p, "a.md");
     const bad = join(documentsDir(p, SPACE), "zz-bad.md");
@@ -679,11 +673,9 @@ describe("t289 a batch is ALL-OR-NOTHING", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("route (b): an id colliding with a PRE-EXISTING index row refuses the batch whole", () => {
-    // The route an earlier line of this work MISSED: it shipped the in-batch
-    // uniqueness check and still stranded a row through this one. Same fixed-id
-    // subprocess as route (a), but run TWICE -- the first run populates the
-    // index with the fixed id, so the second run collides against a row that is
-    // already on disk rather than against a sibling in its own batch.
+    // Same fixed-id subprocess as route (a), but run TWICE -- the first run
+    // populates the index with the fixed id, so the second run collides against a
+    // row that is already on disk rather than against a sibling in its own batch.
     const p = scratchProject();
     doc(p, "a.md");
     const driver = join(p, "collide-b.ts");
@@ -716,7 +708,6 @@ describe("t289 a batch is ALL-OR-NOTHING", () => {
     expect(second.refused, "a collision with a pre-existing row must refuse").toBeDefined();
     expect(second.refused.reason).toMatch(/already exists in index\.json/);
     expect(second.indexed).toEqual([]);
-    // And the index still holds exactly run 1's single row -- no partial apply.
     expect(readIndex(p, SPACE).documents.length).toBe(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -826,7 +817,6 @@ describe("t289 one poisoned row does not strand its healthy siblings", () => {
     expect(err).not.toBeNull();
     expect(err?.message).not.toContain("SECRET-BYTES");
 
-    // THE SIBLING HALF: the healthy row must still be readable.
     expect(readDocumentMetadata(p, SPACE, second.id).id).toBe(second.id);
   });
 
@@ -910,13 +900,12 @@ describe("t289 content sniffing reads the WHOLE buffer", () => {
   });
 
   test("a PDF is detected at offset 0 AND past it", () => {
-    // ISO 32000 permits a header preceded by garbage, and real generators emit
+    // PDF readers tolerate a header preceded by garbage, and real generators emit
     // it, so a fixed-offset check misses genuine PDFs.
     const magic = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d]);
     expect(hasPdfMagicInWindow(magic)).toBe(true);
     expect(hasPdfMagicInWindow(Buffer.concat([Buffer.from("\n\n﻿"), magic]))).toBe(true);
     expect(looksBinary(Buffer.concat([Buffer.alloc(200, 0x20), magic]))).toBe(true);
-    // Past the window it is no longer treated as a PDF header.
     expect(hasPdfMagicInWindow(Buffer.concat([Buffer.alloc(2000, 0x20), magic]))).toBe(false);
   });
 
@@ -958,12 +947,11 @@ describe("t289 content sniffing reads the WHOLE buffer", () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
 // THE TRUST ANCHOR: the guarded directories THEMSELVES replaced by a symlink.
 //
 // Every other test in this file replaces something INSIDE `documents/` or INSIDE
-// `documentkb/<id>/`. That left the CONTAINERS unguarded, and the whole-slice
-// review on 2026-08-08 measured the consequence against the shipped tool:
+// `documentkb/<id>/`. That left the CONTAINERS unguarded, measured against the
+// shipped tool:
 //
 //   documentkb -> /tmp/elsewhere   `onboard` wrote index.json, metadata.json,
 //                                  content.md and source.sha256 OUTSIDE the
@@ -973,14 +961,13 @@ describe("t289 content sniffing reads the WHOLE buffer", () => {
 //                                  this tool promises never to reorganise.
 //
 // So this is the CLASS, not one case: both containers (`knowledge/` and
-// `documentkb/`), pointed inward and outward. Driven through the CLI because the
-// anchor is checked per command handler -- an in-process `onboard()` call skips
-// the very code under test.
+// `documentkb/`), pointed inward and outward. Driven through the CLI so the
+// command handlers are exercised as well as the guarded exports.
 //
 // Each case asserts TWO things: a non-zero exit AND that nothing was written to
 // the target. Exit code alone would pass a tool that refused loudly after it had
 // already leaked the catalog.
-// ─────────────────────────────────────────────────────────────────────────────
+//
 // How to CALL each disk-touching export. Only the arguments live here — which
 // functions must appear is derived from the module source by the completeness test
 // below, so forgetting an entry fails the suite instead of silently shrinking the
@@ -995,17 +982,15 @@ const DISK_TOUCHING_CALLS: Record<string, (p: string) => unknown> = {
   readIndex: (p) => readIndex(p, SPACE),
   readDocumentMetadata: (p) => readDocumentMetadata(p, SPACE, "any-id"),
   // Both read `.sources.local.json`, a SIBLING of documentkb/ under the same
-  // knowledge/ container. Reclassified out of PURE_PATH_BUILDERS after review
-  // reproduced an attacker-authored alias map being returned, and a linked
-  // document resolving into an attacker-controlled root.
+  // knowledge/ container; unguarded, they returned an attacker-authored alias map
+  // and resolved a linked document into an attacker-controlled root.
   readSourcesLocal: (p) => readSourcesLocal(p, SPACE),
   resolveLinkedSource: (p) =>
     resolveLinkedSource(p, SPACE, {
       source: { kind: "linked", alias: "corp", path: "x.txt" },
     } as never),
   // Looks like a pure string function; its realpathOrSelf is existsSync +
-  // realpathSync on a knowledge/-derived anchor. Classified pure for five rounds
-  // on the strength of its own comment.
+  // realpathSync on a knowledge/-derived anchor.
   portableSourcePath: (p) => portableSourcePath(p, SPACE, join(documentsDir(p, SPACE), "x.md")),
   writeIndex: (p) => writeIndex(p, SPACE, { schema_version: 1, documents: [] }),
   setIntentAssociation: (p) =>
@@ -1040,7 +1025,6 @@ describe("t289 the trust anchor: a redirected CONTAINER is refused", () => {
     return target;
   }
 
-  /** A project whose `knowledge/` or `knowledge/documentkb/` is a symlink to `dest`. */
   function withRedirectedContainer(name: "knowledge" | "documentkb", dest: string): string {
     const p = mkdtempSync(join(tmpdir(), "t289-anchor-"));
     proj = p;
@@ -1081,7 +1065,6 @@ describe("t289 the trust anchor: a redirected CONTAINER is refused", () => {
 
     const r = knowledgeCli(p, "onboard");
     expect(r.status).not.toBe(0);
-    // Exactly what the user put there, with nothing generated beside it.
     expect(readdirSync(documentsDir(p, SPACE)).sort()).toEqual(["mine.txt"]);
   });
 
@@ -1100,12 +1083,8 @@ describe("t289 the trust anchor: a redirected CONTAINER is refused", () => {
   });
 
   // Every export taking `(projectDir, space)`, read from the module's own SOURCE
-  // rather than typed out here. That is the whole point: this defect class has now
-  // recurred FOUR times -- the CLI handlers, then the six entry points, then
-  // rebuildIndex/collectStaleJournals/writeIndex, then readIndex/
-  // readDocumentMetadata -- and every round fixed the names someone remembered and
-  // left the next sibling open. A hand-written list cannot fail when a case is
-  // ADDED, so a list was never going to end this, however long it grew.
+  // rather than typed out here. A hand-written list cannot fail when a case is
+  // ADDED, so a list cannot end this, however long it grows.
   //
   // Deliberately reads core/, not dist/, here: this block CLASSIFIES exports
   // (which functions exist and what they're named), a source-shape question the
@@ -1113,7 +1092,8 @@ describe("t289 the trust anchor: a redirected CONTAINER is refused", () => {
   // construction. The BEHAVIOURAL assertions elsewhere in this file (the actual
   // walk/containment/write tests) still spawn dist/claude/.claude/tools/
   // aidlc-knowledge.ts per the file header -- a core/-only revert of the guard
-  // itself would still be caught there, which is what makes this split safe.
+  // itself is still caught there once dist is regenerated (the test runner does
+  // that first), which is what makes this split safe.
   const KNOWLEDGE_SRC = readFileSync(
     join(import.meta.dir, "..", "..", "core", "tools", "aidlc-knowledge.ts"),
     "utf-8",
@@ -1128,12 +1108,12 @@ describe("t289 the trust anchor: a redirected CONTAINER is refused", () => {
   }
 
   // The functions that only COMPOSE a path string: no lstat, no read, no write, so
-  // nothing to redirect. Named individually because "it looked harmless" is the
-  // reasoning that failed four times -- each entry here is a claim that the body
-  // touches no disk, and the completeness test below forces a future export to be
-  // classified deliberately rather than defaulting to unguarded.
+  // nothing to redirect. Named individually because "it looked harmless" is not
+  // enough -- each entry here is a claim that the body touches no disk, and the
+  // completeness test below forces a future export to be classified deliberately
+  // rather than defaulting to unguarded.
   const PURE_PATH_BUILDERS = new Set([
-    "assertKnowledgeRootTrusted", // the guard itself
+    "assertKnowledgeRootTrusted",
     "documentsDir",
     "documentkbDir",
     "indexPath",
@@ -1147,23 +1127,20 @@ describe("t289 the trust anchor: a redirected CONTAINER is refused", () => {
   ]);
 
   test("every PURE_PATH_BUILDERS claim is TRUE: no fs primitive in its own body", () => {
-    // The completeness test made "forgot to list a function" impossible. This makes
-    // "classified it wrong" impossible, which is how instances four and five got
-    // through: both times the entry carried a comment asserting it touched no disk,
-    // and both times the body called realpathOrSelf/existsSync. A claim that is
-    // never checked against the code is a wish.
+    // The completeness test makes "forgot to list a function" impossible. This
+    // checks "classified it wrong": an entry can carry a comment asserting it
+    // touches no disk while its body calls realpathOrSelf/existsSync. A claim that
+    // is never checked against the code is a wish.
     //
-    // portableSourcePath is the case that forced this: classified pure for five
-    // rounds because its own comment said so, while line 2 of its body resolved an
-    // unverified knowledge/ anchor.
+    // portableSourcePath is the case that forced this: its own comment said it was
+    // pure, while its body resolved an unverified knowledge/ anchor.
     // THIS FILE's actual I/O vocabulary, derived from its own call sites — not a
-    // generic list of Node fs names. The first version of this array named
-    // `readFileSync`/`writeFileSync`, which appear ZERO times here, while omitting
-    // `writeFileAtomic`/`writeBufferAtomic`, which are how the module really
-    // writes (5 call sites). It would have passed a future refactor that moved a
-    // write into a pure-classified function: a plausible-looking list that does
-    // not match the code is the same wish this test exists to eliminate, one level
-    // up.
+    // generic list of Node fs names. Naming `readFileSync`/`writeFileSync`, which
+    // appear ZERO times here, while omitting `writeFileAtomic`/`writeBufferAtomic`,
+    // which are how the module really writes, would pass a future refactor that
+    // moved a write into a pure-classified function: a plausible-looking list that
+    // does not match the code is the same wish this test exists to eliminate, one
+    // level up.
     const FS_PRIMITIVES = [
       "realpathOrSelf",
       "realpathSync",
@@ -1181,7 +1158,7 @@ describe("t289 the trust anchor: a redirected CONTAINER is refused", () => {
       // sites (extractor probing + the extractor itself) run outside any
       // knowledge/-root check. If a future refactor moved one of these calls
       // into a function classified "pure", omitting spawnSync here would let
-      // it pass the same way writeFileAtomic's absence once did.
+      // it pass.
       "spawnSync",
     ];
     const offenders: string[] = [];
@@ -1189,8 +1166,6 @@ describe("t289 the trust anchor: a redirected CONTAINER is refused", () => {
       if (name === "assertKnowledgeRootTrusted") continue; // the guard itself must lstat
       const start = KNOWLEDGE_SRC.indexOf(`export function ${name}(`);
       if (start === -1) continue; // a stale entry is the completeness test's problem
-      // Body = from the signature to the next top-level `export`/`//` block, which
-      // is the whole function and nothing after it.
       const rest = KNOWLEDGE_SRC.slice(start);
       const end = rest.indexOf("\n}\n");
       const body = end === -1 ? rest : rest.slice(0, end);
@@ -1229,7 +1204,7 @@ describe("t289 the trust anchor: a redirected CONTAINER is refused", () => {
   test("the guarded set is COMPLETE: no export taking (projectDir, space) is unaccounted for", () => {
     // Structural, and the one that actually closes the class: a new export is
     // either in the invocable set below or explicitly classified as touching no
-    // disk. It cannot be silently neither, which is how all four rounds happened.
+    // disk. It cannot be silently neither.
     const unaccounted = exportsTakingProjectDirAndSpace().filter(
       (n) => !PURE_PATH_BUILDERS.has(n) && !(n in DISK_TOUCHING_CALLS),
     );
@@ -1256,18 +1231,17 @@ describe("t289 the trust anchor: a redirected CONTAINER is refused", () => {
         `${name} did NOT refuse a redirected documentkb`,
       ).toThrow(/symlink/i);
     }
-    // Nothing read, nothing written, and above all nothing deleted.
     expect(existsSync(join(dest, ".journal", "txn", "victim.txt"))).toBe(true);
     expect(existsSync(join(dest, "index.json"))).toBe(false);
   });
 
   test("a DIRECT library call is anchored too, not just the CLI", () => {
-    // Review demonstrated this bypass: with the guard only in the CLI handlers,
-    // importing the module and calling onboard() wrote the catalog off-project.
-    // No in-repo caller does that today, but these functions take a plain
-    // (projectDir, space) and give a future importer -- a plugin, a batch script,
-    // S2's retrieval seam -- no hint that anchoring is required. So the guard
-    // lives in the functions as well, and this pins it there.
+    // With the guard only in the CLI handlers, importing the module and calling
+    // onboard() wrote the catalog off-project. No in-repo caller does that today,
+    // but these functions take a plain (projectDir, space) and give a future
+    // importer -- a plugin, a batch script, a retrieval seam -- no hint that
+    // anchoring is required. So the guard lives in the functions as well, and this
+    // pins it there.
     const dest = outsideTarget();
     const p = withRedirectedContainer("documentkb", dest);
     expect(() => onboard(p, SPACE, undefined, NOW)).toThrow(/symlink/i);
@@ -1290,13 +1264,12 @@ describe("t289 the trust anchor: a redirected CONTAINER is refused", () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ROUND 6: a DESCENDANT of an honestly-trusted `documentkb/` is ITSELF a
-// symlink. `assertKnowledgeRootTrusted` anchors the chain down to `documentkb/`
-// — but a container can be trusted while what is INSIDE it is not: `.journal`
-// or one document's own `<id>/` directory can independently be a symlink,
-// planted after `documentkb/` was created honestly. Measured against the
-// shipped tool (2026-08-11), reproducing the review's two named vectors:
+// A DESCENDANT of an honestly-trusted `documentkb/` is ITSELF a symlink.
+// `assertKnowledgeRootTrusted` anchors the chain down to `documentkb/` -- but a
+// container can be trusted while what is INSIDE it is not: `.journal` or one
+// document's own `<id>/` directory can independently be a symlink, planted
+// after `documentkb/` was created honestly. Two vectors, measured against the
+// shipped tool:
 //
 //   documentkb/.journal -> /outside          `collectStaleJournals` (reached
 //                                             from plain `sync`) rmSync'd a
@@ -1306,17 +1279,16 @@ describe("t289 the trust anchor: a redirected CONTAINER is refused", () => {
 //                                             metadata.json into the user's OWN
 //                                             documents/ folder.
 //
-// The fix is `containedKbDescendant` (aidlc-knowledge.ts), the funnel every
-// mutable path under `documentkb/` is now built through — `journalDir`,
+// The owner is `containedKbDescendant` (aidlc-knowledge.ts), the funnel every
+// mutable path under `documentkb/` is built through -- `journalDir`,
 // `journalTxnDir` and `documentDir` all resolve through it, and every
-// mkdirSync/rmSync/renameSync/writeFileAtomic/writeBufferAtomic target below
-// `documentkb/` is join()'d off one of those three return values. There is no
-// fourth path-builder to forget.
-// ─────────────────────────────────────────────────────────────────────────────
+// ensureDirSync/removeTreeSync/renameIntoPlace/writeFileAtomic/writeBufferAtomic
+// target below `documentkb/` is join()'d off one of those three return values.
+// There is no fourth path-builder to forget.
 describe("t289 a descendant of documentkb/ is ITSELF a symlink: refused, nothing lands or deletes through it", () => {
   test("documentkb/.journal -> outside: `sync` refuses, and the external victim survives", () => {
-    // The exact reviewer-measured vector: collectStaleJournals (reached from
-    // plain `sync`) must not rmSync through a redirected `.journal`.
+    // The vector: collectStaleJournals (reached from plain `sync`) must not rmSync
+    // through a redirected `.journal`.
     const p = mkdtempSync(join(tmpdir(), "t289-descendant-"));
     proj = p;
     mkdirSync(documentsDir(p, SPACE), { recursive: true });
@@ -1385,8 +1357,8 @@ describe("t289 a descendant of documentkb/ is ITSELF a symlink: refused, nothing
   });
 
   test("documentkb/<id> -> knowledge/documents: `sync` refuses, the user's originals are untouched", () => {
-    // The second reviewer-named vector: a symlinked <id>/ dir pointed INWARD at
-    // documents/ must not let sync overwrite the user's own files.
+    // The second vector: a symlinked <id>/ dir pointed INWARD at documents/ must
+    // not let sync overwrite the user's own files.
     const p = mkdtempSync(join(tmpdir(), "t289-descendant-"));
     proj = p;
     mkdirSync(documentsDir(p, SPACE), { recursive: true });
@@ -1426,19 +1398,17 @@ describe("t289 a descendant of documentkb/ is ITSELF a symlink: refused, nothing
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
 // The active-space CURSOR escape. `resolveSpaceFlag` validates an explicit
 // `--space`, but the pathless fallback read straight from `activeSpace()`
-// (aidlc-lib.ts) with no shape check of its own. Measured (2026-08-11): a
-// hand-edited `aidlc/active-space` cursor holding `..` or `../../evil` made
+// (aidlc-lib.ts) with no shape check of its own. A hand-edited
+// `aidlc/active-space` cursor holding `..` or `../../evil` made
 // `knowledgeDir`/`documentkbDir` resolve ABOVE `aidlc/spaces/`, so `onboard`
 // wrote the catalog outside the space tree entirely. A third `../` level is
-// separately refused by `resolveContainedPath`'s existing lexical check, so the
-// escape was bounded to within `projectDir` — still a real corruption of the
-// project tree from a file the tool itself is supposed to own. The cursor now
+// separately refused by `resolveContainedPath`'s existing containment check, so
+// the escape was bounded to within `projectDir` -- still a real corruption of
+// the project tree from a file the tool itself is supposed to own. The cursor
 // reads as the default space unless it names a space this project has
 // (activeSpace in aidlc-lib.ts), and the fallback is still validated here.
-// ─────────────────────────────────────────────────────────────────────────────
 describe("t289 the active-space cursor resolves to a space this project has", () => {
   test("a cursor holding `..` reads as the default space", () => {
     const p = scratchProject();
@@ -1479,11 +1449,9 @@ describe("t289 the active-space cursor resolves to a space this project has", ()
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ROUND 8: the completeness property was keyed to PARAMETER SPELLING, not to
-// the dangerous primitive. An independent reviewer defeated it on the first
-// attempt by adding a NEW export whose parameters are merely spelled
-// differently from `(projectDir, space)`:
+// A completeness property keyed to PARAMETER SPELLING, not to the dangerous
+// primitive, misses an export whose parameters are merely spelled differently
+// from `(projectDir, space)`:
 //
 //   export function pruneContentReallyDangerously(pd: string, spaceName: string, id: string) {
 //     assertKnowledgeRootTrusted(pd, spaceName);
@@ -1493,51 +1461,46 @@ describe("t289 the active-space cursor resolves to a space this project has", ()
 //
 // `exportsTakingProjectDirAndSpace()` above matches `/projectDir/` and
 // `/\bspace\b/` against raw signature TEXT, so this function is invisible to
-// it — all 66 pre-existing t289 tests stayed green with it present and wired
-// into the shipped dist, and it deleted an external content.md through a
-// symlinked `documentkb/<id>` with no throw.
+// it -- and, wired into the shipped dist, it deleted an external content.md
+// through a symlinked `documentkb/<id>` with no throw.
 //
-// The fix re-keys the property to what the reviewer's function actually DOES
-// rather than how it is NAMED: every raw fs-MUTATION call in this file is
-// enumerated by COUNTING CALLS — the `(`-suffixed token, not a mention in
-// prose, so a doc comment cannot inflate the number — and each call's target
-// expression is traced back, through `join()`, local `const`/reassignment,
-// and cross-function parameter passing, to either the funnel
-// (`documentDir`/`journalDir`/`journalTxnDir`) or the bare, unextended
-// `documentkbDir()`/`indexPath()` anchor.
+// So the property is re-keyed to what a function actually DOES rather than how
+// it is NAMED: every raw fs-MUTATION call in this file is enumerated by
+// COUNTING CALLS -- the `(`-suffixed token, not a mention in prose, so a doc
+// comment cannot inflate the number -- and each call's target expression is
+// traced back, through `join()`, local `const`/reassignment, and cross-function
+// parameter passing, to either the funnel (`documentDir`/`journalDir`/
+// `journalTxnDir`) or the bare, unextended `documentkbDir()`/`indexPath()`
+// anchor.
 //
-// ROUND 9: the mutator VOCABULARY itself was still a hand-picked list of
-// primitive names, one level up from the round-8 parameter-name gap. An
-// independent reviewer defeated it twice against the shipped dist tool: an
-// `appendFileSync` imported under an alias, and an `openSync`+`writeSync`+
-// `closeSync` fd-based write — neither name was on the old list, so neither
-// call was ever counted or traced. The vocabulary was re-derived from this
-// module's own `node:fs`/`node:fs/promises` import statements: every imported
-// binding classified against a small set of Node's known-READ-ONLY calls, and
-// anything not on that list treated as a mutator by default (fail-closed).
+// A hand-picked mutator VOCABULARY, one level up from the parameter-name gap,
+// misses primitives it never named: an `appendFileSync` imported under an
+// alias, and an `openSync`+`writeSync`+`closeSync` fd-based write, neither of
+// which was counted or traced. So the vocabulary is derived from this module's
+// own `node:fs`/`node:fs/promises` import statements: every imported binding
+// classified against a small set of Node's known-READ-ONLY calls, and anything
+// not on that list treated as a mutator by default (fail-closed).
 //
-// ROUND 10 (this fix): the round-9 derivation parsed those import statements
-// with a handful of REGEXES (`parseFsImports` matched a bare `{...}` clause;
-// `findUnparseableFsImport` matched only a WHOLE-clause default or namespace
-// form). An independent reviewer defeated it twice against the shipped dist
-// tool by changing the import SYNTAX, not the primitive: a MIXED
-// default+named clause (`import fs, { readFileSync as _r } from "node:fs";`
-// then `fs.appendFileSync(...)`) matched neither regex, and a bare `"fs"`
-// specifier with no `node:` prefix (`import { appendFileSync } from "fs";`)
-// was invisible because both regexes hardcoded the `node:fs`/`node:fs/promises`
-// alternation. A `matchAll` over a few regexes cannot enumerate every way ES
-// modules let you bind a name — so this fix replaces the regex parser with a
-// REAL PARSE of this module's source using the `typescript` compiler API
-// (`ts.createSourceFile` + `ts.isImportDeclaration`), which reports every
-// binding form structurally rather than by pattern-matching text: named,
-// aliased, default, namespace, mixed default+named, type-only, and a dynamic
-// `import("node:fs"/"fs")` call expression. The module specifier is compared
-// by resolved identity (`fs`, `node:fs`, `fs/promises`, `node:fs/promises`),
-// not by a hardcoded string alternation, so a bare specifier is recognised
-// the same as its `node:`-prefixed twin. Fail-closed default is unchanged: an
-// unrecognised BINDING is a mutator; an unrecognised or unparseable IMPORT
-// SHAPE (default, namespace, dynamic, or a source that fails to parse at all)
-// is an unconditional violation, never a silent miss.
+// Parsing those import statements with a handful of REGEXES (one matching a
+// bare `{...}` clause, another only a WHOLE-clause default or namespace form)
+// misses import SYNTAX: a MIXED default+named clause (`import fs, { readFileSync
+// as _r } from "node:fs";` then `fs.appendFileSync(...)`) matched neither
+// regex, and a bare `"fs"` specifier with no `node:` prefix (`import {
+// appendFileSync } from "fs";`) was invisible because both regexes hardcoded
+// the `node:fs`/`node:fs/promises` alternation. A `matchAll` over a few regexes
+// cannot enumerate every way ES modules let you bind a name -- so the imports
+// are read with a REAL PARSE of this module's source using the `typescript`
+// compiler API (`ts.createSourceFile` + `ts.isImportDeclaration`), which
+// reports every binding form structurally rather than by pattern-matching
+// text: named, aliased, default, namespace, mixed default+named, type-only,
+// and a dynamic `import("node:fs"/"fs")` call expression. The module
+// specifier is compared by resolved identity (`fs`, `node:fs`, `fs/promises`,
+// `node:fs/promises`), not by a hardcoded string alternation, so a bare
+// specifier is recognised the same as its `node:`-prefixed twin. The
+// fail-closed default is unchanged: an unrecognised BINDING is a mutator; an
+// unrecognised or unparseable IMPORT SHAPE (default, namespace, dynamic, or a
+// source that fails to parse at all) is an unconditional violation, never a
+// silent miss.
 //
 // WHAT THIS DEFENDS AGAINST, AND WHAT IT DOES NOT. The threat is a hostile
 // FILESYSTEM: a symlink or redirected directory committed to the repo, or
@@ -1547,29 +1510,28 @@ describe("t289 the active-space cursor resolves to a space this project has", ()
 // printing "Up to date."), and it is reachable by a user who never touches this
 // source file.
 //
-// It is NOT a defence against hostile SOURCE CODE in this module. A reviewer
-// demonstrated three routes that evade both this test and the biome import
-// rule: `Bun.write(...)` (a global, never an fs import), `spawnSync("rm", ...)`
-// (the mutation happens in a child process), and re-exporting `rmSync` from
-// `aidlc-lib.ts` under an unrelated name (a specifier neither layer treats as
-// fs-adjacent). All three require ADDING CODE to this module or its lib, and an
-// author who can commit that can defeat any in-repo check — including this one.
-// They are recorded here as known-uncovered rather than left implicit, so a
-// reader does not mistake "the suite is green" for "no write can escape".
-// Closing them needs a different mechanism (verifying the containment invariant
-// by its EFFECT at verb start and before commit, rather than by call syntax),
-// which is deliberately out of scope for this slice.
+// It is NOT a defence against hostile SOURCE CODE in this module. Three routes
+// evade both this test and the biome import rule: `Bun.write(...)` (a global,
+// never an fs import), `spawnSync("rm", ...)` (the mutation happens in a
+// child process), and re-exporting `rmSync` from `aidlc-lib.ts` under an
+// unrelated name (a specifier neither layer treats as fs-adjacent). All three
+// require ADDING CODE to this module or its lib, and an author who can commit
+// that can defeat any in-repo check -- including this one. They are recorded
+// here as known-uncovered rather than left implicit, so a reader does not
+// mistake "the suite is green" for "no write can escape". Closing them needs
+// a different mechanism (verifying the containment invariant by its EFFECT at
+// verb start and before commit, rather than by call syntax), which is
+// deliberately out of scope here.
 //
 // One further pure-filesystem residual, of a different and narrower property:
 // the txn liveness stamp trusts the pid it reads, so a hand-planted
 // `.journal/<txn>/writer.pid` holding an always-alive pid (`1`) makes that
-// staging dir permanently uncollectible. Measured: the dir survives `sync`.
-// That is a disk-space LEAK, not an escape — nothing is written or deleted
-// outside the space — so it is recorded rather than fixed here. It is the cost
-// of choosing fail-safe (never reap a dir that might be live) over fail-clean,
-// which is the right default given the alternative deleted a LIVE transaction's
-// staging dir.
-// ─────────────────────────────────────────────────────────────────────────────
+// staging dir permanently uncollectible: the dir survives `sync`. That is a
+// disk-space LEAK, not an escape -- nothing is written or deleted outside the
+// space -- so it is recorded rather than fixed here. It is the cost of
+// choosing fail-safe (never reap a dir that might be live) over fail-clean,
+// which is the right default given the alternative deleted a LIVE
+// transaction's staging dir.
 describe("t289 the completeness property is keyed to the fs-mutation CALL, not to a parameter name", () => {
   const KNOWLEDGE_SRC = readFileSync(
     join(import.meta.dir, "..", "..", "core", "tools", "aidlc-knowledge.ts"),
@@ -1577,34 +1539,29 @@ describe("t289 the completeness property is keyed to the fs-mutation CALL, not t
   );
 
   // THIS FILE's fs-mutation vocabulary is DERIVED from its own import
-  // statements, not hand-picked. A module can only touch the filesystem
-  // through something it imports from `node:fs`/`fs`/`node:fs/promises`/
-  // `fs/promises`, or through the two funnel-helper mutators it imports from
-  // `aidlc-lib.ts` (`writeFileAtomic`/`writeBufferAtomic`). So every binding
-  // this module imports from the fs modules — including an aliased (`X as Y`),
-  // destructured, default, or namespace import — is classified against a
-  // maintained set of Node's KNOWN READ-ONLY calls; anything imported that is
-  // NOT on that read-only list is treated as a mutator by DEFAULT. That
+  // statements, not hand-picked. This check covers filesystem calls made
+  // through something imported from `node:fs`/`fs`/`node:fs/promises`/
+  // `fs/promises`, or through the five funnel-helper mutators imported from
+  // `aidlc-lib.ts` (LIB_HELPER_MUTATORS). So every named binding this module
+  // imports from the fs modules -- aliased (`X as Y`) or not -- is classified
+  // against a maintained set of Node's KNOWN READ-ONLY calls; anything imported
+  // that is NOT on that read-only list is treated as a mutator by DEFAULT. That
   // default is fail-CLOSED: an fs import this file has never used before is
   // caught the moment it is imported, whether or not anyone remembers to add
-  // its name to a list.
+  // its name to a list. A default or namespace import is refused outright.
   //
-  // A prior version of this vocabulary WAS a hand-picked list of primitive
-  // NAMES. An independent reviewer falsified that against the shipped dist
-  // tool twice: `appendFileSync` imported under an alias, and an
-  // `openSync`+`writeSync`+`closeSync` fd-based write — neither name was on
-  // the list, so neither call was even looked at.
+  // A hand-picked list of primitive NAMES missed `appendFileSync` imported
+  // under an alias, and an `openSync`+`writeSync`+`closeSync` fd-based write:
+  // neither name was on the list, so neither call was even looked at.
   //
-  // The version that replaced the hand-picked list still parsed the import
-  // statements with REGEXES over raw text, and was defeated twice more by
-  // changing the import SYNTAX rather than the primitive name: a mixed
-  // `import fs, { readFileSync as _r } from "node:fs";` clause (neither the
-  // named-import regex nor the whole-clause default/namespace regex matched a
-  // COMBINATION of the two), and a bare `import { appendFileSync } from
-  // "fs";` (the regexes hardcoded the `node:fs`/`node:fs/promises`
-  // alternation and never recognised the un-prefixed specifier). All four
-  // attacks are reproduced as RED-verify tests below, against the AST-based
-  // parser that replaced the regexes.
+  // Parsing the import statements with REGEXES over raw text missed import
+  // SYNTAX rather than primitive names: a mixed `import fs, { readFileSync as
+  // _r } from "node:fs";` clause (neither the named-import regex nor the
+  // whole-clause default/namespace regex matched a COMBINATION of the two), and
+  // a bare `import { appendFileSync } from "fs";` (the regexes hardcoded the
+  // `node:fs`/`node:fs/promises` alternation and never recognised the
+  // un-prefixed specifier). All four attacks are reproduced as RED-verify tests
+  // below, against the AST-based parser.
   const KNOWN_READ_ONLY_FS_CALLS = new Set([
     "existsSync", "lstatSync", "statSync", "fstatSync", "readdirSync",
     "readFileSync", "realpathSync", "accessSync", "readlinkSync",
@@ -1620,12 +1577,10 @@ describe("t289 the completeness property is keyed to the fs-mutation CALL, not t
   // than from raw node:fs. Named explicitly, not derived, because they are not
   // fs imports at all — they ARE the trusted mkdir/rename/rm/atomic-write
   // primitives this whole mechanism exists to route every other call site
-  // toward. `ensureDirSync`/`renameIntoPlace`/`removeTreeSync` were added in
-  // round 10, alongside the biome `noRestrictedImports` override that now
-  // physically forbids this module from binding the raw node:fs mkdir/rename/
-  // rm names at all — every mkdirSync/renameSync/rmSync call site in this file
-  // was rewritten to call these instead, closing the import boundary at the
-  // linter as well as at this trace.
+  // toward. `ensureDirSync`/`renameIntoPlace`/`removeTreeSync` sit alongside the
+  // biome `noRestrictedImports` override that physically forbids this module
+  // from binding the raw node:fs mkdir/rename/rm names at all, closing the
+  // import boundary at the linter as well as at this trace.
   const LIB_HELPER_MUTATORS = [
     "writeFileAtomic", "writeBufferAtomic", "ensureDirSync", "renameIntoPlace", "removeTreeSync",
   ];
@@ -1648,10 +1603,8 @@ describe("t289 the completeness property is keyed to the fs-mutation CALL, not t
   // Parses this module's OWN `fs`/`node:fs`/`fs/promises`/`node:fs/promises`
   // import statements with the real TypeScript compiler API, not a regex over
   // text -- a `matchAll` over a handful of patterns cannot enumerate every way
-  // ES modules let you bind a name, and two prior regex versions of this
-  // function were each defeated by a syntax the regex did not anticipate
-  // (round 9: an alias; round 10: a mixed default+named clause and a bare
-  // "fs" specifier). `ts.createSourceFile` reports every binding form
+  // ES modules let you bind a name (an alias, a mixed default+named clause, a
+  // bare "fs" specifier). `ts.createSourceFile` reports every binding form
   // structurally: named (aliased or not), and -- via `unparseable` below --
   // default, namespace, and dynamic import() forms that this module has no
   // legitimate reason to use. The module specifier is compared by resolved
@@ -1784,7 +1737,6 @@ describe("t289 the completeness property is keyed to the fs-mutation CALL, not t
     return out;
   }
 
-  // Balanced-paren arg text starting just after an opening `(`.
   function extractArgs(src: string, openParenIdx: number): { text: string; end: number } {
     let depth = 1;
     let i = openParenIdx + 1;
@@ -1877,7 +1829,7 @@ describe("t289 the completeness property is keyed to the fs-mutation CALL, not t
   // NOT-FURTHER-EXTENDED documentkb anchor. `join(X, ...more)` is safe only
   // when X itself resolves through the funnel — never when X is the bare
   // anchor, since appending an unguarded segment onto it is exactly the
-  // Round 6 vector this whole mechanism exists to close.
+  // vector this whole mechanism exists to close.
   function resolvesSafely(
     src: string, functions: FnInfo[], expr: string, fn: FnInfo, depth: number, requireFunnel: boolean,
   ): boolean {
@@ -1961,12 +1913,12 @@ describe("t289 the completeness property is keyed to the fs-mutation CALL, not t
   });
 
   test("EVERY fs-mutation call's target traces to the funnel or the bare anchor", () => {
-    // This is the property the reviewer's `pruneContentReallyDangerously`
-    // defeats when it is present: `rmSync(target, ...)` where `target` is
+    // This is the property `pruneContentReallyDangerously` defeats when it is
+    // present: `rmSync(target, ...)` where `target` is
     // `join(documentkbDir(pd, spaceName), id, "content.md")` -- a JOIN that
     // appends an attacker-influenced `id` segment onto the BARE anchor, never
-    // going through `documentDir`. RED-verified: with that function appended
-    // to a copy of this module, this assertion fails naming exactly that call.
+    // going through `documentDir`. With that function appended to a copy of this
+    // module, this assertion fails naming exactly that call.
     const { violations } = auditMutationCalls(KNOWLEDGE_SRC);
     expect(
       violations,
@@ -1977,18 +1929,17 @@ describe("t289 the completeness property is keyed to the fs-mutation CALL, not t
   });
 
   test("RED-verify: the reviewer's exact defeat function is caught by the trace, not the name", () => {
-    // Reproduces the round-8 review finding verbatim: a same-shaped function
-    // with DIFFERENTLY-SPELLED parameters (`pd`, `spaceName` instead of
-    // `projectDir`, `space`) that `join()`s an id segment straight onto the
-    // bare `documentkbDir()` anchor and `rmSync`s it. The old completeness
-    // test (which matched `/projectDir/` + `/\bspace\b/` in the SIGNATURE
-    // TEXT) never saw this function at all. This one does, because it reads
-    // what the function's BODY calls, not what its parameters are named.
+    // Reproduces a same-shaped function with DIFFERENTLY-SPELLED parameters
+    // (`pd`, `spaceName` instead of `projectDir`, `space`) that `join()`s an id
+    // segment straight onto the bare `documentkbDir()` anchor and `rmSync`s it. A
+    // completeness test matching `/projectDir/` + `/\bspace\b/` in the SIGNATURE
+    // TEXT never sees this function at all. This one does, because it reads what
+    // the function's BODY calls, not what its parameters are named.
     //
-    // Round 10 removed `rmSync` from this module's OWN imports (it now routes
-    // every remove through `removeTreeSync` in aidlc-lib.ts), so a defeat
-    // function that calls a bare `rmSync` must import it itself, same as any
-    // real attacker adding a brand-new import would have to.
+    // This module imports no `rmSync` of its own (every remove routes through
+    // `removeTreeSync` in aidlc-lib.ts), so a defeat function that calls a bare
+    // `rmSync` must import it itself, same as any real attacker adding a
+    // brand-new import would have to.
     const defeat = `
 import { rmSync } from "node:fs";
 
@@ -2021,10 +1972,10 @@ function legitimatelyPrunes(projectDir: string, space: string, id: string): void
   });
 
   test("a join() that APPENDS a segment onto the bare anchor is flagged, even inline", () => {
-    // The Round 6 vector, restated as a direct call rather than through a
-    // helper: appending straight onto documentkbDir()/indexPath() with no
-    // funnel is unsafe regardless of how many segments are appended or
-    // whether a local variable is interposed.
+    // The vector, restated as a direct call rather than through a helper:
+    // appending straight onto documentkbDir()/indexPath() with no funnel is unsafe
+    // regardless of how many segments are appended or whether a local variable is
+    // interposed.
     const inline = `
 function inlineUnsafeWrite(projectDir: string, space: string, id: string): void {
   writeFileAtomic(join(documentkbDir(projectDir, space), id, "metadata.json"), "{}");
@@ -2034,12 +1985,9 @@ function inlineUnsafeWrite(projectDir: string, space: string, id: string): void 
     expect(violations.some((v) => v.includes("inlineUnsafeWrite"))).toBe(true);
   });
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // ROUND 9: the reviewer's three attacks against the shipped dist tool, all
-  // defeating the hand-picked MUTATORS list because none of these three
-  // primitive names were on it. Reproduced here as RED-verify tests against
-  // the DERIVED vocabulary that replaced it.
-  // ───────────────────────────────────────────────────────────────────────────
+  // Three attacks against the shipped dist tool, all defeating a hand-picked
+  // MUTATORS list because none of these three primitive names were on it.
+  // Reproduced here as RED-verify tests against the DERIVED vocabulary.
 
   test("RED-verify attack (a): appendFileSync imported under an alias is caught", () => {
     const attack = `
@@ -2113,16 +2061,13 @@ export function nsWrite(pd: string, spaceName: string, id: string): void {
     ).toBe(true);
   });
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // ROUND 10: the reviewer's two attacks against the shipped dist tool, both
-  // defeating the round-9 REGEX parser by changing import SYNTAX rather than
-  // the primitive name. Reproduced here as RED-verify tests against the
-  // AST-based parser that replaced the regexes.
-  // ───────────────────────────────────────────────────────────────────────────
+  // Two attacks against the shipped dist tool, both defeating a REGEX parser by
+  // changing import SYNTAX rather than the primitive name. Reproduced here as
+  // RED-verify tests against the AST-based parser.
 
   test("RED-verify attack (d): a mixed default+named fs import is refused, not silently missed", () => {
     // `import fs, { readFileSync as _rfs } from "node:fs";` matched NEITHER
-    // round-9 regex: the named-import regex required the clause to be a bare
+    // regex: the named-import regex required the clause to be a bare
     // `{...}` with nothing before it, and the default/namespace regex
     // required the whole clause to be JUST the default binding. A mixed
     // clause fell through both, so `fs.appendFileSync(...)` was never counted.
@@ -2142,7 +2087,7 @@ export function mixedImportWrite(pd: string, spaceName: string, id: string): voi
   });
 
   test("RED-verify attack (e): a bare \"fs\" specifier (no node: prefix) is caught the same as its node:fs twin", () => {
-    // `import { appendFileSync } from "fs";` was invisible to both round-9
+    // `import { appendFileSync } from "fs";` was invisible to both
     // regexes, which hardcoded the `node:fs`/`node:fs/promises` alternation
     // and never matched the un-prefixed specifier -- valid and common Node
     // syntax that this tool must classify identically to "node:fs".

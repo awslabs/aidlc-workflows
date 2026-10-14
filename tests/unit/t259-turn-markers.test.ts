@@ -13,10 +13,10 @@
 // makes t121 structurally incapable of pinning the LIB half of the contract:
 // its `.aidlc-engine/engine-touch` cannot be refreshed by the hook's probe no matter
 // what the spawn env carries, so an mtime-equality assertion there passes even
-// with the probe marking deleted (proved by mutation in review of #687). t121
-// now pins the HOOK half with an env witness; this file pins the LIB half
-// in-process. Both halves are needed: the carve-out is dead code if either the
-// hook forgets to mark its probe OR markEngineTouch forgets to honour the mark.
+// with the probe marking deleted. t121 pins the HOOK half with an env witness;
+// this file pins the LIB half in-process. Both halves are needed: the carve-out
+// is dead code if either the hook forgets to mark its probe OR markEngineTouch
+// forgets to honour the mark.
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
@@ -97,7 +97,7 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
     const proj = makeCreatedProject();
     process.env[STOP_HOOK_PROBE_ENV] = "1";
     markEngineTouch(proj);
-    expect(() => statSync(engineTouchMarkerPath(proj))).toThrow(); // never created
+    expect(() => statSync(engineTouchMarkerPath(proj))).toThrow();
   });
 
   test("markEngineTouch DOES write when the probe env var is absent (a real advance)", () => {
@@ -108,7 +108,7 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
 
   test("a probe-marked call does not REFRESH an existing marker either", () => {
     const proj = makeCreatedProject();
-    markEngineTouch(proj); // a real advance lays the marker down
+    markEngineTouch(proj);
     const path = engineTouchMarkerPath(proj);
     const before = Math.floor(Date.now() / 1000) - 300;
     utimesSync(path, before, before);
@@ -200,7 +200,7 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
   // =========================================================================
   test("a failed engine-marker write clears the path instead of leaving a stale mtime", () => {
     const proj = makeCreatedProject();
-    markEngineTouch(proj); // a real advance lays a marker down
+    markEngineTouch(proj);
     const path = engineTouchMarkerPath(proj);
     const stale = Math.floor(Date.now() / 1000) - 3600;
     utimesSync(path, stale, stale);
@@ -227,7 +227,6 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
     const outside = mkdtempSync(join(tmpdir(), "aidlc-t259-outside-"));
     tempDirs.push(outside);
     const canary = join(outside, "canary");
-    // The marker leaf is a link to a file outside the record.
     const proj = makeCreatedProject();
     writeFileSync(canary, "keep\n", "utf-8");
     mkdirSync(join(engineTouchMarkerPath(proj), ".."), { recursive: true });
@@ -239,7 +238,6 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
     markEngineTouch(proj);
     expect(readFileSync(canary, "utf-8")).toBe("keep\n");
     expect(turnEndIsOpen(proj)).toBe(false);
-    // The engine folder itself is a link to a folder outside the record.
     const other = makeCreatedProject();
     const engine = join(engineTouchMarkerPath(other), "..");
     rmSync(engine, { recursive: true, force: true });
@@ -295,7 +293,7 @@ describe("t259 the engine's last word ended the turn", () => {
   // is already in progress on ... How should I handle this?", and picked
   // "Chat about this". The Stop hook's own `next` returned Feasibility, the
   // reminder fired, and the agent went back to the old work, dropping the
-  // question. The turn now ends at the question.
+  // question. The turn ends at the question.
   test("the Stop hook lets the turn end at the new-work question, and nudges again once other work is handed out", async () => {
     const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
     tempDirs.push(proj);
@@ -329,7 +327,7 @@ describe("t259 the engine's last word ended the turn", () => {
 
   // Live runs: after a read-only /aidlc --status, and after a scope change at a
   // gate, the reminder sent the agent into the next stage with no word from the
-  // person. A print the agent stops after now ends the turn; one that hands the
+  // person. A print the agent stops after ends the turn; one that hands the
   // agent back to `next` still does not.
   for (const copilot of [false, true]) {
     test(`the Stop hook lets the turn end after a print the agent stops after${copilot ? ", in a Copilot session" : ""}`, async () => {
@@ -410,7 +408,7 @@ describe("t259 the engine's last word ended the turn", () => {
     expect(restored).toContain(`Specialist reviews are ${named} for the rest of this work (they were off).`);
     expect(readFileSync(stateFilePath(proj), "utf-8")).not.toMatch(/^- \*\*Review Override\*\*:[ \t]*none[ \t]*$/m);
     // At the stage's open gate the person must answer next, so the same
-    // setting ends the turn as before.
+    // setting ends the turn.
     const statePath = stateFilePath(proj);
     writeFileSync(statePath, readFileSync(statePath, "utf-8").replace("- [-] feasibility", "- [?] feasibility"));
     markHumanTurn(proj);
@@ -464,7 +462,7 @@ describe("t259 the engine's last word ended the turn", () => {
 // `/aidlc intent <older work>` whose record had no engine mark (work made before
 // the markers shipped, or a fresh clone, since .aidlc-engine/ is not committed),
 // a plain question's turn was blocked with "AI-DLC is carrying on with <first
-// stage>." and the agent started that stage unasked. A switch now leaves the
+// stage>." and the agent started that stage unasked. A switch leaves the
 // mark on the work it selects, as `intent create` does on new work.
 describe("t259 a switch leaves the engine mark on the work it selects", () => {
   function markless(proj: string, label: string): string {
@@ -506,8 +504,8 @@ describe("t259 a switch leaves the engine mark on the work it selects", () => {
   // A new chat's first command names the work already selected (`/aidlc intent
   // <it>`, `/aidlc space` for the current space, or the resume offer's Yes): a
   // self-switch, which writes no switch receipt. On marked work mid-stage the
-  // turn ends at "Now working on ...", as it did before switches wrote the mark:
-  // the switch never refreshes a mark the record already has.
+  // turn ends at "Now working on ...": the switch never refreshes a mark the
+  // record already has.
   test("a self-switch on marked work leaves the mark alone, so its turn ends", async () => {
     const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
     tempDirs.push(proj);

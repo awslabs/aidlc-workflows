@@ -90,7 +90,6 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       cwd: REPO_ROOT,
     });
     if (r.status !== 0) {
-      // Surface the script's path-level mismatch list.
       console.error(r.stderr);
     }
     expect(r.status).toBe(0);
@@ -126,7 +125,6 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
   });
 
   test("3: the .opencode shell holds ONLY the native emissions — no engine .ts opencode would auto-import", () => {
-    // Top-level shape: exactly the three natively-consumed dirs.
     expect(readdirSync(SHELL).sort()).toEqual(["agents", "command", "plugin"]);
     // The tool-scan trap: opencode imports .opencode/tool/*.ts and
     // .opencode/tools/*.ts as custom tools. Neither dir may ever appear.

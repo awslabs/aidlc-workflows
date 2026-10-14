@@ -161,12 +161,10 @@ export const KIRO_TERMINAL_QUESTION =
   "back with no reply and your words can get split. Set Kiro's terminal to PowerShell? It is a Kiro setting for all " +
   "your projects.";
 
-/** The line after AI-DLC set Kiro's terminal to PowerShell. */
 export function kiroTerminalSetLine(): string {
   return "Set Kiro's terminal to PowerShell (a Kiro setting for all your projects). Restart Kiro so its chats use it.";
 }
 
-/** The line after the person kept their terminal at a question. */
 export function kiroTerminalKeptLine(invoke: string): string {
   return "Kept Kiro's terminal as it is; AI-DLC will not ask again. To switch later: " +
     `\`${invoke} config trust --kiro-terminal powershell\`.`;
@@ -257,9 +255,10 @@ export function readKiroTerminalShell(): "cmd" | "powershell" | null {
 /**
  * Note a tool run Kiro's Command Prompt terminal could not have shown: over a
  * second, in Kiro's terminal (TERM_PROGRAM=kiro; the agent's commands carry no
- * VSCODE_CODE_CACHE_PATH, so the settings come from Kiro's default folder),
- * for a person who kept Command Prompt or was asked and did not act. Nothing is
- * noted before the question was asked, after the switch, or once warned.
+ * VSCODE_CODE_CACHE_PATH, so the shell comes from the last chat start's record
+ * or, before any, from Kiro's default folder), for a person who kept Command
+ * Prompt or was asked and did not act. Nothing is noted before the question
+ * was asked, after the switch, or once warned.
  */
 export function noteSlowReply(
   elapsedMs: number,

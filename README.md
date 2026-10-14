@@ -185,7 +185,7 @@ Run `aidlc doctor` from the project root first. Common fixes:
 
 | Symptom | Fix |
 | --- | --- |
-| `aidlc` is not found | On Windows, open a new terminal or use the direct command printed with [`-NoModifyPath`](docs/guide/18-install-and-lifecycle.md#windows-powershell). On Unix, apply the installer's PATH instruction. |
+| `aidlc` is not found | On Windows, quit and reopen the terminal app or IDE (a new tab inside one that was open during the install keeps the old PATH), or use the direct command printed with [`-NoModifyPath`](docs/guide/18-install-and-lifecycle.md#windows-powershell). On Unix, apply the installer's PATH instruction. |
 | Project/runtime version skew | Finish the active workflow, then run `aidlc config` |
 | Codex hooks do not run | Trust the project hooks as described in the [Codex guide](docs/guide/harnesses/codex-cli.md) |
 | Bedrock access fails | Enable the configured models and verify AWS credentials and region |
