@@ -191,6 +191,7 @@ import {
   type ReviewClass,
   scopeSettingsOffList,
   ceremonyPolicyValues,
+  learningsRitualRuns,
   effectiveSupportAgents,
   effectiveSupportAgentsForProject,
   supportAgentsAtOpenGate,
@@ -7280,10 +7281,7 @@ function buildRunStageDirective(
   if (node.slug === "code-generation" || node.slug === "build-and-test") {
     protocolModules.push("loopback");
   }
-  // The learnings ritual runs at a gate's first showing, never again for a
-  // revision of it (stage-protocol.md, Request Changes).
-  const revising = stateContent !== null && checkboxStateOf(parseCheckboxes(stateContent), node.slug) === "revising";
-  if (ceremony.learnings === "on" && !revising) protocolModules.push("learnings");
+  if (learningsRitualRuns(ceremony.learnings, stateContent, node.slug)) protocolModules.push("learnings");
   if (protocolModules.length > 0) {
     directive.protocol_modules = protocolModules;
   }

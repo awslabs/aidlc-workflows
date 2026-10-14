@@ -118,9 +118,10 @@
 //      (AIDLC_UNATTENDED=1) has nobody present, and a prompt it submits reads as
 //      a person's, so under autonomy it keeps the old guard. It only ever
 //      ALLOWS; it can never block more. Both paths count a `log answer` /
-//      `log review` / `log link` that recorded a row as engagement (the stage's
-//      work in flight, #2400), from the one rule beside markEngineTouch
-//      (markStageWorkLogged, isStageWorkLogCall, stageWorkLogRecorded).
+//      `log review` / `log link` the logger marked as the stage's work going
+//      on (#2400), from the one rule beside markEngineTouch (markStageWorkLogged,
+//      isStageWorkLogCall, stageWorkLogged); Plan Approval and guard-recovery
+//      answers are not among them.
 //        NOT FULL PARITY. The marker path answers the same question more
 //        COARSELY than the transcript: it is blind to aidlc-jump / aidlc-bolt /
 //        aidlc-swarm and the mutating aidlc-state verbs, which the transcript
@@ -198,7 +199,7 @@ import {
   hookChildEnv,
   isEngineToolCall,
   isStageWorkLogCall,
-  stageWorkLogRecorded,
+  stageWorkLogged,
   isShellToolName,
   shellCommandText,
   hooksHealthDir,
@@ -1169,7 +1170,8 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
     engineCall: boolean;
     humanPrompt: boolean;
     // A stage-work `log answer|review|link` call (isStageWorkLogCall): engaged
-    // only once its own result proves it recorded (stageWorkLogRecorded).
+    // only once its own result proves it recorded and the logger marked it as
+    // the stage's work (stageWorkLogged).
     stageWorkLog?: boolean;
     call?: { id: string | null; name: string; input: unknown };
     result?: { id: string | null; output: unknown; failed: boolean };
@@ -1390,7 +1392,7 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
       const results = resultsById.get(call.id);
       if (results?.length === 1 && results[0] > i) {
         const result = turns[results[0]].result;
-        if (result && !result.failed && stageWorkLogRecorded(result.output)) return false;
+        if (result && !result.failed && stageWorkLogged(result.output, projectDir)) return false;
       }
     }
     if (!turn.engineCall) continue;
@@ -1426,7 +1428,7 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
 //     predicate is reconstructed from two files the framework already writes on
 //     the relevant seams - `.aidlc-engine/human-turn` (the UserPromptSubmit mint) and
 //     `.aidlc-engine/engine-touch` (every advancing aidlc-orchestrate invocation,
-//     and a `log answer|review|link` that recorded a row). A
+//     and a `log answer|review|link` the logger counts as stage work). A
 //     human turn NEWER than the last engine advance is the marker spelling of
 //     "answered with zero engine calls".
 //

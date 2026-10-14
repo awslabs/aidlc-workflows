@@ -18,7 +18,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -53,6 +53,8 @@ import {
   stateDigest,
   stripRecommendedDecorator,
   turnEndIsOpen,
+  engineTouchMarkerPath,
+  humanTurnMarkerPath,
   writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { exactOptionPick } from "../../dist/claude/.claude/tools/aidlc-reply-reader.ts";
@@ -550,6 +552,20 @@ describe("the summary confirmation records the choice the agent read", () => {
     const r = answer("Request changes: rename the handler");
     expect(r.rc, r.out).toBe(0);
     expect(r.out).toContain("rename the handler");
+    // What to change is known, so the agent revises: the stage's work goes on.
+    expect(r.out).not.toContain("agent_note");
+    expect(turnEndIsOpen(proj)).toBe(false);
+    expect(statSync(engineTouchMarkerPath(proj)).mtimeMs).toBeGreaterThan(statSync(humanTurnMarkerPath(proj)).mtimeMs);
+  });
+
+  // #2400: a bare Request changes is answered by the person next ("What
+  // should change?"), so the turn ends there and the Stop hook lets it.
+  test("a bare Request changes says to ask what should change, and the turn ends", () => {
+    summary("Request changes");
+    const r = answer("Request changes");
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).toContain('Ask \\"What should change?\\" and end the turn');
+    expect(turnEndIsOpen(proj)).toBe(true);
   });
 
   // The protocol's quoting rule, through a real shell: single quotes keep a

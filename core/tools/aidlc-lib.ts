@@ -27935,7 +27935,7 @@ export function stopHookDir(projectDir: string, intent?: string, space?: string)
 //   .aidlc-engine/engine-touch - touched by aidlc-orchestrate on every ADVANCING
 //                         invocation (`next` / `report` / `park`), by
 //                         `intent create` for the work it creates, and by a
-//                         `log answer|review|link` that recorded a row.
+//                         `log answer|review|link` the logger counts as stage work.
 //
 //   conversational  <=>  mtime(.aidlc-engine/human-turn) > mtime(.aidlc-engine/engine-touch)
 //
@@ -28127,7 +28127,7 @@ export function turnEndIsOpen(projectDir: string, intent?: string, space?: strin
 // record with no mark, made before the markers shipped or freshly cloned, would
 // otherwise read every later plain question as the engine's unfinished turn on
 // the transcript-free hosts), and through markStageWorkLogged (below) from a
-// `log answer` / `log review` / `log link` that recorded a row. A no-op in
+// `log answer` / `log review` / `log link` the logger counts as stage work. A no-op in
 // three cases: when STOP_HOOK_PROBE_ENV is set (the Stop hook's own probe, see
 // above), for read-only utility routing (excluded at the call site), and
 // before creation.
@@ -28163,25 +28163,30 @@ export function markEngineTouch(projectDir: string, intent?: string, space?: str
 // the verdict does all of it through `log answer` / `log review` (and a
 // pipeline stage's `log link`), with no `next` or `report`. Such a turn is the
 // stage's work in flight, not chat: one that ends before the gate is a bail
-// mid-stage, and the carve-out must not release it (#2400). This is the ONE
-// rule for both evidence paths of the carve-out, kept here rather than in
+// mid-stage, and the carve-out must not release it (#2400). aidlc-log is the
+// one owner of that call: after a row it recorded it leaves the engine mark
+// (markStageWorkLogged), or the turn-end mark when the person answers next
+// (a summary's Request changes with nothing said, which asks "What should
+// change?"), or no mark for a review of a stage no longer in flight. Both
+// evidence paths read that mark, kept here rather than in
 // isEngineEngagementSegment, which also feeds the forwarding-loop and
 // runtime-compile detectors:
 //
-//   - marker path (Kiro IDE, Kiro CLI, opencode): aidlc-log calls
-//     markStageWorkLogged after its subcommand wrote an audit row;
-//   - transcript path (Claude Code, Codex): the Stop hook counts a call
-//     isStageWorkLogCall names whose own correlated result
-//     stageWorkLogRecorded proves recorded.
+//   - marker path (Kiro IDE, Kiro CLI, opencode): the engine mark itself;
+//   - transcript path (Claude Code, Codex): a call isStageWorkLogCall names,
+//     whose own correlated result shows the `emitted` row it recorded, with
+//     the engine mark newer than the person's turn (stageWorkLogged).
 //
-// Only a call that RECORDED counts. A refusal (no pending question, "no new
-// human reply has arrived", a review the logger refused) recorded nothing, and
-// several of them tell the agent to end its turn, so the stop stays allowed.
-// `log decision` is not here: a logged question waits on the person, which the
-// pending-decision carve-out already lets end the turn. `log answers` is a read.
+// A refusal recorded nothing, and several tell the agent to end its turn, so
+// the stop stays allowed. Not counted either: `log decision` (a logged
+// question waits on the person, which the pending-decision carve-out lets end
+// the turn), `log answers` (a read), and the Plan Approval and guard-recovery
+// answers, which record through their own owners (recordPlanApprovalAnswer,
+// recordGuardRecoveryChoice) and print `recorded`, not `emitted`: several of
+// them end the turn (I'll edit the files, Request Changes, a park).
 const STAGE_WORK_LOG_VERBS: ReadonlySet<string> = new Set(["answer", "review", "link"]);
 
-// Marker path: the engine mark for a `log` subcommand that recorded a row.
+// Marker path: the engine mark for a `log` subcommand that recorded the stage's work.
 export function markStageWorkLogged(verb: string | undefined, projectDir: string, intent?: string, space?: string): void {
   if (verb === undefined || !STAGE_WORK_LOG_VERBS.has(verb)) return;
   markEngineTouch(projectDir, intent, space);
@@ -28202,17 +28207,26 @@ export function isStageWorkLogCall(name: string, input: unknown): boolean {
 }
 
 // Transcript path, the result: the call's output carries the `emitted` row it
-// recorded. Every recording outcome of the three verbs prints one; a refusal,
-// a skip and a print-only answer do not. The output is the text a transcript
-// keeps (a string, a Codex JSON string, or Claude text parts).
-export function stageWorkLogRecorded(output: unknown): boolean {
+// recorded (a refusal, a skip and a print-only answer carry none), and the
+// logger left the engine mark after the person's last turn, which it does only
+// for the stage's work. The output is the text a transcript keeps (a string, a
+// Codex JSON string, or Claude text parts). Any unreadable mark is no evidence.
+export function stageWorkLogged(output: unknown, projectDir: string): boolean {
   const text = typeof output === "string"
     ? output
     : Array.isArray(output)
       ? output.map((part) => isPlainObject(part) && typeof part.text === "string" ? part.text : "").join("\n")
       : "";
-  return /\\?"emitted\\?"\s*:\s*\\?"[A-Z][A-Z_]*\\?"/.test(text);
+  if (!/\\?"emitted\\?"\s*:\s*\\?"[A-Z][A-Z_]*\\?"/.test(text)) return false;
+  try {
+    const human = turnMarkerStat(projectDir, "human-turn");
+    const engine = turnMarkerStat(projectDir, "engine-touch");
+    return human?.isFile() === true && engine?.isFile() === true && engine.mtimeMs > human.mtimeMs;
+  } catch {
+    return false;
+  }
 }
+
 
 // The engine mark for the work an intent or space switch selects. Written only
 // when the record has none (work made before the markers shipped, or a fresh
@@ -40855,6 +40869,19 @@ export function ceremonyPolicyValues(
     plan_approval: policy.plan_approval.value,
     collaborators: policy.collaborators.value,
   };
+}
+
+// Whether a stage's run lists the learnings ritual: the ceremony is on, and
+// the gate is at its first showing, never again for a revision of it
+// (stage-protocol.md, Request Changes). The run-stage directive and the
+// review verdict's next step both read it here.
+export function learningsRitualRuns(
+  learnings: CeremonyPolicy["learnings"],
+  stateContent: string | null | undefined,
+  slug: string,
+): boolean {
+  if (learnings !== "on") return false;
+  return !stateContent || parseCheckboxes(stateContent).find((row) => row.slug === slug)?.state !== "revising";
 }
 
 // --- Answer mode (stage-protocol.md section 3, Step 2) ---

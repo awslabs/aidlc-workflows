@@ -1,5 +1,5 @@
 // covers: hook:aidlc-continue-workflow, function:refreshActiveDirectiveMarker, function:hasCurrentSharedResumeWait, function:hasCurrentSharedGuardRecoveryWait, function:hasPendingDecision
-// covers: function:boundDirectiveMessage, function:isStageWorkLogCall, function:stageWorkLogRecorded
+// covers: function:boundDirectiveMessage, function:isStageWorkLogCall, function:stageWorkLogged
 //
 // Behavioural contract for the Stop hook `aidlc-continue-workflow.ts` — the framework's
 // FIRST flow-altering hook. Migrated from tests/integration/t121-stop-hook-enforce.sh
@@ -3903,17 +3903,25 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
         "aidlc engine log review --stage requirements-analysis --reviewer aidlc-product-lead-agent --iteration 1 --verdict READY",
         "bun .claude/tools/aidlc.ts engine log review --stage requirements-analysis --reviewer aidlc-product-lead-agent --iteration 1 --verdict READY",
       ]) {
-        const proj = makeProject();
-        seedActive(proj, "requirements-analysis");
-        const tp = seedTranscriptEntries(proj, format, [
-          { kind: "human", text: "Q1: B; Q2: A" },
-          { kind: "bash", id: "verdict", command },
-          { kind: "result", id: "verdict", output: recordedReview },
-          { kind: "text" },
-        ]);
-        const r = runHook(proj, JSON.stringify({ stop_hook_active: false, transcript_path: tp }), "run-stage");
-        expect(r.rc, `${format} ${command}`).toBe(0);
-        expect((JSON.parse(r.out || "{}") as { decision?: string }).decision, `${format} ${command}`).toBe("block");
+        // The logger marked the verdict as the stage's work (its engine mark
+        // is newer than the person's turn): BLOCK. Without that mark (a
+        // review of a stage already approved) the same row is not: ALLOW.
+        for (const marked of [true, false]) {
+          const proj = makeProject();
+          seedActive(proj, "requirements-analysis");
+          seedTurnMarkers(proj, { humanNewer: !marked });
+          const tp = seedTranscriptEntries(proj, format, [
+            { kind: "human", text: "Q1: B; Q2: A" },
+            { kind: "bash", id: "verdict", command },
+            { kind: "result", id: "verdict", output: recordedReview },
+            { kind: "text" },
+          ]);
+          const r = runHook(proj, JSON.stringify({ stop_hook_active: false, transcript_path: tp }), "run-stage");
+          const label = `${format} ${command} marked=${marked}`;
+          expect(r.rc, label).toBe(0);
+          if (marked) expect((JSON.parse(r.out || "{}") as { decision?: string }).decision, label).toBe("block");
+          else expect(r.out, label).toBe("");
+        }
       }
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -3941,6 +3949,9 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       for (const [label, entries] of cases) {
         const proj = makeProject();
         seedActive(proj, "requirements-analysis");
+        // Even with an engine mark newer than the person's turn, a call whose
+        // result recorded nothing is not the stage's work.
+        seedTurnMarkers(proj, { humanNewer: false });
         const tp = seedTranscriptEntries(proj, format, [
           { kind: "human", text: "what did I answer for Q1?" },
           ...entries,

@@ -8,7 +8,8 @@
 // function:isReviewRecordRelativePath, function:readReviewRecord,
 // function:latestReviewRecordRefs, function:mergeReviewRecordsFromDelta,
 // function:reviewRecordMatchesCompletion, function:pairedReviewRecordForCompletion,
-// function:completionCarriesVerifiedReview, function:stageGateReportCommand
+// function:completionCarriesVerifiedReview, function:stageGateReportCommand, function:learningsRitualRuns,
+// function:reviewVerdictNote
 //
 // t271 — engine-enforced review iteration ceiling (aidlc-log review).
 //
@@ -68,6 +69,7 @@ import {
   guardAttemptState,
   reviewRequestReplaces,
   latestReviewRecordRefs,
+  markEngineTouch,
   markHumanTurn,
   mergeReviewRecordsFromDelta,
   REVIEW_RECORD_MAX_BYTES,
@@ -484,61 +486,119 @@ describe("t271 review iteration ceiling", () => {
 
   // #2400: on Kiro IDE the verdict came back with no step, the agent ended its
   // turn after READY, and the gate was never shown. The verdict's output names
-  // the next step: the gate when no pass follows, the next pass when one does.
-  test("a recorded verdict names the agent's next step: the gate after the last pass, the next pass otherwise", () => {
+  // the one next step, with its exact command.
+  describe("a recorded verdict names the agent's next step", () => {
     const note = (stdout: string): string | undefined =>
       (JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}") as { agent_note?: string }).agent_note;
-    for (const verdict of ["READY", "NOT-READY"] as const) {
-      const proj = seedProject("feature"); // requirements-analysis is advisory and in progress
-      const request = [
-        "--stage", "requirements-analysis",
-        "--reviewer", "aidlc-product-lead-agent",
-        "--iteration", "1",
-      ];
-      expect(runReview(proj, request).status).toBe(0);
-      // The person's reply arrives; on the hosts with no transcript the Stop
-      // hook reads the turn from the marks, and the verdict is the stage's
-      // work going on, not chat.
-      markHumanTurn(proj);
-      expect(turnMarkersShowConversational(proj)).toBe(true);
-      const recorded = runReview(proj, [...request, "--verdict", verdict]);
+    const RA = ["--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"];
+    const NO_LEARNINGS = { AIDLC_DISABLE_LEARNINGS: "1" };
+    function verdictNote(
+      box: string,
+      verdict: "READY" | "NOT-READY",
+      env: Record<string, string> = {},
+      between?: (proj: string) => void,
+    ): { proj: string; step: string | undefined } {
+      const proj = seedProject("feature");
+      const sf = seededStateFile(proj);
+      writeFileSync(sf, readFileSync(sf, "utf-8").replace("- [-] requirements-analysis", `- [${box}] requirements-analysis`));
+      const requested = runReview(proj, RA, env);
+      expect(requested.status, requested.stderr).toBe(0);
+      between?.(proj);
+      const recorded = runReview(proj, [...RA, "--verdict", verdict], env);
       expect(recorded.status, recorded.stderr).toBe(0);
-      expect(turnMarkersShowConversational(proj)).toBe(false);
-      const step = note(recorded.stdout);
-      expect(step, `${verdict}: ${recorded.stdout}`).toBeDefined();
-      expect(step).toContain("report --stage requirements-analysis --result awaiting-approval");
-      expect(step).toContain("learnings");
-      expect(step).toContain("Do not end the turn");
-      // Agent-facing only: no verdict token, nothing for the person to read.
-      expect(step).not.toContain(verdict === "READY" ? "READY" : "NOT-READY");
+      return { proj, step: note(recorded.stdout) };
     }
 
-    // An adversarial stage-level pass with passes left is followed by the
-    // next pass, not the gate.
-    const proj = seedProject("feature");
-    const sf = seededStateFile(proj);
-    writeFileSync(sf, readFileSync(sf, "utf-8").replace("- [ ] code-generation", "- [-] code-generation"));
-    const iterationOnly = { AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
-    const first = ["--stage", "code-generation", "--reviewer", "aidlc-architecture-reviewer-agent", "--iteration", "1"];
-    expect(runReview(proj, first, iterationOnly).status).toBe(0);
-    const repairs = runReview(proj, [...first, "--verdict", "NOT-READY"], iterationOnly);
-    expect(repairs.status, repairs.stderr).toBe(0);
-    const again = note(repairs.stdout);
-    expect(again, repairs.stdout).toContain("--iteration 2");
-    expect(again).not.toContain("--result awaiting-approval");
-    expect(again).toContain("Do not end the turn");
+    test("in progress: the gate's report after the last pass, and the turn is the stage's work", () => {
+      for (const verdict of ["READY", "NOT-READY"] as const) {
+        const { step } = verdictNote("-", verdict, NO_LEARNINGS, (proj) => {
+          // The person's reply arrives; on the hosts with no transcript the
+          // Stop hook reads the turn from the marks.
+          markHumanTurn(proj);
+          expect(turnMarkersShowConversational(proj)).toBe(true);
+        });
+        expect(step, verdict).toContain("say the completion summary, then run");
+        expect(step).toContain("report --stage requirements-analysis --result awaiting-approval");
+        expect(step).not.toContain("learnings");
+        // Agent-facing only: no verdict token.
+        expect(step).not.toContain("READY");
+      }
+      const { proj } = verdictNote("-", "READY", NO_LEARNINGS, (p) => markHumanTurn(p));
+      expect(turnMarkersShowConversational(proj)).toBe(false);
+    });
 
-    // A Unit's review keeps the step its own directive names.
-    const unitProj = seedProject("feature");
-    writeReviewedArtifact(unitProj, "code-generation", "plan\n", "unit-alpha");
-    const unit = [
-      "--stage", "code-generation", "--reviewer", "aidlc-architecture-reviewer-agent",
-      "--unit", "unit-alpha", "--iteration", "1",
-    ];
-    expect(runReview(unitProj, unit).status).toBe(0);
-    const unitVerdict = runReview(unitProj, [...unit, "--verdict", "READY"]);
-    expect(unitVerdict.status, unitVerdict.stderr).toBe(0);
-    expect(note(unitVerdict.stdout)).toBeUndefined();
+    test("with the learnings ceremony on, the learnings question comes first and is the only step", () => {
+      const { step } = verdictNote("-", "READY");
+      expect(step).toContain("learnings ritual");
+      expect(step).not.toContain("--result");
+    });
+
+    test("an open gate is shown again, and a revision's gate with --result revised", () => {
+      expect(verdictNote("?", "READY").step).toContain("report --stage requirements-analysis --result awaiting-approval");
+      const revised = verdictNote("R", "READY").step;
+      expect(revised).toContain("report --stage requirements-analysis --result revised");
+      expect(revised).not.toContain("learnings");
+    });
+
+    test("when the person wrote while the review ran, the step is next, with no approval question", () => {
+      const { step } = verdictNote("-", "READY", NO_LEARNINGS, (proj) => {
+        const replied = spawnSync(process.execPath, [join(dirname(LOG_TOOL), "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+          cwd: proj, encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_UNATTENDED: "" },
+          input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t271-wrote", prompt: "looks fine, approve it" }),
+        });
+        expect(replied.status, `${replied.stdout}${replied.stderr}`).toBe(0);
+      });
+      expect(step).toContain("orchestrate next");
+      expect(step).toContain("Do not ask the approval question now");
+      expect(step).not.toContain("--result");
+    });
+
+    test("a review of a stage no longer in flight has no step and leaves the turn as it was", () => {
+      const { proj, step } = verdictNote("x", "READY", NO_LEARNINGS, (p) => {
+        markEngineTouch(p);
+        Bun.sleepSync(20);
+        markHumanTurn(p);
+      });
+      expect(step).toBeUndefined();
+      expect(turnMarkersShowConversational(proj)).toBe(true);
+    });
+
+    test("an adversarial pass with one left names the next pass; an autonomous Construction gate and a Unit name none", () => {
+      const iterationOnly = { AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
+      const first = ["--stage", "code-generation", "--reviewer", "aidlc-architecture-reviewer-agent", "--iteration", "1"];
+      for (const autonomous of [false, true]) {
+        const proj = seedProject("feature");
+        const sf = seededStateFile(proj);
+        // Autonomy governs the gates after the first Construction one, so an
+        // earlier design stage was approved by the person.
+        let state = readFileSync(sf, "utf-8").replace("- [ ] code-generation", "- [-] code-generation");
+        if (autonomous) {
+          state = `${state.replace("- [S] functional-design — SKIP (bugfix scope)", "- [x] functional-design — EXECUTE")}\n` +
+            "- **Construction Autonomy Mode**: autonomous\n";
+        }
+        writeFileSync(sf, state);
+        expect(runReview(proj, first, iterationOnly).status).toBe(0);
+        const recorded = runReview(proj, [...first, "--verdict", autonomous ? "READY" : "NOT-READY"], iterationOnly);
+        expect(recorded.status, recorded.stderr).toBe(0);
+        if (autonomous) {
+          expect(note(recorded.stdout)).toBeUndefined();
+        } else {
+          expect(note(recorded.stdout)).toContain("--iteration 2");
+          expect(note(recorded.stdout)).not.toContain("--result");
+        }
+      }
+
+      const unitProj = seedProject("feature");
+      writeReviewedArtifact(unitProj, "code-generation", "plan\n", "unit-alpha");
+      const unit = [
+        "--stage", "code-generation", "--reviewer", "aidlc-architecture-reviewer-agent",
+        "--unit", "unit-alpha", "--iteration", "1",
+      ];
+      expect(runReview(unitProj, unit).status).toBe(0);
+      const unitVerdict = runReview(unitProj, [...unit, "--verdict", "READY"]);
+      expect(unitVerdict.status, unitVerdict.stderr).toBe(0);
+      expect(note(unitVerdict.stdout)).toBeUndefined();
+    });
   });
 
   test("a gate rejection resets the ordinal, so a stale --iteration is corrected rather than refused as over budget", () => {

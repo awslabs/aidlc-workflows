@@ -1212,6 +1212,30 @@ export function reviewRequestNote(reviewer: string, reviewFile: string, recordVe
     `write it yourself and never stand in for it. When its verdict is back, record it with \`${recordVerdict}\`.`;
 }
 
+// The step after a stage's verdict is recorded (#2400), as the logger decides
+// it: one branch, with its exact command.
+export type ReviewVerdictStep =
+  | { kind: "person-wrote"; next: string }
+  | { kind: "next-pass"; request: string }
+  | { kind: "learnings" }
+  | { kind: "gate"; report: string; summary: boolean };
+export function reviewVerdictNote(step: ReviewVerdictStep): string {
+  switch (step.kind) {
+    case "person-wrote":
+      return `The person wrote while the review ran: run \`${step.next}\` and act on what they said together with ` +
+        "the step it prints. Do not ask the approval question now.";
+    case "next-pass":
+      return "Another review pass follows: fix what its findings name (a review that did not finish names nothing " +
+        `to fix), then request the next pass with \`${step.request}\` in this turn.`;
+    case "learnings":
+      return "No further review pass follows: say the completion summary, then run the learnings ritual and ask " +
+        "its question, which ends the turn. The approval gate comes after their answer.";
+    case "gate":
+      return `No further review pass follows: ${step.summary ? "say the completion summary, then " : ""}run ` +
+        `\`${step.report}\`, print the review brief and ask the approval question in this turn.`;
+  }
+}
+
 // How this stage's questions are answered (stage-protocol.md section 3, Step
 // 2): the first stage with questions asks the person once; later stages reuse
 // the recorded choice and say so. The branch was the protocol's to make on the

@@ -6,7 +6,7 @@
 // (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
 // because they fire per-question / per-review, not per state transition.
 
-import { reviewRequestNote } from "./aidlc-directive.ts";
+import { reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
@@ -31,6 +31,9 @@ import {
   requestChangesReportCommand,
   stageGateReportCommand,
   markStageWorkLogged,
+  markTurnEnd,
+  learningsRitualRuns,
+  ceremonyPolicyValues,
   terminalReviewVerdict,
   isAutonomousConstructionGate,
   releaseTakenGuardRecoveryReply,
@@ -332,7 +335,12 @@ function emitAudit(
 
 // This run wrote an audit row: main() then leaves the engine mark for a
 // stage-work verb (markStageWorkLogged). A refusal exits before main() reads it.
+// Two rows are not the stage's work going on: one whose next move is the
+// person's (rowEndsTurn: the turn-end mark instead), and a review of a stage
+// no longer in flight (stageWorkRow false: no mark at all).
 let recordedRow = false;
+let rowEndsTurn = false;
+let stageWorkRow = true;
 
 // --- Flag parsing ---
 
@@ -2303,6 +2311,10 @@ function handleAnswer(args: string[]): void {
         }
         error(`Audit emission failed: ${errorMessage(e)}.${rollback}`);
       }
+      // Request changes with nothing said about what: the person answers
+      // next, so the turn ends at the question (the summary protocol).
+      const asksWhat = !positive && summaryFeedback === null;
+      if (asksWhat) rowEndsTurn = true;
       console.log(
         JSON.stringify({
           emitted: "SUMMARY_CONFIRMATION_RECORDED",
@@ -2312,6 +2324,7 @@ function handleAnswer(args: string[]): void {
           ...(positive ? { summary_authorization_id: authorization.id } : {}),
           ...(summaryFeedback !== null ? { feedback: summaryFeedback } : {}),
           ...(sayBack !== null ? { say: sayBack } : {}),
+          ...(asksWhat ? { agent_note: 'Ask "What should change?" and end the turn; their next reply is what should change.' } : {}),
         }),
       );
       return;
@@ -3021,14 +3034,25 @@ function removeParentReviewerDispatch(
   }
 }
 
+// A stage whose review is part of its work going on: in progress, at its
+// gate, or being revised. A review of a stage already approved (the person
+// asked for another look) is not, so it never marks the turn as owing work.
+const REVIEW_IN_FLIGHT: ReadonlySet<string> = new Set(["in-progress", "awaiting-approval", "revising"]);
+
+function stageBox(state: string, stage: string): string | undefined {
+  return parseCheckboxes(state).find((row) => row.slug === stage)?.state;
+}
+
 // The agent's next step after a stage's verdict is recorded (#2400). The
 // verdict used to come back with no step, so an agent that took it as the end
 // of the work ended its turn before the approval gate, and on a host that
 // ignores the Stop hook (Kiro IDE) nothing put it back on track. Whether
 // another pass follows is the engine's own terminal rule (terminalReviewVerdict),
-// and the gate's command is the report the stage protocol names. A Unit's
-// review, an isolated single-stage run, an autonomous Construction gate and a
-// stage no longer in flight keep the step their own directive names: no note.
+// whether the learnings question comes first is the run-stage's own rule
+// (learningsRitualRuns), and the gate's command is the report the stage
+// protocol names. A Unit's review, an isolated single-stage run, an autonomous
+// Construction gate and a stage no longer in flight keep the step their own
+// directive names: no note.
 function reviewVerdictStep(
   pd: string,
   flags: Record<string, string>,
@@ -3039,44 +3063,52 @@ function reviewVerdictStep(
     node: { slug: string; phase: string; for_each?: string; reviewer_max_iterations?: number };
     reviewClass: ReviewClass | null;
   },
+  selection: { intent: string | null; space: string },
 ): string | null {
   const { state, node, reviewClass } = context;
   if (flags.unit !== undefined || flags.single === "true" || reviewClass === null || reviewClass === "none") return null;
   if (node.phase === "initialization") return null;
+  const box = stageBox(state, flags.stage);
+  if (box === undefined || !REVIEW_IN_FLIGHT.has(box)) return null;
+  // What the person said while the reviewer worked comes first
+  // (stage-protocol-reviewer.md): `next` names the step, with their words.
+  if (personSpokeSinceReviewRequest(pd, flags.stage, flags.reviewer, undefined, selection.intent, selection.space)) {
+    return reviewVerdictNote({ kind: "person-wrote", next: aidlcDispatcherInvocation("orchestrate next") });
+  }
   const terminal = terminalReviewVerdict(
     verdict,
     String(iteration),
     reviewClass,
     node.reviewer_max_iterations ?? 2,
   ) !== null;
-  const box = parseCheckboxes(state).find((row) => row.slug === flags.stage)?.state;
   if (!terminal) {
-    if (box !== "in-progress" && box !== "revising") return null;
-    const again = renderReviewRequestCommand({
-      projectDir: pd,
-      stage: flags.stage,
-      reviewer: flags.reviewer,
-      iteration: iteration + 1,
+    if (box === "awaiting-approval") return null;
+    return reviewVerdictNote({
+      kind: "next-pass",
+      request: renderReviewRequestCommand({
+        projectDir: pd,
+        stage: flags.stage,
+        reviewer: flags.reviewer,
+        iteration: iteration + 1,
+      }),
     });
-    return "The reviewer asked for repairs and another review pass follows: fix what its findings name (a " +
-      `review that did not finish names nothing to fix), then request the next pass with \`${again}\`, in this ` +
-      "turn, as the reviewer protocol says. Do not end the turn here.";
   }
   if (node.phase === "construction" && isAutonomousConstructionGate(state, node, pd)) return null;
   if (box === "in-progress") {
-    return "The review is recorded and no further pass follows it, so the stage goes on to its approval gate in " +
-      "this turn, as the stage protocol says: say the completion summary; when this stage's directive lists the " +
-      "learnings module, ask its question first, which ends the turn; otherwise run " +
-      `\`${stageGateReportCommand(flags.stage, "awaiting-approval")}\`, print the review brief and ask the approval ` +
-      "question. Do not end the turn before the person has a question to answer.";
+    if (learningsRitualRuns(ceremonyPolicyValues(getField(state, "Scope"), state).learnings, state, flags.stage)) {
+      return reviewVerdictNote({ kind: "learnings" });
+    }
+    return reviewVerdictNote({
+      kind: "gate",
+      report: stageGateReportCommand(flags.stage, "awaiting-approval"),
+      summary: true,
+    });
   }
-  if (box === "awaiting-approval" || box === "revising") {
-    const result = box === "revising" ? "revised" : "awaiting-approval";
-    return "The review is recorded and no further pass follows it, so show the approval gate again in this turn: " +
-      `run \`${stageGateReportCommand(flags.stage, result)}\`, print the review brief and ask the approval ` +
-      "question, as the stage protocol says. Do not end the turn before the gate is shown.";
-  }
-  return null;
+  return reviewVerdictNote({
+    kind: "gate",
+    report: stageGateReportCommand(flags.stage, box === "revising" ? "revised" : "awaiting-approval"),
+    summary: false,
+  });
 }
 
 function handleReview(args: string[]): void {
@@ -3096,6 +3128,13 @@ function handleReview(args: string[]): void {
   const intent = selection.intent;
   if (!intent) {
     error("Cannot resolve the active intent for review logging.");
+  }
+  // A stage's own review of work no longer in flight is not the stage's work
+  // going on: it leaves no engine mark (a Unit's review and an isolated run
+  // keep their own flow's).
+  if (!flags.unit && flags.single !== "true") {
+    const box = stageBox(readStateFile(pd, intent, space), flags.stage);
+    if (box === undefined || !REVIEW_IN_FLIGHT.has(box)) stageWorkRow = false;
   }
   const fields: Record<string, string> = {
     Stage: flags.stage,
@@ -4615,7 +4654,7 @@ function handleReview(args: string[]): void {
 
   const agentNote = recorded.context === undefined
     ? null
-    : reviewVerdictStep(pd, flags, verdict, iteration, recorded.context);
+    : reviewVerdictStep(pd, flags, verdict, iteration, recorded.context, { intent, space });
   console.log(JSON.stringify({
     emitted: "REVIEW_COMPLETED",
     stage: flags.stage,
@@ -4720,7 +4759,8 @@ export function main(argv: string[]): void {
     // Advisory: a mark that is not written never fails the recorded answer.
     if (recordedRow) {
       try {
-        markStageWorkLogged(subcommand, resolveProjectDir(projectDir));
+        if (rowEndsTurn) markTurnEnd(resolveProjectDir(projectDir), true);
+        else if (stageWorkRow) markStageWorkLogged(subcommand, resolveProjectDir(projectDir));
       } catch {
         // The row is recorded either way.
       }
