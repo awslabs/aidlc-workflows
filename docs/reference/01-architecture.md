@@ -663,8 +663,10 @@ out-of-band Bun-shaped `aidlc-copy-runtime-X.Y.Z.tar.gz` and each
 uploads that candidate without signing. Unix and Windows lifecycle jobs verify
 its checksums and test it. The `update-from-previous` job, on Linux, macOS and
 Windows, installs the last stable release with its own installer, sets up a
-project for every harness, runs `aidlc update` to the candidate, and checks that
-each project's hooks, `aidlc config --yes` refresh and doctor still work. A
+project for every harness with the person's work waiting at a gate, runs
+`aidlc update` to the candidate, and checks that each project's hooks,
+`aidlc config --yes` refresh and doctor still work, and that the person picks
+their work up at that gate with nothing asked again. A
 stable release does not publish when it fails; a preview publishes with a
 warning in its notes. `publish` downloads the same candidate, re-verifies
 it, attests it, adds the exported `aidlc-release.intoto.jsonl` bundle, validates

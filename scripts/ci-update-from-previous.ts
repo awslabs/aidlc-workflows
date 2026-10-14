@@ -1,24 +1,31 @@
 #!/usr/bin/env bun
-// A person on the last published release types `aidlc update`, gets this
-// release, and their next commands and hooks work.
+// A person on the last published release, with work waiting at a gate, types
+// `aidlc update`, gets this release, and their next commands, hooks and work
+// carry on.
 //
 // Installs the previous release with its own installer into throwaway
-// folders, sets up a project for every harness with it, and runs `aidlc
-// update` with that release's own binary to the candidate in <release-dir>.
-// Then it does what the person does next: each project's existing hooks run,
-// `aidlc config --yes` refreshes the project, the hooks run again, and doctor
-// passes. Hooks run through the shell Claude Code uses (Git Bash on Windows,
-// sh elsewhere); each must exit 0 and show in the hook phase trace that the
-// installed engine ran it. On Windows the Git Bash launcher must exist once the
-// first command after the update has run.
+// folders and sets up a project for every harness with it. In each, the
+// person's bugfix runs on that release's own engine and hooks up to the open
+// Requirements gate, and they stop for the day (tests/harness/work-open.ts).
+// Then `aidlc update`, run with that release's own binary, takes the machine to
+// the candidate in <release-dir>, and the check does what the person does
+// next: each project's existing hooks run, `aidlc config --yes` refreshes the
+// project, the hooks run again, and doctor passes. Hooks run through the shell
+// Claude Code uses (Git Bash on Windows, sh elsewhere); each must exit 0 and
+// show in the hook phase trace that the installed engine ran it. On Windows the
+// Git Bash launcher must exist once the first command after the update has
+// run. Last, in a new chat the person types `/aidlc --resume` and approves:
+// the same gate comes back, nothing they answered is asked again, the approval
+// is theirs, the next stage starts, and no file of theirs changed.
 //
 // Usage: bun scripts/ci-update-from-previous.ts --previous <version> --candidate <release-dir>
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { KIRO_HOOK_GROUPS } from "../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
+import type { WorkResult } from "../tests/harness/work-open.ts";
 
 export const HARNESSES = ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"] as const;
 const HARNESS_DIRS: Record<(typeof HARNESSES)[number], string> = {
@@ -38,6 +45,21 @@ const HOOK_TIMEOUT_MS = 2 * 60_000;
 // The whole check ends before the release job's 30-minute limit, so its own
 // report, not a cancelled job, says what went wrong.
 const CHECK_BUDGET_MS = 25 * 60_000;
+// The person's project: an app of their own, committed, with their own
+// .gitignore and AGENTS.md, the files AI-DLC adds its marked part to.
+const PERSON_PROJECT = join(import.meta.dir, "..", "tests", "fixtures", "brownfield-todo");
+const PERSON_FILES: Record<string, string> = {
+  ".gitignore": "node_modules/\n",
+  "AGENTS.md": "# Todo app\n\nRun the tests with `npm test`.\n",
+};
+// One project's work, run side by side with the others' (it imports the generated tree).
+const WORK_OPEN = join(import.meta.dir, "..", "tests", "harness", "work-open.ts");
+const PERSON_GIT = {
+  GIT_AUTHOR_NAME: "A Person",
+  GIT_AUTHOR_EMAIL: "person@example.invalid",
+  GIT_COMMITTER_NAME: "A Person",
+  GIT_COMMITTER_EMAIL: "person@example.invalid",
+};
 
 export function uncheckedHarnesses(versionJson: unknown): string[] {
   const listed = (versionJson as { distributions?: Array<{ name?: unknown }> } | null)?.distributions ?? [];
@@ -158,7 +180,7 @@ function gitBash(): string {
   throw new Error("Git for Windows is not installed: Claude Code runs hooks through its Git Bash");
 }
 
-function main(argv: string[]): number {
+async function main(argv: string[]): Promise<number> {
   const option = (flag: string) => { const at = argv.indexOf(flag); return at >= 0 ? argv[at + 1] : undefined; };
   const previous = option("--previous")?.replace(/^v/, "");
   const given = option("--candidate");
@@ -171,13 +193,13 @@ function main(argv: string[]): number {
   const target = (JSON.parse(readFileSync(join(candidate, "version.json"), "utf-8")) as { version?: string }).version ?? "";
   const root = mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), "aidlc-update-from-previous-"));
   try {
-    return check(previous, candidate, target, root);
+    return await check(previous, candidate, target, root);
   } finally {
     if (process.env.AIDLC_KEEP_TEMP !== "1") rmSync(root, { recursive: true, force: true, maxRetries: 3 });
   }
 }
 
-function check(previous: string, candidate: string, target: string, root: string): number {
+async function check(previous: string, candidate: string, target: string, root: string): Promise<number> {
   const deadline = Date.now() + CHECK_BUDGET_MS;
   const within = (ms: number) => Math.max(1_000, Math.min(ms, deadline - Date.now()));
   const unchecked = uncheckedHarnesses(JSON.parse(readFileSync(join(candidate, "version.json"), "utf-8")));
@@ -236,27 +258,83 @@ function check(previous: string, candidate: string, target: string, root: string
   const before = aidlc("version before the update", ["version"]);
   if (!before.output.includes(previous)) fail(`the installed release reports "${before.output}", not ${previous}`);
 
-  // 2. A project for every harness, set up by the previous release.
+  // 2. A project for every harness, the person's own code committed, set up by the previous release.
   const projects = HARNESSES.map((harness) => {
     const project = join(root, `project-${harness}`);
     mkdirSync(project, { recursive: true });
     spawnSync("git", ["init", "--quiet", project], { encoding: "utf-8", timeout: STEP_TIMEOUT_MS });
+    cpSync(PERSON_PROJECT, project, { recursive: true });
+    for (const [name, text] of Object.entries(PERSON_FILES)) writeFileSync(join(project, name), text);
+    for (const args of [["add", "-A"], ["commit", "--quiet", "-m", "The person's project"]]) {
+      run(`git ${args[0]} in the ${harness} project`, "git", args, PERSON_GIT, project);
+    }
     if (harness === "copilot") writeFileSync(join(env.COPILOT_HOME!, "config.json"), `${JSON.stringify({ trustedFolders: [project] })}\n`);
     aidlc(`aidlc config --harness ${harness} on ${previous}`, ["config", "--project-dir", project, "--harness", harness, "--mcp", "none", "--quiet"]);
     return { harness, project };
   });
   if (failures.length > 0) return report(failures);
 
-  // 3. The person's update, run by the previous release's own binary.
+  // 3. In every project the person's work waits at a gate, left there on the
+  // previous release. The projects' work runs side by side; each waits for
+  // the update, then carries on (tests/harness/work-open.ts).
+  const signals = join(root, "work");
+  mkdirSync(signals, { recursive: true });
+  const began = Date.now();
+  const works = projects.map(({ harness, project }) => ({
+    harness,
+    proc: Bun.spawn([process.execPath, WORK_OPEN, harness, project, machine, signals, String(deadline)], {
+      cwd: project,
+      env,
+      stdout: Bun.file(join(signals, `${harness}.log`)),
+      stderr: Bun.file(join(signals, `${harness}.err.log`)),
+    }),
+  }));
+  // A check that ends early ends the projects' runs first, so its folders can go.
+  const stopWorks = async () => {
+    for (const w of works) w.proc.kill();
+    await Promise.all(works.map((w) => w.proc.exited));
+  };
+  process.once("exit", () => { for (const w of works) w.proc.kill(); });
+  const result = (harness: string): WorkResult | null => {
+    const file = join(signals, `${harness}.json`);
+    return existsSync(file) ? JSON.parse(readFileSync(file, "utf-8")) as WorkResult : null;
+  };
+  const parked = (harness: string) => existsSync(join(signals, `${harness}.parked`));
+  while (Date.now() < deadline && works.some((w) => !parked(w.harness) && result(w.harness) === null && w.proc.exitCode === null)) {
+    await Bun.sleep(250);
+  }
+  const ended = (w: (typeof works)[number], when: string) => {
+    const said = result(w.harness);
+    if (said) {
+      for (const problem of said.problems) {
+        fail(said.stage === "open"
+          ? `${w.harness}: the scripted person could not leave work open on ${previous}, so it is not checked: ${problem.split("\n")[0]}`
+          : `${w.harness} work after the update: ${problem}`);
+      }
+    } else if (w.proc.exitCode === null) {
+      fail(`${w.harness}: the check ran out of its ${CHECK_BUDGET_MS / 60_000}-minute budget ${when}`);
+    } else {
+      const err = existsSync(join(signals, `${w.harness}.err.log`)) ? readFileSync(join(signals, `${w.harness}.err.log`), "utf-8") : "";
+      fail(`${w.harness}: the person's work stopped ${when} with no word (exit ${w.proc.exitCode}): ${err.trim().split("\n").slice(-3).join(" | ")}`);
+    }
+  };
+  const waiting = works.filter((w) => parked(w.harness));
+  for (const w of works.filter((w) => !parked(w.harness))) ended(w, "before the person's work was left open");
+  console.log(`${waiting.length} of ${works.length} projects have the person's bugfix waiting at its open Requirements gate on ${previous} (${Math.round((Date.now() - began) / 1000)} s)`);
+
+  // 4. The person's update, run by the previous release's own binary.
   const updated = aidlc(`aidlc update from ${previous}`, ["update", "--from", candidate, "--offline"]);
-  if (!updated.ok) return report(failures);
+  if (!updated.ok) {
+    await stopWorks();
+    return report(failures);
+  }
   const after = aidlc("version after the update", ["version"]);
   if (!after.output.includes(target)) fail(`after the update aidlc reports "${after.output}", not ${target}`);
   if (WINDOWS && !existsSync(join(bin, "aidlc"))) {
     fail(`${join(bin, "aidlc")} is missing after the update and its first command, so Git Bash cannot run a bare aidlc and Claude Code's hooks fail`);
   }
 
-  // 4. What the person does next, per project.
+  // 5. What the person does next, per project.
   let traces = 0;
   const timedOut = new Set<string>();
   const hooks = (harness: string, project: string, when: string) => {
@@ -314,7 +392,18 @@ function check(previous: string, candidate: string, target: string, root: string
     const result = failures.length === known ? "all passed" : `${failures.length - known} failed`;
     console.log(`${harness}: ${count} hook command(s) before and after the refresh, the refresh, and doctor: ${result}`);
   }
-  return report(failures, `Updated from ${previous} to ${target}; every harness's hooks, refresh and doctor work.`);
+
+  // 6. A new chat in every project: the person picks their work up and approves.
+  const resumed = Date.now();
+  writeFileSync(join(signals, "updated"), "");
+  const stopped = await Promise.race([
+    Promise.all(waiting.map((w) => w.proc.exited)).then(() => false),
+    Bun.sleep(Math.max(1_000, deadline - Date.now())).then(() => true),
+  ]);
+  for (const w of waiting) ended(w, "while the person carried on their work");
+  await stopWorks();
+  if (!stopped) console.log(`The person carried on their work in ${waiting.length} project(s) (${Math.round((Date.now() - resumed) / 1000)} s)`);
+  return report(failures, `Updated from ${previous} to ${target}; every harness's hooks, refresh and doctor work, and so does the work each person left open.`);
 }
 
 function report(failures: string[], success = ""): number {
@@ -326,4 +415,4 @@ function report(failures: string[], success = ""): number {
   return 1;
 }
 
-if (import.meta.main) process.exit(main(process.argv.slice(2)));
+if (import.meta.main) process.exit(await main(process.argv.slice(2)));

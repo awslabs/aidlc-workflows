@@ -647,6 +647,8 @@ jobs:
             --limit 20 --json tagName --jq '[.[].tagName | select(. != env.CANDIDATE_TAG)] | .[0] // empty')"
           test -n "$previous"
           echo "tag=$previous" >>"$GITHUB_OUTPUT"
+      # The work each person leaves open is driven by the scripted stand-in, which reads the generated trees.
+      - run: bun scripts/package.ts
       - name: Update from the last release
         shell: bash
         env:
