@@ -602,9 +602,9 @@ describe("t331 preview release channel", () => {
     const state = JSON.parse(checked.stdout);
     expect(state.data.state).toBe("behind");
     expect(state.data.latestVersion).toBe(PREVIEW_3);
-    // 40 entries at 20 per page is two list requests, each under its own cap.
+    // The first page of 20 holds the newest preview, so the check reads only it.
     const listRequests = server.requests.filter((path) => path === "/api/releases");
-    expect(listRequests.length).toBe(2);
+    expect(listRequests.length).toBe(1);
 
     const installed = await run(
       LIFECYCLE,
@@ -617,34 +617,41 @@ describe("t331 preview release channel", () => {
     expect(readFileSync(join(machine, "active-version"), "utf-8").trim()).toBe(PREVIEW_3);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // The newest preview on the last page is still found: the lookup follows the
-  // next-page links to the end before choosing.
-  test("the newest preview on the last page is found", async () => {
+  // GitHub lists releases newest first, so the first page that holds a preview
+  // holds the newest one. Each further page would cost one of GitHub's 60
+  // unauthenticated requests an hour and time from doctor's 750 ms refresh, so
+  // the lookup stops there, and reads on only past pages with no preview.
+  test("the lookup stops at the first page that holds a preview", async () => {
     const previewRelease = fixture(PREVIEW_3);
-    // GitHub returns newest-first; a mirror that happens to list the newest
-    // last still must be read to the end. The fixture pages in array order.
-    const listed: FixtureRelease[] = [];
-    for (let i = 0; i < 25; i++) {
-      listed.push({
+    // The fixture pages in array order, as GitHub does newest first.
+    const previews: FixtureRelease[] = [{ tag_name: `v${PREVIEW_3}`, prerelease: true }];
+    for (let i = 0; i < 39; i++) {
+      previews.push({
         tag_name: `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.202608${String(10 + Math.floor(i / 5)).padStart(2, "0")}.${(i % 5) + 1}`,
         prerelease: true,
       });
     }
-    listed.push({ tag_name: `v${PREVIEW_3}`, prerelease: true });
-    const server = serve(previewRelease, listed);
-    const { project, env } = machineEnv();
-    const base = ["--release-base-url", server.baseUrl, "--release-api-url", server.apiUrl];
+    const stablesFirst: FixtureRelease[] = [];
+    for (let i = 0; i < 25; i++) {
+      stablesFirst.push({ tag_name: `v${MAJOR}.${MINOR}.${PATCH + 1 + i}`, prerelease: false });
+    }
+    stablesFirst.push({ tag_name: `v${PREVIEW_3}`, prerelease: true });
 
-    const checked = await run(
-      DISPATCHER,
-      ["update", "--check", "--channel", PREVIEW_CHANNEL, ...base, "--json"],
-      project,
-      env,
-    );
-    expect(checked.status, checked.stdout + checked.stderr).toBe(5);
-    expect(JSON.parse(checked.stdout).data.latestVersion).toBe(PREVIEW_3);
-    const listRequests = server.requests.filter((path) => path === "/api/releases");
-    expect(listRequests.length).toBe(2);
+    for (const [listed, requests] of [[previews, 1], [stablesFirst, 2]] as const) {
+      const server = serve(previewRelease, listed);
+      const { project, env } = machineEnv();
+      const base = ["--release-base-url", server.baseUrl, "--release-api-url", server.apiUrl];
+      const checked = await run(
+        DISPATCHER,
+        ["update", "--check", "--channel", PREVIEW_CHANNEL, ...base, "--json"],
+        project,
+        env,
+      );
+      expect(checked.status, checked.stdout + checked.stderr).toBe(5);
+      expect(JSON.parse(checked.stdout).data.latestVersion).toBe(PREVIEW_3);
+      const listRequests = server.requests.filter((path) => path === "/api/releases");
+      expect(listRequests.length).toBe(requests);
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A page that is itself larger than the list's own cap is refused, and the

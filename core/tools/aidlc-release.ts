@@ -663,6 +663,9 @@ async function download(
 // `v` plus a preview id. Stable discovery never comes through here (it is the
 // `latest/download` redirect), and a preview lookup never falls back to stable:
 // every API or transport failure, rate limiting included, is "unavailable".
+// GitHub lists releases newest first, so the first page that holds a preview
+// holds the newest one; reading on would spend more of the 60 unauthenticated
+// requests an hour and of doctor's 750 ms refresh.
 export async function resolvePreviewVersion(options: {
   baseUrl?: string;
   apiUrl?: string;
@@ -731,6 +734,7 @@ export async function resolvePreviewVersion(options: {
       const version = tag.slice(1);
       if (!newest || compareVersions(version, newest) > 0) newest = version;
     }
+    if (newest) break;
     const link = headers.get("link") ?? "";
     next = /<([^>]+)>;\s*rel="next"/.exec(link)?.[1] ?? null;
   }
