@@ -6712,11 +6712,13 @@ export interface ProcessIdentity {
   startTime: string | null;
 }
 
-// The whole time one walk may spend finding its chat. macOS reads the process
-// table with one `ps -A`, about 16 ms on an idle machine and several times that
-// on a busy one, so it gets longer; Linux and Windows read each hop natively.
+// The most one walk may spend finding its chat, on every OS. A walk ends as
+// soon as it has its answer (a few ms when idle), so this bounds only one that
+// cannot finish, such as a `ps -A` that never answers. It is checked between
+// steps, so on a busy machine a shorter one never saved the time a slow step
+// took; it only lost the chat.
 export function sessionAncestryBudgetMs(): number {
-  return sessionProcessPlatform() === "darwin" ? 250 : 50;
+  return 2000;
 }
 const SESSION_ANCESTRY_MAX_DEPTH = 64;
 const SESSION_ANCESTRY_CACHE_MS = 1000;
@@ -25950,6 +25952,15 @@ export function unclaimableIgnoredSourceKeys(
   return unclaimable;
 }
 
+function registryExcludesSourcePath(
+  registry: SourceFingerprintRegistry,
+  path: string,
+): boolean {
+  const under = (entry: string): boolean => path === entry || path.startsWith(`${entry}/`);
+  return [...registry.excludes].some(under) &&
+    ![...registry.paths].some((entry) => under(entry) || entry.startsWith(`${path}/`));
+}
+
 /**
  * The source keys (`<repo>\0<path>`) among `keys` that the `exclude` list of
  * that repo root's `.aidlc-source-paths.json` now leaves out of the walk: the
@@ -25979,10 +25990,7 @@ export function registryExcludedSourceKeys(
     }
     const registry = registries.get(root);
     if (!registry) continue;
-    const under = (entry: string): boolean => parsed.path === entry || parsed.path.startsWith(`${entry}/`);
-    if (![...registry.excludes].some(under)) continue;
-    const registered = [...registry.paths].some((entry) => under(entry) || entry.startsWith(`${parsed.path}/`));
-    if (!registered) excluded.add(key);
+    if (registryExcludesSourcePath(registry, parsed.path)) excluded.add(key);
   }
   return excluded;
 }
@@ -26114,7 +26122,16 @@ function ignoredSourceClaimReason(
     if (ignoredDescendants.status !== 0) {
       return `Git could not enumerate ignored source below ${JSON.stringify(path)}`;
     }
-    const firstIgnored = ignoredDescendants.stdout.split("\0").find(Boolean);
+    // A directory claim covers the declared source boundary, not build output
+    // the repo's registry explicitly leaves out. Keep the same paths-over-exclude
+    // rule as completion; an unreadable registry exempts nothing.
+    const failure = lastSourceFailure;
+    const registry = sourceFingerprintRegistry(sourceRepoDir, carriesWorkspaceShell);
+    lastSourceFailure = failure;
+    const firstIgnored = ignoredDescendants.stdout.split("\0").find((descendant) =>
+      descendant.length > 0 &&
+      (registry === null || !registryExcludesSourcePath(registry, descendant))
+    );
     return firstIgnored
       ? `${JSON.stringify(path)} contains ignored application source ${JSON.stringify(firstIgnored)}`
       : null;

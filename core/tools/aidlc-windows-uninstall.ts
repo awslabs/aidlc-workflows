@@ -66,8 +66,9 @@ export type WindowsUninstallJournal = {
 // Automatic resumption is bounded: a worker that keeps dying without a result
 // needs an explicit `aidlc uninstall` rather than a relaunch on every command.
 export const WINDOWS_UNINSTALL_AUTOMATIC_ATTEMPTS = 3;
-// A launched worker waits up to a minute for its parent, then removes files.
-// Within this window it is presumed alive and is not launched a second time.
+// A launched worker waits up to a minute each for its parent and shim, then
+// removes files. Within this ten-minute window it is presumed alive and is not
+// launched a second time.
 export const WINDOWS_UNINSTALL_RUNNING_GRACE_MS = 10 * 60_000;
 
 // The installer's token query, run in a child PowerShell and emitted in

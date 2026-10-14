@@ -96,7 +96,6 @@ export function pickerOffersChoices(options: readonly string[], choices: readonl
     own.slice(0, 2).every((label) => offered.includes(label));
 }
 
-// A picked label is one of these choices ("(Recommended)" stripped, any case).
 export function isOneOfChoices(label: string, choices: readonly string[]): boolean {
   const picked = stripRecommendedDecorator(label).trim().toLowerCase();
   return choices.some((choice) => choice.toLowerCase() === picked);

@@ -1069,9 +1069,6 @@ export function deriveReviewFindingsList(
   };
 }
 
-/**
- * The current derived list for every selected stage scope.
- */
 export function readReviewArtifactContexts(
   projectDir: string,
   stage: ReviewFingerprintStage,

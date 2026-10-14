@@ -299,6 +299,94 @@ export function chatsSince(rows: readonly AuditShardEvent[], pd: string, spentAt
     .map((m) => m.session ?? "terminal"));
 }
 
+// A quote's text as the person typed it, whatever the case, spacing or
+// punctuation: compatibility forms folded, lower case, apostrophes dropped
+// ("it's" and "its" read alike, a typographic one too), and anything else that
+// is not a letter, digit, mark or emoji read as a space, with a run of emoji a
+// word of its own. It reads no meaning.
+function quoteText(text: string): string {
+  return text.normalize("NFKC").toLowerCase()
+    .replace(/['\u2018\u2019\u02BC]/g, "")
+    .replace(/[^\p{L}\p{N}\p{M}\p{So}]+/gu, " ")
+    .replace(/\p{So}+/gu, " $& ")
+    .replace(/ {2,}/g, " ")
+    .trim();
+}
+
+// Scripts written without spaces between words, where a word can end at any
+// seam between two letters.
+const UNSPACED = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
+
+// Whether a word can end at `at` in quoteText's `text`: either end, a space, or
+// a seam beside an unspaced script, never one inside a number or before a mark
+// (it belongs to the letter it follows).
+function wordEdge(text: string, at: number): boolean {
+  if (at === 0 || at === text.length) return true;
+  const before = Array.from(text.slice(Math.max(0, at - 2), at)).at(-1) ?? "";
+  const after = String.fromCodePoint(text.codePointAt(at) ?? 0);
+  if (before === " " || after === " ") return true;
+  if (/\p{M}/u.test(after)) return false;
+  const opens = (c: string) => UNSPACED.test(c) && !/\p{N}/u.test(c);
+  return opens(before) || opens(after);
+}
+
+/** Whether `said` holds the words `quoted` gives as whole words, case, spacing and punctuation aside. */
+export function holdsQuote(said: string, quoted: string): boolean {
+  const wanted = quoteText(quoted);
+  if (wanted === "") return false;
+  const text = quoteText(said);
+  for (let at = text.indexOf(wanted); at !== -1; at = text.indexOf(wanted, at + 1)) {
+    if (wordEdge(text, at) && wordEdge(text, at + wanted.length)) return true;
+  }
+  return false;
+}
+
+/**
+ * What the person said, as the record holds it, for a quote of theirs to be
+ * found in: every message the hook kept in this project, from any chat (what
+ * they typed; of a question box, what they picked or wrote, never its
+ * question), the picks and question-box replies on `rows`, and the request
+ * that started the work. `everyTurnHeld` says whether every turn of theirs on
+ * `rows` names a kept message with all its words in it. A host that passed no
+ * words, a message too long to keep whole, a record gone with the day, or no
+ * turn on record at all leaves it false, and then nothing proves a quote is
+ * not theirs.
+ */
+export function personsSaidWords(
+  projectDir: string,
+  rows: readonly AuditShardEvent[],
+): { said: string[]; everyTurnHeld: boolean } {
+  const said: string[] = [];
+  const kept = new Map<string, StoredMessage>();
+  for (const message of listMessages(projectDir)) {
+    kept.set(message.id, message);
+    if (message.picker === null) said.push(message.source === "picker" ? message.words ?? "" : message.text);
+    else for (const { reply } of message.picker) if (reply !== null) said.push(reply);
+  }
+  let turns = 0;
+  let held = true;
+  for (const row of rows) {
+    if (row.event === "HUMAN_TURN") {
+      turns++;
+      const message = kept.get(auditBlockField(row.block, "Message Id") ?? "");
+      if (message === undefined || message.cut === true || (message.source !== "picker" && message.text.trim() === "")) {
+        held = false;
+      }
+      try {
+        const picks = JSON.parse(auditBlockField(row.block, "Picked") ?? "[]") as unknown;
+        if (Array.isArray(picks)) said.push(...picks.filter((pick): pick is string => typeof pick === "string"));
+      } catch {
+        // A row that does not parse adds nothing.
+      }
+    } else if (row.event === "QUESTION_REPLIED") {
+      said.push(auditBlockField(row.block, "Reply") ?? "");
+    } else if (row.event === "WORKFLOW_STARTED") {
+      said.push(auditBlockField(row.block, "Request") ?? "");
+    }
+  }
+  return { said, everyTurnHeld: turns > 0 && held };
+}
+
 /**
  * The reply of the person's that the agent quoted: a message of `session` that
  * is a reply, sent since the last decision or the chat's newest message (a

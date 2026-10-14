@@ -363,14 +363,10 @@ describe("t148 dist/kiro file structure", () => {
     // The conductor names the two dispatch tools that run a delegate under
     // its own permissions (Kiro IDE accepts only invoke_sub_agent, Kiro CLI
     // only orchestrate_subagent), not the `subagent` category, whose
-    // subagent_<name> dispatch ignores them. Its @mcp offers the AI-DLC chat
-    // every MCP server the person turns on (Kiro CLI v3 and Kiro IDE; a
-    // persona names none), on the copy and the native tree alike.
-    for (const tree of ["dist", "dist-release"]) {
-      expect(fmToolsOf(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents", "aidlc-aidlc.md")), tree).toBe(
-        `["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent", "@mcp"]`,
-      );
-    }
+    // subagent_<name> dispatch ignores them.
+    expect(fmToolsOf(join(IDE_AGENTS, "aidlc-aidlc.md"))).toBe(
+      `["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent"]`,
+    );
     // Leak guard: the grant is Kiro-native and must not ship anywhere else.
     const nonIdeAgentTrees = HARNESS_MATRIX.filter(
       (harness) => !harness.capabilities.ideAgentTools,
@@ -702,7 +698,7 @@ describe("t148 dist/kiro file structure", () => {
       "when their whole message is one of those, treat it as `/aidlc` with nothing after it, and say nothing about it.",
     );
     const fm = frontmatter(join(KI, "agents", "aidlc-aidlc.md"));
-    expect(fm).toContain(`tools: ["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent", "@mcp"]`);
+    expect(fm).toContain(`tools: ["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent"]`);
     expect(fm).toContain("    - capability: shell");
     // The conductor refuses no command: a push or a recursive delete the
     // person asks for gets Kiro's own card, where their Always allow decides

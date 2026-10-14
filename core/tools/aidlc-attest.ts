@@ -130,8 +130,9 @@ export const FAILABLE_STATUSES = [
  *                 computes this exact report — but the tree may be the commit
  *                 under test, which means the change may have authored the very
  *                 receipts it is judged against (`trust.selfAttested`)
- *  independent    reproducible, and the queried range does not touch the record:
- *                 the receipts existed before the change under test
+ *  independent    reproducible, and the record read excludes the range's own
+ *                 record edits: the range touches no record path, or
+ *                 `--record-ref` pins a ref that does not descend from head
  *  signed         independent, and every authority-bearing input the verdict
  *                 rests on — each relied-upon unit's receipt shard AND the
  *                 evidence file that receipt's fingerprint selects — arrived in a
@@ -466,7 +467,6 @@ function readBlobs(dir: string, oids: readonly string[]): Map<string, Buffer> {
 
 const treeShellCache = new Map<string, ReadonlySet<string>>();
 
-/** Harness shell dirs at the root of `commit`'s tree. */
 function commitHarnessShellDirs(dir: string, commit: string): ReadonlySet<string> {
   const cacheKey = `${dir}\0${commit}`;
   const cached = treeShellCache.get(cacheKey);
@@ -777,7 +777,7 @@ interface UnitOwnership {
   evidenceListing: WorkspaceSourceListing | null;
   evidencePath: string | null;
   evidenceSource: "committed" | "local" | null;
-  /** Commit that introduced the relied-upon evidence file, and git's `%G?` code
+  /** Commit that last wrote the relied-upon evidence file, and git's `%G?` code
    *  for it. Both null when the view cannot attribute a commit (worktree) or the
    *  unit binds no committed evidence — either way the unit cannot reach `signed`. */
   evidenceCommit: string | null;
@@ -1056,7 +1056,6 @@ function buildOwnershipIndex(
           evidenceRel !== null && evidenceSource === "committed"
             ? view.lastWriter(space, info.dirName, evidenceRel)
             : null;
-        // Who vouched for the receipt that chose that evidence in the first place.
         const receipt = view.shardOrigin(chosen.shard);
 
         ownerships.push({
@@ -1154,8 +1153,8 @@ function classifyPath(
   headListing: WorkspaceSourceListing,
   exclusion: SourceExclusionContext,
 ): PathReport {
-  // Exclusion reads the commit's own shell dirs, never the checkout's, so a
-  // path's `excluded` verdict is fixed by the SHA.
+  // Exclusion reads the range's base-tree shell dirs, never the checkout's, so a
+  // path's `excluded` verdict is fixed by the range.
   if (sourcePathIsExcluded(path, query.carriesShell, undefined, exclusion)) {
     return { path, status: "excluded" };
   }
@@ -1305,7 +1304,7 @@ function computeTrust(
     prefix === null ? [] : paths.filter((path) => path.startsWith(`${prefix}/`)).sort();
 
   // Does the record we read already contain this change's own record edits? If
-  // the pinned ref does not descend from head, the receipts predate the change.
+  // the pinned ref does not descend from head, its record is taken not to hold them.
   const recordIncludesChange =
     view.commit === null ||
     view.commit === head ||
@@ -1736,8 +1735,7 @@ anchor   Append SOURCE_COMMITTED enrichment events for commits that landed
          anchors, so anchoring is optional and never gates a report.`;
 
 /** Each verb accepts only its own flags: a flag the other verb owns is a usage
- *  error, never a silently ignored argument (`resolve --commit X` used to report
- *  HEAD while looking like it honoured X). */
+ *  error, never a silently ignored argument. */
 const RESOLVE_FLAGS = new Set([
   "diff",
   "commit",

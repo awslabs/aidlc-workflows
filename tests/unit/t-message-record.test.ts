@@ -433,3 +433,32 @@ describe("the human-turn hook keeps one record of each message", () => {
     expect(records(proj)).toEqual([]);
   });
 });
+
+// A choice the person left to the agent is recorded with their words only when
+// a message of theirs holds them (log answer --on-instruction): on every host
+// hook path the record keeps the words that check reads.
+describe("a typed prompt's words back a choice the person left to the agent", () => {
+  const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+  const log = (proj: string, args: string[]) => {
+    const r = spawnSync(BUN, [LOG, ...args, "--project-dir", proj], {
+      cwd: proj, env: env(proj), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  };
+  for (const harness of HARNESSES) {
+    test(`${harness}: their quote is recorded, and words they never typed are not`, () => {
+      const proj = withWork();
+      say(proj, "Q1 is B. Use the recommended answers for the rest!", harness);
+      expect(log(proj, ["decision", "--stage", "requirements-analysis", "--decision", "Q2-Q4", "--options", "A,B"]).status).toBe(0);
+      const theirs = log(proj, [
+        "answer", "--stage", "requirements-analysis", "--details", "Q2: A", "--on-instruction", "use the recommended answers for the rest",
+      ]);
+      expect(theirs.status, theirs.out).toBe(0);
+      const mine = log(proj, [
+        "answer", "--stage", "requirements-analysis", "--details", "Q3: A", "--on-instruction", "grounded from the request",
+      ]);
+      expect(mine.status, mine.out).not.toBe(0);
+      expect(readAuditShardEvents(proj).filter((row) => row.event === "QUESTION_ANSWERED")).toHaveLength(1);
+    });
+  }
+});

@@ -212,11 +212,11 @@ const manifest: HarnessManifest = {
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 
-  // The Kiro IDE row's tools line, without its permissions: on v2 the JSON
-  // still decides, and the .md is only its prompt.
+  // The Kiro IDE row's tools and MCP lines, without its permissions: on v2 the
+  // JSON still decides, and the .md is only its prompt.
   frontmatterAdditions: PERSONA_AGENTS.map((agent) => ({
     file: `agents/${agent}.md`,
-    lines: [`tools: ["read", "write", "shell"]`],
+    lines: [`tools: ["read", "write", "shell"]`, "includeMcpJson: true"],
   })),
 
   // Neutral root guidance is shared; native setup is loaded through agent resources.

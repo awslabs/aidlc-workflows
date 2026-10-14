@@ -283,8 +283,8 @@ function parsedInventory(shell: Shell, content: string): CompletionInventory | n
 // Activation writes the completions of the release that runs it, so after an
 // update they come from the previous release. Every release renders through
 // these templates: content that parses back into a command list and renders
-// to the same text is AI-DLC's own, whichever release wrote it, while any
-// edited or added byte makes it the person's.
+// to the same text is AI-DLC's own, whichever release wrote it, while content
+// that does not round-trip is the person's.
 export function isGeneratedCompletion(shell: Shell, content: string): boolean {
   const data = parsedInventory(shell, content);
   if (!data) return false;

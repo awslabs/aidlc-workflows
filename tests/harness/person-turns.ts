@@ -48,6 +48,16 @@ function audit(): AuditReader {
 }
 const auditBlockField = (block: string, field: string) => audit().auditBlockField(block, field);
 
+// The engine's own check that a quote is the person's words (log answer
+// --on-instruction makes it too), loaded on first use like the reader above.
+let quoteCheck: ((said: string, quoted: string) => boolean) | undefined;
+function holdsQuote(said: string, quoted: string): boolean {
+  quoteCheck ??= (require("../../dist/claude/.claude/tools/aidlc-message-store.ts") as {
+    holdsQuote: (said: string, quoted: string) => boolean;
+  }).holdsQuote;
+  return quoteCheck(said, quoted);
+}
+
 /** Events in one audit shard, keyed by space, intent and shard name. */
 type AuditTrail = Map<string, AuditShardEvent[]>;
 
@@ -212,7 +222,7 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
         // question comes: any turn of the drive that holds the words the row
         // quotes backs it, a command included, and backs every answer it covers.
         if (auditBlockField(row.block, "Answer Source") === audit().ANSWER_SOURCE_ON_INSTRUCTION) {
-          instruction = plainWords(auditBlockField(row.block, "Instruction") ?? "");
+          instruction = auditBlockField(row.block, "Instruction") ?? "";
           since = -1;
           reply = false;
           answer = false;
@@ -247,7 +257,7 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
           return at >= from && at <= index && !(needsReply && isCommand(turn.words)) &&
             (!menuOnly || turn.selections !== undefined) &&
             (!answer || used[which] < (turn.selections ?? openQuestions(events, at))) &&
-            (quoted === undefined || plainWords(turn.words).includes(quoted));
+            (quoted === undefined || holdsQuote(turn.words, quoted));
         });
         let backing = quoted === "" ? -1 : backs(after, false);
         if (backing === -1 && menuSince !== undefined) backing = backs(Math.max(menuSince + 1, first), true);
@@ -294,11 +304,6 @@ function openQuestions(events: readonly AuditShardEvent[], at: number): number {
     else if (DECISION_CLOSING_EVENTS.has(row.event)) open = Math.max(0, open - 1);
   }
   return Math.max(open, 1);
-}
-
-// Words compared as the person typed them, whatever the spacing or case.
-function plainWords(text: string): string {
-  return text.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 /** The Units of the work's compiled DAG (`<record>/runtime-graph.json`), when it has one. */

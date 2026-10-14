@@ -54,6 +54,7 @@ import {
   isCustomClaudeStatusLine,
   jsoncRootMembers,
   jsoncSettingValue,
+  kiroUpgradedAgentFile,
   legacyAidlcHookTarget,
   mergeBlock,
   mergeJsonEntries,
@@ -170,6 +171,7 @@ import {
   KIRO_AUTO_DEFINITION,
   KIRO_EFFORT_LABEL,
   KIRO_PRESET_EFFORT,
+  KIRO_SAVED_MODEL_NOTE,
   kiroAutoRecommendation,
   kiroCliPath,
   type KiroModel,
@@ -1148,7 +1150,11 @@ function modelStateData(
     harness,
     policy,
     effective,
-    notes: harnessHonestyNotes(policy, tiers, harness, cap),
+    notes: [
+      ...harnessHonestyNotes(policy, tiers, harness, cap),
+      // On Kiro CLI the session model agents inherit is the saved one.
+      ...(harness === "kiro" ? [KIRO_SAVED_MODEL_NOTE] : []),
+    ],
   };
 }
 
@@ -6321,16 +6327,15 @@ function personalKiroMcpPath(env: NodeJS.ProcessEnv = process.env): string | nul
 // Kiro CLI offers an agent only the MCP servers its tools name, one
 // `@<server>` each; it has no grant for every server (measured on Kiro CLI
 // 2.29.0: `@*`, `@mcp` and `@*/*` grant nothing, and `*` adds built-in tools).
-// So the AI-DLC agent's staged copy names every server config finds in the
-// project's mcp.json and in the person's own, and allowedTools stays as
-// shipped, so each call still asks first. A server added later is named at
-// the next config run. True when the project's copy is the release's own
-// bytes (a copy install puts them there before config runs), so the named copy
-// replaces it; any other copy meets the ownership check.
-function grantKiroMcpServers(projectDir: string, sourceRoot: string, stagedRoot: string, harnessDir: string): boolean {
-  const rel = `${harnessDir}/agents/aidlc.json`;
-  const agentPath = join(stagedRoot, rel);
-  const names = new Set<string>();
+// So the staged copy of every agent that opts into the MCP files (the AI-DLC
+// agent and its specialists) names every server config finds in the project's
+// mcp.json and in the person's own, and allowedTools stays as shipped, so each
+// call still asks first. A server added later is named at the next config run.
+// Returns the agent files whose project copy is the release's own bytes (a
+// copy install puts them there before config runs), so the named copy replaces
+// it; any other copy meets the ownership check.
+function grantKiroMcpServers(projectDir: string, sourceRoot: string, stagedRoot: string, harnessDir: string): string[] {
+  const found = new Set<string>();
   const personal = personalKiroMcpPath();
   for (const path of [join(stagedRoot, harnessDir, "settings", "mcp.json"), personal]) {
     // The person's own file may be a link (a dotfiles folder): follow it.
@@ -6340,44 +6345,52 @@ function grantKiroMcpServers(projectDir: string, sourceRoot: string, stagedRoot:
     if (path === null || !file) continue;
     try {
       const servers = (readJsonFile(path) as Record<string, unknown>).mcpServers;
-      if (isRecord(servers)) for (const name of Object.keys(servers)) names.add(name);
+      if (isRecord(servers)) for (const name of Object.keys(servers)) found.add(name);
     } catch {
       // A file Kiro cannot read names no server.
     }
   }
-  // The agent file travels with the project (a team's clone), so a server it
-  // already names stays named: a teammate's run adds theirs and keeps yours.
-  // Kiro ignores a grant for a server it does not have.
-  const current = join(projectDir, rel);
-  if (regularFile(current)) {
+  const agentsDir = join(stagedRoot, harnessDir, "agents");
+  const replaced: string[] = [];
+  for (const file of pathPresent(agentsDir) ? readdirSync(agentsDir).filter((name) => name.endsWith(".json")).sort() : []) {
+    const rel = `${harnessDir}/agents/${file}`;
+    const agentPath = join(stagedRoot, rel);
+    if (!regularFile(agentPath)) continue;
+    const agentText = readFileSync(agentPath, "utf-8");
+    let agent: unknown;
     try {
-      const tools = (JSON.parse(withoutBom(readFileSync(current, "utf-8"))) as Record<string, unknown>).tools;
-      if (Array.isArray(tools)) {
-        for (const tool of tools) if (typeof tool === "string" && tool.startsWith("@")) names.add(tool.slice(1));
-      }
+      agent = JSON.parse(withoutBom(agentText));
     } catch {
-      // A copy config cannot read keeps no grant; the ownership check reports it.
+      continue;
     }
+    if (!isRecord(agent) || agent.includeMcpJson !== true || !Array.isArray(agent.tools)) continue;
+    // The agent file travels with the project (a team's clone), so a server it
+    // already names stays named: a teammate's run adds theirs and keeps yours.
+    // Kiro ignores a grant for a server it does not have.
+    const names = new Set(found);
+    const current = join(projectDir, rel);
+    if (regularFile(current)) {
+      try {
+        const tools = (JSON.parse(withoutBom(readFileSync(current, "utf-8"))) as Record<string, unknown>).tools;
+        if (Array.isArray(tools)) {
+          for (const tool of tools) if (typeof tool === "string" && tool.startsWith("@")) names.add(tool.slice(1));
+        }
+      } catch {
+        // A copy config cannot read keeps no grant; the ownership check reports it.
+      }
+    }
+    const tools = [
+      ...agent.tools.filter((tool) => typeof tool !== "string" || !tool.startsWith("@")),
+      ...[...names].map((name) => `@${name}`),
+    ];
+    if (canonical(tools) === canonical(agent.tools)) continue;
+    writeFileSync(agentPath, jsonFileText({ ...agent, tools }, agentText));
+    const release = join(sourceRoot, rel);
+    if (!regularFile(current) || !regularFile(release)) continue;
+    const releaseHash = sha256File(release);
+    if (sha256Matching(readFileSync(current), [releaseHash]) === releaseHash) replaced.push(rel);
   }
-  if (!regularFile(agentPath)) return false;
-  const agentText = readFileSync(agentPath, "utf-8");
-  let agent: unknown;
-  try {
-    agent = JSON.parse(withoutBom(agentText));
-  } catch {
-    return false;
-  }
-  if (!isRecord(agent) || !Array.isArray(agent.tools)) return false;
-  const tools = [
-    ...agent.tools.filter((tool) => typeof tool !== "string" || !tool.startsWith("@")),
-    ...[...names].map((name) => `@${name}`),
-  ];
-  if (canonical(tools) === canonical(agent.tools)) return false;
-  writeFileSync(agentPath, jsonFileText({ ...agent, tools }, agentText));
-  const release = join(sourceRoot, rel);
-  if (!regularFile(current) || !regularFile(release)) return false;
-  const releaseHash = sha256File(release);
-  return sha256Matching(readFileSync(current), [releaseHash]) === releaseHash;
+  return replaced;
 }
 
 function preserveUserProviderFields(
@@ -6752,8 +6765,8 @@ function prepareRefreshSource(
       regenerated.add(rel);
       if (entries) entries[rel] = owned;
     }
-    if (!projectProjection && grantKiroMcpServers(projectDir, sourceRoot, root, descriptor.harnessDir)) {
-      regenerated.add(`${descriptor.harnessDir}/agents/aidlc.json`);
+    if (!projectProjection) {
+      for (const rel of grantKiroMcpServers(projectDir, sourceRoot, root, descriptor.harnessDir)) regenerated.add(rel);
     }
   }
 
@@ -7052,6 +7065,18 @@ const KEPT_GITIGNORE_LINES_DETAIL = "kept your own ignore lines";
 const KEPT_TITLE_LINE_DETAIL = "kept your title line";
 const KEPT_GITIGNORE_LINES_NOTE =
   "Kept your .gitignore entries for node_modules, dist and editor files; AI-DLC now adds only its own lines.";
+// An agent file Kiro upgraded for its 3.0 engine (kiroUpgradedAgentFile) is
+// kept as Kiro left it, so it misses what this release changed in it; the
+// note names the way to take the release's files.
+const KIRO_UPGRADED_DETAIL = "upgraded by Kiro for its 3.0 engine";
+
+function kiroUpgradedNote(count: number, harnessDir: string, force: string): string {
+  const one = count === 1;
+  return `Kiro upgraded ${count} agent ${one ? "file" : "files"} in ${harnessDir}/agents for its 3.0 engine and ` +
+    `${one ? "it was kept as it is" : "they were kept as they are"}; to take this release's ` +
+    `${one ? "version" : "versions"} run \`${force}\`, and Kiro upgrades ${one ? "it" : "them"} again the next ` +
+    "time it starts on its 3.0 engine.";
+}
 
 function unchangedManagedBlockHash(
   projectDir: string,
@@ -9451,6 +9476,12 @@ function planManagedFiles(
           actions.push({ path: rel, action: "update", detail: KEPT_TITLE_LINE_DETAIL });
           continue;
         }
+      }
+      // The person ran Kiro's upgrade for its 3.0 engine: the agent file stays
+      // as Kiro left it, and the rest of the release lands around it.
+      if (!force && kiroUpgradedAgentFile(projectDir, rel)) {
+        actions.push({ path: rel, action: "preserve", detail: KIRO_UPGRADED_DETAIL });
+        continue;
       }
       if (
         targetExists &&
@@ -12939,6 +12970,14 @@ export async function main(
     prepared.notes.push(...hiddenRecords, ...switchWarnings);
     if (actions.some((action) => action.detail === KEPT_GITIGNORE_LINES_DETAIL)) {
       prepared.notes.push(KEPT_GITIGNORE_LINES_NOTE);
+    }
+    const kiroUpgraded = actions.filter((action) => action.detail === KIRO_UPGRADED_DETAIL).length;
+    if (kiroUpgraded > 0) {
+      prepared.notes.push(kiroUpgradedNote(
+        kiroUpgraded,
+        descriptor.harnessDir,
+        configCommandForHarness(descriptor.harnessDir, `--harness ${stamp.distribution} --force`),
+      ));
     }
     // Older releases shipped an effort map in the project's Kiro settings; a
     // refresh that removes it says where the session's effort lives now.

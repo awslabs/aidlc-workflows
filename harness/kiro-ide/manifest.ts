@@ -82,15 +82,15 @@ const SHELL_FORM_ASKS = RISKY_SHELL_FORMS.map((form) => `bun .kiro/tools/aidlc*$
 // conductor's tools list selects those (agents/aidlc-aidlc.md). On that path its
 // shell allow is not applied, the conductor's is (delegate-shell-deny.ts); the
 // allow still serves a persona the person selects directly. tools is enforced on
-// every dispatch path; it names no MCP server, so a persona reaches none. The
-// conductor's @mcp offers every server the person turns on (project and their
-// own Kiro settings) in the AI-DLC chat only, each call asking first unless
-// their Kiro settings allow it.
+// every dispatch path. includeMcpJson gives a persona every server in the
+// person's workspace and user mcp.json; no rule allows an MCP call, so each
+// one asks.
 function personaFrontmatter(agent: string): string[] {
   const writePaths = agent === "aidlc-composer-agent" ? [composerProposalPath] : spacePaths;
   // Engine-owned trees are never a persona's to write; a deny beats every allow.
   return [
     `tools: ["read", "write", "shell"]`,
+    "includeMcpJson: true",
     "permissions:",
     "  rules:",
     "    - capability: shell",
