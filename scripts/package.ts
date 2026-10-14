@@ -69,6 +69,7 @@ import {
 } from "./agent-knowledge.ts";
 import { renderNeutralOnboarding, renderOnboarding } from "./onboarding.ts";
 import { keepOwnHarnessBindings } from "./harness-bindings.ts";
+import { EARLIER_RELEASE_REGIONS, earlierReleasesReadSkill } from "./earlier-release-regions.ts";
 import { forgetPackagedSources, packageInputsFingerprint, recordPackagedSources } from "./package-sources.ts";
 import {
   buildPluginProjection as emitPluginProjection,
@@ -1050,6 +1051,8 @@ function buildTree(
   //    them only after emit(), because Codex and Copilot place the orchestrator
   //    skill outside <harnessDir>/skills/.
   refreshGeneratedSkillRegions(outRoot, treeRoot, harnessDir, m);
+  // 7. The place an earlier release's refresh writes the tables into the skill.
+  keepEarlierReleaseRegions(outRoot, m);
   return [...walk(outRoot)];
 }
 
@@ -1694,6 +1697,14 @@ function refreshGeneratedSkillRegions(
   }
 
   writeFileSync(skillPath, body, "utf-8");
+}
+
+// See scripts/earlier-release-regions.ts.
+function keepEarlierReleaseRegions(outRoot: string, manifest: HarnessManifest): void {
+  const skillPath = assembledOrchestratorSkill(outRoot, manifest);
+  if (!earlierReleasesReadSkill(relative(outRoot, skillPath), manifest.harnessDir)) return;
+  const body = readFileSync(skillPath, "utf-8").replace(/\n*$/, "");
+  writeFileSync(skillPath, `${body}\n\n${EARLIER_RELEASE_REGIONS}\n`, "utf-8");
 }
 
 // Defense-in-depth backstop: rewrite any residual "<harnessDir>/rules/" →

@@ -14,6 +14,7 @@ import {
   unitStepNote,
   unresolvedGateNote,
 } from "../../core/tools/aidlc-directive.ts";
+import { EARLIER_RELEASE_REGIONS } from "../../scripts/earlier-release-regions.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
@@ -66,7 +67,11 @@ describe("t-skill-body-carriers: the /aidlc skill keeps what only it carries", (
     "%s: the skill holds no cut block, and each block's carrier ships",
     (_name, harness) => {
       const skillDir = join(harness.skillsRoot, "aidlc");
-      const skill = read(join(skillDir, "SKILL.md"));
+      // The one empty place an earlier release's refresh writes the tables into.
+      const shipped = read(join(skillDir, "SKILL.md"));
+      const skill = shipped.endsWith(`\n${EARLIER_RELEASE_REGIONS}\n`)
+        ? shipped.slice(0, -(EARLIER_RELEASE_REGIONS.length + 1))
+        : shipped;
       for (const cut of CUT) expect(skill, cut).not.toContain(cut);
       for (const kept of KEPT) expect(flat(skill), kept).toContain(kept);
       // Each harness's own notes keep their heading (Claude Code has none).
