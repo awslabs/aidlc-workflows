@@ -772,6 +772,8 @@ dist/claude/.claude/
     |   +-- stage-protocol-wave.md
     |   +-- stage-protocol-swarm.md
     |   +-- stage-protocol-learnings.md
+    |   +-- stage-protocol-summary.md
+    |   +-- stage-protocol-sensors.md
     +-- stages/
         +-- initialization/
         |   +-- workspace-scaffold.md

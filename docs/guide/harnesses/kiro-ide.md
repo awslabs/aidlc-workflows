@@ -66,7 +66,11 @@ aidlc doctor
 The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
 
 On Windows, download `install.ps1` and run
-`& $installer`. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
+`& $installer`. If Kiro was open while you installed, including when you ran
+the installer in Kiro's own terminal, quit Kiro fully and reopen it before
+your first `/aidlc`: Kiro keeps the PATH it started with, so its hooks, its
+agent and its other terminals cannot find `aidlc` until it restarts, and
+**Developer: Reload Window** is not enough. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
 for account scope, automatic User PATH registration, and `-NoModifyPath`.
 For an air-gapped package, use
 `install.sh --from <release-directory> --offline` on Unix or
@@ -607,8 +611,8 @@ the `/aidlc` skill and the Markdown `agents/aidlc-aidlc.md` are its conductor su
 JSON files (the `kiro` harness relies on the agent-JSON `hooks` block); it preloads standing rules through
 always-included steering rather than CLI agent resources; the shared Kiro
 projection removes the core persona's Claude-only `disallowedTools` key; and
-its manifest adds `tools:` and `permissions.rules` frontmatter to every persona
-(each persona a stage reads inline also ships without it, as
+its manifest adds `permissions.rules` frontmatter to every persona, beside the
+`tools:` line both harnesses add (each persona a stage reads inline also ships without them, as
 `.kiro/aidlc-common/personas/<agent>.md`, the file the lead reads in its own chat).
 It does not ship the `kiro` harness's agent-v1 JSON.
 See [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-harness.md).

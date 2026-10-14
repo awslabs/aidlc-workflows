@@ -207,7 +207,8 @@ describe("t338 atomic per-intent settings", () => {
       "Test Strategy": "Comprehensive",
       // none, not classic's own advisory level, which would clear the override.
       "Review Override": "none",
-      "Guard Policy": "strict (set by you)",
+      // Nobody asked for any of them, so each is the command's.
+      "Guard Policy": "strict (set by a command)",
       Sensors: "off (set by a command)",
       Learnings: "off (set by a command)",
       "Summary Confirmation": "on (set by a command)",
@@ -223,7 +224,7 @@ describe("t338 atomic per-intent settings", () => {
       { "Old Depth": "Standard", "New Depth": "Minimal" },
       { "Old Strategy": "Standard", "New Strategy": "Comprehensive" },
       { "Old Override": "none set", "New Override": "none" },
-      { "Old Value": "off", "New Value": "strict", Source: "you" },
+      { "Old Value": "off", "New Value": "strict", Source: "command" },
       { Key: "sensors", Old: "on", New: "off", Source: "command" },
       { Key: "learnings", Old: "on", New: "off", Source: "command" },
       { Key: "summary_confirmation", Old: "off", New: "on", Source: "command" },
@@ -281,11 +282,12 @@ describe("t338 atomic per-intent settings", () => {
     expect(changed.status, changed.stderr).toBe(0);
     const content = readFileSync(state, "utf-8");
     expect(getField(content, "Scope")).toBe("classic");
-    expect(getField(content, "Guard Policy")).toBe("strict (set by you)");
+    // Nobody asked for either, so both are the command's.
+    expect(getField(content, "Guard Policy")).toBe("strict (set by a command)");
     expect(getField(content, "Sensors")).toBe("off (set by a command)");
     const audit = settingRows(proj);
     expect(audit.map((row) => row.event)).toEqual(["GUARD_POLICY_SET", "CEREMONY_SET"]);
-    expect(auditBlockField(audit[0].block, "Source")).toBe("you");
+    expect(auditBlockField(audit[0].block, "Source")).toBe("command");
     expect(auditBlockField(audit[1].block, "Source")).toBe("command");
     expect(readAuditShardEvents(proj).filter((row) => row.event === "SCOPE_CHANGED")).toHaveLength(0);
     const repeated = run(UTILITY, args, proj);
@@ -443,11 +445,14 @@ describe("t338 atomic per-intent settings", () => {
   ])("slash modifiers produce one canonical config command that applies every setting with %j", ({ scopeArgs }) => {
     const { proj, state } = project();
     const before = readFileSync(state, "utf-8");
-    const routed = run(ORCHESTRATE, [
-      "next", ...scopeArgs, "--summary-confirmation", "on", "--review", "none",
+    const slash = [
+      ...scopeArgs, "--summary-confirmation", "on", "--review", "none",
       "--sensors", "off", "--depth", "minimal", "--guard-policy", "strict",
       "--learnings", "off", "--test-strategy", "comprehensive",
-    ], proj);
+    ];
+    // The person types the slash line; the agent passes it to next.
+    recordHumanPrompt(proj, `/aidlc ${slash.join(" ")}`);
+    const routed = run(ORCHESTRATE, ["next", ...slash], proj);
     expect(routed.status, routed.stderr).toBe(0);
     expect(routed.stdout.trim().split("\n")).toHaveLength(1);
     const printed = directive(routed.stdout);
@@ -469,8 +474,8 @@ describe("t338 atomic per-intent settings", () => {
     expect(listed.status, listed.stderr).toBe(0);
     expect(JSON.parse(listed.stdout)).toEqual({
       depth: "Minimal", "test-strategy": "Comprehensive", review: "none",
-      "guard-policy": "strict (set by you)", sensors: "off (set by a command)",
-      learnings: "off (set by a command)", "summary-confirmation": "on (set by a command)",
+      "guard-policy": "strict (set by you)", sensors: "off (set by you)",
+      learnings: "off (set by you)", "summary-confirmation": "on (set by you)",
       "plan-approval": "on (from scope classic)",
       collaborators: "off (from scope classic)",
       // `guard.plan-approval` is the same switch, so it reads the same setting.
@@ -483,6 +488,7 @@ describe("t338 atomic per-intent settings", () => {
   test("the retired --change-control slash flag produces the same canonical command under the new name", () => {
     const { proj, state } = project();
     const before = readFileSync(state, "utf-8");
+    recordHumanPrompt(proj, "/aidlc --change-control off --sensors off");
     const routed = run(ORCHESTRATE, ["next", "--change-control", "off", "--sensors", "off"], proj);
     expect(routed.status, routed.stderr).toBe(0);
     const printed = directive(routed.stdout);
@@ -498,6 +504,10 @@ describe("t338 atomic per-intent settings", () => {
 
   test("slash flags retain creation and scope-change values and refuse incompatible modes", () => {
     const { proj, state } = project();
+    recordHumanPrompt(
+      proj,
+      "/aidlc --scope feature --summary-confirmation off --guard-policy relaxed",
+    );
     const scope = directive(run(ORCHESTRATE, [
       "next", "--scope", "feature", "--summary-confirmation", "off", "--guard-policy", "relaxed",
     ], proj).stdout);
@@ -505,10 +515,6 @@ describe("t338 atomic per-intent settings", () => {
     const command = scope.message.match(/`[^`]*\b(engine scope change [^`]+)`/);
     expect(command).not.toBeNull();
     expect(command![1]).toContain("--guard-policy relaxed");
-    recordHumanPrompt(
-      proj,
-      "/aidlc --scope feature --summary-confirmation off --guard-policy relaxed",
-    );
     const changed = run(DISPATCHER, command![1].split(/\s+/), proj);
     expect(changed.status, changed.stderr).toBe(0);
     const content = readFileSync(state, "utf-8");
@@ -582,7 +588,9 @@ describe("t338 summary confirmation off is the person's switch", () => {
   test("asked for in the chat, the agent's off says it in one line with their words and the way back", () => {
     const { proj, state } = project("feature");
     recordHumanPrompt(proj, "skip the looks correct check from now on");
-    const changed = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "off"], proj, SESSIONLESS);
+    const changed = run(DISPATCHER, [
+      "engine", "config", "set", "summary-confirmation", "off", "--person-words", "skip the looks correct check from now on",
+    ], proj, SESSIONLESS);
     expect(changed.status, changed.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toStartWith("off (");
     const audit = rows(proj);

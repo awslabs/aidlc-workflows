@@ -6367,8 +6367,8 @@ function sensorStateAtGate(pd: string, stage: GateStage): string {
 
 // What the person hears when a gate opens, or is shown again, while a check
 // still fails on a declared output (#2201): one line per failing check, in
-// plain words (the agent corrects from the detail file the stage protocol's
-// section 14 names), at most three lines and then a count. The orchestrator carries
+// plain words (the agent corrects from the detail file the sensors protocol
+// module names), at most three lines and then a count. The orchestrator carries
 // them in the gate reply's `narration`, beside what the stage produced, which
 // every harness's agent says to the person with the approval question. Nothing
 // is re-fired; a check that passed later, or never ran, says nothing, and an

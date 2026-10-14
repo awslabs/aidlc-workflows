@@ -229,7 +229,9 @@ const manifest: HarnessManifest = {
       "folder in Kiro IDE: choose Trust Folder & Continue when Kiro asks whether you trust it, or " +
       "select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window " +
       "from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), send a message and run " +
-      "doctor again. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.",
+      "doctor again. If AI-DLC was installed while Kiro IDE was open, quit Kiro IDE fully and reopen " +
+      "it instead: it keeps the PATH it started with, so its hooks cannot find aidlc, and Reload " +
+      "Window does not change that. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.",
     // A second cause, measured live on Kiro IDE 1.2.37 (#2167): a folder
     // trusted after Kiro opened it runs the agent's commands, but Kiro's agent
     // started with hooks off for the untrusted folder ("hooks.v2.execution

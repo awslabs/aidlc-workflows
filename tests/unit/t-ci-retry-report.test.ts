@@ -4,13 +4,14 @@
 // which first attempts earn that second run; the report makes every pass on a
 // second attempt visible as a flaky test, and can never fail the job itself.
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type RetryRecord, retryReport } from "../../scripts/ci-retry-report.ts";
+import { liveRetryReport, type RetryRecord, retryReport } from "../../scripts/ci-retry-report.ts";
 import {
-  CASE_TIMEOUT_RETRY_MAX_MS, ISOLATED_RETRY_MAX_MS, ORDINARY_RETRY_MAX_MS, onlyCaseTimeouts, preserveFirstAttempt,
-  RETRY_DEADLINE_RESERVE_MS, type RetryEvidence, retryEligible, retryPassed,
+  CASE_TIMEOUT_RETRY_MAX_MS, flakyLiveLine, ISOLATED_RETRY_MAX_MS, ORDINARY_RETRY_MAX_MS, onlyCaseTimeouts, personTurnFailed,
+  personTurnLine, preserveFirstAttempt, RETRY_DEADLINE_RESERVE_MS, type RetryEvidence, retryEligible, retryPassed,
 } from "../lib/file-retry.ts";
 
 const roots: string[] = [];
@@ -63,6 +64,51 @@ describe("the retry rule", () => {
     expect(retryEligible({ ...failed, caseTimeoutsOnly: true, wallTimeMs: ISOLATED_RETRY_MAX_MS + 1 }, ISOLATED_RETRY_MAX_MS)).toBe(false);
     // A file that ran past its own deadline is still never retried.
     expect(retryEligible({ ...failed, caseTimeoutsOnly: true, timedOut: true }, ORDINARY_RETRY_MAX_MS)).toBe(false);
+  });
+
+  // A live run that saw AI-DLC act for the person (a decision recorded as
+  // theirs with no reply of theirs behind it, or work started before they
+  // answered) is the break a person would meet; a pass on a second attempt
+  // would hide it, so it never earns one.
+  test("a person-turn failure never earns a retry, on either path", () => {
+    for (const limit of [ORDINARY_RETRY_MAX_MS, ISOLATED_RETRY_MAX_MS]) {
+      expect(retryEligible({ ...failed, personTurnFailure: true }, limit)).toBe(false);
+      expect(retryEligible({ ...failed, personTurnFailure: false }, limit)).toBe(true);
+    }
+  });
+
+  test("reads a person-turn failure off bun's JUnit report or the error's own header, as the driver's error writes them", () => {
+    const report = (cases: string) => `<?xml version="1.0"?><testsuites><testsuite name="x">${cases}</testsuite></testsuites>`;
+    const personTurn = '<testcase name="a" time="30.0"><failure type="PersonTurnError" message="recorded 1 decision(s)" /></testcase>';
+    const assertion = '<testcase name="b" time="0.1"><failure type="AssertionError" message="PersonTurnError in words only" /></testcase>';
+    expect(personTurnFailed(report(personTurn + assertion))).toBe(true);
+    expect(personTurnFailed(report(assertion))).toBe(false);
+    expect(personTurnFailed("")).toBe(false);
+    // Bun 1.3 writes every thrown error as a bare AssertionError; the header it
+    // prints for the uncaught error says what it was, on LF and CRLF output.
+    const bun13 = '<testcase name="a" time="0.1"><failure type="AssertionError" /></testcase>';
+    const printed = "15 |     throw new PersonTurnError(\"...\");\r\nPersonTurnError: The SDK drive recorded 1 decision(s)\r\n      at <anonymous> (t-x.test.ts:15:11)\r\n";
+    expect(personTurnFailed(report(bun13), printed)).toBe(true);
+    expect(personTurnFailed(report(bun13), printed.replaceAll("\r\n", "\n"))).toBe(true);
+    // A source excerpt or a sentence that names the error is not its header.
+    expect(personTurnFailed(report(bun13), "2 | class PersonTurnError extends Error {}\nerror: expected PersonTurnError: no\n")).toBe(false);
+    // The real error, through real bun: the JUnit type and the header both say it.
+    const root = mkdtempSync(join(tmpdir(), "aidlc-person-turn-junit-"));
+    roots.push(root);
+    const harness = join(import.meta.dir, "..", "harness", "person-turns.ts").replaceAll("\\", "/");
+    writeFileSync(join(root, "t-x.test.ts"), [
+      `import { test } from "bun:test";`,
+      `import { unbackedFailure } from ${JSON.stringify(harness)};`,
+      `test("an unbacked decision", () => { throw unbackedFailure("The SDK drive", ["GATE_APPROVED at 00:00"]); });`,
+    ].join("\n"));
+    const junit = join(root, "t-x.junit.xml");
+    const child = spawnSync(process.execPath, ["test", "--reporter=junit", `--reporter-outfile=${junit}`, "t-x.test.ts"], {
+      cwd: root, encoding: "utf8", timeout: 60_000,
+    });
+    expect(child.status, child.stderr).toBe(1);
+    expect(personTurnFailed(readFileSync(junit, "utf8"), `${child.stdout}${child.stderr}`)).toBe(true);
+    // The header alone holds on every Bun, whatever its JUnit names the failure.
+    expect(personTurnFailed("", `${child.stdout}${child.stderr}`)).toBe(true);
   });
 
   test("reads case timeouts off bun's JUnit report", () => {
@@ -192,5 +238,71 @@ describe("the retry report", () => {
     const [line] = retryReport(run([retry("tests/unit/t-%0A::error::x.test.ts", true)]).stamp, {}, roots.at(-1)!);
     expect(line).toContain("t-%250A::error::x.test.ts");
     expect(line.split("\n")).toHaveLength(1);
+  });
+});
+
+// A Windows live job keeps the child's output to itself, so its lines never
+// become annotations there. The job reads the collected e2e-results.json
+// instead and says the same two lines, built only from fixed words and a test
+// file this checkout holds: nothing a test or an agent wrote is said again.
+describe("the live retry report (Windows)", () => {
+  function collected(files: unknown[] | string | undefined, checkout: string[] = []): { root: string; logs: string } {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-live-retry-report-"));
+    roots.push(root);
+    for (const file of checkout) {
+      mkdirSync(join(root, file, ".."), { recursive: true });
+      writeFileSync(join(root, file), "");
+    }
+    const logs = join(root, "tests", "logs");
+    const stamp = join(logs, "windows-isolated-0f", "2026-10-14T00-00-00Z-p2");
+    mkdirSync(stamp, { recursive: true });
+    if (files !== undefined) {
+      writeFileSync(join(stamp, "e2e-results.json"), typeof files === "string" ? files : JSON.stringify({ state: "COMPLETE", files }));
+    }
+    return { root, logs };
+  }
+  const FLAKY = "tests/e2e/t-exec-codex-compose-inflight.serial.test.ts";
+  const PERSON = "tests/e2e/t-exec-copilot-release-journey.serial.test.ts";
+  const STEADY = "tests/integration/t20.test.ts";
+
+  test("says the Flaky line and the person-turn line the POSIX jobs print, once per file", () => {
+    const { root, logs } = collected([
+      { file: FLAKY, state: "PASS", passedOnRetry: true, reason: "::error::from a test" },
+      { file: PERSON, state: "FAIL", personTurnFailure: true },
+      { file: STEADY, state: "PASS" },
+    ], [FLAKY, PERSON, STEADY]);
+    expect(liveRetryReport(logs, root)).toEqual([flakyLiveLine(FLAKY), personTurnLine(PERSON)]);
+    expect(flakyLiveLine(FLAKY)).toBe("::warning title=Flaky live test::t-exec-codex-compose-inflight.serial.test.ts passed on its second attempt; both attempts are retained.");
+    expect(personTurnLine(PERSON)).toStartWith("::error title=Person-turn failure::t-exec-copilot-release-journey.serial.test.ts ");
+  });
+
+  test("says nothing about a record that names no test file of this checkout", () => {
+    const { root, logs } = collected([
+      { file: "tests/e2e/t-%0A::error::x.test.ts", passedOnRetry: true },
+      { file: "tests/e2e/../../escape.test.ts", personTurnFailure: true },
+      { file: "tests/e2e/t-not-here.test.ts", passedOnRetry: true },
+      { file: 7, personTurnFailure: true },
+    ]);
+    expect(liveRetryReport(logs, root)).toEqual(["Retries: 4 live result record(s) named no test file of this checkout; not reported."]);
+  });
+
+  test("says when there is nothing to report, and never throws", () => {
+    const quiet = collected([{ file: STEADY, state: "PASS" }], [STEADY]);
+    expect(liveRetryReport(quiet.logs, quiet.root)).toEqual(["Retries: no live test file needed a second attempt or failed a person-turn check."]);
+    const none = collected(undefined);
+    expect(liveRetryReport(none.logs, none.root)).toEqual(["Retries: no live results were collected."]);
+    const broken = collected("{");
+    expect(liveRetryReport(broken.logs, broken.root)).toEqual(["Retries: 1 collected results file(s) could not be read; not reported."]);
+  });
+
+  test("an unreadable results file costs only its own lines", () => {
+    const { root, logs } = collected([{ file: FLAKY, state: "PASS", passedOnRetry: true }], [FLAKY]);
+    const other = join(logs, "windows-isolated-1a", "2026-10-14T00-00-00Z-p3");
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(other, "e2e-results.json"), "{\"files\": [::error::x");
+    expect(liveRetryReport(logs, root)).toEqual([
+      flakyLiveLine(FLAKY),
+      "Retries: 1 collected results file(s) could not be read; not reported.",
+    ]);
   });
 });

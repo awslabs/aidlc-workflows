@@ -108,15 +108,17 @@ stable `%LOCALAPPDATA%\aidlc\bin\aidlc.cmd` shim. After successful verification
 and installation, the installer registers that bin directory in the current
 account's persistent User PATH, preserving existing entries and avoiding
 duplicates on reruns. It also updates the current PowerShell process and
-notifies Windows of the environment change for new terminals. If another
-session cannot find `aidlc`, open a new terminal; restart the terminal app or
-IDE if needed.
+notifies Windows of the environment change, so programs started afterwards
+find `aidlc`. A terminal app or IDE that was already open (Kiro, VS Code,
+Cursor) keeps the PATH it started with: quit it fully and reopen it before using
+`aidlc` or AI-DLC's hooks there. A new tab or Reload Window inside it is not
+enough.
 It does not change Machine PATH or edit a PowerShell profile.
 
 Successful human output starts with `Installed`, the version, the account,
 and the installed command path. Next, run `aidlc config` from your project
-directory. Restart guidance applies only if another terminal or IDE cannot
-find the command.
+directory. When the installer added the PATH entry, it also says to quit and
+reopen any terminal app or IDE that was already open.
 
 The installer writes `windows-path.json` under the install root only when it
 adds a User PATH entry. This ownership record survives reruns, including
@@ -603,7 +605,9 @@ Claude Opus 4.8. Where you set the model and effort depends on the harness:
 - **Kiro CLI:** the session model and its one effort. `aidlc config models`
   saves them in your personal Kiro settings (a preset sets the effort:
   `minimal` low, `balanced` medium, `thorough` extra-high); `/model` and
-  `/effort` change them inside Kiro. Recommended setup keeps an effort you
+  `/effort` change them inside Kiro. A `/model` switch reaches the agents the
+  conductor dispatches only once you save it with
+  `/model set-current-as-default`. Recommended setup keeps an effort you
   already saved for your model. On Kiro IDE's row setup saves Kiro CLI's
   session model only. See
   [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).

@@ -73,6 +73,8 @@ import {
   REPO_ROOT,
   seededRecordDir,
 } from "../harness/fixtures.ts";
+import { expectPersonFirst } from "../harness/person-turns.ts";
+import { PERSON_ASKED_SKIP_REASON } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 function completedStartupProbe<T extends { error?: Error }>(result: T): T {
   if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
@@ -277,9 +279,18 @@ describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec r
         expect(/approve/i.test(gateOut), gateDiagnostic).toBe(true);
         expect(/reject/i.test(gateOut), gateDiagnostic).toBe(true);
         // Marker written, nothing applied: state byte-unchanged, no RECOMPOSED.
+        // The words name the stages, so the skill may also take its named-stage
+        // route (`next --skip`, done at once): a plan change the person asked
+        // for, not one made ahead of them. Only on the compose gate route is a
+        // change before Approve AI-DLC acting for the person.
         expect(existsSync(markerPath(proj))).toBe(true);
-        expect(readState(proj)).toBe(before);
-        expect(auditText(proj)).not.toContain("**Event**: RECOMPOSED");
+        const beat1Audit = auditText(proj);
+        const untouched = readState(proj) === before && !beat1Audit.includes("**Event**: RECOMPOSED");
+        if (beat1Audit.includes(`**Reason**: ${PERSON_ASKED_SKIP_REASON}`)) {
+          expect(untouched, "beat 1 took the named-stage route, so the compose gate was not reached").toBe(true);
+        } else {
+          expectPersonFirst(untouched, "the plan change was applied before the person approved it");
+        }
 
         // Beat 2: answer the gate in the SAME session.
         const b2 = codexTurn(proj, home, "Approve", { resume: true });

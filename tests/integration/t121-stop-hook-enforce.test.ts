@@ -943,9 +943,12 @@ function terminalConfigDispatch(proj: string): string {
   return result.stdout;
 }
 
-function terminalModifierDispatch(proj: string, flags: string[], command: string): string {
+// `typed`: the person typed the switch, so the setter the print names needs no
+// words of theirs; otherwise the print names the slot for them after it.
+function terminalModifierDispatch(proj: string, flags: string[], command: string, typed = true): string {
   const statePath = seededStateFile(proj);
   writeFileSync(statePath, `- **State Version**: 8\n${readFileSync(statePath, "utf-8")}`);
+  if (typed) recordTypedLine(proj, flags);
   const result = spawnSync(BUN, [
     join(dirname(UTILITY_TS), "aidlc-orchestrate.ts"),
     "next", ...flags, "--project-dir", proj,
@@ -953,9 +956,22 @@ function terminalModifierDispatch(proj: string, flags: string[], command: string
   expect(result.status, result.stderr).toBe(0);
   const directive = JSON.parse(result.stdout);
   expect(directive.kind, result.stdout).toBe("print");
-  expect(directive.message).toContain(`${command}\``);
+  expect(directive.message).toContain(typed ? `${command}\`` : command);
   expect(directive.message).toContain("then print its output verbatim and stop.");
   return result.stdout;
+}
+
+function recordTypedLine(proj: string, flags: string[]): void {
+  const typed = spawnSync(BUN, [join(dirname(UTILITY_TS), "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+    cwd: proj,
+    encoding: "utf-8",
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+    input: JSON.stringify({
+      hook_event_name: "UserPromptSubmit", session_id: "01995000-7a11-7000-8000-000000000121", cwd: proj,
+      prompt: `/aidlc ${flags.join(" ")}`,
+    }),
+  });
+  expect(typed.status, typed.stderr).toBe(0);
 }
 
 // next takes no level word outside the allowed ones, and names them instead of
@@ -3963,7 +3979,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     // A print naming another scope proves nothing, so the stop is still blocked.
     const proj = makeProject();
     seedActive(proj);
-    const output = terminalModifierDispatch(proj, ["--scope", "poc"], "scope change --scope poc");
+    const output = terminalModifierDispatch(proj, ["--scope", "poc"], "scope change --scope poc", false);
     const tp = seedTranscriptEntries(proj, "claude", [
       { kind: "human", text: "/aidlc --scope mvp" },
       { kind: "bash", id: "scope-call", command: "bun .claude/tools/aidlc.ts engine orchestrate next --scope mvp" },
@@ -3978,7 +3994,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   test("(h) a guard-policy next whose print names a different value still blocks (#1369)", () => {
     const proj = makeProject();
     seedActive(proj);
-    const output = terminalModifierDispatch(proj, ["--guard-policy", "strict"], "config set guard-policy strict");
+    const output = terminalModifierDispatch(proj, ["--guard-policy", "strict"], "config set guard-policy strict", false);
     const tp = seedTranscriptEntries(proj, "claude", [
       { kind: "human", text: "/aidlc --guard-policy relaxed" },
       { kind: "bash", id: "modifier-call", command: "bun .claude/tools/aidlc.ts engine orchestrate next --guard-policy relaxed" },

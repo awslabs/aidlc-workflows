@@ -1036,6 +1036,27 @@ describe("t345 complete nightly coverage", () => {
     expect(callers).not.toContain("preview-release.yml:full_suite");
   });
 
+  // The POSIX live jobs stream the runner's own lines; the Windows job keeps
+  // the isolated child's output to itself, so it says them from the collected
+  // results file (scripts/ci-retry-report.ts --live) and nothing else.
+  test("the Windows live job says the Flaky and person-turn lines from the collected results", () => {
+    const windows = steps(workflow.jobs.live_windows);
+    const index = (name: string) => windows.findIndex((step) => step.name === name);
+    const report = windows[index("Report retries and person-turn failures")];
+    expect(report).toEqual({
+      name: "Report retries and person-turn failures",
+      if: `\${{ always() }}`,
+      "continue-on-error": true,
+      run: "bun scripts/ci-retry-report.ts --live tests/logs",
+    });
+    expect(index("Collect isolated live logs")).toBeLessThan(index("Report retries and person-turn failures"));
+    // Sanitize stays right before the upload (the upload rule below).
+    expect(index("Report retries and person-turn failures")).toBeLessThan(index("Sanitize diagnostic logs"));
+    for (const name of ["live_linux", "live_macos"]) {
+      expect(steps(workflow.jobs[name]).some((step) => step.run?.includes("ci-retry-report.ts")), name).toBe(false);
+    }
+  });
+
   test("each credentialed live job stops at once, without echoing it, when the role secret is empty", () => {
     const oidcJobs = Object.entries(workflow.jobs).filter(([, job]) => job.permissions?.["id-token"] === "write");
     expect(oidcJobs.length).toBeGreaterThan(0);

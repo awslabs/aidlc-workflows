@@ -861,7 +861,6 @@ export async function publishRelease(
       ));
     }
 
-    // Verify the exact remote state: identity, inventory, and every byte.
     const snapshot = await getRelease(releaseUrl, options.token);
     try {
       assertReleaseIdentity(
@@ -983,7 +982,7 @@ async function main(argv: string[]): Promise<void> {
   const channel = requireReleaseChannel(requiredOption(argv, "--channel"));
   const tag = requiredOption(argv, "--tag");
   // Stable notes are the reviewed CHANGELOG section for the tag; preview notes
-  // come from the plan the authorize job computed with full history.
+  // come from the plan the validate job computed with full history.
   const plan = channel === PREVIEW_CHANNEL
     ? readPreviewPlan(requiredOption(argv, "--preview-plan"))
     : null;

@@ -252,7 +252,8 @@ describe("the hook records the message whole and applies nothing", () => {
     expect(state(proj)).toBe(before);
     expect(rows(proj, "CEREMONY_SET")).toHaveLength(0);
     expect(lastTurnMark(proj)).toBeNull();
-    const lowered = configSet(proj, ["plan-approval", "off"]);
+    // The agent read their words and names them; the setter finds them on record.
+    const lowered = configSet(proj, ["plan-approval", "off", "--person-words", "skip plan approval for this work"]);
     expect(lowered.status, lowered.out).toBe(0);
     expect(getField(state(proj), "Plan Approval")).toBe("off (set by you)");
     expect(rows(proj, "CEREMONY_SET").join("\n")).toContain("**Person Reply**: skip plan approval for this work");
@@ -386,7 +387,12 @@ describe("creation takes a check typed off, under the person-turn rule", () => {
       expect(command).toContain("--guard-policy relaxed");
       expect(command).toContain("--guard.review-freeze off");
     }
-    const made = utility(proj, ["intent-create", "--scope", "enterprise", "--guard-policy", "relaxed", "--guard.review-freeze", "off"]);
+    // The creation answers their request, as the offer's own commands do.
+    const request = /--request ([0-9a-f]{8})/.exec(commands[0])?.[1];
+    expect(request, commands[0]).toBeDefined();
+    const made = utility(proj, [
+      "intent-create", "--scope", "enterprise", "--request", request!, "--guard-policy", "relaxed", "--guard.review-freeze", "off",
+    ]);
     expect(made.status, made.stderr).toBe(0);
     const built = createdState(proj);
     expect(getField(built, "Guard Policy")).toBe("relaxed (set by you)");

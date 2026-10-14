@@ -45,7 +45,7 @@ import {
   TestBudgetExhaustedError,
 } from "./harness/test-budget.ts";
 import { buildMeta, renderMeta } from "./lib/bun-junit-to-meta.ts";
-import { CASE_TIMEOUT_RETRY_MAX_MS, ISOLATED_RETRY_MAX_MS, onlyCaseTimeouts, ORDINARY_RETRY_MAX_MS, preserveFirstAttempt, retryEligible, retryPassed } from "./lib/file-retry.ts";
+import { CASE_TIMEOUT_RETRY_MAX_MS, flakyLiveLine, ISOLATED_RETRY_MAX_MS, onlyCaseTimeouts, ORDINARY_RETRY_MAX_MS, personTurnFailed, personTurnLine, preserveFirstAttempt, retryEligible, retryPassed } from "./lib/file-retry.ts";
 import {
   type OrderWeights,
   orderLongestFirst,
@@ -125,6 +125,8 @@ interface FileExecution {
   junitPath?: string;
   /** Every failed case failed by running past its case timeout. */
   caseTimeoutsOnly?: boolean;
+  /** A case failed a person-turn check, so the file is never retried. */
+  personTurnFailure?: boolean;
 }
 
 function usage(): string {
@@ -1222,6 +1224,7 @@ async function runBunTestFile(
     evidenceError: evidence.complete ? undefined : evidence.error,
     junitPath: junitXml,
     ...(status === "FAIL" && onlyCaseTimeouts(xml) ? { caseTimeoutsOnly: true } : {}),
+    ...(status === "FAIL" && personTurnFailed(xml, run.output) ? { personTurnFailure: true } : {}),
     // Diagnostic evidence, never grounds for changing an assertion or retrying.
     throttlingSignals: (run.output.match(
       /ThrottlingException|TooManyRequestsException|(?:HTTP|status(?:Code)?)\s*[:=]?\s*429\b|rate[_ ]limit[_ ]exceeded/gi,
@@ -1312,6 +1315,11 @@ interface OrdinaryRetry {
 }
 const ordinaryRetries: OrdinaryRetry[] = [];
 
+/** Said in place of a retry when a file failed a person-turn check. */
+function noRetryForPersonTurn(file: string): string {
+  return `=== NO RETRY ${basename(file)} (it found AI-DLC acting for the person; a pass on a second attempt would hide that) ===\n`;
+}
+
 /**
  * Ordinary smoke/unit/integration files get one fresh second run (the merge
  * queue passes --file-retries 1) when the first attempt failed assertions
@@ -1320,12 +1328,13 @@ const ordinaryRetries: OrdinaryRetry[] = [];
  */
 async function runFileWithRetry(file: string, parallelMode: boolean): Promise<FileExecution | undefined> {
   const first = await runBunTestFile(file, parallelMode);
-  if (!first || !args.fileRetries || !retryEligible(first, ORDINARY_RETRY_MAX_MS, remainingRunMs())) return first;
-  const name = resultName(file);
   const say = async (line: string): Promise<void> => {
     if (parallelMode) await withStdoutLock(() => process.stdout.write(line));
     else process.stdout.write(line);
   };
+  if (first?.personTurnFailure && args.fileRetries) await say(noRetryForPersonTurn(file));
+  if (!first || !args.fileRetries || !retryEligible(first, ORDINARY_RETRY_MAX_MS, remainingRunMs())) return first;
+  const name = resultName(file);
   // Without verbose logs there is no evidence to keep; with them, a retry that
   // would overwrite the first attempt's evidence never starts.
   const kept = args.verbose ? preserveFirstAttempt(logDir, name) : { ok: true, log: null };
@@ -1715,12 +1724,16 @@ async function runIsolatedE2e(): Promise<void> {
       try {
         const first = await execute(task.file, worker);
         // Retry only a short assertion failure after confirmed retirement. A
-        // timeout, missing evidence or cleanup failure never earns another run.
+        // timeout, missing evidence, cleanup failure or person-turn failure
+        // never earns another run.
+        if (args.fileRetries && first.personTurnFailure) {
+          process.stdout.write(`${noRetryForPersonTurn(task.file)}${personTurnLine(task.file)}\n`);
+        }
         if (args.fileRetries && retryEligible(first, ISOLATED_RETRY_MAX_MS, remainingRunMs())) {
           const second = await execute(task.file, worker, 2);
           if (second.status === "PASS") {
             records.get(task.file)!.passedOnRetry = true;
-            process.stdout.write(`::warning title=Flaky live test::${basename(task.file)} passed on its second attempt; both attempts are retained.\n`);
+            process.stdout.write(`${flakyLiveLine(task.file)}\n`);
           }
         }
       } catch (error) {

@@ -36,13 +36,14 @@ import { join } from "node:path";
 import { copilotTurn, trustCopilotFolder } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
+  checkReleaseJourneyTurn,
   doctorChecks,
+  expectPersonFirstInJourney,
   hooksRanProblems,
   RELEASE_JOURNEY_TURNS,
   type ReleaseJourneyReport,
   recordedPersonLines,
   releaseJourneyEvidence,
-  releaseJourneyProblems,
   runReleaseJourney,
   setupReleaseJourneyProject,
 } from "../harness/release-journey.ts";
@@ -138,7 +139,7 @@ describe("t-exec-copilot-release-journey: a person's first day on Copilot CLI, b
           report.turns.push({ line, seconds: Math.round((Date.now() - started) / 1000) });
           lastOut = turn.out;
           if (turn.rc !== 0) report.problems.push(`Copilot ended "${line}" with exit ${turn.rc}: ${turn.out.slice(-1500)}`);
-          report.problems.push(...releaseJourneyProblems(project.proj, index + 1).map((problem) => `after "${line}": ${problem}`));
+          checkReleaseJourneyTurn(report, project.proj, index + 1, line);
           if (report.problems.length) break;
         }
         if (!report.problems.length) report.problems.push(...hooksRanProblems(doctorChecks(project, env)));
@@ -146,6 +147,7 @@ describe("t-exec-copilot-release-journey: a person's first day on Copilot CLI, b
         report.extra = { "hook runs": Object.values(runs).reduce((sum, count) => sum + count, 0), ...tokens(usageFile), hooksByKind: runs };
         if (report.problems.length) report.extra.evidence = { ...releaseJourneyEvidence(project.proj), output: lastOut.slice(-4000) };
       });
+      expectPersonFirstInJourney(report);
       expect(report.problems).toEqual([]);
       rmSync(project.root, { recursive: true, force: true });
     },

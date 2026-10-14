@@ -82,6 +82,7 @@ import { join } from "node:path";
 import {
   parseMemoryEntries,
   parseMemoryHeadings,
+  parseStageFrontmatter,
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
@@ -669,4 +670,146 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
 
   // .sh 26 (test-run -> persist writes nothing) was dropped per #369 when the
   // test-run mechanism was removed; persist now always proceeds.
+});
+
+// =====================================================================
+// GROUP 5 - a sensor bind keeps the stage file's header whole
+//
+// The bind edits the installed stage file the stage graph compiles from, so
+// each case checks the whole file byte for byte (only the new id is added, in
+// the file's own line ending) and reads it back with parseStageFrontmatter,
+// the compile's own reader. CRLF is what a Windows team clone checks out.
+// =====================================================================
+describe("t97 persist sensor bind keeps the stage header whole (cli)", () => {
+  const LF = "\n";
+  const CRLF = "\r\n";
+  const ID = "acceptance-format";
+
+  // A stage file whose header carries `sensors` lines where given, then
+  // `scopes:` and the `tail` keys as its last header lines.
+  function stageLines(sensors: string[], tail: string[]): string[] {
+    return [
+      "---",
+      "slug: user-stories",
+      "phase: inception",
+      "execution: ALWAYS",
+      "lead_agent: aidlc-product-agent",
+      "support_agents: []",
+      ...sensors,
+      "scopes:",
+      "  - feature",
+      ...tail,
+      "---",
+      "",
+      "# User Stories",
+      "",
+      "## Steps",
+      "1. do the thing",
+      "",
+    ];
+  }
+
+  // Persist one sensor selection for user-stories against a stage file holding
+  // `before`; returns the exit code and the stage file afterwards.
+  function bindOn(name: string, before: string): { rc: number; after: string } {
+    const pd = mkproj(name);
+    const stagesRoot = join(pd, ".claude", "skills", "aidlc", "stages");
+    const stageFile = join(stagesRoot, "inception", "user-stories.md");
+    writeFileSync(stageFile, before, "utf-8");
+    const sel = join(pd, "sel.json");
+    writeFileSync(
+      sel,
+      JSON.stringify({
+        stage_slug: "user-stories",
+        space: "default",
+        intent: null,
+        selections: [
+          {
+            candidate_id: "c5",
+            type: "sensor",
+            origin_stage: "user-stories",
+            manifest_fields: {
+              id: ID,
+              kind: "deterministic",
+              command: `bun .claude/tools/aidlc-sensor.ts fire ${ID}`,
+              default_severity: "advisory",
+              description: "Checks AC format",
+              matches: "**/user-stories/**",
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+    const res = runCli(
+      ["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd],
+      { env: { AIDLC_STAGES_DIR: stagesRoot } },
+    );
+    return { rc: res.rc, after: readFile(stageFile) };
+  }
+
+  function sensorsRead(text: string): unknown {
+    return parseStageFrontmatter(text).sensors;
+  }
+
+  test("no sensors: key, LF -> sensors: becomes the last header key, every other line unchanged", () => {
+    const { rc, after } = bindOn("b1", stageLines([], ["outputs: bar"]).join(LF));
+    expect(rc).toBe(0);
+    expect(after).toBe(stageLines([], ["outputs: bar", "sensors:", `  - ${ID}`]).join(LF));
+    expect(sensorsRead(after)).toEqual([ID]);
+    expect(parseStageFrontmatter(after).outputs).toBe("bar");
+  });
+
+  test("no sensors: key, CRLF -> the new lines end in CRLF too", () => {
+    const { rc, after } = bindOn("b2", stageLines([], ["outputs: bar"]).join(CRLF));
+    expect(rc).toBe(0);
+    expect(after).toBe(stageLines([], ["outputs: bar", "sensors:", `  - ${ID}`]).join(CRLF));
+    expect(/(^|[^\r])\n/.test(after)).toBe(false);
+    expect(sensorsRead(after)).toEqual([ID]);
+  });
+
+  test("block of two ids, CRLF -> the id follows the last one and all three read back", () => {
+    const before = stageLines(["sensors:", "  - required-sections", "  - upstream-coverage"], ["outputs: bar"]);
+    const { rc, after } = bindOn("b3", before.join(CRLF));
+    expect(rc).toBe(0);
+    expect(after).toBe(
+      stageLines(["sensors:", "  - required-sections", "  - upstream-coverage", `  - ${ID}`], ["outputs: bar"]).join(CRLF),
+    );
+    expect(sensorsRead(after)).toEqual(["required-sections", "upstream-coverage", ID]);
+  });
+
+  test("block, LF, not the last key -> the id follows the last one", () => {
+    const { rc, after } = bindOn("b4", stageLines(["sensors:", "  - required-sections"], ["outputs: bar"]).join(LF));
+    expect(rc).toBe(0);
+    expect(after).toBe(stageLines(["sensors:", "  - required-sections", `  - ${ID}`], ["outputs: bar"]).join(LF));
+    expect(sensorsRead(after)).toEqual(["required-sections", ID]);
+  });
+
+  test("id already bound second, CRLF -> the stage file is unchanged", () => {
+    const before = stageLines(["sensors:", "  - required-sections", `  - ${ID}`], ["outputs: bar"]).join(CRLF);
+    const { rc, after } = bindOn("b5", before);
+    expect(rc).toBe(0);
+    expect(after).toBe(before);
+  });
+
+  test("block as the last key -> no blank line before the closing ---", () => {
+    const { rc, after } = bindOn("b6", stageLines([], ["outputs: bar", "sensors:", "  - required-sections"]).join(LF));
+    expect(rc).toBe(0);
+    expect(after).toBe(stageLines([], ["outputs: bar", "sensors:", "  - required-sections", `  - ${ID}`]).join(LF));
+    expect(sensorsRead(after)).toEqual(["required-sections", ID]);
+  });
+
+  test("flow sensors: [] -> the id goes inside the brackets", () => {
+    const { rc, after } = bindOn("b7", stageLines(["sensors: []"], ["outputs: bar"]).join(LF));
+    expect(rc).toBe(0);
+    expect(after).toBe(stageLines([`sensors: [${ID}]`], ["outputs: bar"]).join(LF));
+    expect(sensorsRead(after)).toEqual([ID]);
+  });
+
+  test("flow sensors: [required-sections], CRLF -> the id follows inside the brackets", () => {
+    const { rc, after } = bindOn("b8", stageLines(["sensors: [required-sections]"], ["outputs: bar"]).join(CRLF));
+    expect(rc).toBe(0);
+    expect(after).toBe(stageLines([`sensors: [required-sections, ${ID}]`], ["outputs: bar"]).join(CRLF));
+    expect(sensorsRead(after)).toEqual(["required-sections", ID]);
+  });
 });

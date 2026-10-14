@@ -21,7 +21,7 @@ map to the static protocol or the named conditional module.
 
 ## Protocol File Structure
 
-The stage protocol is split across fourteen files, loaded conditionally by the
+The stage protocol is split across sixteen files, loaded conditionally by the
 conductor based on workflow context:
 
 | File | Contents | When Loaded |
@@ -39,6 +39,8 @@ conductor based on workflow context:
 | `stage-protocol-checkpoint.md` | Unit and skeleton checkpoint verification and approval, and the verification command every checkpoint uses | When `directive.protocol_modules` lists `checkpoint`: a checkpoint step and every invoke-swarm |
 | `stage-protocol-loopback.md` | Build-and-Test failure loop-back | When `directive.protocol_modules` lists `loopback`: every Code Generation and Build and Test step and every invoke-swarm |
 | `stage-protocol-wave.md` | Per-unit batch waves | When `directive.protocol_modules` lists `wave`: a step that carries `directive.wave` |
+| `stage-protocol-summary.md` | The consolidated summary confirmation before generation | When `directive.protocol_modules` lists `summary`: the step asks for the summary confirmation |
+| `stage-protocol-sensors.md` | Sensor imports and a blocking gate sensor at the approval gate | When `directive.protocol_modules` lists `sensors`: Sensors are on, and every invoke-swarm under them |
 | `stage-protocol-swarm.md` | Harness-specific autonomous fan-out, the autonomous Code Generation plan contract (§12b), the batch checkpoint, convergence, finalize, and reviewer boundary | Every invoke-swarm |
 
 ### Conditional Loading Logic (from SKILL.md Routing)
@@ -68,6 +70,9 @@ The conductor's Routing section defines the loading rules:
   when `protocol_modules` names `checkpoint`, `loopback`, `wave`, or
   `collaborators`. The engine names each only on the steps that take that
   branch, so the other steps never read them.
+- **`stage-protocol-summary.md`** and **`stage-protocol-sensors.md`**: load when
+  `protocol_modules` names `summary` or `sensors`, which the engine does while
+  that ceremony is on.
 - **`stage-protocol-swarm.md`**: load for invoke-swarm.
 
 Before running the stage body, the conductor reads every module named by
@@ -558,8 +563,17 @@ ask targeted follow-up. Do NOT proceed until resolved.
   decides: it picks the option that best fits what they have said and records
   it with `log answer --on-instruction '<their words>'` (single-quoted, like
   every piece of the person's text on a command line), so the record shows
-  the agent chose it as they asked. It then says one line: "You left <the
-  question> to me, so I chose <the choice>. Say if you want something else."
+  the agent chose it as they asked. The tool keeps the words only when
+  something the person said holds them, case, spacing and punctuation aside
+  (`holdsQuote` and `personsSaidWords` in `aidlc-message-store.ts`, the same
+  check the live drives' person-turn check makes): a message the human-turn
+  hook kept, a question box's reply, or the request that started the work.
+  Otherwise it tells the agent to quote their words or show the questions and
+  wait. Where the record lacks some of what they said (a host that passed no
+  words, a message too long to keep whole, a message older than the store
+  keeps, no hook), the choice is recorded as before. The agent then says one
+  line: "You left <the question> to me, so I chose <the choice>. Say if you
+  want something else."
   (for several questions, "You left <Stage>'s <N> questions to me, so I chose
   the recommended answers: ... Say if you want any of them changed."), and
   once per piece of work: "Approvals are still yours: I'll stop at each stage
@@ -1275,8 +1289,9 @@ change. See
    consumed - an advisory normal-flow budget is exactly one pass, so a counted
    cut-off would exhaust it without any review happening), and a second
    incomplete attempt records the terminal receipt `--verdict NOT-READY` with no
-   review file and the brief's fallback finding "review did not complete within
-   its turn budget" - the gate is reached with a concrete finding, never
+   review file, and the brief names it "The review did not finish, so there is
+   no review result to rely on." (followed by the conductor's `--fallback-finding` reason when
+   the reviewer's reply said why) - the gate is reached with a concrete finding, never
    presented on (or deadlocked by) a silently missing verdict. That receipt
    is no reviewer's verdict: the logger marks its row `Review Finished: no`,
    a Unit checkpoint asks about it with `review_not_finished.question`, and the

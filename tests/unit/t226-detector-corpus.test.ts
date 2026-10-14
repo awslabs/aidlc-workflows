@@ -1249,6 +1249,25 @@ describe("detector corpus", () => {
     }
   });
 
+  test("a setting their line did not carry is the same dispatch with the words flag its step names", () => {
+    const command = "bun .claude/tools/aidlc.ts engine orchestrate next --sensors off";
+    const fill = ", with <their words> the person's reply that asked for it, word for word";
+    const step = (named: string, said = fill): string => JSON.stringify({
+      kind: "print",
+      message: `Run \`${named}\` to update the configuration${said}, then print its output verbatim and stop.`,
+    });
+    const setter = "bun .claude/tools/aidlc.ts engine config set sensors off";
+    expect(isEngineToolCall("Bash", { command }, step(`${setter} --person-words '<their words>'`))).toBe(false);
+    for (const other of [
+      step(`${setter} --person-words 'please turn the sensors off'`),
+      step(`${setter} --person-words`),
+      step(`${setter} --person-words '<their words>'`, ""),
+      step(setter),
+    ]) {
+      expect(isEngineToolCall("Bash", { command }, other), other).toBe(true);
+    }
+  });
+
   test("a scope change needs its exact authoritative dispatch output", () => {
     const command = "bun .claude/tools/aidlc.ts engine orchestrate next --scope mvp";
     const directive = {

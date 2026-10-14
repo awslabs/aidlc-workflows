@@ -92,6 +92,9 @@ export const VALID_PROTOCOL_MODULES = [
   // stale-receipt recovery, each named on the reviews that need them.
   "reviewer-unit",
   "reviewer-repair",
+  // The summary confirmation and the sensor rules, named while their ceremony is on.
+  "summary",
+  "sensors",
 ] as const;
 export type ProtocolModule = (typeof VALID_PROTOCOL_MODULES)[number];
 
@@ -1304,7 +1307,7 @@ export function briefNote(ceremony: Record<string, unknown>, modules: readonly s
 export function ceremonyNote(state: "on" | "off"): string {
   return state === "on"
     ? "After this stage's questions are answered and before writing anything, confirm the summary of the answers " +
-      "with the person (stage-protocol.md, Consolidated summary before generation)."
+      "with the person (stage-protocol-summary.md)."
     : "Summary confirmation is off for this work: once the answers are written to the questions file, write the " +
       "stage's outputs; skip the stage file's Consolidated Summary step and record nothing for it.";
 }

@@ -46,13 +46,10 @@ export interface FullSuiteResult extends SuiteIdentity {
   omittedLegs: string[];
 }
 
-/** The legs whose status this run's purpose does not accept: an omitted leg
- *  must be skipped, every other leg must pass. */
 export function unmetLegs(legs: Record<string, string>, omittedLegs: readonly string[]): Array<[string, string]> {
   return Object.entries(legs).filter(([job, status]) => status !== (omittedLegs.includes(job) ? "skipped" : "success"));
 }
 
-/** Every purpose has an explicit omission set; all other declared jobs are required. */
 export function fullSuiteResult(
   needs: SuiteNeeds,
   identity: SuiteIdentity,

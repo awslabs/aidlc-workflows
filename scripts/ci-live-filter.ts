@@ -39,7 +39,6 @@ export const LIVE_PLATFORM_SHARD_COUNTS: Partial<Record<LiveFamily, Partial<Reco
   "claude-sdk": { linux: 4 },
 };
 
-/** The shards a family gets on one OS. */
 export function liveShardCount(family: LiveFamily, platform: NodeJS.Platform): number {
   return LIVE_PLATFORM_SHARD_COUNTS[family]?.[platform] ?? LIVE_SHARD_COUNTS[family] ?? 1;
 }
@@ -78,7 +77,6 @@ export function discoverLiveFiles(root: string): Map<string, Set<AllowedLiveGate
   return files;
 }
 
-/** Precedence assigns each file from its own live gates or derived Claude dependency. */
 export function classifyLiveFiles(root: string): Map<LiveFamily, string[]> {
   const claude = new Set(discoverClaudeRequiredTests(join(root, "tests")).map(({ file }) => file));
   const partition = new Map<LiveFamily, string[]>(Object.keys(FAMILIES).map((family) => [family as LiveFamily, []]));
@@ -144,7 +142,6 @@ export function assignLiveShards(files: string[], family: LiveFamily, platform: 
   });
 }
 
-/** A bounded group per shard; exact diagnostics still select just one owned file. */
 export function selectedLiveFiles(family: LiveFamily, platform: NodeJS.Platform, shard?: string, selectedTest = ""): string[] {
   const files = eligibleLiveFiles(liveInvocationFiles(), family, platform);
   if (shard === undefined) {
@@ -192,7 +189,6 @@ export function liveMatrix(
     }
   }
   if (!include.length) throw new Error(`${kind} has no selected live files`);
-  // Start the first file for every family before its second file.
   include.sort((a, b) => Number(a.shard.split("/")[0]) - Number(b.shard.split("/")[0]));
   // Filter only after discovery and shard assignment; N/M and slice identities
   // stay identical to the full run for the selected family.
@@ -230,7 +226,6 @@ function requiresProductionGuards(file: string): boolean {
 /** Live file and run ceiling; bounded by the one-hour credential session. */
 export const LIVE_RUN_CEILING_SECONDS = 3600;
 
-/** A retry's ceiling: whole seconds, at least one minute, never past the session. */
 export function liveCeiling(value: string): number {
   const seconds = Number(value);
   if (!/^[1-9][0-9]*$/.test(value) || seconds < 60 || seconds > LIVE_RUN_CEILING_SECONDS) {

@@ -236,9 +236,9 @@ const PLUGIN_KEY = PLUGIN_NAME.replace(/[^\w.-]/g, "_");
 
 // Resolve the hooks-health dir from the INSTALLED tree so compose drops land
 // exactly where core hooks write theirs (hooksHealthDir under docsRoot) and where
-// --doctor scans — not a bespoke flat path (round-2 major: the old path was read
-// by nothing). Memoized; falls back to the workspace-level dir if the lib can't be
-// loaded (e.g. a partial install), so a drop is never lost.
+// --doctor scans, not a bespoke flat path, which nothing reads. Memoized; falls
+// back to the workspace-level dir if the lib can't be loaded (e.g. a partial
+// install), so a drop is never lost.
 let _healthDir: string | null = null;
 async function resolveHealthDir(): Promise<string> {
   if (_healthDir) return _healthDir;
@@ -275,13 +275,13 @@ function recordInstalledToolPayloadDrop(reason: string): void {
 // Flush drops as the CURRENT run's complete record: OVERWRITE (not append), and
 // REMOVE the file when the run had none. So the drops file always reflects only
 // the latest compose — it self-clears when the cause is fixed and re-composed,
-// and can't grow unboundedly on a persistent collision (round-5). Doctor reading
+// and can't grow unboundedly on a persistent collision. Doctor reading
 // it therefore sees a live signal, not accumulated history.
 // The drops file is PER-PLUGIN (`plugin-compose-<PLUGIN_KEY>.drops`), not a
 // single shared file: SessionStart runs one compose per installed plugin against
 // the same project, and an overwrite-per-run shared file let the LAST plugin win
 // — a clean plugin's compose (or an early-exit guard) deleted another plugin's
-// live degraded drop, so doctor went green (round-6). Per-plugin files isolate
+// live degraded drop, so doctor went green. Per-plugin files isolate
 // each plugin's signal; doctor globs `*.drops` and aggregates them all.
 // The file goes through the installed engine's hook status writer and
 // remover, which go through no link inside the record; an engine from before
@@ -484,7 +484,7 @@ function refreshSkillGeneratedRegion(
 // Does the INSTALLED engine accept a frontmatter key? Probes the installed
 // validator (not our own copy) so compose never writes a key an older shipped
 // engine would reject — which would permanently break that install's graph
-// compile with only a drops line as evidence (round-3 blocker). Run the installed
+// compile with only a drops line as evidence. Run the installed
 // validateStageFrontmatter against a minimal-but-valid stage carrying the key; if
 // it rejects specifically because of that key, the merge is unsafe here. Fails
 // OPEN (returns true) if the lib can't be loaded — a partial install already
@@ -501,7 +501,6 @@ async function installedSchemaAccepts(key: string, sampleValue: unknown): Promis
       const withKey = { ...base, [key]: sampleValue };
       const res = schema.validateStageFrontmatter(withKey);
       if (res.valid) return true;
-      // Rejected — is it BECAUSE of our key? (An unknown/!array error naming it.)
       const errs: string[] = res.errors ?? [];
       return !errs.some((e) => e.includes(key));
     } catch {
@@ -511,7 +510,6 @@ async function installedSchemaAccepts(key: string, sampleValue: unknown): Promis
   return true; // module unavailable → don't block (see note above)
 }
 
-// Guard: only compose in an AIDLC project, with a resolvable plugin root.
 export async function compose(): Promise<void> {
 if (!existsSync(join(HARNESS_DIR, "tools", "aidlc-graph.ts"))) {
   return; // not an AIDLC project — nothing to do (no drop: not our project)
@@ -792,7 +790,7 @@ function sensorManifestNamePrecheck(): CopyPrecheck {
       "degraded",
     );
   };
-  // copyTreeNoClobber skips prechecks when the destination already exists, so an
+  // copyTreeNoClobber runs no precheck on an existing destination it keeps, so an
   // undiscoverable manifest an OLDER (pre-guard) compose already landed would
   // never reach the precheck below. Audit those up front - otherwise an upgrade
   // leaves the dead sensor silently on disk forever (mirrors the stage guards).
@@ -825,7 +823,7 @@ function doctorScriptOwnershipPrecheck(): CopyPrecheck {
     );
   };
   // Older compose versions may already have landed the foreign file. Audit that
-  // state up front because copyTreeNoClobber skips prechecks for existing paths.
+  // state up front because copyTreeNoClobber runs no precheck on an existing file it keeps.
   for (const file of walk(toolsRoot).filter((p) => p.endsWith("-doctor.ts"))) {
     const relPosix = relative(toolsRoot, file).replace(/\\/g, "/");
     const owner = foreignOwner(relPosix);
@@ -1136,7 +1134,7 @@ async function unsupportedRuntimeModePrecheck(): Promise<CopyPrecheck> {
     };
   };
 
-  // copyTreeNoClobber skips prechecks when the destination exists. Audit
+  // copyTreeNoClobber runs no precheck on an existing destination it keeps. Audit
   // installed reserved modes up front so upgrades cannot leave one silently.
   const stagesRoot = join(PLUGIN_ROOT, "stages");
   for (const file of walk(stagesRoot).filter((path) => path.endsWith(".md"))) {
@@ -1358,8 +1356,8 @@ function installedIdeAgentIsDispatchable(agentsDir: string, agent: string): bool
 
 // Kiro CLI, Kiro IDE, Codex, OpenCode, and Copilot each require a native
 // dispatch surface. The two Kiro variants share .kiro but are distinguished by
-// the recorded harness name: CLI uses agent-v1 JSON + trustedAgents, while IDE
-// uses capability-bearing Markdown and never reads the CLI conductor JSON.
+// the tree's layout (KIRO_KAS_LAYOUT): agent-v1 uses JSON + trustedAgents, while
+// KAS uses capability-bearing Markdown and never reads the CLI conductor JSON.
 async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | null> {
   if (
     HARNESS_LEAF !== ".kiro" &&
@@ -1625,13 +1623,14 @@ async function installedStageSchemaPrecheck(): Promise<CopyPrecheck> {
 }
 
 // No-clobber copy of one tree into another, with {{HARNESS_DIR}} substitution on
-// .md prose. NEVER overwrites an existing dest (portable no-clobber — the point
-// of the former `cp -n`, done right). Returns true if anything was written.
-// `kind` labels the tree for the collision drop-log: a
+// .md prose. Never overwrites core, another plugin, or a copy the person changed;
+// the one existing dest it replaces is this plugin's own earlier copy, unchanged
+// since it was installed. Returns true if anything was written.
+// `kind` labels the tree for the collision drop-log: any other
 // dest that already exists with DIFFERENT content is a real collision (a plugin
 // trying to ship a file that shadows core or another plugin) and is dropped-with-
-// log — silently skipping it made a plugin "override" a no-op with no evidence
-// (round-4). An identical dest is a benign idempotent re-run (no log).
+// log: silently skipping it made a plugin "override" a no-op with no evidence.
+// An identical dest is a benign idempotent re-run (no log).
 function copyTreeNoClobber(
   src: string,
   dst: string,
@@ -1793,16 +1792,15 @@ function cutFragmentBlock(content: string, start: number, end: number): string {
 }
 
 // Read half: a single frontmatter split (LF/CRLF tolerant) shared by every read
-// in this file — after the three-file fold there is one parser here, not two, so
-// a robustness fix lands once (review #8). Contribution frontmatter is a distinct
-// shape (target/adds/fragments) from stage frontmatter, so it stays local rather
+// in this file, so a robustness fix lands once. Contribution frontmatter is a
+// distinct shape (target/adds/fragments) from stage frontmatter, so it stays local rather
 // than importing aidlc-lib's stage parser.
 function frontmatter(content: string): string {
   return content.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
 }
 
 // Append items to a top-level list field, or replace the inline-empty `field: []`
-// form with a block (fixes the silent-drop asymmetry, review #5). Idempotent.
+// form with a block. Idempotent.
 // Returns the (possibly unchanged) content; logs when a field is absent entirely.
 // `added` (when given) collects the values THIS call actually wrote - the
 // contribution sidecar records actually-added entries, never declared ones, so
@@ -1902,7 +1900,7 @@ function mergeConsumes(content: string, entries: ConsumeEntry[], target: string,
   // (`required:`, `conditional_on:`). Matching those continuations is what keeps
   // an append AFTER the last core entry — omit `conditional_on` and the block
   // ends early, splicing the new entry INSIDE a core entry and stealing its
-  // brownfield gate (round-2 major). The new entries land past the whole block.
+  // brownfield gate. The new entries land past the whole block.
   const blockRe = /^(consumes:\n(?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m;
   const m = content.match(blockRe);
   if (!m) {
@@ -1942,7 +1940,7 @@ function mergeRequiredSections(content: string, items: string[], target: string,
   // Field absent — insert it just before the closing frontmatter `---`. The
   // closing fence may be followed by a newline OR sit at EOF (a stage file with
   // no trailing newline is valid) — `(?:\n|$)` tolerates both; requiring `\r?\n`
-  // after `---` silently dropped the whole merge on a newline-less file (round-4).
+  // after `---` silently dropped the whole merge on a newline-less file.
   const fmClose = content.match(/^---\r?\n[\s\S]*?\n(---)(?:\r?\n|$)/);
   if (!fmClose) {
     recordDrop(`contribution to ${target}: cannot add required_sections (no frontmatter block)`);
@@ -1955,10 +1953,10 @@ function mergeRequiredSections(content: string, items: string[], target: string,
 }
 
 // Resolve a fragment anchor to a char offset. Anchors are validated + escaped
-// (review #6) — a malformed anchor is skipped-with-log, never a thrown regex. A
+// so a malformed anchor is skipped-with-log, never a thrown regex. A
 // valid anchor whose target heading is ABSENT also returns -1 but logs a distinct
-// "not found" drop (round-4: the not-found case was silent, so a contribution's
-// frontmatter `adds` landed while its prose vanished — a half-applied merge).
+// "not found" drop (a silent not-found would let a contribution's
+// frontmatter `adds` land while its prose vanished: a half-applied merge).
 function locateAnchor(content: string, anchor: string, target: string): number {
   const stepAnchor = (kind: "after" | "before"): number => {
     const n = anchor.slice(anchor.indexOf(":") + 1);
@@ -2047,12 +2045,11 @@ function spliceFragment(
   // The close marker carries the SAME content hash as the open, so the block's
   // boundary is content-specific: a close-marker-lookalike line inside the prose
   // (which lacks the exact hash) can't be mistaken for the real close on an
-  // upgrade re-splice (round-5 — the old hashless close matched the first
-  // occurrence, so prose containing the marker corrupted the block).
+  // upgrade re-splice (a hashless close matches the first occurrence, so prose
+  // containing the marker would corrupt the block).
   const closeOf = (h: string) => `<!-- /plugin:${f.plugin}:${f.anchor}:${f.order}:${h} -->`;
   const block = `<!-- plugin:${f.plugin}:${f.anchor}:${f.order}:${hash} -->\n${encode(f.prose)}\n${closeOf(hash)}`;
 
-  // Present already? Skip on hash match; replace the whole block on hash change.
   const mine = content.match(new RegExp(`<!-- plugin:${pE}:${aE}:${f.order}:([0-9a-f]+) -->`));
   if (mine) {
     const start = mine.index!;
@@ -2084,7 +2081,6 @@ function spliceFragment(
     return content.slice(0, lastEnd) + "\n\n" + block + content.slice(lastEnd);
   }
 
-  // Virgin anchor — use the structural locator for the base insertion point.
   const base = locateAnchor(content, f.anchor, target);
   if (base === -1) return content;
   return content.slice(0, base) + "\n" + block + "\n" + content.slice(base);
@@ -2388,7 +2384,7 @@ try {
   };
   // Fragment keys seen across ALL contribution files this run, so a same
   // (target, plugin, anchor, order) arriving from a SECOND file drops-with-log
-  // rather than silently last-writer-winning via the hash-upgrade path (round-3).
+  // rather than silently last-writer-winning via the hash-upgrade path.
   const seenFragKeys = new Set<string>();
   // Contributions merge ONLY for an enabled plugin. Stage/scope/agent copies
   // are safe under a disabling selection (runtime loaders filter them), but
@@ -2478,7 +2474,6 @@ try {
         ? notLowerNumbered(depNumber, targetNumber)
         : `is in a later phase than ${target}; an edge must point at an earlier stage`;
     }
-    // Same phase: ordering needs the installed graph's pinned numbers.
     if (!installedNumbers) {
       return "is a same-phase edge and the installed stage graph is unreadable, so its ordering cannot be verified";
     }
@@ -2554,7 +2549,7 @@ try {
       // strip a leading UTF-8 BOM and any leading blank lines so the `^---`
       // frontmatter anchor still matches a file saved with a BOM (common on
       // Windows) or a stray blank first line — otherwise the whole contribution
-      // was silently skipped with no drop (round-5).
+      // was silently skipped with no drop.
       const content = readFileSync(join(phaseDir, file), "utf-8")
         .replace(/\r\n/g, "\n").replace(/^﻿/, "").replace(/^\n+/, "");
       const fm = frontmatter(content);
@@ -2578,7 +2573,7 @@ try {
       }
       // `:` is the fragment-sentinel delimiter (<!-- plugin:<plugin>:anchor:order -->),
       // so a plugin containing `:` would break the peer-block scan's `[^:]+` and
-      // silently misorder splices. Reject it up front (round-6).
+      // silently misorder splices. Reject it up front.
       if (plugin.includes(":")) { recordDrop(`contribution "${file}" has an invalid plugin "${plugin}" (must not contain ':'); skipped`); continue; }
       if (plugin !== PLUGIN_NAME) {
         recordDrop(
@@ -2615,9 +2610,8 @@ try {
         recordDrop(`contribution to ${target}: agent contributions carry prose fragments only; adds.* has no meaning on a persona and was ignored`, "advisory");
       }
       const addsBlock = isAgentContribution ? "" : declaredAdds;
-      // Drop-log a parse shortfall, mirroring the consumes parser: the block
-      // regex stops at the first non-4-space entry, so a mis-indented line
-      // silently truncated the list (entries after it vanished with no log).
+      // Drop-log a parse shortfall, mirroring the consumes parser: only 4-space
+      // entries parse, so a mis-indented line would otherwise vanish with no log.
       const listOf = (f: string): string[] => {
         const declaredBlock = addsBlock.match(new RegExp(`^ {2}${f}:\\n((?:\\s+- .*\\n?)*)`, "m"))?.[1] ?? "";
         const parsed: string[] = [];
@@ -2634,15 +2628,15 @@ try {
       const consumes = (() => {
         // Parse consumes per-entry, NOT by zipping two independent artifact/required
         // scans: a dash-less `required:`/`conditional_on:` continuation line must
-        // bind to the artifact above it, or entry 2+ is dropped and required flips
-        // (round-2 blocker). Each entry starts at `- artifact:` and owns every
+        // bind to the artifact above it, or entry 2+ is dropped and required flips.
+        // Each entry starts at `- artifact:` and owns every
         // following indented non-dash line until the next `- artifact:`.
         const block = addsBlock.match(/^ {2}consumes:\n((?: {4}-? .*\n?)*)/m)?.[1];
         if (!block) return [];
         const out: Array<{ artifact: string; required: boolean; conditional_on?: string }> = [];
         // Split on ANY-indent `- artifact:` (a YAML-legal 6-space list must still
-        // yield one chunk per entry; a fixed 4-space anchor silently merged them —
-        // round-3). Drop-log if entries outnumber chunks (a split that failed).
+        // yield one chunk per entry; a fixed 4-space anchor silently merged them).
+        // Drop-log if entries outnumber chunks (a split that failed).
         for (const chunk of block.split(/^(?=\s*- artifact:)/m)) {
           const artifact = chunk.match(/-\s*artifact:\s*([\w-]+)/)?.[1];
           if (!artifact) continue;
@@ -2675,7 +2669,7 @@ try {
       // required_sections values are quoted strings ("Branch Coverage"), unlike
       // the kebab slugs in produces/sensors. Capture the whole value then strip
       // only a MATCHED pair of outer quotes — a `[^"]` class dropped any value
-      // with an interior quote (`"Say "Hi" Section"`) silently (round-5).
+      // with an interior quote (`"Say "Hi" Section"`) silently.
       const requiredSections = (() => {
         const s = addsBlock.match(/^ {2}required_sections:\n((?: {4}- .*\n?)*)/m)?.[1];
         if (!s) return [];
@@ -2683,7 +2677,7 @@ try {
         for (const x of s.matchAll(/^ {4}- (.+?)\s*$/gm)) {
           const v = x[1].replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1").trim();
           // An empty (or quote-only) value would merge a useless `- ""` into the
-          // stage with no signal — drop-log it instead (round-6).
+          // stage with no signal, so drop-log it instead.
           if (v === "") { recordDrop(`contribution to ${target}: empty required_sections value; dropped`); continue; }
           out.push(v);
         }
@@ -2755,7 +2749,7 @@ try {
       // prose fragments — paired to their `## fragment: <anchor>` body block BY
       // ANCHOR LABEL, not array index. Positional pairing silently mismatched
       // prose to anchors when the body order differed from the frontmatter order
-      // (round-4). Multiple fragments may target the same anchor (test-pro has 3×
+      // Multiple fragments may target the same anchor (test-pro has two at
       // after-step:9), so pair per-anchor FIFO: the i-th frontmatter entry for
       // anchor A takes the i-th body block labelled A. A frontmatter entry with no
       // matching body block (or vice versa) is dropped-with-log, not silently
@@ -2767,7 +2761,7 @@ try {
       // scanner, not a global regex: a `## fragment:` line INSIDE a ``` code fence
       // (exactly how an author documents the fragment format) must NOT be treated
       // as a delimiter — the regex form truncated the block there and spawned
-      // phantom blocks, silently dropping trailing real prose (round-5).
+      // phantom blocks, silently dropping trailing real prose.
       const blocksByAnchor = new Map<string, string[]>();
       {
         let curAnchor: string | null = null; let curLines: string[] = [];
@@ -2777,7 +2771,7 @@ try {
           // CommonMark fence rules: a closing fence is the SAME char, length >=
           // the opener, and carries no info string. Tracking only the char (not
           // the length) let an inner ``` close an outer ```` — so documenting the
-          // fragment format with a nested fence corrupted the block (round-6).
+          // fragment format with a nested fence corrupted the block.
           const fence = line.match(/^(\s*)(`{3,}|~{3,})(.*)$/);
           if (fence) {
             const ch = fence[2][0]; const len = fence[2].length; const info = fence[3].trim();
@@ -2798,8 +2792,7 @@ try {
         frags.push({ ...meta, plugin, prose });
       }
       // Leftover body blocks with no matching frontmatter entry are dropped-with-
-      // log — the "or vice versa" half the prior comment promised but never did
-      // (round-5). An empty leftover (blank prose) is ignored, not logged.
+      // log. An empty leftover (blank prose) is ignored, not logged.
       for (const [anchor, remaining] of blocksByAnchor) {
         for (const leftover of remaining) {
           if (leftover) recordDrop(`contribution to ${target}: "## fragment: ${anchor}" prose block has no matching frontmatter fragments entry; dropped`);
@@ -2829,7 +2822,7 @@ try {
         }
       }
 
-      if (stageContent !== before) { // compare-before-write (review #11)
+      if (stageContent !== before) {
         writeComposeFile(stageFile, stageContent);
         changed = true;
       }
@@ -2941,7 +2934,7 @@ try {
   //    a transient failure (disk full, killed mid-session-start) must self-heal
   //    next session. Under the no-clobber + sentinel + compare-before-write gates
   //    `changed` stays false on reruns, so gating on `changed` alone would make a
-  //    failed compile permanent (round-2 major). Detect it by checking the
+  //    failed compile permanent. Detect it by checking the
   //    compiled graph actually contains this plugin's stage slugs.
   const pluginStages: Array<{ slug: string; phase: string }> = [];
   for (const phase of PHASES) {
@@ -2990,7 +2983,7 @@ try {
   // the graph-slug check can't see its failed recompile. A persisted retry marker
   // covers that case: written on compile failure, deleted on success, and any
   // presence forces a retry next run — so a transient failure self-heals for
-  // stage-carrying AND contributions-only plugins alike (round-3). The marker is
+  // stage-carrying AND contributions-only plugins alike. The marker is
   // PROJECT-side (never in PLUGIN_ROOT, which may be read-only / under dist/), and
   // keyed by the plugin's identity (PLUGIN_KEY, computed up front) so two plugins
   // on one harness never share a marker.

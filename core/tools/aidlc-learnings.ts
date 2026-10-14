@@ -119,6 +119,7 @@ import {
   isoTimestamp,
   intentsDir,
   listIntentDirs,
+  listField,
   parseMemoryEntries,
   readAllAuditShards,
   readStateFile,
@@ -1145,35 +1146,42 @@ function bindSensorToStage(projectDir: string, slug: string, sensorId: string): 
   if (!fmMatch) return false;
   const fmBody = fmMatch[2];
 
-  // Already bound? Idempotent.
-  const sensorsBlock = fmBody.match(/^sensors:\s*\n((?:[ \t]+-[ \t]+.*\n?)*)/m);
-  if (sensorsBlock) {
-    const already = new RegExp(`^[ \\t]+-[ \\t]+${escapeRegex(sensorId)}\\s*$`, "m").test(
-      sensorsBlock[1]
-    );
-    if (already) {
-      writeFileAtomic(stageFile, raw); // no-op rewrite keeps semantics uniform
-      return true;
-    }
-    // Insert the new id as a list item at the end of the existing block,
-    // matching the block's indentation.
-    const indentMatch = sensorsBlock[1].match(/^([ \t]+)-/);
-    const indent = indentMatch ? indentMatch[1] : "  ";
-    // Find the end of the sensors block within the raw string.
-    const blockText = sensorsBlock[0];
-    const insertPoint = raw.indexOf(blockText) + blockText.length;
-    const trailing = blockText.endsWith("\n") ? "" : "\n";
-    const newItem = `${trailing}${indent}- ${sensorId}\n`;
-    const newRaw = raw.slice(0, insertPoint) + newItem + raw.slice(insertPoint);
-    writeFileAtomic(stageFile, newRaw);
+  // Already bound? Idempotent. Read the list the way the graph compile does.
+  if (listField(fmBody, "sensors").includes(sensorId)) {
+    writeFileAtomic(stageFile, raw); // no-op rewrite keeps semantics uniform
     return true;
   }
 
-  // No sensors: block — add one right after the frontmatter opening, as the
-  // last frontmatter key before the closing ---.
-  const closeIdx = raw.indexOf(fmMatch[3]);
-  const insert = `sensors:\n  - ${sensorId}\n`;
-  const newRaw = raw.slice(0, closeIdx) + insert + raw.slice(closeIdx);
+  // Edit the frontmatter line by line: every line keeps its own line end, and
+  // a new line takes the one the opening --- line uses (LF, or CRLF in a
+  // Windows checkout).
+  const eol = fmMatch[1].endsWith("\r\n") ? "\r\n" : "\n";
+  const parts = fmBody.split(/(\r?\n)/); // line, line end, line, ..., line
+  const lineAt = (i: number) => parts[2 * i];
+  const lineCount = (parts.length + 1) / 2;
+  let keyAt = 0;
+  while (keyAt < lineCount && !/^sensors:/.test(lineAt(keyAt))) keyAt++;
+
+  if (keyAt === lineCount) {
+    // No sensors: key: add one as the last frontmatter key before the
+    // closing ---.
+    parts.push(eol, "sensors:", eol, `  - ${sensorId}`);
+  } else if (/^sensors:[ \t]*\[.*\]/.test(lineAt(keyAt))) {
+    // Flow form (sensors: [] or sensors: [a, b]): add the id inside the
+    // brackets.
+    const keyLine = lineAt(keyAt);
+    const close = keyLine.lastIndexOf("]");
+    const sep = keyLine.slice(keyLine.indexOf("[") + 1, close).trim() ? ", " : "";
+    parts[2 * keyAt] = `${keyLine.slice(0, close).trimEnd()}${sep}${sensorId}${keyLine.slice(close)}`;
+  } else {
+    // Block form: add the id after the block's last list item, matching the
+    // block's indentation.
+    let last = keyAt;
+    while (last + 1 < lineCount && /^[ \t]+-[ \t]+\S/.test(lineAt(last + 1))) last++;
+    const indent = last > keyAt ? (lineAt(last).match(/^[ \t]+/)?.[0] ?? "  ") : "  ";
+    parts.splice(2 * last + 1, 0, eol, `${indent}- ${sensorId}`);
+  }
+  const newRaw = fmMatch[1] + parts.join("") + raw.slice(fmMatch[1].length + fmBody.length);
   writeFileAtomic(stageFile, newRaw);
   return true;
 }

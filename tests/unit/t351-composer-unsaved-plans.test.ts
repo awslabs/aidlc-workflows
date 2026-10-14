@@ -378,14 +378,25 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
     expect(validated.status, validated.stdout + validated.stderr).toBe(0);
     const echoed = JSON.parse(validated.stdout) as { base_scope: string; plan_changes: { skip: string[]; add: string[] } };
     expect(withEnvAndFreshCaches(POLICY_ENV, () => scopeGuardPolicyDefault(echoed.base_scope))).toBe("off");
-    // What the conductor runs on approval. The presence bypass is off, so a lowering would be refused.
-    const args = ["intent-create", "--scope", echoed.base_scope, "--guard-policy", "relaxed", "--arguments", "x", "--label", "relaxed-plan"];
+    // What the conductor runs on approval, naming the person's approval. The
+    // presence bypass is off, so a lowering would be refused.
+    const session = "01995000-7a11-7000-8000-000000000351";
+    const env = {
+      ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0",
+      AIDLC_SESSION_OVERRIDE: session,
+    };
+    const approved = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      cwd: proj, encoding: "utf-8", env,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, cwd: proj, prompt: "Approve" }),
+    });
+    expect(approved.status, approved.stderr).toBe(0);
+    const args = [
+      "intent-create", "--scope", echoed.base_scope, "--guard-policy", "relaxed", "--arguments", "x", "--label", "relaxed-plan",
+      "--person-words", "Approve",
+    ];
     if (echoed.plan_changes.skip.length > 0) args.push("--skip", echoed.plan_changes.skip.join(","));
     if (echoed.plan_changes.add.length > 0) args.push("--add", echoed.plan_changes.add.join(","));
-    const created = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], {
-      encoding: "utf-8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0" },
-    });
+    const created = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], { encoding: "utf-8", env });
     expect(created.status, created.stdout + created.stderr).toBe(0);
     const intents = join(proj, "aidlc", "spaces", "default", "intents");
     const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();

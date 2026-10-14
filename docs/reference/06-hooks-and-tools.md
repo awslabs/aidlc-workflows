@@ -640,7 +640,8 @@ separately withholds human-turn minting; it does not lower the fence.
 
 For the three switchable fences, `config-change --guard.<fence> off|on` writes
 the `Guards Off` or `Guards On` line in canonical order as
-`<comma list> (set by you)` or `none`, and one `GUARD_DISABLED` or
+`<comma list> (set by you)` (or `(set by a command)` once a check on it is not
+the person's on record), or `none`, and one `GUARD_DISABLED` or
 `GUARD_RESTORED` row. Setting `on` can raise a policy-lowered fence and records
 that override in `Guards On` with `GUARD_RESTORED`. A Guard Policy word the person
 sets (source `you`) clears both lines, except a fence the same command names,
@@ -648,7 +649,7 @@ with one `GUARD_DISABLED` or `GUARD_RESTORED` row per fence that changes; a fenc
 it turns off counts as a lowering. `/aidlc --status` names each fence
 the person or an environment kill switch turned off on its `Checks off:` line,
 grouped by where the setting came from and worded by `fenceSourceLabel` as
-`formatFence` words it: `set by you` or `env <VAR>`. A fence the Guard Policy
+`formatFence` words it: `set by you`, `set by a command` or `env <VAR>`. A fence the Guard Policy
 word lowers is left to the `Guard Policy:` line, which names where the policy
 came from; with no such fence off there is no line.
 
@@ -760,7 +761,9 @@ switch in front of the person who met it, in whichever shape that refusal has:
 `review-freeze` builds a typed refusal with `fence` set, so
 `evaluateGuardRefusal` appends `lowerFenceRemedy` (`op: "lower-fence"`) as a
 `command` choice whose `command` is the setter. When the person picks it, the
-conductor runs the setter and says in one line what changed.
+conductor runs the setter with their reply as `--person-words` (the choice's
+`action` says so), so the check reads `set by you`, and says in one line what
+changed.
 The other three fences refuse from `PreToolUse` with exit 2.
 Main-session prose refusals use
 `fenceSwitchSentence`: it returns `lowerFenceSentence` when the switch is
@@ -774,7 +777,8 @@ Human-presence refusals instead say that no new reply from the person is on reco
 
 **Changed inputs after approval.** They no longer reach the decision table.
 Once the person approved a plan, other code moving is one notice line on every
-Guard Policy, and an edited plan under strict is asked about again by the
+Guard Policy (a swarm under strict is the exception, see
+[Plan-Approval Guard Hook](#plan-approval-guard-hook)), and an edited plan under strict is asked about again by the
 engine's own Plan Approval question on the next `next`, not by a guard.
 
 Conversational authority is therefore consumed by the evidence trail alone: no
@@ -827,7 +831,8 @@ against a project with no ledger, a stand-aside therefore leaves neither a line
 nor a row. `hold` refuses as before. Switchable-fence main-session refusals use
 `fenceSwitchSentence` to append `lowerFenceSentence`, which tells the
 conductor to offer the switch and, when the person says so, run the setter
-itself, only when memory does not hold strict.
+itself with their reply as `--person-words`, only when memory does not hold
+strict.
 Memory-held strict withholds the switch everywhere; the prose refusal names
 the memory file to edit instead. An unreadable policy also withholds the switch.
 Plan-approval and direct state-tool refusals withhold both sentences from
@@ -1763,7 +1768,7 @@ This is one of the framework's flow-altering hooks and `PreToolUse` controls. Th
 
 **Per harness.** Claude, Codex, Cursor, opencode, and Copilot route native dispatch/mutation payloads to the shared hook (on Copilot, both VS Code's `runSubagent` and the CLI's `task` launches). Kiro CLI agent-v1 registers it on the conductor and every writable worker; v3/KAS ships standalone prompt-submit and PreToolUse registrations. The `kiro-ide` row (Kiro IDE 1.x and Kiro CLI v3) ships its PreToolUse registrations as `.kiro/hooks/*.json`. Populated arguments use the shared target-aware guard. Both Kiro adapters recognise the shell under every name the runtime uses (`execute_bash`, `execute_pwsh` on Windows, `shell`) and normalise it to `Bash` before forwarding; the Kiro IDE adapter also marks `execute_pwsh` as PowerShell (see PowerShell commands above) and routes all three names through the same legacy recovery branches, and denies an unattributable mutation-capable payload only while a Code Generation workflow is active, so a no-workflow shell call (the `next` that starts the loop) is never refused by this guard. Legacy argument-less calls permit only measured `fs_write`/`str_replace` planning; unsupported writes create a protected violation. That is this guard's rule alone: the row's review-freeze and state-transition registrations refuse any call whose input cannot be read, an argument-less write included, so on the `kiro-ide` row such a write does not run. The next opaque shell attempt runs only the adapter-owned engine recovery chain, blocks the unknown original command, and restores canonical planning. Unknown tools are mutation-capable unless explicitly safe reads. Source discovery hard-excludes dependency/cache/virtualenv trees, preserves tracked files under conditional build/output names, and hashes source-like external directory targets under bounded file/byte limits.
 
-**Guard Policy: the drift half.** Approving a plan is about the plan and its test instructions, so a workspace source that moved after approval never asks again, on any Guard Policy: generation start, the brief, `begin`, and this hook each accept the move once, with one `CHANGE_ACCEPTED` row, one `change_notices` line naming the files (`N files changed since this plan was approved: <paths>. Building <target> now.`), and the recorded source re-baselined so the same move is never reported twice. AI-DLC's own files (`aidlcOwnedSourceKey`: an AI-DLC update the person took) are left out of that line, and a move of only those files records and says nothing. Only a source that cannot be read at all still refuses under `strict`, because nothing could then say what the build starts from. "Review the plan" from the person asks again: the conductor records the request (`answer --checkpoint plan-approval --details "Review the plan"`) and the next `next` shows the question before anything else is built.
+**Guard Policy: the drift half.** Approving a plan is about the plan and its test instructions, so a workspace source that moved after approval never asks again, on any Guard Policy: generation start, the brief, `begin`, and this hook each accept the move once, with one `CHANGE_ACCEPTED` row, one `change_notices` line naming the files (`N files changed since this plan was approved: <paths>. Building <target> now.`), and the recorded source re-baselined so the same move is never reported twice. AI-DLC's own files (`aidlcOwnedSourceKey`: an AI-DLC update the person took) are left out of that line, and a move of only those files records and says nothing. On those paths only a source that cannot be read at all still refuses under `strict`, because nothing could then say what the build starts from. Swarm prepare is the exception under `strict`: when the parent source moved after approval and the person's own files moved since the build's last verified source, it refuses (`Parent source has changed since Plan Approval`) until the plan is approved again, and `aidlc-worktree merge` then refuses the same change (against the stage-entry baseline, or the previous landing) until it is undone or Guard Policy is `relaxed`. "Review the plan" from the person asks again: the conductor records the request (`answer --checkpoint plan-approval --details "Review the plan"`) and the next `next` shows the question before anything else is built.
 
 **Postapproval content changes.** For the same intent, target, and stage attempt, edits to the plan, unit test instructions, or Testing Contract reopen approval when the effective `plan-approval` fence is on (Guard Policy `strict`; status names it `plan re-approval`). A fence lowered by `relaxed` or `off` permits continuation with the current content through the engine without mandatory reapproval. Testing Posture, scope, test strategy, and project type input changes use that same rule: refresh the current contract and instructions as needed and continue while the fence remains lowered. The conductor does not reset the answer, re-fingerprint the approval, or invent a replacement receipt for that continuation. The original human answer and approval evidence still describe only what was actually approved. New attempts, explicit Request Changes, and other gates keep their existing rules.
 
@@ -2090,7 +2095,7 @@ path for a framework command.
 | `version` | Print the framework version | — |
 | `status` | Read-only status check from `aidlc-state.md`. Surfaces `[?]` / `[R]` gate awareness; team mode appends the pure Team Construction snapshot. | — |
 | `doctor` | Health check: verify hooks, prerequisites, file structure, Kiro IDE ignore sources that hide `.kiro/`, plus local-only team claim stamp/activity/orphan-ref reconciliation (never fetches or releases). | `HEALTH_CHECKED` |
-| `intent-create` | Create a new intent and run the three deterministic Initialization stages. `--space <name>` creates under an existing space and reads that space's memory; `--intent` is refused. Explicit `--guard-policy relaxed\|off` from chat is refused when it differs from the selected scope's default: create the piece of work, and the agent runs the setter when the person asks for the lower value. A value the person typed before the work existed, or with the new work, is recorded for the request it answered. Naming the scope's own default is recorded as the scope's value; scope defaults apply without asking. Only `fenceKeyBypassed` permits CLI lowering through the fixture/harness-launch presence bypass, after memory-strict and unattended checks. `--skip <slug,...>` / `--add <slug,...>` apply a composed plan's own stage changes to the scope's grid at creation, written as the state file's EXECUTE/SKIP suffixes with a `Plan: <name>` field (`--plan-name <name>`, the name the gate showed, lowercase letters, digits and hyphens; `tailored plan` without it); an unknown slug, an initialization stage, a stage on both lists, or a change the scope already makes is refused before any mutation. | `WORKFLOW_STARTED`, `PHASE_STARTED`, `PHASE_SKIPPED`, `STAGE_STARTED`, `STAGE_COMPLETED`, `WORKSPACE_*`, and the init-to-first-post-init phase hand-off events |
+| `intent-create` | Create a new intent and run the three deterministic Initialization stages. `--space <name>` creates under an existing space and reads that space's memory; `--intent` is refused. Explicit `--guard-policy relaxed\|off` from chat is refused when it differs from the selected scope's default: create the piece of work, and the agent runs the setter when the person asks for the lower value. A value the person typed before the work existed, or with the new work, is recorded for the request it answered. A setting asked for in plain words reads `set by you` when `--person-words '<their words>'` (or `--person-words-file`, read from the selected work's record and removed) names a reply of theirs on record in this chat (the engine's creation command names it then). Naming the scope's own default is recorded as the scope's value; scope defaults apply without asking. Only `fenceKeyBypassed` permits CLI lowering through the fixture/harness-launch presence bypass, after memory-strict and unattended checks. `--skip <slug,...>` / `--add <slug,...>` apply a composed plan's own stage changes to the scope's grid at creation, written as the state file's EXECUTE/SKIP suffixes with a `Plan: <name>` field (`--plan-name <name>`, the name the gate showed, lowercase letters, digits and hyphens; `tailored plan` without it); an unknown slug, an initialization stage, a stage on both lists, or a change the scope already makes is refused before any mutation. | `WORKFLOW_STARTED`, `PHASE_STARTED`, `PHASE_SKIPPED`, `STAGE_STARTED`, `STAGE_COMPLETED`, `WORKSPACE_*`, and the init-to-first-post-init phase hand-off events |
 | `init` | Transition error only in this release; start work by describing what to build so the engine routes to `intent-create`. | none |
 | `intent [name]` | List intents (`--json`; `--all` includes archived) or switch the active-intent cursor. Normally routed from `/aidlc intent [name]`. | — |
 | `intent archive <name> [--reason <text>]` | Retire an in-flight or completed intent: registry row `archived`, state `Status: Archived` (prior Status kept in `Archived From`), record dir, audit shards, and Bolt worktrees preserved, default listing hides it. Normally routed from `/aidlc intent archive <name>`. | `WORKFLOW_ARCHIVED` |
@@ -2151,12 +2156,14 @@ and do not change `Last Updated`.
 A memory layer's `Mode: strict` refuses an explicit `--guard-policy relaxed` or
 `--guard-policy off` for the whole command, including companion settings or a
 scope change, and names the memory file. Explicit strict and unrelated settings
-remain allowed. `review adversarial` stores an empty `Review Override`; explicit
-Guard Policy choices store `<value> (set by you)`; a ceremony choice stores
-`<value> (set by you)` when the setter applies the person's typed switch or the
-setter turns off a check the person asked in the chat to turn off, and
-`<value> (set by a command)` otherwise, never relabeling an identical
-`set by you` line; and a fence switch stores the `Guards Off` or `Guards On` line. An `on` override can raise a
+remain allowed. `review adversarial` stores an empty `Review Override`; a Guard
+Policy or ceremony choice stores `<value> (set by you)` when `settingTheirs`
+finds the person behind it (their typed switch, their own terminal, or the words
+the agent passes with `--person-words` equal to a reply of theirs in this chat
+since the last decision, stored as `Person Reply`), and `<value> (set by a
+command)` otherwise, never relabeling an identical `set by you` line; and a fence
+switch stores the `Guards Off` or `Guards On` line. Who may lower a check is
+unchanged: a reply of theirs since the last decision, as before. An `on` override can raise a
 policy-lowered fence and records `GUARD_RESTORED`. Scope defaults retain their
 scope source, and a same-value change of source is still a recorded change.
 Environment kill switches override effective ceremony values without changing

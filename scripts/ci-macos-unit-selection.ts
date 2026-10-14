@@ -33,7 +33,6 @@ export function macosNamedUnitFiles(unitDir: string): string[] {
     .sort();
 }
 
-/** The unit test files the change touches, or null when git cannot compare it with its base. */
 export function changedUnitFiles(repoRoot: string, base: string): string[] | null {
   const diff = spawnSync("git", ["-C", repoRoot, "diff", "-z", "--name-only", base, "HEAD", "--", "tests/unit"], {
     encoding: "utf8",
@@ -44,7 +43,6 @@ export function changedUnitFiles(repoRoot: string, base: string): string[] | nul
     .map((path) => basename(path));
 }
 
-/** This shard's share of the selection; `changed` is null when the change could not be read. */
 export function macosUnitSelection(repoRoot: string, changed: string[] | null, shard: string): MacosUnitSelection {
   const spec = parseShardSpec(shard);
   if (changed === null) return { mode: "full" };

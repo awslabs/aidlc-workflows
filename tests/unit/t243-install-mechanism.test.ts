@@ -8414,6 +8414,7 @@ describe("t243 projection channel", () => {
           "sha256:0274b7bd2c26f8fc6158aafd6632a99aced247305d2aa09d1c60312283de7e69",
           "sha256:6130b11ceb91e334f30940d3a3a1f40b41e82519ac777b0177c089b35f348442",
           "sha256:ad6ccb9e0d8fbfc3224448ed45c6d3b278ffb8afdffe697ef2f362cfafeb44bf",
+          "sha256:fde31c458f35dc77c83845acdad3d4715a4c87a219f2004fc6c96625c7933d29",
         ],
       },
     };
@@ -8528,10 +8529,20 @@ describe("t243 projection channel", () => {
           expect(allowed.some((command) => command.includes(`aidlc ${namespace}`))).toBe(false);
         }
       }
-      expect(readFileSync(join(root, ".kiro", "steering", "aidlc-onboarding.md"), "utf-8"))
-        .toContain(
-          "**Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.",
-        );
+      const kiroOnboarding = readFileSync(join(root, ".kiro", "steering", "aidlc-onboarding.md"), "utf-8");
+      expect(kiroOnboarding).toContain(
+        "**Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.",
+      );
+      // aidlc not found has two causes, and the agent gives both fixes: a tool
+      // opened before the install keeps its old PATH (restart it), while an
+      // install that left PATH alone needs the bin folder added, which a
+      // restart never does (#2396).
+      expect(kiroOnboarding).toContain(
+        "if AI-DLC was installed while this tool was open, quit the tool fully and reopen it (a new tab or reloaded window is not enough)",
+      );
+      expect(kiroOnboarding).toContain(
+        "otherwise the installer's bin folder is not on PATH (an install with `-NoModifyPath`, or a Unix install whose PATH line was not applied), so add the folder the installer printed to PATH, or rerun the installer without `-NoModifyPath`, then reopen the tool.",
+      );
     }
     // The unified Kiro row carries its native grant in the Markdown
     // conductor's permissions, not in .vscode settings Kiro IDE 1.x ignores.
