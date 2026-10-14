@@ -142,6 +142,17 @@ describe("t-plan-question-waits-for-the-person", () => {
     expect(startsWork(next(proj, answerArgs(ask.confirm_command), env))).toBe(true);
   });
 
+  test("a command line typed after the question is no reply to it; a typed plan pick still is", () => {
+    proj = fresh();
+    const env = chatEnv(proj, SESSION);
+    const ask = planQuestion(proj, env);
+    // A settings-only line asks for a setting, not for a plan.
+    typed(proj, SESSION, "/aidlc --plan-approval off");
+    expect(waits(next(proj, answerArgs(ask.confirm_command), env))).toBe(true);
+    typed(proj, SESSION, "/aidlc --scope bugfix");
+    expect(startsWork(next(proj, answerArgs(ask.confirm_command), env))).toBe(true);
+  });
+
   test("another chat's message is no reply in this one", () => {
     proj = fresh();
     const env = chatEnv(proj, SESSION);
@@ -161,9 +172,9 @@ describe("t-plan-question-waits-for-the-person", () => {
 
   test("a message keeps whole seconds: one in the question's own second is after it, one a second before is not", () => {
     proj = fresh();
-    const kept = (at: string, session: string): void => {
+    const kept = (at: string, session: string, text = "1", words: string | null = text): void => {
       saveMessage(proj, {
-        session, at, source: "prompt", text: "1", picker: null, words: "1", settings: [],
+        session, at, source: "prompt", text, picker: null, words, settings: [],
         route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
       });
     };
@@ -180,6 +191,12 @@ describe("t-plan-question-waits-for-the-person", () => {
     kept(at(9_000), OTHER);
     expect(noReplySince(proj, SESSION, asked(6_100))).toBe(true);
     expect(noReplySince(proj, "named-by-the-engine", asked(6_100))).toBe(false);
+    // A typed line with no words and no route (settings only, a bare entry) is no reply;
+    // a prompt whose words the host did not pass on (text "") may be one.
+    kept(at(10_000), SESSION, "/aidlc --plan-approval off", null);
+    expect(noReplySince(proj, SESSION, asked(9_500))).toBe(true);
+    kept(at(11_000), SESSION, "", null);
+    expect(noReplySince(proj, SESSION, asked(10_500))).toBe(false);
   });
 
   test("with the presence check switched off, or no message on record at all, the answer runs as before", () => {
