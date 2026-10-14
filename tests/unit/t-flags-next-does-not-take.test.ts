@@ -496,6 +496,8 @@ describe("plan approval off typed with new work rides the answer commands", () =
     expect(offer.d.ask_type, offer.out).toBe("scope-confirm");
     const confirm = String(offer.d.confirm_command);
     expect(confirm).toContain("--plan-approval off");
+    // The person goes ahead with the plan.
+    say(proj, "1");
     const created = next(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" "));
     expect(String(created.d.message), created.out).toContain("--plan-approval off");
   });
