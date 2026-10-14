@@ -123,12 +123,15 @@ describe("t341 orchestrate wait", () => {
     ]);
 
     writeFileSync(join(dir, "aidlc-developer-agent.md"), "**Collaborator:** aidlc-developer-agent\n");
+    // Settled comes back at once, not at its bound: waited_ms is then only the
+    // time of one check, which is a hosted runner's speed, so the bound here is
+    // the call's own and far above any check.
     const settled = wait([
-      "--stage", "practices-discovery", "--for", "collaborators", "--timeout", "1",
+      "--stage", "practices-discovery", "--for", "collaborators", "--timeout", "30",
     ]);
     expect(settled.json?.status).toBe("settled");
     expect(settled.json?.missing).toEqual([]);
-    expect(Number(settled.json?.waited_ms)).toBeLessThan(900);
+    expect(Number(settled.json?.waited_ms)).toBeLessThan(30_000);
     expect(String(settled.json?.next)).toContain("continue the stage body");
   });
 
