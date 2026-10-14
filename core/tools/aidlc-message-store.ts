@@ -299,6 +299,66 @@ export function chatsSince(rows: readonly AuditShardEvent[], pd: string, spentAt
     .map((m) => m.session ?? "terminal"));
 }
 
+// A quote's text as the person typed it, whatever the case, spacing or
+// punctuation: compatibility forms folded, lower case, apostrophes dropped
+// ("it's" and "its" read alike, a typographic one too), and anything else that
+// is not a letter, digit, mark or emoji read as a space. It reads no meaning.
+function quoteText(text: string): string {
+  return text.normalize("NFKC").toLowerCase()
+    .replace(/['\u2018\u2019\u02BC]/g, "")
+    .replace(/[^\p{L}\p{N}\p{M}\p{So}]+/gu, " ")
+    .trim();
+}
+
+/** Whether `said` holds the words `quoted` gives, case, spacing and punctuation aside. */
+export function holdsQuote(said: string, quoted: string): boolean {
+  const wanted = quoteText(quoted);
+  return wanted !== "" && quoteText(said).includes(wanted);
+}
+
+/**
+ * What the person said, as the record holds it, for a quote of theirs to be
+ * found in: every message the hook kept in this project, from any chat (what
+ * they typed; of a question box, what they picked or wrote, never its
+ * question), the picks and question-box replies on `rows`, and the request
+ * that started the work. `everyTurnHeld` says whether every turn of theirs on
+ * `rows` names a kept message with its words in it. A host that passed no
+ * words, a record gone with the day, or no turn on record at all leaves it
+ * false, and then nothing proves a quote is not theirs.
+ */
+export function personsSaidWords(
+  projectDir: string,
+  rows: readonly AuditShardEvent[],
+): { said: string[]; everyTurnHeld: boolean } {
+  const said: string[] = [];
+  const kept = new Map<string, StoredMessage>();
+  for (const message of listMessages(projectDir)) {
+    kept.set(message.id, message);
+    if (message.picker === null) said.push(message.source === "picker" ? message.words ?? "" : message.text);
+    else for (const { reply } of message.picker) if (reply !== null) said.push(reply);
+  }
+  let turns = 0;
+  let held = true;
+  for (const row of rows) {
+    if (row.event === "HUMAN_TURN") {
+      turns++;
+      const message = kept.get(auditBlockField(row.block, "Message Id") ?? "");
+      if (message === undefined || (message.source !== "picker" && message.text.trim() === "")) held = false;
+      try {
+        const picks = JSON.parse(auditBlockField(row.block, "Picked") ?? "[]") as unknown;
+        if (Array.isArray(picks)) said.push(...picks.filter((pick): pick is string => typeof pick === "string"));
+      } catch {
+        // A row that does not parse adds nothing.
+      }
+    } else if (row.event === "QUESTION_REPLIED") {
+      said.push(auditBlockField(row.block, "Reply") ?? "");
+    } else if (row.event === "WORKFLOW_STARTED") {
+      said.push(auditBlockField(row.block, "Request") ?? "");
+    }
+  }
+  return { said, everyTurnHeld: turns > 0 && held };
+}
+
 /**
  * The reply of the person's that the agent quoted: a message of `session` that
  * is a reply, sent since the last decision or the chat's newest message (a
