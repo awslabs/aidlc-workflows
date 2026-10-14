@@ -31,7 +31,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, delimiter, dirname, join } from "node:path";
 import {
   cleanupTestProject,
@@ -48,6 +48,7 @@ import {
   codekbStoreIsCurrent,
   gitAlternateEntry,
   parseReScope,
+  scopeDirectoryChecker,
   scopePathCovered,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -463,6 +464,21 @@ describe("t248 scopePathCovered", () => {
     expect(scopePathCovered(["src/config"], "src/config/", () => false)).toBe(false);
     // a narrower path still does not cover a wider one, however it is spelled
     expect(scopePathCovered(["src/payments"], "src/")).toBe(false);
+  });
+
+  test.skipIf(process.platform === "win32")("a symlink to a directory is not a directory: it covers only itself (#2578)", () => {
+    // the source fingerprint records a symlink as its link text, not its target's
+    // files, so coverage under it would not be bound by the snapshot
+    const proj = freshProject();
+    mkdirSync(join(proj, "real", "sub"), { recursive: true });
+    writeFileSync(join(proj, "real", "sub", "f.ts"), "export const f = 1;\n");
+    symlinkSync(join(proj, "real"), join(proj, "link"));
+    const isDirectory = scopeDirectoryChecker(proj);
+    expect(isDirectory("real")).toBe(true);
+    expect(isDirectory("link")).toBe(false);
+    expect(scopePathCovered(["real"], "real/sub/f.ts", isDirectory)).toBe(true);
+    expect(scopePathCovered(["link"], "link/sub/f.ts", isDirectory)).toBe(false);
+    expect(scopePathCovered(["link"], "link/", isDirectory)).toBe(false);
   });
 
   test("the repo root is not a coverage case: full scans are decided by the caller", () => {

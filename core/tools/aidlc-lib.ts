@@ -4149,11 +4149,13 @@ export function scopePathCovered(
   });
 }
 
-// `isDirectory` for scopePathCovered, answering from the repo on disk.
+// `isDirectory` for scopePathCovered, answering from the repo on disk. A symlink to a
+// directory is not one: the source fingerprint records a symlink as its link text,
+// not its target's files, so a bare symlink covers only itself.
 export function scopeDirectoryChecker(repoDir: string): (normalizedPath: string) => boolean {
   return (normalizedPath) => {
     try {
-      return statSync(join(repoDir, normalizedPath)).isDirectory();
+      return lstatSync(join(repoDir, normalizedPath)).isDirectory();
     } catch {
       return false;
     }
