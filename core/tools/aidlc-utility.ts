@@ -6420,8 +6420,9 @@ export async function collectDoctorReport(
   // ---------------------------------------------------------------------------
   // Check 6 — MERGE_DISPATCH advisory
   //
-  // Walk MERGE_DISPATCH_INVOKED rows; an INVOKED row should pair with either
-  // _RETURNED or _FALLBACK for the same slug within MERGE_DISPATCH_TIMEOUT_SEC.
+  // Walk MERGE_DISPATCH_INVOKED rows; an INVOKED row older than
+  // MERGE_DISPATCH_TIMEOUT_SEC should pair with a _RETURNED or _FALLBACK for
+  // the same slug recorded at any time after it. A younger one is in flight.
   // Orphan INVOKED rows are reported as advisory (pass=true) — observation-
   // time drift on an in-memory LLM dispatch is not a fail-loud condition. A
   // future observer layer may take over this reconciliation.
@@ -6483,7 +6484,7 @@ export async function collectDoctorReport(
       pass: true,
       label: orphans === 0
         ? `MERGE_DISPATCH: 0 orphan INVOKED (${invokedRows.length} bracketed)`
-        : `MERGE_DISPATCH: ${orphans} orphan INVOKED (advisory - a merge started but no matching finish was recorded within ${MERGE_DISPATCH_TIMEOUT_SEC}s)`,
+        : `MERGE_DISPATCH: ${orphans} orphan INVOKED (advisory - a merge started more than ${MERGE_DISPATCH_TIMEOUT_SEC}s ago and no matching finish was recorded after it)`,
     });
   } catch {
     // MERGE_DISPATCH check failure is non-fatal for doctor report

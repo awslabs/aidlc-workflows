@@ -444,6 +444,12 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     const line = out.split("\n").find((l) => l.includes("MERGE_DISPATCH:")) ?? "";
     expect(line).toContain("MERGE_DISPATCH: 1 orphan INVOKED");
     expect(line).toContain("advisory");
+    // A finish recorded any time after the start counts (case 13); 60s is
+    // only how long a start counts as still running.
+    expect(line).toContain(
+      "a merge started more than 60s ago and no matching finish was recorded after it",
+    );
+    expect(line).not.toContain("within");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("12: merged-and-cleaned Bolt does not flag as orphan (BLOCKER regression)", () => {
